@@ -5,7 +5,6 @@ from __future__ import annotations
 import traceback
 
 import typer
-from typer import _click as click
 
 from lazycloud._terminal.streams import error_console, json_output_active, set_json_output
 from lazycloud.cli.components.errors import (
@@ -33,9 +32,6 @@ def run_cli(
         if isinstance(exit_code, int):
             raise SystemExit(exit_code)
     except (Exception, KeyboardInterrupt) as exc:
-        if isinstance(exc, click.exceptions.NoArgsIsHelpError) and not json_output:
-            exc.show()
-            raise SystemExit(exc.exit_code) from None
         if debug_errors_enabled(args):
             if not json_output:
                 raise

@@ -631,7 +631,12 @@ def test_rejected_reserve_moves_to_another_offer_after_cleanup(
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
         scheduler_hooks=_SchedulerHooks(),
-        fleet_policy=FleetCapacityPolicy(max_cpu_instances=2, warm_cpu_preemptible_min=0),
+        fleet_policy=FleetCapacityPolicy(
+            max_cpu_instances=2,
+            warm_cpu_preemptible_min=0,
+            stopped_cpu_preemptible_target=2,
+            stopped_cpu_non_preemptible_target=0,
+        ),
     )
     now = datetime.now(UTC)
     compute.reconcile_platform_warm_capacity(now=now)

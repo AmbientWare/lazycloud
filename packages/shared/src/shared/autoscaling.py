@@ -47,6 +47,14 @@ def function_container_ceiling(max_containers: int) -> int:
     return max(max_containers, 1)
 
 
+POD_WAKE_START_SECONDS = 900
+"""How long a start keeps asking for a container.
+
+Shorter than any wake window, so once the container a start got has served its
+window, the same start cannot ask for another.
+"""
+
+
 class PodStubType(StringEnum):
     Pod = "pod"
     PodDeployment = "pod/deployment"
@@ -75,6 +83,8 @@ class PodScaleReason(StringEnum):
     OneShotKeepWarmDrain = "one-shot-keep-warm-drain"
     DeploymentIdle = "deployment-idle"
     DeploymentConnectionsActive = "deployment-connections-active"
+    DeploymentParked = "deployment-parked"
+    DeploymentWoken = "deployment-woken"
 
 
 class PodAutoscalerSample(ContractModel):
@@ -100,6 +110,11 @@ class PodAutoscalerConfig(ContractModel):
     min_containers: int = Field(default=0, ge=0)
     max_containers: int = Field(default=1, ge=0)
     keep_warm_seconds: int = Field(default=0, ge=-1)
+    parked: bool = False
+    """Its owner stopped it: nothing, not even a warm floor or a connection,
+    starts a container until something wakes it."""
+    woken: bool = False
+    """Its owner asked it to start and it has not had the time to."""
 
     @model_validator(mode="after")
     def minimum_cannot_exceed_maximum(self) -> PodAutoscalerConfig:
@@ -222,6 +237,12 @@ def decide_pod_scale(
         else:
             desired = 1
             reason = PodScaleReason.OneShotRunning
+    elif autoscaler_config.parked:
+        desired = 0
+        reason = PodScaleReason.DeploymentParked
+    elif sample.total_connections == 0 and autoscaler_config.woken:
+        desired = min(max(autoscaler_config.min_containers, 1), autoscaler_config.max_containers)
+        reason = PodScaleReason.DeploymentWoken
     elif sample.total_connections == 0:
         desired = autoscaler_config.min_containers
         reason = PodScaleReason.DeploymentIdle
@@ -243,7 +264,15 @@ def select_stoppable_pod_containers(
     keep_warm_seconds: int = 0,
     keep_warm_lock_authoritative: bool = False,
     now_seconds: int = 0,
+    woken_at_seconds: int | None = None,
+    wake_window_seconds: int = 0,
 ) -> PodStopPlan:
+    """The containers a scale-down may stop now, and why each other one is spared.
+
+    A container started after its owner woke the pod is spared for
+    `wake_window_seconds` from its start, whatever `keep_warm_seconds` says, so
+    a start always leaves something to connect to.
+    """
     stoppable: list[str] = []
     skipped: list[PodContainerStopSkip] = []
     for container in containers:
@@ -253,6 +282,8 @@ def select_stoppable_pod_containers(
             keep_warm_seconds=keep_warm_seconds,
             keep_warm_lock_authoritative=keep_warm_lock_authoritative,
             now_seconds=now_seconds,
+            woken_at_seconds=woken_at_seconds,
+            wake_window_seconds=wake_window_seconds,
         )
         if reason is None:
             stoppable.append(container.container_id)
@@ -323,6 +354,8 @@ def _pod_stop_skip_reason(
     keep_warm_seconds: int,
     keep_warm_lock_authoritative: bool,
     now_seconds: int,
+    woken_at_seconds: int | None,
+    wake_window_seconds: int,
 ) -> PodContainerSkipReason | None:
     if container.status is ContainerStatus.Pending:
         return PodContainerSkipReason.Pending
@@ -334,6 +367,12 @@ def _pod_stop_skip_reason(
         keep_warm_seconds > 0
         and container.started_at_seconds > 0
         and now_seconds < container.started_at_seconds + keep_warm_seconds
+    ):
+        return PodContainerSkipReason.KeepWarmWindow
+    if (
+        woken_at_seconds is not None
+        and container.started_at_seconds >= woken_at_seconds
+        and now_seconds < container.started_at_seconds + wake_window_seconds
     ):
         return PodContainerSkipReason.KeepWarmWindow
     # The lock defends a container only while it names a window that ends. An
@@ -348,6 +387,7 @@ def _pod_stop_skip_reason(
 
 
 __all__ = [
+    "POD_WAKE_START_SECONDS",
     "Autoscaler",
     "BacklogAutoscalerConfig",
     "BacklogAutoscalerSample",

@@ -255,6 +255,14 @@ class StubTable(IdTable, DatabaseBase):
     """Whether a pod serves SSH; a column so the SSH host list filters on it in SQL."""
 
     role: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    parked: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    """Its owner stopped it, and nothing starts a container until something wakes it."""
+
+    woken_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    """When its owner last asked it to start; the autoscaler holds a container for it."""
+
     runtime_workspace_gpu_quota: Mapped[int | None] = mapped_column(Integer, nullable=True)
     runtime_workspace_cpu_quota_millicores: Mapped[int | None] = mapped_column(
         Integer, nullable=True

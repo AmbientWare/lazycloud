@@ -12,7 +12,7 @@ from coordination.wake_signal import RedisWakeSignal
 from database.repositories.apps import StubRepository
 from database.repositories.orchestration import AutoscalerStateRepository, ContainerRepository
 from execution.containers.scheduling import ContainerSchedulingPersistenceService
-from execution.pods.proxy import PodProxySession, PodProxyTarget
+from execution.pods.proxy import PodConnectionHold, PodProxySession, PodProxyTarget
 from execution.pods.service import PodControlService
 from gateway.pod_proxy import AsyncRedisPodProxyConnectionRepository
 from observability.stream_state import RedisEventStreamRepository
@@ -35,7 +35,7 @@ from scheduler.state import (
 )
 from scheduler.workspace_owners import DatabaseWorkspaceOwners
 from shared.autoscaler_state import AutoscalerTargetKind
-from shared.autoscaling import PodStubType
+from shared.autoscaling import POD_WAKE_START_SECONDS, PodStubType
 from shared.container_requests import WorkerContainerRequestPayload, WorkerStartupKind
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.deployment_records import DeploymentSpec, Resources
@@ -377,13 +377,8 @@ async def test_pod_last_proxy_disconnect_renews_idle_window_before_autoscaler_st
     )
     lock_key = redis.key(pod_keep_warm_lock_key(stub.workspace_id, stub.id, container.id))
     redis.set(lock_key, "1", ex=1)
-    await connections.increment_total_connections(stub.workspace_id, stub.id)
-    await connections.increment_container_connections(
-        stub.workspace_id,
-        stub.id,
-        container.id,
-        keep_warm_seconds=stub.config.runtime.keep_warm,
-    )
+    hold = PodConnectionHold(connections, stub.workspace_id, stub.id, stub.config.runtime.keep_warm)
+    await hold.attach(container.id)
     assert redis.ttl(lock_key) == -1
     active = _pod_autoscaler(async_services, redis).reconcile()[0]
     assert active.signal_value == 1
@@ -391,10 +386,8 @@ async def test_pod_last_proxy_disconnect_renews_idle_window_before_autoscaler_st
 
     await service.finish_pod_proxy(
         PodProxySession(
-            workspace_id=stub.workspace_id,
-            stub_id=stub.id,
             target=PodProxyTarget(container_id=container.id, address="10.0.0.1:8080"),
-            keep_warm_seconds=stub.config.runtime.keep_warm,
+            hold=hold,
         )
     )
 
@@ -427,21 +420,14 @@ async def test_pod_proxy_finalization_is_idempotent_after_stub_deletion(
         pod_proxy_connections=connections,
     )
     container_id = "00000000-0000-4000-8000-000000000406"
+    hold = PodConnectionHold(connections, stub.workspace_id, stub.id, stub.config.runtime.keep_warm)
     session = PodProxySession(
-        workspace_id=stub.workspace_id,
-        stub_id=stub.id,
         target=PodProxyTarget(container_id=container_id, address="10.0.0.1:8080"),
-        keep_warm_seconds=stub.config.runtime.keep_warm,
+        hold=hold,
     )
-    await connections.increment_total_connections(stub.workspace_id, stub.id)
     lock_key = redis.key(pod_keep_warm_lock_key(stub.workspace_id, stub.id, container_id))
     redis.set(lock_key, "1")
-    await connections.increment_container_connections(
-        stub.workspace_id,
-        stub.id,
-        container_id,
-        keep_warm_seconds=stub.config.runtime.keep_warm,
-    )
+    await hold.attach(container_id)
     assert redis.ttl(lock_key) == -1
     with async_services.context.database.session() as database_session:
         assert StubRepository(database_session).delete(
@@ -487,6 +473,73 @@ def test_pod_deployment_explicit_zero_scale_remains_zero_with_connections(
     assert result.desired_containers == 0
     assert result.actions == []
     assert scheduler.requests == []
+
+
+def test_a_parked_always_on_pod_starts_nothing_even_with_connections(
+    isolated_services: ApiServices,
+) -> None:
+    scheduler = _Scheduler()
+    isolated_services = replace(
+        isolated_services,
+        containers=replace(isolated_services.containers, scheduler=scheduler),
+    )
+    redis = RedisClient(FakeRedis(), key_prefix="test")
+    stub = _create_pod_stub(isolated_services, keep_warm_seconds=-1)
+    with isolated_services.context.database.session() as session:
+        StubRepository(session).park(stub.id, workspace_id=stub.workspace_id)
+    redis.set(redis.key(pod_total_connections_key(stub.workspace_id, stub.id)), 2)
+
+    result = _pod_autoscaler(isolated_services, redis).reconcile()[0]
+
+    assert result.desired_containers == 0
+    assert result.actions == []
+    assert scheduler.requests == []
+
+
+def test_a_woken_pod_with_no_idle_time_is_started_and_kept_for_the_devbox_window(
+    isolated_services: ApiServices,
+    real_redis_actors: RealRedisActors,
+) -> None:
+    scheduler = _Scheduler()
+    isolated_services = replace(
+        isolated_services,
+        containers=replace(isolated_services.containers, scheduler=scheduler),
+    )
+    redis = real_redis_actors.client()
+    stub = _create_pod_stub(isolated_services, keep_warm_seconds=0)
+    now = utc_now()
+    with isolated_services.context.database.session() as session:
+        StubRepository(session).wake(stub.id, workspace_id=stub.workspace_id, woken_at=now)
+
+    woken = _pod_autoscaler(isolated_services, redis).reconcile(now=now)[0]
+
+    assert woken.desired_containers == 1
+    assert [action.action for action in woken.actions] == ["start"]
+
+    # Long after the start stopped asking, the container it got is still inside
+    # the devbox idle window, which a zero keep-warm would not give it.
+    [started] = [action.container_id for action in woken.actions]
+    later = now + timedelta(seconds=POD_WAKE_START_SECONDS + 60)
+    with isolated_services.context.database.session() as session:
+        record = ContainerRepository(session).get_across_workspaces(started)
+        assert record is not None
+        record.status = ContainerStatus.Running
+        record.started_at = now + timedelta(seconds=30)
+        ContainerRepository(session).upsert(record)
+    RedisSchedulerContainerRepository(redis).set_container_state(
+        SchedulerContainerState(
+            container_id=started,
+            stub_id=stub.id,
+            workspace_id=stub.workspace_id,
+            status=SchedulerContainerStatus.Running,
+        )
+    )
+
+    idle = _pod_autoscaler(isolated_services, redis).reconcile(now=later)[0]
+
+    assert idle.desired_containers == 0
+    assert idle.actions == []
+    assert isolated_services.containers.get(started).status is ContainerStatus.Running
 
 
 def _create_pod_stub(

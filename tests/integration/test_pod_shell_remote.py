@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import socket
 import threading
+import time
 from collections.abc import Iterable
 from contextlib import ExitStack, suppress
 from dataclasses import dataclass, field, replace
@@ -37,6 +38,8 @@ from shared.bytes_transport import encode_bytes
 from shared.container_requests import WORKER_USER_CODE_VOLUME
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.contracts import ContractModel
+from shared.deployments import PodRole
+from shared.disks import DiskMount
 from shared.errors import ConflictError, UpstreamUnavailableError
 from shared.http.pods import (
     CreatePodResponse,
@@ -51,7 +54,8 @@ from shared.http.pods import (
     PodSandboxUpdateNetworkPermissionsResponse as HttpPodSandboxUpdateNetworkPermissionsResponse,
 )
 from shared.shell_protocol import ShellFrameType, encode_shell_frame
-from shared.workload_keys import pod_keep_warm_lock_key
+from shared.workload_config import StubConfig
+from shared.workload_keys import pod_container_connections_key, pod_keep_warm_lock_key
 from starlette.websockets import WebSocketDisconnect
 from tests.agent_tunnels import enrolled_tunnel_route
 from tests.real_redis import RealRedisActors
@@ -742,6 +746,56 @@ def test_shell_websocket_proxies_bidirectional_terminal_bytes(
         ):
             pass
         assert replayed.value.code == 1008
+
+
+def test_shell_websocket_counts_as_a_devbox_connection_while_open(
+    isolated_services: ApiServices,
+    tmp_path: Path,
+) -> None:
+    with ExitStack() as client_stack:
+        stub = ControlPlaneService(isolated_services.context).create_stub(
+            "devbox-shell",
+            kind=StubKind.Pod,
+            config=StubConfig(
+                role=PodRole.Devbox,
+                ssh=True,
+                disks=[DiskMount(name="devbox-shell", size_bytes=1024**3)],
+            ),
+        )
+        container_id = str(uuid4())
+        echo_server = _EchoServer()
+        echo_server.start()
+        client_stack.callback(echo_server.close)
+        portal = client_stack.enter_context(start_blocking_portal())
+        client_stack.enter_context(
+            portal.wrap_async_context_manager(
+                enrolled_tunnel_route(
+                    isolated_services,
+                    stub,
+                    container_id,
+                    echo_server.address,
+                    tmp_path / "tunnel",
+                    port=SHELL_WORKER_PORT,
+                )
+            )
+        )
+        client = client_stack.enter_context(TestClient(create_app(isolated_services)))
+        redis = isolated_services.redis()
+        held = redis.key(pod_container_connections_key(stub.workspace_id, stub.id, container_id))
+
+        with client.websocket_connect(
+            f"/api/v1/shells/id/{stub.id}/{container_id}/ws",
+            headers=_auth_headers(isolated_services),
+        ) as websocket:
+            assert websocket.receive_text() == "OK"
+            websocket.send_bytes(b"ping")
+            assert websocket.receive_bytes() == b"ping"
+            assert int(redis.get(held) or 0) == 1
+
+        deadline = time.monotonic() + 5
+        while redis.get(held) is not None:
+            assert time.monotonic() < deadline, "the closed shell still holds its connection"
+            time.sleep(0.05)
 
 
 def test_shell_websocket_rejects_long_lived_query_credentials_before_backend(

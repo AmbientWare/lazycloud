@@ -123,9 +123,12 @@ class AutoscalerOperationsService:
                 workspace=workspace,
             )
             kind = target_kind or _target_kind_for_stub(stub)
+            # The loop's own record, so a reconcile asked for by hand sees what
+            # the loop sees, the stub's power state included.
+            [record] = self.services.scheduler_workloads.list_autoscaling_stubs([stub.id])
             return AutoscalerReconcileResponse(
                 results=[
-                    _dump_result(self._service_for_kind(kind).reconcile_stub(stub)),
+                    _dump_result(self._service_for_kind(kind).reconcile_stub(record)),
                 ]
             )
         if target_kind is not None:

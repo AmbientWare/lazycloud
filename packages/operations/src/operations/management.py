@@ -869,7 +869,7 @@ class ManagementService:
             workspace=workspace,
         )
         if not active:
-            self._stop_deployment_containers(workspace, updated)
+            self.stop_deployment_containers(workspace, updated, reason=None)
         self.services.events.emit(
             "deployment.started" if active else "deployment.stopped",
             resource_type="deployment",
@@ -993,7 +993,9 @@ class ManagementService:
             ]
         return tuple(stopped)
 
-    def _stop_deployment_containers(self, workspace: str, deployment: Deployment) -> None:
+    def stop_deployment_containers(
+        self, workspace: str, deployment: Deployment, *, reason: StopContainerReason | None
+    ) -> None:
         workspace_id = self.control_plane.get_workspace(workspace).id
         with self.services.context.database.session() as session:
             container_ids = DeploymentRepository(session).live_container_ids(
@@ -1001,7 +1003,7 @@ class ManagementService:
                 deployment_id=deployment.id,
             )
         for container_id in container_ids:
-            self.services.containers.stop(container_id)
+            self.services.containers.stop(container_id, reason=reason)
 
     def _scale_pod_deployment_stubs(
         self,

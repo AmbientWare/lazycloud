@@ -16,7 +16,7 @@ from compute.state import RedisComputeStateRepository
 from coordination.redis_client import REDIS_UNAVAILABLE_ERRORS, RedisClient
 from coordination.token_lock import release_token_lock, try_acquire_token_lock
 from coordination.wake_signal import WakeSignalWaiter
-from database.records.apps import AppRecord, AutoscalingStub
+from database.records.apps import AppRecord, AutoscalingStubRecord
 from database.repositories.apps import CronJobRepository
 from database.repositories.execution import (
     CronJobRunCursor,
@@ -742,7 +742,7 @@ class Scheduler:
             limit=autoscaling_limit,
             lease_seconds=AUTOSCALING_TARGET_CLAIM_LEASE_SECONDS,
         )
-        stubs: tuple[AutoscalingStub, ...] = ()
+        stubs: tuple[AutoscalingStubRecord, ...] = ()
         snapshot = AutoscalingPlacementSnapshot(
             stubs=(),
             active_by_stub={},

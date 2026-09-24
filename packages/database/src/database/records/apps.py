@@ -70,6 +70,13 @@ class AutoscalingStubConfig(ContractModel):
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
 
+class StubPower(ContractModel):
+    """Whether its owner has stopped a pod or asked it to start."""
+
+    parked: bool = False
+    woken_at: datetime | None = None
+
+
 class AutoscalingStubRecord(ContractModel):
     id: str
     workspace_id: str
@@ -77,9 +84,7 @@ class AutoscalingStubRecord(ContractModel):
     deployment_id: str | None = None
     app_id: str | None = None
     config: AutoscalingStubConfig = Field(default_factory=AutoscalingStubConfig)
-
-
-type AutoscalingStub = AutoscalingStubRecord | StubRecord
+    power: StubPower = Field(default_factory=StubPower)
 
 
 class AppRecord(ContractModel):
@@ -136,10 +141,10 @@ __all__ = [
     "AppContainerShutdownIntentRecord",
     "AppDeploymentIntentRecord",
     "AppRecord",
-    "AutoscalingStub",
     "AutoscalingStubConfig",
     "AutoscalingStubRecord",
     "AutoscalingStubRuntimeConfig",
     "StubKind",
+    "StubPower",
     "StubRecord",
 ]

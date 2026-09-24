@@ -14,3 +14,6 @@ class ShellBackendTarget:
     worker_port: int
     buffer_size_bytes: int
     dial_timeout_seconds: int
+    devbox: bool = False
+    """The container is a devbox's, so an open shell holds off its idle stop."""
+    keep_warm_seconds: int = 0

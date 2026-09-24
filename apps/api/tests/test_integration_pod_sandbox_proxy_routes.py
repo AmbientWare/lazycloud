@@ -491,7 +491,9 @@ def test_pinned_sandbox_route_metadata_is_ready_exact_and_address_bound(
             started = time.monotonic()
             response = client.get(f"/sandbox/id/{container.id}/8080", headers=headers)
             assert response.status_code == 503
-            assert time.monotonic() - started < 0.5
+            # Refused without waiting out the pod start timeout (175 s); the
+            # bound is loose so a slow runner does not fail it.
+            assert time.monotonic() - started < 10
         assert len(proxy_client.calls) == successful_calls
 
 

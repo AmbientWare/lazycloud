@@ -1,6 +1,6 @@
 import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
 
-import { apiRequest, withWorkspace } from "@/lib/api/client";
+import { apiRequest, postJson, withWorkspace } from "@/lib/api/client";
 import {
   deploymentListSchema,
   devboxSchema,
@@ -72,6 +72,34 @@ export function devboxQueryOptions(workspaceId: string, deploymentId: string) {
         : CHANGING_REFRESH_MS,
     meta: workspaceLiveQueryMeta(false),
   });
+}
+
+/** Boot a stopped devbox; the server answers once it has a container. */
+export function startDevboxMutationOptions(workspaceId: string, deploymentId: string) {
+  return {
+    mutationFn: () =>
+      postJson(
+        withWorkspace(
+          `/api/v1/deployments/${encodeURIComponent(deploymentId)}/devbox/start`,
+          workspaceId,
+        ),
+        devboxSchema,
+      ),
+  };
+}
+
+/** Stop a devbox's container now; its deployment stays on. */
+export function stopDevboxMutationOptions(workspaceId: string, deploymentId: string) {
+  return {
+    mutationFn: () =>
+      postJson(
+        withWorkspace(
+          `/api/v1/deployments/${encodeURIComponent(deploymentId)}/devbox/stop`,
+          workspaceId,
+        ),
+        devboxSchema,
+      ),
+  };
 }
 
 const SETTLED_PHASES = new Set<DevboxPhase>(["running", "stopped", "failed"]);

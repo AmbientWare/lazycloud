@@ -16,6 +16,10 @@ class AutoscalerTargetKind(StringEnum):
     Pod = "pod"
 
 
+SCALE_UP_FAILED_ACTION = "scale-up-failed"
+"""The action an autoscaler records when the platform refused a container it asked for."""
+
+
 class AutoscaleAction(ContractModel):
     container_id: str = ""
     action: str
@@ -63,6 +67,7 @@ def autoscaler_state_name(target_kind: AutoscalerTargetKind, target_id: str) -> 
 
 
 __all__ = [
+    "SCALE_UP_FAILED_ACTION",
     "AutoscaleAction",
     "AutoscalerStateRecord",
     "AutoscalerTargetKind",
