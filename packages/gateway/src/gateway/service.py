@@ -2162,6 +2162,14 @@ class GatewayControlService:
         )
 
     def stream_agent(self, request: StreamAgentRequest) -> StreamAgentResponse:
+        # The agent treats a 4xx here as final and exits. Another operation holding
+        # the capacity owner's lease is over in seconds, so it answers as retryable.
+        try:
+            return self._stream_agent(request)
+        except (CapacityReservationLockContendedError, CapacityReservationLeaseLostError) as exc:
+            raise UpstreamUnavailableError(f"agent stream will be retried: {exc}") from exc
+
+    def _stream_agent(self, request: StreamAgentRequest) -> StreamAgentResponse:
         releases = DeploymentReleaseService()
         release = releases.active()
         if release is None:
