@@ -4,7 +4,9 @@ A disk belongs to a workspace by name, the way a volume does, and outlives every
 container that mounts it. While a container runs, the disk is a local ext4
 filesystem on the node that holds it. Between containers it is a chain of sealed
 layers in the workspace bucket, so any node in the workspace's placement can
-restore it, and the node that last held it restarts it without a download.
+restore it, and the node that last held it restarts it without a download. On
+a provider machine the disk's volume is also snapshotted, and a new volume in
+the same region starts from the snapshot rather than a download.
 
 One container writes a disk at a time. Acquiring the disk enforces that with a
 fencing token every publish must carry, because two writers of one block device
@@ -238,7 +240,8 @@ class DiskRecord(ContractModel):
     """Newest published generation; 0 means nothing was ever published."""
 
     stored_bytes: int = Field(default=0, ge=0)
-    """Bytes the disk's chunks occupy in object storage."""
+    """Bytes the disk's saved copies occupy, and what its storage bills: its chunks in
+    object storage, plus its volume snapshot on an AWS machine."""
 
     holder_container_id: str = ""
     created_at: datetime = Field(default_factory=utc_now)

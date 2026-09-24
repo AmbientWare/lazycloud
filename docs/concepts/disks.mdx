@@ -48,6 +48,17 @@ A machine failure can lose up to the last two minutes of writes.
 One container writes a disk at a time. A pod with a disk runs one container,
 and a redeploy's new container waits for the old one to hand the disk over.
 
+## Fast starts on AWS
+
+On AWS machines, LazyCloud's own and those in a connected account, the disk
+also keeps a snapshot of its volume. A start in the same region gets a volume
+made from that snapshot and runs without waiting for a download, however large
+the disk is. Blocks load when first read. The regions the last session used
+load first and the rest follow in the background, so the first read of a file
+nobody has touched in a while can be slower. A start in another region, or on
+a machine you joined, restores from workspace storage as above. The snapshot
+counts toward what the disk stores.
+
 ## List and delete
 
 ```bash
