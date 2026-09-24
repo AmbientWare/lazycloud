@@ -1,4 +1,4 @@
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from threading import Event
@@ -37,6 +37,17 @@ class WorkerImagePreparation:
         if wait_seconds > 0:
             self.wait(wait_seconds)
         return image in self.prepared()
+
+    def unreported(self, reported: Collection[str]) -> bool:
+        """Whether an image finished preparing, or failed to, since `reported` was taken.
+
+        Never raises: a failed preparation is raised by `prepared` on the stream
+        that reads it, where the daemon handles it.
+        """
+        pending = self._pending
+        if pending is not None and pending[1].done():
+            return True
+        return bool(self._prepared.difference(reported))
 
     def wait(self, timeout_seconds: float) -> bool:
         """Wait for the image being prepared; True when one finished, however it ended."""

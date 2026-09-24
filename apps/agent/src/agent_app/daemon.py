@@ -620,6 +620,10 @@ class DockerAgentWorkerController:
     def prepared_worker_images(self) -> list[str]:
         return self._images.prepared()
 
+    def has_unreported_image(self, reported: Collection[str]) -> bool:
+        """Whether the next stream has an image outcome the last one did not report."""
+        return self._images.unreported(reported)
+
     def wait_for_image_preparation(self, timeout_seconds: float) -> bool:
         """Wait for a worker image being prepared; True once it has finished."""
         return self._images.wait(timeout_seconds)
@@ -1153,7 +1157,7 @@ class AgentDaemonService:
         A slot whose image was not yet reported was deferred, and the stream
         that reports the image prepared is the one that starts it.
         """
-        if set(self.worker_controller.prepared_worker_images()) - set(self._reported_worker_images):
+        if self.worker_controller.has_unreported_image(self._reported_worker_images):
             return
         began = time.monotonic()
         if self.worker_controller.wait_for_image_preparation(seconds):
