@@ -11,12 +11,19 @@ from coordination.redis_client import RedisClient
 from database.repositories.apps import StubRecord
 from gateway.stub_config import deployment_spec_from_stub, stub_config
 from pydantic import ValidationError
-from shared.deployment_records import request_and_limit
-from shared.deployments import DeploymentKind
+from shared.deployment_records import (
+    DEFAULT_DEVBOX_KEEP_WARM_SECONDS,
+    DEVBOX_COMMAND,
+    request_and_limit,
+)
+from shared.deployments import DeploymentKind, PodRole, StubKind
+from shared.disks import DiskMount
 from shared.http.gateway import DeployStubRequest, GetOrCreateStubRequest
 from shared.placement import ProductRegion
 from shared.workload_config import StubConfig
 from tests.redis_fakes import FakeRedis
+
+GIB = 1024**3
 
 
 def test_pod_checkpoint_readiness_is_retained_by_source_and_deployed_stubs(
@@ -197,3 +204,54 @@ def test_a_gpu_the_platform_cannot_schedule_is_refused_at_the_public_boundary() 
         )
     )
     assert config.runtime.gpu == ["H100", "L4"]
+
+
+def test_a_devbox_resolves_its_defaults_and_keeps_what_its_author_set() -> None:
+    devbox = stub_config(
+        GetOrCreateStubRequest(
+            name="box",
+            stub_type=DeploymentKind.Pod.value,
+            role=PodRole.Devbox,
+            root_disk_bytes=GIB * 20,
+        )
+    )
+    assert devbox.role is PodRole.Devbox
+    assert devbox.ssh is True
+    assert devbox.command == list(DEVBOX_COMMAND)
+    assert devbox.runtime.keep_warm == DEFAULT_DEVBOX_KEEP_WARM_SECONDS
+    assert devbox.runtime.preemptible is False
+    assert devbox.autoscaler.max_containers == 1
+    assert devbox.disks == [DiskMount(name="box", size_bytes=GIB * 20)]
+    assert deployment_spec_from_stub(_record(devbox), name="box").role is PodRole.Devbox
+
+    chosen = stub_config(
+        GetOrCreateStubRequest(
+            name="box",
+            stub_type=DeploymentKind.Pod.value,
+            role=PodRole.Devbox,
+            disks=[DiskMount(name="home", size_bytes=GIB)],
+            keep_warm_seconds=60,
+            preemptible=True,
+            command=["/usr/sbin/init"],
+        )
+    )
+    assert chosen.disks == [DiskMount(name="home", size_bytes=GIB)]
+    assert chosen.runtime.keep_warm == 60
+    assert chosen.runtime.preemptible is True
+    assert chosen.command == ["/usr/sbin/init"]
+
+    service = stub_config(GetOrCreateStubRequest(name="web", stub_type=DeploymentKind.Pod.value))
+    assert service.role is PodRole.Service
+    assert service.ssh is False
+    assert service.runtime.preemptible is True
+    assert service.command == []
+
+
+def _record(config: StubConfig) -> StubRecord:
+    return StubRecord(
+        id="00000000-0000-0000-0000-000000000001",
+        workspace_id="00000000-0000-0000-0000-000000000002",
+        name="box",
+        kind=StubKind.Pod,
+        config=config,
+    )
