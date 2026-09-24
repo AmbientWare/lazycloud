@@ -10,6 +10,8 @@ from typing import Protocol
 
 from pydantic import field_validator
 from shared.contracts import ContractModel
+from shared.errors import ContainerLifetimeEndedError, domain_error_code
+from shared.http.errors import HttpApiError
 from shared.realtime.contracts import CloudEventRecord, ContainerMetricsData
 from shared.scheduling import (
     SchedulerContainerStatus,
@@ -281,6 +283,8 @@ class _ThreadedContainerRuntimeMonitorHandle:
     _thread: threading.Thread | None = None
     _heartbeat_stopped: bool = False
     _last_heartbeat_at: float = float("-inf")
+    _lifetime_ended: bool = False
+    """The platform refused usage past the end it recorded for this container."""
 
     def runtime_started(self, pid: int) -> None:
         if pid <= 0:
@@ -527,18 +531,43 @@ class _ThreadedContainerRuntimeMonitorHandle:
                 evidence=evidence,
                 measurement_complete=window.measurement_complete,
             )
-        except Exception:  # pragma: no cover - defensive worker boundary
+        except HttpApiError as exc:
+            if exc.code != domain_error_code(ContainerLifetimeEndedError):
+                self._hold_failed_usage_window(window, evidence)
+                return None
+            # Every later window lies further past the recorded end, so none would
+            # be accepted either. The cleanup pass stops the container itself.
+            with self._lock:
+                self._lifetime_ended = True
+                dropped = [window, *(held for held, _ in self._held)]
+                self._held.clear()
             LOGGER.warning(
-                "container usage window was not recorded",
-                exc_info=True,
+                "container usage stopped: the platform recorded this container as ended",
                 extra={
                     "container_id": self.request.container_id,
-                    "window_start_ms": window.start_ms,
-                    "window_end_ms": window.end_ms,
+                    "windows": [f"{item.start_ms}-{item.end_ms}ms" for item in dropped],
                 },
             )
-            self._hold_usage_window(window, evidence)
             return None
+        except Exception:  # pragma: no cover - defensive worker boundary
+            self._hold_failed_usage_window(window, evidence)
+            return None
+
+    def _hold_failed_usage_window(
+        self,
+        window: _UsageWindow,
+        evidence: WorkerUsageEvidence,
+    ) -> None:
+        LOGGER.warning(
+            "container usage window was not recorded",
+            exc_info=True,
+            extra={
+                "container_id": self.request.container_id,
+                "window_start_ms": window.start_ms,
+                "window_end_ms": window.end_ms,
+            },
+        )
+        self._hold_usage_window(window, evidence)
 
     def _claim_usage_window(
         self,
@@ -551,6 +580,8 @@ class _ThreadedContainerRuntimeMonitorHandle:
         """
 
         with self._lock:
+            if self._lifetime_ended:
+                return None
             if self._held:
                 return self._held.pop(0)
             start_ms = self._usage_cursor_ms

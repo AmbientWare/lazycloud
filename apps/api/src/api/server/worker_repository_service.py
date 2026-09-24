@@ -66,6 +66,7 @@ from shared.container_requests import StopContainerReason
 from shared.containers import TERMINAL_CONTAINER_STATUSES, ContainerRecord, ContainerStatus
 from shared.errors import (
     ConflictError,
+    ContainerLifetimeEndedError,
     DomainError,
     InvalidInputError,
     NotFoundError,
@@ -135,6 +136,7 @@ from worker.repository_payloads import (
     AppendSandboxProcessLogResponse,
     ClaimSourceCacheCleanupRequest,
     ClaimSourceCacheCleanupResponse,
+    ContainerCleanupTarget,
     DeleteContainerStateRequest,
     DeleteContainerStateResponse,
     DisableWorkerRequest,
@@ -1442,11 +1444,22 @@ class WorkerRepositoryService:
         if self.services is None:
             raise UpstreamUnavailableError("container cleanup requires durable state")
         with self.services.context.database.session() as session:
-            return ListContainerCleanupResponse(
-                container_ids=ContainerRepository(session).list_pending_storage_cleanup(
-                    principal.worker_id
+            pending = ContainerRepository(session).list_pending_storage_cleanup(principal.worker_id)
+        # A stop that named no reason records none and travels to the worker as
+        # `User`. A worker that missed it stops the container the same way.
+        return ListContainerCleanupResponse(
+            containers=[
+                ContainerCleanupTarget(
+                    container_id=container_id,
+                    stop_reason=(
+                        StopContainerReason.User
+                        if reason is StopContainerReason.Unknown
+                        else reason
+                    ),
                 )
-            )
+                for container_id, reason in pending.items()
+            ]
+        )
 
     def delete_container_state(
         self,
@@ -2340,7 +2353,13 @@ class WorkerRepositoryService:
                 request.ended_at,
             ):
                 raise InvalidInputError("all usage records must describe the same container window")
-            accepted.append(self._authorized_usage_record(record, worker_id=worker_id))
+            accepted.append(
+                self._authorized_usage_record(
+                    record,
+                    worker_id=worker_id,
+                    measurement_complete=request.measurement_complete,
+                )
+            )
         with services.context.database.session() as session:
             records = tuple(
                 services.usage.append_in_session(session, record) for record in accepted
@@ -2359,6 +2378,7 @@ class WorkerRepositoryService:
         record: UsageRecord,
         *,
         worker_id: str,
+        measurement_complete: bool,
     ) -> UsageRecord:
         """Refuse a usage record that is not this worker's to report.
 
@@ -2389,7 +2409,9 @@ class WorkerRepositoryService:
             # against. Accepted rather than dropped: usage that was measured is
             # what this path exists to keep.
             return record
-        return self._metered_within_lifetime(record, container, worker_id=worker_id)
+        return self._metered_within_lifetime(
+            record, container, worker_id=worker_id, measurement_complete=measurement_complete
+        )
 
     def _authorize_worker_container(
         self,
@@ -2461,6 +2483,7 @@ class WorkerRepositoryService:
         container: ContainerRecord,
         *,
         worker_id: str,
+        measurement_complete: bool,
     ) -> UsageRecord:
         """Bound the billed window by the lifetime the control plane holds.
 
@@ -2478,6 +2501,17 @@ class WorkerRepositoryService:
         started_at, ended_at = window
         earliest = to_utc(container.started_at or container.created_at) - _METERING_WINDOW_TOLERANCE
         latest = to_utc(container.finished_at or utc_now()) + _METERING_WINDOW_TOLERANCE
+        # A complete window cannot be cut back, since its evidence covers all of
+        # it. Past a recorded finish, the worker has missed the stop.
+        if (
+            container.finished_at is not None
+            and ended_at > latest
+            and (started_at >= latest or measurement_complete)
+        ):
+            raise ContainerLifetimeEndedError(
+                f"container {container.id} finished at {container.finished_at.isoformat()}; "
+                "the platform accepts no usage past it"
+            )
         if ended_at <= earliest or started_at >= latest:
             raise AuthorizationDeniedError(
                 "usage names a window outside the container's recorded lifetime"

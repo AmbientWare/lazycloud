@@ -84,6 +84,7 @@ from worker.repository_payloads import (
     AppendSandboxProcessLogResponse,
     ClaimSourceCacheCleanupRequest,
     ClaimSourceCacheCleanupResponse,
+    ContainerCleanupTarget,
     ContainerLogBatchEntry,
     DeleteContainerStateRequest,
     DeleteContainerStateResponse,
@@ -1183,8 +1184,8 @@ class RemoteSchedulerContainerRepository:
     client: WorkerRepositoryHttpClient
     state: RemoteWorkerRepositoryState
 
-    def list_pending_storage_cleanup(self) -> list[str]:
-        return self.client.list_container_cleanup().container_ids
+    def list_pending_storage_cleanup(self) -> list[ContainerCleanupTarget]:
+        return self.client.list_container_cleanup().containers
 
     def get_container_state(self, container_id: str) -> WorkerContainerState | None:
         response = self.client.get_container_state(

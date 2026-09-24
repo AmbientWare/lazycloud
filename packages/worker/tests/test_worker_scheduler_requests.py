@@ -31,6 +31,7 @@ from worker.container_service.state import LocalWorkerContainerInstanceStore
 from worker.events import WorkerBuildCancelRegistry
 from worker.oci_runtime import OciRuntimeCommandController
 from worker.repository_errors import WorkerRepositoryClientError
+from worker.repository_payloads import ContainerCleanupTarget
 from worker.scheduler_requests import (
     WorkerSchedulerRequestAction,
     WorkerSchedulerRequestProcessor,
@@ -39,6 +40,8 @@ from worker.scheduler_requests import (
     container_execution_context_from_scheduler_request,
 )
 from worker.worker_lifecycle import WorkerLifecycleOrchestrator
+
+from worker import scheduler_requests
 
 _CAPACITY_OWNER_ID = "11111111-1111-4111-8111-111111111111"
 
@@ -74,6 +77,7 @@ def test_worker_scheduler_request_processor_executes_and_releases_capacity() -> 
         containers=containers,
         execution=execution,
         worker_gpu_type="",
+        container_stopper=_ShutdownStopper(threading.Event()),
     )
 
     started = processor.run_once()
@@ -120,6 +124,7 @@ def test_worker_scheduler_request_processor_tracks_active_container_for_shutdown
         containers=containers,
         execution=execution,
         worker_gpu_type="",
+        container_stopper=_ShutdownStopper(threading.Event()),
         lifecycle=lifecycle,
     )
     started = processor.run_once()
@@ -142,6 +147,50 @@ def test_worker_scheduler_request_processor_tracks_active_container_for_shutdown
     assert containers.deleted == ["ctr-1"]
     assert workers.capacity_changes == [("worker-1", "ctr-1", WorkerCapacityChange.Add)]
     assert result.status is WorkerSchedulerRequestStatus.Executed
+
+
+def test_a_container_the_platform_ended_while_its_worker_was_unreachable_is_stopped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stop the worker never heard still stops the container, as the platform ended it.
+
+    The stop event reaches only a connected event stream and is not sent again,
+    so a stop issued while the worker's control-plane connection was down left
+    the container running, metered against a record that says it ended, and
+    holding its disk lease. The cleanup list is durable and names it.
+    """
+
+    request = _request(payload={"image_id": "image-1", "startup_kind": "pod"})
+    containers = _ContainerRepository(
+        states={"ctr-1": _state(request, status=SchedulerContainerStatus.Pending)}
+    )
+    runtime_started = threading.Event()
+    stop_requested = threading.Event()
+    stopper = _ShutdownStopper(stop_requested)
+    processor = WorkerSchedulerRequestProcessor(
+        build_cancels=WorkerBuildCancelRegistry(),
+        worker_id="worker-1",
+        workers=_WorkerRepository(requests=[request]),
+        containers=containers,
+        execution=_BlockingExecutionService(
+            started=runtime_started, stop_requested=stop_requested, containers=containers
+        ),
+        worker_gpu_type="",
+        container_stopper=stopper,
+    )
+    assert processor.run_once().background
+    assert runtime_started.wait(timeout=1)
+
+    containers.cleanup = [
+        ContainerCleanupTarget(container_id="ctr-1", stop_reason=StopContainerReason.User)
+    ]
+    next_pass = scheduler_requests.monotonic() + 10
+    monkeypatch.setattr(scheduler_requests, "monotonic", lambda: next_pass)
+    result = _wait_for_background_result(processor, "ctr-1")
+
+    assert result.status is WorkerSchedulerRequestStatus.Executed
+    assert stopper.stopped == [("ctr-1", False)]
+    assert stopper.reasons == [StopContainerReason.User]
 
 
 def test_worker_scheduler_request_processor_backgrounds_long_lived_container(
@@ -171,6 +220,7 @@ def test_worker_scheduler_request_processor_backgrounds_long_lived_container(
         containers=containers,
         execution=execution,
         worker_gpu_type="",
+        container_stopper=_ShutdownStopper(threading.Event()),
         lifecycle=lifecycle,
     )
 
@@ -212,6 +262,7 @@ def test_worker_scheduler_request_processor_drops_missing_state_and_releases_cap
         containers=_ContainerRepository(),
         execution=_ExecutionService(),
         worker_gpu_type="",
+        container_stopper=_ShutdownStopper(threading.Event()),
     )
 
     result = processor.run_once()
@@ -234,6 +285,7 @@ def test_worker_scheduler_request_processor_drops_stopping_state_and_deletes_sta
         containers=containers,
         execution=_ExecutionService(),
         worker_gpu_type="",
+        container_stopper=_ShutdownStopper(threading.Event()),
     )
 
     result = processor.run_once()
@@ -265,6 +317,7 @@ def test_worker_scheduler_request_processor_reports_execution_failure() -> None:
         ),
         execution=_ExecutionService(result=execution_result),
         worker_gpu_type="",
+        container_stopper=_ShutdownStopper(threading.Event()),
     )
 
     started = processor.run_once()
@@ -310,6 +363,7 @@ def test_worker_scheduler_request_processor_reconciles_a_redelivered_request(
         containers=containers,
         execution=execution,
         worker_gpu_type="",
+        container_stopper=_ShutdownStopper(threading.Event()),
         lifecycle=lifecycle,
     )
 
@@ -349,6 +403,7 @@ def test_worker_scheduler_request_processor_keeps_a_request_it_could_not_act_on(
         containers=containers,
         execution=execution,
         worker_gpu_type="",
+        container_stopper=_ShutdownStopper(threading.Event()),
     )
 
     with pytest.raises(WorkerRepositoryClientError):
@@ -388,6 +443,7 @@ def test_worker_scheduler_request_processor_refuses_a_container_it_already_start
         containers=containers,
         execution=execution,
         worker_gpu_type="",
+        container_stopper=_ShutdownStopper(threading.Event()),
     )
 
     result = processor.run_once()
@@ -507,9 +563,10 @@ class _ContainerRepository:
     exit_codes: list[tuple[str, int]] = field(default_factory=list)
     ttls: list[int] = field(default_factory=list)
     state_errors: int = 0
+    cleanup: list[ContainerCleanupTarget] = field(default_factory=list)
 
-    def list_pending_storage_cleanup(self) -> list[str]:
-        return []
+    def list_pending_storage_cleanup(self) -> list[ContainerCleanupTarget]:
+        return list(self.cleanup)
 
     def get_container_state(self, container_id: str) -> WorkerContainerState | None:
         if self.state_errors > 0:
@@ -590,6 +647,7 @@ class _BlockingExecutionService:
 class _ShutdownStopper:
     stop_requested: threading.Event
     stopped: list[tuple[str, bool]] = field(default_factory=list)
+    reasons: list[StopContainerReason] = field(default_factory=list)
 
     def stop_container(
         self,
@@ -598,8 +656,8 @@ class _ShutdownStopper:
         force: bool,
         reason: StopContainerReason = StopContainerReason.Unknown,
     ) -> None:
-        del reason
         self.stopped.append((container_id, force))
+        self.reasons.append(reason)
         self.stop_requested.set()
 
 
