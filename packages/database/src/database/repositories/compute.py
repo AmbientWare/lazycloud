@@ -1695,6 +1695,21 @@ class ComputeProviderInstanceRepository:
             if pool_id is not None and instance_id is not None and machine_id is not None
         ]
 
+    def reserve_counts(self, pool_ids: Collection[str]) -> dict[str, int]:
+        if not pool_ids:
+            return {}
+        table = ComputeProviderInstanceTable
+        rows = self.session.execute(
+            select(table.pool_id, func.count())
+            .where(
+                table.pool_id.in_(pool_ids),
+                table.status.in_(("preparing", "stopping", "stopped")),
+                table.missing_since.is_(None),
+            )
+            .group_by(table.pool_id)
+        ).tuples()
+        return {pool_id: count for pool_id, count in rows if pool_id is not None}
+
     def platform_reserve_in_preparation(self) -> bool:
         table = ComputeProviderInstanceTable
         return bool(

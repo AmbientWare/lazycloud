@@ -66,8 +66,9 @@ The agent proves its current binary and worker image before initial preparation
 completes, and the provider row records them. A stopped reserve that predates the
 active release is started and prepared again, one machine at a time and only while
 no CPU work waits, so a resume never updates itself first. A refused reserve launch
-or an interrupted reserve leaves the pool serving; the reserve moves to another
-market until the failure's cooldown passes. Finishing a preparation needs the
+or an interrupted reserve leaves the pool serving. Until the failure's cooldown
+passes, that market keeps the reserves it holds and buys no more; the shortfall
+goes to another market. Finishing a preparation needs the
 pool's lease, and a stream that finds it held defers that step instead of failing. Returning a used host requires a durable drain, no live workloads,
 stopped worker processes, and a receipt fenced to the stop request and cache
 generation. Cleanup removes tenant files and retires the worker credential while

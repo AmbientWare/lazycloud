@@ -3525,6 +3525,16 @@ class ComputeService:
             units = ComputeUnitRepository(session)
             units.lock_platform_capacity()
             existing = units.list_platform_internal(preemptible=preemptible, gpu=False)
+            # A market that refused a launch keeps the reserves it already has and
+            # buys no more until its cooldown passes.
+            cooled = [
+                unit.id
+                for unit in existing
+                if unit.stopped_machines and self._capacity_rejected_recently(unit, now=now)
+            ]
+            held = dict.fromkeys(cooled, 0) | ComputeProviderInstanceRepository(
+                session
+            ).reserve_counts(cooled)
             remaining_target = self.fleet_policy.stopped_cpu_target(
                 preemptible=preemptible,
                 running_machines=sum(unit.desired_machines for unit in existing),
@@ -3532,11 +3542,10 @@ class ComputeService:
             for index, unit in enumerate(existing):
                 target = (
                     0
-                    if unit.provider_state.degraded_reason
-                    or unit.provider_ref not in enabled
-                    or self._capacity_rejected_recently(unit, now=now)
-                    else min(unit.stopped_machines, remaining_target)
+                    if unit.provider_state.degraded_reason or unit.provider_ref not in enabled
+                    else min(unit.stopped_machines, held.get(unit.id, unit.stopped_machines))
                 )
+                target = min(target, remaining_target)
                 remaining_target -= target
                 if target != unit.stopped_machines:
                     existing[index] = units.upsert(
@@ -3632,7 +3641,7 @@ class ComputeService:
             owner_id = owner_ids[(provider.ref, offer.id)]
             if owner_id in cooling:
                 continue
-            if retained and owner_id not in retained:
+            if retained - cooling and owner_id not in retained:
                 continue
             policy = provider.policy
             assert policy is not None
