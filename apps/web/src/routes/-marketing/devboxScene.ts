@@ -199,7 +199,7 @@ export async function createDevboxScene(
       (Math.floor(index / 3) % 3) - 1,
       Math.floor(index / 9) - 1,
     ).multiplyScalar(0.96);
-    const size = background ? 0.6 + (index % 4) * 0.1 : 0.65 + (index % 5) * 0.11;
+    const size = (background ? 0.6 + (index % 4) * 0.1 : 0.65 + (index % 5) * 0.11) * 0.9;
     const rotation =
       index < 3
         ? foregroundRotations[index]
@@ -389,12 +389,13 @@ export async function createDevboxScene(
     camera.position.copy(cameraDirection).multiplyScalar(distance);
     camera.updateProjectionMatrix();
     const mobile = width < 1024;
+    const centerY = mobile ? -0.57 : 0;
     const halfHeight = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * distance;
     const halfWidth = halfHeight * camera.aspect;
     const focus = right
       .clone()
       .multiplyScalar(mobile ? 0 : -halfWidth * 0.46)
-      .addScaledVector(up, mobile ? -halfHeight * 0.57 : 0);
+      .addScaledVector(up, halfHeight * centerY);
     shell.position.copy(focus);
     cubes.forEach((cube, index) => {
       let x: number;
@@ -411,6 +412,8 @@ export async function createDevboxScene(
         x = ((slot % 5) - 2) * 0.51 + Math.sin(index * 4.7) * 0.09;
         y = (Math.floor(slot / 5) - 2) * 0.49 + Math.cos(index * 2.3) * 0.08;
       }
+      x *= 0.84;
+      y = THREE.MathUtils.lerp(centerY, y, 0.84);
       const depth = cube.background
         ? -4 - (index % 5) * 1.2
         : index < 3
@@ -424,7 +427,7 @@ export async function createDevboxScene(
         .addScaledVector(up, y * halfHeight * depthScale)
         .addScaledVector(cameraDirection, depth);
       if (cube.background) cube.origin.copy(cube.target);
-      if (index < 3) cube.size = mobile ? 0.98 : 1.4;
+      if (index < 3) cube.size = mobile ? 0.84 : 1.18;
     });
     renderer.setSize(width, height, false);
     focusEffect.resize(width, height);
