@@ -662,6 +662,12 @@ class LiveContainer:
     """A worker has taken the container."""
 
 
+@dataclass(frozen=True, slots=True)
+class StartupFailure:
+    container_id: str
+    reason: str
+
+
 @dataclass(slots=True)
 class ContainerRepository:
     session: Session
@@ -1146,14 +1152,14 @@ class ContainerRepository:
             placed=worker_id is not None or bool(runtime_worker_id),
         )
 
-    def recent_startup_failure(self, stub_id: str, *, since: datetime) -> str | None:
-        """Why the stub's newest container that failed to start since `since` failed.
+    def recent_startup_failure(self, stub_id: str, *, since: datetime) -> StartupFailure | None:
+        """The stub's newest container that failed to start since `since`, and why.
 
         Only a container that never ran counts: one that ran and then exited
         failed for some other reason, which a start did not cause.
         """
         row = self.session.execute(
-            select(ContainerTable.startup_error)
+            select(ContainerTable.id, ContainerTable.startup_error)
             .where(
                 ContainerTable.stub_id == stub_id,
                 ContainerTable.status == ContainerStatus.Failed.value,
@@ -1165,7 +1171,9 @@ class ContainerRepository:
         ).first()
         if row is None:
             return None
-        return row[0] or "the container failed to start"
+        return StartupFailure(
+            container_id=str(row[0]), reason=row[1] or "the container failed to start"
+        )
 
     def count_live_for_stub(self, stub_id: str) -> int:
         """How many containers are already serving this stub, or about to.

@@ -30,6 +30,7 @@ export const volumeListSchema = z.object({
 });
 
 export const diskStatuses = ["detached", "attached", "saving", "deleting"] as const;
+export type DiskStatus = (typeof diskStatuses)[number];
 
 export const diskSchema = z.object({
   id: z.string(),

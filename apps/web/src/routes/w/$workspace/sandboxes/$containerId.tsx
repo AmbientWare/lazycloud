@@ -8,6 +8,7 @@ import { Fact } from "@/components/shared/Fact";
 import { FactGrid } from "@/components/shared/Fact/FactGrid";
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { PanelError } from "@/components/shared/PanelError";
+import { ContainerFileBrowser } from "@/components/shared/ContainerFileBrowser";
 import { PanelErrorBoundary, RouteErrorFallback } from "@/components/shared/ErrorBoundary";
 import { LinearTab, LinearTabsList } from "@/components/shared/LinearSelect";
 import { LiveDuration, LiveRelativeTime } from "@/components/shared/LiveTime";
@@ -29,7 +30,6 @@ import { useWorkspace } from "@/lib/workspace-context";
 
 import { ContainerLifecycle } from "./-components/ContainerLifecycle";
 import { ContainerLineage } from "./-components/ContainerLineage";
-import { SandboxFileBrowser } from "./-components/SandboxFileBrowser";
 import { SandboxProcessList } from "./-components/SandboxProcessList";
 import { SandboxTerminal } from "./-components/SandboxTerminal";
 
@@ -118,7 +118,12 @@ function SandboxDetailPage() {
           <TabsContent value="files" className="m-0 min-h-0 flex-1 overflow-hidden p-3">
             {running ? (
               <PanelErrorBoundary key={containerId} title="Files could not be displayed">
-                <SandboxFileBrowser containerId={containerId} writable className="h-full" />
+                <ContainerFileBrowser
+                  containerId={containerId}
+                  rootPath="/workspace"
+                  writable
+                  className="h-full"
+                />
               </PanelErrorBoundary>
             ) : (
               <PanelEmpty message="Sandbox is not running" className="h-56" />

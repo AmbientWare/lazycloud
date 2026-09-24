@@ -1717,6 +1717,15 @@ class ManagementService:
                 raise NotFoundError(msg)
         return container
 
+    def container_writes_to_root_disk(self, container: ContainerRecord) -> bool:
+        """Whether the container's workload mounts a disk at `/`, where its writes land."""
+        if container.stub_id is None or container.workspace_id is None:
+            return False
+        with self.services.context.database.session() as session:
+            return StubRepository(session).mounts_root_disk(
+                container.stub_id, workspace_id=container.workspace_id
+            )
+
     def container_view(
         self,
         container_id: str,

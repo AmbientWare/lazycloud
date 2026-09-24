@@ -593,13 +593,32 @@ class PodControlService:
         self,
         container_id: str,
         container_path: str,
+        *,
+        max_bytes: int,
+        truncate: bool = False,
     ) -> PodSandboxDownloadFileResponse:
+        """A file of at most `max_bytes`, or with `truncate`, the first `max_bytes` of any file.
+
+        The supervisor enforces the bound while it reads, since a size read
+        beforehand says nothing about a file still being written or one that
+        reports none, such as those under /proc.
+        """
         response = self._client(container_id).sandbox_download_file(
             container_id,
             container_path,
+            # One byte past the bound tells a longer file from one that fits exactly.
+            max_bytes=max_bytes + 1 if truncate else max_bytes,
+            truncate=truncate,
         )
+        if response.over_limit:
+            raise InvalidInputError(
+                f"{container_path} is larger than the {max_bytes}-byte download limit"
+            )
         _raise_container_response_error(response)
-        return PodSandboxDownloadFileResponse.from_bytes(response.data)
+        data = response.data
+        if truncate and len(data) > max_bytes:
+            return PodSandboxDownloadFileResponse.from_bytes(data[:max_bytes], truncated=True)
+        return PodSandboxDownloadFileResponse.from_bytes(data)
 
     def sandbox_stat_file(
         self,
@@ -617,14 +636,18 @@ class PodControlService:
         self,
         container_id: str,
         container_path: str,
+        *,
+        limit: int,
     ) -> PodSandboxListFilesResponse:
         response = self._client(container_id).sandbox_list_files(
             container_id,
             container_path,
+            limit=limit,
         )
         _raise_container_response_error(response)
         return PodSandboxListFilesResponse(
             files=[_file_info(item) for item in response.files],
+            truncated=response.truncated,
         )
 
     def sandbox_delete_file(

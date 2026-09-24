@@ -24,7 +24,7 @@ import { useWorkspace } from "@/lib/workspace-context";
 
 import { currentDeployment, findWorkloadGroup, type WorkloadGroup } from "./-workloads/grouping";
 import { CallMethods } from "./-workloads/CallMethods";
-import { DevboxPanel } from "./-workloads/DevboxPanel";
+import { DevboxConnect, DevboxWorkspace } from "./-workloads/DevboxDetail";
 import { LatencyPanel, latencyHasSignal } from "./-workloads/LatencyPanel";
 import { Playground } from "./-workloads/Playground";
 import { PLAYGROUND_KINDS } from "./-workloads/playground-form";
@@ -66,6 +66,7 @@ function WorkloadDetailPage() {
   const deploymentList = selectDeploymentList(deployments.data, deployments.hasNextPage);
   const group = findWorkloadGroup(deploymentList.items, appId, kind, name);
   const selectedDeployment = group ? currentDeployment(group) : undefined;
+  const isDevbox = selectedDeployment?.role === "devbox";
   const containerStubIds =
     group?.kind === "pod" && selectedDeployment?.stub_id
       ? [selectedDeployment.stub_id]
@@ -78,7 +79,8 @@ function WorkloadDetailPage() {
       // running, and asking the server for those is what makes the count right
       // rather than right about the newest page of a long history.
       statuses: podContainerStatuses(group?.kind, podInstanceStatus),
-      enabled: Boolean(group),
+      // A devbox is one machine; its status endpoint names the container.
+      enabled: Boolean(group) && !isDevbox,
     }),
   );
   if (deployments.isPending || stubs.isPending || app.isPending) return <WorkloadSkeleton />;
@@ -104,6 +106,61 @@ function WorkloadDetailPage() {
   );
   const isPublic = Boolean(app.data?.public || currentStub?.public);
   const isPod = group.kind === "pod";
+  const kindFact = (
+    <span key="kind" className="flex items-center gap-1.5">
+      <StubKindIcon kind={group.kind} className="size-3.5" />
+      {kindLabel(group)}
+    </span>
+  );
+  const backLink = (
+    <Link
+      to="/w/$workspace/apps/$appId"
+      params={{ workspace: workspace.name, appId }}
+      className="flex h-8 min-w-0 items-center gap-1.5 rounded-md border border-input bg-card px-2.5 text-xs text-muted-foreground outline-none transition-colors hover:border-brand/40 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      <ArrowLeft className="size-3.5 shrink-0" aria-hidden="true" />
+      {app.data?.name ?? "View app"}
+    </Link>
+  );
+
+  if (current.role === "devbox") {
+    return (
+      <WorkspacePage
+        title={<span className="mono">{group.name}</span>}
+        description={
+          <PageFacts
+            items={[
+              kindFact,
+              <span key="version" className="mono">
+                v{current.version}
+              </span>,
+              isPublic ? "Public" : "Token required",
+            ]}
+          />
+        }
+        actions={backLink}
+        headerDetails={
+          <PanelErrorBoundary title="Devbox status could not be displayed">
+            <DevboxConnect workspaceId={workspace.id} deploymentId={current.id} />
+          </PanelErrorBoundary>
+        }
+        contentClassName="flex flex-col gap-3 overflow-y-auto xl:grid xl:grid-cols-[minmax(0,3fr)_minmax(22rem,2fr)] xl:overflow-hidden"
+      >
+        <DevboxWorkspace
+          workspaceId={workspace.id}
+          workspaceName={workspace.name}
+          appId={appId}
+          group={group}
+          deploymentId={current.id}
+          nextCursor={deploymentList.nextCursor}
+          loadingMore={deployments.isFetchingNextPage}
+          loadMoreError={deployments.isFetchNextPageError}
+          onLoadMore={() => void deployments.fetchNextPage()}
+        />
+      </WorkspacePage>
+    );
+  }
+
   const showsInvoke = group.active && PLAYGROUND_KINDS.has(group.kind);
 
   return (
@@ -112,10 +169,7 @@ function WorkloadDetailPage() {
       description={
         <PageFacts
           items={[
-            <span key="kind" className="flex items-center gap-1.5">
-              <StubKindIcon kind={group.kind} className="size-3.5" />
-              {kindLabel(group)}
-            </span>,
+            kindFact,
             <span key="version" className="mono">
               v{current.version}
             </span>,
@@ -124,16 +178,7 @@ function WorkloadDetailPage() {
           ]}
         />
       }
-      actions={
-        <Link
-          to="/w/$workspace/apps/$appId"
-          params={{ workspace: workspace.name, appId }}
-          className="flex h-8 min-w-0 items-center gap-1.5 rounded-md border border-input bg-card px-2.5 text-xs text-muted-foreground outline-none transition-colors hover:border-brand/40 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          <ArrowLeft className="size-3.5 shrink-0" aria-hidden="true" />
-          {app.data?.name ?? "View app"}
-        </Link>
-      }
+      actions={backLink}
       headerDetails={
         <WorkloadOperation workspaceId={workspace.id} deployment={current} group={group} />
       }
@@ -143,11 +188,6 @@ function WorkloadDetailPage() {
           : "flex flex-col gap-3 overflow-y-auto xl:grid xl:grid-cols-[minmax(20rem,2fr)_minmax(0,3fr)] xl:overflow-hidden"
       }
     >
-      {current.role === "devbox" ? (
-        <PanelErrorBoundary title="Devbox status could not be displayed">
-          <DevboxPanel workspaceId={workspace.id} deploymentId={current.id} />
-        </PanelErrorBoundary>
-      ) : null}
       <Tabs
         key={JSON.stringify([appId, group.kind, group.name])}
         defaultValue={defaultInspectorTab(group, showsInvoke)}

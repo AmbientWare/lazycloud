@@ -14,6 +14,14 @@ from worker.runtime_config import OciRuntimeName
 from worker.sandbox_server import SandboxContainerMount, SandboxFileOperation, SandboxLogStream
 
 CONTAINER_NOT_FOUND_MESSAGE = "Container not found"
+SANDBOX_FILESYSTEM_OVER_LIMIT_EXIT = 3
+"""The supervisor's exit status for a download larger than its limit."""
+
+
+class SandboxFileOverLimitError(ValueError):
+    """The supervisor refused a download larger than the limit it was given."""
+
+
 SANDBOX_PROCESS_MANAGER_NOT_READY_MESSAGE = "Sandbox process manager is not ready"
 
 
@@ -24,6 +32,13 @@ class SandboxFilesystemRequest(ContractModel):
     mode: int = 0o644
     pattern: str = ""
     replacement: str = ""
+    # Left out when unset: a supervisor started before these fields existed
+    # rejects unknown keys.
+    limit: int = Field(default=0, ge=0, exclude_if=lambda value: value == 0)
+    """Entries a listing returns or bytes a download writes; 0 is unbounded."""
+
+    truncate: bool = Field(default=False, exclude_if=lambda value: not value)
+    """Write the first `limit` bytes of a larger file instead of refusing it."""
 
 
 class SandboxProcessEventType(StrEnum):

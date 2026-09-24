@@ -122,7 +122,8 @@ def api_v1_container_metrics_timeseries(
     workspace_id: read_workspace,
     services: ApiServices = Depends(current_services),
 ) -> ContainerMetricsTimeseriesResponse:
-    container = _management(services).get_container(container_id, workspace=workspace_id)
+    management = _management(services)
+    container = management.get_container(container_id, workspace=workspace_id)
     query = EventHistoryQuery(
         workspace_id=container.workspace_id or "",
         stub_id=container.stub_id or "",
@@ -131,4 +132,6 @@ def api_v1_container_metrics_timeseries(
         limit=limit,
     )
     records = RedisEventStreamRepository(services.redis()).read_event_history(query)
-    return container_metrics_timeseries(container_id, records)
+    return container_metrics_timeseries(
+        container_id, records, root_disk=management.container_writes_to_root_disk(container)
+    )

@@ -11,6 +11,7 @@ from shared.realtime.contracts import CloudEventRecord, ContainerMetricsPayload
 
 from worker.events import (
     ContainerRequestContext,
+    DiskFilesystemUsage,
     GpuMemoryCounters,
     build_container_metrics_payload,
 )
@@ -92,6 +93,10 @@ class ContainerDiskUsageSource(Protocol):
     def used_bytes(self, container_id: str) -> int: ...
 
 
+class ContainerRootDiskSource(Protocol):
+    def root_disk_usage(self, container_id: str) -> DiskFilesystemUsage | None: ...
+
+
 class ContainerNetworkEgressSource(Protocol):
     def sample(self, container_id: str) -> NetworkEgressCounterSample: ...
 
@@ -104,6 +109,7 @@ class WorkerContainerMetricsService:
     # Reports the bytes a container's own layer occupies, so ephemeral disk is
     # billed on what was actually used rather than on an oversubscribed cap.
     disk_usage: ContainerDiskUsageSource | None = None
+    root_disk: ContainerRootDiskSource | None = None
     network_egress: ContainerNetworkEgressSource | None = None
 
     def sample_and_publish(
@@ -133,6 +139,15 @@ class WorkerContainerMetricsService:
             # container down.
             LOGGER.debug("disk usage read failed for %s", container_id, exc_info=True)
             return 0
+
+    def _root_disk_usage(self, container_id: str) -> DiskFilesystemUsage | None:
+        if self.root_disk is None:
+            return None
+        try:
+            return self.root_disk.root_disk_usage(container_id)
+        except Exception:
+            LOGGER.debug("root disk usage read failed for %s", container_id, exc_info=True)
+            return None
 
     def publish_sample(
         self,
@@ -192,6 +207,7 @@ class WorkerContainerMetricsService:
             previous=previous,
             sample_interval_ms=sample_interval_ms,
             disk_used_bytes=self._disk_used_bytes(request.container_id),
+            root_disk=self._root_disk_usage(request.container_id),
         )
         published = False
         try:
@@ -314,6 +330,7 @@ def container_metrics_payload_from_sample(
     previous: ContainerMetricsCounterState,
     sample_interval_ms: int,
     disk_used_bytes: int = 0,
+    root_disk: DiskFilesystemUsage | None = None,
 ) -> ContainerMetricsPayload:
     return build_container_metrics_payload(
         worker_id=worker_id,
@@ -327,6 +344,7 @@ def container_metrics_payload_from_sample(
         network_io=network_io_delta(sample.network_io, previous.network_io),
         gpu_memory=sample.gpu_memory,
         disk_used_bytes=max(disk_used_bytes, 0),
+        root_disk=root_disk,
     )
 
 

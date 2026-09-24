@@ -131,19 +131,19 @@ export const workspaceQueryKeys = {
       [...workspaceRoot(workspaceId), "containers", "event-summary", containerId] as const,
     metrics: (workspaceId: string, containerId: string) =>
       [...workspaceRoot(workspaceId), "containers", "metrics", containerId] as const,
+    files: (workspaceId: string, containerId: string, path?: string) =>
+      [
+        ...workspaceRoot(workspaceId),
+        "containers",
+        "files",
+        containerId,
+        ...(path ? [path] : []),
+      ] as const,
   },
   sandboxes: {
     root: (workspaceId: string) => [...workspaceRoot(workspaceId), "sandboxes"] as const,
     list: (workspaceId: string, limit: number, appId: string | null) =>
       [...workspaceRoot(workspaceId), "sandboxes", "list", { limit, appId }] as const,
-    files: (workspaceId: string, containerId: string, path?: string) =>
-      [
-        ...workspaceRoot(workspaceId),
-        "sandboxes",
-        "files",
-        containerId,
-        ...(path ? [path] : []),
-      ] as const,
     processes: (workspaceId: string, containerId: string) =>
       [...workspaceRoot(workspaceId), "sandboxes", "processes", containerId] as const,
     urls: (workspaceId: string, containerId: string) =>

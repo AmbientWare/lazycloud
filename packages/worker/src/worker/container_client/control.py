@@ -217,12 +217,17 @@ class ContainerServiceClient:
         self,
         container_id: str,
         container_path: str,
+        *,
+        max_bytes: int = 0,
+        truncate: bool = False,
     ) -> ContainerSandboxDownloadFileResponse:
         return self._unary(
             ContainerServiceMethod.ContainerSandboxDownloadFile,
             ContainerSandboxDownloadFileRequest(
                 container_id=container_id,
                 container_path=container_path,
+                max_bytes=max_bytes,
+                truncate=truncate,
             ),
             ContainerSandboxDownloadFileResponse,
         )
@@ -290,12 +295,15 @@ class ContainerServiceClient:
         self,
         container_id: str,
         container_path: str = ".",
+        *,
+        limit: int = 0,
     ) -> ContainerSandboxListFilesResponse:
         return self._unary(
             ContainerServiceMethod.ContainerSandboxListFiles,
             ContainerSandboxListFilesRequest(
                 container_id=container_id,
                 container_path=container_path,
+                limit=limit,
             ),
             ContainerSandboxListFilesResponse,
         )

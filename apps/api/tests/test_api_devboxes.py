@@ -3,6 +3,7 @@ from __future__ import annotations
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from control.service import ControlPlaneService
+from database.repositories.apps import StubRepository
 from fastapi.testclient import TestClient
 from identity.auth import TokenIssuer
 from shared.deployment_records import DeploymentSpec
@@ -82,6 +83,11 @@ def test_a_devbox_detail_carries_its_role_connection_and_disk(
     other = DeploymentDetailResponse.model_validate_json(service_detail.content)
     assert other.role is PodRole.Service
     assert other.devbox is None
+    assert service.stub_id is not None
+    with isolated_services.context.database.session() as session:
+        stubs = StubRepository(session)
+        assert stubs.mounts_root_disk(devbox.stub_id, workspace_id=workspace.id)
+        assert not stubs.mounts_root_disk(service.stub_id, workspace_id=workspace.id)
 
     roles = {
         item.name: item.role

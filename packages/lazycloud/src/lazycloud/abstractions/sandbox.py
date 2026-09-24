@@ -699,6 +699,13 @@ class SandboxFileSystem:
     def list_files(self, sandbox_path: str | Path) -> list[SandboxFileInfo]:
         path_text = _path_text(sandbox_path)
         response = self.client.sandbox_list_files(self.container_id, path_text)
+        if response.truncated:
+            raise SandboxFileSystemError(
+                f"{path_text} holds more entries than one listing returns",
+                operation="list_files",
+                path=path_text,
+                container_id=self.container_id,
+            )
         return [
             _sandbox_file_info(
                 file_info,

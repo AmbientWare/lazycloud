@@ -303,6 +303,7 @@ def build_worker_process_services(
             worker_id=identity.worker_id,
             sink=RemoteContainerMetricsSink(repository),
             disk_usage=container_rootfs,
+            root_disk=durable_disks,
             network_egress=network_backend.egress_counters,
         ),
         metrics_source_factory=CgroupContainerMetricsSourceFactory(),

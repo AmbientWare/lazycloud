@@ -121,7 +121,9 @@ function PodInstanceDrawerBody({
     <div className="content-transition flex min-h-0 flex-1 flex-col">
       <DrawerHeader>
         <div className="flex min-w-0 flex-wrap items-center gap-2.5">
-          <SheetTitle>Pod instance</SheetTitle>
+          <SheetTitle>
+            {deployment.role === "devbox" ? "Devbox container" : "Pod instance"}
+          </SheetTitle>
           <StatusChip status={record.status} live={running} />
           <div className="ml-auto">
             {record.actions.can_shell ? (

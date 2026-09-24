@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -21,7 +22,24 @@ type filesystemRequest struct {
 	Mode        uint32 `json:"mode"`
 	Pattern     string `json:"pattern"`
 	Replacement string `json:"replacement"`
+	// Limit caps the entries a listing returns and the bytes a download
+	// writes; zero leaves both unbounded. A download over the limit is
+	// refused unless Truncate asks for its first Limit bytes instead.
+	Limit    int64 `json:"limit"`
+	Truncate bool  `json:"truncate"`
 }
+
+// maxFilesystemLimit keeps Limit+1 far from overflowing; the control plane
+// sends much smaller limits.
+const maxFilesystemLimit = 1 << 40
+
+// errOverLimit is the refusal a caller maps to its own client error rather
+// than a failure of the container.
+var errOverLimit = errors.New("over the download limit")
+
+// exitOverLimit is the exit status of a filesystem call refused with
+// errOverLimit; the worker reads it as a typed refusal.
+const exitOverLimit = 3
 
 type filesystemInfo struct {
 	Name        string `json:"name"`
@@ -46,6 +64,8 @@ type filesystemResponse struct {
 	FileInfo *filesystemInfo   `json:"file_info,omitempty"`
 	Files    []filesystemInfo  `json:"files,omitempty"`
 	Results  []filesystemMatch `json:"results,omitempty"`
+	// Truncated says a listing returned its first Limit names and more remain.
+	Truncated bool `json:"truncated,omitempty"`
 }
 
 func runFilesystem(payload string) error {
@@ -54,6 +74,9 @@ func runFilesystem(payload string) error {
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&request); err != nil {
 		return err
+	}
+	if request.Limit < 0 || request.Limit > maxFilesystemLimit {
+		return fmt.Errorf("limit %d is outside 0..%d", request.Limit, int64(maxFilesystemLimit))
 	}
 	response, err := filesystemOperation(request)
 	if err != nil {
@@ -90,8 +113,28 @@ func filesystemOperation(request filesystemRequest) (filesystemResponse, error) 
 			return response, err
 		}
 		defer input.Close()
-		_, err = io.Copy(os.Stdout, input)
-		return response, err
+		if request.Limit == 0 {
+			_, err = io.Copy(os.Stdout, input)
+			return response, err
+		}
+		if request.Truncate {
+			_, err = io.CopyN(os.Stdout, input, request.Limit)
+			if errors.Is(err, io.EOF) {
+				err = nil
+			}
+			return response, err
+		}
+		// The size is only known by reading: a file can grow while it is
+		// read, and /proc and device files report none. Reading one byte past
+		// the limit is what tells a file that fits exactly from a larger one.
+		written, err := io.CopyN(os.Stdout, input, request.Limit+1)
+		if err != nil && !errors.Is(err, io.EOF) {
+			return response, err
+		}
+		if written > request.Limit {
+			return response, fmt.Errorf("%q is larger than %d bytes: %w", path, request.Limit, errOverLimit)
+		}
+		return response, nil
 	case "create-directory":
 		if err := os.MkdirAll(path, mode); err != nil {
 			return response, err
@@ -124,23 +167,30 @@ func filesystemOperation(request filesystemRequest) (filesystemResponse, error) 
 		if err != nil {
 			return response, err
 		}
-		paths := []string{path}
-		if info.IsDir() {
-			entries, err := os.ReadDir(path)
-			if err != nil {
-				return response, err
-			}
-			paths = nil
-			for _, entry := range entries {
-				paths = append(paths, filepath.Join(path, entry.Name()))
-			}
+		if !info.IsDir() {
+			response.Files = []filesystemInfo{filesystemInfoOf(info)}
+			return response, nil
 		}
-		for _, child := range paths {
-			info, err := filesystemStat(child)
+		names, truncated, err := directoryNames(path, request.Limit)
+		if err != nil {
+			return response, err
+		}
+		response.Truncated = truncated
+		for _, name := range names {
+			child := filepath.Join(path, name)
+			info, err := os.Stat(child)
+			if err != nil {
+				// A link whose target is gone is still an entry, so the
+				// link itself is reported.
+				info, err = os.Lstat(child)
+			}
+			if errors.Is(err, fs.ErrNotExist) {
+				continue
+			}
 			if err != nil {
 				return response, err
 			}
-			response.Files = append(response.Files, info)
+			response.Files = append(response.Files, filesystemInfoOf(info))
 		}
 		return response, nil
 	case "find-in-files", "replace-in-files":
@@ -184,17 +234,42 @@ func filesystemOperation(request filesystemRequest) (filesystemResponse, error) 
 	}
 }
 
+// directoryNames returns the first limit names in sorted order, and whether
+// more remain. Sorting needs every name, which is cheap; only the names
+// returned are stat'ed.
+func directoryNames(path string, limit int64) ([]string, bool, error) {
+	directory, err := os.Open(path)
+	if err != nil {
+		return nil, false, err
+	}
+	defer directory.Close()
+	names, err := directory.Readdirnames(-1)
+	if err != nil {
+		return nil, false, err
+	}
+	sort.Strings(names)
+	truncated := limit > 0 && int64(len(names)) > limit
+	if truncated {
+		names = names[:limit]
+	}
+	return names, truncated, nil
+}
+
 func filesystemStat(path string) (filesystemInfo, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return filesystemInfo{}, err
 	}
+	return filesystemInfoOf(info), nil
+}
+
+func filesystemInfoOf(info os.FileInfo) filesystemInfo {
 	stat := info.Sys().(*syscall.Stat_t)
 	return filesystemInfo{
 		Name: info.Name(), Mode: stat.Mode, Size: info.Size(), ModTime: info.ModTime().Unix(),
 		Owner: strconv.FormatUint(uint64(stat.Uid), 10), Group: strconv.FormatUint(uint64(stat.Gid), 10),
 		IsDir: info.IsDir(), Permissions: stat.Mode & 0777,
-	}, nil
+	}
 }
 
 func uploadFilesystemFile(source, target string, mode os.FileMode) error {
