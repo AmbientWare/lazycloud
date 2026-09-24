@@ -8,9 +8,10 @@ import (
 	"io"
 	"net/http"
 	"slices"
+	"sync"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
@@ -19,13 +20,62 @@ import (
 
 // storeConfig is STORE.json: the workspace bucket credentials the worker holds.
 type storeConfig struct {
-	EndpointURL    string `json:"endpoint_url"`
-	Region         string `json:"region"`
-	Bucket         string `json:"bucket"`
-	AccessKey      string `json:"access_key"`
-	SecretKey      string `json:"secret_key"`
-	SessionToken   string `json:"session_token"`
-	ForcePathStyle bool   `json:"force_path_style"`
+	EndpointURL    string     `json:"endpoint_url"`
+	Region         string     `json:"region"`
+	Bucket         string     `json:"bucket"`
+	AccessKey      string     `json:"access_key"`
+	SecretKey      string     `json:"secret_key"`
+	SessionToken   string     `json:"session_token"`
+	ForcePathStyle bool       `json:"force_path_style"`
+	ExpiresAt      *time.Time `json:"expires_at"`
+}
+
+// storeCredentialMargin is how long before its credentials expire the engine
+// reads STORE.json again. The worker replaces the file at half the grant's
+// life, so a fresh grant is normally waiting there well before this.
+const storeCredentialMargin = 2 * time.Minute
+
+// storeCredentials signs with the credentials in STORE.json and reads the file
+// again once they come within storeCredentialMargin of expiring. One engine
+// call can outlast one grant; the worker rewrites the file while the call runs.
+type storeCredentials struct {
+	path    string
+	now     func() time.Time
+	mu      sync.Mutex
+	current aws.Credentials
+}
+
+func (p *storeCredentials) Retrieve(context.Context) (aws.Credentials, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	now := p.now()
+	if p.current.HasKeys() &&
+		(!p.current.CanExpire || now.Before(p.current.Expires.Add(-storeCredentialMargin))) {
+		return p.current, nil
+	}
+	var config storeConfig
+	if err := readJSONFile(p.path, &config); err != nil {
+		return aws.Credentials{}, err
+	}
+	if config.AccessKey == "" || config.SecretKey == "" {
+		return aws.Credentials{}, fmt.Errorf("%s has no access_key or secret_key", p.path)
+	}
+	credentials := aws.Credentials{
+		AccessKeyID:     config.AccessKey,
+		SecretAccessKey: config.SecretKey,
+		SessionToken:    config.SessionToken,
+	}
+	if config.ExpiresAt != nil {
+		if !now.Before(*config.ExpiresAt) {
+			return aws.Credentials{}, fmt.Errorf(
+				"the workspace storage credentials in %s expired at %s and the worker did not replace them",
+				p.path, config.ExpiresAt.UTC().Format(time.RFC3339))
+		}
+		credentials.CanExpire = true
+		credentials.Expires = *config.ExpiresAt
+	}
+	p.current = credentials
+	return credentials, nil
 }
 
 type objectStore struct {
@@ -38,18 +88,18 @@ func openStore(path string) (*objectStore, error) {
 	if err := readJSONFile(path, &config); err != nil {
 		return nil, err
 	}
-	for _, field := range [][2]string{
-		{"region", config.Region}, {"bucket", config.Bucket},
-		{"access_key", config.AccessKey}, {"secret_key", config.SecretKey},
-	} {
+	for _, field := range [][2]string{{"region", config.Region}, {"bucket", config.Bucket}} {
 		if field[1] == "" {
 			return nil, fmt.Errorf("%s has no %s", path, field[0])
 		}
 	}
+	credentials := &storeCredentials{path: path, now: time.Now}
+	if _, err := credentials.Retrieve(context.Background()); err != nil {
+		return nil, err
+	}
 	options := s3.Options{
-		Region: config.Region,
-		Credentials: credentials.NewStaticCredentialsProvider(
-			config.AccessKey, config.SecretKey, config.SessionToken),
+		Region:       config.Region,
+		Credentials:  credentials,
 		UsePathStyle: config.ForcePathStyle,
 		// Compute checksums only where S3 requires them. S3-compatible stores
 		// reject the streaming trailers the SDK otherwise adds to every upload.
