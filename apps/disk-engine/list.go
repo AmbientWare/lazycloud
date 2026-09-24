@@ -129,7 +129,10 @@ func runUsage(ctx context.Context, args []string) (any, error) {
 		return nil, err
 	}
 	var result usageResult
-	for _, l := range state.Layers[min(state.lowestLocal()+1, len(state.Layers)):] {
+	// Compaction commits into the lowest local layer, so that one is not
+	// unmerged unless it is the head, which is never committed.
+	unmerged := min(state.lowestLocal()+1, len(state.Layers)-1)
+	for _, l := range state.Layers[unmerged:] {
 		allocated, err := allocatedBytes(p.layerPath(l))
 		if err != nil {
 			return nil, err
