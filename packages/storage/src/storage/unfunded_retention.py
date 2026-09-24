@@ -161,11 +161,11 @@ class UnfundedStorageRetentionService:
             workspace_id=workspace_id, after="", limit=self.max_items_per_workspace
         )
         for disk in disks:
-            if not repository.lock_disk(disk.id, workspace_id=workspace_id):
+            if not repository.lock_disk(str(disk.row.id), workspace_id=workspace_id):
                 continue
             try:
                 self.disks.request_deletion_in_session(
-                    session, disk.name, workspace_id=workspace_id, now=now
+                    session, disk.row.name, workspace_id=workspace_id, now=now
                 )
             except (ConflictError, NotFoundError):
                 continue

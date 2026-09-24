@@ -86,7 +86,7 @@ def test_one_container_writes_a_disk_until_its_worker_releases_it(
         assert row is not None
         row.status = ContainerStatus.Stopped.value
     shown = disks.get("box-root", workspace_id=workspace_id)
-    assert shown.status is DiskStatus.Detached and not shown.holder_container_id
+    assert shown.status is DiskStatus.Saving and shown.holder_container_id == first
     with pytest.raises(ConflictError, match="held by container"):
         disks.acquire(disk_id, container_id=second, worker_id="worker-b")
 
@@ -94,6 +94,8 @@ def test_one_container_writes_a_disk_until_its_worker_releases_it(
         row = session.get(ContainerTable, first)
         assert row is not None
         row.storage_released_at = utc_now()
+    shown = disks.get("box-root", workspace_id=workspace_id)
+    assert shown.status is DiskStatus.Detached and not shown.holder_container_id
     taken = disks.acquire(disk_id, container_id=second, worker_id="worker-b")
     assert taken.generation == 3
     assert [link.generation for link in taken.chain] == [3]

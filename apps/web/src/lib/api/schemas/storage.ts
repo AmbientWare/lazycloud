@@ -29,7 +29,7 @@ export const volumeListSchema = z.object({
   volumes: z.array(volumeSchema).default([]),
 });
 
-export const diskStatuses = ["detached", "attached", "deleting"] as const;
+export const diskStatuses = ["detached", "attached", "saving", "deleting"] as const;
 
 export const diskSchema = z.object({
   id: z.string(),

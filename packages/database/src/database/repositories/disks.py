@@ -87,23 +87,31 @@ class DiskAttachmentCheckpoint:
     """When the holding container stopped running; it holds nothing billable after."""
 
 
-def disk_from_table(row: DiskTable, *, holder_live: bool = True) -> DiskRecord:
-    """The disk as a reader sees it; a holder that stopped no longer holds it.
+@dataclass(frozen=True, slots=True)
+class DiskReading:
+    """A disk row with the container its lease names, read in the same query.
 
-    The row keeps a terminal holder until the next acquire clears it, since
-    only acquisition decides when its final publish is past. A reader is told
-    the disk is detached from the moment the holder stops.
+    The row keeps a stopped holder until the next acquire clears it, so the
+    row's status alone cannot say whether the holder still saves. The storage
+    owner decides that from `holder`.
     """
-    status = DiskStatus(row.status)
-    held = status is DiskStatus.Attached and holder_live
+
+    row: DiskTable
+    holder: DiskHolder | None
+
+
+def disk_from_table(row: DiskTable, *, status: DiskStatus | None = None) -> DiskRecord:
+    """The disk as a reader sees it, with the status its holder earns."""
+    shown = status or DiskStatus(row.status)
+    holding = shown in {DiskStatus.Attached, DiskStatus.Saving}
     return DiskRecord(
         id=str(row.id),
         name=row.name,
         size_bytes=row.size_bytes,
-        status=DiskStatus.Detached if status is DiskStatus.Attached and not held else status,
+        status=shown,
         generation=row.generation,
         stored_bytes=row.stored_bytes,
-        holder_container_id=str(row.holder_container_id or "") if held else "",
+        holder_container_id=str(row.holder_container_id or "") if holding else "",
         created_at=to_utc(row.created_at),
         updated_at=to_utc(row.updated_at),
     )
@@ -156,20 +164,17 @@ class DiskRepository:
         existing = self.get(name, workspace_id=workspace_id)
         if existing is None:
             raise ConflictError("disk changed during creation; retry the request")
-        return existing, False
+        return disk_from_table(existing.row), False
 
-    def get(self, name: str, *, workspace_id: str) -> DiskRecord | None:
+    def get(self, name: str, *, workspace_id: str) -> DiskReading | None:
         result = self.session.execute(
-            _with_holder_liveness().where(
+            _with_holder().where(
                 DiskTable.workspace_id == workspace_id,
                 DiskTable.name == name,
                 DiskTable.deleted_at.is_(None),
             )
         ).first()
-        if result is None:
-            return None
-        row, holder_live = result
-        return disk_from_table(row, holder_live=bool(holder_live))
+        return None if result is None else _reading(*result)
 
     def identity(self, disk_id: str) -> tuple[str, str] | None:
         """The live disk's workspace and name, resolved across workspaces."""
@@ -264,15 +269,15 @@ class DiskRepository:
         ).tuples()
         return {str(machine_id): count for machine_id, count in rows}
 
-    def list(self, *, workspace_id: str, after: str, limit: int) -> list[DiskRecord]:
-        statement = _with_holder_liveness().where(
+    def list(self, *, workspace_id: str, after: str, limit: int) -> list[DiskReading]:
+        statement = _with_holder().where(
             DiskTable.workspace_id == workspace_id,
             DiskTable.deleted_at.is_(None),
         )
         if after:
             statement = statement.where(DiskTable.name > after)
         rows = self.session.execute(statement.order_by(DiskTable.name).limit(limit)).tuples()
-        return [disk_from_table(row, holder_live=bool(live)) for row, live in rows]
+        return [_reading(*row) for row in rows]
 
     def workloads(self, disk_ids: Sequence[str]) -> dict[str, DiskWorkload]:
         """The workload each disk was last asked for by, while that workload is deployed.
@@ -685,10 +690,34 @@ _VOLUME_ATTACHED_STATES = ("attaching", "attached", "releasing", "detaching")
 """Volume states in which the volume holds one of its machine's attachments."""
 
 
-def _with_holder_liveness() -> Select[tuple[DiskTable, bool]]:
-    live = [status.value for status in LIVE_CONTAINER_STATUSES]
-    return select(DiskTable, ContainerTable.status.in_(live)).outerjoin(
-        ContainerTable, ContainerTable.id == DiskTable.holder_container_id
+def _with_holder() -> Select[tuple[DiskTable, str, datetime | None, str, str | None]]:
+    # An outer join: the container columns are None when the holder row is gone.
+    return select(
+        DiskTable,
+        ContainerTable.status,
+        ContainerTable.storage_released_at,
+        ContainerTable.runtime_worker_id,
+        ContainerTable.worker_id,
+    ).outerjoin(ContainerTable, ContainerTable.id == DiskTable.holder_container_id)
+
+
+def _reading(
+    row: DiskTable,
+    status: str | None,
+    storage_released_at: datetime | None,
+    runtime_worker_id: str | None,
+    worker_id: str | None,
+) -> DiskReading:
+    if not row.holder_container_id:
+        return DiskReading(row=row, holder=None)
+    return DiskReading(
+        row=row,
+        holder=DiskHolder(
+            container_id=str(row.holder_container_id),
+            status=None if status is None else ContainerStatus(status),
+            storage_released=status is None or storage_released_at is not None,
+            worker_id=runtime_worker_id or str(worker_id or ""),
+        ),
     )
 
 
@@ -700,6 +729,7 @@ __all__ = [
     "DiskMeteringCheckpoint",
     "DiskMeteringTarget",
     "DiskPlacementHint",
+    "DiskReading",
     "DiskRepository",
     "disk_from_table",
 ]
