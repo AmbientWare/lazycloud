@@ -236,6 +236,16 @@ def connection_role_statements(
                 "Condition": _MANAGED_RESOURCE_TAG,
             },
             {
+                # A persistent Spot request relaunches a terminated instance from
+                # its launch specification without the launch's tags. The node
+                # profile it keeps is the only evidence the relaunch is ours.
+                "Sid": "TerminateNodeProfileInstances",
+                "Effect": "Allow",
+                "Action": "ec2:TerminateInstances",
+                "Resource": arns.arn(_INSTANCE),
+                "Condition": {"ArnLike": {"ec2:InstanceProfile": arns.arn(_NODE_PROFILE)}},
+            },
+            {
                 "Sid": "CancelTaggedSpotRequests",
                 "Effect": "Allow",
                 "Action": "ec2:CancelSpotInstanceRequests",

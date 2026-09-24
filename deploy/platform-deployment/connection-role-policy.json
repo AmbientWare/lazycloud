@@ -111,6 +111,17 @@
       "Sid": "ManageTaggedRetainedInstances"
     },
     {
+      "Action": "ec2:TerminateInstances",
+      "Condition": {
+        "ArnLike": {
+          "ec2:InstanceProfile": "arn:aws:iam::*:instance-profile/compute-node-*"
+        }
+      },
+      "Effect": "Allow",
+      "Resource": "arn:aws:ec2:*:*:instance/*",
+      "Sid": "TerminateNodeProfileInstances"
+    },
+    {
       "Action": "ec2:CancelSpotInstanceRequests",
       "Condition": {
         "StringEquals": {
