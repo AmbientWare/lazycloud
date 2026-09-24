@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Play, Square } from "lucide-react";
 
@@ -77,6 +77,20 @@ function devboxAction(
   return devbox.state === "running" ? { kind: "stop" } : { kind: "start" };
 }
 
+/** How long a stop may go unconfirmed before the header shows the server's state again. */
+const STOP_CONFIRM_TIMEOUT_MS = 2 * 60_000;
+
+/**
+ * Whether the server has answered a stop: it reports the devbox stopped, or woken
+ * since. A woken devbox has a container other than the one being stopped, or a
+ * start queued with no container, which a parked devbox only has once woken.
+ */
+function stopSettled(devbox: Devbox, stoppingContainerId: string | null): boolean {
+  if (devbox.state === "stopped") return true;
+  if (devbox.container_id === null) return devbox.state === "starting";
+  return devbox.container_id !== stoppingContainerId;
+}
+
 /** Shell, Start and Stop for the devbox header. */
 export function DevboxActions({
   workspaceId,
@@ -86,7 +100,9 @@ export function DevboxActions({
   deploymentId: string;
 }) {
   const queryClient = useQueryClient();
-  const [stopRequested, setStopRequested] = useState(false);
+  // The container a stop was asked of, held until the server answers the stop.
+  const [stopRequest, setStopRequest] = useState<{ containerId: string | null } | null>(null);
+  const stopRequested = stopRequest !== null;
   const status = useQuery(
     devboxQueryOptions(workspaceId, deploymentId, { awaitingChange: stopRequested }),
   );
@@ -111,13 +127,18 @@ export function DevboxActions({
     onMutate: cancelPolls,
     onSuccess: (next) => queryClient.setQueryData(key, next),
     onError: () => {
-      setStopRequested(false);
+      setStopRequest(null);
       return queryClient.invalidateQueries({ queryKey: key });
     },
   });
-  if (stopRequested && !stop.isPending && devbox?.state === "stopped") {
-    setStopRequested(false);
+  if (stopRequest && !stop.isPending && devbox && stopSettled(devbox, stopRequest.containerId)) {
+    setStopRequest(null);
   }
+  useEffect(() => {
+    if (!stopRequest) return;
+    const timeout = window.setTimeout(() => setStopRequest(null), STOP_CONFIRM_TIMEOUT_MS);
+    return () => window.clearTimeout(timeout);
+  }, [stopRequest]);
 
   if (status.isPending) {
     return (
@@ -182,7 +203,7 @@ export function DevboxActions({
           className="min-w-26"
           onClick={() => {
             start.reset();
-            setStopRequested(true);
+            setStopRequest({ containerId: devbox.container_id });
             stop.mutate();
           }}
         >
