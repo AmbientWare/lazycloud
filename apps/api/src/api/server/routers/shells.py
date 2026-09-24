@@ -4,7 +4,7 @@ import asyncio
 import logging
 import socket
 from collections.abc import AsyncIterator
-from contextlib import AsyncExitStack
+from contextlib import AbstractAsyncContextManager, AsyncExitStack
 
 from execution.shells.service import ShellControlService
 from fastapi import (
@@ -174,7 +174,12 @@ async def shell_connect_tunnel(
     except Exception as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Failed to connect to container") from exc
     return StreamingResponse(
-        _proxy_http_shell_stream(request, backend, target.buffer_size_bytes),
+        _proxy_http_shell_stream(
+            request,
+            backend,
+            target.buffer_size_bytes,
+            hold=service.devbox_connection(target, workspace_id=workspace_id),
+        ),
         media_type="application/octet-stream",
         headers={"cache-control": "no-store"},
     )
@@ -249,20 +254,24 @@ async def _proxy_http_shell_stream(
     request: Request,
     backend: socket.socket,
     buffer_size_bytes: int,
+    *,
+    hold: AbstractAsyncContextManager[None],
 ) -> AsyncIterator[bytes]:
+    # Held inside the stream so a response that never starts takes no count.
     backend.setblocking(False)
     loop = asyncio.get_running_loop()
     writer = asyncio.create_task(_request_body_to_socket(request, backend, loop))
     try:
-        yield b"OK"
-        while True:
-            try:
-                data = await loop.sock_recv(backend, max(buffer_size_bytes, 1))
-            except OSError:
-                return
-            if not data:
-                return
-            yield data
+        async with hold:
+            yield b"OK"
+            while True:
+                try:
+                    data = await loop.sock_recv(backend, max(buffer_size_bytes, 1))
+                except OSError:
+                    return
+                if not data:
+                    return
+                yield data
     finally:
         writer.cancel()
         await asyncio.gather(writer, return_exceptions=True)
