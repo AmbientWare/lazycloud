@@ -1,6 +1,7 @@
 .devbox-section {
   border-bottom: 1px solid var(--input);
   padding-block: 64px 80px;
+  overflow: clip;
 }
 
 .devbox-layout {
@@ -8,6 +9,17 @@
   grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr);
   align-items: center;
   gap: 56px;
+  pointer-events: none;
+}
+
+.devbox-art-space {
+  height: clamp(420px, 40vw, 560px);
+}
+
+.devbox-copy {
+  position: relative;
+  z-index: 3;
+  pointer-events: auto;
 }
 
 .devbox-copy h2 {
@@ -62,16 +74,36 @@
 }
 
 .devbox-stage {
-  position: relative;
-  height: clamp(420px, 40vw, 560px);
-  width: calc(100% + 80px);
-  margin-left: -48px;
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  height: 100%;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.devbox-stage:focus-visible {
+  outline: 1px solid var(--ring);
+  outline-offset: -5px;
 }
 
 .devbox-stage canvas {
   display: block;
   width: 100%;
   height: 100%;
+  mask-image: linear-gradient(to right, #000 35%, #000b 49%, #0004 63%, #0003);
+}
+
+.devbox-stage::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  backdrop-filter: blur(5px);
+  mask-image: linear-gradient(to right, transparent 40%, #000 62%);
 }
 
 .devbox-preview-error {
@@ -96,10 +128,16 @@
     max-width: 560px;
   }
 
-  .devbox-stage {
+  .devbox-art-space {
     height: clamp(300px, 65vw, 520px);
-    width: 100%;
-    margin-left: 0;
+  }
+
+  .devbox-stage canvas {
+    mask-image: linear-gradient(to bottom, #0002 25%, #0004 45%, #000 65%);
+  }
+
+  .devbox-stage::after {
+    mask-image: linear-gradient(to bottom, #000 40%, transparent 65%);
   }
 }
 

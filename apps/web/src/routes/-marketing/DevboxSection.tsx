@@ -8,7 +8,7 @@ import "./devbox.css";
 
 export function DevboxSection() {
   const canvas = useRef<HTMLCanvasElement>(null);
-  const stage = useRef<HTMLDivElement>(null);
+  const stage = useRef<HTMLButtonElement>(null);
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
@@ -38,20 +38,24 @@ export function DevboxSection() {
 
   return (
     <section id="devboxes" aria-labelledby="devboxes-title" className="devbox-section scroll-mt-24">
+      <button
+        ref={stage}
+        type="button"
+        className="devbox-stage"
+        data-marketing-overlay
+        aria-label="Expand dev boxes"
+        aria-pressed="false"
+        title="Click to assemble or expand dev boxes"
+      >
+        <canvas ref={canvas} aria-hidden="true" />
+        {failed && (
+          <span className="devbox-preview-error" role="status">
+            The 3D preview could not load. Reload the page to try again.
+          </span>
+        )}
+      </button>
       <div className={`${shell} devbox-layout`}>
-        <div ref={stage} className="devbox-stage">
-          <canvas
-            ref={canvas}
-            role="img"
-            aria-label="A shared workspace connected to three separate cloud compute modules bearing the Codex, Claude Code, and OpenCode icons."
-          />
-          {failed && (
-            <p className="devbox-preview-error" role="status">
-              The 3D preview could not load. Reload the page to try again.
-            </p>
-          )}
-        </div>
-
+        <div className="devbox-art-space" aria-hidden="true" />
         <div className="devbox-copy">
           <h2 id="devboxes-title">
             <em>Dev boxes</em> for your coding agents.
