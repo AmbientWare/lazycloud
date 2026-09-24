@@ -491,6 +491,8 @@ class Scheduler:
     reconcile_agent_pools_enabled: bool = True
     managed_compute_reconcile_interval_seconds: float = MANAGED_COMPUTE_RECONCILE_INTERVAL_SECONDS
     last_managed_compute_reconcile_at: datetime | None = field(default=None, init=False)
+    last_reserve_refresh_at: datetime | None = field(default=None, init=False)
+    last_reserve_refresh_generation: int = field(default=0, init=False)
     worker_pool_drain_interval_seconds: float = 30.0
     last_worker_pool_drain_at: datetime | None = field(default=None, init=False)
     custom_domain_reconcile_interval_seconds: float = 60.0
@@ -923,6 +925,8 @@ class Scheduler:
             agent_pools = self._best_effort_reconcile_agent_pools(now=now)
         with timings.step("managed_compute"):
             managed_compute = self._best_effort_reconcile_managed_compute(now=now)
+        with timings.step("reserve_refresh"):
+            self._best_effort_refresh_stale_reserves(now=now)
         with timings.step("pool_states"):
             pool_states = self._best_effort_refresh_pool_states(now=now)
         with timings.step("capacity_reservations"):
@@ -1656,16 +1660,44 @@ class Scheduler:
                     self.compute_states.delete_unit_state(unit.workspace_id, unit.capacity_owner_id)
                     self.pool_states.pool_states.delete_unit_state(unit.capacity_owner_id)
             self.runtime_services.compute.reconcile_pooled_capacity(now=current_time)
-            releases = DeploymentReleaseService()
-            release = releases.active()
-            if release is not None and releases.controls(release):
-                self.runtime_services.compute.refresh_stale_reserve(
-                    release.target, now=current_time
-                )
             return []
         except Exception:
             LOGGER.exception("scheduler managed compute reconciliation failed")
             return []
+
+    def _best_effort_refresh_stale_reserves(self, *, now: datetime | None) -> None:
+        """Prepare stopped reserves again for the active release.
+
+        Runs on the minute, and at once when a release activates: every stopped
+        reserve predates it then, and a devbox start that resumes one before it
+        is refreshed pays for the agent update and the worker image pull.
+        Reading the active release is a file read, so checking it each pass
+        costs nothing until the generation moves.
+        """
+        if self.services is None:
+            return
+        releases = DeploymentReleaseService()
+        release = releases.active()
+        if release is None or not releases.controls(release):
+            return
+        current_time = now or utc_now()
+        if (
+            release.generation == self.last_reserve_refresh_generation
+            and self.last_reserve_refresh_at is not None
+            and (current_time - self.last_reserve_refresh_at).total_seconds()
+            < self.managed_compute_reconcile_interval_seconds
+        ):
+            return
+        if release.generation != self.last_reserve_refresh_generation:
+            LOGGER.info(
+                "release generation %d is active; checking stopped reserves", release.generation
+            )
+        self.last_reserve_refresh_generation = release.generation
+        self.last_reserve_refresh_at = current_time
+        try:
+            self.runtime_services.compute.refresh_stale_reserve(release.target, now=current_time)
+        except Exception:
+            LOGGER.exception("scheduler stopped reserve refresh failed")
 
     def _best_effort_schedule_function_retries(
         self, *, now: datetime | None, limit: int
