@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 
 import { ContainerFileBrowser } from "@/components/shared/ContainerFileBrowser";
 import { ChartSkeleton, ContainerMetricsCharts } from "@/components/shared/ContainerMetricsCharts";
@@ -12,6 +13,7 @@ import { LiveRelativeTime } from "@/components/shared/LiveTime";
 import { Panel } from "@/components/shared/Panel";
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { PanelError } from "@/components/shared/PanelError";
+import { LogViewer } from "@/components/shared/TaskDrawer/LogViewer";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import type { Devbox, DevboxPhase, DiskStatus } from "@/lib/api/schemas";
@@ -142,7 +144,7 @@ function idleStop(devbox: Devbox): ReactNode {
   return "None";
 }
 
-/** Files, versions and configuration beside the devbox's metrics. */
+/** Files, logs, versions and configuration beside the devbox's metrics. */
 export function DevboxWorkspace({
   workspaceId,
   workspaceName,
@@ -167,6 +169,7 @@ export function DevboxWorkspace({
   const status = useQuery(devboxQueryOptions(workspaceId, deploymentId));
   const devbox = status.data;
   const current = group.deployments.find((deployment) => deployment.id === deploymentId);
+  const logContainerId = devbox?.container_id ?? devbox?.failed_container_id ?? null;
 
   return (
     <>
@@ -177,6 +180,7 @@ export function DevboxWorkspace({
       >
         <LinearTabsList ariaLabel="Devbox views" className="min-h-11 shrink-0 bg-card px-2">
           <LinearTab value="files">Files</LinearTab>
+          <LinearTab value="logs">Logs</LinearTab>
           <LinearTab value="versions">Versions</LinearTab>
           <LinearTab value="configuration">Configuration</LinearTab>
         </LinearTabsList>
@@ -206,6 +210,40 @@ export function DevboxWorkspace({
               }
               className="h-56"
             />
+          )}
+        </TabsContent>
+        <TabsContent value="logs" className="m-0 flex min-h-0 flex-1 flex-col overflow-hidden">
+          {status.isError ? (
+            <PanelError message={status.error.message} />
+          ) : !devbox ? (
+            <Skeleton className="m-3 h-40" aria-hidden="true" />
+          ) : logContainerId ? (
+            <>
+              <div className="flex min-h-9 shrink-0 items-center justify-end border-b border-border/80 px-3 text-xs">
+                <Link
+                  to="/w/$workspace/apps/$appId/workloads/$kind/$name/instances/$containerId"
+                  params={{
+                    workspace: workspaceName,
+                    appId,
+                    kind: group.kind,
+                    name: group.name,
+                    containerId: logContainerId,
+                  }}
+                  className="interactive-link text-muted-foreground hover:text-foreground"
+                >
+                  Container details
+                </Link>
+              </div>
+              <PanelErrorBoundary key={logContainerId} title="Logs could not be displayed">
+                <LogViewer
+                  workspaceId={workspaceId}
+                  scope={{ containerId: logContainerId }}
+                  className="min-h-0 flex-1"
+                />
+              </PanelErrorBoundary>
+            </>
+          ) : (
+            <PanelEmpty message="Logs appear once the devbox starts" className="h-56" />
           )}
         </TabsContent>
         <TabsContent value="versions" className="m-0 min-h-0 flex-1 overflow-auto">

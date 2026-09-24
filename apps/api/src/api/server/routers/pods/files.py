@@ -3,6 +3,8 @@ from __future__ import annotations
 from execution.pods.service import PodControlService
 from fastapi import APIRouter, Depends, Query
 from shared.http.pods import (
+    POD_FILE_DOWNLOAD_MAX_BYTES,
+    POD_FILE_LIST_MAX_ENTRIES,
     PodSandboxDeleteFileResponse,
     PodSandboxDownloadFileResponse,
     PodSandboxFindInFilesRequest,
@@ -40,14 +42,19 @@ def sandbox_upload_file(
 def sandbox_download_file(
     container_id: str,
     container_path: str,
-    max_bytes: int | None = Query(default=None, ge=1),
+    max_bytes: int = Query(
+        default=POD_FILE_DOWNLOAD_MAX_BYTES, ge=1, le=POD_FILE_DOWNLOAD_MAX_BYTES
+    ),
+    truncate: bool = False,
     *,
     _auth: read_container,
     _transfer: read_transfer,
     service: PodControlService = Depends(pod_service),
 ) -> PodSandboxDownloadFileResponse:
-    """A file's bytes; with `max_bytes`, a larger file is refused before it is read."""
-    return service.sandbox_download_file(container_id, container_path, max_bytes=max_bytes)
+    """A file of at most `max_bytes`; with `truncate`, the first `max_bytes` of a larger one."""
+    return service.sandbox_download_file(
+        container_id, container_path, max_bytes=max_bytes, truncate=truncate
+    )
 
 
 @router.get("/{container_id}/files/stat", response_model=PodSandboxStatFileResponse)
@@ -64,12 +71,12 @@ def sandbox_stat_file(
 def sandbox_list_files(
     container_id: str,
     container_path: str = ".",
-    limit: int | None = Query(default=None, ge=1),
+    limit: int = Query(default=POD_FILE_LIST_MAX_ENTRIES, ge=1, le=POD_FILE_LIST_MAX_ENTRIES),
     *,
     _auth: read_container,
     service: PodControlService = Depends(pod_service),
 ) -> PodSandboxListFilesResponse:
-    """A directory's entries; with `limit`, at most that many, sorted by name."""
+    """A directory's first `limit` entries by name."""
     return service.sandbox_list_files(container_id, container_path, limit=limit)
 
 

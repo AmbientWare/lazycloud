@@ -9,6 +9,8 @@ const base = {
   cpu_total_millicores: 1000,
   memory_rss_bytes: 100 * 1024 * 1024,
   memory_total_bytes: 512 * 1024 * 1024,
+  disk_used_bytes: null,
+  disk_total_bytes: null,
 };
 
 describe("container metric chart data", () => {

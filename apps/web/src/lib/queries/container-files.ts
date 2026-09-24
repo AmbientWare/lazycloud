@@ -11,11 +11,11 @@ import {
 
 import { workspaceQueryKeys } from "./workspace-keys";
 
-/** The most entries one directory listing returns; the server reports whether it stopped short. */
+/** The most entries one directory listing shows; the server reports whether it stopped short. */
 export const CONTAINER_FILE_LIST_LIMIT = 1000;
 
-/** The largest file the browser reads; the server refuses a larger one before reading it. */
-export const CONTAINER_FILE_DOWNLOAD_LIMIT_BYTES = 10 * 1024 * 1024;
+/** How much of a file a preview reads. */
+export const CONTAINER_FILE_PREVIEW_BYTES = 256 * 1024;
 
 export function containerFilesQueryOptions(workspaceId: string, containerId: string, path: string) {
   const params = new URLSearchParams({
@@ -33,15 +33,30 @@ export function containerFilesQueryOptions(workspaceId: string, containerId: str
   });
 }
 
+/** A whole file, up to the server's download limit. */
 export function downloadContainerFile(
   workspaceId: string,
   containerId: string,
   path: string,
-  signal?: AbortSignal,
+): Promise<PodFileDownload> {
+  const params = new URLSearchParams({ container_path: path });
+  return apiRequest(
+    withWorkspace(`${filesPath(containerId)}/download?${params.toString()}`, workspaceId),
+    podFileDownloadSchema,
+  );
+}
+
+/** The first `CONTAINER_FILE_PREVIEW_BYTES` of a file, with `truncated` set when there is more. */
+export function readContainerFilePreview(
+  workspaceId: string,
+  containerId: string,
+  path: string,
+  signal: AbortSignal,
 ): Promise<PodFileDownload> {
   const params = new URLSearchParams({
     container_path: path,
-    max_bytes: String(CONTAINER_FILE_DOWNLOAD_LIMIT_BYTES),
+    max_bytes: String(CONTAINER_FILE_PREVIEW_BYTES),
+    truncate: "true",
   });
   return apiRequest(
     withWorkspace(`${filesPath(containerId)}/download?${params.toString()}`, workspaceId),

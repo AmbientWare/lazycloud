@@ -594,27 +594,31 @@ class PodControlService:
         container_id: str,
         container_path: str,
         *,
-        max_bytes: int | None = None,
+        max_bytes: int,
+        truncate: bool = False,
     ) -> PodSandboxDownloadFileResponse:
-        """A file's bytes, refused before reading when it is larger than `max_bytes`."""
-        client = self._client(container_id)
-        if max_bytes is not None:
-            stat = client.sandbox_stat_file(container_id, container_path)
-            _raise_container_response_error(stat)
-            if stat.file_info.is_dir:
-                raise InvalidInputError(f"{container_path} is a directory")
-            if stat.file_info.size > max_bytes:
-                raise InvalidInputError(
-                    f"{container_path} is {stat.file_info.size} bytes, over the "
-                    f"{max_bytes}-byte download limit"
-                )
-        response = client.sandbox_download_file(
+        """A file of at most `max_bytes`, or with `truncate`, the first `max_bytes` of any file.
+
+        The supervisor enforces the bound while it reads, since a size read
+        beforehand says nothing about a file still being written or one that
+        reports none, such as those under /proc.
+        """
+        response = self._client(container_id).sandbox_download_file(
             container_id,
             container_path,
-            max_bytes=max_bytes or 0,
+            # One byte past the bound tells a longer file from one that fits exactly.
+            max_bytes=max_bytes + 1 if truncate else max_bytes,
+            truncate=truncate,
         )
+        if response.over_limit:
+            raise InvalidInputError(
+                f"{container_path} is larger than the {max_bytes}-byte download limit"
+            )
         _raise_container_response_error(response)
-        return PodSandboxDownloadFileResponse.from_bytes(response.data)
+        data = response.data
+        if truncate and len(data) > max_bytes:
+            return PodSandboxDownloadFileResponse.from_bytes(data[:max_bytes], truncated=True)
+        return PodSandboxDownloadFileResponse.from_bytes(data)
 
     def sandbox_stat_file(
         self,
@@ -633,12 +637,12 @@ class PodControlService:
         container_id: str,
         container_path: str,
         *,
-        limit: int | None = None,
+        limit: int,
     ) -> PodSandboxListFilesResponse:
         response = self._client(container_id).sandbox_list_files(
             container_id,
             container_path,
-            limit=limit or 0,
+            limit=limit,
         )
         _raise_container_response_error(response)
         return PodSandboxListFilesResponse(

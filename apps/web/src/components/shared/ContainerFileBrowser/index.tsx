@@ -17,22 +17,20 @@ import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { PanelError } from "@/components/shared/PanelError";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { PodFileInfo } from "@/lib/api/schemas";
+import type { PodFileDownload, PodFileInfo } from "@/lib/api/schemas";
 import { base64ToBytes, downloadBlob } from "@/lib/files";
 import { exactTime, formatBytes, relativeTime } from "@/lib/format";
 import {
-  CONTAINER_FILE_DOWNLOAD_LIMIT_BYTES,
   CONTAINER_FILE_LIST_LIMIT,
   containerFilesQueryOptions,
   deleteContainerFileMutationOptions,
   downloadContainerFile,
+  readContainerFilePreview,
   uploadContainerFileMutationOptions,
 } from "@/lib/queries/container-files";
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 import { cn } from "@/lib/utils";
 import { useWorkspace } from "@/lib/workspace-context";
-
-const PREVIEW_LIMIT_BYTES = 256 * 1024;
 
 type Preview =
   | { path: string; state: "reading" }
@@ -104,22 +102,18 @@ export function ContainerFileBrowser({
   const openFile = async (file: PodFileInfo) => {
     const target = joinPath(path, file.name);
     clearPreview();
-    if (file.size > CONTAINER_FILE_DOWNLOAD_LIMIT_BYTES) {
-      setPreview({ path: target, state: "note", message: tooLargeMessage(file.size) });
-      return;
-    }
     const controller = new AbortController();
     previewRequest.current = { path: target, controller };
     setPreview({ path: target, state: "reading" });
     try {
-      const download = await downloadContainerFile(
+      const download = await readContainerFilePreview(
         workspace.id,
         containerId,
         target,
         controller.signal,
       );
       if (controller.signal.aborted) return;
-      setPreview(decodePreview(target, download.value_base64));
+      setPreview(decodePreview(target, download, file.size));
     } catch (error) {
       if (controller.signal.aborted) return;
       setPreview({
@@ -226,7 +220,6 @@ export function ContainerFileBrowser({
             <>
               {[...query.data.files].sort(byDirThenName).map((file) => {
                 const target = joinPath(path, file.name);
-                const tooLarge = !file.is_dir && file.size > CONTAINER_FILE_DOWNLOAD_LIMIT_BYTES;
                 return (
                   <div
                     key={file.name}
@@ -261,11 +254,17 @@ export function ContainerFileBrowser({
                     </span>
                     <span className="flex items-center justify-end gap-0.5">
                       {file.is_dir ? null : (
-                        <DownloadButton
-                          name={file.name}
-                          tooLarge={tooLarge}
-                          onDownload={() => void downloadFile(file)}
-                        />
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="size-7"
+                          aria-label={`Download ${file.name}`}
+                          title="Download"
+                          onClick={() => void downloadFile(file)}
+                        >
+                          <Download />
+                        </Button>
                       )}
                       {writable && !file.is_dir ? (
                         deleteTarget === target ? (
@@ -356,31 +355,6 @@ export function ContainerFileBrowser({
   );
 }
 
-function DownloadButton({
-  name,
-  tooLarge,
-  onDownload,
-}: {
-  name: string;
-  tooLarge: boolean;
-  onDownload: () => void;
-}) {
-  return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="icon"
-      className="size-7"
-      aria-label={`Download ${name}`}
-      title={tooLarge ? tooLargeMessage() : "Download"}
-      disabled={tooLarge}
-      onClick={onDownload}
-    >
-      <Download />
-    </Button>
-  );
-}
-
 function FileSkeleton() {
   return (
     <div aria-hidden="true">
@@ -392,13 +366,6 @@ function FileSkeleton() {
       ))}
     </div>
   );
-}
-
-function tooLargeMessage(size?: number): string {
-  const limit = formatBytes(CONTAINER_FILE_DOWNLOAD_LIMIT_BYTES);
-  return size === undefined
-    ? `Files over ${limit} don't download here`
-    : `This file is ${formatBytes(size)}. Files over ${limit} don't open or download here.`;
 }
 
 function byDirThenName(a: PodFileInfo, b: PodFileInfo): number {
@@ -421,18 +388,17 @@ function breadcrumbs(path: string): Array<{ label: string; path: string }> {
   return crumbs;
 }
 
-function decodePreview(path: string, valueBase64: string): Preview {
-  const bytes = base64ToBytes(valueBase64);
+function decodePreview(path: string, download: PodFileDownload, size: number): Preview {
+  const bytes = base64ToBytes(download.value_base64);
   if (bytes.subarray(0, 512).some((byte) => byte === 0)) {
-    return { path, state: "note", message: `Binary file, ${formatBytes(bytes.length)}.` };
+    return { path, state: "note", message: `Binary file, ${formatBytes(size)}.` };
   }
-  const decoder = new TextDecoder("utf-8", { fatal: false });
-  if (bytes.length > PREVIEW_LIMIT_BYTES) {
-    return {
-      path,
-      state: "text",
-      content: `[first ${formatBytes(PREVIEW_LIMIT_BYTES)} of ${formatBytes(bytes.length)}]\n${decoder.decode(bytes.subarray(0, PREVIEW_LIMIT_BYTES))}`,
-    };
-  }
-  return { path, state: "text", content: decoder.decode(bytes) };
+  const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+  return {
+    path,
+    state: "text",
+    content: download.truncated
+      ? `[first ${formatBytes(bytes.length)} of ${formatBytes(size)}]\n${text}`
+      : text,
+  };
 }

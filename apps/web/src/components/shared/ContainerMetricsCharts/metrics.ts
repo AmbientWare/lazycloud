@@ -12,8 +12,9 @@ export type MetricDatum = {
   memoryTotal: number;
   gpuMemoryUsed: number;
   gpuMemoryTotal: number;
-  diskUsed: number;
-  diskTotal: number;
+  /** Null where the sample has no reading, drawn as a gap. */
+  diskUsed: number | null;
+  diskTotal: number | null;
   /** Bytes per second over the sample interval; null for samples without one. */
   networkRecvRate: number | null;
   networkSentRate: number | null;

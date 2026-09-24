@@ -82,14 +82,32 @@ class PodSandboxUploadFileResponse(HttpModel):
     pass
 
 
+POD_FILE_LIST_MAX_ENTRIES = 10_000
+"""The most entries one directory listing returns, and what a listing gets by default."""
+
+POD_FILE_DOWNLOAD_MAX_BYTES = 64 * 1024 * 1024
+"""The largest file a download returns, and what a download gets by default.
+
+A download travels as base64 inside one JSON body, held whole in the worker and
+the API, so this bound is also what one request can cost them in memory.
+"""
+
+
 class PodSandboxDownloadFileResponse(EncodedBytesBody):
+    # Omitted when false, so a client from before the field still reads a
+    # whole-file download.
+    truncated: bool = Field(default=False, exclude_if=lambda value: not value)
+    """The body is the file's first `max_bytes` bytes and the file is longer."""
+
     @property
     def data(self) -> bytes:
         return self.bytes_value()
 
     @classmethod
-    def from_bytes(cls, value: bytes) -> PodSandboxDownloadFileResponse:
-        return cls(value_base64=EncodedBytesBody.from_bytes(value).value_base64)
+    def from_bytes(cls, value: bytes, *, truncated: bool = False) -> PodSandboxDownloadFileResponse:
+        return cls(
+            value_base64=EncodedBytesBody.from_bytes(value).value_base64, truncated=truncated
+        )
 
 
 class PodSandboxFileInfo(HttpModel):
@@ -105,8 +123,9 @@ class PodSandboxFileInfo(HttpModel):
 
 class PodSandboxListFilesResponse(HttpModel):
     files: list[PodSandboxFileInfo] = Field(default_factory=list)
-    truncated: bool = False
-    """The listing stopped at the requested limit with entries left unread."""
+    truncated: bool = Field(default=False, exclude_if=lambda value: not value)
+    """Only the first `limit` entries by name are listed. Omitted when false, so a
+    client from before the field still reads a complete listing."""
 
 
 class PodSandboxDeleteFileResponse(HttpModel):
@@ -284,6 +303,8 @@ class SandboxTimeline(HttpModel):
 
 
 __all__ = [
+    "POD_FILE_DOWNLOAD_MAX_BYTES",
+    "POD_FILE_LIST_MAX_ENTRIES",
     "CreatePodRequest",
     "CreatePodResponse",
     "PodFileSearchMatch",

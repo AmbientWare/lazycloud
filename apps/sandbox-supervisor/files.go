@@ -23,9 +23,23 @@ type filesystemRequest struct {
 	Pattern     string `json:"pattern"`
 	Replacement string `json:"replacement"`
 	// Limit caps the entries a listing returns and the bytes a download
-	// writes; zero leaves both unbounded.
-	Limit int64 `json:"limit"`
+	// writes; zero leaves both unbounded. A download over the limit is
+	// refused unless Truncate asks for its first Limit bytes instead.
+	Limit    int64 `json:"limit"`
+	Truncate bool  `json:"truncate"`
 }
+
+// maxFilesystemLimit keeps Limit+1 far from overflowing; the control plane
+// sends much smaller limits.
+const maxFilesystemLimit = 1 << 40
+
+// errOverLimit is the refusal a caller maps to its own client error rather
+// than a failure of the container.
+var errOverLimit = errors.New("over the download limit")
+
+// exitOverLimit is the exit status of a filesystem call refused with
+// errOverLimit; the worker reads it as a typed refusal.
+const exitOverLimit = 3
 
 type filesystemInfo struct {
 	Name        string `json:"name"`
@@ -50,7 +64,7 @@ type filesystemResponse struct {
 	FileInfo *filesystemInfo   `json:"file_info,omitempty"`
 	Files    []filesystemInfo  `json:"files,omitempty"`
 	Results  []filesystemMatch `json:"results,omitempty"`
-	// Truncated says a listing stopped at its limit with entries left unread.
+	// Truncated says a listing returned its first Limit names and more remain.
 	Truncated bool `json:"truncated,omitempty"`
 }
 
@@ -60,6 +74,9 @@ func runFilesystem(payload string) error {
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&request); err != nil {
 		return err
+	}
+	if request.Limit < 0 || request.Limit > maxFilesystemLimit {
+		return fmt.Errorf("limit %d is outside 0..%d", request.Limit, int64(maxFilesystemLimit))
 	}
 	response, err := filesystemOperation(request)
 	if err != nil {
@@ -96,18 +113,26 @@ func filesystemOperation(request filesystemRequest) (filesystemResponse, error) 
 			return response, err
 		}
 		defer input.Close()
-		if request.Limit <= 0 {
+		if request.Limit == 0 {
 			_, err = io.Copy(os.Stdout, input)
 			return response, err
 		}
-		// Reading one byte past the limit tells a file that grew after its
-		// size was checked apart from one that fits exactly.
+		if request.Truncate {
+			_, err = io.CopyN(os.Stdout, input, request.Limit)
+			if errors.Is(err, io.EOF) {
+				err = nil
+			}
+			return response, err
+		}
+		// The size is only known by reading: a file can grow while it is
+		// read, and /proc and device files report none. Reading one byte past
+		// the limit is what tells a file that fits exactly from a larger one.
 		written, err := io.CopyN(os.Stdout, input, request.Limit+1)
 		if err != nil && !errors.Is(err, io.EOF) {
 			return response, err
 		}
 		if written > request.Limit {
-			return response, fmt.Errorf("file is larger than the %d-byte download limit: %q", request.Limit, path)
+			return response, fmt.Errorf("%q is larger than %d bytes: %w", path, request.Limit, errOverLimit)
 		}
 		return response, nil
 	case "create-directory":
@@ -209,27 +234,24 @@ func filesystemOperation(request filesystemRequest) (filesystemResponse, error) 
 	}
 }
 
-// directoryNames reads at most limit names, sorted, and whether more remain.
-// Reading stops at the limit, so a directory's size never sets the cost.
+// directoryNames returns the first limit names in sorted order, and whether
+// more remain. Sorting needs every name, which is cheap; only the names
+// returned are stat'ed.
 func directoryNames(path string, limit int64) ([]string, bool, error) {
 	directory, err := os.Open(path)
 	if err != nil {
 		return nil, false, err
 	}
 	defer directory.Close()
-	count := -1
-	if limit > 0 {
-		count = int(limit) + 1
-	}
-	names, err := directory.Readdirnames(count)
-	if err != nil && !errors.Is(err, io.EOF) {
+	names, err := directory.Readdirnames(-1)
+	if err != nil {
 		return nil, false, err
 	}
+	sort.Strings(names)
 	truncated := limit > 0 && int64(len(names)) > limit
 	if truncated {
 		names = names[:limit]
 	}
-	sort.Strings(names)
 	return names, truncated, nil
 }
 

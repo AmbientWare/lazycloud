@@ -102,6 +102,9 @@ class DevboxResponse(HttpModel):
     container_id: str | None = None
     """The container running or starting the devbox; null while it is stopped."""
 
+    failed_container_id: str | None = None
+    """The container whose start failed, while `phase` is `failed`."""
+
     open_connections: int = Field(ge=0)
     """Connections held open through the pod's proxy, SSH sessions included."""
 

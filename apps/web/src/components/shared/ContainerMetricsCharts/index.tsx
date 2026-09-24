@@ -53,12 +53,13 @@ export function ContainerMetricsCharts({
   }
 
   const hasGpu = data.some((point) => point.gpuMemoryTotal > 0);
-  const hasDisk = data.some((point) => point.diskTotal > 0);
+  const hasDisk = data.some((point) => (point.diskTotal ?? 0) > 0);
   const hasIo = showIo && hasIoSamples(samples);
   const readout = latestComputeReadout(data);
   const latest = data[data.length - 1];
   const gpuReadout = latest?.gpuMemoryTotal ? formatBytes(latest.gpuMemoryUsed) : undefined;
-  const diskUsageReadout = latest?.diskTotal ? formatBytes(latest.diskUsed) : undefined;
+  const diskUsageReadout =
+    latest?.diskTotal && latest.diskUsed !== null ? formatBytes(latest.diskUsed) : undefined;
   const diskReadout =
     latest && latest.diskReadRate !== null && latest.diskWriteRate !== null
       ? `Read ${formatBytesPerSecond(latest.diskReadRate)} · write ${formatBytesPerSecond(latest.diskWriteRate)}`

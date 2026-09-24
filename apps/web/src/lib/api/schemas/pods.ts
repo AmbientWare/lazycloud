@@ -15,8 +15,10 @@ export const podFileListSchema = z.object({
   truncated: z.boolean().default(false),
 });
 
+// Synced to packages/shared/src/shared/http/pods.py (PodSandboxDownloadFileResponse).
 export const podFileDownloadSchema = z.object({
   value_base64: z.string().default(""),
+  truncated: z.boolean().default(false),
 });
 export type PodFileDownload = z.infer<typeof podFileDownloadSchema>;
 

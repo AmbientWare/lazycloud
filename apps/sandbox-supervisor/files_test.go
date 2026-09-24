@@ -1,19 +1,22 @@
 package main
 
 import (
+	"errors"
+	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
 )
 
-func TestListingStopsAtItsLimitAndKeepsDanglingLinks(t *testing.T) {
+func TestBoundedListingReturnsTheFirstNamesInOrderAndKeepsDanglingLinks(t *testing.T) {
 	root := t.TempDir()
-	for _, name := range []string{"a", "b", "c"} {
+	for _, name := range []string{"d", "b", "c"} {
 		if err := os.WriteFile(filepath.Join(root, name), []byte(name), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := os.Symlink(filepath.Join(root, "gone"), filepath.Join(root, "link")); err != nil {
+	if err := os.Symlink(filepath.Join(root, "gone"), filepath.Join(root, "a")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -21,8 +24,8 @@ func TestListingStopsAtItsLimitAndKeepsDanglingLinks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(bounded.Files) != 2 || !bounded.Truncated {
-		t.Fatalf("bounded listing returned %d files, truncated=%v", len(bounded.Files), bounded.Truncated)
+	if !bounded.Truncated || len(bounded.Files) != 2 || bounded.Files[0].Name != "a" || bounded.Files[1].Name != "b" {
+		t.Fatalf("bounded listing returned %+v, truncated=%v", bounded.Files, bounded.Truncated)
 	}
 
 	full, err := filesystemOperation(filesystemRequest{Operation: "list-files", Path: root})
@@ -34,26 +37,40 @@ func TestListingStopsAtItsLimitAndKeepsDanglingLinks(t *testing.T) {
 	}
 }
 
-func TestDownloadRefusesAFileOverItsLimit(t *testing.T) {
+func TestDownloadRefusesOverItsLimitOrReturnsAPrefix(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "data")
 	if err := os.WriteFile(path, []byte("12345"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	stdout := os.Stdout
-	sink, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+
+	if out, err := captureStdout(t, filesystemRequest{Operation: "download-file", Path: path, Limit: 5}); err != nil || out != "12345" {
+		t.Fatalf("a file at the limit returned %q, %v", out, err)
+	}
+	if _, err := captureStdout(t, filesystemRequest{Operation: "download-file", Path: path, Limit: 4}); !errors.Is(err, errOverLimit) {
+		t.Fatalf("a file over the limit returned %v", err)
+	}
+	if out, err := captureStdout(t, filesystemRequest{Operation: "download-file", Path: path, Limit: 3, Truncate: true}); err != nil || out != "123" {
+		t.Fatalf("a prefix read returned %q, %v", out, err)
+	}
+	if err := runFilesystem(`{"operation":"download-file","path":"` + path + `","limit":` + "9223372036854775807" + `}`); err == nil || errors.Is(err, errOverLimit) {
+		t.Fatalf("a limit of %d was accepted: %v", int64(math.MaxInt64), err)
+	}
+}
+
+func captureStdout(t *testing.T, request filesystemRequest) (string, error) {
+	t.Helper()
+	reader, writer, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
 	}
-	os.Stdout = sink
-	defer func() {
-		os.Stdout = stdout
-		sink.Close()
-	}()
-
-	if _, err := filesystemOperation(filesystemRequest{Operation: "download-file", Path: path, Limit: 5}); err != nil {
-		t.Fatalf("a file at the limit was refused: %v", err)
+	stdout := os.Stdout
+	os.Stdout = writer
+	_, opErr := filesystemOperation(request)
+	os.Stdout = stdout
+	writer.Close()
+	out, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := filesystemOperation(filesystemRequest{Operation: "download-file", Path: path, Limit: 4}); err == nil {
-		t.Fatal("a file over the limit was written")
-	}
+	return string(out), opErr
 }

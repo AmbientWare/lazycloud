@@ -135,7 +135,7 @@ class DevboxService:
             saving_disk = (
                 container is None and disk is not None and disk.status is DiskStatus.Saving
             )
-            recent_failure = (
+            failure = (
                 containers.recent_startup_failure(
                     stub.id,
                     since=self.clock()
@@ -159,7 +159,7 @@ class DevboxService:
                 else frozenset()
             ),
             saving_disk=saving_disk,
-            recent_failure=recent_failure,
+            recent_failure=failure.reason if failure is not None else None,
         )
         connections, idle_deadline = self._keep_alive(
             container,
@@ -172,8 +172,13 @@ class DevboxService:
             ssh_host=ssh_host_alias(workspace_name, resource.app.name, deployment.name),
             state=_state(container),
             phase=phase,
-            container_id=container.id if container is not None else None,
             phase_reason=reason,
+            container_id=container.id if container is not None else None,
+            failed_container_id=(
+                failure.container_id
+                if failure is not None and phase is DevboxPhase.Failed
+                else None
+            ),
             open_connections=connections,
             idle_deadline=idle_deadline,
             disk=(

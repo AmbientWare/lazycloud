@@ -219,6 +219,7 @@ class ContainerServiceClient:
         container_path: str,
         *,
         max_bytes: int = 0,
+        truncate: bool = False,
     ) -> ContainerSandboxDownloadFileResponse:
         return self._unary(
             ContainerServiceMethod.ContainerSandboxDownloadFile,
@@ -226,6 +227,7 @@ class ContainerServiceClient:
                 container_id=container_id,
                 container_path=container_path,
                 max_bytes=max_bytes,
+                truncate=truncate,
             ),
             ContainerSandboxDownloadFileResponse,
         )

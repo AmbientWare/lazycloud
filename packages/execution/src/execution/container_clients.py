@@ -88,6 +88,8 @@ class ContainerStderrResponse(ContainerOperationResponse, Protocol):
 class ContainerDownloadResponse(ContainerOperationResponse, Protocol):
     @property
     def data(self) -> bytes: ...
+    @property
+    def over_limit(self) -> bool: ...
 
 
 class ContainerStatResponse(ContainerOperationResponse, Protocol):
@@ -154,7 +156,12 @@ class PodContainerControlClient(Protocol):
         self, container_id: str, container_path: str, data: bytes, *, mode: int = 0o644
     ) -> ContainerOperationResponse: ...
     def sandbox_download_file(
-        self, container_id: str, container_path: str, *, max_bytes: int = 0
+        self,
+        container_id: str,
+        container_path: str,
+        *,
+        max_bytes: int = 0,
+        truncate: bool = False,
     ) -> ContainerDownloadResponse: ...
     def sandbox_stat_file(
         self, container_id: str, container_path: str

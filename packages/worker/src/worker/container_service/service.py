@@ -68,7 +68,9 @@ from worker.container_client.models import (
 )
 from worker.container_service.models import (
     CONTAINER_NOT_FOUND_MESSAGE,
+    SANDBOX_FILESYSTEM_OVER_LIMIT_EXIT,
     SANDBOX_PROCESS_MANAGER_NOT_READY_MESSAGE,
+    SandboxFileOverLimitError,
     SandboxFilesystemRequest,
     SandboxProcessEvent,
     SandboxProcessEventType,
@@ -454,9 +456,14 @@ class WorkerContainerService:
                     operation=SandboxFileOperation.DownloadFile,
                     path=request.container_path,
                     limit=request.max_bytes,
+                    truncate=request.truncate,
                 ),
             )
             return ContainerSandboxDownloadFileResponse(ok=True, data=data)
+        except SandboxFileOverLimitError as exc:
+            return ContainerSandboxDownloadFileResponse(
+                ok=False, error_msg=str(exc), over_limit=True
+            )
         except Exception as exc:
             return ContainerSandboxDownloadFileResponse(ok=False, error_msg=str(exc))
 
@@ -693,6 +700,8 @@ class WorkerContainerService:
         stdout, stderr, exit_code = self._sandbox_control_exec(
             instance, [CONTAINER_HELPER_PATH, "filesystem", request.model_dump_json()]
         )
+        if exit_code == SANDBOX_FILESYSTEM_OVER_LIMIT_EXIT:
+            raise SandboxFileOverLimitError(stderr.decode("utf-8", errors="replace").strip())
         if exit_code != 0:
             raise RuntimeError(
                 stderr.decode("utf-8", errors="replace").strip()
