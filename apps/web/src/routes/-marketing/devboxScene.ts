@@ -1,10 +1,6 @@
 import * as THREE from "three";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
-import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
-import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
-import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
-import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 
 const agents = [
   { icon: "codex", position: new THREE.Vector3(-2.15, 0.1, 0.2) },
@@ -49,47 +45,36 @@ export async function createDevboxScene(
       return image;
     }),
   );
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  renderer.setClearColor(0x000000, 1);
+  renderer.setClearColor(0x000000, 0);
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1;
   const scene = new THREE.Scene();
   const world = new THREE.Group();
-  scene.add(world, new THREE.HemisphereLight("#d6eeff", "#080e16", 1.2));
-  const key = new THREE.DirectionalLight("#e2f2ff", 4);
+  scene.add(world, new THREE.HemisphereLight("#e0e5e9", "#111519", 1.2));
+  const key = new THREE.DirectionalLight("#e2e8ed", 2);
   key.position.set(-3, 7, 4);
-  const rim = new THREE.DirectionalLight("#4faaff", 5);
+  const rim = new THREE.DirectionalLight("#7cabc4", 1.2);
   rim.position.set(4, 2, -5);
   scene.add(key, rim);
   const studio = new RoomEnvironment();
   const reflection = new THREE.PMREMGenerator(renderer);
   const environment = reflection.fromScene(studio, 0.04);
   scene.environment = environment.texture;
-  scene.environmentIntensity = 0.65;
+  scene.environmentIntensity = 0.35;
   studio.dispose();
   reflection.dispose();
 
   const camera = new THREE.OrthographicCamera(-5, 5, 4, -4, 0.1, 50);
   camera.position.set(6, 8, 12);
   camera.lookAt(0, 0, 0);
-  const renderTarget = new THREE.WebGLRenderTarget(1, 1, {
-    type: THREE.HalfFloatType,
-    samples: 4,
-  });
-  const composer = new EffectComposer(renderer, renderTarget);
-  const renderPass = new RenderPass(scene, camera);
-  const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.55, 0.5, 1.1);
-  const output = new OutputPass();
-  composer.addPass(renderPass);
-  composer.addPass(bloom);
-  composer.addPass(output);
 
   const geometries: THREE.BufferGeometry[] = [];
   const materials: THREE.Material[] = [];
   const textures: THREE.Texture[] = [];
   const cache = new Map<string, THREE.BufferGeometry>();
-  function metal(color: string, roughness = 0.28, metalness = 0.7) {
+  function metal(color: string, roughness = 0.75, metalness = 0.15) {
     const material = new THREE.MeshStandardMaterial({ color, roughness, metalness });
     materials.push(material);
     return material;
@@ -122,22 +107,19 @@ export async function createDevboxScene(
     geometries.push(geometry);
     return new THREE.Mesh(geometry, material);
   }
-  const graphite = metal("#18212d", 0.31);
-  const edge = metal("#526779", 0.26, 0.85);
-  const inset = metal("#0b121b", 0.4);
-  const glow = light("#50b7ff", 1.8);
-  const trace = light("#285778", 0.8);
-  const acrylic = new THREE.MeshPhysicalMaterial({
-    color: "#1470aa",
-    metalness: 0.25,
-    roughness: 0.18,
-    transparent: true,
-    opacity: 0.65,
-    clearcoat: 1,
-    emissive: "#08477c",
-    emissiveIntensity: 0.65,
+  const graphite = metal("#24282d");
+  const edge = metal("#394149", 0.65, 0.25);
+  const inset = metal("#181c21");
+  const glow = light("#659db7", 0.8);
+  const trace = light("#385b70", 0.8);
+  const coreMaterial = new THREE.MeshStandardMaterial({
+    color: "#294656",
+    metalness: 0.1,
+    roughness: 0.8,
+    emissive: "#214459",
+    emissiveIntensity: 0.15,
   });
-  materials.push(acrylic);
+  materials.push(coreMaterial);
   const plane = new THREE.PlaneGeometry(1, 1);
   geometries.push(plane);
 
@@ -162,7 +144,7 @@ export async function createDevboxScene(
     base.position.y = -0.2;
     const lower = box(1.98, 0.16, 1.98, graphite);
     lower.position.y = -0.11;
-    const core = box(1.85, 0.29, 1.85, acrylic);
+    const core = box(1.85, 0.29, 1.85, coreMaterial);
     core.position.y = 0.14;
     const coreLine = tube(roundedSquare(1.83, 0.15), 0.016, glow);
     const lid = new THREE.Group();
@@ -273,7 +255,7 @@ export async function createDevboxScene(
     }
     world.rotation.y = look.x * 0.1;
     world.rotation.x = look.y * 0.045;
-    composer.render();
+    renderer.render(scene, camera);
   }
   function tick(now: number) {
     animation = 0;
@@ -313,7 +295,6 @@ export async function createDevboxScene(
     camera.bottom = -halfHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(width, height, false);
-    composer.setSize(width, height);
     requestDraw();
   }
   function follow(event: PointerEvent) {
@@ -368,10 +349,6 @@ export async function createDevboxScene(
       for (const material of materials) material.dispose();
       for (const texture of textures) texture.dispose();
       environment.dispose();
-      renderPass.dispose();
-      bloom.dispose();
-      output.dispose();
-      composer.dispose();
       renderer.dispose();
     },
   };
