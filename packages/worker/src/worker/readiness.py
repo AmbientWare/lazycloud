@@ -18,6 +18,8 @@ def run_readiness_checks[T](label: str, checks: Mapping[str, Callable[[], T]]) -
     outcomes: dict[str, Future[T]] = {}
 
     def run(name: str, check: Callable[[], T], outcome: Future[T]) -> None:
+        if not outcome.set_running_or_notify_cancel():
+            return
         try:
             with timings.step(name):
                 result = check()
@@ -26,15 +28,15 @@ def run_readiness_checks[T](label: str, checks: Mapping[str, Callable[[], T]]) -
         else:
             outcome.set_result(result)
 
-    for name, check in checks.items():
-        outcome: Future[T] = Future()
-        outcomes[name] = outcome
-        Thread(
-            target=run, args=(name, check, outcome), name=f"readiness-{name}", daemon=True
-        ).start()
     results: dict[str, T] = {}
     failure: BaseException | None = None
     try:
+        for name, check in checks.items():
+            outcome: Future[T] = Future()
+            outcomes[name] = outcome
+            Thread(
+                target=run, args=(name, check, outcome), name=f"readiness-{name}", daemon=True
+            ).start()
         for name, outcome in outcomes.items():
             error = outcome.exception()
             if error is not None:
@@ -48,6 +50,11 @@ def run_readiness_checks[T](label: str, checks: Mapping[str, Callable[[], T]]) -
             raise failure
         return results
     finally:
+        # Validation can mutate host resources. Settle it before an interrupt
+        # reaches the caller's cleanup; preparation runs on its own daemon thread.
+        for outcome in outcomes.values():
+            if not outcome.cancel():
+                outcome.exception()
         timings.log(LOGGER, label)
 
 
