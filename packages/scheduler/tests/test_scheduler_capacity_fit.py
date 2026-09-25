@@ -388,7 +388,7 @@ def test_purchase_reservation_and_placement_agree_on_fit(
                 filter_offers(
                     [offer],
                     OfferRequest(min_cpu_millicores=cpu, min_memory_mb=memory),
-                    reported_memory={"offer": reported_memory},
+                    reported_memory={(node_cpu, node_memory, 0): reported_memory},
                 )
             )
             reservation = shape.can_host(

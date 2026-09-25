@@ -20,20 +20,23 @@ def upgrade() -> None:
         "AND (stopped_machines = 0 OR platform_fleet)",
     )
     op.drop_column("compute_units", "warm_handoff_from")
-    op.add_column(
-        "compute_units",
-        sa.Column("node_memory_mib", sa.BigInteger(), nullable=False, server_default="0"),
+    op.create_table(
+        "compute_node_shapes",
+        sa.Column("cpu_millicores", sa.Integer(), primary_key=True),
+        sa.Column("memory_mib", sa.Integer(), primary_key=True),
+        sa.Column("gpu_count", sa.Integer(), primary_key=True),
+        sa.Column("reported_memory_mib", sa.BigInteger(), nullable=False),
+        sa.CheckConstraint("reported_memory_mib > 0", name="ck_compute_node_shapes_memory"),
     )
     op.execute(
-        "UPDATE compute_units AS unit SET node_memory_mib = shape.memory "
-        "FROM (SELECT owner.worker_cpu_millicores AS cpu, owner.worker_memory_mib AS mem, "
-        "owner.worker_gpu_count AS gpu, min(enrollment.memory_mb) AS memory "
-        "FROM compute_units AS owner JOIN compute_machine_enrollments AS enrollment "
-        "ON enrollment.capacity_owner_id = owner.id "
-        "WHERE owner.visibility = 'internal' AND enrollment.memory_mb > 0 "
-        "GROUP BY 1, 2, 3) AS shape "
-        "WHERE unit.worker_cpu_millicores = shape.cpu AND unit.worker_memory_mib = shape.mem "
-        "AND unit.worker_gpu_count = shape.gpu"
+        "INSERT INTO compute_node_shapes "
+        "(cpu_millicores, memory_mib, gpu_count, reported_memory_mib) "
+        "SELECT unit.worker_cpu_millicores, unit.worker_memory_mib, unit.worker_gpu_count, "
+        "min(enrollment.memory_mb) "
+        "FROM compute_machine_enrollments AS enrollment "
+        "JOIN compute_units AS unit ON unit.id = enrollment.capacity_owner_id "
+        "WHERE unit.visibility = 'internal' AND enrollment.memory_mb > 0 "
+        "GROUP BY 1, 2, 3"
     )
     op.create_index(
         "ix_compute_units_platform_live",
@@ -59,7 +62,7 @@ def downgrade() -> None:
     )
     op.drop_index("ix_compute_provider_instances_live", table_name="compute_provider_instances")
     op.drop_index("ix_compute_units_platform_live", table_name="compute_units")
-    op.drop_column("compute_units", "node_memory_mib")
+    op.drop_table("compute_node_shapes")
     op.add_column(
         "compute_units",
         sa.Column(

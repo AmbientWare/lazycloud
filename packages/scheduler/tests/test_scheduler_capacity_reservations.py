@@ -743,7 +743,7 @@ def test_capacity_reservation_reuses_machine_during_prepared_worker_update(
     )
     unit = _managed_pool()
     controller = ComputeUnitCapacityController(
-        unit.workspace_id, unit, _UnusedComputeCapacity(unit), workers
+        unit.workspace_id, unit, _UnusedComputeCapacity(unit), workers, 0
     )
     reservation = CapacityProvisioningReservation(
         id="worker-update-demand",
@@ -766,6 +766,7 @@ def test_fixed_pool_rejects_cross_workspace_and_oversized_capacity_requests() ->
         _managed_pool(),
         _UnusedComputeCapacity(_managed_pool()),
         _WorkerRepository(),
+        0,
     )
     assert compute.accepts(_request("fits"))
     assert not compute.accepts(
@@ -783,7 +784,7 @@ def test_fixed_pool_rejects_cross_workspace_and_oversized_capacity_requests() ->
 def test_platform_capacity_accepts_customer_cold_requests_in_the_requested_market() -> None:
     unit = _managed_pool().model_copy(update={"platform_fleet": True})
     controller = ComputeUnitCapacityController(
-        unit.workspace_id, unit, _UnusedComputeCapacity(unit), _WorkerRepository()
+        unit.workspace_id, unit, _UnusedComputeCapacity(unit), _WorkerRepository(), 0
     )
     request = _request("customer-cold-capacity").model_copy(update={"preemptible": False})
 

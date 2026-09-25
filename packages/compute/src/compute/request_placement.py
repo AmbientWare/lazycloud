@@ -33,7 +33,9 @@ class PooledCapacityOwner(Protocol):
 
     def pooled_offer_owners(
         self, provider: ResolvedComputeProvider, offers: list[ComputeOffer]
-    ) -> dict[str, tuple[str, int]]: ...
+    ) -> dict[str, str]: ...
+
+    def reported_node_memory(self) -> dict[tuple[int, int, int], int]: ...
 
     def prepare_pooled_offer(
         self,
@@ -90,6 +92,7 @@ class ComputeCapacityPlacementService:
         )
         offers: list[tuple[ResolvedComputeProvider, ComputeOffer, str]] = []
         failures: list[str] = []
+        reported_memory = self.compute.reported_node_memory()
         for provider in providers:
             policy = provider.policy
             if provider.pooled is None or policy is None or not policy.can_purchase:
@@ -113,18 +116,14 @@ class ComputeCapacityPlacementService:
                         and offer.cost_terms.complete_hourly_cost_micros is not None
                     ],
                     purchase,
+                    reported_memory=reported_memory,
                 )
             except Exception:
                 LOGGER.exception("provider offer discovery failed for %s", provider.ref)
                 failures.append(provider.ref)
                 continue
-            owned = self.compute.pooled_offer_owners(provider, candidates)
-            candidates = filter_offers(
-                candidates,
-                purchase,
-                reported_memory={offer_id: memory for offer_id, (_, memory) in owned.items()},
-            )
-            offers.extend((provider, offer, owned[offer.id][0]) for offer in candidates)
+            owners = self.compute.pooled_offer_owners(provider, candidates)
+            offers.extend((provider, offer, owners[offer.id]) for offer in candidates)
         admission = self.compute.reserve_admission()
         purchases: dict[str, ComputeCapacityPurchase] = {}
         for provider, offer, owner_id in sorted(

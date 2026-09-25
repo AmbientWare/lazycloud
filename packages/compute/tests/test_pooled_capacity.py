@@ -702,7 +702,7 @@ def test_purchase_admission_respects_fleet_headroom_and_market_cooldown(
 
     def controllers() -> tuple[ComputeUnitCapacityController, ...]:
         return tuple(
-            ComputeUnitCapacityController(item.workspace_id, item, compute, workers)
+            ComputeUnitCapacityController(item.workspace_id, item, compute, workers, 0)
             for item in compute.platform_units()
         )
 
@@ -774,7 +774,7 @@ def test_waiting_capacity_claim_resumes_after_fleet_headroom_reopens(
 
     def controllers() -> tuple[ComputeUnitCapacityController, ...]:
         return tuple(
-            ComputeUnitCapacityController(item.workspace_id, item, compute, workers)
+            ComputeUnitCapacityController(item.workspace_id, item, compute, workers, 0)
             for item in compute.platform_units()
         )
 
@@ -2036,7 +2036,7 @@ def test_registered_reservation_settles_against_durable_purchase_outcome(
                     operation_id=acquisition.operation_id,
                 )
             )
-    controller = ComputeUnitCapacityController(pool.workspace_id, pool, compute, workers)
+    controller = ComputeUnitCapacityController(pool.workspace_id, pool, compute, workers, 0)
     service = CapacityReservationService(reservations, lambda: (controller,))
     service.reconcile([], now=now)
     service.reconcile([], now=now)

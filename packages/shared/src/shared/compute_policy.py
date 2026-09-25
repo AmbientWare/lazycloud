@@ -185,12 +185,6 @@ class ComputeUnitRecord(CapacityOwnerIdentity):
     min_free_gpu_count: int = Field(default=0, ge=0)
     worker_cpu_millicores: int = Field(default=0, ge=0)
     worker_memory_mib: int = Field(default=0, ge=0)
-    node_memory_mib: int = Field(default=0, ge=0)
-    """The least memory a machine of this shape has reported, 0 until one enrolls.
-
-    Recorded by enrollment alone, and never written back from this record, so a
-    stale copy cannot erase an observation.
-    """
     worker_gpu_type: str = Field(default="", max_length=160)
     worker_gpu_count: int = Field(default=0, ge=0)
     worker_runtimes: tuple[str, ...] = (OciRuntimeName.Runsc.value,)

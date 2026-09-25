@@ -413,6 +413,8 @@ class ComputeUnitCapacityController:
     unit: ComputeUnitRecord
     compute: ComputeCapacityService
     workers: CapacityWorkerRepository
+    reported_memory_mib: int
+    """The memory machines of the unit's shape report, or 0 until one has enrolled."""
 
     @property
     def capacity_owner_id(self) -> str:
@@ -473,10 +475,6 @@ class ComputeUnitCapacityController:
         return self.reservation_shape(request).can_host(
             request, reported_memory_mib=self.reported_memory_mib
         )
-
-    @property
-    def reported_memory_mib(self) -> int:
-        return self.unit.node_memory_mib
 
     def reservation_shape(self, request: SchedulerWorkerRequest) -> CapacityRequestShape:
         return CapacityRequestShape(

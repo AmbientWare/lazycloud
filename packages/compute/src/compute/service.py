@@ -1546,16 +1546,17 @@ class ComputeService:
             rows = ComputeUnitRepository(session).stopped_reserve_units()
         return reserve_admission(rows, self.fleet_policy)
 
+    def reported_node_memory(self) -> dict[tuple[int, int, int], int]:
+        with self.context.database.session() as session:
+            return ComputeUnitRepository(session).reported_node_memory()
+
     def pooled_offer_owner_id(self, provider: ResolvedComputeProvider, offer: ComputeOffer) -> str:
-        return self.pooled_offer_owners(provider, [offer])[offer.id][0]
+        return self.pooled_offer_owners(provider, [offer])[offer.id]
 
     def pooled_offer_owners(
         self, provider: ResolvedComputeProvider, offers: list[ComputeOffer]
-    ) -> dict[str, tuple[str, int]]:
-        """Each offer's owning unit, and the memory its machines report or 0 if none has.
-
-        An offer no unit owns yet takes what machines of its shape reported in others.
-        """
+    ) -> dict[str, str]:
+        """The unit that owns, or would own, each offer."""
         policy = provider.policy
         if policy is None or provider.pooled is None:
             raise InvalidInputError("offer does not belong to a pooled provider")
@@ -1573,34 +1574,19 @@ class ComputeService:
         if not identities:
             return {}
         with self.context.database.session() as session:
-            units = ComputeUnitRepository(session)
-            states = units.offer_states(tuple(set(identities.values())))
-            unreported = any(
-                (state := states.get(identity)) is None or state.reported_memory_mib == 0
-                for identity in identities.values()
-            )
-            shapes = units.reported_memory_by_shape() if unreported else {}
-        owners: dict[str, tuple[str, int]] = {}
-        for offer in offers:
-            identity = identities[offer.id]
-            state = states.get(identity)
-            owner_id = (
-                state.id
-                if state is not None
-                else internal_unit_identity(
-                    workspace_id=identity[0],
-                    provider_ref=identity[1],
-                    region=identity[2],
-                    capability_key=identity[3],
-                    root_volume_gib=identity[4],
-                )[0]
-            )
-            owners[offer.id] = (
-                owner_id,
-                (state.reported_memory_mib if state is not None else 0)
-                or shapes.get((offer.cpu_millicores, offer.memory_mb, offer.gpu_count), 0),
-            )
-        return owners
+            states = ComputeUnitRepository(session).offer_states(tuple(set(identities.values())))
+        return {
+            offer_id: state.id
+            if (state := states.get(identity)) is not None
+            else internal_unit_identity(
+                workspace_id=identity[0],
+                provider_ref=identity[1],
+                region=identity[2],
+                capability_key=identity[3],
+                root_volume_gib=identity[4],
+            )[0]
+            for offer_id, identity in identities.items()
+        }
 
     def prepare_pooled_offer(
         self,
@@ -2146,7 +2132,6 @@ class ComputeService:
                 # earns an opt-in, and keeps the flag for it.
                 worker_cpu_millicores=offer.cpu_millicores,
                 worker_memory_mib=offer.memory_mb,
-                node_memory_mib=current.node_memory_mib if current is not None else 0,
                 worker_gpu_type=offer.gpu or "",
                 worker_gpu_count=offer.gpu_count,
                 worker_runtimes=(offer.runtime,),
@@ -2182,9 +2167,6 @@ class ComputeService:
             created = current is None
             if current is None or unit != current:
                 current = repository.upsert(unit)
-            if created:
-                repository.inherit_node_memory(current.id)
-                current = repository.get(current.id) or current
             if baseline is not None and not unit_platform_fleet:
                 self._clear_other_internal_pool_floors(
                     session,
@@ -3175,11 +3157,13 @@ class ComputeService:
             if can_retain and stopped_target is not None:
                 # The used machine becomes a reserve only while the market's
                 # reserves, without it, fall short of the target the planner set.
-                held = machine_capacity(
+                shape = (
                     current.worker_cpu_millicores,
                     current.worker_memory_mib,
                     current.worker_gpu_count,
-                    reported_memory_mib=current.node_memory_mib,
+                )
+                held = machine_capacity(
+                    *shape, reported_memory_mib=units.reported_node_memory().get(shape, 0)
                 ) * (retained - 1)
                 for unit_id, count, cpu, memory, reported, gpu in units.platform_stopped_reserves(
                     preemptible=current.worker_preemptible, gpu_type=current.worker_gpu_type

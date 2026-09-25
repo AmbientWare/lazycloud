@@ -197,9 +197,6 @@ class ComputeUnitTable(IdTable, DatabaseBase):
     min_free_gpu_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     worker_cpu_millicores: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     worker_memory_mib: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    node_memory_mib: Mapped[int] = mapped_column(
-        BigInteger, nullable=False, default=0, server_default=text("0")
-    )
     worker_gpu_type: Mapped[str] = mapped_column(String(160), nullable=False, default="")
     worker_gpu_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     worker_runtimes: Mapped[list[str]] = mapped_column(ARRAY(String(80)), nullable=False)
@@ -226,6 +223,25 @@ class ComputeUnitTable(IdTable, DatabaseBase):
     supplier_cpu_count: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     replacement_machine_id: Mapped[str] = mapped_column(String(160), nullable=False)
     replacement_template_version: Mapped[str] = mapped_column(String(160), nullable=False)
+
+
+class ComputeNodeShapeTable(DatabaseBase):
+    """The least memory an enrolled machine of one nominal shape reported.
+
+    Machines report less memory than their offer's nominal size, and every
+    machine of a shape reports about the same, so the fact is kept once per shape
+    rather than on each unit.
+    """
+
+    __tablename__ = "compute_node_shapes"
+    __table_args__ = (
+        CheckConstraint("reported_memory_mib > 0", name="ck_compute_node_shapes_memory"),
+    )
+
+    cpu_millicores: Mapped[int] = mapped_column(Integer, primary_key=True)
+    memory_mib: Mapped[int] = mapped_column(Integer, primary_key=True)
+    gpu_count: Mapped[int] = mapped_column(Integer, primary_key=True)
+    reported_memory_mib: Mapped[int] = mapped_column(BigInteger, nullable=False)
 
 
 class ComputeCapacityOperationTable(IdTable, DatabaseBase):

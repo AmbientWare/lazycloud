@@ -13,6 +13,7 @@ from database.tables.compute import (
     ComputeCapacityOperationTable,
     ComputeJoinCredentialTable,
     ComputeMachineEnrollmentTable,
+    ComputeNodeShapeTable,
     ComputeProviderInstanceTable,
     ComputeUnitTable,
 )
@@ -58,14 +59,17 @@ from sqlalchemy import (
     delete,
     exists,
     func,
+    literal,
     or_,
     select,
     text,
     tuple_,
     update,
 )
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.engine import CursorResult
-from sqlalchemy.orm import Session, aliased
+from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import ColumnElement
 
 
 class ComputeCapacityOperationRecord(ContractModel):
@@ -111,7 +115,6 @@ class ComputeOfferState:
     phase: ComputeUnitPhase
     provider_state: ComputeUnitProviderState
     registration_timeout_seconds: int
-    reported_memory_mib: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -480,7 +483,6 @@ def _compute_unit_record(row: ComputeUnitTable) -> ComputeUnitRecord:
             "min_free_gpu_count": row.min_free_gpu_count,
             "worker_cpu_millicores": row.worker_cpu_millicores,
             "worker_memory_mib": row.worker_memory_mib,
-            "node_memory_mib": row.node_memory_mib,
             "worker_gpu_type": row.worker_gpu_type,
             "worker_gpu_count": row.worker_gpu_count,
             "worker_runtimes": row.worker_runtimes,
@@ -577,9 +579,10 @@ class ComputeUnitRepository:
                 func.coalesce(load.c.cpu, 0),
                 func.coalesce(load.c.memory, 0),
                 func.coalesce(load.c.gpu, 0),
-                unit.node_memory_mib,
+                _reported_memory(),
             )
             .select_from(unit)
+            .outerjoin(ComputeNodeShapeTable, _same_shape(unit))
             .outerjoin(
                 instance,
                 and_(instance.pool_id == unit.id, instance.status.not_in(("deleted", "failed"))),
@@ -659,62 +662,45 @@ class ComputeUnitRepository:
         return PlatformReserveRows(units=tuple(units.values()), instances=tuple(instances))
 
     def record_node_memory(self, unit_id: str, memory_mib: int) -> None:
-        """Keep the least memory a machine of this unit, and of its shape, reported."""
+        """Keep the least memory a machine of this unit's shape has reported."""
         if memory_mib <= 0:
             return
         unit = ComputeUnitTable
-        shape = (
-            select(unit.worker_cpu_millicores, unit.worker_memory_mib, unit.worker_gpu_count)
-            .where(unit.id == unit_id)
-            .subquery()
+        shape = ComputeNodeShapeTable
+        statement = postgresql_insert(shape).from_select(
+            ["cpu_millicores", "memory_mib", "gpu_count", "reported_memory_mib"],
+            select(
+                unit.worker_cpu_millicores,
+                unit.worker_memory_mib,
+                unit.worker_gpu_count,
+                literal(memory_mib, BigInteger),
+            ).where(unit.id == unit_id),
         )
         self.session.execute(
-            update(unit)
-            .where(
-                unit.worker_cpu_millicores == shape.c.worker_cpu_millicores,
-                unit.worker_memory_mib == shape.c.worker_memory_mib,
-                unit.worker_gpu_count == shape.c.worker_gpu_count,
-                or_(unit.node_memory_mib == 0, unit.node_memory_mib > memory_mib),
+            statement.on_conflict_do_update(
+                index_elements=[shape.cpu_millicores, shape.memory_mib, shape.gpu_count],
+                set_={
+                    "reported_memory_mib": func.least(
+                        shape.reported_memory_mib, statement.excluded.reported_memory_mib
+                    )
+                },
             )
-            .values(node_memory_mib=memory_mib, updated_at=unit.updated_at)
         )
 
-    def reported_memory_by_shape(self) -> dict[tuple[int, int, int], int]:
-        """The least memory machines of each nominal CPU, memory and card count reported."""
-        unit = ComputeUnitTable
+    def reported_node_memory(self) -> dict[tuple[int, int, int], int]:
+        """The least memory reported for each nominal CPU, memory and card count."""
+        shape = ComputeNodeShapeTable
         return {
             (cpu, memory, gpu): int(reported)
             for cpu, memory, gpu, reported in self.session.execute(
                 select(
-                    unit.worker_cpu_millicores,
-                    unit.worker_memory_mib,
-                    unit.worker_gpu_count,
-                    func.min(unit.node_memory_mib),
+                    shape.cpu_millicores,
+                    shape.memory_mib,
+                    shape.gpu_count,
+                    shape.reported_memory_mib,
                 )
-                .where(unit.node_memory_mib > 0)
-                .group_by(unit.worker_cpu_millicores, unit.worker_memory_mib, unit.worker_gpu_count)
             ).tuples()
         }
-
-    def inherit_node_memory(self, unit_id: str) -> None:
-        """Give a new unit what machines of its shape reported in other units."""
-        unit = ComputeUnitTable
-        sibling = aliased(unit)
-        reported = (
-            select(func.min(sibling.node_memory_mib))
-            .where(
-                sibling.worker_cpu_millicores == unit.worker_cpu_millicores,
-                sibling.worker_memory_mib == unit.worker_memory_mib,
-                sibling.worker_gpu_count == unit.worker_gpu_count,
-                sibling.node_memory_mib > 0,
-            )
-            .scalar_subquery()
-        )
-        self.session.execute(
-            update(unit)
-            .where(unit.id == unit_id, unit.node_memory_mib == 0, reported.is_not(None))
-            .values(node_memory_mib=reported, updated_at=unit.updated_at)
-        )
 
     def platform_running_cpu_millicores(self) -> int:
         """Nominal CPU the platform CPU fleet runs, a replacement's surge included."""
@@ -751,9 +737,11 @@ class ComputeUnitRepository:
                     unit.stopped_machines,
                     unit.worker_cpu_millicores,
                     unit.worker_memory_mib,
-                    unit.node_memory_mib,
+                    _reported_memory(),
                     unit.worker_gpu_count,
-                ).where(
+                )
+                .outerjoin(ComputeNodeShapeTable, _same_shape(unit))
+                .where(
                     unit.visibility == ComputeUnitVisibility.Internal.value,
                     unit.platform_fleet.is_(True),
                     unit.worker_preemptible.is_(preemptible),
@@ -791,11 +779,13 @@ class ComputeUnitRepository:
                         unit.worker_gpu_type,
                         unit.worker_cpu_millicores,
                         unit.worker_memory_mib,
-                        unit.node_memory_mib,
+                        _reported_memory(),
                         unit.worker_gpu_count,
                         unit.stopped_machines,
                         resumable,
-                    ).where(
+                    )
+                    .outerjoin(ComputeNodeShapeTable, _same_shape(unit))
+                    .where(
                         unit.platform_fleet.is_(True),
                         unit.visibility == ComputeUnitVisibility.Internal.value,
                         unit.phase.not_in(
@@ -829,7 +819,6 @@ class ComputeUnitRepository:
                 table.degraded_at,
                 table.last_capacity_failure_at,
                 table.registration_timeout_seconds,
-                table.node_memory_mib,
             ).where(
                 tuple_(
                     table.workspace_id,
@@ -847,7 +836,6 @@ class ComputeUnitRepository:
                 observed_machines=observed,
                 phase=ComputeUnitPhase(phase),
                 registration_timeout_seconds=timeout,
-                reported_memory_mib=reported,
                 provider_state=ComputeUnitProviderState(
                     degraded_reason=reason,
                     degraded_at=to_utc_or_none(degraded_at),
@@ -868,7 +856,6 @@ class ComputeUnitRepository:
                 degraded_at,
                 failed_at,
                 timeout,
-                reported,
             ) in rows
         }
 
@@ -2714,3 +2701,16 @@ class ComputeMachineEnrollmentRepository:
             statement = statement.with_for_update()
         row = self.session.scalars(statement).first()
         return _machine_enrollment_record(row) if row is not None else None
+
+
+def _same_shape(unit: type[ComputeUnitTable]) -> ColumnElement[bool]:
+    shape = ComputeNodeShapeTable
+    return and_(
+        shape.cpu_millicores == unit.worker_cpu_millicores,
+        shape.memory_mib == unit.worker_memory_mib,
+        shape.gpu_count == unit.worker_gpu_count,
+    )
+
+
+def _reported_memory() -> ColumnElement[int]:
+    return func.coalesce(ComputeNodeShapeTable.reported_memory_mib, 0)

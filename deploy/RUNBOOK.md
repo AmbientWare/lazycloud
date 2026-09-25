@@ -468,11 +468,12 @@ inventory before calling the warm and stopped targets healthy.
 
 Revision `0023_capacity_headroom` drops `compute_units.warm_handoff_from`, lets
 GPU units hold stopped reserves, adds the live-load index the reserve planner
-reads, and adds `compute_units.node_memory_mib`, filled from the memory each
-enrolled machine reported for its unit's shape. Older API and scheduler replicas read and write the dropped column, and an
-older scheduler plans machine-count reserves against the same units, so both stop
-before the migration. Pause Argo automatic sync and record its settings, scale the
-API and scheduler Deployments to zero, then Ship and run a full sync. Confirm the
+reads, and creates `compute_node_shapes`, filled with the least memory enrolled
+machines reported for each nominal CPU, memory and card count. Older API and
+scheduler replicas read and write the dropped column, and an older scheduler
+plans machine-count reserves against the same units, so both stop before the
+migration. Pause Argo automatic sync and record its settings, scale the API and
+scheduler Deployments to zero, then Ship and run a full sync. Confirm the
 migration, then that one scheduler logs `platform reserve for` each market within
 a minute. Restore Argo's automatic sync. Redis needs no clearing: the planner's
 keys are new, and no stored hot-state model changed. Existing GPU Auto Scaling

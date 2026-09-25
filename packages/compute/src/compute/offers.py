@@ -216,11 +216,12 @@ def filter_offers(
     offers: list[ComputeOffer],
     request: OfferRequest,
     *,
-    reported_memory: Mapping[str, int] | None = None,
+    reported_memory: Mapping[tuple[int, int, int], int] | None = None,
 ) -> list[ComputeOffer]:
     """The offers that serve the request, sized by what their machines report when known.
 
-    `reported_memory` maps an offer id to the memory its machines report.
+    `reported_memory` maps a nominal CPU, memory and card count to the memory
+    machines of that shape report.
     """
     selected: list[ComputeOffer] = []
     for offer in offers:
@@ -236,7 +237,12 @@ def filter_offers(
             continue
         if not node_fits_request(
             offer.cpu_millicores,
-            node_memory(offer.memory_mb, (reported_memory or {}).get(offer.id, 0)),
+            node_memory(
+                offer.memory_mb,
+                (reported_memory or {}).get(
+                    (offer.cpu_millicores, offer.memory_mb, offer.gpu_count), 0
+                ),
+            ),
             cpu_millicores=request.min_cpu_millicores,
             memory_mib=request.min_memory_mb,
         ):

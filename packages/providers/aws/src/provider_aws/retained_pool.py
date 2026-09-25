@@ -557,10 +557,7 @@ class AwsRetainedPool:
         serving = sum(s.serving and s.phase is not SlotPhase.Retiring for s in self.state.slots)
         # A reserve the request still counts stays stopped while the pool has
         # room to launch a machine instead.
-        resume_until = self.request.desired_machines - max(
-            self.request.desired_machines + self.request.stopped_machines - len(self.state.slots),
-            0,
-        )
+        resume_until = self.request.desired_machines - self._launch_room()
         for slot in self.state.slots:
             if serving >= resume_until or not self.request.purchases_enabled:
                 break
@@ -576,12 +573,7 @@ class AwsRetainedPool:
             reserve_count = min(len(reserves), self.request.stopped_machines)
             additions = [True] * max(self.request.desired_machines - serving, 0)
             additions += [False] * max(self.request.stopped_machines - reserve_count, 0)
-            room = max(
-                self.request.desired_machines
-                + self.request.stopped_machines
-                - len(self.state.slots),
-                0,
-            )
+            room = self._launch_room()
             if additions and room:
                 subnet = self.provisioner._resolve_subnets(self.spec)[0]
                 slots = tuple(
@@ -600,6 +592,15 @@ class AwsRetainedPool:
                 self._save(self.state.model_copy(update={"slots": (*self.state.slots, *slots)}))
         self._actions(inventory)
         return self.describe()
+
+    def _launch_room(self) -> int:
+        """Machines the pool may launch before it holds the running and stopped counts.
+
+        A retiring slot is leaving and no longer counts, so it neither delays a
+        launch nor makes a reserve resume in place of one.
+        """
+        held = sum(slot.phase is not SlotPhase.Retiring for slot in self.state.slots)
+        return max(self.request.desired_machines + self.request.stopped_machines - held, 0)
 
     def describe(self) -> ProviderUnitSnapshot:
         inventory = self._inventory()
