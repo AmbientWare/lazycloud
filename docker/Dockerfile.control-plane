@@ -62,7 +62,6 @@ COPY apps/cli/pyproject.toml ./apps/cli/pyproject.toml
 COPY apps/container-worker/pyproject.toml ./apps/container-worker/pyproject.toml
 COPY apps/scheduler/pyproject.toml ./apps/scheduler/pyproject.toml
 COPY apps/connection-gateway/pyproject.toml ./apps/connection-gateway/pyproject.toml
-COPY apps/worker-bootstrap/pyproject.toml ./apps/worker-bootstrap/pyproject.toml
 
 FROM scratch AS workspace-source
 COPY packages /packages
@@ -73,7 +72,6 @@ COPY apps/cli /apps/cli
 COPY apps/container-worker /apps/container-worker
 COPY apps/scheduler /apps/scheduler
 COPY apps/connection-gateway /apps/connection-gateway
-COPY apps/worker-bootstrap /apps/worker-bootstrap
 
 FROM scratch AS managed-package-source
 COPY packages/shared/pyproject.toml /packages/shared/pyproject.toml
@@ -125,16 +123,6 @@ COPY --from=workspace-source /packages ./packages
 COPY --from=workspace-source /apps ./apps
 RUN --mount=type=cache,id=lazycloud-uv-cache-v2,target=/root/.cache/uv \
     uv sync --frozen --no-dev --package cache-server-app --no-editable
-
-FROM python-manifests AS worker-bootstrap-dependencies
-RUN --mount=type=cache,id=lazycloud-uv-cache-v2,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --package worker-bootstrap-app --no-install-workspace
-
-FROM worker-bootstrap-dependencies AS worker-bootstrap-install
-COPY --from=workspace-source /packages ./packages
-COPY --from=workspace-source /apps ./apps
-RUN --mount=type=cache,id=lazycloud-uv-cache-v2,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --package worker-bootstrap-app --no-editable
 
 FROM python-manifests AS cli-dependencies
 RUN --mount=type=cache,id=lazycloud-uv-cache-v2,target=/root/.cache/uv \
@@ -195,11 +183,6 @@ VOLUME ["/var/lib/lazycloud"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD python -c "import socket; socket.create_connection(('127.0.0.1', 7900), timeout=3).close()"
 CMD ["lazycloud-cache-server", "--host", "0.0.0.0", "--port", "7900", "--root", "/var/lib/lazycloud/cache"]
-
-FROM python-runtime AS worker-bootstrap
-COPY --from=worker-bootstrap-install /app/.venv /app/.venv
-VOLUME ["/var/lib/lazycloud"]
-CMD ["lazycloud-worker-bootstrap", "--help"]
 
 FROM python-runtime AS cli
 COPY --from=cli-install /app/.venv /app/.venv

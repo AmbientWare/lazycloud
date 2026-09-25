@@ -42,7 +42,7 @@ from compute.request_placement import (
     ComputeCapacityPlacementService,
 )
 from compute.reserve_state import RedisFleetReserveState
-from compute.service import ComputeService, ReserveAgentPreparation
+from compute.service import ComputeService, ReserveAgentPreparation, ReservePreparationPhase
 from compute.state import RedisComputeStateRepository
 from compute.supplier_costs import SupplierCostInspectionService
 from database.context import ServiceContext
@@ -4313,10 +4313,10 @@ def test_stopped_reserve_from_an_older_release_is_prepared_again_and_records_the
         )
 
     leases.contended.add(unit.capacity_owner_id)
-    assert prepare().preparing
+    assert prepare().phase is ReservePreparationPhase.PreparingCold
     assert provider.prepared == []
     leases.contended.clear()
-    assert prepare().preparing
+    assert prepare().phase is ReservePreparationPhase.PreparingCold
     assert provider.prepared == [_RESERVE_INSTANCE]
     with service_context.database.session() as session:
         prepared = ComputeProviderInstanceRepository(session).get_by_machine(machine_id)
@@ -4400,7 +4400,7 @@ def test_a_resumed_reserve_registers_no_worker_until_its_stream_authorizes_the_r
         return record.status, machine.lifecycle
 
     # The authorizing stream opens the fence without waiting on the provider.
-    assert stream().resuming
+    assert stream().phase is ReservePreparationPhase.ResumeAuthorized
     assert not awaits_resume()
     assert observed() == (ReservationStatus.Resuming.value, MachineLifecycle.Joining)
 
@@ -4413,7 +4413,7 @@ def test_a_resumed_reserve_registers_no_worker_until_its_stream_authorizes_the_r
         write_machine_lifecycle(
             session, machine, MachineLifecycle.Ready, workspace_changes=compute.workspace_changes
         )
-    assert not stream(agent_binary_sha256="b" * 64).resuming
+    assert stream(agent_binary_sha256="b" * 64).phase is ReservePreparationPhase.Serving
     assert observed() == (ReservationStatus.Resuming.value, MachineLifecycle.Ready)
     # A resume the provider cannot finish, such as a reclaimed instance, leaves
     # the row for a later pass and does not fail this one.

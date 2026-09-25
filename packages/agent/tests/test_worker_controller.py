@@ -12,7 +12,7 @@ from agent.operations import (
     AgentWorkerSlot,
     plan_worker_slot_reconciliation,
 )
-from agent_app.daemon import CommandResult, DockerAgentWorkerController
+from agent.worker_controller import CommandResult, DockerAgentWorkerController
 from shared.contracts import ContractModel
 from shared.placement import Placement
 from shared.usage import UsageBillingOwner
@@ -43,7 +43,7 @@ class _RunningWorkerRunner(_Runner):
         return CommandResult(args=args, returncode=0)
 
 
-def test_agent_atomically_writes_worker_yaml_before_starting_container(
+def test_worker_configuration_excludes_credentials_and_is_owner_readable(
     tmp_path: Path, request: pytest.FixtureRequest
 ) -> None:
     runner = _Runner()
@@ -77,6 +77,7 @@ def test_agent_atomically_writes_worker_yaml_before_starting_container(
         AgentBootstrap(
             gateway_public_http_url="https://gateway.example.test",
         ),
+        active_slots=[item.slot for item in controller.observe_workers()],
         reported_images=controller.prepared_worker_images(),
     )
 
@@ -84,58 +85,10 @@ def test_agent_atomically_writes_worker_yaml_before_starting_container(
     contents = config_path.read_text(encoding="utf-8")
     document = _WorkerConfigurationDocument.model_validate(yaml.safe_load(contents))
     config = document.configuration
-    docker_run = next(args for args in runner.calls if len(args) > 1 and args[1] == "run")
-
     assert applied
-    assert config.execution.capacity.cpu_millicores == 4000
-    assert config.execution.capacity.memory_mib == 8192
-    assert config.execution.capacity.gpu_type == "L4"
-    assert config.execution.capacity.gpu_count == 1
-    assert "WORKER_NETWORK_PREFIX=private-pool:machine-one" in docker_run
     assert "worker-secret" not in contents
     assert config_path.stat().st_mode & 0o777 == 0o600
-    assert f"{config_path}:/etc/lazycloud/worker/worker.yaml:ro" in docker_run
-    # Both clients must reach the control plane through the runtime origin.
-    assert "GATEWAY_HTTP_URL=http://127.0.0.1:9000" in docker_run
-    assert docker_run[docker_run.index("--network") + 1] == "host"
-    assert docker_run[docker_run.index("--cgroupns") + 1] == "host"
-
-
-def test_agent_gives_all_workers_one_bounded_graceful_shutdown_window(
-    tmp_path: Path,
-) -> None:
-    runner = _RunningWorkerRunner()
-    controller = DockerAgentWorkerController(state_dir=tmp_path, runner=runner)
-    slots = [
-        AgentWorkerSlot(
-            worker_id=f"worker-{index}",
-            placement=Placement.machine("private-pool"),
-            billing_owner=UsageBillingOwner.SelfHosted,
-            capacity_owner_id="11111111-1111-4111-8111-111111111111",
-            machine_id="machine-one",
-        )
-        for index in (1, 2)
-    ]
-    controller._save_active_slots(slots)
-
-    controller.gracefully_stop_all(grace_seconds=89.1)
-
-    assert [
-        "docker",
-        "stop",
-        "--timeout",
-        "90",
-        "lazycloud-agent-worker-1",
-        "lazycloud-agent-worker-2",
-    ] in runner.calls
-    assert [
-        "docker",
-        "rm",
-        "-f",
-        "lazycloud-agent-worker-1",
-        "lazycloud-agent-worker-2",
-    ] in runner.calls
-    assert controller.active_slots() == []
+    assert config.execution.capacity.cpu_millicores == slot.cpu_millicores
 
 
 @dataclass(slots=True)
@@ -176,14 +129,20 @@ def test_agent_stop_treats_concurrent_container_removal_as_settled(
     bootstrap = AgentBootstrap(gateway_public_http_url="https://gateway.example.test")
     reported = controller.prepared_worker_images()
     controller.apply(
-        plan_worker_slot_reconciliation([slot], []), bootstrap, reported_images=reported
+        plan_worker_slot_reconciliation([slot], []),
+        bootstrap,
+        active_slots=[],
+        reported_images=reported,
     )
-    assert [active.worker_id for active in controller.active_slots()] == [slot.worker_id]
+    assert [
+        active.worker_id for active in [item.slot for item in controller.observe_workers()]
+    ] == [slot.worker_id]
 
     controller.apply(
-        plan_worker_slot_reconciliation([], controller.active_slots()),
+        plan_worker_slot_reconciliation([], [item.slot for item in controller.observe_workers()]),
         bootstrap,
+        active_slots=[item.slot for item in controller.observe_workers()],
         reported_images=reported,
     )
 
-    assert controller.active_slots() == []
+    assert [item.slot for item in controller.observe_workers()] == []

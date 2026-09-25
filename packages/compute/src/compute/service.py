@@ -6,6 +6,7 @@ from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
+from enum import StrEnum
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from database.repositories.aws_connections import AwsAccountConnectionRepository
@@ -195,15 +196,19 @@ class _PooledCapacityBaseline:
     min_free_memory_mib: int
 
 
-@dataclass(slots=True)
+class ReservePreparationPhase(StrEnum):
+    Serving = "serving"
+    PreparingCold = "preparing_cold"
+    PreparingWarm = "preparing_warm"
+    StoppingUsed = "stopping_used"
+    ResumePending = "resume_pending"
+    ResumeAuthorized = "resume_authorized"
+
+
+@dataclass(frozen=True, slots=True)
 class ReserveAgentPreparation:
-    preparing: bool = False
-    warm: bool = False
-    """The reserve's worker runs, fenced: it hibernates, or its resume is pending."""
+    phase: ReservePreparationPhase = ReservePreparationPhase.Serving
     stop_request_id: str = ""
-    resuming: bool = False
-    lagging_resume: bool = False
-    """The machine resumed before its row said so; its agent keeps the reserve as it is."""
 
 
 @dataclass(slots=True)
@@ -2937,10 +2942,8 @@ class ComputeService:
                 # An earlier stream authorized the resume; the machine serves, and
                 # only that stream tells the agent it resumed.
                 return ReserveAgentPreparation()
-            # Only a used machine returning to reserve cleans tenant storage before
-            # it stops, and returning sets its row to stopping. A reserve being
-            # prepared again keeps its row at preparing until it finishes, even
-            # after it once served, so its stop goes through preparation.
+            # Returning a used machine requires tenant-storage cleanup. Refreshing
+            # a stopped reserve follows preparation even if it served in the past.
             stop_request_id = (
                 machine.lifecycle_at.isoformat()
                 if machine.lifecycle is MachineLifecycle.Stopping
@@ -2949,10 +2952,7 @@ class ComputeService:
                 else ""
             )
             stopping_used_machine = bool(stop_request_id)
-            # A machine that booted after its preparation was stopped and started
-            # again, so a row still reading stopping or stopped lags the resume.
-            # Its worker waits, fenced, like a hibernating reserve's, until the
-            # row reads resuming.
+            # A new boot can precede the provider row's transition to resuming.
             lagging_resume = (
                 booted_since_prepared
                 and not stopping_used_machine
@@ -2964,13 +2964,19 @@ class ComputeService:
             )
             hibernate = preparing and record.hibernates and not stopping_used_machine
             warm = hibernate or lagging_resume
-            instruction = ReserveAgentPreparation(
-                preparing=preparing,
-                warm=warm,
-                stop_request_id=stop_request_id,
-                resuming=resuming,
-                lagging_resume=lagging_resume,
-            )
+            if stopping_used_machine:
+                phase = ReservePreparationPhase.StoppingUsed
+            elif lagging_resume:
+                phase = ReservePreparationPhase.ResumePending
+            elif preparing:
+                phase = (
+                    ReservePreparationPhase.PreparingWarm
+                    if warm
+                    else ReservePreparationPhase.PreparingCold
+                )
+            else:
+                phase = ReservePreparationPhase.Serving
+            instruction = ReserveAgentPreparation(phase, stop_request_id)
             # A hibernating reserve stops with its worker on the release, built and
             # waiting at its first call; any other stops with none.
             machine_worker = agent_machine_worker_id(machine_id)
@@ -3008,8 +3014,7 @@ class ComputeService:
                     )
                 )
             ):
-                # Only the stream that authorizes the resume says so.
-                return replace(instruction, resuming=False)
+                return instruction
             if preparing:
                 # A stopped machine can never complete an update it began. Resuming
                 # registers a new worker, which must match the active release before
@@ -3039,7 +3044,7 @@ class ComputeService:
                 # waiting on the provider; the capacity pass finishes the row it marks.
                 ComputeProviderInstanceRepository(session).authorize_resume(record.id)
         if resuming:
-            return instruction
+            return ReserveAgentPreparation(ReservePreparationPhase.ResumeAuthorized)
         try:
             self._finish_reserved_machine_preparation(
                 workspace_id=workspace_id,

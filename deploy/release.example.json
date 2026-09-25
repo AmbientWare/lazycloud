@@ -15,7 +15,6 @@
     "scheduler": "registry.example.com/scheduler@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     "connection-gateway": "registry.example.com/connection-gateway@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     "cache-server": "registry.example.com/cache-server@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-    "worker-bootstrap": "registry.example.com/worker-bootstrap@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     "cli": "registry.example.com/cli@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     "database-bootstrap": "registry.example.com/database-bootstrap@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
   },

@@ -399,7 +399,6 @@ tags and the release selects their executable digests.
 | `otel-collector` | whatever `LAZYCLOUD_TELEMETRY_ENDPOINT` names |
 | `container-worker` | enrolled agents on managed or joined compute |
 | `agent`, `agent-join-token` | a real joined machine |
-| `platform-unit`, `worker-token` | not needed; those feed the Compose fleet |
 | `redis` | ElastiCache, through `LAZYCLOUD_REDIS_URL`; a primary and a standby with automatic failover |
 
 ### The database connection string

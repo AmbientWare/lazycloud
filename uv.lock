@@ -41,7 +41,6 @@ members = [
     "storage",
     "storage-client",
     "worker",
-    "worker-bootstrap-app",
     "worker-repository",
     "workspace",
 ]
@@ -2877,31 +2876,6 @@ requires-dist = [
 ]
 
 [[package]]
-name = "worker-bootstrap-app"
-version = "0.1.0"
-source = { editable = "apps/worker-bootstrap" }
-dependencies = [
-    { name = "container-worker-app" },
-    { name = "coordination" },
-    { name = "database" },
-    { name = "identity" },
-    { name = "lazycloud-shared" },
-    { name = "scheduler" },
-    { name = "worker" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "container-worker-app", editable = "apps/container-worker" },
-    { name = "coordination", editable = "packages/coordination" },
-    { name = "database", editable = "packages/database" },
-    { name = "identity", editable = "packages/identity" },
-    { name = "lazycloud-shared", editable = "packages/shared" },
-    { name = "scheduler", editable = "packages/scheduler" },
-    { name = "worker", editable = "packages/worker" },
-]
-
-[[package]]
 name = "worker-repository"
 version = "0.1.0"
 source = { editable = "packages/worker-repository" }
@@ -2991,7 +2965,6 @@ dev = [
     { name = "storage-client" },
     { name = "types-grpcio" },
     { name = "worker" },
-    { name = "worker-bootstrap-app" },
     { name = "worker-repository" },
 ]
 lint = [
@@ -3035,7 +3008,6 @@ workspace = [
     { name = "storage" },
     { name = "storage-client" },
     { name = "worker" },
-    { name = "worker-bootstrap-app" },
     { name = "worker-repository" },
 ]
 
@@ -3089,7 +3061,6 @@ dev = [
     { name = "storage-client", editable = "packages/storage-client" },
     { name = "types-grpcio", specifier = ">=1.83,<2" },
     { name = "worker", editable = "packages/worker" },
-    { name = "worker-bootstrap-app", editable = "apps/worker-bootstrap" },
     { name = "worker-repository", editable = "packages/worker-repository" },
 ]
 lint = [{ name = "ruff", specifier = ">=0.6" }]
@@ -3131,6 +3102,5 @@ workspace = [
     { name = "storage", editable = "packages/storage" },
     { name = "storage-client", editable = "packages/storage-client" },
     { name = "worker", editable = "packages/worker" },
-    { name = "worker-bootstrap-app", editable = "apps/worker-bootstrap" },
     { name = "worker-repository", editable = "packages/worker-repository" },
 ]

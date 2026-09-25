@@ -258,6 +258,9 @@ class _UnexpectedProcessor:
 
 @dataclass(slots=True)
 class _Lifecycle:
+    def close(self) -> list[WorkerLifecycleStepResult]:
+        return []
+
     registered: bool = False
     shutdown_calls: int = 0
     shutdown_remove_worker: list[bool] = field(default_factory=list)

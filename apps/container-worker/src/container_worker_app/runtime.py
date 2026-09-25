@@ -26,6 +26,8 @@ class ContainerWorkerProcessor(Protocol):
 
 
 class ContainerWorkerLifecycle(Protocol):
+    def close(self) -> list[WorkerLifecycleStepResult]: ...
+
     def register_available(self) -> list[WorkerLifecycleStepResult]: ...
 
     def keepalive(self) -> WorkerLifecycleStepResult: ...
@@ -108,7 +110,7 @@ class ContainerWorkerRuntime:
         return cls(settings=settings, services=services)
 
     def close(self) -> None:
-        pass
+        self.services.lifecycle.close()
 
     def __enter__(self) -> ContainerWorkerRuntime:
         return self
