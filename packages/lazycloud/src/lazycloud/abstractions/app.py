@@ -852,7 +852,7 @@ class App:
         disk: str | int,
         cpu: CpuRequest,
         memory: MemoryRequest,
-        agent_harnesses: Iterable[AgentHarness] = (),
+        agent_harnesses: Iterable[AgentHarness] = tuple(AgentHarness),
         gpu: GpuInput = None,
         gpu_count: int = 0,
         keep_warm: int | None = None,
@@ -883,6 +883,7 @@ class App:
                 the disk.
             disk: Root disk size, such as ``"100Gi"``; stored data is billed.
             agent_harnesses: Coding agents to install in a Debian or Ubuntu image.
+                Defaults to all supported agents; an empty list skips installation.
                 Versions are pinned by the SDK. Authentication happens after deployment.
             cpu, memory, gpu, gpu_count: Compute resources for the container.
             keep_warm: Idle seconds before the container stops; unset uses the
@@ -898,7 +899,10 @@ class App:
         install_commands = agent_install_commands(agent_harnesses, image.architecture)
         if install_commands:
             if image.explicit_image_id:
-                raise ValueError("agent_harnesses requires a buildable image, not Image.from_id()")
+                raise ValueError(
+                    "agent_harnesses requires a buildable image, not Image.from_id(); "
+                    "pass agent_harnesses=[] to skip installation"
+                )
             image = deepcopy(image).add_commands(install_commands)
         return self._register(
             Pod(

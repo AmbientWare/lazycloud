@@ -13,7 +13,7 @@ start to the next, on whichever machine it lands.
 Save this as `dev.py`:
 
 ```python
-from lazycloud import AgentHarness, App, Image
+from lazycloud import App, Image
 
 app = App("dev")
 
@@ -23,12 +23,6 @@ box = app.devbox(
     disk="100Gi",
     cpu=4,
     memory="16Gi",
-    agent_harnesses=[
-        AgentHarness.Codex,
-        AgentHarness.ClaudeCode,
-        AgentHarness.OpenCode,
-        AgentHarness.Pi,
-    ],
 )
 ```
 
@@ -45,11 +39,16 @@ mounted, so `git clone` your code onto the disk. The image needs no `sshd`.
 
 ## Coding agents
 
-`agent_harnesses` installs the selected agents, Node.js 22, and Git during the
-image build. It defaults to an empty list. The SDK pins agent and Node.js
-versions. Installation requires a Debian or Ubuntu image with root build access;
-`Image.from_id()` cannot accept additional installation steps. Reusing an image
-object for another resource does not add these agents to that resource.
+Devboxes install Codex, Claude Code, OpenCode, and Pi by default, along with
+Node.js 22 and Git, during the image build. The SDK pins agent and Node.js
+versions. Import `AgentHarness` from `lazycloud` and pass
+`agent_harnesses=[AgentHarness.Codex]` to install only Codex, or
+`agent_harnesses=[]` to skip agent installation.
+
+Installation requires a Debian or Ubuntu image with root build access. Pass
+`agent_harnesses=[]` when using `Image.from_id()` or an image that supplies its
+own tools. Reusing an image object for another resource does not add these
+agents to that resource.
 
 After deployment, authenticate from an interactive terminal on your laptop:
 
