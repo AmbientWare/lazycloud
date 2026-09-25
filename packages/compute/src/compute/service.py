@@ -3008,7 +3008,8 @@ class ComputeService:
                     )
                 )
             ):
-                return instruction
+                # Only the stream that authorizes the resume says so.
+                return replace(instruction, resuming=False)
             if preparing:
                 # A stopped machine can never complete an update it began. Resuming
                 # registers a new worker, which must match the active release before
