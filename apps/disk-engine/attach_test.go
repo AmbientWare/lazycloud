@@ -1,8 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -37,5 +39,17 @@ func TestPlanRestoreCountsBaseGrowthFromCommits(t *testing.T) {
 	plan, err = planRestore(p, 10*gib, gib, rewrites)
 	if err != nil || !slices.Equal(plan, []bool{false, false, true}) {
 		t.Fatalf("rewrites bounded by the virtual size: plan %v, err %v", plan, err)
+	}
+}
+
+// The worker reads attach output with a model whose warnings field is a list,
+// so an attach with nothing to warn about must not print a JSON null there.
+func TestAttachResultWithoutWarningsHasNoNullList(t *testing.T) {
+	out, err := json.Marshal(attachResult{Mountpoint: "/m"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "null") {
+		t.Fatalf("attach result has a null field: %s", out)
 	}
 }
