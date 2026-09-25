@@ -251,6 +251,13 @@ class StopContainerReason(StringEnum):
     Otherwise the filesystem inside would see I/O errors rather than a full disk.
     """
 
+    DiskUnavailable = "DISK_UNAVAILABLE"
+    """A durable disk restored lazily could not fetch part of itself from storage.
+
+    The read has already failed inside the container, so the worker stops it
+    rather than let it run on a disk it cannot read.
+    """
+
     Unknown = "UNKNOWN"
 
     def describe(self) -> str:
@@ -284,6 +291,9 @@ _STOP_REASON_DESCRIPTIONS: dict[StopContainerReason, str] = {
         "the machine ran out of memory and this container was using the most above its request"
     ),
     StopContainerReason.DiskFull: "one of its disks ran out of space to save its changes",
+    StopContainerReason.DiskUnavailable: (
+        "one of its disks could not be read from workspace storage"
+    ),
     StopContainerReason.Unknown: "",
 }
 

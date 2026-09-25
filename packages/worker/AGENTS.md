@@ -125,6 +125,14 @@ A disk's engine gets workspace storage on the disk's lease, not on the
 container's scheduler state. That state expires a while after a stop, and the
 release after it still has to publish the disk's last generation.
 
+A disk restored lazily reads its chunks from the workspace bucket for as long
+as the engine's `serve` runs, so the worker keeps one STORE.json for that disk
+renewed until detach and hands the same file to publish and collect. It holds
+no such file for a disk that restored nothing lazily, and watches only disks
+with a volume or a running `serve`. A failed read has already given the
+workload an I/O error, so the worker stops the container: `DISK_UNAVAILABLE`
+when a chunk could not be fetched, `DISK_FULL` when it had no room to land.
+
 A container that outgrows its reservation is stopped here, not by the kernel.
 The worker holds the two readings the decision needs, its own memory pressure
 and what each container currently uses, and the kernel is seconds away once a
