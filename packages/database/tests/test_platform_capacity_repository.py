@@ -315,6 +315,12 @@ def test_stopped_capacity_holds_its_budget_through_resume_and_retirement(
         sizing = units.sizing_for_owner(unit.id)
         assert sizing is not None and sizing.desired_machines == 0
         assert {row.id for row in units.stopped_reserve_units() if row.resumable} == {unit.id}
+        # A reserve whose stop EC2 finished before a pass recorded it still resumes.
+        stopped = next(
+            item for item in instances.list_for_pool(unit.id) if item.status == "stopped"
+        )
+        instances.upsert(stopped.model_copy(update={"status": "stopping"}))
+        assert {row.id for row in units.stopped_reserve_units() if row.resumable} == {unit.id}
         resumed = units.update_capacity(
             unit.id,
             expected_generation=unit.generation,

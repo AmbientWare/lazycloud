@@ -170,7 +170,9 @@ def _reserve_machine(
             or billing_minimum_seconds is None
             or now >= started + timedelta(seconds=billing_minimum_seconds)
         ),
-        stopped_resumable=status == ReservationStatus.Stopped.value,
+        # As for acquisitions: EC2 often finishes a stop before a pass records it.
+        stopped_resumable=status
+        in {ReservationStatus.Stopped.value, ReservationStatus.Stopping.value},
     )
 
 

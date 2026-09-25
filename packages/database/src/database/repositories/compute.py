@@ -755,11 +755,16 @@ class ComputeUnitRepository:
         ]
 
     def stopped_reserve_units(self) -> list[StoppedReserveUnitRow]:
-        """Platform units holding stopped reserves, and whether one can resume now."""
+        """Platform units holding stopped reserves, and whether one can resume now.
+
+        A stopping reserve counts: EC2 often finishes the stop well before a pass
+        records it, and the acquisition reads the pool live, so it resumes one
+        already stopped and buys beside one still stopping.
+        """
         unit = ComputeUnitTable
         resumable = exists().where(
             ComputeProviderInstanceTable.pool_id == unit.id,
-            ComputeProviderInstanceTable.status == "stopped",
+            ComputeProviderInstanceTable.status.in_(("stopped", "stopping")),
             ComputeProviderInstanceTable.missing_since.is_(None),
         )
         return [
