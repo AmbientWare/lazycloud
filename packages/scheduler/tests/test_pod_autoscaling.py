@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 from datetime import datetime, timedelta
+from uuid import uuid4
 
 import pytest
 from api.server.services import ApiServices
@@ -541,6 +542,59 @@ def test_a_woken_pod_with_no_idle_time_is_started_and_kept_for_the_devbox_window
     assert idle.desired_containers == 0
     assert idle.actions == []
     assert isolated_services.containers.get(started).status is ContainerStatus.Running
+
+
+def test_a_start_that_keeps_failing_ends_at_the_threshold_and_the_next_start_retries(
+    isolated_services: ApiServices,
+    real_redis_actors: RealRedisActors,
+) -> None:
+    scheduler = _Scheduler()
+    isolated_services = replace(
+        isolated_services,
+        containers=replace(isolated_services.containers, scheduler=scheduler),
+    )
+    redis = real_redis_actors.client()
+    stub = _create_pod_stub(isolated_services, keep_warm_seconds=0)
+    started_at = utc_now()
+    with isolated_services.context.database.session() as session:
+        StubRepository(session).wake(stub.id, workspace_id=stub.workspace_id, woken_at=started_at)
+        for index in range(3):
+            ContainerRepository(session).upsert(
+                ContainerRecord(
+                    id=str(uuid4()),
+                    name=f"pod-failed-{index}",
+                    image="img-pod",
+                    command=["python", "-m", "http.server"],
+                    workspace_id=stub.workspace_id,
+                    stub_id=stub.id,
+                    app_id=stub.app_id,
+                    status=ContainerStatus.Failed,
+                    exit_code=1,
+                    startup_error="container startup failed during prepare-rootfs",
+                    created_at=started_at + timedelta(seconds=index),
+                    finished_at=started_at + timedelta(seconds=index + 1),
+                )
+            )
+
+    failing = _pod_autoscaler(isolated_services, redis).reconcile(
+        now=started_at + timedelta(seconds=10)
+    )[0]
+
+    assert failing.desired_containers == 0
+    assert failing.reason == "failed container threshold reached"
+    with isolated_services.context.database.session() as session:
+        assert (
+            StubRepository(session).power(stub.id, workspace_id=stub.workspace_id).woken_at is None
+        )
+
+    restarted_at = started_at + timedelta(seconds=20)
+    with isolated_services.context.database.session() as session:
+        StubRepository(session).wake(stub.id, workspace_id=stub.workspace_id, woken_at=restarted_at)
+
+    retried = _pod_autoscaler(isolated_services, redis).reconcile(now=restarted_at)[0]
+
+    assert retried.desired_containers == 1
+    assert [action.action for action in retried.actions] == ["start"]
 
 
 def _create_pod_stub(

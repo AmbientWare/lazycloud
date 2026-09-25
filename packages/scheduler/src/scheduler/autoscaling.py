@@ -8,7 +8,7 @@ from typing import Protocol
 
 from coordination.redis_client import RedisClient
 from database.records.apps import AutoscalingStubConfig, AutoscalingStubRecord, StubKind
-from database.repositories.apps import AppRepository, DeploymentRepository
+from database.repositories.apps import AppRepository, DeploymentRepository, StubRepository
 from database.repositories.container_rollouts import ContainerRolloutRepository
 from database.repositories.orchestration import ContainerRepository
 from pydantic import Field, JsonValue
@@ -443,6 +443,7 @@ class AutoscalingDriver:
             containers,
             now=current_time,
             window_seconds=_failed_container_window_seconds(stub.config),
+            started_at=stub.power.woken_at,
         )
         failed_containers = [container.id for container in recent_failed_containers]
         failure_threshold = _failed_container_threshold(stub.config)
@@ -988,7 +989,19 @@ class PodAutoscaler:
         stub: AutoscalingStubRecord,
         failed_containers: Sequence[ContainerRecord],
     ) -> list[AutoscaleAction]:
-        del stub, failed_containers
+        """End the start that asked for these containers.
+
+        A pending start keeps the pod wanting a container whoever is connected,
+        and a devbox reports it as queued rather than as the startup failure.
+        A start made since this pass read the stub is kept.
+        """
+        del failed_containers
+        woken_at = stub.power.woken_at
+        if woken_at is not None:
+            with self.services.context.database.session() as session:
+                StubRepository(session).end_start(
+                    stub.id, workspace_id=stub.workspace_id, woken_at=woken_at
+                )
         return []
 
     def scale_down(
@@ -1462,8 +1475,12 @@ def _recent_failed_containers(
     *,
     now: datetime,
     window_seconds: int,
+    started_at: datetime | None,
 ) -> list[ContainerRecord]:
     cutoff = now - timedelta(seconds=max(window_seconds, 0))
+    # An explicit start asks for a fresh attempt, so failures before it do not count.
+    if started_at is not None:
+        cutoff = max(cutoff, started_at)
     failed: list[ContainerRecord] = []
     for container in containers:
         if container.status is not ContainerStatus.Failed:
