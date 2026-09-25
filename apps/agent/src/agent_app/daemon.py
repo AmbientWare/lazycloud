@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
-from threading import Event, Timer
+from threading import Event, Thread, Timer
 from types import TracebackType
 from typing import Protocol
 
@@ -72,7 +72,7 @@ from agent.storage_cleanup import (
     read_stop_preparation,
 )
 from agent.tunnel import AgentTunnelRoute, AgentTunnelService
-from agent.updates import AgentUpdater
+from agent.updates import AgentUpdateBlockedError, AgentUpdater
 from gateway.http import (
     AgentBootstrapConfig,
     AgentTelemetryRequest,
@@ -158,8 +158,6 @@ SLOW_STREAM_ITERATION_SECONDS = 2.0
 DEFAULT_AGENT_HTTP_TIMEOUT_SECONDS = 30.0
 NVIDIA_SMI_TIMEOUT_SECONDS = 5.0
 JOIN_RETRY_SECONDS = 60.0
-JOINING_REPORT_SECONDS = 5.0
-"""How long the joining report may hold the agent's start before it gives up."""
 JOIN_RETRY_BASE_SECONDS = 0.15
 JOIN_RETRY_MAX_SECONDS = 30.0
 AGENT_STATE_FILE = "agent-state.json"
@@ -309,8 +307,6 @@ class AgentGatewayClient(AgentLeaveClient, Protocol):
     def record_provider_node_bootstrap_phase(
         self,
         request: ProviderNodeBootstrapPhaseRequest,
-        *,
-        timeout_seconds: float | None = None,
     ) -> ProviderNodeBootstrapFailureResponse: ...
 
     def stream_agent(self, request: StreamAgentRequest) -> StreamAgentResponse: ...
@@ -381,15 +377,9 @@ class HttpAgentGatewayClient:
     def record_provider_node_bootstrap_phase(
         self,
         request: ProviderNodeBootstrapPhaseRequest,
-        *,
-        timeout_seconds: float | None = None,
     ) -> ProviderNodeBootstrapFailureResponse:
         return ProviderNodeBootstrapFailureResponse.model_validate(
-            self.channel.post(
-                "/gateway/provider-nodes/bootstrap-phase",
-                _payload(request),
-                timeout_seconds=timeout_seconds,
-            )
+            self.channel.post("/gateway/provider-nodes/bootstrap-phase", _payload(request))
         )
 
     def leave_agent(self, request: LeaveAgentRequest) -> LeaveAgentResponse:
@@ -1208,7 +1198,10 @@ class AgentDaemonService:
     _interruption_reported: bool = False
     _reported_worker_images: list[str] = field(default_factory=list)
     _last_applied_actions: str = "nothing"
-    _update_blocked: str = ""
+    _identity_failure: MachineBootstrapFailureReason = (
+        MachineBootstrapFailureReason.ProviderIdentityFailed
+    )
+    """What identity resolution reports once its retries run out: the stage it last reached."""
 
     def __post_init__(self) -> None:
         self._capacity_shutdown = CapacityShutdown(
@@ -1221,41 +1214,28 @@ class AgentDaemonService:
             raise ValueError(msg)
         return self.provider_identity or provider_node_identity_evidence_provider()
 
-    def _report_bootstrap_phase(self, phase: MachineLifecycle) -> None:
-        """Best effort: a phase report must not prevent enrollment retries."""
-        try:
-            self._record_bootstrap_phase(phase)
-        except Exception:
-            LOGGER.warning("reporting the %s phase failed", phase.value, exc_info=True)
+    def _report_phase_aside(self, phase: MachineLifecycle) -> None:
+        """Report a boot phase on its own thread, so it never holds the tunnel or a stream.
 
-    def _report_joining(self) -> None:
-        """Report joining, retrying briefly while the network comes up beside the agent.
-
-        It runs before the tunnel and the first stream, so every metadata and
-        gateway call shares one deadline a few seconds out; a machine that fails
-        it still joins through its stream.
+        It retries within the join budget and logs a final failure; a machine
+        that misses it still joins through its stream.
         """
-        deadline = time.monotonic() + JOINING_REPORT_SECONDS
-        try:
-            self._join_step(
-                "bootstrap_phase.joining",
-                lambda: self._record_bootstrap_phase(MachineLifecycle.Joining, deadline=deadline),
-                budget_seconds=JOINING_REPORT_SECONDS,
-            )
-        except Exception:
-            LOGGER.warning("reporting the joining phase failed", exc_info=True)
-
-    def _record_bootstrap_phase(
-        self, phase: MachineLifecycle, *, deadline: float | None = None
-    ) -> None:
         if not self.options.provider_enrollment_request:
             return
-        proof = self._provider_evidence_provider().create(deadline=deadline)
-        timeout_seconds = None
-        if deadline is not None:
-            timeout_seconds = deadline - time.monotonic()
-            if timeout_seconds <= 0:
-                raise TimeoutError(f"the {phase.value} report ran out of time")
+
+        def report() -> None:
+            try:
+                self._join_step(
+                    f"bootstrap_phase.{phase.value}",
+                    lambda: self._record_bootstrap_phase(phase),
+                )
+            except Exception:
+                LOGGER.warning("reporting the %s phase failed", phase.value, exc_info=True)
+
+        Thread(target=report, name="agent-phase-report", daemon=True).start()
+
+    def _record_bootstrap_phase(self, phase: MachineLifecycle) -> None:
+        proof = self._provider_evidence_provider().create()
         self.client.record_provider_node_bootstrap_phase(
             ProviderNodeBootstrapPhaseRequest(
                 enrollment_request_id=self.options.provider_enrollment_request,
@@ -1264,8 +1244,7 @@ class AgentDaemonService:
                 provider_instance_id=proof.provider_instance_id,
                 identity_proof_url=proof.proof_url.get_secret_value(),
                 phase=phase,
-            ),
-            timeout_seconds=timeout_seconds,
+            )
         )
 
     def _report_bootstrap_failure(self, reason: MachineBootstrapFailureReason) -> None:
@@ -1301,7 +1280,8 @@ class AgentDaemonService:
             self._capacity_shutdown.arm(saved_state.capacity_notice_at)
         try:
             if saved_state is None:
-                self._report_bootstrap_phase(MachineLifecycle.Booting)
+                # Before enrolling: the join records joining, and booting cannot follow it.
+                self._report_phase_aside(MachineLifecycle.Booting)
                 # Enrollment reports Docker in its preflight. Its wait stays out
                 # of the network retry budget below.
                 if self.options.executor is WorkerExecutor.Container:
@@ -1313,11 +1293,10 @@ class AgentDaemonService:
                     self._capacity_shutdown.stop()
             finally:
                 self._capacity_shutdown.close()
-                self._report_bootstrap_failure(MachineBootstrapFailureReason.ProviderIdentityFailed)
+                self._report_bootstrap_failure(self._identity_failure)
             raise
         if state.capacity_notice_at is not None:
             self._capacity_shutdown.arm(state.capacity_notice_at)
-        self._report_joining()
         iterations = 0
         last_result = AgentDaemonRunResult(
             workspace_id=state.workspace_id,
@@ -1345,6 +1324,10 @@ class AgentDaemonService:
             except Exception:
                 self._report_bootstrap_failure(MachineBootstrapFailureReason.NetworkJoinFailed)
                 raise
+            if saved_state is not None:
+                # A restart or resume joined before; the report only moves a failed
+                # machine back, so it waits for the network the tunnel proved.
+                self._report_phase_aside(MachineLifecycle.Joining)
             try:
                 self.worker_controller.prepare_worker_image()
             except WorkerImagePullError:
@@ -1523,7 +1506,6 @@ class AgentDaemonService:
                     },
                     prepared_worker_images=self._reported_worker_images,
                     prepared_stop=read_stop_preparation(self.state_store.state_dir),
-                    update_blocked=self._update_blocked,
                 )
             )
         if not stream.ok:
@@ -1636,20 +1618,17 @@ class AgentDaemonService:
             raise RuntimeError("agent release instruction is stale")
         state = state.model_copy(update={"release_generation": release.generation})
         self.state_store.save(state)
-        agent = release.agent
-        blocker = ""
-        if agent is not None and agent.sha256 != updater.binary_sha256():
-            blocker = updater.update_blocker(agent)
-            if blocker and blocker != self._update_blocked:
-                LOGGER.warning("not updating the agent to %s: %s", agent.sha256, blocker)
-        # The next stream reports it, so the gateway stops holding the machine
-        # for an update it cannot take; the agent keeps serving on its release.
-        self._update_blocked = blocker
-        if release.update_agent and agent is not None and not blocker:
+        if release.update_agent and release.agent is not None:
+            blocker = updater.update_blocker(release.agent)
+            if blocker:
+                # The machine stays drained for the update, so serving on is no
+                # option; exiting for good shows it failed until it is joined again.
+                msg = f"cannot update the agent to {release.agent.sha256}: {blocker}"
+                raise AgentUpdateBlockedError(msg)
             self.worker_controller.pull_detached(
                 {slot.worker_image for slot in desired_slots if slot.worker_image}
             )
-            updater.install(agent, before_exec=before_agent_update)
+            updater.install(release.agent, before_exec=before_agent_update)
         return AgentDaemonRunResult(
             workspace_id=state.workspace_id,
             placement=state.placement.key,
@@ -1866,9 +1845,9 @@ class AgentDaemonService:
     def _enroll_provider_node(self, *, gateway_url: str) -> AgentState:
         if self.options.provider is None:
             raise ValueError("provider node enrollment requires a provider")
+        self._identity_failure = MachineBootstrapFailureReason.ProviderIdentityFailed
         registration = self._machine_registration()
-        proof_provider = self._provider_evidence_provider()
-        proof = proof_provider.create()
+        proof = self._provider_evidence_provider().create()
         if proof.provider is not self.options.provider:
             raise ValueError("provider node identity evidence returned the wrong provider")
         enrollment = ProviderNodeEnrollmentRequest(
@@ -1893,23 +1872,8 @@ class AgentDaemonService:
             preflight=registration.preflight,
             requested_schedulable=registration.schedulable,
         )
-        try:
-            response = self.client.enroll_provider_node(enrollment)
-        except Exception:
-            self._bootstrap_failure_reported = True
-            with suppress(Exception):
-                failed_proof = proof_provider.create()
-                self.client.record_provider_node_bootstrap_failure(
-                    ProviderNodeBootstrapFailureRequest(
-                        enrollment_request_id=self.options.provider_enrollment_request,
-                        provider=failed_proof.provider,
-                        region=failed_proof.region,
-                        provider_instance_id=failed_proof.provider_instance_id,
-                        identity_proof_url=failed_proof.proof_url.get_secret_value(),
-                        failure_reason=MachineBootstrapFailureReason.AgentEnrollmentFailed,
-                    )
-                )
-            raise
+        self._identity_failure = MachineBootstrapFailureReason.AgentEnrollmentFailed
+        response = self.client.enroll_provider_node(enrollment)
         return _agent_state_from_join_response(response, gateway_url=gateway_url)
 
     def _machine_registration(self) -> AgentMachineRegistration:
@@ -1978,13 +1942,7 @@ class AgentDaemonService:
             )
         return self.telemetry.flush(state.agent_token, self.client) > 0
 
-    def _join_step[T](
-        self,
-        action: str,
-        operation: Callable[[], T],
-        *,
-        budget_seconds: float = JOIN_RETRY_SECONDS,
-    ) -> T:
+    def _join_step[T](self, action: str, operation: Callable[[], T]) -> T:
         """Run a startup step, retrying failures that never reached the control plane.
 
         The stream loop already tolerates transient failures, but everything before
@@ -1998,7 +1956,7 @@ class AgentDaemonService:
         outage costs the gateway a few calls per agent, and the last one comes
         at the minute.
         """
-        deadline = time.monotonic() + budget_seconds
+        deadline = time.monotonic() + JOIN_RETRY_SECONDS
         attempt = 0
         while True:
             try:

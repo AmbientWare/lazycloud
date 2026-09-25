@@ -83,10 +83,8 @@ class _Gateway:
     def record_provider_node_bootstrap_phase(
         self,
         request: ProviderNodeBootstrapPhaseRequest,
-        *,
-        timeout_seconds: float | None = None,
     ) -> ProviderNodeBootstrapFailureResponse:
-        del request, timeout_seconds
+        del request
         raise AssertionError("saved identity should not report a bootstrap phase")
 
     def leave_agent(self, request: LeaveAgentRequest) -> LeaveAgentResponse:

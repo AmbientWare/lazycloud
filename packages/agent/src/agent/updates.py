@@ -72,6 +72,14 @@ class AgentUpdateRestartError(RuntimeError):
     pass
 
 
+AGENT_UPDATE_BLOCKED_EXIT_STATUS = 78
+"""The agent's exit status when it cannot apply an ordered update; its unit does not restart it."""
+
+
+class AgentUpdateBlockedError(RuntimeError):
+    """The control plane ordered an update this agent cannot apply; it must be joined again."""
+
+
 RELEASE_DIGEST_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 RUNNING_EXECUTABLE = Path(sys.executable).resolve() if getattr(sys, "frozen", False) else None
 """The agent executable this process started from, read once; None when run from source.
@@ -223,12 +231,16 @@ class AgentUpdater:
             self._unpack(artifact, release)
         executable = release / AGENT_NAME
         _replace_link(self.previous, self.executable)
+        # The supervisor restores from the previous link once it sees the marker.
+        fsync_directory(self.previous.parent)
         pending = self.state_dir / UPDATE_PENDING_FILE
         with pending.open("w") as handle:
             handle.write(artifact.sha256 + "\n")
             handle.flush()
             os.fsync(handle.fileno())
+        fsync_directory(self.state_dir)
         _replace_link(self.command, executable)
+        fsync_directory(self.command.parent)
         try:
             before_exec()
             os.execv(str(self.command), [str(self.command), *sys.argv[1:]])
@@ -286,4 +298,11 @@ def _replace_link(link: Path, target: Path) -> None:
     os.replace(temporary, link)
 
 
-__all__ = ["SUPERVISOR", "SUPERVISOR_SCRIPT", "AgentUpdateRestartError", "AgentUpdater"]
+__all__ = [
+    "AGENT_UPDATE_BLOCKED_EXIT_STATUS",
+    "SUPERVISOR",
+    "SUPERVISOR_SCRIPT",
+    "AgentUpdateBlockedError",
+    "AgentUpdateRestartError",
+    "AgentUpdater",
+]

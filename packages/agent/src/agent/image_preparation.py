@@ -1,5 +1,5 @@
 from collections.abc import Callable, Collection
-from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from concurrent.futures import wait as wait_for_futures
 from dataclasses import dataclass, field
 from threading import Event
@@ -34,10 +34,6 @@ class WorkerImagePreparation:
         """Images already found prepared, without collecting a pending result or its error."""
         return frozenset(self._prepared)
 
-    def mark_prepared(self, image: str) -> None:
-        """Record an image found on the host without preparing it again."""
-        self._prepared.add(image)
-
     def look_up(self, image: str, present: Callable[[str, Event], bool]) -> None:
         """Record `image` as prepared, in the background, if `present` finds it on the host.
 
@@ -62,14 +58,9 @@ class WorkerImagePreparation:
         if image in self.prepared():
             return True
         if self._pending is None:
-            self.start(image)
-        own = [
-            entry[1]
-            for entry in (self._pending, self._lookup)
-            if entry is not None and entry[0] == image
-        ]
-        if own and wait_seconds > 0:
-            wait_for_futures(own, timeout=wait_seconds, return_when=FIRST_COMPLETED)
+            operation = self.start(image)
+            if wait_seconds > 0:
+                wait_for_futures([operation], timeout=wait_seconds)
         return image in self.prepared()
 
     def unreported(self, reported: Collection[str]) -> bool:

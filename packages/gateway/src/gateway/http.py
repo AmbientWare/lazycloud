@@ -167,8 +167,6 @@ class StreamAgentRequest(HttpModel):
     active_worker_images: dict[str, str] = Field(default_factory=dict)
     prepared_worker_images: list[str] = Field(default_factory=list)
     prepared_stop: MachineStopPreparationReceipt | None = None
-    update_blocked: str = Field(default="", max_length=1024)
-    """Why the agent cannot apply the release's agent itself; empty when it can."""
 
 
 class StreamAgentResponse(HttpModel):

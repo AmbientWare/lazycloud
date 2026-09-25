@@ -39,7 +39,13 @@ from agent.service_manager import (
     resolve_service_platform,
 )
 from agent.storage_cleanup import prepare_source_cache_destruction
-from agent.updates import SUPERVISOR, SUPERVISOR_SCRIPT, discard_release
+from agent.updates import (
+    AGENT_UPDATE_BLOCKED_EXIT_STATUS,
+    SUPERVISOR,
+    SUPERVISOR_SCRIPT,
+    AgentUpdateBlockedError,
+    discard_release,
+)
 from gateway.http import LeaveAgentRequest
 from pydantic import TypeAdapter, ValidationError
 from shared.app_identity import AGENT_NAME
@@ -144,15 +150,21 @@ def main(argv: list[str] | None = None) -> None:
             )
         else:
             result, releases = _manage_service(args)
+    except AgentUpdateBlockedError as exc:
+        parser.exit(AGENT_UPDATE_BLOCKED_EXIT_STATUS, f"error: {exc}; run its join command again\n")
     except (OSError, RuntimeError, ValueError) as exc:
         parser.exit(1, f"error: {exc}\n")
-    print(result.model_dump_json())
+    removal_error: OSError | None = None
     if releases is not None and releases.exists():
         # Last, since this process was loaded from one of these releases.
         try:
             discard_release(releases)
         except OSError as exc:
-            parser.exit(1, f"error: could not remove the agent releases {releases}: {exc}\n")
+            removal_error = exc
+            result = result.model_copy(update={"binary_removed": False})
+    print(result.model_dump_json())
+    if removal_error is not None:
+        parser.exit(1, f"error: could not remove the agent releases {releases}: {removal_error}\n")
     if isinstance(result, AgentDaemonRunResult) and result.authority_revoked:
         # A revoked agent has finished for good. Exiting non-zero is what tells
         # the service manager this was not a clean stop to be restarted.

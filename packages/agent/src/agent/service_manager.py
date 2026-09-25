@@ -17,6 +17,8 @@ from shared.app_identity import (
 from shared.compute_enrollment import PreflightSeverity
 from shared.contracts import ContractModel
 
+from agent.updates import AGENT_UPDATE_BLOCKED_EXIT_STATUS
+
 DEFAULT_AGENT_SERVICE_NAME = AGENT_NAME
 DEFAULT_AGENT_SERVICE_DESCRIPTION = AGENT_SERVICE_DESCRIPTION
 DEFAULT_AGENT_STATE_DIR = f"{STATE_DIR}/agent"
@@ -266,6 +268,8 @@ def render_systemd_unit(spec: AgentServiceSpec) -> str:
             # `on-failure`, not `always`: the agent exits non-zero for every
             # reason worth retrying, and a revoked one must be allowed to stop.
             "Restart=on-failure",
+            # An agent that cannot apply an ordered update waits to be joined again.
+            f"RestartPreventExitStatus={AGENT_UPDATE_BLOCKED_EXIT_STATUS}",
             "RestartSec=15",
             "KillSignal=SIGINT",
             "TimeoutStopSec=30",
