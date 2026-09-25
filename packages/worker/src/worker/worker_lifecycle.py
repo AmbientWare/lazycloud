@@ -3,6 +3,7 @@ from __future__ import annotations
 import threading
 import time
 from collections.abc import Callable, Iterable
+from concurrent.futures import Future
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
@@ -158,7 +159,11 @@ class WorkerLifecycleOrchestrator:
     repository: WorkerLifecycleRepository | None = None
     stopper: WorkerLifecycleContainerStopper | None = None
     registration: WorkerExecutionRecord | None = None
+    readiness_preparer: Callable[[], None] | None = None
+    """Readiness work that registration cannot change. It runs beside registration,
+    which holds a reserve's worker until its machine resumes, so it is done by then."""
     readiness_validator: Callable[[], None] | None = None
+    """The readiness checks left for after registration, such as whatever a sleep changes."""
     cleanup_actions: list[WorkerCleanupAction] = field(default_factory=list)
     keepalive_ttl_seconds: int = DEFAULT_WORKER_KEEPALIVE_TTL_SECONDS
     cleanup_retries: int = DEFAULT_WORKER_CLEANUP_RETRIES
@@ -200,6 +205,9 @@ class WorkerLifecycleOrchestrator:
                     error_message="worker repository is not configured",
                 )
             ]
+        preparation = (
+            _in_background(self.readiness_preparer) if self.readiness_preparer is not None else None
+        )
         current_time = now or utc_now()
         registration = registration.model_copy(
             update={
@@ -225,10 +233,17 @@ class WorkerLifecycleOrchestrator:
         if not activation.ok:
             return [added, activation]
         readiness_validator = self.readiness_validator
-        if readiness_validator is not None:
+        if preparation is not None or readiness_validator is not None:
+
+            def validate_readiness() -> None:
+                if preparation is not None:
+                    preparation.result()
+                if readiness_validator is not None:
+                    readiness_validator()
+
             readiness = self._run_repository_step(
                 WorkerLifecycleAction.ValidateReadiness,
-                readiness_validator,
+                validate_readiness,
             )
             if not readiness.ok:
                 return [added, readiness]
@@ -536,3 +551,19 @@ class WorkerLifecycleOrchestrator:
         if isinstance(result, WorkerRemovalResult):
             metadata["requeued_count"] = str(result.requeued_count)
         return WorkerLifecycleStepResult(action=action, metadata=metadata)
+
+
+def _in_background(work: Callable[[], None]) -> Future[None]:
+    """Run `work` on its own thread; the future holds how it ended."""
+    future: Future[None] = Future()
+
+    def run() -> None:
+        try:
+            work()
+        except BaseException as exc:
+            future.set_exception(exc)
+        else:
+            future.set_result(None)
+
+    threading.Thread(target=run, name="worker-readiness", daemon=True).start()
+    return future

@@ -488,10 +488,15 @@ def build_worker_process_services(
         pool_mode=execution.pool_mode,
         billing_owner=execution.billing_owner,
         registration=registration,
-        readiness_validator=lambda: _validate_worker_readiness(
+        readiness_preparer=lambda: _prepare_worker_readiness(
             image_runtime,
             spec_builder=spec_builder,
             network_backend=network_backend,
+        ),
+        readiness_validator=lambda: _validate_worker_readiness(
+            network_backend=network_backend,
+            gpu_count=execution.capacity.gpu_count,
+            gpu_devices=config.gpu_devices,
         ),
         cleanup_actions=(
             [WorkerCleanupAction(name="prepared-networks", action=network_backend.close)]
@@ -524,17 +529,13 @@ def build_worker_process_services(
     )
 
 
-def _validate_worker_readiness(
+def _prepare_worker_readiness(
     image_runtime: ImageRuntimeClient | None,
     *,
     spec_builder: OciRuntimeSpecBuilder,
     network_backend: AgentBridgeNetworkBackend,
 ) -> None:
-    """Run the readiness checks side by side, since none depends on another.
-
-    Each still has to pass; the first failure is raised once all have finished.
-    """
-    timings = StepTimings()
+    """The readiness checks a sleep cannot change, run while the worker registers."""
 
     def image_runtime_health() -> None:
         if image_runtime is None:
@@ -543,11 +544,47 @@ def _validate_worker_readiness(
         if not response.ok:
             raise RuntimeError(response.error or "image runtime is unavailable")
 
-    checks: dict[str, Callable[[], object]] = {
-        "managed_runtimes": spec_builder.prepare_managed_runtimes,
-        "image_runtime": image_runtime_health,
-        "network": network_backend.initialize,
-    }
+    _run_readiness_checks(
+        "container worker readiness preparation",
+        {
+            "managed_runtimes": spec_builder.prepare_managed_runtimes,
+            "image_runtime": image_runtime_health,
+            "network": network_backend.prepare,
+        },
+    )
+
+
+def _validate_worker_readiness(
+    *,
+    network_backend: AgentBridgeNetworkBackend,
+    gpu_count: int,
+    gpu_devices: str,
+) -> None:
+    """The readiness checks a sleep can change, run once the worker is registered.
+
+    A reserve's worker registers only after its machine resumes, so these see
+    the machine as it woke: its addressing and routes, and its GPUs.
+    """
+
+    def gpu_presence() -> None:
+        found = len(
+            NvidiaGpuIndexProvider(visible_devices=gpu_devices or "all").available_devices()
+        )
+        if found < gpu_count:
+            raise RuntimeError(f"nvidia-smi lists {found} of the worker's {gpu_count} GPUs")
+
+    checks: dict[str, Callable[[], object]] = {"network": network_backend.probe_gateway_egress}
+    if gpu_count:
+        checks["gpu"] = gpu_presence
+    _run_readiness_checks("container worker readiness checks", checks)
+
+
+def _run_readiness_checks(label: str, checks: dict[str, Callable[[], object]]) -> None:
+    """Run readiness checks side by side, since none depends on another.
+
+    Each still has to pass; the first failure is raised once all have finished.
+    """
+    timings = StepTimings()
 
     def timed(name: str) -> None:
         with timings.step(name):
@@ -569,7 +606,7 @@ def _validate_worker_readiness(
         if failures:
             raise failures[0][1]
     finally:
-        timings.log(LOGGER, "container worker readiness checks")
+        timings.log(LOGGER, label)
 
 
 def planned_scheduler_worker_record_from_settings(
