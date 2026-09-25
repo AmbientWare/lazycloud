@@ -618,8 +618,6 @@ def _validate_worker_readiness(
 
     def network() -> None:
         network_backend.prepare()
-        if network_backend.refresh_capabilities():
-            LOGGER.info("host routes changed since the network was prepared; rules re-applied")
         network_backend.probe_gateway_egress()
 
     checks: dict[str, Callable[[], object]] = {"network": network}

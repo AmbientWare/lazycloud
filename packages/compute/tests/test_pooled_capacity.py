@@ -4137,6 +4137,7 @@ class _ReserveProvider(_PooledProvider):
     reserve_status: str = "stopped"
     refreshed: list[str] = field(default_factory=list)
     prepared: list[str] = field(default_factory=list)
+    reclaimed: bool = False
 
     def refresh_machine(
         self, request: ProviderUnitRequest, provider_instance_id: str
@@ -4149,6 +4150,8 @@ class _ReserveProvider(_PooledProvider):
         self, request: ProviderUnitRequest, provider_instance_id: str, *, hibernate: bool
     ) -> ProviderUnitSnapshot:
         del hibernate
+        if self.reclaimed:
+            raise ValueError("instance is not owned by this retained pool")
         self.prepared.append(provider_instance_id)
         self.reserve_status = "active" if self.reserve_status == "resuming" else "stopping"
         return self._snapshot(request)
@@ -4397,6 +4400,13 @@ def test_a_resumed_reserve_registers_no_worker_until_its_stream_authorizes_the_r
         )
     assert not stream(agent_binary_sha256="b" * 64).resuming
     assert observed() == (ReservationStatus.Resuming.value, MachineLifecycle.Ready)
+    # A resume the provider cannot finish, such as a reclaimed instance, leaves
+    # the row for a later pass and does not fail this one.
+    provider.reclaimed = True
+    reconciled = compute.reconcile_unit_capacity(unit.id, now=now)
+    assert reconciled is not None and reconciled.provider_state.degraded_reason is None
+    assert observed() == (ReservationStatus.Resuming.value, MachineLifecycle.Ready)
+    provider.reclaimed = False
     compute.reconcile_unit_capacity(unit.id, now=now)
     assert observed() == (ReservationStatus.Active.value, MachineLifecycle.Ready)
     with service_context.database.session() as session:

@@ -4167,6 +4167,7 @@ class ComputeService:
             for record in records
             if record.status == ReservationStatus.Resuming.value
             and record.instance_id is not None
+            and record.missing_since is None
             and record.machine_id is not None
             and (machine := machines.get(record.machine_id, workspace_id=unit.workspace_id))
             is not None
@@ -4239,14 +4240,22 @@ class ComputeService:
                         self._provider_unit_request(current, offer), record.instance_id
                     )
             for instance_id in resumed:
-                current = self.provider_machines._apply_pooled_snapshot(
-                    current,
-                    offer,
-                    pooled.complete_machine_preparation(
+                # One instance the provider no longer owns, such as a reclaimed
+                # Spot machine, must not stop the rest of the pass.
+                try:
+                    snapshot = pooled.complete_machine_preparation(
                         self._provider_unit_request(current, offer), instance_id, hibernate=False
-                    ),
-                    provider=pooled,
-                    now=now,
+                    )
+                except Exception:
+                    LOGGER.warning(
+                        "finishing the resume of %s in %s failed",
+                        instance_id,
+                        current.id,
+                        exc_info=True,
+                    )
+                    continue
+                current = self.provider_machines._apply_pooled_snapshot(
+                    current, offer, snapshot, provider=pooled, now=now
                 )
             request = self._provider_unit_request(current, offer)
             if request.desired_machines == 0 and request.stopped_machines == 0:
