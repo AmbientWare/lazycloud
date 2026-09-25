@@ -15,6 +15,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql.schema import SchemaItem
@@ -141,6 +142,13 @@ class TaskAttemptTable(IdTable, DatabaseBase):
         Index("ix_task_attempts_workspace_created", "workspace_id", "created_at"),
         Index("ix_task_attempts_status_created", "status", "created_at"),
         Index("ix_task_attempts_container", "container_id"),
+        Index(
+            "uq_task_attempts_container_claim",
+            "container_id",
+            "claim_id",
+            unique=True,
+            postgresql_where=text("claim_id IS NOT NULL"),
+        ),
     )
 
     workspace_id: Mapped[str | None] = mapped_column(
@@ -158,6 +166,7 @@ class TaskAttemptTable(IdTable, DatabaseBase):
         ForeignKey("containers.id", ondelete="SET NULL"),
         nullable=True,
     )
+    claim_id: Mapped[str | None] = mapped_column(uuid_type, nullable=True)
     attempt_number: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String(80), nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

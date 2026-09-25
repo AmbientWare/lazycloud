@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from collections.abc import Mapping
 from contextlib import AbstractContextManager, nullcontext
 from copy import deepcopy
@@ -13,6 +14,7 @@ from typing import Protocol
 from pydantic import JsonValue
 from shared.deployment_records import DeploymentSpec, VolumeMount
 from shared.deployments import DeploymentKind
+from shared.errors import ObjectOperationInProgressError, domain_error_code
 from shared.function_payloads import FunctionCloudpickleInvocation
 from shared.http.deployments import DeploymentListResponse, DeploymentResponse
 from shared.http.errors import HttpApiError
@@ -734,36 +736,56 @@ class _DefaultObjectUploadClient:
     def upload_source(
         self, archive: SourcePackageArchive, *, name: str, progress: ProgressCallback | None = None
     ) -> PutObjectResponse:
-        response = HeadObjectResponse.model_validate(
-            self.channel.post(
-                workspace_path("/gateway/objects/head", self.config.workspace),
-                HeadObjectRequest(hash=archive.sha256, bucket=SOURCE_PACKAGE_BUCKET).model_dump(
-                    mode="json"
-                ),
+        """Upload a source package, or reuse the one already stored under its digest.
+
+        Runs started together from one project upload the same archive. While
+        one holds the write the others wait and look again, up to the time one
+        upload is allowed, and then reuse the stored package.
+        """
+
+        timeout_seconds = object_upload_timeout_seconds(self.config.timeout_seconds)
+        deadline = time.monotonic() + timeout_seconds
+        delay = 0.25
+        while True:
+            response = HeadObjectResponse.model_validate(
+                self.channel.post(
+                    workspace_path("/gateway/objects/head", self.config.workspace),
+                    HeadObjectRequest(hash=archive.sha256, bucket=SOURCE_PACKAGE_BUCKET).model_dump(
+                        mode="json"
+                    ),
+                )
             )
-        )
-        if response.exists:
-            if progress is not None:
-                progress(archive.size)
-            return PutObjectResponse(object_id=response.object_id)
-        return stream_object_file(
-            channel=self.channel,
-            workspace=self.config.workspace,
-            source=archive.path,
-            size=archive.size,
-            object_hash=archive.sha256,
-            name=name,
-            bucket=SOURCE_PACKAGE_BUCKET,
-            overwrite=False,
-            content_type=SOURCE_PACKAGE_CONTENT_TYPE,
-            metadata={
-                "kind": "source-package",
-                "sha256": archive.sha256,
-                "file_count": str(len(archive.files)),
-            },
-            timeout_seconds=object_upload_timeout_seconds(self.config.timeout_seconds),
-            progress=progress,
-        )
+            if response.exists:
+                if progress is not None:
+                    progress(archive.size)
+                return PutObjectResponse(object_id=response.object_id)
+            try:
+                return stream_object_file(
+                    channel=self.channel,
+                    workspace=self.config.workspace,
+                    source=archive.path,
+                    size=archive.size,
+                    object_hash=archive.sha256,
+                    name=name,
+                    bucket=SOURCE_PACKAGE_BUCKET,
+                    overwrite=False,
+                    content_type=SOURCE_PACKAGE_CONTENT_TYPE,
+                    metadata={
+                        "kind": "source-package",
+                        "sha256": archive.sha256,
+                        "file_count": str(len(archive.files)),
+                    },
+                    timeout_seconds=timeout_seconds,
+                    progress=progress,
+                )
+            except HttpApiError as exc:
+                if (
+                    exc.code != domain_error_code(ObjectOperationInProgressError)
+                    or time.monotonic() + delay > deadline
+                ):
+                    raise
+            time.sleep(delay)
+            delay = min(delay * 2, 2.0)
 
     def upload_bytes(
         self,

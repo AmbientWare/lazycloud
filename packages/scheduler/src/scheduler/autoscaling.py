@@ -113,7 +113,7 @@ class ContainerRequestReader(Protocol):
 class FunctionAutoscaleControl(Protocol):
     def start_function_container(self, stub_id: str) -> bool: ...
 
-    def unclaimed_task_counts(self, stub_ids: Sequence[str]) -> dict[str, int]: ...
+    def task_demand_counts(self, stub_ids: Sequence[str]) -> dict[str, int]: ...
 
     def containers_holding_work(self, container_ids: Sequence[str]) -> set[str]: ...
 
@@ -205,7 +205,7 @@ FUNCTION_AUTOSCALER = AutoscalerIdentity(
     kind=AutoscalerTargetKind.Function,
     source=FUNCTION_AUTOSCALER_SOURCE,
     scale_decision_action=FUNCTION_SCALE_DECISION_ACTION,
-    signal_name="unclaimed_tasks",
+    signal_name="task_demand",
     lock_namespace="functions",
 )
 ENDPOINT_AUTOSCALER = AutoscalerIdentity(
@@ -705,10 +705,11 @@ class FunctionAutoscaler:
     tick, and stops there; everything about depth is decided here, from the
     whole backlog, once per tick per stub.
 
-    Scaling down is deliberately not done: a function container ends itself when
-    its keep-warm window passes with no work, so the way to have fewer is to
-    stop giving them any. Stopping one from outside risks taking an invocation
-    with it.
+    Demand counts claimed, unfinished tasks as well as the unclaimed ones, so a
+    claim moves work between the two without shrinking the target and stopping
+    the containers started for the rest of the backlog. Scale-down stops only
+    containers holding no work: pending ones, and running ones whose stub never
+    lets them retire on their own.
     """
 
     services: SchedulerServices
@@ -727,7 +728,7 @@ class FunctionAutoscaler:
         return stub.kind is StubKind.Function
 
     def samples(self, stubs: Sequence[AutoscalingStubRecord]) -> Mapping[str, AutoscalingSignal]:
-        counts = self.functions.unclaimed_task_counts([stub.id for stub in stubs])
+        counts = self.functions.task_demand_counts([stub.id for stub in stubs])
         return {stub.id: AutoscalingSignal(value=counts.get(stub.id, 0)) for stub in stubs}
 
     def plan(

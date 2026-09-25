@@ -54,6 +54,14 @@ class DiskVolumePendingError(ConflictError):
     """
 
 
+class ObjectOperationInProgressError(ConflictError):
+    """Another write or cleanup holds this object location.
+
+    That operation finishes without the caller. A writer of content-addressed
+    data can wait and look for the object again instead of failing.
+    """
+
+
 class ContainerLifetimeEndedError(ConflictError):
     """The control plane recorded this container as finished.
 
@@ -92,6 +100,7 @@ __all__ = [
     "ExpiredCursorError",
     "InvalidInputError",
     "NotFoundError",
+    "ObjectOperationInProgressError",
     "PaymentRequiredError",
     "UpstreamTimeoutError",
     "UpstreamUnavailableError",
