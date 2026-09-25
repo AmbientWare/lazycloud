@@ -1265,6 +1265,7 @@ class DeploymentRepository:
         workspace_id: str,
         app: str | None = None,
         pod: str | None = None,
+        role: PodRole | None = None,
         after: tuple[str, str] | None = None,
         limit: int,
     ) -> list[SshPodRow]:
@@ -1311,6 +1312,8 @@ class DeploymentRepository:
         )
         if pod is None:
             statement = statement.where(candidates.c.ssh.is_(True), candidates.c.active.is_(True))
+        if role is not None:
+            statement = statement.where(candidates.c.role == role.value)
         if after is not None:
             statement = statement.where(
                 tuple_(candidates.c.app_name, candidates.c.pod)

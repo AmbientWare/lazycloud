@@ -28,14 +28,30 @@ box = app.devbox(
 
 ```bash
 uv run lazycloud deploy dev:box
-uv run lazycloud ssh box
+uv run lazycloud devbox box ssh
 ```
 
-`lazycloud ssh` opens a shell as `root` in `/root`. The app's source is not
+`lazycloud devbox box ssh` opens a shell as `root` in `/root`. The app's source is not
 mounted, so `git clone` your code onto the disk. The image needs no `sshd`.
 
 `disk=` sizes the root disk, which is named after the devbox.
 [Disk pricing](/concepts/disks#pricing) covers what it costs.
+
+## Find and inspect boxes
+
+```bash
+lazycloud devbox list
+lazycloud devbox box status
+lazycloud devbox box ssh --app dev
+```
+
+`list` shows deployed devbox names and apps in your current workspace. `status`
+shows a box's live state and resources. Neither command starts a sleeping box.
+Use `--app` when several apps share a name, and `--workspace` to select another
+workspace. Both commands support the global `--json` option.
+
+Listings return up to 100 boxes per page. Use `--limit` for a smaller page and
+`--cursor` with the returned `next` value to continue.
 
 ## Coding agents
 
@@ -53,10 +69,10 @@ own tools.
 After deployment, authenticate from an interactive terminal on your laptop:
 
 ```bash
-lazycloud devbox login box codex
-lazycloud devbox login box claude-code
-lazycloud devbox login box opencode
-lazycloud devbox login box pi
+lazycloud devbox box login codex
+lazycloud devbox box login claude
+lazycloud devbox box login opencode
+lazycloud devbox box login pi
 ```
 
 The command checks that the agent and its required system commands are installed
