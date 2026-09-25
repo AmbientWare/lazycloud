@@ -97,6 +97,7 @@ def test_agent_atomically_writes_worker_yaml_before_starting_container(
     assert f"{config_path}:/etc/lazycloud/worker/worker.yaml:ro" in docker_run
     # Both clients must reach the control plane through the runtime origin.
     assert "GATEWAY_HTTP_URL=http://127.0.0.1:9000" in docker_run
+    assert "WORKER_PUBLIC_GATEWAY_URL=https://gateway.example.test" in docker_run
     assert docker_run[docker_run.index("--network") + 1] == "host"
     assert docker_run[docker_run.index("--cgroupns") + 1] == "host"
 

@@ -36,6 +36,7 @@ from shared.env import (
     GATEWAY_HTTP_PORT_ENV,
     GATEWAY_HTTP_TLS_ENV,
     GATEWAY_HTTP_URL_ENV,
+    WORKER_PUBLIC_GATEWAY_URL_ENV,
 )
 from shared.gpu import normalize_gpu_type
 from shared.placement import Placement
@@ -1410,6 +1411,7 @@ def plan_worker_container(
         env["NVIDIA_VISIBLE_DEVICES"] = assignment
         env["WORKER_GPU_DEVICES"] = assignment
     env.update(gateway_env)
+    env[WORKER_PUBLIC_GATEWAY_URL_ENV] = bootstrap.gateway_public_http_url
     volumes = [
         f"{dirs.images}:/images",
         f"{dirs.tmp}:{AGENT_CONTAINER_TMP_PATH}",

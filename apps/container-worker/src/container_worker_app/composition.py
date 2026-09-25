@@ -6,6 +6,8 @@ import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
+from urllib.parse import urlparse
 
 from cache.server import (
     FileCacheServer,
@@ -177,6 +179,9 @@ def build_worker_process_services(
     paths = configuration.paths
     identity = _worker_identity(config)
     internal_http = _internal_http_client(config)
+    # A held worker reports waiting only once its readiness preparation succeeded,
+    # so its reserve never hibernates with a worker that is not ready.
+    readiness_prepared = Event()
     repository = repository_client or build_worker_repository_http_client(
         endpoint=AGENT_TUNNEL_CONTROL_URL,
         token=config.worker_token,
@@ -187,6 +192,7 @@ def build_worker_process_services(
             if config.admission_hold_seconds
             else None
         ),
+        admission_ready=readiness_prepared,
         http=internal_http,
     )
     image_build_scratch = ImageBuildScratchManager(
@@ -495,14 +501,11 @@ def build_worker_process_services(
             image_runtime,
             spec_builder=spec_builder,
             network_backend=network_backend,
+            prepared=readiness_prepared,
         ),
         readiness_validator=lambda: _validate_worker_readiness(
             network_backend=network_backend,
-            external=(
-                (config.gateway_grpc_host, config.gateway_grpc_port)
-                if config.gateway_grpc_host
-                else None
-            ),
+            external=_url_endpoint(config.public_gateway_url),
             gpu_count=execution.capacity.gpu_count,
             gpu_devices=config.gpu_devices,
         ),
@@ -542,6 +545,7 @@ def _prepare_worker_readiness(
     *,
     spec_builder: OciRuntimeSpecBuilder,
     network_backend: AgentBridgeNetworkBackend,
+    prepared: Event,
 ) -> None:
     """The readiness checks a sleep cannot change, run while the worker registers."""
 
@@ -560,6 +564,7 @@ def _prepare_worker_readiness(
             "network": network_backend.prepare,
         },
     )
+    prepared.set()
 
 
 def _validate_worker_readiness(
@@ -600,6 +605,14 @@ def _validate_worker_readiness(
     if gpu_count:
         checks["gpu"] = gpu_presence
     _run_readiness_checks("container worker readiness checks", checks)
+
+
+def _url_endpoint(url: str) -> tuple[str, int] | None:
+    """The host and port a URL names, with its scheme's default port."""
+    parsed = urlparse(url)
+    if not parsed.hostname:
+        return None
+    return parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80)
 
 
 def _run_readiness_checks(label: str, checks: dict[str, Callable[[], object]]) -> None:

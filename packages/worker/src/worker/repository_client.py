@@ -8,6 +8,7 @@ from contextlib import closing
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from threading import Event
 from typing import Literal, Protocol, runtime_checkable
 from urllib.parse import urlparse
 
@@ -248,6 +249,9 @@ class WorkerRepositoryHttpTransport:
     admission_waiting_file: Path | None = None
     """Present while a hold is under way and a call was refused, telling the agent
     this worker is built and waits only for the control plane."""
+    admission_ready: Event | None = None
+    """Set once the worker's readiness preparation has succeeded. Until then it
+    is not built, so a refused call reports no waiting."""
 
     http: InternalHttpClient = field(default_factory=InternalHttpClient)
     _admitted: bool = field(default=False, init=False)
@@ -296,7 +300,11 @@ class WorkerRepositoryHttpTransport:
             except InternalHttpConnectError as exc:
                 # Read on every attempt, so a shutdown ends a hold already under way.
                 held = not self._admitted and self.admission_hold_seconds > 0
-                if held and self.admission_waiting_file is not None:
+                if (
+                    held
+                    and self.admission_waiting_file is not None
+                    and (self.admission_ready is None or self.admission_ready.is_set())
+                ):
                     self._report_waiting(self.admission_waiting_file)
                 budget = self.admission_hold_seconds if held else self.connect_retry_seconds
                 if time.monotonic() + delay - began >= budget:
@@ -1667,6 +1675,7 @@ def build_worker_repository_http_client(
     timeout_seconds: float = 30.0,
     admission_hold_seconds: float = 0.0,
     admission_waiting_file: Path | None = None,
+    admission_ready: Event | None = None,
     http: InternalHttpClient | None = None,
 ) -> WorkerRepositoryHttpClient:
     if not endpoint:
@@ -1682,6 +1691,7 @@ def build_worker_repository_http_client(
             timeout_seconds=timeout_seconds,
             admission_hold_seconds=admission_hold_seconds,
             admission_waiting_file=admission_waiting_file,
+            admission_ready=admission_ready,
             http=http or InternalHttpClient(timeout_seconds=timeout_seconds),
         )
     )

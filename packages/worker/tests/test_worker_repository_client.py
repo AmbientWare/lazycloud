@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Mapping
 from pathlib import Path
+from threading import Event
 from typing import IO
 
 import httpx
@@ -250,3 +251,28 @@ def test_a_fenced_worker_stays_held_after_the_refusal(
 
     assert clock.now >= 1799
     assert marker.exists()
+
+
+@pytest.mark.parametrize("prepared", [False, True])
+def test_a_held_worker_reports_waiting_only_once_its_readiness_is_prepared(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, prepared: bool
+) -> None:
+    """A reserve hibernates once its worker waits, so an unprepared worker never says it does."""
+    monkeypatch.setattr(repository_client, "time", _Clock())
+    marker = tmp_path / "admission-waiting"
+    ready = Event()
+    if prepared:
+        ready.set()
+    transport = WorkerRepositoryHttpTransport(
+        endpoint="http://agent.invalid",
+        token="worker-secret",
+        admission_hold_seconds=5.0,
+        admission_waiting_file=marker,
+        admission_ready=ready,
+        http=_RefusedHttp(),
+    )
+
+    with pytest.raises(WorkerRepositoryClientError, match="did not admit this reserve worker"):
+        transport.post("/worker-repository/add-worker", {})
+
+    assert marker.exists() is prepared

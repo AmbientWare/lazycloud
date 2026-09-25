@@ -30,6 +30,8 @@ from worker.status import (
 )
 
 LOGGER = logging.getLogger(__name__)
+READINESS_PREPARATION_SHUTDOWN_SECONDS = 10.0
+"""How long shutdown waits for a readiness preparation before it cleans up anyway."""
 DEFAULT_WORKER_KEEPALIVE_TTL_SECONDS = 60
 DEFAULT_WORKER_SHUTDOWN_DRAIN_SECONDS = 5.0
 DEFAULT_WORKER_STOP_GRACE_SECONDS = 5.0
@@ -456,11 +458,19 @@ class WorkerLifecycleOrchestrator:
             return self._preparation
 
     def _settle_readiness_preparation(self) -> None:
-        """End the preparation before cleanup closes what it sets up."""
+        """End the preparation before cleanup closes what it sets up, waiting only so long."""
         with self._lock:
             preparation = self._preparation
         if preparation is not None and not preparation.cancel():
-            error = preparation.exception()
+            try:
+                error = preparation.exception(timeout=READINESS_PREPARATION_SHUTDOWN_SECONDS)
+            except TimeoutError:
+                LOGGER.warning(
+                    "worker readiness preparation still running after %.0fs; cleaning up anyway",
+                    READINESS_PREPARATION_SHUTDOWN_SECONDS,
+                )
+                self._preparer.shutdown(wait=False, cancel_futures=True)
+                return
             if error is not None:
                 LOGGER.warning("worker readiness preparation failed", exc_info=error)
         self._preparer.shutdown(wait=True, cancel_futures=True)
