@@ -11,6 +11,7 @@ import random
 import shutil
 import socket
 import subprocess
+import sys
 import time
 import traceback
 import urllib.error
@@ -1485,7 +1486,9 @@ class AgentDaemonService:
             )
 
     def run(self) -> AgentDaemonRunResult:
-        wakeup = Wakeup(on_resume=self.client.reset_connections)
+        wakeup = Wakeup(
+            on_resume=self.client.reset_connections, watch_resume=sys.platform == "linux"
+        )
         self._wakeup = wakeup
         self.worker_controller.wake_on_image_prepared(wakeup.wake)
         try:

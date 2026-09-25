@@ -81,13 +81,13 @@ AGENT_RUNTIME_READY_FILE = "runtime-ready.json"
 AGENT_AUTHORITY_REVOKED_FILE = "authority-revoked.json"
 AGENT_SERVICE_READY_TIMEOUT_SECONDS = 180
 RESERVE_WORKER_ADMISSION_HOLD_SECONDS = 30 * 60
-WORKER_ADMISSION_HOLD_ENV = "WORKER_ADMISSION_HOLD_SECONDS"
-"""Set on a worker's container when it starts under the admission hold."""
 """Awake time a reserve's worker waits behind closed listeners before it fails.
 
 It covers preparing the reserve, the wait until EC2 accepts a hibernation, and
 a stop that runs to its deadline. Past it, no stream adopted or stopped the worker.
 """
+WORKER_ADMISSION_HOLD_ENV = "WORKER_ADMISSION_HOLD_SECONDS"
+"""Set on a worker's container when it starts under the admission hold."""
 DOCKER_NETWORK_NAME_PATTERN = r"^(?:host|container:[A-Za-z0-9][A-Za-z0-9_.-]{0,254})$"
 
 

@@ -100,14 +100,19 @@ class Wakeup:
     work the owner is itself blocked in, then wakes the waiter. Without that
     notice a resume would go unseen, so a kernel that cannot give one fails the
     agent at start, and a watch that fails later fails the next wait.
+
+    Only Linux machines hibernate as platform reserves, so elsewhere
+    `watch_resume` is false and the waiter ends only at its timeout or on `wake()`.
     """
 
-    def __init__(self, on_resume: Callable[[], None] | None = None) -> None:
-        try:
-            self._jumps: _ClockJumps | None = _ClockJumps()
-        except (OSError, AttributeError) as exc:
-            msg = "the agent needs a Linux timerfd clock jump notice to see a resume from sleep"
-            raise RuntimeError(msg) from exc
+    def __init__(self, on_resume: Callable[[], None] | None = None, *, watch_resume: bool) -> None:
+        self._jumps: _ClockJumps | None = None
+        if watch_resume:
+            try:
+                self._jumps = _ClockJumps()
+            except (OSError, AttributeError) as exc:
+                msg = "the agent needs a Linux timerfd clock jump notice to see a resume from sleep"
+                raise RuntimeError(msg) from exc
         self._read, self._write = os.pipe()
         self._stop_read, self._stop_write = os.pipe()
         for descriptor in (self._read, self._write, self._stop_read, self._stop_write):
@@ -117,10 +122,12 @@ class Wakeup:
         self._lock = Lock()
         self._closed = False
         self._failure: OSError | None = None
-        self._watch = Thread(
-            target=self._watch_jumps, args=(self._jumps,), name="clock-jumps", daemon=True
-        )
-        self._watch.start()
+        self._watch: Thread | None = None
+        if self._jumps is not None:
+            self._watch = Thread(
+                target=self._watch_jumps, args=(self._jumps,), name="clock-jumps", daemon=True
+            )
+            self._watch.start()
 
     def wake(self) -> None:
         with self._lock:
@@ -170,7 +177,8 @@ class Wakeup:
             self._closed = True
         with suppress(BlockingIOError, OSError):
             os.write(self._stop_write, b"\0")
-        self._watch.join(timeout=1.0)
+        if self._watch is not None:
+            self._watch.join(timeout=1.0)
         if self._jumps is not None:
             self._jumps.close()
         for descriptor in (self._read, self._write, self._stop_read, self._stop_write):
