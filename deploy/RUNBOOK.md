@@ -500,6 +500,9 @@ is replaced rather than upgraded.
 6. Machines customers joined and connected-cloud nodes run the old agent too.
    Run their join command again.
 
+An agent from before this release cannot apply the archive as an update; it
+keeps running its old release until it is joined again.
+
 IAM and Redis need no change. A node on the new image logs `docker answered
 after` from its agent, and `/proc/cmdline` shows `root=PARTUUID=`.
 

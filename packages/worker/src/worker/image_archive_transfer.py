@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 from networking.internal_http import InternalHttpClient, InternalHttpError
+from shared.durable_files import fsync_directory
 
 IMAGE_ARCHIVE_TRANSFER_CHUNK_SIZE_BYTES = 1024 * 1024
 IMAGE_ARCHIVE_TRANSFER_RETRY_DELAYS_SECONDS = (0.5, 2.0, 5.0)
@@ -135,7 +136,7 @@ def download_image_archive(
                     timeout_seconds=_remaining_timeout(deadline),
                 )
                 os.replace(partial, target)
-                _fsync_directory(target.parent)
+                fsync_directory(target.parent)
                 return bytes_written
             except _ImageArchiveHttpError as exc:
                 if not exc.retryable or attempt == attempts - 1:
@@ -308,14 +309,6 @@ def _wait_before_retry(delay_seconds: float, deadline: float) -> None:
     if remaining <= 0 or delay_seconds >= remaining:
         raise ImageArchiveTransferError("image archive transfer deadline expired")
     time.sleep(delay_seconds)
-
-
-def _fsync_directory(directory: Path) -> None:
-    descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
 
 
 def _transfer_endpoint(url: str) -> str:

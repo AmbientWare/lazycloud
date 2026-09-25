@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import http.client as http_client
 import json
 import logging
@@ -157,6 +158,8 @@ SLOW_STREAM_ITERATION_SECONDS = 2.0
 DEFAULT_AGENT_HTTP_TIMEOUT_SECONDS = 30.0
 NVIDIA_SMI_TIMEOUT_SECONDS = 5.0
 JOIN_RETRY_SECONDS = 60.0
+JOINING_REPORT_SECONDS = 5.0
+"""How long the joining report may hold the agent's start before it gives up."""
 JOIN_RETRY_BASE_SECONDS = 0.15
 JOIN_RETRY_MAX_SECONDS = 30.0
 AGENT_STATE_FILE = "agent-state.json"
@@ -585,16 +588,49 @@ class SubprocessCommandRunner:
                 raise
 
 
-def _docker_ping_failure() -> str:
-    """Why Docker's API socket did not answer a ping, or empty when it did.
+def docker_socket_path() -> str | None:
+    """The unix socket the docker CLI would talk to, or None if that is not a local socket.
 
-    A plain request on the unix socket named by DOCKER_HOST, or the default
-    socket: no docker process to start and no timer thread per attempt.
+    As the CLI resolves it: DOCKER_HOST, else the context named by DOCKER_CONTEXT
+    or the docker config's `currentContext`, else the default socket.
     """
     host = os.environ.get("DOCKER_HOST", "")
-    if host and not host.startswith("unix://"):
-        return ""
-    path = host.removeprefix("unix://") or DEFAULT_DOCKER_SOCKET
+    if not host:
+        config_dir = Path(os.environ.get("DOCKER_CONFIG") or Path.home() / ".docker")
+        context = os.environ.get("DOCKER_CONTEXT", "")
+        try:
+            if not context:
+                config = _JSON_VALUE_ADAPTER.validate_json(
+                    (config_dir / "config.json").read_bytes()
+                )
+                current = config.get("currentContext") if isinstance(config, dict) else None
+                context = current if isinstance(current, str) else ""
+            if context and context != "default":
+                digest = hashlib.sha256(context.encode()).hexdigest()
+                meta = _JSON_VALUE_ADAPTER.validate_json(
+                    (config_dir / "contexts" / "meta" / digest / "meta.json").read_bytes()
+                )
+                endpoints = meta.get("Endpoints") if isinstance(meta, dict) else None
+                docker = endpoints.get("docker") if isinstance(endpoints, dict) else None
+                named = docker.get("Host") if isinstance(docker, dict) else None
+                if not isinstance(named, str):
+                    return None
+                host = named
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError):
+            return None
+    if not host:
+        return DEFAULT_DOCKER_SOCKET
+    return host.removeprefix("unix://") if host.startswith("unix://") else None
+
+
+def _docker_ping_failure(path: str) -> str:
+    """Why Docker's API socket did not answer a ping, or empty when it did.
+
+    A plain request on the unix socket: no docker process to start and no timer
+    thread per attempt.
+    """
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
             connection.settimeout(DOCKER_PING_SECONDS)
@@ -647,10 +683,15 @@ class DockerAgentWorkerController:
     such as uninstall, and every stop, runs Docker at once and fails fast.
     """
     _docker_deadline: float = field(default=0.0, init=False)
+    _docker_socket: str | None = field(default=None, init=False)
+    _closing: Event = field(default_factory=Event, init=False)
 
     def __post_init__(self) -> None:
         self._images = WorkerImagePreparation(self._prepare_worker_image)
         self._docker_deadline = time.monotonic() + self.docker_wait_seconds
+        # Resolved once: a socket that is not local, or cannot be resolved,
+        # means no wait, and Docker calls run at once.
+        self._docker_socket = docker_socket_path() if self.docker_wait_seconds else None
 
     def wait_for_docker(self, stop: Event | None = None) -> bool:
         """Wait for the Docker daemon to answer; False once it has not in time.
@@ -658,22 +699,20 @@ class DockerAgentWorkerController:
         The daemon's unit starts before Docker rather than after it, so its
         Docker calls wait here, up to `docker_wait_seconds` from the start,
         instead of failing or spending a pull's retries while Docker starts.
-        A set `stop` ends the wait at once.
+        A set `stop`, or the controller closing, ends the wait at once.
         """
         if self._docker_answered:
             return True
-        if self._docker_waited_out:
+        socket_path = self._docker_socket
+        if self._docker_waited_out or socket_path is None:
             return False
         began = time.monotonic()
-        while failure := _docker_ping_failure():
+        while failure := _docker_ping_failure(socket_path):
             if time.monotonic() >= self._docker_deadline:
-                if self.docker_wait_seconds:
-                    LOGGER.warning("docker did not answer after agent start: %s", failure)
+                LOGGER.warning("docker did not answer after agent start: %s", failure)
                 self._docker_waited_out = True
                 return False
-            if stop is None:
-                time.sleep(DOCKER_POLL_SECONDS)
-            elif stop.wait(DOCKER_POLL_SECONDS):
+            if self._closing.wait(DOCKER_POLL_SECONDS) or (stop is not None and stop.is_set()):
                 return False
         LOGGER.info("docker answered after %.2fs", time.monotonic() - began)
         self._docker_answered = True
@@ -700,6 +739,7 @@ class DockerAgentWorkerController:
         return (result.stderr or result.stdout).strip()[-300:] or f"exit {result.returncode}"
 
     def close(self) -> None:
+        self._closing.set()
         self._images.close()
 
     def prepare_worker_image(self) -> Future[None] | None:
@@ -718,12 +758,12 @@ class DockerAgentWorkerController:
             self._images.look_up(image, self._image_present)
         return None
 
-    def _image_present(self, image: str) -> bool:
+    def _image_present(self, image: str, stop: Event | None = None) -> bool:
         """Whether docker has the image, answered within a few seconds or taken as no.
 
         A no costs one stream; the stream then names the image and prepares it.
         """
-        self.wait_for_docker()
+        self.wait_for_docker(stop)
         return not self._docker_failure(
             [self.docker_binary, "image", "inspect", image], within=BOOT_IMAGE_LOOKUP_SECONDS
         )
@@ -1148,6 +1188,7 @@ class AgentDaemonService:
     _interruption_reported: bool = False
     _reported_worker_images: list[str] = field(default_factory=list)
     _last_applied_actions: str = "nothing"
+    _update_refused: str = ""
 
     def __post_init__(self) -> None:
         self._capacity_shutdown = CapacityShutdown(
@@ -1168,11 +1209,16 @@ class AgentDaemonService:
             LOGGER.warning("reporting the %s phase failed", phase.value, exc_info=True)
 
     def _report_joining(self) -> None:
-        """Report joining, retrying while the network comes up beside the agent."""
+        """Report joining, retrying briefly while the network comes up beside the agent.
+
+        It runs before the tunnel and the first stream, so it gets only a few
+        seconds; a machine that fails it still joins through its stream.
+        """
         try:
             self._join_step(
                 "bootstrap_phase.joining",
                 lambda: self._record_bootstrap_phase(MachineLifecycle.Joining),
+                budget_seconds=JOINING_REPORT_SECONDS,
             )
         except Exception:
             LOGGER.warning("reporting the joining phase failed", exc_info=True)
@@ -1560,10 +1606,21 @@ class AgentDaemonService:
         state = state.model_copy(update={"release_generation": release.generation})
         self.state_store.save(state)
         if release.update_agent and release.agent is not None:
-            self.worker_controller.pull_detached(
-                {slot.worker_image for slot in desired_slots if slot.worker_image}
-            )
-            updater.install(release.agent, before_exec=before_agent_update)
+            blocker = updater.update_blocker(release.agent)
+            if blocker:
+                # Logged once per release, not on every stream, and never fatal:
+                # the agent keeps serving on the release it has.
+                refusal = f"{release.agent.sha256}:{blocker}"
+                if refusal != self._update_refused:
+                    self._update_refused = refusal
+                    LOGGER.warning(
+                        "not updating the agent to %s: %s", release.agent.sha256, blocker
+                    )
+            else:
+                self.worker_controller.pull_detached(
+                    {slot.worker_image for slot in desired_slots if slot.worker_image}
+                )
+                updater.install(release.agent, before_exec=before_agent_update)
         return AgentDaemonRunResult(
             workspace_id=state.workspace_id,
             placement=state.placement.key,
@@ -1892,7 +1949,13 @@ class AgentDaemonService:
             )
         return self.telemetry.flush(state.agent_token, self.client) > 0
 
-    def _join_step[T](self, action: str, operation: Callable[[], T]) -> T:
+    def _join_step[T](
+        self,
+        action: str,
+        operation: Callable[[], T],
+        *,
+        budget_seconds: float = JOIN_RETRY_SECONDS,
+    ) -> T:
         """Run a startup step, retrying failures that never reached the control plane.
 
         The stream loop already tolerates transient failures, but everything before
@@ -1906,7 +1969,7 @@ class AgentDaemonService:
         outage costs the gateway a few calls per agent, and the last one comes
         at the minute.
         """
-        deadline = time.monotonic() + JOIN_RETRY_SECONDS
+        deadline = time.monotonic() + budget_seconds
         attempt = 0
         while True:
             try:

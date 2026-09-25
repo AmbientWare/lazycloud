@@ -72,8 +72,8 @@ def test_an_update_switches_the_command_and_keeps_only_the_releases_it_can_retur
 
     for artifact in (second, third):
         with pytest.raises(AgentUpdateRestartError):
-            AgentUpdater(command, state).install(artifact, before_exec=restart)
-        updated = AgentUpdater(command, state)
+            AgentUpdater(command, state, command.resolve()).install(artifact, before_exec=restart)
+        updated = AgentUpdater(command, state, command.resolve())
         assert updated.binary_sha256() == artifact.sha256
         assert (state / UPDATE_PENDING_FILE).read_text().strip() == artifact.sha256
         updated.confirm()
@@ -86,8 +86,8 @@ def test_an_update_switches_the_command_and_keeps_only_the_releases_it_can_retur
 
     tampered = third.model_copy(update={"sha256": "0" * 64})
     with pytest.raises(RuntimeError, match="does not match"):
-        AgentUpdater(command, state).install(tampered, before_exec=restart)
-    assert AgentUpdater(command, state).binary_sha256() == third.sha256
+        AgentUpdater(command, state, command.resolve()).install(tampered, before_exec=restart)
+    assert AgentUpdater(command, state, command.resolve()).binary_sha256() == third.sha256
     assert sorted(entry.name for entry in releases.iterdir()) == sorted(
         [second.sha256, third.sha256]
     )
@@ -116,8 +116,8 @@ def test_a_release_left_incomplete_is_unpacked_again(
     incomplete.mkdir()
 
     with pytest.raises(AgentUpdateRestartError):
-        AgentUpdater(command, state).install(second, before_exec=restart)
+        AgentUpdater(command, state, command.resolve()).install(second, before_exec=restart)
 
     assert (incomplete / AGENT_NAME).is_file()
     assert (incomplete / RELEASE_COMPLETE_FILE).is_file()
-    assert AgentUpdater(command, state).binary_sha256() == second.sha256
+    assert AgentUpdater(command, state, command.resolve()).binary_sha256() == second.sha256

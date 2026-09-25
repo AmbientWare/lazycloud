@@ -39,7 +39,7 @@ from agent.service_manager import (
     resolve_service_platform,
 )
 from agent.storage_cleanup import prepare_source_cache_destruction
-from agent.updates import SUPERVISOR, SUPERVISOR_SCRIPT
+from agent.updates import SUPERVISOR, SUPERVISOR_SCRIPT, discard_release
 from gateway.http import LeaveAgentRequest
 from pydantic import TypeAdapter, ValidationError
 from shared.app_identity import AGENT_NAME
@@ -130,6 +130,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> None:
     parser = build_parser()
     args = parser.parse_args(argv, namespace=AgentCommandArgs())
+    releases: Path | None = None
     try:
         if args.command == "join":
             result = run_agent_daemon(_daemon_options(args))
@@ -142,10 +143,16 @@ def main(argv: list[str] | None = None) -> None:
                 service_name=args.service_name,
             )
         else:
-            result = _manage_service(args)
+            result, releases = _manage_service(args)
     except (OSError, RuntimeError, ValueError) as exc:
         parser.exit(1, f"error: {exc}\n")
     print(result.model_dump_json())
+    if releases is not None and releases.exists():
+        # Last, since this process was loaded from one of these releases.
+        try:
+            discard_release(releases)
+        except OSError as exc:
+            parser.exit(1, f"error: could not remove the agent releases {releases}: {exc}\n")
     if isinstance(result, AgentDaemonRunResult) and result.authority_revoked:
         # A revoked agent has finished for good. Exiting non-zero is what tells
         # the service manager this was not a clean stop to be restarted.
@@ -586,7 +593,8 @@ def _service_status(
     )
 
 
-def _manage_service(args: AgentCommandArgs) -> AgentServiceOperationResult:
+def _manage_service(args: AgentCommandArgs) -> tuple[AgentServiceOperationResult, Path | None]:
+    """Run a service action; also the releases directory uninstall leaves for last."""
     action = ServiceLifecycleAction(args.command)
     selected_platform = _resolve_service_platform(args.target)
     _require_service_manager(selected_platform, mutation=True)
@@ -618,7 +626,7 @@ def _manage_service(args: AgentCommandArgs) -> AgentServiceOperationResult:
             )
     service_removed = False
     state_removed = False
-    binary_removed = False
+    releases: Path | None = None
     if plan.remove_service:
         service_removed = service_path.exists()
         service_path.unlink(missing_ok=True)
@@ -628,8 +636,8 @@ def _manage_service(args: AgentCommandArgs) -> AgentServiceOperationResult:
             shutil.rmtree(state_dir)
     commands.extend(_run_service_commands(plan.after_removal))
     if action is ServiceLifecycleAction.Uninstall and not args.keep_binary:
-        binary_removed = _remove_canonical_agent_binary()
-    return AgentServiceOperationResult(
+        releases = _remove_canonical_agent_binary()
+    result = AgentServiceOperationResult(
         action=action,
         platform=selected_platform,
         service_name=plan.service_name,
@@ -638,8 +646,9 @@ def _manage_service(args: AgentCommandArgs) -> AgentServiceOperationResult:
         remote_leave=remote_leave,
         service_removed=service_removed,
         state_removed=state_removed,
-        binary_removed=binary_removed,
+        binary_removed=releases is not None,
     )
+    return result, releases
 
 
 def _load_agent_state_for_removal(state_dir: Path, *, service_path: Path) -> AgentState | None:
@@ -715,14 +724,16 @@ def _validated_state_directory(path: Path) -> Path:
     return resolved
 
 
-def _remove_canonical_agent_binary() -> bool:
-    """Remove the agent command the installer created and every release it unpacked.
+def _remove_canonical_agent_binary() -> Path | None:
+    """Remove the agent command the installer created; return the releases it unpacked.
 
-    False when the command sits outside the installer's paths, so a binary an
+    None when the command sits outside the installer's paths, so a binary an
     operator placed is left alone. At an installer path, whatever is found goes:
     the link to a release, or a single executable an older installer wrote. A
     link that leads outside the releases, or anything that cannot be removed,
-    raises rather than leaving the agent half installed.
+    raises rather than leaving the agent half installed. The releases directory
+    is returned rather than removed: this process runs from it, so the caller
+    removes it after its output.
     """
     found = Path(_agent_binary_path()).expanduser().absolute()
     command = found.parent.resolve() / found.name
@@ -734,16 +745,14 @@ def _remove_canonical_agent_binary() -> bool:
         )
     }
     if command not in allowed or not (command.is_symlink() or command.is_file()):
-        return False
+        return None
     releases = command.parent.parent / "lib" / AGENT_NAME
     if command.is_symlink() and not command.resolve().is_relative_to(releases.resolve()):
         msg = f"{command} links outside the agent releases in {releases}; remove it by hand"
         raise RuntimeError(msg)
     command.unlink()
     command.with_name(f"{command.name}.previous").unlink(missing_ok=True)
-    if releases.exists():
-        shutil.rmtree(releases)
-    return True
+    return releases
 
 
 def _status_payload(

@@ -6,6 +6,8 @@ import stat
 from dataclasses import dataclass
 from pathlib import Path
 
+from shared.durable_files import fsync_directory
+
 
 class CredentialFileError(RuntimeError):
     pass
@@ -71,7 +73,7 @@ class CredentialFilePublication:
                 os.close(descriptor)
             raise
         os.close(descriptor)
-        _fsync_directory(output.parent)
+        fsync_directory(output.parent)
 
     def publish(self, *, replace: bool) -> None:
         staged = self.staged_path
@@ -87,13 +89,13 @@ class CredentialFilePublication:
                 raise CredentialFileError(f"credential output already exists: {output}") from exc
             staged.unlink()
         _secure_mode(output)
-        _fsync_directory(output.parent)
+        fsync_directory(output.parent)
 
     def secure_published_mode(self) -> None:
         if self.read_published() is None:
             raise CredentialFileError("published credential is missing")
         _secure_mode(self.resolved_output)
-        _fsync_directory(self.resolved_output.parent)
+        fsync_directory(self.resolved_output.parent)
 
     def discard_staged(self) -> None:
         staged = self.staged_path
@@ -104,7 +106,7 @@ class CredentialFilePublication:
         if not stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
             raise CredentialFileError(f"refusing to remove non-regular staged path: {staged}")
         staged.unlink()
-        _fsync_directory(staged.parent)
+        fsync_directory(staged.parent)
 
 
 def _read_credential(path: Path) -> str | None:
@@ -124,14 +126,6 @@ def _read_credential(path: Path) -> str | None:
 
 def _secure_mode(path: Path) -> None:
     os.chmod(path, 0o600, follow_symlinks=False)
-
-
-def _fsync_directory(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
 
 
 __all__ = ["CredentialFileError", "CredentialFilePublication"]

@@ -139,7 +139,7 @@ intend to publish. Publication is immutable; inspect the staged bundle before
 the `publish` command:
 
 ```sh
-uv run --no-project python -m deploy.agent-binary.build build \
+uv run --group workspace python -m deploy.agent-binary.build build \
   --version "$VERSION" --output dist/agent-binarys --arch amd64
 
 uv run --group workspace python -m deploy.aws-release-assets.release stage \

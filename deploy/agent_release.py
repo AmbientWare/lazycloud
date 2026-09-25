@@ -1,6 +1,7 @@
 """What an agent release archive is, for the build that makes one and the release that ships it.
 
-Standard library only: the agent build runs without the workspace installed.
+Every archive holds the agent as `./lazycloud-agent`, the name the install script
+and the updater link commands to, however a command itself is named.
 """
 
 from __future__ import annotations
@@ -8,17 +9,17 @@ from __future__ import annotations
 import tarfile
 from pathlib import Path
 
-AGENT_EXECUTABLE = "lazycloud-agent"
+from shared.app_identity import AGENT_NAME
 
 
 def is_agent_release(path: Path) -> bool:
     """Whether `path` is a gzip tarball with the agent executable at its root."""
     try:
         with tarfile.open(path, "r:gz") as archive:
-            executable = archive.getmember(f"./{AGENT_EXECUTABLE}")
+            executable = archive.getmember(f"./{AGENT_NAME}")
     except (tarfile.TarError, KeyError, OSError):
         return False
     return executable.isfile() and bool(executable.mode & 0o111)
 
 
-__all__ = ["AGENT_EXECUTABLE", "is_agent_release"]
+__all__ = ["is_agent_release"]

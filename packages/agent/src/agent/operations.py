@@ -579,7 +579,7 @@ install_from_url() {
   release="$releases/$digest"
   if [ ! -f "$release/__RELEASE_COMPLETE_FILE__" ]; then
     staged="$(mktemp -d "$releases/.release.XXXXXX")"
-    if ! tar -xzf "$archive" -C "$staged" || [ ! -x "$staged/__AGENT_NAME__" ]; then
+    if ! tar -xzf "$archive" -C "$staged" || [ ! -x "$staged/__AGENT_EXECUTABLE__" ]; then
       rm -rf "$staged" "$archive"
       fail "the agent release from $url could not be unpacked" 1
     fi
@@ -593,7 +593,7 @@ install_from_url() {
   fi
   rm -f "$archive"
   link="$(dirname "$command_path")/.__AGENT_NAME__.$$.link"
-  ln -s "$release/__AGENT_NAME__" "$link"
+  ln -s "$release/__AGENT_EXECUTABLE__" "$link"
   mv -f "$link" "$command_path"
 }
 
@@ -726,6 +726,7 @@ main "$@"
         script.replace("__AGENT_NAME__", name)
         .replace("__HOME_DIR__", HOME_DIR)
         .replace("__RELEASE_COMPLETE_FILE__", RELEASE_COMPLETE_FILE)
+        .replace("__AGENT_EXECUTABLE__", AGENT_NAME)
         .replace("__DEFAULT_AGENT_STATE_DIR__", DEFAULT_AGENT_STATE_DIR)
         .replace("__AGENT_RUNTIME_READY_FILE__", AGENT_RUNTIME_READY_FILE)
         .replace("__READY_TIMEOUT_SECONDS__", str(AGENT_SERVICE_READY_TIMEOUT_SECONDS))

@@ -12,7 +12,7 @@ pays before its agent can connect.
 Build and stage both architectures from the repository root:
 
 ```sh
-uv run --no-project python -m deploy.agent-binary.build build \
+uv run --group workspace python -m deploy.agent-binary.build build \
   --version 0.1.0 \
   --output dist/agent-binarys
 ```

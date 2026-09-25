@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 import hashlib
 import logging
 import os
@@ -14,6 +15,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from shared.app_identity import AGENT_NAME
+from shared.durable_files import fsync_directory, fsync_tree
 from shared.releases import AgentArtifact
 
 LOGGER = logging.getLogger(__name__)
@@ -70,6 +73,12 @@ class AgentUpdateRestartError(RuntimeError):
 
 
 RELEASE_DIGEST_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+RUNNING_EXECUTABLE = Path(sys.executable).resolve() if getattr(sys, "frozen", False) else None
+"""The agent executable this process started from, read once; None when run from source.
+
+Every release archive holds its executable as `./lazycloud-agent`, whatever the
+command that links to it is named.
+"""
 STALE_STAGING_SECONDS = 3600
 """How long a download or unpack goes untouched before pruning takes it as abandoned."""
 UPDATE_PENDING_FILE = "agent-update.pending"
@@ -104,30 +113,52 @@ class AgentUpdater:
     in the directory of unpacked releases. Each release is unpacked once, into a
     directory named by its archive's verified digest, so that name is the digest
     the agent reports and nothing is hashed or unpacked when it starts.
+    `executable` is the one this process runs, which stays the running release
+    even after the command is pointed at another.
     """
 
     command: Path
     state_dir: Path
+    executable: Path | None
 
     @classmethod
     def running(cls, state_dir: Path) -> AgentUpdater:
         command = Path(shutil.which(sys.argv[0]) or sys.argv[0]).absolute()
-        if not command.exists():
-            raise RuntimeError("the running agent executable could not be resolved")
-        return cls(command, state_dir)
+        return cls(command, state_dir, RUNNING_EXECUTABLE)
 
     @property
-    def release(self) -> Path:
-        return self.command.resolve().parent
+    def release(self) -> Path | None:
+        """The directory the running executable was unpacked into."""
+        return self.executable.parent if self.executable is not None else None
 
     @property
     def previous(self) -> Path:
         return self.command.with_name(f"{self.command.name}.previous")
 
     def binary_sha256(self) -> str:
-        """The digest of the release archive this agent runs from; empty from a source tree."""
-        name = self.release.name
-        return name if RELEASE_DIGEST_PATTERN.fullmatch(name) else ""
+        """The digest of the artifact this agent runs from; empty from a source tree.
+
+        An installed release is named by its archive's digest. An executable
+        placed any other way reports its own digest, so the answer is stable.
+        """
+        if self.executable is None or self.release is None:
+            return ""
+        if RELEASE_DIGEST_PATTERN.fullmatch(self.release.name):
+            return self.release.name
+        return _file_sha256(self.executable)
+
+    def update_blocker(self, artifact: AgentArtifact) -> str:
+        """Why this agent cannot apply `artifact` itself, or empty when it can."""
+        if self.release is None:
+            return "the agent runs from a source tree"
+        if not RELEASE_DIGEST_PATTERN.fullmatch(self.release.name):
+            return "the agent was not installed as a release; run its join command again"
+        if not (self.state_dir / SUPERVISOR).is_file():
+            return "the agent service has no update supervisor; reinstall the service"
+        rejected = self.state_dir / "agent-update.rejected"
+        if rejected.exists() and rejected.read_text().strip() == artifact.sha256:
+            return "this release failed startup and was rolled back"
+        return ""
 
     def confirm(self) -> None:
         """Accept a new release once it has streamed, and remove all but it and the previous."""
@@ -148,13 +179,15 @@ class AgentUpdater:
         fails is logged and left for the next start. An agent run from a source
         tree has no releases and keeps everything.
         """
-        if not self.binary_sha256():
+        running = self.release
+        if running is None or not RELEASE_DIGEST_PATTERN.fullmatch(running.name):
             return
-        keep = {self.release}
-        if self.previous.is_symlink():
-            keep.add(self.previous.resolve().parent)
+        keep = {running}
+        for link in (self.command, self.previous):
+            if link.is_symlink():
+                keep.add(link.resolve().parent)
         stale_before = time.time() - STALE_STAGING_SECONDS
-        for entry in self.release.parent.iterdir():
+        for entry in running.parent.iterdir():
             if entry in keep:
                 continue
             try:
@@ -169,22 +202,21 @@ class AgentUpdater:
                 LOGGER.warning("could not remove the old agent release %s", entry, exc_info=True)
 
     def install(self, artifact: AgentArtifact, *, before_exec: Callable[[], None]) -> None:
-        if not (self.state_dir / SUPERVISOR).is_file():
-            raise RuntimeError(
-                "agent automatic updates require reinstalling its supervised service"
-            )
-        if not self.binary_sha256():
-            raise RuntimeError("agent automatic updates require an installed agent release")
-        rejected = self.state_dir / "agent-update.rejected"
-        if rejected.exists() and rejected.read_text().strip() == artifact.sha256:
-            raise RuntimeError("agent release failed startup and was rolled back")
-        release = self.release.parent / artifact.sha256
+        """Unpack `artifact` beside the running release and restart into it.
+
+        The caller checks `update_blocker` first; an agent that cannot update
+        never gets here.
+        """
+        running = self.release
+        if running is None or self.executable is None or self.update_blocker(artifact):
+            raise RuntimeError(self.update_blocker(artifact) or "the agent cannot update")
+        release = running.parent / artifact.sha256
         if not release_complete(release):
             if release.exists():
                 discard_release(release)
             self._unpack(artifact, release)
-        executable = release / self.command.resolve().name
-        _replace_link(self.previous, self.command.resolve())
+        executable = release / AGENT_NAME
+        _replace_link(self.previous, self.executable)
         pending = self.state_dir / UPDATE_PENDING_FILE
         with pending.open("w") as handle:
             handle.write(artifact.sha256 + "\n")
@@ -221,38 +253,24 @@ class AgentUpdater:
                 raise RuntimeError("agent update does not match the published artifact")
             with tarfile.open(archive, "r:gz") as unpacked:
                 unpacked.extractall(staged, filter="data")
-            executable = staged / self.command.resolve().name
+            executable = staged / AGENT_NAME
             subprocess.run([str(executable), "--help"], check=True, capture_output=True, timeout=30)
             (staged / RELEASE_COMPLETE_FILE).touch()
-            _fsync_tree(staged)
+            fsync_tree(staged)
             os.replace(staged, release)
-            _fsync_directory(release.parent)
+            fsync_directory(release.parent)
         finally:
             archive.unlink(missing_ok=True)
             shutil.rmtree(staged, ignore_errors=True)
 
 
-def _fsync_tree(root: Path) -> None:
-    """Flush every file and directory of a staged release, so a crash never exposes a torn one."""
-    for directory, _, names in os.walk(root, topdown=False):
-        for name in names:
-            path = os.path.join(directory, name)
-            if os.path.islink(path):
-                continue
-            descriptor = os.open(path, os.O_RDONLY)
-            try:
-                os.fsync(descriptor)
-            finally:
-                os.close(descriptor)
-        _fsync_directory(Path(directory))
-
-
-def _fsync_directory(directory: Path) -> None:
-    descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
+@functools.cache
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _replace_link(link: Path, target: Path) -> None:
