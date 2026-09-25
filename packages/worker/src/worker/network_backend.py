@@ -499,9 +499,9 @@ class AgentBridgeNetworkBackend:
             raise RuntimeError("worker bridge network has not been initialized")
         return capabilities
 
-    def initialize(self) -> HostNetworkCapabilities:
+    def prepare(self) -> HostNetworkCapabilities:
+        """Set up container networking on the host, from the routes it has now."""
         self._ensure_bridge_commands()
-        self._probe_gateway_egress()
         try:
             self._prepared_networks.initialize()
             if self.egress_counters is not None:
@@ -523,7 +523,11 @@ class AgentBridgeNetworkBackend:
             if self.egress_counters is not None:
                 self.egress_counters.close()
 
-    def _probe_gateway_egress(self) -> None:
+    def probe_gateway_egress(self) -> None:
+        """Prove a container reaches the agent's control listener through the bridge.
+
+        The agent opens that listener only once the worker may serve.
+        """
         origin = f"http://{self.config.gateway}:{AGENT_TUNNEL_CONTROL_PORT}"
         # The worker, not just the bridge: the veth pair this name derives is created
         # and unconditionally deleted in the host namespace, so two workers probing

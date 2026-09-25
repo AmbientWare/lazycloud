@@ -2933,6 +2933,10 @@ class ComputeService:
             machine = MachineRepository(session).get(machine_id, workspace_id=workspace_id)
             if unit is None or machine is None:
                 raise ConflictError("reserve preparation lost its capacity owner")
+            if resuming and record.resume_authorized_at is not None:
+                # An earlier stream authorized the resume; the machine serves, and
+                # only that stream tells the agent it resumed.
+                return ReserveAgentPreparation()
             # Only a used machine returning to reserve cleans tenant storage before
             # it stops, and returning sets its row to stopping. A reserve being
             # prepared again keeps its row at preparing until it finishes, even
@@ -3004,7 +3008,8 @@ class ComputeService:
                     )
                 )
             ):
-                return instruction
+                # Only the stream that authorizes the resume says so.
+                return replace(instruction, resuming=False)
             if preparing:
                 # A stopped machine can never complete an update it began. Resuming
                 # registers a new worker, which must match the active release before
@@ -3029,6 +3034,12 @@ class ComputeService:
                         }
                     )
                 )
+            if resuming:
+                # Joining opens the fence, so the resumed worker registers without
+                # waiting on the provider; the capacity pass finishes the row it marks.
+                ComputeProviderInstanceRepository(session).authorize_resume(record.id)
+        if resuming:
+            return instruction
         try:
             self._finish_reserved_machine_preparation(
                 workspace_id=workspace_id,
@@ -3048,8 +3059,7 @@ class ComputeService:
             )
         except CapacityReservationLockContendedError as contended:
             # Another pass holds the pool's lease for a few seconds of provider
-            # calls. A resuming machine takes its worker slot on this stream
-            # anyway, and the next stream finishes the bookkeeping.
+            # calls; the next stream finishes the bookkeeping.
             LOGGER.info("reserve preparation for %s deferred: %s", machine_id, contended)
         return instruction
 
@@ -4189,16 +4199,50 @@ class ComputeService:
                 now=now,
             )
             with self.context.database.session() as session:
-                retiring = ComputeProviderInstanceRepository(session).list_for_pool(
-                    current.id, status=ReservationStatus.Terminating.value
+                records = ComputeProviderInstanceRepository(session).list_for_pool(
+                    current.id,
+                    statuses=(
+                        ReservationStatus.Terminating.value,
+                        ReservationStatus.Resuming.value,
+                    ),
                 )
-            for record in retiring:
-                if record.instance_id is None or record.missing_since is not None:
+            for record in records:
+                if (
+                    record.status != ReservationStatus.Terminating.value
+                    or record.instance_id is None
+                    or record.missing_since is not None
+                ):
                     continue
                 with dispatch_fence.dispatch_lock(current.capacity_owner_id):
                     pooled.release_machine(
                         self._provider_unit_request(current, offer), record.instance_id
                     )
+            resumed = [
+                record.instance_id
+                for record in records
+                if record.status == ReservationStatus.Resuming.value
+                and record.resume_authorized_at is not None
+                and record.instance_id is not None
+                and record.missing_since is None
+            ]
+            for instance_id in resumed:
+                # One instance the provider no longer owns, such as a reclaimed
+                # Spot machine, must not stop the rest of the pass.
+                try:
+                    snapshot = pooled.complete_machine_preparation(
+                        self._provider_unit_request(current, offer), instance_id, hibernate=False
+                    )
+                except Exception:
+                    LOGGER.warning(
+                        "finishing the resume of %s in %s failed",
+                        instance_id,
+                        current.id,
+                        exc_info=True,
+                    )
+                    continue
+                current = self.provider_machines._apply_pooled_snapshot(
+                    current, offer, snapshot, provider=pooled, now=now
+                )
             request = self._provider_unit_request(current, offer)
             if request.desired_machines == 0 and request.stopped_machines == 0:
                 with dispatch_fence.dispatch_lock(current.capacity_owner_id):

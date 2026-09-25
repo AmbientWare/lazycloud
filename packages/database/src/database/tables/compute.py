@@ -435,6 +435,9 @@ class ComputeProviderInstanceTable(IdTable, DatabaseBase):
     hibernates: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=text("false")
     )
+    resume_authorized_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     missing_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     provider_storage_destroyed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

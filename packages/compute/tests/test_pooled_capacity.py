@@ -4137,6 +4137,7 @@ class _ReserveProvider(_PooledProvider):
     reserve_status: str = "stopped"
     refreshed: list[str] = field(default_factory=list)
     prepared: list[str] = field(default_factory=list)
+    reclaimed: bool = False
 
     def refresh_machine(
         self, request: ProviderUnitRequest, provider_instance_id: str
@@ -4149,6 +4150,8 @@ class _ReserveProvider(_PooledProvider):
         self, request: ProviderUnitRequest, provider_instance_id: str, *, hibernate: bool
     ) -> ProviderUnitSnapshot:
         del hibernate
+        if self.reclaimed:
+            raise ValueError("instance is not owned by this retained pool")
         self.prepared.append(provider_instance_id)
         self.reserve_status = "active" if self.reserve_status == "resuming" else "stopping"
         return self._snapshot(request)
@@ -4357,27 +4360,73 @@ def test_a_resumed_reserve_registers_no_worker_until_its_stream_authorizes_the_r
     )
     assert awaits_resume()
 
-    preparation = compute.prepare_reserved_machine(
-        workspace_id=unit.workspace_id,
-        machine_id=machine_id,
-        credential_id=enrollment.id,
-        credential_generation=enrollment.credential_generation,
-        release=_RESERVE_RELEASE,
-        agent_binary_sha256="a" * 64,
-        prepared_worker_images=[_RESERVE_RELEASE.worker_image],
-        active_worker_images={agent_machine_worker_id(machine_id): _RESERVE_RELEASE.worker_image},
-        admission_waiting_workers=[agent_machine_worker_id(machine_id)],
-        booted_since_prepared=True,
-        prepared_stop=None,
-    )
-
-    assert preparation.resuming
-    assert not awaits_resume()
+    # A resuming row no stream authorized, such as a new machine still booting,
+    # is left for its own stream; the pass finishes only authorized resumes.
     with service_context.database.session() as session:
-        record = ComputeProviderInstanceRepository(session).get_by_machine(machine_id)
+        machines = MachineRepository(session)
+        resuming = machines.get(machine_id, workspace_id=unit.workspace_id)
+        assert resuming is not None
+        machines.upsert(
+            resuming.model_copy(update={"lifecycle": MachineLifecycle.Booting}),
+            workspace_id=unit.workspace_id,
+        )
+    compute.reconcile_unit_capacity(unit.id, now=now)
+    assert provider.prepared == []
+    with service_context.database.session() as session:
+        MachineRepository(session).upsert(resuming, workspace_id=unit.workspace_id)
+
+    def stream(agent_binary_sha256: str = "a" * 64) -> ReserveAgentPreparation:
+        return compute.prepare_reserved_machine(
+            workspace_id=unit.workspace_id,
+            machine_id=machine_id,
+            credential_id=enrollment.id,
+            credential_generation=enrollment.credential_generation,
+            release=_RESERVE_RELEASE,
+            agent_binary_sha256=agent_binary_sha256,
+            prepared_worker_images=[_RESERVE_RELEASE.worker_image],
+            active_worker_images={
+                agent_machine_worker_id(machine_id): _RESERVE_RELEASE.worker_image
+            },
+            admission_waiting_workers=[agent_machine_worker_id(machine_id)],
+            booted_since_prepared=True,
+            prepared_stop=None,
+        )
+
+    def observed() -> tuple[str, MachineLifecycle]:
+        with service_context.database.session() as session:
+            record = ComputeProviderInstanceRepository(session).get_by_machine(machine_id)
+            machine = MachineRepository(session).get(machine_id, workspace_id=unit.workspace_id)
+        assert record is not None and machine is not None
+        return record.status, machine.lifecycle
+
+    # The authorizing stream opens the fence without waiting on the provider.
+    assert stream().resuming
+    assert not awaits_resume()
+    assert observed() == (ReservationStatus.Resuming.value, MachineLifecycle.Joining)
+
+    # Only the authorizing stream tells the agent it resumed. A later one, even
+    # from an agent updated past the release, leaves the row to the capacity
+    # pass, which finishes it and leaves a machine its heartbeat made ready.
+    with service_context.database.session() as session:
         machine = MachineRepository(session).get(machine_id, workspace_id=unit.workspace_id)
-    assert record is not None and record.status == ReservationStatus.Active.value
-    assert machine is not None and machine.lifecycle is MachineLifecycle.Joining
+        assert machine is not None
+        write_machine_lifecycle(
+            session, machine, MachineLifecycle.Ready, workspace_changes=compute.workspace_changes
+        )
+    assert not stream(agent_binary_sha256="b" * 64).resuming
+    assert observed() == (ReservationStatus.Resuming.value, MachineLifecycle.Ready)
+    # A resume the provider cannot finish, such as a reclaimed instance, leaves
+    # the row for a later pass and does not fail this one.
+    provider.reclaimed = True
+    reconciled = compute.reconcile_unit_capacity(unit.id, now=now)
+    assert reconciled is not None and reconciled.provider_state.degraded_reason is None
+    assert observed() == (ReservationStatus.Resuming.value, MachineLifecycle.Ready)
+    provider.reclaimed = False
+    compute.reconcile_unit_capacity(unit.id, now=now)
+    assert observed() == (ReservationStatus.Active.value, MachineLifecycle.Ready)
+    with service_context.database.session() as session:
+        machine = MachineRepository(session).get(machine_id, workspace_id=unit.workspace_id)
+    assert machine is not None
 
     # A serving machine left in a reserve phase by a stop no one recorded still
     # joins on its own report, since no stream will authorize it again.
