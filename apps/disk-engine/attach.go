@@ -23,6 +23,11 @@ type attachResult struct {
 	// Lazy is true when the restore fetched no data up front: the published
 	// layers fill in from the bucket as they are read.
 	Lazy bool `json:"lazy"`
+	// Serving is true while `serve` runs for the disk, for as long as it
+	// has layers still lazy.
+	Serving bool `json:"serving"`
+	// Warnings name what the attach skipped that only costs prefetch order.
+	Warnings []string `json:"warnings"`
 }
 
 func runAttach(ctx context.Context, args []string) (any, error) {
@@ -139,7 +144,10 @@ func runAttach(ctx context.Context, args []string) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		if lazy = lazyFits(have, *minFree, manifests); !lazy {
+		if lazy, err = lazyFits(p, have, *minFree, manifests); err != nil {
+			return nil, err
+		}
+		if !lazy {
 			if plan, err = planRestore(p, have, *minFree, manifests); err != nil {
 				return nil, err
 			}
@@ -171,7 +179,7 @@ func runAttach(ctx context.Context, args []string) (any, error) {
 			state.Layers = []layer{base}
 			format = true
 		} else if lazy {
-			if err := restoreLazy(ctx, p, state, store, chain, manifests); err != nil {
+			if result.Warnings, err = restoreLazy(ctx, p, state, store, chain, manifests); err != nil {
 				return nil, err
 			}
 			result.Lazy = true
@@ -208,6 +216,7 @@ func runAttach(ctx context.Context, args []string) (any, error) {
 	if err := connectAndMount(ctx, p, state, format); err != nil {
 		return nil, errors.Join(err, teardown(context.WithoutCancel(ctx), p, state))
 	}
+	result.Serving = state.hasLazy()
 	return result, nil
 }
 
@@ -334,12 +343,17 @@ func (e *insufficientSpaceError) Error() string {
 	return fmt.Sprintf("insufficient space on %s: need %d, have %d free, reserve %d", e.root, e.need, e.have, e.reserve)
 }
 
+// blockRounded is the space n bytes of a file take in filesystem blocks.
+func blockRounded(n int64) int64 {
+	return (n + filesystemBlockBytes - 1) / filesystemBlockBytes * filesystemBlockBytes
+}
+
 // storedBytes is the space restoring a layer takes: its chunks, not its
 // holes, each rounded up to the filesystem blocks it fills.
 func storedBytes(manifest layerManifest) int64 {
 	var total int64
 	for _, chunk := range manifest.Chunks {
-		total += (chunk.Length + filesystemBlockBytes - 1) / filesystemBlockBytes * filesystemBlockBytes
+		total += blockRounded(chunk.Length)
 	}
 	return total
 }

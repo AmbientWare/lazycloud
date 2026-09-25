@@ -21,23 +21,24 @@ import (
 
 const (
 	serveFlushInterval = 2 * time.Second
-	// heatWindow matches the worker's publish interval, so one window is one
-	// publish's worth of use.
+	// heatWindow matches the worker's publish interval.
 	heatWindow        = 2 * time.Minute
 	hydrateHotFetches = 4
 	hydrateFetches    = 2
-	// hydrateRate leaves most of the machine's bandwidth to the workload's own
-	// reads while the chunks nobody asked for yet arrive.
+	// hydrateRate leaves most of the machine's bandwidth to the workload.
 	hydrateRate     = 64 << 20
 	serverStartWait = 10 * time.Second
 	serverStopWait  = 30 * time.Second
+	// heatUploadWait is the part of serverStopWait the last heat upload may take.
+	heatUploadWait  = 5 * time.Second
 	maxHeatMapBytes = 2 << 20
-	heatUploadWait  = 10 * time.Second
 )
 
 type serveStatus struct {
+	// PID is the `serve` that wrote the record; one from an earlier process
+	// describes an earlier attachment.
+	PID           int        `json:"pid"`
 	StartedAt     time.Time  `json:"started_at"`
-	Layers        int        `json:"layers"`
 	Chunks        int        `json:"chunks"`
 	PresentChunks int        `json:"present_chunks"`
 	Bytes         int64      `json:"bytes"`
@@ -46,11 +47,13 @@ type serveStatus struct {
 	HotDoneAt     *time.Time `json:"hot_done_at,omitempty"`
 	DoneAt        *time.Time `json:"done_at,omitempty"`
 	// FailedReads counts reads that returned an I/O error to the daemon.
-	FailedReads  int        `json:"failed_reads"`
-	LastError    string     `json:"last_error,omitempty"`
-	LastErrorAt  *time.Time `json:"last_error_at,omitempty"`
-	HydrateError string     `json:"hydrate_error,omitempty"`
-	HeatError    string     `json:"heat_error,omitempty"`
+	FailedReads int        `json:"failed_reads"`
+	LastError   string     `json:"last_error,omitempty"`
+	LastErrorAt *time.Time `json:"last_error_at,omitempty"`
+	// OutOfSpace is set once a chunk could not be written for lack of room.
+	OutOfSpace   bool   `json:"out_of_space"`
+	HydrateError string `json:"hydrate_error,omitempty"`
+	HeatError    string `json:"heat_error,omitempty"`
 }
 
 type chunkRef struct{ layer, index int }
@@ -73,10 +76,8 @@ func runServe(ctx context.Context, args []string) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	heat, err := loadHeat(p)
-	if err != nil {
-		return nil, err
-	}
+	heat := loadHeatHint(p)
+	group, groupCtx := errgroup.WithContext(ctx)
 	var layers []*lazyLayer
 	exports := map[string]nbdExport{}
 	defer func() {
@@ -84,11 +85,8 @@ func runServe(ctx context.Context, args []string) (any, error) {
 			layer.close()
 		}
 	}()
-	for _, l := range state.Layers {
-		if !l.Lazy {
-			continue
-		}
-		layer, err := openLazyLayer(p, l, store)
+	for _, l := range state.Layers[:state.lowestLocal()] {
+		layer, err := openLazyLayer(groupCtx, p, l, store)
 		if err != nil {
 			return nil, err
 		}
@@ -96,7 +94,7 @@ func runServe(ctx context.Context, args []string) (any, error) {
 		layers = append(layers, layer)
 		exports[l.file()] = layer
 	}
-	status := &serveProgress{status: serveStatus{StartedAt: time.Now().UTC(), Layers: len(layers)}}
+	status := &serveProgress{status: serveStatus{PID: os.Getpid(), StartedAt: time.Now().UTC()}}
 	if err := os.Remove(p.layersSocket()); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
@@ -105,8 +103,6 @@ func runServe(ctx context.Context, args []string) (any, error) {
 		return nil, err
 	}
 	server := &nbdServer{exports: exports, failed: status.failedRead}
-
-	group, groupCtx := errgroup.WithContext(ctx)
 	group.Go(func() error { return server.serve(groupCtx, listener) })
 	group.Go(func() error {
 		hydrate(groupCtx, layers, heat.ordered(), status)
@@ -137,6 +133,18 @@ func runServe(ctx context.Context, args []string) (any, error) {
 	return status.current(), err
 }
 
+// loadHeatHint reads the disk's heat map. The map only orders prefetching, so
+// one that cannot be read is dropped rather than stopping the disk.
+func loadHeatHint(p diskPaths) *heatMap {
+	heat, err := loadHeat(p)
+	if err == nil {
+		return heat
+	}
+	fmt.Fprintf(os.Stderr, "ignoring the heat map of disk %s: %v\n", p.id, err)
+	os.Remove(p.heatPath())
+	return newHeatMap()
+}
+
 // publishHeat saves the map beside the disk and in its bucket prefix, where
 // the next restore on any machine finds it.
 func publishHeat(ctx context.Context, p diskPaths, store *objectStore, heat *heatMap) error {
@@ -162,28 +170,26 @@ func hydrationOrder(layers []*lazyLayer, hot []heatKey) (first, rest []chunkRef)
 		for i, chunk := range layer.manifest.Chunks {
 			if layer.has(i) {
 				queued[chunkRef{li, i}] = true
-				continue
-			}
-			if key, ok := heatKeyOf(chunk.SHA256); ok {
+			} else if key, ok := heatKeyOf(chunk.SHA256); ok {
 				byKey[key] = append(byKey[key], chunkRef{li, i})
 			}
 		}
 		layer.mu.Unlock()
 	}
+	next := func(ref chunkRef, into *[]chunkRef) {
+		if !queued[ref] {
+			queued[ref] = true
+			*into = append(*into, ref)
+		}
+	}
 	for _, key := range hot {
 		for _, ref := range byKey[key] {
-			if !queued[ref] {
-				queued[ref] = true
-				first = append(first, ref)
-			}
+			next(ref, &first)
 		}
 	}
 	for li := len(layers) - 1; li >= 0; li-- {
 		for i := range layers[li].manifest.Chunks {
-			if ref := (chunkRef{li, i}); !queued[ref] {
-				queued[ref] = true
-				rest = append(rest, ref)
-			}
+			next(chunkRef{li, i}, &rest)
 		}
 	}
 	return first, rest
@@ -191,18 +197,17 @@ func hydrationOrder(layers []*lazyLayer, hot []heatKey) (first, rest []chunkRef)
 
 func hydrate(ctx context.Context, layers []*lazyLayer, hot []heatKey, status *serveProgress) {
 	first, rest := hydrationOrder(layers, hot)
-	status.setHot(len(first))
+	status.update(func(s *serveStatus) { s.HotChunks = len(first) })
 	fetchAll(ctx, layers, first, hydrateHotFetches, nil, status)
-	status.markHotDone()
+	status.update(func(s *serveStatus) { s.HotDoneAt = timestamp() })
 	fetchAll(ctx, layers, rest, hydrateFetches, newRateLimit(hydrateRate), status)
 	if ctx.Err() == nil && !slices.ContainsFunc(layers, func(l *lazyLayer) bool { return !l.complete() }) {
-		status.markDone()
+		status.update(func(s *serveStatus) { s.DoneAt = timestamp() })
 	}
 }
 
-// fetchAll fetches refs in order on a few connections. A chunk a read already
-// fetched costs nothing here, and one that cannot be fetched is left for a
-// read to try again.
+// fetchAll fetches refs in order on a few connections. A chunk that cannot be
+// fetched is left for a read to try again.
 func fetchAll(ctx context.Context, layers []*lazyLayer, refs []chunkRef, fetches int, limit *rateLimit, status *serveProgress) {
 	work := make(chan chunkRef)
 	var wg sync.WaitGroup
@@ -212,11 +217,14 @@ func fetchAll(ctx context.Context, layers []*lazyLayer, refs []chunkRef, fetches
 			defer wg.Done()
 			for ref := range work {
 				layer := layers[ref.layer]
-				if err := limit.wait(ctx, layer.manifest.Chunks[ref.index].Length); err != nil {
+				if limit.wait(ctx, layer.manifest.Chunks[ref.index].Length) != nil {
 					return
 				}
-				if err := layer.fetch(ctx, ref.index); err != nil {
-					status.hydrateError(err)
+				if err := layer.fetch(ctx, ref.index); err != nil && ctx.Err() == nil {
+					status.update(func(s *serveStatus) {
+						s.HydrateError = err.Error()
+						s.OutOfSpace = s.OutOfSpace || errors.Is(err, syscall.ENOSPC)
+					})
 				}
 			}
 		}()
@@ -224,11 +232,10 @@ func fetchAll(ctx context.Context, layers []*lazyLayer, refs []chunkRef, fetches
 	for _, ref := range refs {
 		select {
 		case work <- ref:
+			continue
 		case <-ctx.Done():
 		}
-		if ctx.Err() != nil {
-			break
-		}
+		break
 	}
 	close(work)
 	wg.Wait()
@@ -265,59 +272,49 @@ func (r *rateLimit) wait(ctx context.Context, length int64) error {
 	}
 }
 
+func timestamp() *time.Time {
+	now := time.Now().UTC()
+	return &now
+}
+
 type serveProgress struct {
 	mu     sync.Mutex
 	status serveStatus
 }
 
-func (s *serveProgress) failedRead(export string, err error) {
-	now := time.Now().UTC()
+func (s *serveProgress) update(change func(*serveStatus)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.status.FailedReads++
-	s.status.LastError = fmt.Sprintf("%s: %v", export, err)
-	s.status.LastErrorAt = &now
-}
-
-func (s *serveProgress) hydrateError(err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.status.HydrateError = err.Error()
-}
-
-func (s *serveProgress) heatError(err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.status.HeatError = ""
-	if err != nil {
-		s.status.HeatError = err.Error()
-	}
-}
-
-func (s *serveProgress) setHot(count int) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.status.HotChunks = count
-}
-
-func (s *serveProgress) markHotDone() {
-	now := time.Now().UTC()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.status.HotDoneAt = &now
-}
-
-func (s *serveProgress) markDone() {
-	now := time.Now().UTC()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.status.DoneAt = &now
+	change(&s.status)
 }
 
 func (s *serveProgress) current() serveStatus {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.status
+}
+
+// failedRead records a read that returned an error to the daemon. One that
+// failed for lack of room is a full disk, not an unreadable one.
+func (s *serveProgress) failedRead(export string, err error) {
+	s.update(func(status *serveStatus) {
+		if errors.Is(err, syscall.ENOSPC) {
+			status.OutOfSpace = true
+			return
+		}
+		status.FailedReads++
+		status.LastError = fmt.Sprintf("%s: %v", export, err)
+		status.LastErrorAt = timestamp()
+	})
+}
+
+func (s *serveProgress) heatError(err error) {
+	s.update(func(status *serveStatus) {
+		status.HeatError = ""
+		if err != nil {
+			status.HeatError = err.Error()
+		}
+	})
 }
 
 // record flushes every layer's bitmap and writes the progress file. A flush
@@ -331,29 +328,37 @@ func (s *serveProgress) record(p diskPaths, layers []*lazyLayer) {
 		c, pc, b, pb := layer.progress()
 		chunks, present, bytes, presentBytes = chunks+c, present+pc, bytes+b, presentBytes+pb
 	}
-	s.mu.Lock()
-	s.status.Chunks, s.status.PresentChunks = chunks, present
-	s.status.Bytes, s.status.PresentBytes = bytes, presentBytes
-	if flushErr != nil {
-		s.status.HydrateError = flushErr.Error()
+	s.update(func(status *serveStatus) {
+		status.Chunks, status.PresentChunks = chunks, present
+		status.Bytes, status.PresentBytes = bytes, presentBytes
+		if flushErr != nil {
+			status.HydrateError = flushErr.Error()
+		}
+	})
+	data, err := json.Marshal(s.current())
+	if err == nil {
+		err = writeFileAtomic(p.serveStatusPath(), data)
 	}
-	status := s.status
-	s.mu.Unlock()
-	if data, err := json.Marshal(status); err == nil {
-		writeFileAtomic(p.serveStatusPath(), data)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "record the progress of disk %s: %v\n", p.id, err)
 	}
 }
 
-func readServeStatus(p diskPaths) (serveStatus, error) {
+// readServeStatus reads what the running `serve` recorded. A record another
+// process left, or none yet, reads as empty.
+func readServeStatus(p diskPaths, pid int) (serveStatus, error) {
 	var status serveStatus
 	data, err := os.ReadFile(p.serveStatusPath())
 	if errors.Is(err, os.ErrNotExist) {
-		return status, nil
+		return serveStatus{}, nil
 	}
 	if err != nil {
 		return status, err
 	}
-	return status, json.Unmarshal(data, &status)
+	if err := json.Unmarshal(data, &status); err != nil || status.PID != pid {
+		return serveStatus{}, err
+	}
+	return status, nil
 }
 
 // startServer runs `serve` for the disk in a session of its own, so it
@@ -362,11 +367,18 @@ func startServer(ctx context.Context, p diskPaths, state *diskState, storePath s
 	if serverAlive(p, state.ServerPID) {
 		return nil
 	}
+	if err := os.MkdirAll(p.runDir(), 0o700); err != nil {
+		return err
+	}
+	if err := os.Remove(p.serveStatusPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
 	self, err := os.Executable()
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(p.runDir(), 0o700); err != nil {
+	storeAbs, err := filepath.Abs(storePath)
+	if err != nil {
 		return err
 	}
 	log, err := os.OpenFile(p.serveLog(), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
@@ -374,10 +386,6 @@ func startServer(ctx context.Context, p diskPaths, state *diskState, storePath s
 		return err
 	}
 	defer log.Close()
-	storeAbs, err := filepath.Abs(storePath)
-	if err != nil {
-		return err
-	}
 	cmd := exec.Command(self, "serve", "--root", p.root, "--disk", p.id, "--store", storeAbs)
 	cmd.Stdout = log
 	cmd.Stderr = log
@@ -425,25 +433,29 @@ func serverAlive(p diskPaths, pid int) bool {
 	return slices.Contains(args, "serve") && slices.Contains(args, p.root) && slices.Contains(args, p.id)
 }
 
-// stopServer ends the server once nothing reads through it. It flushes its
-// bitmaps on the way out.
+// stopServer ends the server within serverStopWait. One that has not flushed
+// its bitmaps by then is killed: an unflushed bit only makes the next session
+// fetch that chunk again.
 func stopServer(ctx context.Context, p diskPaths, state *diskState) error {
 	pid := state.ServerPID
-	if serverAlive(p, pid) {
-		if err := syscall.Kill(pid, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
+	for _, signal := range []syscall.Signal{syscall.SIGTERM, syscall.SIGKILL} {
+		if !serverAlive(p, pid) {
+			break
+		}
+		if err := syscall.Kill(pid, signal); err != nil && !errors.Is(err, syscall.ESRCH) {
 			return fmt.Errorf("stop serving disk %s: %w", p.id, err)
 		}
 		deadline := time.Now().Add(serverStopWait)
-		for serverAlive(p, pid) {
-			if time.Now().After(deadline) {
-				return fmt.Errorf("serving disk %s (pid %d) did not exit within %s", p.id, pid, serverStopWait)
-			}
+		for serverAlive(p, pid) && time.Now().Before(deadline) {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
 			case <-time.After(50 * time.Millisecond):
 			}
 		}
+	}
+	if serverAlive(p, pid) {
+		return fmt.Errorf("serving disk %s (pid %d) survived SIGKILL", p.id, pid)
 	}
 	state.ServerPID = 0
 	return nil

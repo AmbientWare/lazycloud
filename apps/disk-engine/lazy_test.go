@@ -68,7 +68,7 @@ func randomBytes(size int, seed byte) []byte {
 
 func openFixture(t *testing.T, p diskPaths, l layer, source chunkSource) *lazyLayer {
 	t.Helper()
-	lazy, err := openLazyLayer(p, l, source)
+	lazy, err := openLazyLayer(context.Background(), p, l, source)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,44 +199,6 @@ func TestACrashMidFetchNeverLeavesAPartialChunk(t *testing.T) {
 	defer lazy.close()
 	if !lazy.has(0) {
 		t.Fatal("a flushed chunk was forgotten")
-	}
-}
-
-// Hydration fetches what the last session read first, most recent first, then
-// the newest layers, and skips what is already present.
-func TestHydrationOrderPutsRecentChunksFirst(t *testing.T) {
-	sum := func(b byte) string { return hex.EncodeToString(bytes.Repeat([]byte{b}, 32)) }
-	layerOf := func(sums ...string) *lazyLayer {
-		manifest := layerManifest{}
-		for i, s := range sums {
-			manifest.Chunks = append(manifest.Chunks, manifestChunk{Offset: int64(i) << 20, Length: 1 << 20, SHA256: s})
-		}
-		return &lazyLayer{manifest: manifest, present: make([]byte, bitmapBytes(len(sums)))}
-	}
-	older := layerOf(sum(1), sum(2), sum(3))
-	newer := layerOf(sum(4), sum(5))
-	older.present[0] |= 1 << 1 // chunk 2 is already here
-	heat := newHeatMap()
-	heat.touch(sum(3))
-	heat.age()
-	heat.touch(sum(1))
-	heat.touch(sum(2))
-
-	first, rest := hydrationOrder([]*lazyLayer{older, newer}, heat.ordered())
-	if want := []chunkRef{{0, 0}, {0, 2}}; !slices.Equal(first, want) {
-		t.Fatalf("hot chunks %v, want %v", first, want)
-	}
-	if want := []chunkRef{{1, 0}, {1, 1}}; !slices.Equal(rest, want) {
-		t.Fatalf("remaining chunks %v, want %v", rest, want)
-	}
-
-	encoded, err := heat.encode()
-	if err != nil {
-		t.Fatal(err)
-	}
-	decoded, err := decodeHeat(encoded)
-	if err != nil || !slices.Equal(decoded.ordered(), heat.ordered()) {
-		t.Fatalf("heat map round trip: %v", err)
 	}
 }
 

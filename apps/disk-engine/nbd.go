@@ -258,7 +258,8 @@ func (s *nbdServer) transmit(ctx context.Context, reader io.Reader, conn io.Writ
 				defer func() { <-slots }()
 				buf := make([]byte, request.Length)
 				if err := export.ReadAt(ctx, buf, int64(request.Offset)); err != nil {
-					if s.failed != nil {
+					// A read cut short by the server stopping failed nothing.
+					if s.failed != nil && ctx.Err() == nil {
 						s.failed(name, err)
 					}
 					reply(request.Cookie, nbdEIO, nil)

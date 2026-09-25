@@ -209,7 +209,7 @@ func runPublish(ctx context.Context, args []string) (any, error) {
 		if !flat {
 			break
 		}
-		if flat, err = lazyComplete(p, l); err != nil {
+		if _, flat, err = lazyOwed(p, l); err != nil {
 			return nil, err
 		}
 	}
@@ -539,8 +539,12 @@ func recoverDisk(ctx context.Context, p diskPaths) (bool, int, error) {
 	}
 	defer lock.release()
 	state, err := loadState(p)
-	if err != nil || state == nil || state.Attachment == nil {
+	if err != nil || state == nil {
 		return false, 0, err
+	}
+	if state.Attachment == nil {
+		// Stops a `serve` whose attach died before the daemon started.
+		return false, 0, teardown(ctx, p, state)
 	}
 	// The worker that attached this disk is gone, so the head's write
 	// statistics went with its daemon; the next seal must not trust them.
@@ -618,6 +622,11 @@ func runEvict(ctx context.Context, args []string) (any, error) {
 	}
 	if state != nil && state.Attachment != nil {
 		return nil, fmt.Errorf("disk %s is attached at %s; detach it first", p.id, state.Attachment.Mountpoint)
+	}
+	if state != nil {
+		if err := teardown(ctx, p, state); err != nil {
+			return nil, err
+		}
 	}
 	present, err := pathExists(p.dir())
 	if err != nil {

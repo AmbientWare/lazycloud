@@ -25,6 +25,8 @@ const (
 	fetchAttempts     = 6
 	fetchFirstBackoff = 500 * time.Millisecond
 	fetchMaxBackoff   = 8 * time.Second
+	// fetchTimeout bounds one GET of one chunk, 8 MiB at most.
+	fetchTimeout = 20 * time.Second
 )
 
 // lazyLayer is a published layer file whose chunks arrive on first read. The
@@ -40,6 +42,14 @@ type lazyLayer struct {
 	bitmap   *os.File
 	source   chunkSource
 	backoff  time.Duration
+	// life ends every fetch when the layer stops being served. A fetch runs
+	// on it rather than on its reader, so the others waiting on the same
+	// chunk still get it when that reader gives up.
+	life context.Context
+	// touched receives the digest of every chunk a read covers.
+	touched func(sum string)
+
+	downloads sync.WaitGroup
 
 	mu       sync.Mutex
 	present  []byte
@@ -47,8 +57,6 @@ type lazyLayer struct {
 	dirty    uint64
 	flushed  uint64
 	inflight map[int]*fetchCall
-	// touched receives the digest of every chunk a read covers, for the heat map.
-	touched func(sum string)
 }
 
 type fetchCall struct {
@@ -58,6 +66,10 @@ type fetchCall struct {
 
 func manifestPath(p diskPaths, l layer) string { return p.layerPath(l) + ".manifest" }
 func bitmapPath(p diskPaths, l layer) string   { return p.layerPath(l) + ".present" }
+
+func bitmapBytes(chunks int) int { return (chunks + 7) / 8 }
+
+func bitSet(bits []byte, i int) bool { return bits[i/8]&(1<<(i%8)) != 0 }
 
 // createLazyLayer lays out a layer to be filled on demand: its manifest beside
 // it, a sparse file of the layer's size, and an empty bitmap.
@@ -83,20 +95,46 @@ func createLazyLayer(p diskPaths, l layer, manifest layerManifest) error {
 	return file.Sync()
 }
 
-func bitmapBytes(chunks int) int { return (chunks + 7) / 8 }
-
-func openLazyLayer(p diskPaths, l layer, source chunkSource) (*lazyLayer, error) {
+// readLazyRecord reads a lazy layer's manifest, chunks in file order, and the
+// bitmap on disk.
+func readLazyRecord(p diskPaths, l layer) (layerManifest, []byte, error) {
 	var manifest layerManifest
 	if err := readJSONFile(manifestPath(p, l), &manifest); err != nil {
-		return nil, err
+		return manifest, nil, err
 	}
 	sort.Slice(manifest.Chunks, func(i, j int) bool { return manifest.Chunks[i].Offset < manifest.Chunks[j].Offset })
 	present, err := os.ReadFile(bitmapPath(p, l))
 	if err != nil {
-		return nil, err
+		return manifest, nil, err
 	}
 	if len(present) != bitmapBytes(len(manifest.Chunks)) {
-		return nil, fmt.Errorf("%s holds %d bytes for %d chunks", bitmapPath(p, l), len(present), len(manifest.Chunks))
+		return manifest, nil, fmt.Errorf("%s holds %d bytes for %d chunks", bitmapPath(p, l), len(present), len(manifest.Chunks))
+	}
+	return manifest, present, nil
+}
+
+// lazyOwed is what a lazy layer still has to fetch, as the space it will take,
+// and whether it has fetched everything.
+func lazyOwed(p diskPaths, l layer) (int64, bool, error) {
+	manifest, present, err := readLazyRecord(p, l)
+	if err != nil {
+		return 0, false, err
+	}
+	var owed int64
+	complete := true
+	for i, chunk := range manifest.Chunks {
+		if !bitSet(present, i) {
+			owed += blockRounded(chunk.Length)
+			complete = false
+		}
+	}
+	return owed, complete, nil
+}
+
+func openLazyLayer(ctx context.Context, p diskPaths, l layer, source chunkSource) (*lazyLayer, error) {
+	manifest, present, err := readLazyRecord(p, l)
+	if err != nil {
+		return nil, err
 	}
 	file, err := os.OpenFile(p.layerPath(l), os.O_RDWR, 0)
 	if err != nil {
@@ -109,21 +147,24 @@ func openLazyLayer(p diskPaths, l layer, source chunkSource) (*lazyLayer, error)
 	}
 	layer := &lazyLayer{
 		diskID: p.id, name: l.file(), manifest: manifest, file: file, bitmap: bitmap,
-		source: source, backoff: fetchFirstBackoff, present: present, inflight: map[int]*fetchCall{},
+		source: source, backoff: fetchFirstBackoff, life: ctx, present: present,
+		inflight: map[int]*fetchCall{},
 	}
 	for i := range manifest.Chunks {
-		if layer.has(i) {
+		if bitSet(present, i) {
 			layer.count++
 		}
 	}
 	return layer, nil
 }
 
+// close waits out downloads, which end at once when life has, then flushes.
 func (l *lazyLayer) close() error {
+	l.downloads.Wait()
 	return errors.Join(l.flush(), l.file.Close(), l.bitmap.Close())
 }
 
-func (l *lazyLayer) has(i int) bool { return l.present[i/8]&(1<<(i%8)) != 0 }
+func (l *lazyLayer) has(i int) bool { return bitSet(l.present, i) }
 
 func (l *lazyLayer) complete() bool {
 	l.mu.Lock()
@@ -131,54 +172,57 @@ func (l *lazyLayer) complete() bool {
 	return l.count == len(l.manifest.Chunks)
 }
 
-// overlapping lists the chunks that hold bytes in [offset, offset+length).
-func (l *lazyLayer) overlapping(offset, length int64) []int {
-	chunks := l.manifest.Chunks
-	first := sort.Search(len(chunks), func(i int) bool { return chunks[i].Offset+chunks[i].Length > offset })
-	var found []int
-	for i := first; i < len(chunks) && chunks[i].Offset < offset+length; i++ {
-		found = append(found, i)
+func (l *lazyLayer) Size() int64 { return l.manifest.LayerSizeBytes }
+
+// ReadAt serves a read of the layer, fetching every chunk it touches first.
+func (l *lazyLayer) ReadAt(ctx context.Context, buf []byte, offset int64) error {
+	if err := l.ensure(ctx, offset, int64(len(buf))); err != nil {
+		return err
 	}
-	return found
+	_, err := l.file.ReadAt(buf, offset)
+	return err
 }
 
-// ensure makes every chunk under [offset, offset+length) present, fetching
-// the missing ones. Concurrent callers share one fetch of each chunk.
+// ensure makes every chunk under [offset, offset+length) present.
 func (l *lazyLayer) ensure(ctx context.Context, offset, length int64) error {
+	chunks := l.manifest.Chunks
+	first := sort.Search(len(chunks), func(i int) bool { return chunks[i].Offset+chunks[i].Length > offset })
 	var errs []error
-	for _, i := range l.overlapping(offset, length) {
+	for i := first; i < len(chunks) && chunks[i].Offset < offset+length; i++ {
 		if l.touched != nil {
-			l.touched(l.manifest.Chunks[i].SHA256)
+			l.touched(chunks[i].SHA256)
 		}
-		if err := l.fetch(ctx, i); err != nil {
-			errs = append(errs, err)
-		}
+		errs = append(errs, l.fetch(ctx, i))
 	}
 	return errors.Join(errs...)
 }
 
+// fetch makes chunk i present. Concurrent callers share one download.
 func (l *lazyLayer) fetch(ctx context.Context, i int) error {
 	l.mu.Lock()
 	if l.has(i) {
 		l.mu.Unlock()
 		return nil
 	}
-	if call, running := l.inflight[i]; running {
-		l.mu.Unlock()
-		select {
-		case <-call.done:
-			return call.err
-		case <-ctx.Done():
-			return ctx.Err()
-		}
+	call, running := l.inflight[i]
+	if !running {
+		call = &fetchCall{done: make(chan struct{})}
+		l.inflight[i] = call
+		l.downloads.Add(1)
+		go l.download(i, call)
 	}
-	call := &fetchCall{done: make(chan struct{})}
-	l.inflight[i] = call
 	l.mu.Unlock()
+	select {
+	case <-call.done:
+		return call.err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
 
-	// The fetch outlives a caller that gives up, so the others waiting on it
-	// still get the chunk.
-	call.err = l.download(context.WithoutCancel(ctx), i)
+func (l *lazyLayer) download(i int, call *fetchCall) {
+	defer l.downloads.Done()
+	call.err = l.fetchVerified(i)
 	l.mu.Lock()
 	delete(l.inflight, i)
 	if call.err == nil {
@@ -188,12 +232,11 @@ func (l *lazyLayer) fetch(ctx context.Context, i int) error {
 	}
 	l.mu.Unlock()
 	close(call.done)
-	return call.err
 }
 
-// download fetches chunk i, checks it against the manifest, and writes it
-// into the file. Bytes that fail the check are never written.
-func (l *lazyLayer) download(ctx context.Context, i int) error {
+// fetchVerified downloads chunk i, checks it against the manifest and writes
+// it into the file. Bytes that fail the check are never written.
+func (l *lazyLayer) fetchVerified(i int) error {
 	chunk := l.manifest.Chunks[i]
 	key := diskChunkKey(l.diskID, chunk.SHA256)
 	wait := l.backoff
@@ -202,18 +245,19 @@ func (l *lazyLayer) download(ctx context.Context, i int) error {
 		if attempt > 0 {
 			select {
 			case <-time.After(wait):
-			case <-ctx.Done():
-				return errors.Join(last, ctx.Err())
+			case <-l.life.Done():
+				return errors.Join(last, l.life.Err())
 			}
 			wait = min(wait*2, fetchMaxBackoff)
 		}
+		ctx, cancel := context.WithTimeout(l.life, fetchTimeout)
 		data, err := l.source.get(ctx, key, chunk.Length)
+		cancel()
 		if err != nil {
 			last = err
 			continue
 		}
-		sum := sha256.Sum256(data)
-		if int64(len(data)) != chunk.Length || hex.EncodeToString(sum[:]) != chunk.SHA256 {
+		if sum := sha256.Sum256(data); int64(len(data)) != chunk.Length || hex.EncodeToString(sum[:]) != chunk.SHA256 {
 			last = fmt.Errorf("chunk %s does not match its digest or length", key)
 			continue
 		}
@@ -226,8 +270,8 @@ func (l *lazyLayer) download(ctx context.Context, i int) error {
 }
 
 // flush makes the bitmap durable. The layer file is flushed first, so a bit on
-// disk always names bytes that are on disk too; a crash only forgets chunks,
-// which are then fetched again.
+// disk always names bytes on disk; a crash can only forget chunks, which are
+// then fetched again.
 func (l *lazyLayer) flush() error {
 	l.mu.Lock()
 	if l.dirty == l.flushed {
@@ -252,17 +296,6 @@ func (l *lazyLayer) flush() error {
 	return nil
 }
 
-// ReadAt serves a read of the layer, fetching what it touches first.
-func (l *lazyLayer) ReadAt(ctx context.Context, buf []byte, offset int64) error {
-	if err := l.ensure(ctx, offset, int64(len(buf))); err != nil {
-		return err
-	}
-	_, err := l.file.ReadAt(buf, offset)
-	return err
-}
-
-func (l *lazyLayer) Size() int64 { return l.manifest.LayerSizeBytes }
-
 // progress reports how much of the layer is present.
 func (l *lazyLayer) progress() (chunks, present int, bytes, presentBytes int64) {
 	l.mu.Lock()
@@ -274,23 +307,4 @@ func (l *lazyLayer) progress() (chunks, present int, bytes, presentBytes int64) 
 		}
 	}
 	return len(l.manifest.Chunks), l.count, bytes, presentBytes
-}
-
-// lazyComplete reports, from the bitmap on disk, whether every chunk of a lazy
-// layer is present.
-func lazyComplete(p diskPaths, l layer) (bool, error) {
-	var manifest layerManifest
-	if err := readJSONFile(manifestPath(p, l), &manifest); err != nil {
-		return false, err
-	}
-	present, err := os.ReadFile(bitmapPath(p, l))
-	if err != nil {
-		return false, err
-	}
-	for i := range manifest.Chunks {
-		if i/8 >= len(present) || present[i/8]&(1<<(i%8)) == 0 {
-			return false, nil
-		}
-	}
-	return true, nil
 }

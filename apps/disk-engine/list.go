@@ -109,10 +109,11 @@ type usageResult struct {
 	// UnmergedBytes is the space the layers above the one compaction commits
 	// into occupy. A compaction needs room to copy each of them into it.
 	UnmergedBytes int64 `json:"unmerged_bytes"`
-	// Unreadable says why the disk failed a read, empty while it has not. A
-	// lazy layer whose chunk could not be fetched, or whose server stopped,
-	// has already given the workload an I/O error.
+	// Unreadable says why a read of a lazy layer failed, empty while none
+	// has. The workload has already seen the I/O error.
 	Unreadable string `json:"unreadable"`
+	// Full is set once a lazy layer had no room for a chunk it fetched.
+	Full bool `json:"full"`
 }
 
 // runUsage reads the disk's state without its lock, because the worker asks
@@ -143,10 +144,11 @@ func runUsage(ctx context.Context, args []string) (any, error) {
 		result.UnmergedBytes += allocated
 	}
 	if state.Attachment != nil && state.hasLazy() {
-		status, err := readServeStatus(p)
+		status, err := readServeStatus(p, state.ServerPID)
 		if err != nil {
 			return nil, err
 		}
+		result.Full = status.OutOfSpace
 		switch {
 		case status.FailedReads > 0:
 			result.Unreadable = fmt.Sprintf("%d reads failed; the last: %s", status.FailedReads, status.LastError)
