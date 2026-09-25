@@ -883,6 +883,19 @@ systemctl mask update-motd.service update-motd.timer systemd-boot-update.service
 # device node carries, so xfs_growfs refuses to grow / and every node keeps the
 # image's 16 GB root whatever volume it launched with.
 
+# A reserve launched able to hibernate writes its memory to /swap. hibinit-agent
+# creates that file at each cold boot and puts `resume=PARTUUID=...
+# resume_offset=...` on the boot entry; the initrd finds the root partition by
+# that PARTUUID whatever order the disks appear in. A release that named the
+# partition by its NVMe device name would resume from whichever disk probed
+# first, so the bake refuses one. acpid hands EC2's hibernate request to it. The
+# kernel writes the smallest image it can, freeing its page cache first, so less
+# memory goes to disk and comes back on resume.
+dnf install -y ec2-hibinit-agent acpid
+grep -q PARTUUID /usr/bin/hibinit-agent
+systemctl enable hibinit-agent.service acpid.service
+printf 'w /sys/power/image_size - - - - 0\\n' > /etc/tmpfiles.d/lazycloud-hibernate.conf
+
 cat > /etc/lazycloud-node-image.json <<MARKER
 {"recipe_sha256":"${RECIPE_SHA256}","ssm_agent":true,"variant":"__VARIANT__"}
 MARKER

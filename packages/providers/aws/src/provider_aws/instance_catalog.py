@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import re
 from enum import StrEnum
 from types import MappingProxyType
@@ -10,6 +11,9 @@ from compute.providers import ProviderOfferEligibility
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from shared.compute_policy import UnitName
 from shared.gpu import SUPPORTED_GPU_TYPES, GpuType
+
+HIBERNATION_MEMORY_LIMIT_MIB = 150 * 1024
+"""EC2 hibernates only instances with less RAM than this."""
 
 
 class AwsInstanceCatalogModel(BaseModel):
@@ -40,6 +44,27 @@ class AwsInstanceCatalogEntry(AwsInstanceCatalogModel):
     ebs_volume_limit_dedicated: bool = False
     """Network interfaces and instance store do not count against a dedicated limit."""
 
+    hibernates: bool = False
+    """EC2 reports `HibernationSupported` for the type in every catalog region.
+
+    Offers never call DescribeInstanceTypes and the connection role is not
+    granted it, so this is kept by hand. Set it on a type only once
+    `aws ec2 describe-instance-types --filters Name=hibernation-supported,Values=true`
+    lists that type in each catalog region. EC2 also needs its RAM under 150 GiB,
+    which the validator holds.
+    """
+
+    @property
+    def hibernation_swap_gib(self) -> int:
+        """Root volume a retained machine adds for the swap file it hibernates to."""
+        return math.ceil(self.memory_mb / 1024) if self.hibernates else 0
+
+    @model_validator(mode="after")
+    def validate_hibernation(self) -> AwsInstanceCatalogEntry:
+        if self.hibernates and self.memory_mb >= HIBERNATION_MEMORY_LIMIT_MIB:
+            raise ValueError("EC2 hibernates only instances with less than 150 GiB of RAM")
+        return self
+
     @model_validator(mode="after")
     def validate_accelerator(self) -> AwsInstanceCatalogEntry:
         if self.kind is AwsInstanceCategory.Cpu and (self.gpu is not None or self.gpu_count):
@@ -58,6 +83,7 @@ class AwsInstanceCatalogEntry(AwsInstanceCatalogModel):
 AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     AwsInstanceCatalogEntry(
         instance_type="c6i.8xlarge",
+        hibernates=True,
         ebs_volume_limit=27,
         kind=AwsInstanceCategory.Cpu,
         cpu_millicores=32_000,
@@ -65,6 +91,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="c6a.2xlarge",
+        hibernates=True,
         ebs_volume_limit=27,
         kind=AwsInstanceCategory.Cpu,
         cpu_millicores=8_000,
@@ -72,6 +99,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="c6a.4xlarge",
+        hibernates=True,
         ebs_volume_limit=27,
         kind=AwsInstanceCategory.Cpu,
         cpu_millicores=16_000,
@@ -79,6 +107,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="c6a.8xlarge",
+        hibernates=True,
         ebs_volume_limit=27,
         kind=AwsInstanceCategory.Cpu,
         cpu_millicores=32_000,
@@ -86,6 +115,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="m6a.2xlarge",
+        hibernates=True,
         ebs_volume_limit=27,
         kind=AwsInstanceCategory.Cpu,
         cpu_millicores=8_000,
@@ -93,6 +123,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="m6a.4xlarge",
+        hibernates=True,
         ebs_volume_limit=27,
         kind=AwsInstanceCategory.Cpu,
         cpu_millicores=16_000,
@@ -100,6 +131,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="m6a.8xlarge",
+        hibernates=True,
         ebs_volume_limit=27,
         kind=AwsInstanceCategory.Cpu,
         cpu_millicores=32_000,
@@ -107,6 +139,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="r6a.2xlarge",
+        hibernates=True,
         ebs_volume_limit=27,
         kind=AwsInstanceCategory.Cpu,
         cpu_millicores=8_000,
@@ -114,6 +147,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="r6a.4xlarge",
+        hibernates=True,
         ebs_volume_limit=27,
         kind=AwsInstanceCategory.Cpu,
         cpu_millicores=16_000,
@@ -128,6 +162,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="m7i.2xlarge",
+        hibernates=True,
         ebs_volume_limit=32,
         ebs_volume_limit_dedicated=True,
         kind=AwsInstanceCategory.Cpu,
@@ -136,6 +171,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="m7i.4xlarge",
+        hibernates=True,
         ebs_volume_limit=32,
         ebs_volume_limit_dedicated=True,
         kind=AwsInstanceCategory.Cpu,
@@ -144,6 +180,7 @@ AWS_INSTANCE_CATALOG: tuple[AwsInstanceCatalogEntry, ...] = (
     ),
     AwsInstanceCatalogEntry(
         instance_type="m7i.8xlarge",
+        hibernates=True,
         ebs_volume_limit=32,
         ebs_volume_limit_dedicated=True,
         kind=AwsInstanceCategory.Cpu,

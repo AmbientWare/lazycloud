@@ -29,11 +29,24 @@ class CapacityShutdown:
     _timer: Timer | None = field(default=None, init=False)
     _lock: Lock = field(default_factory=Lock, init=False)
     _stopped: bool = field(default=False, init=False)
+    """Set once a stop has finished."""
+    _stopping: Event | None = field(default=None, init=False)
+    """Set by the stop under way when it ends, however it ended."""
 
     def arm(self, deadline: datetime) -> None:
-        if self.deadline is not None and self.deadline <= deadline:
-            return
-        self.deadline = deadline
+        with self._lock:
+            if self.deadline is not None and self.deadline <= deadline:
+                return
+            self.deadline = deadline
+            self._schedule(deadline)
+
+    def rearm(self) -> None:
+        """Restart the timer from the wall clock, which kept moving while the machine slept."""
+        with self._lock:
+            if self.deadline is not None and not self._stopped and self._stopping is None:
+                self._schedule(self.deadline)
+
+    def _schedule(self, deadline: datetime) -> None:
         if self._timer is not None:
             self._timer.cancel()
         delay = max(
@@ -55,16 +68,35 @@ class CapacityShutdown:
         )
 
     def stop(self, *, force: bool = False) -> None:
+        """Stop every worker once, returning only when they are stopped.
+
+        A call made while another stop runs waits for it; with `force` it then
+        removes whatever that stop left. The lock covers only claiming the stop
+        and reading the deadline, so `arm` and `rearm` never wait for workers.
+        A stop that fails gives up its claim, so the next call tries again.
+        """
+        grace = self.grace_seconds
         with self._lock:
-            if self._stopped:
-                return
-            self.started.set()
-            grace = self.grace_seconds
-            if self.deadline is not None:
-                grace = min(
-                    grace,
-                    (self.deadline - utc_now()).total_seconds() - INTERRUPTION_SAFETY_SECONDS,
-                )
+            running = self._stopping
+            claimed = running is None and not self._stopped
+            if claimed:
+                self._stopping = Event()
+                self.started.set()
+                if self.deadline is not None:
+                    grace = min(
+                        grace,
+                        (self.deadline - utc_now()).total_seconds() - INTERRUPTION_SAFETY_SECONDS,
+                    )
+        if running is not None:
+            running.wait()
+            if not self._stopped:
+                self.stop(force=force)
+            elif force:
+                self.workers.stop_all()
+            return
+        if not claimed:
+            return
+        try:
             if grace > 0 and not force:
                 try:
                     self.workers.gracefully_stop_all(grace_seconds=grace)
@@ -75,7 +107,13 @@ class CapacityShutdown:
                     self.workers.stop_all()
             else:
                 self.workers.stop_all()
-            self._stopped = True
+            with self._lock:
+                self._stopped = True
+        finally:
+            with self._lock:
+                finished, self._stopping = self._stopping, None
+            if finished is not None:
+                finished.set()
 
     def close(self) -> None:
         if self._timer is not None:

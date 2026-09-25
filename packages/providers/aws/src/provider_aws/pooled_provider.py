@@ -193,8 +193,8 @@ class AwsPooledCapacityProvider(PooledCapacityProvider):
         return ()
 
     def complete_machine_preparation(
-        self, request: ProviderUnitRequest, provider_instance_id: str
-    ) -> None:
+        self, request: ProviderUnitRequest, provider_instance_id: str, *, hibernate: bool
+    ) -> ProviderUnitSnapshot:
         raise ValueError("Auto Scaling groups do not own stopped reserves")
 
     def refresh_machine(

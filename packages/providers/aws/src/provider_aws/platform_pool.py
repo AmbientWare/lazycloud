@@ -10,9 +10,20 @@ from compute.providers import (
     ProviderUnitStateCheckpoints,
 )
 
-from .managed_pool import AwsManagedPoolSpec
+from .instance_catalog import aws_instance_catalog_entry
+from .managed_pool import AWS_MAX_ROOT_VOLUME_GIB, AwsManagedPoolSpec
 from .pooled_provider import AwsPooledCapacityProvider
 from .retained_pool import AwsRetainedPool, RetainedPoolState
+
+
+def _hibernation_swap_gib(instance_type: str, root_volume_gib: int) -> int:
+    """The root volume a retained machine adds to hibernate, or 0 when it stops plainly.
+
+    A type whose grown root would pass the largest root volume a node launches
+    with stops plainly instead.
+    """
+    swap_gib = aws_instance_catalog_entry(instance_type).hibernation_swap_gib
+    return swap_gib if root_volume_gib + swap_gib <= AWS_MAX_ROOT_VOLUME_GIB else 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,10 +34,23 @@ class AwsPlatformCapacityProvider(AwsPooledCapacityProvider):
         # Every platform offer is retained, so CPU and GPU machines alike can stop
         # as reserves. Units recorded under the plain capability key are Auto
         # Scaling groups bought before; they keep that owner through cleanup.
+        # Storage stays the usable root disk, and the price covers the swap a
+        # hibernating type launches with.
         for offer in super(AwsPlatformCapacityProvider, self).list_offers(
             root_volume_gib=root_volume_gib
         ):
-            yield offer.model_copy(update={"capability_key": f"{offer.capability_key}:retained"})
+            update: dict[str, object] = {"capability_key": f"{offer.capability_key}:retained"}
+            swap_gib = _hibernation_swap_gib(offer.instance_type, root_volume_gib)
+            prices = self.regional_prices.get(offer.region)
+            if swap_gib and prices is not None:
+                update["cost_terms"] = offer.cost_terms.model_copy(
+                    update={
+                        "root_disk_hourly_micros": prices.root_disk_hourly_micros(
+                            root_volume_gib + swap_gib
+                        )
+                    }
+                )
+            yield offer.model_copy(update=update)
 
     def list_reserve_offers(self, *, root_volume_gib: int) -> Iterable[ComputeOffer]:
         return self.list_offers(root_volume_gib=root_volume_gib)
@@ -37,10 +61,17 @@ class AwsPlatformCapacityProvider(AwsPooledCapacityProvider):
 
     def _spec(self, request: ProviderUnitRequest) -> AwsManagedPoolSpec:
         spec = super(AwsPlatformCapacityProvider, self)._spec(request)
-        return (
-            spec.model_copy(update={"spot_request_type": "persistent"})
-            if self._retained(request) and request.offer.preemptible
-            else spec
+        if not self._retained(request):
+            return spec
+        swap_gib = _hibernation_swap_gib(request.offer.instance_type, request.root_volume_gib)
+        return spec.model_copy(
+            update={
+                "hibernation": bool(swap_gib),
+                "root_volume_gib": request.root_volume_gib + swap_gib,
+                "spot_request_type": (
+                    "persistent" if request.offer.preemptible else spec.spot_request_type
+                ),
+            }
         )
 
     @staticmethod
@@ -85,14 +116,15 @@ class AwsPlatformCapacityProvider(AwsPooledCapacityProvider):
         )
 
     def complete_machine_preparation(
-        self, request: ProviderUnitRequest, provider_instance_id: str
-    ) -> None:
+        self, request: ProviderUnitRequest, provider_instance_id: str, *, hibernate: bool
+    ) -> ProviderUnitSnapshot:
         if self._retained(request):
-            self._pool(request).complete_preparation(provider_instance_id)
-        else:
-            super(AwsPlatformCapacityProvider, self).complete_machine_preparation(
-                request, provider_instance_id
+            return self._pool(request).complete_preparation(
+                provider_instance_id, hibernate=hibernate
             )
+        return super(AwsPlatformCapacityProvider, self).complete_machine_preparation(
+            request, provider_instance_id, hibernate=hibernate
+        )
 
     def refresh_machine(
         self, request: ProviderUnitRequest, provider_instance_id: str

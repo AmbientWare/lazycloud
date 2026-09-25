@@ -64,6 +64,7 @@ from shared.timestamps import to_utc, utc_now
 
 from compute.context import ComputeContext
 from compute.machine_lifecycle import (
+    RETAINED_MACHINE_LIFECYCLES,
     machine_lifecycle_allowed,
     write_machine_lifecycle,
 )
@@ -326,6 +327,7 @@ class ProviderMachineReconciler:
                 existing_machine_id=(
                     settled_existing.machine_id if settled_existing is not None else None
                 ),
+                recorded_status=provider_status,
                 now=now,
             )
             if settled_existing is not None:
@@ -422,6 +424,7 @@ class ProviderMachineReconciler:
                 "prepared_worker_image": (
                     settled_existing.prepared_worker_image if settled_existing else ""
                 ),
+                "hibernates": instance.hibernates,
                 "missing_since": None,
                 "provider_storage_destroyed_at": settled_existing.provider_storage_destroyed_at
                 if settled_existing
@@ -519,6 +522,7 @@ class ProviderMachineReconciler:
         offer: ComputeOffer,
         instance: ProviderUnitInstance,
         existing_machine_id: str | None,
+        recorded_status: str,
         now: datetime,
     ) -> str | None:
         """The machine row this provider instance is, created the first time it is seen.
@@ -528,7 +532,8 @@ class ProviderMachineReconciler:
         only moves a machine that has not yet reported for itself: a node that
         is booting or joining is further along than "the instance is running",
         and a provider health verdict of unhealthy fails it from any phase short
-        of shutting down.
+        of shutting down. An instance this pass records active also moves a
+        machine still in a reserve phase to joining.
         """
         machines = MachineRepository(session)
         machine = (
@@ -581,6 +586,18 @@ class ProviderMachineReconciler:
             and machine.lifecycle is MachineLifecycle.Requested
         ):
             target = MachineLifecycle.Provisioning
+            failure = None
+            message = ""
+        elif (
+            recorded_status == ReservationStatus.Active.value
+            and machine.lifecycle in RETAINED_MACHINE_LIFECYCLES
+        ):
+            # The provider serves an instance whose stop or resume was never
+            # recorded. Its stream sends no reserve instruction for an active
+            # row, so only this pass moves the machine on. A used machine going
+            # back to reserve keeps its row stopping until its stop is
+            # acknowledged, and stays out of this branch.
+            target = MachineLifecycle.Joining
             failure = None
             message = ""
         else:

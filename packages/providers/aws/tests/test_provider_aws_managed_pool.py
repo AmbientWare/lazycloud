@@ -108,7 +108,9 @@ class _Ec2:
     def start_instances(self, *, InstanceIds: list[str]) -> Mapping[str, object]:
         raise AssertionError("ASG lifecycle must not directly start instances")
 
-    def stop_instances(self, *, InstanceIds: list[str]) -> Mapping[str, object]:
+    def stop_instances(
+        self, *, InstanceIds: list[str], Hibernate: bool = False, Force: bool = False
+    ) -> Mapping[str, object]:
         raise AssertionError("ASG lifecycle must not directly stop instances")
 
     def cancel_spot_instance_requests(
@@ -526,6 +528,22 @@ class _RetainedEc2(_Ec2):
         return {}
 
 
+def _save_slot(pool: AwsRetainedPool, request: ProviderUnitRequest, slot: RetainedSlot) -> None:
+    state = pool.checkpoints.load(request)
+    pool.checkpoints.save(
+        request,
+        expected=state,
+        state=state.model_copy(
+            update={
+                "revision": state.revision + 1,
+                "attributes": RetainedPoolState(
+                    namespace_id=pool.spec.workspace_id, slots=(slot,)
+                ).model_dump(mode="json"),
+            }
+        ),
+    )
+
+
 @pytest.fixture
 def retained_pool(service_context: ServiceContext) -> tuple[AwsRetainedPool, _RetainedEc2]:
     workspace = PlatformNamespaceService(service_context.database).initialize()
@@ -641,19 +659,7 @@ def test_missing_stopped_instance_releases_slot_after_storage_and_request_cleanu
         spot_request_id="sir-retained",
         storage_volume_ids=("vol-00000000000000001",),
     )
-    state = pool.checkpoints.load(pool.request)
-    pool.checkpoints.save(
-        pool.request,
-        expected=state,
-        state=state.model_copy(
-            update={
-                "revision": state.revision + 1,
-                "attributes": RetainedPoolState(
-                    namespace_id=pool.spec.workspace_id, slots=(slot,)
-                ).model_dump(mode="json"),
-            }
-        ),
-    )
+    _save_slot(pool, pool.request, slot)
     request = pool.request.model_copy(update={"purchases_enabled": False})
     held = AwsRetainedPool(request, pool.spec, pool.clients, pool.checkpoints)
     held.ensure()
@@ -708,19 +714,7 @@ def test_retiring_slot_cancels_its_persistent_request_and_terminates_its_relaunc
         },
     }
     ec2.spot_instance_id = "i-00000000000000002"
-    state = pool.checkpoints.load(pool.request)
-    pool.checkpoints.save(
-        pool.request,
-        expected=state,
-        state=state.model_copy(
-            update={
-                "revision": state.revision + 1,
-                "attributes": RetainedPoolState(
-                    namespace_id=pool.spec.workspace_id, slots=(slot,)
-                ).model_dump(mode="json"),
-            }
-        ),
-    )
+    _save_slot(pool, pool.request, slot)
     request = pool.request.model_copy(update={"purchases_enabled": False})
     held = AwsRetainedPool(request, pool.spec, pool.clients, pool.checkpoints)
     held.ensure()
@@ -1369,3 +1363,96 @@ def test_managed_pool_maps_malformed_aws_inventory_to_typed_error() -> None:
 
     assert caught.value.code is AwsProviderControlErrorCode.InvalidResponse
     assert caught.value.resource_ids == AwsManagedPoolResourceIds()
+
+
+class _StoppingEc2(_RetainedEc2):
+    """Records each stop request, refusing hibernation with `refusal` when given."""
+
+    def __init__(self, *, refusal: str) -> None:
+        super().__init__()
+        self.refusal = refusal
+        self.stops: list[str] = []
+
+    def stop_instances(
+        self, *, InstanceIds: list[str], Hibernate: bool = False, Force: bool = False
+    ) -> Mapping[str, object]:
+        if Hibernate and self.refusal:
+            raise ClientError({"Error": {"Code": self.refusal, "Message": "no"}}, "StopInstances")
+        self.stops.append("force" if Force else "hibernate" if Hibernate else "stop")
+        for instance_id in InstanceIds:
+            self.instances[instance_id]["State"] = {"Name": "stopping"}
+        return {}
+
+
+@pytest.mark.parametrize(
+    ("hibernate", "refusal", "first_pass", "after_deadline"),
+    [
+        (True, "", ["hibernate"], ["hibernate", "force"]),
+        (True, "UnsupportedHibernationConfiguration", ["stop"], ["stop", "force"]),
+        (True, "UnsupportedOperation", [], ["stop"]),
+        (False, "", ["stop"], ["stop", "force"]),
+    ],
+)
+def test_a_reserve_hibernates_only_when_asked_and_always_reaches_a_stop(
+    retained_pool: tuple[AwsRetainedPool, _RetainedEc2],
+    hibernate: bool,
+    refusal: str,
+    first_pass: list[str],
+    after_deadline: list[str],
+) -> None:
+    """A reserve hibernates only when compute asked, and it never stays stopping.
+
+    An instance launched without hibernation stops plainly at once. Any other
+    refusal, such as a guest not ready to hibernate, is retried until the
+    operation deadline and then stops plainly. A stop of either kind still
+    pending past that deadline, counted from its own request, is forced.
+    """
+    pool, _ = retained_pool
+    ec2 = _StoppingEc2(refusal=refusal)
+    now = utc_now()
+    slot = RetainedSlot(
+        token=uuid4().hex,
+        created_at=now - timedelta(hours=1),
+        launch_template_id="lt-retained",
+        launch_template_version=1,
+        host_revision="host",
+        subnet_id=_SUBNET_IDS[0],
+        serving=False,
+        phase=SlotPhase.Stopping,
+        instance_id="i-00000000000000001",
+        hibernate=hibernate,
+    )
+    ec2.instances = {
+        "i-00000000000000001": {
+            "InstanceId": "i-00000000000000001",
+            "ClientToken": slot.token,
+            "State": {"Name": "running"},
+            "LaunchTime": (now - timedelta(hours=1)).isoformat(),
+            "HibernationOptions": {"Configured": True},
+            "Tags": [
+                {"Key": AWS_MANAGED_POOL_TAG, "Value": AWS_MANAGED_POOL_TAG_VALUE},
+                {"Key": "cloud-pool:key", "Value": pool.spec.resource_key},
+                {"Key": "cloud-pool:workspace", "Value": pool.spec.workspace_id},
+            ],
+        }
+    }
+    request = pool.request.model_copy(update={"purchases_enabled": False})
+    clients = AwsManagedPoolClients(ec2=ec2, autoscaling=_AutoScaling())
+    _save_slot(pool, request, slot)
+    AwsRetainedPool(request, pool.spec, clients, pool.checkpoints).ensure()
+    assert ec2.stops == first_pass
+    [stopping] = RetainedPoolState.model_validate(pool.checkpoints.load(request).attributes).slots
+    overdue = now - timedelta(minutes=11)
+    _save_slot(
+        pool,
+        request,
+        stopping.model_copy(
+            update={
+                "stop_requested_at": stopping.stop_requested_at and overdue,
+                "hibernate_refused_since": stopping.hibernate_refused_since and overdue,
+            }
+        ),
+    )
+    AwsRetainedPool(request, pool.spec, clients, pool.checkpoints).ensure()
+
+    assert ec2.stops == after_deadline

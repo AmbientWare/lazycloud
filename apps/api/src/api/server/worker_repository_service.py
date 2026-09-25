@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Protocol
 from uuid import uuid4
 
+from compute.machine_lifecycle import reserve_awaits_resume
 from compute.service import ComputeService
 from compute.state import AsyncRedisComputeStateRepository, RedisComputeStateRepository
 from control.deployment_resources import DeploymentResourceService
@@ -1068,6 +1069,14 @@ class WorkerRepositoryService:
             ):
                 raise ConflictError(
                     "worker has no active machine enrollment in this capacity owner"
+                )
+            # Read under the enrollment lock, which reserve authorization also
+            # takes before it moves a resumed reserve to joining.
+            if reserve_awaits_resume(
+                session, machine_id=worker.machine_id, workspace_id=principal.workspace_id
+            ):
+                raise ConflictError(
+                    f"machine {worker.machine_id} has not been authorized to serve since it stopped"
                 )
             workers = WorkerRepository(session)
             worker.admitted_release_generation = WorkerReleaseRepository(session).admit(

@@ -509,6 +509,33 @@ stream, until the machine is joined again.
 IAM and Redis need no change. A node on the new image logs `docker answered
 after` from its agent, and `df -h /` shows its whole root volume.
 
+### Reserve hibernation upgrade
+
+Reserves on instance types EC2 can hibernate stop with their worker running and
+fenced. The agent and the control plane change their stream contract together,
+and an older node image leaves acpid off, so EC2's hibernate request never
+reaches it. The fleet is replaced again, the same way as the directory release
+upgrade:
+Node Images on `main`, pause Argo and scale the scheduler to zero, terminate
+every platform machine and stopped reserve, Ship, then restore. Migration
+`0025_reserve_hibernation` adds `compute_provider_instances.hibernates`.
+
+IAM needs no change: `ec2:StopInstances` covers a hibernating stop, and the root
+volume is encrypted with the account's default EBS key. Redis needs no clearing.
+
+hibinit-agent writes `resume=PARTUUID=... resume_offset=...` to the boot entry
+at a reserve's first cold boot, and the initrd finds the root partition by that
+PARTUUID. On a reserve, `grep resume= /proc/cmdline` shows it from the second
+boot on. Every cold boot logs `systemd-hibernate-resume@dev-disk-by-partuuid-...`
+from the initrd, and a resume logs `PM: hibernation: hibernation exit`. Each
+cold boot of a reserve also rebuilds its initrd, about ten seconds of CPU beside
+the agent's start.
+
+A reserve that hibernated logs `hibernating reserve` in the scheduler, and on
+resume `starting reserve ..., stopped by Client.UserInitiatedHibernate`. Its agent
+logs `machine slept for`, `agent tunnel connected` and `adopted reserve worker`,
+each with its boot-relative time, and its worker logs `registration finished`.
+
 ### Python invocation format upgrade
 
 Python invocation format 2 preserves Python object graphs and resolves function

@@ -80,6 +80,11 @@ class WorkerSettings(BaseSettings):
         default=30.0,
         validation_alias="WORKER_REPOSITORY_TIMEOUT_SECONDS",
     )
+    admission_hold_seconds: float = Field(
+        default=0.0,
+        ge=0,
+        validation_alias="WORKER_ADMISSION_HOLD_SECONDS",
+    )
     # The agent hands the placement key over as plain text. Without `NoDecode`
     # the settings loader would try to read it as JSON and refuse every value.
     placement: Annotated[Placement, NoDecode] = Field(

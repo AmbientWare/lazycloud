@@ -14,6 +14,8 @@ POD_IMAGE = f"{NAME}-pod"
 SHELL_IMAGE = f"{NAME}-shell"
 SHELL_LOG_PATH = f"/tmp/{NAME}-shell.log"
 AGENT_CONTAINER_TMP_PATH = f"/tmp/{NAME}"
+WORKER_ADMISSION_WAITING_FILE = "admission-waiting"
+"""Created in a held worker's temporary directory once the agent refuses its first call."""
 AGENT_CONTAINER_LOG_PATH = f"/var/log/{NAME}"
 AGENT_STATE_DIR = f"{STATE_DIR}/agent"
 AGENT_CONTAINER_DATA_PATH = f"{AGENT_STATE_DIR}/data"
@@ -84,6 +86,7 @@ __all__ = [
     "SOURCE_CACHE_DIR",
     "SOURCE_PACKAGE_BUCKET",
     "STATE_DIR",
+    "WORKER_ADMISSION_WAITING_FILE",
     "WORKER_BOOTSTRAP_PROCESS_NAME",
     "WORKER_BUNDLE_ROOT",
     "WORKER_CHECKPOINT_ROOT",

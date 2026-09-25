@@ -136,8 +136,9 @@ class _PooledProvider:
         return ()
 
     def complete_machine_preparation(
-        self, request: ProviderUnitRequest, provider_instance_id: str
-    ) -> None:
+        self, request: ProviderUnitRequest, provider_instance_id: str, *, hibernate: bool
+    ) -> ProviderUnitSnapshot:
+        del hibernate
         raise AssertionError("enrollment must not complete reserve preparation")
 
     def refresh_machine(

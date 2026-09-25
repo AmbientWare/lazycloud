@@ -34,6 +34,22 @@ class AgentCapacityState(StringEnum):
     Cordoned = "cordoned"
 
 
+class AgentReserveInstruction(StringEnum):
+    """What a stream tells an agent to do with a reserve's held worker.
+
+    Only `serve` releases the hold: the agent adopts the worker and opens its
+    listeners. `keep` changes nothing, so an agent holding a worker goes on
+    holding it and one holding none reconciles as usual.
+    """
+
+    Keep = "keep"
+    Serve = "serve"
+    Prepare = "prepare"
+    ResumePending = "resume_pending"
+    """The machine was started again before its row reads resuming. The agent holds
+    its worker and keeps the reserve record, with the boot it was prepared in."""
+
+
 class AgentWorkerSlotStatus(StringEnum):
     Pending = "pending"
     Active = "active"
@@ -123,6 +139,7 @@ __all__ = [
     "DEFAULT_PRIVATE_EXECUTOR",
     "AgentBootstrapConfig",
     "AgentCapacityState",
+    "AgentReserveInstruction",
     "AgentWorkerSlotStatus",
     "ComputeCredentialStatus",
     "ComputeMachineEnrollmentStatus",
