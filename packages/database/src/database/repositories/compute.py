@@ -169,6 +169,8 @@ class ComputeProviderInstanceRecord(ContractModel):
     prepared_worker_image: str = ""
     hibernates: bool = False
     """Launched able to hibernate, so it stops warm, with its worker running."""
+    resume_authorized_at: datetime | None = None
+    """When a stream authorized this reserve's resume; cleared once the row is active."""
     missing_since: datetime | None = None
     provider_storage_destroyed_at: datetime | None = None
     terminating_reason: str = ""
@@ -1782,6 +1784,7 @@ def _provider_instance_record(row: ComputeProviderInstanceTable) -> ComputeProvi
             "prepared_agent_sha256": row.prepared_agent_sha256,
             "prepared_worker_image": row.prepared_worker_image,
             "hibernates": row.hibernates,
+            "resume_authorized_at": to_utc_or_none(row.resume_authorized_at),
             "missing_since": to_utc_or_none(row.missing_since),
             "provider_storage_destroyed_at": to_utc_or_none(row.provider_storage_destroyed_at),
             "terminating_reason": row.terminating_reason,
@@ -1844,6 +1847,7 @@ class ComputeProviderInstanceRepository:
         row.prepared_agent_sha256 = record.prepared_agent_sha256
         row.prepared_worker_image = record.prepared_worker_image
         row.hibernates = record.hibernates
+        row.resume_authorized_at = record.resume_authorized_at
         row.missing_since = record.missing_since
         row.provider_storage_destroyed_at = record.provider_storage_destroyed_at
         row.terminating_reason = record.terminating_reason
@@ -1879,6 +1883,17 @@ class ComputeProviderInstanceRepository:
         if for_update:
             statement = statement.with_for_update()
         return [_provider_instance_record(row) for row in self.session.scalars(statement)]
+
+    def authorize_resume(self, record_id: str) -> None:
+        """Mark a resuming reserve's resume as authorized, for the capacity pass to finish."""
+        self.session.execute(
+            update(ComputeProviderInstanceTable)
+            .where(
+                ComputeProviderInstanceTable.id == record_id,
+                ComputeProviderInstanceTable.status == "resuming",
+            )
+            .values(resume_authorized_at=utc_now())
+        )
 
     def list_for_reconciliation(
         self,

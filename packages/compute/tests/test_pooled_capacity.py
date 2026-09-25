@@ -4360,6 +4360,21 @@ def test_a_resumed_reserve_registers_no_worker_until_its_stream_authorizes_the_r
     )
     assert awaits_resume()
 
+    # A resuming row no stream authorized, such as a new machine still booting,
+    # is left for its own stream; the pass finishes only authorized resumes.
+    with service_context.database.session() as session:
+        machines = MachineRepository(session)
+        resuming = machines.get(machine_id, workspace_id=unit.workspace_id)
+        assert resuming is not None
+        machines.upsert(
+            resuming.model_copy(update={"lifecycle": MachineLifecycle.Booting}),
+            workspace_id=unit.workspace_id,
+        )
+    compute.reconcile_unit_capacity(unit.id, now=now)
+    assert provider.prepared == []
+    with service_context.database.session() as session:
+        MachineRepository(session).upsert(resuming, workspace_id=unit.workspace_id)
+
     def stream(agent_binary_sha256: str = "a" * 64) -> ReserveAgentPreparation:
         return compute.prepare_reserved_machine(
             workspace_id=unit.workspace_id,

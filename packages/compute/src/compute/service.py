@@ -2933,7 +2933,7 @@ class ComputeService:
             machine = MachineRepository(session).get(machine_id, workspace_id=workspace_id)
             if unit is None or machine is None:
                 raise ConflictError("reserve preparation lost its capacity owner")
-            if resuming and machine.lifecycle not in RETAINED_MACHINE_LIFECYCLES:
+            if resuming and record.resume_authorized_at is not None:
                 # An earlier stream authorized the resume; the machine serves, and
                 # only that stream tells the agent it resumed.
                 return ReserveAgentPreparation()
@@ -3033,9 +3033,11 @@ class ComputeService:
                         }
                     )
                 )
+            if resuming:
+                # Joining opens the fence, so the resumed worker registers without
+                # waiting on the provider; the capacity pass finishes the row it marks.
+                ComputeProviderInstanceRepository(session).authorize_resume(record.id)
         if resuming:
-            # Joining opens the fence, so the resumed worker registers without
-            # waiting on the provider; the capacity pass finishes the row.
             return instruction
         try:
             self._finish_reserved_machine_preparation(
@@ -4150,30 +4152,6 @@ class ComputeService:
                     )
                 )
 
-    @staticmethod
-    def _authorized_resumes(
-        session: DatabaseSession,
-        unit: ComputeUnitRecord,
-        records: Sequence[ComputeProviderInstanceRecord],
-    ) -> list[str]:
-        """Resuming instances whose stream authorized the resume, which the pass finishes.
-
-        The authorizing stream moves the machine out of its reserve phases and
-        leaves the provider's bookkeeping to the pass.
-        """
-        machines = MachineRepository(session)
-        return [
-            record.instance_id
-            for record in records
-            if record.status == ReservationStatus.Resuming.value
-            and record.instance_id is not None
-            and record.missing_since is None
-            and record.machine_id is not None
-            and (machine := machines.get(record.machine_id, workspace_id=unit.workspace_id))
-            is not None
-            and machine.lifecycle not in RETAINED_MACHINE_LIFECYCLES
-        ]
-
     def _reconcile_pooled_pool(
         self,
         pool_id: str,
@@ -4227,7 +4205,6 @@ class ComputeService:
                         ReservationStatus.Resuming.value,
                     ),
                 )
-                resumed = self._authorized_resumes(session, current, records)
             for record in records:
                 if (
                     record.status != ReservationStatus.Terminating.value
@@ -4239,6 +4216,14 @@ class ComputeService:
                     pooled.release_machine(
                         self._provider_unit_request(current, offer), record.instance_id
                     )
+            resumed = [
+                record.instance_id
+                for record in records
+                if record.status == ReservationStatus.Resuming.value
+                and record.resume_authorized_at is not None
+                and record.instance_id is not None
+                and record.missing_since is None
+            ]
             for instance_id in resumed:
                 # One instance the provider no longer owns, such as a reclaimed
                 # Spot machine, must not stop the rest of the pass.
