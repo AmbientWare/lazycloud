@@ -83,6 +83,7 @@ def fleet_reserve_snapshot(
             stopped=unit.stopped,
             retained=unit.retained,
             growable=unit_growable(unit, purchasable_providers=purchasable_providers, now=now),
+            enabled=unit.provider_ref in purchasable_providers,
         )
         for unit in rows.units
     )

@@ -3760,16 +3760,29 @@ class ComputeService:
         return identities[available[0]] if available else None
 
     def _retain_machines(self, unit_id: str, retained: int) -> None:
-        """Keep this many of the unit's serving machines from the idle drain."""
-        with self.context.database.session() as session:
+        """Keep this many of the unit's serving machines from the idle drain.
+
+        Under the unit's lease, which the drain holds while it releases a machine,
+        so the count never changes between its choice and its release.
+        """
+        with (
+            self._required_capacity_owner_mutations().mutation_lock(unit_id),
+            self.context.database.session() as session,
+        ):
             units = ComputeUnitRepository(session)
             units.lock_platform_capacity()
             current = units.get(unit_id, for_update=True)
             if current is None or current.phase in ENDED_UNIT_PHASES:
                 return
             updated = _with_retained_machines(current, min(retained, current.desired_machines))
-            if updated != current:
-                units.upsert(updated.model_copy(update={"generation": current.generation + 1}))
+            if updated == current:
+                return
+            updated = units.upsert(updated)
+        # The drain reads the count from the unit's hot state.
+        if self.scheduler_hooks is not None:
+            provider, offer = self._resolved_internal_unit_provider(updated)
+            if provider.pooled is not None:
+                self.scheduler_hooks.register_internal_unit(updated, offer)
 
     def _set_stopped_reserves(self, unit_id: str, stopped: int, *, now: datetime) -> None:
         with self._required_capacity_owner_mutations().mutation_lock(unit_id):

@@ -1,4 +1,4 @@
-"""Plan platform reserves by headroom: GPU stopped reserves, live load index, no handoff."""
+"""Plan platform reserves by headroom: GPU stopped reserves, live-row indexes, no handoff."""
 
 import sqlalchemy as sa
 from alembic import op
@@ -21,17 +21,18 @@ def upgrade() -> None:
     )
     op.drop_column("compute_units", "warm_handoff_from")
     op.create_index(
-        "ix_containers_live_runtime_machine",
-        "containers",
-        ["runtime_machine_id"],
-        postgresql_where=sa.text("status IN ('pending', 'running') AND runtime_machine_id <> ''"),
-        postgresql_include=[
-            "scheduling_cpu_millicores",
-            "scheduling_memory_mib",
-            "scheduling_gpu_count",
-            "scheduling_preemptible",
-            "scheduling_required_worker_id",
-        ],
+        "ix_compute_units_platform_live",
+        "compute_units",
+        ["id"],
+        postgresql_where=sa.text(
+            "platform_fleet IS TRUE AND visibility = 'internal' AND phase <> 'deleted'"
+        ),
+    )
+    op.create_index(
+        "ix_compute_provider_instances_live",
+        "compute_provider_instances",
+        ["pool_id"],
+        postgresql_where=sa.text("status NOT IN ('deleted', 'failed')"),
     )
 
 
@@ -41,7 +42,8 @@ def downgrade() -> None:
         "AND (stopped_machines > 0 OR retiring_stopped_machines > 0)) THEN "
         "RAISE EXCEPTION 'retire stopped GPU reserves before downgrading'; END IF; END $$"
     )
-    op.drop_index("ix_containers_live_runtime_machine", table_name="containers")
+    op.drop_index("ix_compute_provider_instances_live", table_name="compute_provider_instances")
+    op.drop_index("ix_compute_units_platform_live", table_name="compute_units")
     op.add_column(
         "compute_units",
         sa.Column(

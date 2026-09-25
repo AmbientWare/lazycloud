@@ -72,6 +72,13 @@ class ComputeUnitTable(IdTable, DatabaseBase):
         UniqueConstraint("capacity_owner_id", name="uq_compute_units_capacity_owner_id"),
         Index("ix_compute_units_workspace_placement", "workspace_id", "placement"),
         Index(
+            "ix_compute_units_platform_live",
+            "id",
+            postgresql_where=text(
+                "platform_fleet IS TRUE AND visibility = 'internal' AND phase <> 'deleted'"
+            ),
+        ),
+        Index(
             "ix_compute_units_active_provider_gpu",
             "provider_ref",
             "worker_gpu_count",
@@ -329,6 +336,13 @@ class ComputeProviderInstanceTable(IdTable, DatabaseBase):
             "ix_compute_provider_instances_stopped",
             "pool_id",
             postgresql_where=text("status = 'stopped' AND missing_since IS NULL"),
+        ),
+        # The reserve planner reads every live instance each minute; terminal
+        # history stays out of the index it reads through.
+        Index(
+            "ix_compute_provider_instances_live",
+            "pool_id",
+            postgresql_where=text("status NOT IN ('deleted', 'failed')"),
         ),
         Index("ix_compute_provider_instances_renewal", "billing_renewal_at"),
         Index(

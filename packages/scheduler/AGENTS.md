@@ -202,3 +202,30 @@ another's because the id differs, so no owner comparison sits beside it. The
 placement is never chosen by the caller; the control plane resolves it once when
 a stub is created, from the workspace's location or the machine its config
 names, and the request carries it from there.
+
+## Placement packs, and consolidation moves only what may move
+
+Below liveness, priority, the preferred worker and the preferred zone, a request
+lands on a busy machine before an empty one: the one reserving the most CPU, then
+memory, then the largest. Among empty machines the smallest that fits goes first,
+so large machines stay free for large requests. A machine the reserve planner is
+watching to consolidate takes work only when nothing else fits. In a quiet market,
+work that cannot be moved later goes to the smallest machine, because it would
+otherwise pin a large one the drain could release.
+
+A workload may be moved if and only if it is preemptible, whatever its kind:
+accepting interruption is accepting a stop and a reschedule elsewhere. Functions,
+endpoints, image builds, pods, devboxes and sandboxes on those terms may move;
+work that did not accept interruption, or that must run on one named worker, is
+never stopped to consolidate. The container row's `scheduling_preemptible` is the
+durable record of that consent.
+
+Consolidation empties a machine the planner has watched at 30 percent use or less
+for ten minutes, whose work may all move, while the market's other machines keep
+its running target with room for that work. One machine per market at a time,
+then a cooldown. The unit's dispatch lease is held while the durable rows are read
+again and the machine is cordoned through the durable drain path, so nothing lands
+on it after the check. Its movable containers then stop with
+`StopContainerReason.Scheduler` and reschedule like any preemption; a devbox's
+disks save on stop as usual. Image builds finish where they are. The idle drain
+then retires the empty machine or returns it to the stopped reserve.

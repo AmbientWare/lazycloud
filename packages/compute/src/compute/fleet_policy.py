@@ -259,6 +259,10 @@ class ReserveUnit:
     growable: bool
     """Whether a resume or purchase may go here: healthy, not cooling, and purchasable."""
 
+    enabled: bool = True
+    """Whether its provider may purchase at all. A disabled unit holds no reserves
+    and its idle machines drain; its capacity does not count as headroom."""
+
 
 @dataclass(frozen=True, slots=True)
 class ReserveMachine:
@@ -425,12 +429,14 @@ def _plan_market(
         machine
         for machine in machines
         if machine.state in {ReserveMachineState.Serving, ReserveMachineState.Starting}
+        and units[machine.unit_id].enabled
     ]
     working = [machine for machine in machines if machine.state is not ReserveMachineState.Reserve]
     load = total(machine.load for machine in working)
     launching = total(
-        units[unit.unit_id].machine
+        unit.machine
         for unit in market_units
+        if unit.enabled
         for _ in range(
             max(
                 unit.desired
@@ -473,7 +479,9 @@ def _plan_market(
     # A unit that cannot grow keeps the reserves it holds and gives up any it
     # was still waiting to launch, so the shortfall goes to another unit.
     stopped = {
-        unit.unit_id: unit.stopped
+        unit.unit_id: 0
+        if not unit.enabled
+        else unit.stopped
         if unit.growable
         else min(
             unit.stopped,
