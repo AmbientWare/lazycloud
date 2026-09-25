@@ -716,22 +716,33 @@ def _validated_state_directory(path: Path) -> Path:
 
 
 def _remove_canonical_agent_binary() -> bool:
-    """Remove the agent command the installer created and every release it unpacked."""
-    command = Path(_agent_binary_path()).expanduser().absolute()
+    """Remove the agent command the installer created and every release it unpacked.
+
+    False when the command sits outside the installer's paths, so a binary an
+    operator placed is left alone. At an installer path, whatever is found goes:
+    the link to a release, or a single executable an older installer wrote. A
+    link that leads outside the releases, or anything that cannot be removed,
+    raises rather than leaving the agent half installed.
+    """
+    found = Path(_agent_binary_path()).expanduser().absolute()
+    command = found.parent.resolve() / found.name
     allowed = {
-        Path("/usr/local/bin") / AGENT_NAME,
-        Path.home() / f".{AGENT_NAME.removesuffix('-agent')}" / "bin" / AGENT_NAME,
+        path.parent.resolve() / path.name
+        for path in (
+            Path("/usr/local/bin") / AGENT_NAME,
+            Path.home() / f".{AGENT_NAME.removesuffix('-agent')}" / "bin" / AGENT_NAME,
+        )
     }
-    releases = command.parent.parent / "lib" / AGENT_NAME
-    if (
-        command not in allowed
-        or not command.is_symlink()
-        or not command.resolve().is_relative_to(releases)
-    ):
+    if command not in allowed or not (command.is_symlink() or command.is_file()):
         return False
+    releases = command.parent.parent / "lib" / AGENT_NAME
+    if command.is_symlink() and not command.resolve().is_relative_to(releases.resolve()):
+        msg = f"{command} links outside the agent releases in {releases}; remove it by hand"
+        raise RuntimeError(msg)
     command.unlink()
     command.with_name(f"{command.name}.previous").unlink(missing_ok=True)
-    shutil.rmtree(releases)
+    if releases.exists():
+        shutil.rmtree(releases)
     return True
 
 

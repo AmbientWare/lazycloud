@@ -183,6 +183,10 @@ bootstrap_main() {
     --executor container \\
     --max-gpus "$GPU_COUNT" \\
     --state-dir "$AGENT_STATE_DIR"
+
+  # Enrolled. The agent's unit handles every later boot, and cloud-init would
+  # only add its own run to each one.
+  touch /etc/cloud/cloud-init.disabled
 }
 
 bootstrap_main

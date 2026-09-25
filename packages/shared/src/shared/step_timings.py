@@ -54,4 +54,10 @@ class StepTimings:
         logger.log(level, f"{message}: %s", *args, self.summary(), extra=fields)
 
 
-__all__ = ["StepTimings"]
+def seconds_since_boot() -> float:
+    """Seconds since the kernel started, which lines a node's logs up with its instance start."""
+    boot_clock = getattr(time, "CLOCK_BOOTTIME", None)
+    return time.monotonic() if boot_clock is None else time.clock_gettime(boot_clock)
+
+
+__all__ = ["StepTimings", "seconds_since_boot"]

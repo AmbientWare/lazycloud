@@ -234,8 +234,16 @@ def render_systemd_unit(spec: AgentServiceSpec) -> str:
     lines = [
         "[Unit]",
         f"Description={spec.description}",
-        "Wants=network-online.target docker.service",
-        "After=network-online.target docker.service",
+        # The agent retries its first control-plane calls until the network is
+        # up and touches Docker only once it answers, so it waits for neither.
+        # Orderings are symmetric, so these two act at shutdown: network.target
+        # is reached before the network is online and stays up until the agent
+        # stops, and a simple service counts as started once forked, so Docker
+        # starts no later and stops its workers while the agent still carries
+        # their final calls.
+        "Wants=docker.service",
+        "After=network.target",
+        "Before=docker.service",
         # A machine that cannot reach the control plane must keep trying, so the
         # limit is sized to outlast a full bootstrap phase deadline of gateway
         # unavailability (300s at RestartSec=15 is 20 starts; 40 doubles it).

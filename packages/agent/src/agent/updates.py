@@ -1,18 +1,22 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import re
 import shutil
 import subprocess
 import sys
 import tarfile
+import time
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 from shared.releases import AgentArtifact
+
+LOGGER = logging.getLogger(__name__)
 
 SUPERVISOR = "agent-supervisor.sh"
 
@@ -66,6 +70,8 @@ class AgentUpdateRestartError(RuntimeError):
 
 
 RELEASE_DIGEST_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+STALE_STAGING_SECONDS = 3600
+"""How long a download or unpack goes untouched before pruning takes it as abandoned."""
 UPDATE_PENDING_FILE = "agent-update.pending"
 
 
@@ -108,12 +114,40 @@ class AgentUpdater:
         if not pending.exists() or pending.read_text().strip() != self.binary_sha256():
             return
         pending.unlink()
+        self.prune()
+
+    def prune(self) -> None:
+        """Remove every unpacked release but the running one and the previous.
+
+        Releases are directories named by their digest, and a download or
+        unpack in progress, the updater's or the install script's, is named
+        with a leading dot. A release rolled back or superseded goes, and so
+        does staging untouched for STALE_STAGING_SECONDS, which leaves an
+        install running now alone. Each removal is best effort: one that
+        fails is logged and left for the next start. An agent run from a source
+        tree has no releases and keeps everything.
+        """
+        if not self.binary_sha256():
+            return
         keep = {self.release}
         if self.previous.is_symlink():
             keep.add(self.previous.resolve().parent)
+        stale_before = time.time() - STALE_STAGING_SECONDS
         for entry in self.release.parent.iterdir():
-            if RELEASE_DIGEST_PATTERN.fullmatch(entry.name) and entry not in keep:
-                shutil.rmtree(entry)
+            if entry in keep:
+                continue
+            try:
+                if entry.name.startswith("."):
+                    if entry.lstat().st_mtime > stale_before:
+                        continue
+                elif not RELEASE_DIGEST_PATTERN.fullmatch(entry.name):
+                    continue
+                if entry.is_dir() and not entry.is_symlink():
+                    shutil.rmtree(entry)
+                else:
+                    entry.unlink(missing_ok=True)
+            except OSError:
+                LOGGER.warning("could not remove the old agent release %s", entry, exc_info=True)
 
     def install(self, artifact: AgentArtifact, *, before_exec: Callable[[], None]) -> None:
         if not (self.state_dir / SUPERVISOR).is_file():
@@ -168,11 +202,35 @@ class AgentUpdater:
                 unpacked.extractall(staged, filter="data")
             executable = staged / self.command.resolve().name
             subprocess.run([str(executable), "--help"], check=True, capture_output=True, timeout=30)
-            os.sync()
+            _fsync_tree(staged)
             os.replace(staged, release)
+            _fsync_directory(release.parent)
         finally:
             archive.unlink(missing_ok=True)
             shutil.rmtree(staged, ignore_errors=True)
+
+
+def _fsync_tree(root: Path) -> None:
+    """Flush every file and directory of a staged release, so a crash never exposes a torn one."""
+    for directory, _, names in os.walk(root, topdown=False):
+        for name in names:
+            path = os.path.join(directory, name)
+            if os.path.islink(path):
+                continue
+            descriptor = os.open(path, os.O_RDONLY)
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+        _fsync_directory(Path(directory))
+
+
+def _fsync_directory(directory: Path) -> None:
+    descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def _replace_link(link: Path, target: Path) -> None:
