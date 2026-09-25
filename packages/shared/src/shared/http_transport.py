@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 import os
 import ssl
+import threading
 import weakref
 from collections.abc import Generator, Iterable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from types import TracebackType
 
@@ -18,6 +20,7 @@ from shared.client_version import (
     report_client_version,
 )
 from shared.http.errors import (
+    HttpApiError,
     HttpResponseDecodeError,
     HttpTransportError,
     http_api_error_from_body,
@@ -38,25 +41,83 @@ def build_http_ssl_context() -> ssl.SSLContext:
     return context
 
 
+class _CurrentClient:
+    """The client a channel sends through, replaced whole by `reset`."""
+
+    def __init__(self, client: httpx.Client) -> None:
+        self._lock = threading.Lock()
+        self.client = client
+
+    def replace(self, client: httpx.Client) -> httpx.Client:
+        with self._lock:
+            previous, self.client = self.client, client
+        return previous
+
+    def close(self) -> None:
+        self.client.close()
+
+
 @dataclass
 class HttpChannel:
     endpoint: str = "http://127.0.0.1:9000"
     token: str | None = None
     timeout_seconds: float = 10.0
     ssl_context: ssl.SSLContext = field(default_factory=build_http_ssl_context, repr=False)
-    _client: httpx.Client = field(init=False, repr=False)
+    _current: _CurrentClient = field(init=False, repr=False)
     _owner_pid: int = field(default_factory=os.getpid, init=False, repr=False)
 
     def __post_init__(self) -> None:
-        self._client = httpx.Client(
+        self._current = _CurrentClient(self._connect())
+        weakref.finalize(self, self._current.close)
+
+    def _connect(self) -> httpx.Client:
+        return httpx.Client(
             verify=self.ssl_context,
             follow_redirects=True,
             limits=httpx.Limits(max_connections=None),
         )
-        weakref.finalize(self, self._client.close)
+
+    @contextmanager
+    def _stream(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: Mapping[str, str],
+        timeout: float,
+        content: bytes | Iterable[bytes] | None = None,
+    ) -> Iterator[httpx.Response]:
+        """Stream one request, raising every transport failure as `HttpTransportError`.
+
+        A reset on another thread closes the client a call started with; httpx
+        then raises a plain RuntimeError, which is a transport failure too.
+        """
+        client = self._current.client
+        try:
+            with client.stream(
+                method, url, content=content, headers=headers, timeout=timeout
+            ) as response:
+                yield response
+        except httpx.RequestError as exc:
+            raise HttpTransportError(method, url, str(exc)) from exc
+        except (HttpApiError, HttpResponseDecodeError):
+            raise
+        except RuntimeError as exc:
+            if not client.is_closed:
+                raise
+            raise HttpTransportError(method, url, "connection closed by a reset") from exc
+
+    def reset(self) -> None:
+        """Open new connections from here on, as a machine that slept needs.
+
+        The old ones are closed at once, calls under way on them included:
+        after a sleep their sockets are dead, and a call left on one would wait
+        out its whole timeout before failing and retrying.
+        """
+        self._current.replace(self._connect()).close()
 
     def close(self) -> None:
-        self._client.close()
+        self._current.close()
 
     def __enter__(self) -> HttpChannel:
         return self
@@ -101,18 +162,15 @@ class HttpChannel:
             {"Content-Type": "application/json", **(headers or {})},
         )
         url = self._request_url(path)
-        try:
-            with self._client.stream(
-                method.upper(),
-                url,
-                content=data,
-                headers=request_headers,
-                timeout=self.timeout_seconds if timeout_seconds is None else timeout_seconds,
-            ) as response:
-                _check_response(response)
-                return HttpResponse(_decode_response(response), response.headers)
-        except httpx.RequestError as exc:
-            raise HttpTransportError(method, url, str(exc)) from exc
+        with self._stream(
+            method.upper(),
+            url,
+            content=data,
+            headers=request_headers,
+            timeout=self.timeout_seconds if timeout_seconds is None else timeout_seconds,
+        ) as response:
+            _check_response(response)
+            return HttpResponse(_decode_response(response), response.headers)
 
     def get(self, path: str) -> JsonValue:
         return self.request("GET", path)
@@ -127,34 +185,28 @@ class HttpChannel:
         timeout_seconds: float | None = None,
     ) -> bytes:
         url = self._request_url(path)
-        try:
-            with self._client.stream(
-                method.upper(),
-                url,
-                content=data,
-                headers=_request_headers(self.token, headers),
-                timeout=self.timeout_seconds if timeout_seconds is None else timeout_seconds,
-            ) as response:
-                _check_response(response)
-                return response.read()
-        except httpx.RequestError as exc:
-            raise HttpTransportError(method, url, str(exc)) from exc
+        with self._stream(
+            method.upper(),
+            url,
+            content=data,
+            headers=_request_headers(self.token, headers),
+            timeout=self.timeout_seconds if timeout_seconds is None else timeout_seconds,
+        ) as response:
+            _check_response(response)
+            return response.read()
 
     def stream_get(self, path: str, *, timeout_seconds: float | None = None) -> Generator[str]:
         headers = _request_headers(self.token)
         url = self._request_url(path)
-        try:
-            with self._client.stream(
-                "GET",
-                url,
-                headers=headers,
-                timeout=self.timeout_seconds if timeout_seconds is None else timeout_seconds,
-            ) as response:
-                _check_response(response)
-                for raw_line in _response_lines(response):
-                    yield raw_line.decode("utf-8")
-        except httpx.RequestError as exc:
-            raise HttpTransportError("GET", url, str(exc)) from exc
+        with self._stream(
+            "GET",
+            url,
+            headers=headers,
+            timeout=self.timeout_seconds if timeout_seconds is None else timeout_seconds,
+        ) as response:
+            _check_response(response)
+            for raw_line in _response_lines(response):
+                yield raw_line.decode("utf-8")
 
     def post(
         self,
@@ -181,21 +233,18 @@ class HttpChannel:
             },
         )
         url = self._request_url(path)
-        try:
-            with self._client.stream(
-                "POST",
-                url,
-                content=data,
-                headers=headers,
-                timeout=self.timeout_seconds if timeout_seconds is None else timeout_seconds,
-            ) as response:
-                _check_response(response)
-                for raw_line in _response_lines(response):
-                    line = raw_line.strip()
-                    if line:
-                        yield _decode_json(line)
-        except httpx.RequestError as exc:
-            raise HttpTransportError("POST", url, str(exc)) from exc
+        with self._stream(
+            "POST",
+            url,
+            content=data,
+            headers=headers,
+            timeout=self.timeout_seconds if timeout_seconds is None else timeout_seconds,
+        ) as response:
+            _check_response(response)
+            for raw_line in _response_lines(response):
+                line = raw_line.strip()
+                if line:
+                    yield _decode_json(line)
 
     def patch(self, path: str, payload: Mapping[str, JsonValue] | None = None) -> JsonValue:
         return self.request("PATCH", path, payload=payload)

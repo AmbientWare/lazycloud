@@ -102,6 +102,39 @@ credential while preserving the agent identity and platform image cache. Resumin
 keeps the machine identity and requires a new worker registration and
 request-poll lease.
 
+A reserve prepared without serving keeps its worker slot and credential, and its
+agent records them. A retained machine of a type EC2 can hibernate, with under
+150 GiB of RAM, launches with hibernation configured and a root volume grown by
+its RAM. Its offer lists the usable disk and prices the whole volume. Such a
+reserve runs its worker while it is prepared. Compute asks the provider to
+hibernate it only once that worker runs the release and the agent reports it
+waiting at its first call, so it resumes with both running. Any other reserve,
+a used machine returning to reserve included, stops plainly, and its agent
+starts the recorded worker at the next boot. EC2 refuses to hibernate a guest
+that is not ready yet, so a refusal is retried each pass and becomes a plain
+stop after ten minutes, or at once for an instance launched without
+hibernation. A stop of either kind still pending ten minutes after its request
+is forced.
+
+The reserve-worker protocol. Every party changes state only on the named
+event, and any path not listed leaves it where it is.
+
+| Party | States | Moves when |
+| --- | --- | --- |
+| Agent | serving: listeners open, no reserve record | `reserve` says `prepare`: preparing |
+| | preparing: listeners held, record written with this boot, workers started held, an unheld reserve worker restarted into the hold | `serve`: serving, adopting the worker by the planner's keep rule or stopping it; `keep`: stays; `stop_preparation_id`: workers stopped for a used host's stop |
+| | booted from a record: worker started held before the first stream, `booted_since_reserve_prepared` sent on every stream | `resume_pending` or `keep`: stays, record untouched; otherwise as preparing |
+| | slept: one connection reset, tunnel redialed, timers rearmed | the next stream, as the state before |
+| Stream answer | not ok, retryable or final | the agent changes nothing |
+| | ok with `reserve` `keep`, the default: a release not yet activated, or a used host's stop | an agent holding a worker keeps holding it |
+| | ok with `prepare`, and a warm slot Active or a plain one Draining | compute's row is `preparing`, `stopping` or `stopped` |
+| | ok with `resume_pending` | the row reads `stopping` or `stopped` while the agent reports a boot since preparation |
+| | ok with `serve` | the machine is no prepared reserve; with `resume_from_stop` the row reads `resuming` and the same stream authorizes the resume |
+| Compute row | `preparing` -> `stopping` -> `stopped` -> `resuming` -> `active` | preparation completes once the worker is ready (warm: release running and waiting; plain: no worker); the pass observes the stop; the pass starts the instance; the stream authorizes the resume |
+| Lifecycle | `stopping`, `stopped`, `resuming` -> `joining` -> `ready` | the stream's resume authorization, or an active row seen by the pass or the agent's joining report; then the heartbeat |
+| Worker | held: refused calls retried up to 30 awake minutes, `admission-waiting` present | a 2xx admits it and removes the marker; a refusal, the fence's 409 included, leaves it held; the hold running out fails it |
+| Fence | refuses registration while the row is `preparing`, `stopping` or `stopped`, or the lifecycle is retained before the row is active; a machine with no row is refused as missing | the row turns active |
+
 A provider lists its regions in the order platform purchases prefer them. When
 offers in two combinations of one region refuse launches within 30 minutes, that
 region ranks after the others, so a shortfall moves to the next region rather than

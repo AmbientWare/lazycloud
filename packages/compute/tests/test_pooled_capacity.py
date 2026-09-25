@@ -21,6 +21,7 @@ from compute.fleet_policy import (
     HeadroomTarget,
     MarketReserve,
 )
+from compute.machine_lifecycle import reserve_awaits_resume, write_machine_lifecycle
 from compute.offers import ComputeOffer, ReservationStatus
 from compute.provider_state import ProviderUnitStateService
 from compute.providers import (
@@ -52,6 +53,7 @@ from database.repositories.compute import (
     ComputeCapacityOperationRepository,
     ComputeJoinCredentialRepository,
     ComputeMachineEnrollmentCreate,
+    ComputeMachineEnrollmentRecord,
     ComputeMachineEnrollmentRepository,
     ComputeProviderInstanceRecord,
     ComputeProviderInstanceRepository,
@@ -146,8 +148,9 @@ class _PooledProvider:
         return self.reserve_offers
 
     def complete_machine_preparation(
-        self, request: ProviderUnitRequest, provider_instance_id: str
-    ) -> None:
+        self, request: ProviderUnitRequest, provider_instance_id: str, *, hibernate: bool
+    ) -> ProviderUnitSnapshot:
+        del hibernate
         raise AssertionError("test provider has no stopped capacity")
 
     def refresh_machine(
@@ -4143,10 +4146,12 @@ class _ReserveProvider(_PooledProvider):
         return self._snapshot(request)
 
     def complete_machine_preparation(
-        self, request: ProviderUnitRequest, provider_instance_id: str
-    ) -> None:
+        self, request: ProviderUnitRequest, provider_instance_id: str, *, hibernate: bool
+    ) -> ProviderUnitSnapshot:
+        del hibernate
         self.prepared.append(provider_instance_id)
-        self.reserve_status = "stopping"
+        self.reserve_status = "active" if self.reserve_status == "resuming" else "stopping"
+        return self._snapshot(request)
 
     def _snapshot(
         self,
@@ -4175,10 +4180,13 @@ class _ContendedLeases(_MutationLeases):
             yield
 
 
-def test_stopped_reserve_from_an_older_release_is_prepared_again_and_records_the_release(
+def _stopped_reserve(
     service_context: ServiceContext,
     real_redis_actors: RealRedisActors,
-) -> None:
+    *,
+    now: datetime,
+) -> tuple[ComputeService, _ReserveProvider, _ContendedLeases, ComputeUnitRecord, str]:
+    """A platform unit holding one stopped On-Demand reserve, and that reserve's machine id."""
     provider = _ReserveProvider()
     provider.reserve_offers = (provider.offer,)
     resolved = _Resolver(
@@ -4216,7 +4224,6 @@ def test_stopped_reserve_from_an_older_release_is_prepared_again_and_records_the
             gpu={},
         ),
     )
-    now = datetime.now(UTC)
     compute.reconcile_platform_reserves(now=now)
     with service_context.database.session() as session:
         [unit] = ComputeUnitRepository(session).list_platform_internal()
@@ -4239,46 +4246,66 @@ def test_stopped_reserve_from_an_older_release_is_prepared_again_and_records_the
             machine.model_copy(update={"lifecycle": MachineLifecycle.Stopped}),
             workspace_id=unit.workspace_id,
         )
-    release = ReleaseTarget(
-        version="2",
-        source_revision="new",
-        worker_image="registry.example/worker:new",
-        agent=AgentArtifact(url="https://example.test/agent", sha256="a" * 64, size_bytes=1),
-    )
+    return compute, provider, leases, unit, stopped.machine_id
 
-    assert compute.refresh_stale_reserve(release, now=now) == stopped.machine_id
-    assert provider.refreshed == [_RESERVE_INSTANCE]
-    assert compute.refresh_stale_reserve(release, now=now) is None
 
+def _reserve_enrollment(
+    service_context: ServiceContext, unit: ComputeUnitRecord, machine_id: str, *, now: datetime
+) -> ComputeMachineEnrollmentRecord:
     with service_context.database.session() as session:
-        instances = ComputeProviderInstanceRepository(session)
-        refreshing = instances.get_by_machine(stopped.machine_id)
-        assert refreshing is not None
-        instances.upsert(refreshing.model_copy(update={"first_served_at": now}))
-        enrollment = ComputeMachineEnrollmentRepository(session).create(
+        return ComputeMachineEnrollmentRepository(session).create(
             ComputeMachineEnrollmentCreate(
                 user_id=None,
                 workspace_id=unit.workspace_id,
                 capacity_owner_id=unit.capacity_owner_id,
                 placement=unit.placement,
-                machine_id=stopped.machine_id,
+                machine_id=machine_id,
                 machine_fingerprint_hash="d" * 64,
                 credential_hash="e" * 64,
                 last_join_at=now,
             )
         )
 
+
+_RESERVE_RELEASE = ReleaseTarget(
+    version="2",
+    source_revision="new",
+    worker_image="registry.example/worker:new",
+    agent=AgentArtifact(url="https://example.test/agent", sha256="a" * 64, size_bytes=1),
+)
+
+
+def test_stopped_reserve_from_an_older_release_is_prepared_again_and_records_the_release(
+    service_context: ServiceContext,
+    real_redis_actors: RealRedisActors,
+) -> None:
+    now = datetime.now(UTC)
+    compute, provider, leases, unit, machine_id = _stopped_reserve(
+        service_context, real_redis_actors, now=now
+    )
+    assert compute.refresh_stale_reserve(_RESERVE_RELEASE, now=now) == machine_id
+    assert provider.refreshed == [_RESERVE_INSTANCE]
+    assert compute.refresh_stale_reserve(_RESERVE_RELEASE, now=now) is None
+
+    with service_context.database.session() as session:
+        instances = ComputeProviderInstanceRepository(session)
+        refreshing = instances.get_by_machine(machine_id)
+        assert refreshing is not None
+        instances.upsert(refreshing.model_copy(update={"first_served_at": now}))
+    enrollment = _reserve_enrollment(service_context, unit, machine_id, now=now)
+
     def prepare() -> ReserveAgentPreparation:
-        assert stopped.machine_id is not None
         return compute.prepare_reserved_machine(
             workspace_id=unit.workspace_id,
-            machine_id=stopped.machine_id,
+            machine_id=machine_id,
             credential_id=enrollment.id,
             credential_generation=enrollment.credential_generation,
-            release=release,
+            release=_RESERVE_RELEASE,
             agent_binary_sha256="a" * 64,
-            prepared_worker_images=["registry.example/worker:new"],
-            has_active_workers=False,
+            prepared_worker_images=[_RESERVE_RELEASE.worker_image],
+            active_worker_images={},
+            admission_waiting_workers=[],
+            booted_since_prepared=False,
             prepared_stop=None,
         )
 
@@ -4289,9 +4316,79 @@ def test_stopped_reserve_from_an_older_release_is_prepared_again_and_records_the
     assert prepare().preparing
     assert provider.prepared == [_RESERVE_INSTANCE]
     with service_context.database.session() as session:
-        prepared = ComputeProviderInstanceRepository(session).get_by_machine(stopped.machine_id)
+        prepared = ComputeProviderInstanceRepository(session).get_by_machine(machine_id)
     assert prepared is not None
     assert (prepared.prepared_agent_sha256, prepared.prepared_worker_image) == (
         "a" * 64,
         "registry.example/worker:new",
     )
+
+
+def test_a_resumed_reserve_registers_no_worker_until_its_stream_authorizes_the_resume(
+    service_context: ServiceContext,
+    real_redis_actors: RealRedisActors,
+) -> None:
+    """The agent starts a resumed reserve's worker at boot, before its first stream.
+
+    Only the stream's authorization, which checks the release the machine holds,
+    may let that worker register; the node's own report of joining may not.
+    """
+    now = datetime.now(UTC)
+    compute, provider, _leases, unit, machine_id = _stopped_reserve(
+        service_context, real_redis_actors, now=now
+    )
+    enrollment = _reserve_enrollment(service_context, unit, machine_id, now=now)
+
+    def awaits_resume() -> bool:
+        with service_context.database.session() as session:
+            return reserve_awaits_resume(
+                session, machine_id=machine_id, workspace_id=unit.workspace_id
+            )
+
+    assert awaits_resume()
+    provider.reserve_status = "resuming"
+    compute.reconcile_unit_capacity(unit.id, now=now)
+    assert awaits_resume()
+    compute.record_provider_node_lifecycle(
+        pool_id=unit.id,
+        provider_instance_id=_RESERVE_INSTANCE,
+        lifecycle=MachineLifecycle.Joining,
+        failure_reason=None,
+    )
+    assert awaits_resume()
+
+    preparation = compute.prepare_reserved_machine(
+        workspace_id=unit.workspace_id,
+        machine_id=machine_id,
+        credential_id=enrollment.id,
+        credential_generation=enrollment.credential_generation,
+        release=_RESERVE_RELEASE,
+        agent_binary_sha256="a" * 64,
+        prepared_worker_images=[_RESERVE_RELEASE.worker_image],
+        active_worker_images={agent_machine_worker_id(machine_id): _RESERVE_RELEASE.worker_image},
+        admission_waiting_workers=[agent_machine_worker_id(machine_id)],
+        booted_since_prepared=True,
+        prepared_stop=None,
+    )
+
+    assert preparation.resuming
+    assert not awaits_resume()
+    with service_context.database.session() as session:
+        record = ComputeProviderInstanceRepository(session).get_by_machine(machine_id)
+        machine = MachineRepository(session).get(machine_id, workspace_id=unit.workspace_id)
+    assert record is not None and record.status == ReservationStatus.Active.value
+    assert machine is not None and machine.lifecycle is MachineLifecycle.Joining
+
+    # A serving machine left in a reserve phase by a stop no one recorded still
+    # joins on its own report, since no stream will authorize it again.
+    with service_context.database.session() as session:
+        write_machine_lifecycle(
+            session, machine, MachineLifecycle.Stopping, workspace_changes=compute.workspace_changes
+        )
+    joined = compute.record_provider_node_lifecycle(
+        pool_id=unit.id,
+        provider_instance_id=_RESERVE_INSTANCE,
+        lifecycle=MachineLifecycle.Joining,
+        failure_reason=None,
+    )
+    assert joined.lifecycle is MachineLifecycle.Joining

@@ -432,6 +432,9 @@ class ComputeProviderInstanceTable(IdTable, DatabaseBase):
     prepared_worker_image: Mapped[str] = mapped_column(
         Text, nullable=False, default="", server_default=text("''")
     )
+    hibernates: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
     missing_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     provider_storage_destroyed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

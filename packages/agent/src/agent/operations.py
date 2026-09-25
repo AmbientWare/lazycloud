@@ -80,6 +80,14 @@ AGENT_WORKER_CONTAINER_SERVICE_PORT_SPAN = 20000
 AGENT_RUNTIME_READY_FILE = "runtime-ready.json"
 AGENT_AUTHORITY_REVOKED_FILE = "authority-revoked.json"
 AGENT_SERVICE_READY_TIMEOUT_SECONDS = 180
+RESERVE_WORKER_ADMISSION_HOLD_SECONDS = 30 * 60
+"""Awake time a reserve's worker waits behind closed listeners before it fails.
+
+It covers preparing the reserve, the wait until EC2 accepts a hibernation, and
+a stop that runs to its deadline. Past it, no stream adopted or stopped the worker.
+"""
+WORKER_ADMISSION_HOLD_ENV = "WORKER_ADMISSION_HOLD_SECONDS"
+"""Set on a worker's container when it starts under the admission hold."""
 DOCKER_NETWORK_NAME_PATTERN = r"^(?:host|container:[A-Za-z0-9][A-Za-z0-9_.-]{0,254})$"
 
 
@@ -1358,6 +1366,7 @@ def plan_worker_container(
     host_aliases: list[str] | None = None,
     network: AgentWorkerNetwork | None = None,
     disk_volume_slots: int | None = None,
+    reserve: bool = False,
 ) -> AgentWorkerContainerPlan:
     selected_network = network or AgentWorkerNetwork()
     dirs = build_agent_worker_dirs(state_dir, slot.worker_id)
@@ -1394,6 +1403,8 @@ def plan_worker_container(
         # reachable gateway and an unreachable repository and never reported
         # itself available.
     }
+    if reserve:
+        env[WORKER_ADMISSION_HOLD_ENV] = str(RESERVE_WORKER_ADMISSION_HOLD_SECONDS)
     if slot.gpu_count > 0:
         assignment = slot.gpu_assignment or "all"
         env["NVIDIA_VISIBLE_DEVICES"] = assignment
@@ -1448,8 +1459,13 @@ def agent_worker_container_service_port(worker_id: str) -> int:
 def same_worker_slot(a: AgentWorkerSlot | None, b: AgentWorkerSlot | None) -> bool:
     if a is None or b is None:
         return a is b
+    # The planner keeps a running worker only when this holds, and the agent
+    # adopts a reserve's worker by the same rule. The token and capacity owner are
+    # in the worker's environment, so a change to either needs a new container.
     comparable = [
         "worker_id",
+        "worker_token",
+        "capacity_owner_id",
         "placement",
         "machine_id",
         "cpu_millicores",
@@ -1466,6 +1482,15 @@ def same_worker_slot(a: AgentWorkerSlot | None, b: AgentWorkerSlot | None) -> bo
         "billing_owner",
     ]
     return all(getattr(a, field_name) == getattr(b, field_name) for field_name in comparable)
+
+
+def worker_slot_kept(active: AgentWorkerSlot | None, desired: AgentWorkerSlot) -> bool:
+    """Whether a running worker stays as it is for this desired slot."""
+    return (
+        desired.status is not AgentWorkerSlotStatus.Draining
+        and active is not None
+        and same_worker_slot(active, desired)
+    )
 
 
 def plan_worker_slot_reconciliation(
@@ -1526,7 +1551,7 @@ def plan_worker_slot_reconciliation(
         elif active is None:
             action = WorkerSlotAction.Start
             reason = "worker slot is new"
-        elif same_worker_slot(active, desired):
+        elif worker_slot_kept(active, desired):
             action = WorkerSlotAction.Keep
             reason = "worker slot is unchanged"
         elif desired.status is AgentWorkerSlotStatus.Pending:

@@ -10,15 +10,18 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from database.repositories.compute import ComputeProviderInstanceRepository
 from database.repositories.orchestration import MachineRepository
 from database.types import DatabaseSession
 from observability.workspace_changes import WorkspaceChangePublisher
 from shared.compute_enrollment import MachineBootstrapFailureReason
 from shared.compute_fleet import Machine, MachineLifecycle, ResourceStatus
-from shared.errors import ConflictError
+from shared.errors import ConflictError, NotFoundError
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
 from shared.timestamps import to_utc, utc_now
 from sqlalchemy import event
+
+from compute.offers import ReservationStatus
 
 MACHINE_LIFECYCLE_TRANSITIONS: dict[MachineLifecycle, frozenset[MachineLifecycle]] = {
     MachineLifecycle.Requested: frozenset(
@@ -68,7 +71,17 @@ MACHINE_LIFECYCLE_TRANSITIONS: dict[MachineLifecycle, frozenset[MachineLifecycle
     MachineLifecycle.Draining: frozenset(
         {MachineLifecycle.Joining, MachineLifecycle.Stopping, MachineLifecycle.Terminating}
     ),
-    MachineLifecycle.Stopping: frozenset({MachineLifecycle.Stopped, MachineLifecycle.Terminating}),
+    # A pass can observe a reserve stopped and resume it at once, so the first
+    # phase recorded after `stopping` may be `resuming`. One the provider reports
+    # active never stopped, and joins again from here.
+    MachineLifecycle.Stopping: frozenset(
+        {
+            MachineLifecycle.Stopped,
+            MachineLifecycle.Resuming,
+            MachineLifecycle.Joining,
+            MachineLifecycle.Terminating,
+        }
+    ),
     MachineLifecycle.Stopped: frozenset(
         {MachineLifecycle.Resuming, MachineLifecycle.Joining, MachineLifecycle.Terminating}
     ),
@@ -82,6 +95,47 @@ MACHINE_LIFECYCLE_TRANSITIONS: dict[MachineLifecycle, frozenset[MachineLifecycle
 }
 
 _TERMINAL_FROM_ANYWHERE = frozenset({MachineLifecycle.Failed, MachineLifecycle.Deleted})
+
+RETAINED_MACHINE_LIFECYCLES = frozenset(
+    {MachineLifecycle.Stopping, MachineLifecycle.Stopped, MachineLifecycle.Resuming}
+)
+"""Phases of a reserve its stream has not yet authorized to serve.
+
+While the provider row is not active, only that authorization moves a resumed
+reserve on to `joining`, and the agent's own report of joining leaves these
+phases alone.
+"""
+
+
+PREPARED_RESERVE_STATUSES = frozenset(
+    {
+        ReservationStatus.Preparing.value,
+        ReservationStatus.Stopping.value,
+        ReservationStatus.Stopped.value,
+    }
+)
+
+
+def reserve_awaits_resume(session: DatabaseSession, *, machine_id: str, workspace_id: str) -> bool:
+    """Whether a worker on this machine must wait for its reserve's resume to be authorized.
+
+    A reserve runs its worker before it may serve: while it is prepared to
+    hibernate, and from boot on a resume. This is what keeps work off that
+    worker until the stream authorizes the resume. A machine left in a retained
+    phase by an unobserved stop serves once its provider row is active.
+    """
+    phases = ComputeProviderInstanceRepository(session).machine_reserve_phases(
+        machine_id, workspace_id=workspace_id
+    )
+    if phases is None:
+        raise NotFoundError(f"machine {machine_id} has no record in this workspace")
+    lifecycle, status = MachineLifecycle(phases[0]), phases[1]
+    if status in PREPARED_RESERVE_STATUSES:
+        return True
+    if lifecycle not in RETAINED_MACHINE_LIFECYCLES:
+        return False
+    return status != ReservationStatus.Active.value
+
 
 _DEFAULT_MESSAGES: dict[MachineLifecycle, str] = {
     MachineLifecycle.Requested: "Waiting for the machine to be launched",
@@ -279,9 +333,12 @@ def publish_machine_change_on_commit(
 
 __all__ = [
     "MACHINE_LIFECYCLE_TRANSITIONS",
+    "PREPARED_RESERVE_STATUSES",
+    "RETAINED_MACHINE_LIFECYCLES",
     "advance_machine_lifecycle",
     "lifecycle_failure_message",
     "machine_lifecycle_allowed",
     "publish_machine_change_on_commit",
+    "reserve_awaits_resume",
     "write_machine_lifecycle",
 ]

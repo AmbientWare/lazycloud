@@ -89,8 +89,9 @@ class _PooledProvider:
         return ()
 
     def complete_machine_preparation(
-        self, request: ProviderUnitRequest, provider_instance_id: str
-    ) -> None:
+        self, request: ProviderUnitRequest, provider_instance_id: str, *, hibernate: bool
+    ) -> ProviderUnitSnapshot:
+        del hibernate
         raise AssertionError("explicit pool scaling must not prepare stopped capacity")
 
     def refresh_machine(
