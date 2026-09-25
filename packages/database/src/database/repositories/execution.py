@@ -330,12 +330,7 @@ class TaskRepository:
         rows = (
             self.session.scalars(
                 select(TaskTable)
-                .where(
-                    TaskTable.stub_id == stub_id,
-                    TaskTable.status == TaskStatus.Pending.value,
-                    TaskTable.container_id.is_(None),
-                    TaskTable.claimable_at.is_not(None),
-                )
+                .where(TaskTable.stub_id == stub_id, _unclaimed_task())
                 .order_by(TaskTable.claimable_at, TaskTable.id)
                 .with_for_update(skip_locked=True)
                 .limit(limit)
@@ -510,18 +505,33 @@ class TaskRepository:
 
     def count_unclaimed_by_stub(self, stub_ids: Sequence[str]) -> dict[str, int]:
         """Runnable, unclaimed work for several stubs in one grouped query."""
+        return self._count_by_stub(stub_ids, _unclaimed_task())
+
+    def count_demand_by_stub(self, stub_ids: Sequence[str]) -> dict[str, int]:
+        """Work that needs a container slot: runnable and unclaimed, or claimed and in flight.
+
+        Tasks still waiting on their dependencies are left out, since no
+        container can run them yet.
+        """
+        return self._count_by_stub(
+            stub_ids,
+            or_(
+                _unclaimed_task(),
+                TaskTable.container_id.is_not(None)
+                & TaskTable.status.in_([status.value for status in IN_FLIGHT_TASK_STATUSES]),
+            ),
+        )
+
+    def _count_by_stub(
+        self, stub_ids: Sequence[str], condition: ColumnElement[bool]
+    ) -> dict[str, int]:
         ids = tuple(dict.fromkeys(stub_id for stub_id in stub_ids if stub_id))
         counts = dict.fromkeys(ids, 0)
         if not ids:
             return counts
         rows = self.session.execute(
             select(TaskTable.stub_id, func.count(TaskTable.id))
-            .where(
-                TaskTable.stub_id.in_(ids),
-                TaskTable.status == TaskStatus.Pending.value,
-                TaskTable.container_id.is_(None),
-                TaskTable.claimable_at.is_not(None),
-            )
+            .where(TaskTable.stub_id.in_(ids), condition)
             .group_by(TaskTable.stub_id)
         )
         for stub_id, count in rows:
@@ -1757,3 +1767,11 @@ class CronJobRunCursor:
 class CronJobRunPage:
     data: tuple[CronJobRun, ...]
     next: CronJobRunCursor | None = None
+
+
+def _unclaimed_task() -> ColumnElement[bool]:
+    return (
+        (TaskTable.status == TaskStatus.Pending.value)
+        & TaskTable.container_id.is_(None)
+        & TaskTable.claimable_at.is_not(None)
+    )

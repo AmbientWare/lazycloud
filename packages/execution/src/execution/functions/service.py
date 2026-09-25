@@ -396,9 +396,9 @@ class FunctionControlService:
             task = marked
         return self._schedule_function_task(task, placement=placement)
 
-    def unclaimed_task_counts(self, stub_ids: Sequence[str]) -> dict[str, int]:
+    def task_demand_counts(self, stub_ids: Sequence[str]) -> dict[str, int]:
         with self.services.context.database.session() as session:
-            return TaskRepository(session).count_unclaimed_by_stub(stub_ids)
+            return TaskRepository(session).count_demand_by_stub(stub_ids)
 
     def containers_holding_work(self, container_ids: Sequence[str]) -> set[str]:
         """Which of these containers is serving an invocation right now.
