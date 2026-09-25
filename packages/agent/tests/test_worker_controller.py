@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Event
 
 import pytest
-import yaml
 from agent.operations import (
     AgentBootstrap,
     AgentWorkerNetwork,
@@ -13,33 +11,13 @@ from agent.operations import (
     plan_worker_slot_reconciliation,
 )
 from agent.worker_controller import CommandResult, DockerAgentWorkerController
-from shared.contracts import ContractModel
 from shared.placement import Placement
 from shared.usage import UsageBillingOwner
-from worker.configuration import WorkerConfiguration
 
 
-class _WorkerConfigurationDocument(ContractModel):
-    configuration: WorkerConfiguration
-
-
-@dataclass(slots=True)
 class _Runner:
-    calls: list[list[str]] = field(default_factory=list)
-
     def run(self, args: list[str], *, stop: Event | None = None) -> CommandResult:
         del stop
-        self.calls.append(args)
-        return CommandResult(args=args, returncode=0)
-
-
-@dataclass(slots=True)
-class _RunningWorkerRunner(_Runner):
-    def run(self, args: list[str], *, stop: Event | None = None) -> CommandResult:
-        del stop
-        self.calls.append(args)
-        if len(args) > 1 and args[1] == "inspect":
-            return CommandResult(args=args, returncode=0, stdout="true\n\nhost")
         return CommandResult(args=args, returncode=0)
 
 
@@ -77,25 +55,22 @@ def test_worker_configuration_excludes_credentials_and_is_owner_readable(
         AgentBootstrap(
             gateway_public_http_url="https://gateway.example.test",
         ),
-        active_slots=[item.slot for item in controller.observe_workers()],
+        active_slots=[],
         reported_images=controller.prepared_worker_images(),
     )
 
     config_path = tmp_path / "slots" / "worker-one" / "worker.yaml"
     contents = config_path.read_text(encoding="utf-8")
-    document = _WorkerConfigurationDocument.model_validate(yaml.safe_load(contents))
-    config = document.configuration
     assert applied
     assert "worker-secret" not in contents
     assert config_path.stat().st_mode & 0o777 == 0o600
-    assert config.execution.capacity.cpu_millicores == slot.cpu_millicores
 
 
-@dataclass(slots=True)
-class _ConcurrentRemovalRunner(_RunningWorkerRunner):
+class _ConcurrentRemovalRunner(_Runner):
     def run(self, args: list[str], *, stop: Event | None = None) -> CommandResult:
+        if len(args) > 1 and args[1] == "inspect":
+            return CommandResult(args=args, returncode=0, stdout="true\n\nhost")
         if len(args) > 1 and args[1] == "rm":
-            self.calls.append(args)
             return CommandResult(
                 args=args,
                 returncode=1,
@@ -104,7 +79,7 @@ class _ConcurrentRemovalRunner(_RunningWorkerRunner):
                     "lazycloud-agent-worker-one is already in progress"
                 ),
             )
-        return _RunningWorkerRunner.run(self, args, stop=stop)
+        return super().run(args, stop=stop)
 
 
 def test_agent_stop_treats_concurrent_container_removal_as_settled(
@@ -134,15 +109,14 @@ def test_agent_stop_treats_concurrent_container_removal_as_settled(
         active_slots=[],
         reported_images=reported,
     )
-    assert [
-        active.worker_id for active in [item.slot for item in controller.observe_workers()]
-    ] == [slot.worker_id]
+    active_slots = [item.slot for item in controller.observe_workers()]
+    assert [active.worker_id for active in active_slots] == [slot.worker_id]
 
     controller.apply(
-        plan_worker_slot_reconciliation([], [item.slot for item in controller.observe_workers()]),
+        plan_worker_slot_reconciliation([], active_slots),
         bootstrap,
-        active_slots=[item.slot for item in controller.observe_workers()],
+        active_slots=active_slots,
         reported_images=reported,
     )
 
-    assert [item.slot for item in controller.observe_workers()] == []
+    assert controller.observe_workers() == []

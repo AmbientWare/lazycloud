@@ -517,8 +517,12 @@ class WorkerLifecycleOrchestrator:
                     attempts=attempt,
                     metadata={"name": cleanup.name},
                 )
-            except Exception as exc:  # pragma: no cover - defensive boundary capture
+            except Exception as exc:
                 error = f"{type(exc).__name__}: {exc}"
+                if attempt == retries:
+                    LOGGER.exception(
+                        "worker cleanup %s failed after %d attempts", cleanup.name, retries
+                    )
         return WorkerLifecycleStepResult(
             action=WorkerLifecycleAction.Cleanup,
             status=WorkerLifecycleStatus.Error,

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import shutil
 from functools import partial
 from pathlib import Path
@@ -153,7 +152,6 @@ from .process_assembly import (
 )
 from .settings import WorkerSettings
 
-LOGGER = logging.getLogger(__name__)
 RUNTIME_VERSION_PROBE_TIMEOUT_SECONDS = 5.0
 
 
@@ -172,7 +170,7 @@ def build_worker_process_services(
     execution = configuration.execution
     paths = configuration.paths
     identity = _worker_identity(config)
-    internal_http = _internal_http_client(config)
+    internal_http = InternalHttpClient(timeout_seconds=config.worker_repository_timeout_seconds)
     readiness = WorkerReadiness()
     repository = repository_client or build_worker_repository_http_client(
         endpoint=AGENT_TUNNEL_CONTROL_URL,
@@ -543,10 +541,6 @@ def build_worker_process_services(
             ),
         ),
     )
-
-
-def _internal_http_client(config: WorkerSettings) -> InternalHttpClient:
-    return InternalHttpClient(timeout_seconds=config.worker_repository_timeout_seconds)
 
 
 def _worker_content_cache(
