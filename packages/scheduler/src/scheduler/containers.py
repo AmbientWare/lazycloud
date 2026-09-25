@@ -632,12 +632,12 @@ class SchedulerContainerRequestService:
             else {}
         )
         consolidating = (
-            frozenset(self.reserve_state.published().consolidation_candidates)
+            self.reserve_state.consolidation_candidates()
             if self.reserve_state is not None
             else frozenset[str]()
         )
         worker_capacities = [
-            _worker_capacity(
+            worker_capacity(
                 worker,
                 now=current_time,
                 reserved_capacity=reserved_by_worker.get(worker.worker_id),
@@ -653,7 +653,7 @@ class SchedulerContainerRequestService:
             outcome.request_id: outcome
             for outcome in plan_scheduling_batch(
                 [
-                    _scheduling_request(
+                    scheduling_request(
                         request,
                         owner_user_id=owners_by_workspace_id[request.workspace_id],
                         provisionable=self.capacity_reservations is not None,
@@ -662,7 +662,7 @@ class SchedulerContainerRequestService:
                 ],
                 worker_capacities,
                 queued_gpu_requests=[
-                    _scheduling_request(
+                    scheduling_request(
                         queued,
                         owner_user_id=self.workspace_owners.owner_user_id(queued.workspace_id),
                     )
@@ -810,9 +810,9 @@ class SchedulerContainerRequestService:
     ) -> SchedulerContainerDispatchResult | None:
         if not claim.request.gpu or self.backfill_preemption is None:
             return None
-        request = _scheduling_request(claim.request, owner_user_id=owner_user_id)
+        request = scheduling_request(claim.request, owner_user_id=owner_user_id)
         for worker in workers:
-            if not gpu_request_matches_worker(request, _worker_capacity(worker, now=now)):
+            if not gpu_request_matches_worker(request, worker_capacity(worker, now=now)):
                 continue
             try:
                 recovering = self.backfill_preemption.recover(
@@ -1627,7 +1627,7 @@ def container_state_for_request(
     )
 
 
-def _scheduling_request(
+def scheduling_request(
     request: SchedulerWorkerRequest,
     *,
     owner_user_id: str,
@@ -1678,7 +1678,7 @@ def _placement_failure_detail(
     placement = request.placement.key
     if not workers:
         return f"{reason}: no schedulable workers (placement {placement})"
-    scheduling = _scheduling_request(
+    scheduling = scheduling_request(
         request,
         owner_user_id=owner_user_id,
         provisionable=False,
@@ -1686,14 +1686,14 @@ def _placement_failure_detail(
     rejections = [
         f"{worker.worker_id[:8]} in {worker.placement.key}: {detail}"
         for worker in workers[:3]
-        if (detail := _worker_capacity(worker, now=now).fit_rejection(scheduling))
+        if (detail := worker_capacity(worker, now=now).fit_rejection(scheduling))
     ]
     if not rejections:
         return f"{reason} (placement {placement})"
     return f"{reason}: placement {placement}; " + "; ".join(rejections)
 
 
-def _worker_capacity(
+def worker_capacity(
     worker: SchedulerWorkerRecord,
     *,
     now: datetime,

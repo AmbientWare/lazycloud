@@ -197,6 +197,9 @@ class ComputeUnitTable(IdTable, DatabaseBase):
     min_free_gpu_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     worker_cpu_millicores: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     worker_memory_mib: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    node_memory_mib: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
     worker_gpu_type: Mapped[str] = mapped_column(String(160), nullable=False, default="")
     worker_gpu_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     worker_runtimes: Mapped[list[str]] = mapped_column(ARRAY(String(80)), nullable=False)

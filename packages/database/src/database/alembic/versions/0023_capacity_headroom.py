@@ -1,4 +1,4 @@
-"""Plan platform reserves by headroom: GPU stopped reserves, live-row indexes, no handoff."""
+"""Plan platform reserves by headroom: GPU reserves, node memory, live-row indexes."""
 
 import sqlalchemy as sa
 from alembic import op
@@ -20,6 +20,21 @@ def upgrade() -> None:
         "AND (stopped_machines = 0 OR platform_fleet)",
     )
     op.drop_column("compute_units", "warm_handoff_from")
+    op.add_column(
+        "compute_units",
+        sa.Column("node_memory_mib", sa.BigInteger(), nullable=False, server_default="0"),
+    )
+    op.execute(
+        "UPDATE compute_units AS unit SET node_memory_mib = shape.memory "
+        "FROM (SELECT owner.worker_cpu_millicores AS cpu, owner.worker_memory_mib AS mem, "
+        "owner.worker_gpu_count AS gpu, min(enrollment.memory_mb) AS memory "
+        "FROM compute_units AS owner JOIN compute_machine_enrollments AS enrollment "
+        "ON enrollment.capacity_owner_id = owner.id "
+        "WHERE owner.visibility = 'internal' AND enrollment.memory_mb > 0 "
+        "GROUP BY 1, 2, 3) AS shape "
+        "WHERE unit.worker_cpu_millicores = shape.cpu AND unit.worker_memory_mib = shape.mem "
+        "AND unit.worker_gpu_count = shape.gpu"
+    )
     op.create_index(
         "ix_compute_units_platform_live",
         "compute_units",
@@ -44,6 +59,7 @@ def downgrade() -> None:
     )
     op.drop_index("ix_compute_provider_instances_live", table_name="compute_provider_instances")
     op.drop_index("ix_compute_units_platform_live", table_name="compute_units")
+    op.drop_column("compute_units", "node_memory_mib")
     op.add_column(
         "compute_units",
         sa.Column(

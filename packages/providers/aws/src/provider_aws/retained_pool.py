@@ -555,8 +555,14 @@ class AwsRetainedPool:
                 )
             )
         serving = sum(s.serving and s.phase is not SlotPhase.Retiring for s in self.state.slots)
+        # A reserve the request still counts stays stopped while the pool has
+        # room to launch a machine instead.
+        resume_until = self.request.desired_machines - max(
+            self.request.desired_machines + self.request.stopped_machines - len(self.state.slots),
+            0,
+        )
         for slot in self.state.slots:
-            if serving >= self.request.desired_machines or not self.request.purchases_enabled:
+            if serving >= resume_until or not self.request.purchases_enabled:
                 break
             if slot.phase is SlotPhase.Stopped:
                 self._update(slot.model_copy(update={"serving": True, "phase": SlotPhase.Resuming}))

@@ -36,7 +36,6 @@ class PublishedReservePlan(ContractModel):
 
     targets: dict[str, MarketTargets] = Field(default_factory=dict)
     lightly_used_since: dict[str, datetime] = Field(default_factory=dict)
-    consolidation_candidates: tuple[str, ...] = ()
 
     @classmethod
     def of(cls, plan: FleetReservePlan) -> PublishedReservePlan:
@@ -48,13 +47,6 @@ class PublishedReservePlan(ContractModel):
                 for market in plan.markets
             },
             lightly_used_since=dict(plan.lightly_used_since),
-            consolidation_candidates=tuple(
-                sorted(
-                    market.consolidation_candidate
-                    for market in plan.markets
-                    if market.consolidation_candidate
-                )
-            ),
         )
 
 
@@ -63,8 +55,8 @@ class Consolidation(ContractModel):
     unit_id: str
     workspace_id: str
     started_at: datetime
-    moved: bool = False
-    """Whether its relocatable containers have been stopped; builds are waited out."""
+    stopped_at: datetime | None = None
+    """When its movable containers were last told to stop; builds are waited out."""
 
 
 class FleetReserveState(Protocol):
@@ -76,15 +68,21 @@ class FleetReserveState(Protocol):
 
     def published(self) -> PublishedReservePlan: ...
 
-    def publish(self, plan: PublishedReservePlan) -> None: ...
+    def publish(self, plan: FleetReservePlan) -> None: ...
+
+    def consolidation_candidates(self) -> frozenset[str]: ...
 
     def consolidations(self) -> dict[ReserveMarket, Consolidation]: ...
 
     def cooling_markets(self) -> frozenset[ReserveMarket]: ...
 
-    def begin_consolidation(self, market: ReserveMarket, consolidation: Consolidation) -> bool: ...
+    def begin_consolidation(
+        self, market: ReserveMarket, consolidation: Consolidation, *, ttl_seconds: int
+    ) -> bool: ...
 
-    def save_consolidation(self, market: ReserveMarket, consolidation: Consolidation) -> None: ...
+    def save_consolidation(
+        self, market: ReserveMarket, consolidation: Consolidation, *, ttl_seconds: int
+    ) -> None: ...
 
     def finish_consolidation(self, market: ReserveMarket, *, cooldown_seconds: int) -> None: ...
 
@@ -124,8 +122,28 @@ class RedisFleetReserveState:
             else PublishedReservePlan()
         )
 
-    def publish(self, plan: PublishedReservePlan) -> None:
-        self.redis.set(self._key("published"), dump_model_json(plan), ex=_PUBLISHED_SECONDS)
+    def publish(self, plan: FleetReservePlan) -> None:
+        self.redis.set(
+            self._key("published"),
+            dump_model_json(PublishedReservePlan.of(plan)),
+            ex=_PUBLISHED_SECONDS,
+        )
+        # Kept apart from the plan: dispatch reads it on every batch.
+        self.redis.set(
+            self._key("candidates"),
+            ",".join(
+                sorted(
+                    market.consolidation_candidate
+                    for market in plan.markets
+                    if market.consolidation_candidate
+                )
+            ),
+            ex=_PUBLISHED_SECONDS,
+        )
+
+    def consolidation_candidates(self) -> frozenset[str]:
+        raw = self.redis.get(self._key("candidates"))
+        return frozenset(redis_text(raw).split(",")) - {""} if raw is not None else frozenset()
 
     def consolidations(self) -> dict[ReserveMarket, Consolidation]:
         markets = self.redis.set_members(self._key("consolidating"))
@@ -148,18 +166,28 @@ class RedisFleetReserveState:
             )
         )
 
-    def begin_consolidation(self, market: ReserveMarket, consolidation: Consolidation) -> bool:
+    def begin_consolidation(
+        self, market: ReserveMarket, consolidation: Consolidation, *, ttl_seconds: int
+    ) -> bool:
         if self.redis.exists(self._key("cooldown", market.key)):
             return False
         if not self.redis.set(
-            self._key("consolidation", market.key), dump_model_json(consolidation), nx=True
+            self._key("consolidation", market.key),
+            dump_model_json(consolidation),
+            ex=ttl_seconds,
+            nx=True,
         ):
             return False
         self.redis.set_add(self._key("consolidating"), market.key)
+        self.redis.expire(self._key("consolidating"), ttl_seconds)
         return True
 
-    def save_consolidation(self, market: ReserveMarket, consolidation: Consolidation) -> None:
-        self.redis.set(self._key("consolidation", market.key), dump_model_json(consolidation))
+    def save_consolidation(
+        self, market: ReserveMarket, consolidation: Consolidation, *, ttl_seconds: int
+    ) -> None:
+        self.redis.set(
+            self._key("consolidation", market.key), dump_model_json(consolidation), ex=ttl_seconds
+        )
 
     def finish_consolidation(self, market: ReserveMarket, *, cooldown_seconds: int) -> None:
         if cooldown_seconds:

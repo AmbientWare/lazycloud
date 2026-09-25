@@ -104,8 +104,6 @@ class ProviderUnitRequest(ContractModel):
             raise ValueError("desired machines cannot be negative")
         if self.max_machines <= 0 or self.desired_machines > self.max_machines:
             raise ValueError("invalid pooled capacity bounds")
-        if self.stopped_machines and self.offer.gpu_count:
-            raise ValueError("stopped reserves require CPU capacity")
         if self.desired_machines + self.stopped_machines > self.max_machines:
             raise ValueError("running and stopped commitments exceed the pool limit")
         if self.generation <= 0:

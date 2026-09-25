@@ -205,6 +205,7 @@ class FleetCapacityPolicy(ContractModel):
     consolidation_percent: int = Field(default=30, ge=0, le=100)
     consolidation_seconds: int = Field(default=600, ge=0)
     consolidation_cooldown_seconds: int = Field(default=900, ge=0)
+    consolidation_deadline_seconds: int = Field(default=3600, gt=0)
 
     def machine_limit(self, *, gpu: bool) -> int:
         return self.max_gpu_instances if gpu else self.max_cpu_instances

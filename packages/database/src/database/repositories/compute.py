@@ -65,7 +65,7 @@ from sqlalchemy import (
     update,
 )
 from sqlalchemy.engine import CursorResult
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 
 class ComputeCapacityOperationRecord(ContractModel):
@@ -111,6 +111,7 @@ class ComputeOfferState:
     phase: ComputeUnitPhase
     provider_state: ComputeUnitProviderState
     registration_timeout_seconds: int
+    reported_memory_mib: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -191,6 +192,7 @@ class PlatformReserveUnitRow:
     gpu_count: int
     cpu_millicores: int
     memory_mib: int
+    reported_memory_mib: int
     desired: int
     stopped: int
     retiring_stopped: int
@@ -231,6 +233,7 @@ class StoppedReserveUnitRow:
     gpu_type: str
     cpu_millicores: int
     memory_mib: int
+    reported_memory_mib: int
     gpu_count: int
     stopped: int
     resumable: bool
@@ -477,6 +480,7 @@ def _compute_unit_record(row: ComputeUnitTable) -> ComputeUnitRecord:
             "min_free_gpu_count": row.min_free_gpu_count,
             "worker_cpu_millicores": row.worker_cpu_millicores,
             "worker_memory_mib": row.worker_memory_mib,
+            "node_memory_mib": row.node_memory_mib,
             "worker_gpu_type": row.worker_gpu_type,
             "worker_gpu_count": row.worker_gpu_count,
             "worker_runtimes": row.worker_runtimes,
@@ -573,6 +577,7 @@ class ComputeUnitRepository:
                 func.coalesce(load.c.cpu, 0),
                 func.coalesce(load.c.memory, 0),
                 func.coalesce(load.c.gpu, 0),
+                unit.node_memory_mib,
             )
             .select_from(unit)
             .outerjoin(
@@ -616,6 +621,7 @@ class ComputeUnitRepository:
                     gpu_count=row[5],
                     cpu_millicores=row[6],
                     memory_mib=row[7],
+                    reported_memory_mib=row[34],
                     desired=row[8],
                     stopped=row[9],
                     retiring_stopped=row[10],
@@ -652,6 +658,64 @@ class ComputeUnitRepository:
             )
         return PlatformReserveRows(units=tuple(units.values()), instances=tuple(instances))
 
+    def record_node_memory(self, unit_id: str, memory_mib: int) -> None:
+        """Keep the least memory a machine of this unit, and of its shape, reported."""
+        if memory_mib <= 0:
+            return
+        unit = ComputeUnitTable
+        shape = (
+            select(unit.worker_cpu_millicores, unit.worker_memory_mib, unit.worker_gpu_count)
+            .where(unit.id == unit_id)
+            .subquery()
+        )
+        self.session.execute(
+            update(unit)
+            .where(
+                unit.worker_cpu_millicores == shape.c.worker_cpu_millicores,
+                unit.worker_memory_mib == shape.c.worker_memory_mib,
+                unit.worker_gpu_count == shape.c.worker_gpu_count,
+                or_(unit.node_memory_mib == 0, unit.node_memory_mib > memory_mib),
+            )
+            .values(node_memory_mib=memory_mib, updated_at=unit.updated_at)
+        )
+
+    def reported_memory_by_shape(self) -> dict[tuple[int, int, int], int]:
+        """The least memory machines of each nominal CPU, memory and card count reported."""
+        unit = ComputeUnitTable
+        return {
+            (cpu, memory, gpu): int(reported)
+            for cpu, memory, gpu, reported in self.session.execute(
+                select(
+                    unit.worker_cpu_millicores,
+                    unit.worker_memory_mib,
+                    unit.worker_gpu_count,
+                    func.min(unit.node_memory_mib),
+                )
+                .where(unit.node_memory_mib > 0)
+                .group_by(unit.worker_cpu_millicores, unit.worker_memory_mib, unit.worker_gpu_count)
+            ).tuples()
+        }
+
+    def inherit_node_memory(self, unit_id: str) -> None:
+        """Give a new unit what machines of its shape reported in other units."""
+        unit = ComputeUnitTable
+        sibling = aliased(unit)
+        reported = (
+            select(func.min(sibling.node_memory_mib))
+            .where(
+                sibling.worker_cpu_millicores == unit.worker_cpu_millicores,
+                sibling.worker_memory_mib == unit.worker_memory_mib,
+                sibling.worker_gpu_count == unit.worker_gpu_count,
+                sibling.node_memory_mib > 0,
+            )
+            .scalar_subquery()
+        )
+        self.session.execute(
+            update(unit)
+            .where(unit.id == unit_id, unit.node_memory_mib == 0, reported.is_not(None))
+            .values(node_memory_mib=reported, updated_at=unit.updated_at)
+        )
+
     def platform_running_cpu_millicores(self) -> int:
         """Nominal CPU the platform CPU fleet runs, a replacement's surge included."""
         unit = ComputeUnitTable
@@ -675,18 +739,19 @@ class ComputeUnitRepository:
 
     def platform_stopped_reserves(
         self, *, preemptible: bool, gpu_type: str
-    ) -> list[tuple[str, int, int, int, int]]:
+    ) -> list[tuple[str, int, int, int, int, int]]:
         """Each of a market's units holding stopped reserves: its id, the count, and one
-        machine's nominal CPU, memory and cards."""
+        machine's nominal CPU, nominal and reported memory, and cards."""
         unit = ComputeUnitTable
         return [
-            (str(unit_id), int(stopped), int(cpu), int(memory), int(gpu))
-            for unit_id, stopped, cpu, memory, gpu in self.session.execute(
+            (str(unit_id), int(stopped), int(cpu), int(memory), int(reported), int(gpu))
+            for unit_id, stopped, cpu, memory, reported, gpu in self.session.execute(
                 select(
                     unit.id,
                     unit.stopped_machines,
                     unit.worker_cpu_millicores,
                     unit.worker_memory_mib,
+                    unit.node_memory_mib,
                     unit.worker_gpu_count,
                 ).where(
                     unit.visibility == ComputeUnitVisibility.Internal.value,
@@ -713,11 +778,12 @@ class ComputeUnitRepository:
                 gpu_type=gpu_type,
                 cpu_millicores=cpu,
                 memory_mib=memory,
+                reported_memory_mib=reported,
                 gpu_count=gpu,
                 stopped=stopped,
                 resumable=bool(ready),
             )
-            for unit_id, preemptible, gpu_type, cpu, memory, gpu, stopped, ready in (
+            for unit_id, preemptible, gpu_type, cpu, memory, reported, gpu, stopped, ready in (
                 self.session.execute(
                     select(
                         unit.id,
@@ -725,6 +791,7 @@ class ComputeUnitRepository:
                         unit.worker_gpu_type,
                         unit.worker_cpu_millicores,
                         unit.worker_memory_mib,
+                        unit.node_memory_mib,
                         unit.worker_gpu_count,
                         unit.stopped_machines,
                         resumable,
@@ -762,6 +829,7 @@ class ComputeUnitRepository:
                 table.degraded_at,
                 table.last_capacity_failure_at,
                 table.registration_timeout_seconds,
+                table.node_memory_mib,
             ).where(
                 tuple_(
                     table.workspace_id,
@@ -779,6 +847,7 @@ class ComputeUnitRepository:
                 observed_machines=observed,
                 phase=ComputeUnitPhase(phase),
                 registration_timeout_seconds=timeout,
+                reported_memory_mib=reported,
                 provider_state=ComputeUnitProviderState(
                     degraded_reason=reason,
                     degraded_at=to_utc_or_none(degraded_at),
@@ -799,6 +868,7 @@ class ComputeUnitRepository:
                 degraded_at,
                 failed_at,
                 timeout,
+                reported,
             ) in rows
         }
 

@@ -42,6 +42,7 @@ from shared.container_requests import (
     capacity_memory_mib,
     fits_reservation,
     node_fits_request,
+    node_memory,
     schedulable_capacity,
 )
 from shared.contracts import ContractModel
@@ -179,13 +180,24 @@ class CapacityRequestShape(ContractModel):
             raise ValueError("capacity reservation GPU type and count must be configured together")
         return self
 
-    def can_host(self, request: SchedulerWorkerRequest) -> bool:
+    def can_host(self, request: SchedulerWorkerRequest, *, reported_memory_mib: int = 0) -> bool:
         """Whether an empty machine of this nominal shape takes the request."""
         return self.serves(request) and node_fits_request(
             self.cpu_millicores,
-            self.memory_mib,
+            node_memory(self.memory_mib, reported_memory_mib),
             cpu_millicores=request.cpu_millicores,
             memory_mib=request.memory_mib,
+        )
+
+    def schedulable(self, *, reported_memory_mib: int) -> CapacityRequestShape:
+        """What a machine of this shape gives containers, as its worker will advertise."""
+        return self.model_copy(
+            update={
+                "cpu_millicores": schedulable_capacity(self.cpu_millicores),
+                "memory_mib": schedulable_capacity(
+                    node_memory(self.memory_mib, reported_memory_mib)
+                ),
+            }
         )
 
     def serves(self, request: SchedulerWorkerRequest) -> bool:
@@ -267,17 +279,9 @@ class CapacityProvisioningReservation(ContractModel):
 
     @property
     def allocatable_capacity(self) -> tuple[int, int]:
-        """CPU millicores and memory MiB its allocations may reserve in total.
-
-        A registered worker states its schedulable totals; until then they are
-        derived from the nominal machine shape the way the worker will derive them.
-        """
-        if self.schedulable_shape is not None:
-            return self.schedulable_shape.cpu_millicores, self.schedulable_shape.memory_mib
-        return (
-            schedulable_capacity(self.acquisition_shape.cpu_millicores),
-            schedulable_capacity(self.acquisition_shape.memory_mib),
-        )
+        """CPU millicores and memory MiB its allocations may reserve in total."""
+        shape = self.schedulable_shape or self.acquisition_shape.schedulable(reported_memory_mib=0)
+        return shape.cpu_millicores, shape.memory_mib
 
 
 class CapacityAcquisitionResult(ContractModel):
@@ -344,6 +348,9 @@ class CapacityAcquisitionController(Protocol):
     ) -> WorkerPoolSizingPlan: ...
 
     def reservation_shape(self, request: SchedulerWorkerRequest) -> CapacityRequestShape: ...
+
+    @property
+    def reported_memory_mib(self) -> int: ...
 
     def ensure_capacity(
         self,
@@ -463,7 +470,13 @@ class ComputeUnitCapacityController:
             return False
         if request.placement != self.unit.placement:
             return False
-        return self.reservation_shape(request).can_host(request)
+        return self.reservation_shape(request).can_host(
+            request, reported_memory_mib=self.reported_memory_mib
+        )
+
+    @property
+    def reported_memory_mib(self) -> int:
+        return self.unit.node_memory_mib
 
     def reservation_shape(self, request: SchedulerWorkerRequest) -> CapacityRequestShape:
         return CapacityRequestShape(
@@ -895,6 +908,7 @@ class RedisCapacityReservationRepository:
         request: SchedulerWorkerRequest,
         shape: CapacityRequestShape,
         registration_timeout: timedelta,
+        reported_memory_mib: int = 0,
         desired_unit: int = 0,
         now: datetime | None = None,
     ) -> CapacityReservationDecision:
@@ -933,6 +947,7 @@ class RedisCapacityReservationRepository:
                 placement=placement,
                 owner_kind=owner_kind,
                 acquisition_shape=shape,
+                schedulable_shape=shape.schedulable(reported_memory_mib=reported_memory_mib),
                 workload_preemptible=request.preemptible,
                 operation_id=reservation_id,
                 desired_unit=desired_unit,
@@ -1455,6 +1470,7 @@ class CapacityReservationService:
                 owner_kind=controller.owner_kind,
                 request=request,
                 shape=controller.reservation_shape(request),
+                reported_memory_mib=controller.reported_memory_mib,
                 registration_timeout=controller.registration_timeout,
                 now=now,
             )

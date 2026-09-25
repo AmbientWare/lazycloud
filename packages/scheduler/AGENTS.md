@@ -222,10 +222,14 @@ durable record of that consent.
 
 Consolidation empties a machine the planner has watched at 30 percent use or less
 for ten minutes, whose work may all move, while the market's other machines keep
-its running target with room for that work. One machine per market at a time,
-then a cooldown. The unit's dispatch lease is held while the durable rows are read
-again and the machine is cordoned through the durable drain path, so nothing lands
-on it after the check. Its movable containers then stop with
-`StopContainerReason.Scheduler` and reschedule like any preemption; a devbox's
-disks save on stop as usual. Image builds finish where they are. The idle drain
-then retires the empty machine or returns it to the stopped reserve.
+its running target. One machine per market at a time, then a cooldown. Under the
+unit's dispatch lease the durable rows are read again, each movable container is
+placed on a specific other host the way placement would place it, CPU, memory,
+cards and disks included, and only then is the machine cordoned through the
+durable drain path; a drain that finds the machine already draining ends the
+attempt. Movable containers stop with `StopContainerReason.Preempted`, so retries
+and billing treat the stop as the preemption it is, and a devbox's disks save on
+stop as usual. A stop not acted on within five minutes is sent again. Image
+builds finish where they are. After an hour the attempt is given up and the
+cordoned machine drains on its own; the Redis record expires after twice that.
+The idle drain then retires the empty machine or returns it to the stopped reserve.

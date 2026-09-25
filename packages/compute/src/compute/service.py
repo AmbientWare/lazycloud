@@ -153,7 +153,7 @@ from compute.providers import (
 )
 from compute.purchase_policy import assess_fleet_purchase
 from compute.reclaim import ComputeReclaimPolicy
-from compute.reserve_state import FleetReserveState, PublishedReservePlan
+from compute.reserve_state import FleetReserveState
 from compute.source_cache_storage import SourceCacheStorageLifecycleService
 from compute.telemetry import AGENT_HEARTBEAT_TIMEOUT_SECONDS
 
@@ -654,6 +654,11 @@ class ComputeService:
         requested_provider_units, _ = provider_unit_operational_capacity(
             current_pool.model_copy(update={"desired_machines": desired_unit})
         )
+        preemptible = (
+            request.shape.preemptible
+            if request.workload_preemptible is None
+            else request.workload_preemptible
+        )
         if snapshot.desired_machines < requested_provider_units:
             try:
                 offer = self._available_unit_offer(provider, current_pool)
@@ -668,15 +673,7 @@ class ComputeService:
                     failure_code=CapacityFailureCode.CapacityPlanningFailed,
                     desired_unit=desired_unit,
                 )
-            if rejection := self.pooled_offer_rejection(
-                provider,
-                offer,
-                preemptible=(
-                    request.shape.preemptible
-                    if request.workload_preemptible is None
-                    else request.workload_preemptible
-                ),
-            ):
+            if rejection := self.pooled_offer_rejection(provider, offer, preemptible=preemptible):
                 return _capacity_result(
                     request,
                     CapacityAcquisitionStatus.TemporarilyUnavailable,
@@ -822,10 +819,21 @@ class ComputeService:
                         CapacityAcquisitionStatus.TemporarilyUnavailable,
                         reason=operation.last_error,
                     )
+                resumed = _reserves_resumed(snapshot, locked_pool, desired=desired_unit)
+                if (
+                    resumed
+                    and preemptible
+                    and locked_pool.id
+                    in reserve_admission(
+                        pools.stopped_reserve_units(), self.fleet_policy
+                    ).withheld_from_preemptible
+                ):
+                    resumed = 0
+                committed = desired_unit + locked_pool.stopped_machines - resumed
                 maximum = (
-                    max(locked_pool.max_machines, desired_unit, 1)
+                    max(locked_pool.max_machines, committed, 1)
                     if available is None
-                    else max(available, desired_unit, 1)
+                    else max(available, committed, 1)
                 )
                 intent_pool = pools.update_capacity(
                     locked_pool.id,
@@ -835,8 +843,7 @@ class ComputeService:
                     observed_machines=locked_pool.observed_machines,
                     phase=ComputeUnitPhase.Updating,
                     provider_state=locked_pool.provider_state,
-                    stopped_machines=locked_pool.stopped_machines
-                    - _reserves_resumed(snapshot, locked_pool, desired=desired_unit),
+                    stopped_machines=locked_pool.stopped_machines - resumed,
                 )
                 if intent_pool is None:
                     return _capacity_result(
@@ -1540,27 +1547,60 @@ class ComputeService:
         return reserve_admission(rows, self.fleet_policy)
 
     def pooled_offer_owner_id(self, provider: ResolvedComputeProvider, offer: ComputeOffer) -> str:
+        return self.pooled_offer_owners(provider, [offer])[offer.id][0]
+
+    def pooled_offer_owners(
+        self, provider: ResolvedComputeProvider, offers: list[ComputeOffer]
+    ) -> dict[str, tuple[str, int]]:
+        """Each offer's owning unit, and the memory its machines report or 0 if none has.
+
+        An offer no unit owns yet takes what machines of its shape reported in others.
+        """
         policy = provider.policy
-        if policy is None or provider.pooled is None or offer.provider != provider.ref:
+        if policy is None or provider.pooled is None:
             raise InvalidInputError("offer does not belong to a pooled provider")
-        with self.context.database.session() as session:
-            current = ComputeUnitRepository(session).get_by_identity(
-                workspace_id=policy.workspace_id,
-                provider_ref=provider.ref,
-                region=offer.region,
-                capability_key=offer.capability_key,
-                root_volume_gib=policy.root_volume_gib,
+        identities: dict[str, tuple[str, str, str, str, int]] = {}
+        for offer in offers:
+            if offer.provider != provider.ref:
+                raise InvalidInputError("offer does not belong to a pooled provider")
+            identities[offer.id] = (
+                policy.workspace_id,
+                provider.ref,
+                offer.region,
+                offer.capability_key,
+                policy.root_volume_gib,
             )
-        if current is not None:
-            return current.capacity_owner_id
-        owner_id, _ = internal_unit_identity(
-            workspace_id=policy.workspace_id,
-            provider_ref=provider.ref,
-            region=offer.region,
-            capability_key=offer.capability_key,
-            root_volume_gib=policy.root_volume_gib,
-        )
-        return owner_id
+        if not identities:
+            return {}
+        with self.context.database.session() as session:
+            units = ComputeUnitRepository(session)
+            states = units.offer_states(tuple(set(identities.values())))
+            unreported = any(
+                (state := states.get(identity)) is None or state.reported_memory_mib == 0
+                for identity in identities.values()
+            )
+            shapes = units.reported_memory_by_shape() if unreported else {}
+        owners: dict[str, tuple[str, int]] = {}
+        for offer in offers:
+            identity = identities[offer.id]
+            state = states.get(identity)
+            owner_id = (
+                state.id
+                if state is not None
+                else internal_unit_identity(
+                    workspace_id=identity[0],
+                    provider_ref=identity[1],
+                    region=identity[2],
+                    capability_key=identity[3],
+                    root_volume_gib=identity[4],
+                )[0]
+            )
+            owners[offer.id] = (
+                owner_id,
+                (state.reported_memory_mib if state is not None else 0)
+                or shapes.get((offer.cpu_millicores, offer.memory_mb, offer.gpu_count), 0),
+            )
+        return owners
 
     def prepare_pooled_offer(
         self,
@@ -2106,6 +2146,7 @@ class ComputeService:
                 # earns an opt-in, and keeps the flag for it.
                 worker_cpu_millicores=offer.cpu_millicores,
                 worker_memory_mib=offer.memory_mb,
+                node_memory_mib=current.node_memory_mib if current is not None else 0,
                 worker_gpu_type=offer.gpu or "",
                 worker_gpu_count=offer.gpu_count,
                 worker_runtimes=(offer.runtime,),
@@ -2141,6 +2182,9 @@ class ComputeService:
             created = current is None
             if current is None or unit != current:
                 current = repository.upsert(unit)
+            if created:
+                repository.inherit_node_memory(current.id)
+                current = repository.get(current.id) or current
             if baseline is not None and not unit_platform_fleet:
                 self._clear_other_internal_pool_floors(
                     session,
@@ -3135,12 +3179,15 @@ class ComputeService:
                     current.worker_cpu_millicores,
                     current.worker_memory_mib,
                     current.worker_gpu_count,
+                    reported_memory_mib=current.node_memory_mib,
                 ) * (retained - 1)
-                for unit_id, count, cpu, memory, gpu in units.platform_stopped_reserves(
+                for unit_id, count, cpu, memory, reported, gpu in units.platform_stopped_reserves(
                     preemptible=current.worker_preemptible, gpu_type=current.worker_gpu_type
                 ):
                     if unit_id != current.id:
-                        held = held + machine_capacity(cpu, memory, gpu) * count
+                        held = held + (
+                            machine_capacity(cpu, memory, gpu, reported_memory_mib=reported) * count
+                        )
                 gpu = _pool_gpu_capacity(current)
                 can_retain = (
                     desired
@@ -3447,7 +3494,7 @@ class ComputeService:
             rows, self.fleet_policy, purchasable_providers=purchasable, now=now
         )
         plan = self._plan_reserves(snapshot, now=now)
-        self.reserve_state.publish(PublishedReservePlan.of(plan))
+        self.reserve_state.publish(plan)
         units = {unit.id: unit for unit in rows.units}
         markets = {unit.unit_id: unit.market for unit in snapshot.units}
         for market in plan.markets:
@@ -3502,20 +3549,21 @@ class ComputeService:
             consolidating=self.reserve_state.cooling_markets(),
         )
         plan = plan_market_reserve(self.fleet_policy, snapshot, conditions)
-        growing = [market.market for market in plan.markets if market.growth]
-        if not growing:
+        if not any(market.growth for market in plan.markets):
             return plan
         with self.context.database.session() as session:
             demand = ContainerRepository(session).unplaced_platform_demand()
         cards = frozenset(normalize_gpu_type(card) for card in demand.gpu_types)
+        # Every market with waiting work, not only the ones that grew: holding one
+        # back returns budget that another market's growth may then spend.
         waiting = frozenset(
-            market
-            for market in growing
+            market.market
+            for market in plan.markets
             if (
-                bool(cards & {market.gpu_type, GPU_ANY})
-                if market.gpu_type
+                bool(cards & {market.market.gpu_type, GPU_ANY})
+                if market.market.gpu_type
                 else demand.preemptible_cpu
-                if market.preemptible
+                if market.market.preemptible
                 else demand.cpu
             )
         )
@@ -3650,12 +3698,12 @@ class ComputeService:
             policy = provider.policy
             if provider.pooled is None or policy is None or not policy.can_purchase:
                 continue
-            listing = (
-                provider.pooled.list_reserve_offers(root_volume_gib=policy.root_volume_gib)
-                if reserve
-                else provider.pooled.list_offers(root_volume_gib=policy.root_volume_gib)
-            )
             try:
+                listing = (
+                    provider.pooled.list_reserve_offers(root_volume_gib=policy.root_volume_gib)
+                    if reserve
+                    else provider.pooled.list_offers(root_volume_gib=policy.root_volume_gib)
+                )
                 candidates.extend(
                     (provider, offer)
                     for offer in listing
@@ -4922,10 +4970,11 @@ def _reserves_resumed(
 ) -> int:
     """How many of the unit's stopped reserves raising it to `desired` will start.
 
-    A retained pool starts a stopped reserve before it launches a machine, and it
-    refills any reserve count it is still given. Lowering the count by what the
-    resume takes leaves the refill to the reserve planner, which decides it
-    against the market's headroom and never ahead of waiting work.
+    A retained pool starts a stopped reserve only when its running and stopped
+    counts leave no room to launch. Lowering the stopped count by what the raise
+    takes resumes that many and leaves the refill to the reserve planner, which
+    decides it against the market's headroom and never ahead of waiting work;
+    keeping the count launches a fresh machine beside the reserve.
     """
     if desired <= unit.desired_machines or not unit.stopped_machines:
         return 0

@@ -47,7 +47,9 @@ busiest Spot machine's load, so an interruption resumes onto reserves. Defaults:
 Spot keeps 12 vCPU and 24 GiB running (two small machines) and 28 vCPU and
 100 GiB stopped (one large); On-Demand keeps nothing running and one small and one
 large stopped; T4, A10G and L4 keep one stopped On-Demand card, larger cards none.
-Headroom is measured in schedulable capacity, what a node gives containers.
+Headroom is measured in schedulable capacity, what a node gives containers. A
+node's memory is the least its shape's enrolled machines reported, kept in
+`compute_units.node_memory_mib`, and the offer's nominal size until one enrolls.
 
 `plan_market_reserve` is pure and runs on one scheduler replica a minute, or
 sooner when a market's running headroom stays short for a minute. It reads one
@@ -61,7 +63,9 @@ target retire. A market with waiting work or an interruption recovery takes no
 reserve growth, so a request's purchase is never behind a reserve's. A resume
 lowers the unit's stopped count, so refilling a reserve is always the planner's
 decision. Spot-tolerant work may resume an On-Demand reserve only while the
-On-Demand reserves left still meet their floor.
+On-Demand reserves left still meet their floor; otherwise it buys a new machine
+in that unit and the reserve stays stopped, because a retained pool resumes a
+reserve only when its running and stopped counts leave no room to launch.
 
 A unit's `min_machines` is the planner's count of serving machines the idle drain
 keeps, and the drain keeps its busy machines first. Running, stopped, preparing and

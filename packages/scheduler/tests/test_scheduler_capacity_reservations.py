@@ -161,6 +161,10 @@ class _Controller:
     def reservation_shape(self, request: SchedulerWorkerRequest) -> CapacityRequestShape:
         return _shape()
 
+    @property
+    def reported_memory_mib(self) -> int:
+        return 0
+
     def ensure_capacity(
         self,
         reservation: CapacityProvisioningReservation,

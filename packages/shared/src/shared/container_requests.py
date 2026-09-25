@@ -57,22 +57,29 @@ def fits_reservation(
 
     `free_*` is schedulable capacity, what a worker advertises less what it has
     already reserved. `memory_mib` is the request, and the container reserves
-    `capacity_memory_mib` of it.
-
-    Purchase, reservation and placement all decide fit through this function or
-    `node_fits_request`. When they each had their own rule, a request between
-    the rules bought or resumed a machine it could not be placed on, and bought
-    another on the retry.
+    `capacity_memory_mib` of it. Purchase, reservation and placement all decide
+    fit through this function or `node_fits_request`, so a machine bought or
+    resumed for a request is one placement puts it on.
     """
     return free_cpu_millicores >= cpu_millicores and free_memory_mib >= capacity_memory_mib(
         memory_mib
     )
 
 
+def node_memory(nominal_mib: int, reported_mib: int) -> int:
+    """The memory a node of this nominal size has once one has reported it.
+
+    A node's operating system reports less than its nominal size, and its worker
+    advertises from the report. Until a node of the size has reported, the
+    nominal size stands in.
+    """
+    return reported_mib if 0 < reported_mib < nominal_mib else nominal_mib
+
+
 def node_fits_request(
     node_cpu_millicores: int, node_memory_mib: int, *, cpu_millicores: int, memory_mib: int
 ) -> bool:
-    """Whether an empty node of this nominal size takes this request."""
+    """Whether an empty node of this size takes this request."""
     return fits_reservation(
         schedulable_capacity(node_cpu_millicores),
         schedulable_capacity(node_memory_mib),
@@ -485,6 +492,7 @@ __all__ = [
     "container_memory_limit_mib",
     "fits_reservation",
     "node_fits_request",
+    "node_memory",
     "schedulable_capacity",
     "select_memory_eviction_candidate",
 ]

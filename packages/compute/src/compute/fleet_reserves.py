@@ -14,7 +14,7 @@ from database.repositories.compute import (
 )
 from shared.compute_enrollment import AgentCapacityState
 from shared.compute_policy import ComputeUnitPhase
-from shared.container_requests import schedulable_capacity
+from shared.container_requests import node_memory, schedulable_capacity
 from shared.gpu import normalize_gpu_type
 
 from compute.fleet_policy import (
@@ -35,10 +35,14 @@ def unit_reserve_market(*, preemptible: bool, gpu_type: str) -> ReserveMarket:
     )
 
 
-def machine_capacity(cpu_millicores: int, memory_mib: int, gpu_count: int) -> Capacity:
+def machine_capacity(
+    cpu_millicores: int, memory_mib: int, gpu_count: int, *, reported_memory_mib: int
+) -> Capacity:
     """What one machine of this nominal size gives containers."""
     return Capacity(
-        schedulable_capacity(cpu_millicores), schedulable_capacity(memory_mib), gpu_count
+        schedulable_capacity(cpu_millicores),
+        schedulable_capacity(node_memory(memory_mib, reported_memory_mib)),
+        gpu_count,
     )
 
 
@@ -77,7 +81,12 @@ def fleet_reserve_snapshot(
                 memory_mib=unit.memory_mib,
                 gpu_count=unit.gpu_count,
             ),
-            machine=machine_capacity(unit.cpu_millicores, unit.memory_mib, unit.gpu_count),
+            machine=machine_capacity(
+                unit.cpu_millicores,
+                unit.memory_mib,
+                unit.gpu_count,
+                reported_memory_mib=unit.reported_memory_mib,
+            ),
             nominal_cpu_millicores=unit.cpu_millicores,
             desired=unit.desired,
             stopped=unit.stopped,
@@ -185,20 +194,29 @@ def reserve_admission(
     held: dict[ReserveMarket, Capacity] = {}
     for unit in units:
         market = unit_reserve_market(preemptible=unit.preemptible, gpu_type=unit.gpu_type)
-        machine = machine_capacity(unit.cpu_millicores, unit.memory_mib, unit.gpu_count)
+        machine = _reserve_capacity(unit)
         held[market] = held.get(market, Capacity()) + machine * unit.stopped
     withheld: set[str] = set()
     for unit in units:
         market = unit_reserve_market(preemptible=unit.preemptible, gpu_type=unit.gpu_type)
         if market.preemptible:
             continue
-        machine = machine_capacity(unit.cpu_millicores, unit.memory_mib, unit.gpu_count)
+        machine = _reserve_capacity(unit)
         floor = policy.reserve(market).stopped.floor
         if not (held[market] - machine).covers(floor):
             withheld.add(unit.id)
     return ReserveAdmission(
         prepared=frozenset(unit.id for unit in units if unit.resumable),
         withheld_from_preemptible=frozenset(withheld),
+    )
+
+
+def _reserve_capacity(unit: StoppedReserveUnitRow) -> Capacity:
+    return machine_capacity(
+        unit.cpu_millicores,
+        unit.memory_mib,
+        unit.gpu_count,
+        reported_memory_mib=unit.reported_memory_mib,
     )
 
 

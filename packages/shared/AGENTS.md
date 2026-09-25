@@ -46,8 +46,9 @@ reserves 1.25x the request to avoid oversubscribing promised memory. The higher
 ceiling allows bursts into unreserved memory. Eviction is required when a node
 can no longer accommodate competing bursts. Purchase, reservation and placement decide
 whether a request fits through the same two functions, `node_fits_request` for a
-node's nominal size and `fits_reservation` for what a worker has left, so a
-machine bought or resumed for a request is one placement puts it on.
+node's size and `fits_reservation` for what a worker has left, so a machine bought
+or resumed for a request is one placement puts it on. `node_memory` picks the
+memory a node's shape reported over its nominal size once a machine has enrolled.
 
 Under gVisor the sentry and the gofer are charged to the container's cgroup
 alongside guest memory, so every value below is really "guest plus sandbox" and a

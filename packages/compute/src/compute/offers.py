@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
 
 from pydantic import Field
 from shared.compute_policy import ComputeCapacityMode, ComputeUnitRecord
-from shared.container_requests import OciRuntimeName, node_fits_request
+from shared.container_requests import OciRuntimeName, node_fits_request, node_memory
 from shared.contracts import ContractModel
 from shared.gpu import gpu_preference_accepts, gpu_preference_rank
 from shared.supplier_costs import SupplierCostTerms, SupplierCpuUnit
@@ -212,7 +212,16 @@ def record_purchase_terms(unit: ComputeUnitRecord, offer: ComputeOffer) -> Compu
     )
 
 
-def filter_offers(offers: list[ComputeOffer], request: OfferRequest) -> list[ComputeOffer]:
+def filter_offers(
+    offers: list[ComputeOffer],
+    request: OfferRequest,
+    *,
+    reported_memory: Mapping[str, int] | None = None,
+) -> list[ComputeOffer]:
+    """The offers that serve the request, sized by what their machines report when known.
+
+    `reported_memory` maps an offer id to the memory its machines report.
+    """
     selected: list[ComputeOffer] = []
     for offer in offers:
         if request.offer_id and offer.id != request.offer_id:
@@ -227,7 +236,7 @@ def filter_offers(offers: list[ComputeOffer], request: OfferRequest) -> list[Com
             continue
         if not node_fits_request(
             offer.cpu_millicores,
-            offer.memory_mb,
+            node_memory(offer.memory_mb, (reported_memory or {}).get(offer.id, 0)),
             cpu_millicores=request.min_cpu_millicores,
             memory_mib=request.min_memory_mb,
         ):

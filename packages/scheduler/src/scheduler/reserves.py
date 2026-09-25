@@ -7,9 +7,11 @@ empties the lightly used machine a plan names.
 A workload may be moved if and only if it is preemptible, whatever its kind:
 being preemptible is how it accepted being stopped and rescheduled. Functions,
 endpoints, image builds, pods, devboxes and sandboxes on those terms may move;
-nothing else is ever stopped here. Image builds finish where they are, since a
-build restarted elsewhere repeats its work. Once the machine holds nothing, the
-idle drain retires it or returns it to the stopped reserve like any idle machine.
+nothing else is ever stopped here. Movable work stops as a preemption, so its
+retries and billing treat it as one. Image builds finish where they are, since
+a build restarted elsewhere repeats its work. Once the machine holds nothing,
+the idle drain retires it or returns it to the stopped reserve like any idle
+machine.
 """
 
 from __future__ import annotations
@@ -30,7 +32,9 @@ from shared.placement import Placement
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 from shared.timestamps import utc_now
 
+from scheduler.containers import scheduling_request, worker_capacity
 from scheduler.preemption import WorkerPlannedDrainOperation, WorkerPreemptionQueueResult
+from scheduler.tools import select_worker_for_request
 
 LOGGER = logging.getLogger(__name__)
 
@@ -68,6 +72,8 @@ class ConsolidationContainers(Protocol):
 
 
 class ConsolidationWorkers(Protocol):
+    def list_workers(self) -> list[SchedulerWorkerRecord]: ...
+
     def list_workers_on_machine(self, machine_id: str) -> list[SchedulerWorkerRecord]: ...
 
     def drain_worker_for_maintenance(
@@ -92,6 +98,11 @@ class FleetConsolidationService:
     leases: ConsolidationLeases
     state: FleetReserveState
     cooldown_seconds: int
+    deadline_seconds: int
+    """How long a consolidation may take before it is given up and the machine left
+    to drain on its own."""
+
+    restop_seconds: int = 300
 
     def reconcile(self, plan: FleetReservePlan | None, *, now: datetime | None = None) -> None:
         current_time = now or utc_now()
@@ -100,10 +111,10 @@ class FleetConsolidationService:
                 if market.consolidate:
                     self.begin(market.market, market.consolidate, now=current_time)
         for market, consolidation in self.state.consolidations().items():
-            self.advance(market, consolidation)
+            self.advance(market, consolidation, now=current_time)
 
     def begin(self, market: ReserveMarket, machine_id: str, *, now: datetime) -> bool:
-        """Cordon the machine if everything on it may move.
+        """Cordon the machine if everything on it may move and has a host to move to.
 
         The durable rows are read again under the unit's dispatch lock, so work
         placed after the planner looked is seen, and nothing is placed here once
@@ -116,23 +127,21 @@ class FleetConsolidationService:
         consolidation = Consolidation(
             machine_id=machine_id, unit_id=unit_id, workspace_id=workspace_id, started_at=now
         )
-        if not self.state.begin_consolidation(market, consolidation):
+        if not self.state.begin_consolidation(market, consolidation, ttl_seconds=self._ttl):
             return False
         cordoned = False
         try:
             with self.leases.dispatch_lock(unit_id):
                 live = self.containers.live_on_machine(machine_id)
-                if not live or any(container.pinned for container in live):
-                    self.state.finish_consolidation(market, cooldown_seconds=0)
-                    LOGGER.info(
-                        "not consolidating %s: %s",
-                        machine_id,
-                        "it emptied" if not live else "it holds work that cannot move",
-                    )
-                    return False
-                self.compute.drain_internal_unit_machine(
+                refusal = self._refusal(machine_id, live, now=now)
+                if not refusal and not self.compute.drain_internal_unit_machine(
                     workspace_id, machine_id, reason=CONSOLIDATION_REASON, now=now
-                )
+                ):
+                    refusal = "it is already draining"
+                if refusal:
+                    self.state.finish_consolidation(market, cooldown_seconds=0)
+                    LOGGER.info("not consolidating %s: %s", machine_id, refusal)
+                    return False
                 cordoned = True
                 self._drain_workers(machine_id, now=now)
         except Exception:
@@ -145,17 +154,72 @@ class FleetConsolidationService:
         )
         return True
 
-    def advance(self, market: ReserveMarket, consolidation: Consolidation) -> None:
+    def advance(
+        self, market: ReserveMarket, consolidation: Consolidation, *, now: datetime
+    ) -> None:
         live = self.containers.live_on_machine(consolidation.machine_id)
         if not live:
             self.state.finish_consolidation(market, cooldown_seconds=self.cooldown_seconds)
             LOGGER.info("consolidated %s; the idle drain releases it", consolidation.machine_id)
             return
-        if consolidation.moved:
+        if (now - consolidation.started_at).total_seconds() >= self.deadline_seconds:
+            # The machine stays cordoned, so what is left finishes and it drains.
+            self.state.finish_consolidation(market, cooldown_seconds=self.cooldown_seconds)
+            LOGGER.warning(
+                "consolidating %s gave up with %d containers left",
+                consolidation.machine_id,
+                len(live),
+            )
             return
+        if (
+            consolidation.stopped_at is not None
+            and (now - consolidation.stopped_at).total_seconds() < self.restop_seconds
+        ):
+            return
+        # Stopping an already stopping container changes nothing, so a stop that
+        # never arrived is sent again rather than waited on.
         for container in _movable(live):
-            self.stopper.stop(container.id, reason=StopContainerReason.Scheduler)
-        self.state.save_consolidation(market, consolidation.model_copy(update={"moved": True}))
+            self.stopper.stop(container.id, reason=StopContainerReason.Preempted)
+        self.state.save_consolidation(
+            market, consolidation.model_copy(update={"stopped_at": now}), ttl_seconds=self._ttl
+        )
+
+    @property
+    def _ttl(self) -> int:
+        return self.deadline_seconds * 2
+
+    def _refusal(self, machine_id: str, live: Sequence[MachineContainer], *, now: datetime) -> str:
+        if not live:
+            return "it emptied"
+        movable = _movable(live)
+        if any(container.pinned for container in live) or any(
+            container.request is None for container in movable
+        ):
+            return "it holds work that cannot move"
+        hosts = {
+            worker.worker_id: worker_capacity(worker, now=now)
+            for worker in self.workers.list_workers()
+            if worker.machine_id != machine_id
+            and worker.request_intake_status(at=now) is SchedulerWorkerStatus.Available
+        }
+        # Largest first, each onto the host placement itself would choose, so
+        # every container has a specific machine with its CPU, memory, cards and
+        # disks free before any of them is stopped.
+        requests = sorted(
+            (
+                scheduling_request(container.request, owner_user_id="", provisionable=False)
+                for container in movable
+                if container.request is not None
+            ),
+            key=lambda request: (request.cpu, request.memory_mib, request.gpu_count),
+            reverse=True,
+        )
+        for request in requests:
+            host = select_worker_for_request(request, hosts.values())
+            if host is None:
+                return f"no other machine has room for container {request.id}"
+            hosts[host.worker_id] = host.reserve(request)
+        return ""
 
     def _drain_workers(self, machine_id: str, *, now: datetime) -> None:
         for worker in self.workers.list_workers_on_machine(machine_id):

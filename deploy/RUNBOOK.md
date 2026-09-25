@@ -467,8 +467,9 @@ inventory before calling the warm and stopped targets healthy.
 ### Capacity headroom upgrade
 
 Revision `0023_capacity_headroom` drops `compute_units.warm_handoff_from`, lets
-GPU units hold stopped reserves, and adds the live-load index the reserve planner
-reads. Older API and scheduler replicas read and write the dropped column, and an
+GPU units hold stopped reserves, adds the live-load index the reserve planner
+reads, and adds `compute_units.node_memory_mib`, filled from the memory each
+enrolled machine reported for its unit's shape. Older API and scheduler replicas read and write the dropped column, and an
 older scheduler plans machine-count reserves against the same units, so both stop
 before the migration. Pause Argo automatic sync and record its settings, scale the
 API and scheduler Deployments to zero, then Ship and run a full sync. Confirm the

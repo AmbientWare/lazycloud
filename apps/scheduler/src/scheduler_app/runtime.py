@@ -308,6 +308,9 @@ class SchedulerRuntime:
                         cooldown_seconds=(
                             scheduler_services.compute.fleet_policy.consolidation_cooldown_seconds
                         ),
+                        deadline_seconds=(
+                            scheduler_services.compute.fleet_policy.consolidation_deadline_seconds
+                        ),
                     )
                     if scheduler_services.compute.reserve_state is not None
                     else None

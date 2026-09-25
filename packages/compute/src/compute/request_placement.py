@@ -31,9 +31,9 @@ class PooledCapacityOwner(Protocol):
         preemptible: bool,
     ) -> str | None: ...
 
-    def pooled_offer_owner_id(
-        self, provider: ResolvedComputeProvider, offer: ComputeOffer
-    ) -> str: ...
+    def pooled_offer_owners(
+        self, provider: ResolvedComputeProvider, offers: list[ComputeOffer]
+    ) -> dict[str, tuple[str, int]]: ...
 
     def prepare_pooled_offer(
         self,
@@ -88,7 +88,7 @@ class ComputeCapacityPlacementService:
             min_gpu_count=requirements.gpu_count,
             nodes=1,
         )
-        offers: list[tuple[ResolvedComputeProvider, ComputeOffer]] = []
+        offers: list[tuple[ResolvedComputeProvider, ComputeOffer, str]] = []
         failures: list[str] = []
         for provider in providers:
             policy = provider.policy
@@ -118,15 +118,18 @@ class ComputeCapacityPlacementService:
                 LOGGER.exception("provider offer discovery failed for %s", provider.ref)
                 failures.append(provider.ref)
                 continue
-            offers.extend((provider, offer) for offer in candidates)
+            owned = self.compute.pooled_offer_owners(provider, candidates)
+            candidates = filter_offers(
+                candidates,
+                purchase,
+                reported_memory={offer_id: memory for offer_id, (_, memory) in owned.items()},
+            )
+            offers.extend((provider, offer, owned[offer.id][0]) for offer in candidates)
         admission = self.compute.reserve_admission()
         purchases: dict[str, ComputeCapacityPurchase] = {}
-        for provider, offer in sorted(
+        for provider, offer, owner_id in sorted(
             offers, key=lambda item: offer_selection_key(item[1], purchase)
         ):
-            owner_id = self.compute.pooled_offer_owner_id(provider, offer)
-            if requirements.preemptible and owner_id in admission.withheld_from_preemptible:
-                continue
             purchases.setdefault(
                 owner_id,
                 ComputeCapacityPurchase(
@@ -145,7 +148,13 @@ class ComputeCapacityPlacementService:
             )
         # A stopped reserve starts in seconds and a purchase takes a minute, so any
         # prepared pool comes first; within each, the disk's cached volume zone.
-        prepared = admission.prepared
+        # Spot-tolerant work buys into a withheld On-Demand unit without resuming
+        # its reserve, so that unit ranks as a purchase for it.
+        prepared = (
+            admission.prepared - admission.withheld_from_preemptible
+            if requirements.preemptible
+            else admission.prepared
+        )
         preferred = request.preferred_availability_zone
         return tuple(
             sorted(
