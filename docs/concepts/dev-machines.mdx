@@ -39,16 +39,15 @@ mounted, so `git clone` your code onto the disk. The image needs no `sshd`.
 
 ## Coding agents
 
-Devboxes install Codex, Claude Code, OpenCode, and Pi by default, along with
-Node.js 22 and Git, during the image build. The SDK pins agent and Node.js
-versions. Import `AgentHarness` from `lazycloud` and pass
+Devboxes install Codex, Claude Code, OpenCode, Pi, Node.js 22, and Git when the
+image builds. The SDK pins the agent and Node.js versions.
+Import `AgentHarness` from `lazycloud` and pass
 `agent_harnesses=[AgentHarness.Codex]` to install only Codex, or
 `agent_harnesses=[]` to skip agent installation.
 
 Installation requires a Debian or Ubuntu image with root build access. Pass
 `agent_harnesses=[]` when using `Image.from_id()` or an image that supplies its
-own tools. Reusing an image object for another resource does not add these
-agents to that resource.
+own tools.
 
 After deployment, authenticate from an interactive terminal on your laptop:
 
@@ -59,25 +58,24 @@ lazycloud devbox login box opencode
 lazycloud devbox login box pi
 ```
 
-The command runs the agent's native login on the devbox and opens your local
-browser. It reads the callback address from the login URL and temporarily
-forwards that loopback port over SSH before opening the browser. No public
-`ports` entry or device-code authentication is required. Login credentials stay
-in the agent's own files on the devbox disk, outside the built image.
+The command starts the agent's login on the devbox and opens your laptop's
+browser. SSH carries the localhost callback back to the devbox. You don't need
+a public `ports` entry or device-code authentication. The agent saves its
+credentials on the devbox disk, outside the built image.
 
 OpenCode prompts for a provider and login method. Select browser login. In Pi,
 run `/login`, select the provider's browser login, and exit Pi when finished.
 Available methods depend on the provider. API keys can also be supplied through
 [secrets](/concepts/secrets).
 
-Browser forwarding requires a local OpenSSH client on macOS, Linux, or WSL and
-a browser on that computer. A dashboard terminal alone cannot open a callback
-listener on your laptop. Finish one login before starting another that uses the
+Browser login requires OpenSSH and a browser on your macOS, Linux, or WSL
+computer. Run the command locally; a dashboard terminal cannot forward a
+callback from your laptop. Finish one login before starting another that uses the
 same port. If a local service already occupies the port, the command fails
 before opening the browser.
 
-Credentials persist with the disk and are accessible to anyone who can access
-that devbox. Use separate devboxes for separate account credentials.
+Anyone with access to the devbox can read its saved credentials. Use separate
+devboxes for separate accounts.
 
 ## What persists
 
