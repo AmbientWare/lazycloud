@@ -91,6 +91,17 @@ class AgentBridgeNetworkOperation(StrEnum):
     AllowNetworkDestination = "allow-network-destination"
     DeleteNamespace = "delete-namespace"
     DeleteVeth = "delete-veth"
+    DeleteStaleBaseRule = "delete-stale-base-rule"
+
+
+@dataclass(frozen=True, slots=True)
+class _FirewallRule:
+    binary: str
+    table: str
+    chain: str
+    rule: tuple[str, ...]
+    operation: AgentBridgeNetworkOperation
+    insert: bool = False
 
 
 class NetworkCommand(ContractModel):
@@ -536,8 +547,11 @@ class AgentBridgeNetworkBackend:
             token = self.ip_allocator.acquire_network_lock()
             try:
                 capabilities = self.system.discover_host_capabilities(self.config)
-                if capabilities == self._capabilities:
+                previous = self._capabilities
+                if capabilities == previous:
                     return False
+                if previous is not None:
+                    self._remove_stale_base_firewall_rules(previous, capabilities)
                 for command in self._bridge_commands(capabilities):
                     self.system.run(command)
                 self._ensure_base_firewall_rules(capabilities)
@@ -1027,6 +1041,43 @@ class AgentBridgeNetworkBackend:
         capabilities: HostNetworkCapabilities,
     ) -> list[NetworkCommand]:
         commands: list[NetworkCommand] = []
+        for rule in self._base_firewall_rules(capabilities):
+            commands.extend(
+                self._ensure_firewall_rule(
+                    binary=rule.binary,
+                    table=rule.table,
+                    chain=rule.chain,
+                    rule=list(rule.rule),
+                    operation=rule.operation,
+                    insert=rule.insert,
+                )
+            )
+        return commands
+
+    def _remove_stale_base_firewall_rules(
+        self,
+        previous: HostNetworkCapabilities,
+        current: HostNetworkCapabilities,
+    ) -> None:
+        """Delete the base rules `previous` needed and `current` does not.
+
+        Those name a default-route interface the host no longer uses, or are IPv6
+        rules on a host that lost IPv6.
+        """
+        kept = set(self._base_firewall_rules(current))
+        for rule in self._base_firewall_rules(previous):
+            if rule in kept:
+                continue
+            self.system.run(
+                NetworkCommand(
+                    operation=AgentBridgeNetworkOperation.DeleteStaleBaseRule,
+                    argv=[rule.binary, "-t", rule.table, "-D", rule.chain, *rule.rule],
+                    ignore_failure=True,
+                )
+            )
+
+    def _base_firewall_rules(self, capabilities: HostNetworkCapabilities) -> list[_FirewallRule]:
+        rules: list[_FirewallRule] = []
         # Before NAT and tenant allowlists: a sandbox must never read node
         # metadata or bootstrap credentials through the host's source address.
         destinations = [(self.config.iptables_binary, "169.254.0.0/16")]
@@ -1041,103 +1092,57 @@ class AgentBridgeNetworkBackend:
                 )
             )
         for binary, destination in destinations:
-            commands.extend(
-                self._ensure_firewall_rule(
+            rules.append(
+                _FirewallRule(
                     binary=binary,
                     table="raw",
                     chain="PREROUTING",
-                    rule=["-i", self.config.bridge_name, "-d", destination, "-j", "DROP"],
+                    rule=("-i", self.config.bridge_name, "-d", destination, "-j", "DROP"),
                     operation=AgentBridgeNetworkOperation.BlockProviderMetadata,
                     insert=True,
                 )
             )
-        commands.extend(
-            self._ensure_firewall_rule(
-                binary=self.config.iptables_binary,
-                table="nat",
-                chain="POSTROUTING",
-                rule=[
-                    "-s",
-                    self.config.subnet,
-                    "-o",
-                    capabilities.ipv4_interface,
-                    "-j",
-                    "MASQUERADE",
-                ],
-                operation=AgentBridgeNetworkOperation.EnableMasquerade,
-            )
-        )
-        commands.extend(
-            self._ensure_forwarding_rules(
-                binary=self.config.iptables_binary,
-                egress_interface=capabilities.ipv4_interface,
-            )
-        )
+        egress = [(self.config.iptables_binary, self.config.subnet, capabilities.ipv4_interface)]
         if capabilities.ipv6_enabled:
-            commands.extend(
-                self._ensure_firewall_rule(
-                    binary=self.config.ip6tables_binary,
+            egress.append(
+                (self.config.ip6tables_binary, self.config.ipv6_subnet, capabilities.ipv6_interface)
+            )
+        for binary, subnet, interface in egress:
+            rules.append(
+                _FirewallRule(
+                    binary=binary,
                     table="nat",
                     chain="POSTROUTING",
-                    rule=[
-                        "-s",
-                        self.config.ipv6_subnet,
-                        "-o",
-                        capabilities.ipv6_interface,
-                        "-j",
-                        "MASQUERADE",
-                    ],
+                    rule=("-s", subnet, "-o", interface, "-j", "MASQUERADE"),
                     operation=AgentBridgeNetworkOperation.EnableMasquerade,
                 )
             )
-            commands.extend(
-                self._ensure_forwarding_rules(
-                    binary=self.config.ip6tables_binary,
-                    egress_interface=capabilities.ipv6_interface,
+            for rule in (
+                ("-i", self.config.bridge_name, "-o", interface, "-j", "ACCEPT"),
+                (
+                    "-i",
+                    interface,
+                    "-o",
+                    self.config.bridge_name,
+                    "-m",
+                    "conntrack",
+                    "--ctstate",
+                    "RELATED,ESTABLISHED",
+                    "-j",
+                    "ACCEPT",
+                ),
+            ):
+                rules.append(
+                    _FirewallRule(
+                        binary=binary,
+                        table="filter",
+                        chain="FORWARD",
+                        rule=rule,
+                        operation=AgentBridgeNetworkOperation.AllowForwarding,
+                        insert=True,
+                    )
                 )
-            )
-        return commands
-
-    def _ensure_forwarding_rules(
-        self,
-        *,
-        binary: str,
-        egress_interface: str,
-    ) -> list[NetworkCommand]:
-        commands: list[NetworkCommand] = []
-        for rule in (
-            [
-                "-i",
-                self.config.bridge_name,
-                "-o",
-                egress_interface,
-                "-j",
-                "ACCEPT",
-            ],
-            [
-                "-i",
-                egress_interface,
-                "-o",
-                self.config.bridge_name,
-                "-m",
-                "conntrack",
-                "--ctstate",
-                "RELATED,ESTABLISHED",
-                "-j",
-                "ACCEPT",
-            ],
-        ):
-            commands.extend(
-                self._ensure_firewall_rule(
-                    binary=binary,
-                    table="filter",
-                    chain="FORWARD",
-                    rule=rule,
-                    operation=AgentBridgeNetworkOperation.AllowForwarding,
-                    insert=True,
-                )
-            )
-        return commands
+        return rules
 
     def _ensure_firewall_rule(
         self,
