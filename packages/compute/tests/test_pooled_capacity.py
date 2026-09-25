@@ -4357,14 +4357,14 @@ def test_a_resumed_reserve_registers_no_worker_until_its_stream_authorizes_the_r
     )
     assert awaits_resume()
 
-    def stream() -> ReserveAgentPreparation:
+    def stream(agent_binary_sha256: str = "a" * 64) -> ReserveAgentPreparation:
         return compute.prepare_reserved_machine(
             workspace_id=unit.workspace_id,
             machine_id=machine_id,
             credential_id=enrollment.id,
             credential_generation=enrollment.credential_generation,
             release=_RESERVE_RELEASE,
-            agent_binary_sha256="a" * 64,
+            agent_binary_sha256=agent_binary_sha256,
             prepared_worker_images=[_RESERVE_RELEASE.worker_image],
             active_worker_images={
                 agent_machine_worker_id(machine_id): _RESERVE_RELEASE.worker_image
@@ -4386,15 +4386,15 @@ def test_a_resumed_reserve_registers_no_worker_until_its_stream_authorizes_the_r
     assert not awaits_resume()
     assert observed() == (ReservationStatus.Resuming.value, MachineLifecycle.Joining)
 
-    # The next stream finishes the provider's bookkeeping and leaves a machine
-    # its heartbeat made ready where it is.
+    # A later stream finishes the provider's bookkeeping even once the agent has
+    # updated past the release, and leaves a machine its heartbeat made ready.
     with service_context.database.session() as session:
         machine = MachineRepository(session).get(machine_id, workspace_id=unit.workspace_id)
         assert machine is not None
         write_machine_lifecycle(
             session, machine, MachineLifecycle.Ready, workspace_changes=compute.workspace_changes
         )
-    assert stream().resuming
+    assert stream(agent_binary_sha256="b" * 64).resuming
     assert observed() == (ReservationStatus.Active.value, MachineLifecycle.Ready)
     with service_context.database.session() as session:
         machine = MachineRepository(session).get(machine_id, workspace_id=unit.workspace_id)

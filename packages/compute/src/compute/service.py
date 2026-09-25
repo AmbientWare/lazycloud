@@ -2933,6 +2933,12 @@ class ComputeService:
             machine = MachineRepository(session).get(machine_id, workspace_id=workspace_id)
             if unit is None or machine is None:
                 raise ConflictError("reserve preparation lost its capacity owner")
+            # The stream that authorizes a resume moves the lifecycle to joining,
+            # which opens the fence, and answers without waiting on the provider.
+            # A later stream finishes the provider's bookkeeping whatever release
+            # the machine holds by then, since it already serves.
+            authorizing_resume = resuming and machine.lifecycle in RETAINED_MACHINE_LIFECYCLES
+            finishing_resume = resuming and not authorizing_resume
             # Only a used machine returning to reserve cleans tenant storage before
             # it stops, and returning sets its row to stopping. A reserve being
             # prepared again keeps its row at preparing until it finishes, even
@@ -2983,7 +2989,7 @@ class ComputeService:
                     raise ConflictError("stop preparation acknowledgment is stale")
                 if ContainerRepository(session).count_live_for_machine(machine_id):
                     raise ConflictError("machine still owns live workloads")
-            elif (
+            elif not finishing_resume and (
                 not worker_prepared
                 or not agent_current
                 or (preparing and not worker_ready)
@@ -3010,11 +3016,6 @@ class ComputeService:
                 # registers a new worker, which must match the active release before
                 # it takes requests whether or not an update is recorded.
                 WorkerReleaseRepository(session).cancel_machine_update(machine_id)
-            # Joining opens the fence to the resumed worker, so this stream answers
-            # at once and the next finishes the provider's bookkeeping, which reads
-            # EC2. Only the first resumed stream moves the lifecycle, so a later one
-            # never takes a ready machine back to joining.
-            authorizing_resume = resuming and machine.lifecycle in RETAINED_MACHINE_LIFECYCLES
             target = MachineLifecycle.Stopping if preparing else MachineLifecycle.Joining
             if (preparing or authorizing_resume) and machine_lifecycle_allowed(
                 machine.lifecycle, target
@@ -3026,7 +3027,7 @@ class ComputeService:
                     workspace_changes=self.workspace_changes,
                     workspace_id=workspace_id,
                 )
-            if resuming and enrollment.capacity_notice_at is None:
+            if authorizing_resume and enrollment.capacity_notice_at is None:
                 ComputeMachineEnrollmentRepository(session).save(
                     enrollment.model_copy(
                         update={
