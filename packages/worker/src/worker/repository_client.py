@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from collections.abc import Generator, Iterator, Mapping
 from contextlib import closing
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 from typing import Literal, Protocol, runtime_checkable
 from urllib.parse import urlparse
 
@@ -187,6 +189,8 @@ from worker.tools import (
     WorkspaceStorageCredentials,
 )
 
+LOGGER = logging.getLogger(__name__)
+
 type JsonObject = dict[str, JsonValue]
 
 _JSON_OBJECT: TypeAdapter[JsonObject] = TypeAdapter(JsonObject)
@@ -232,8 +236,21 @@ class WorkerRepositoryHttpTransport:
     nothing, so retrying it cannot repeat a request, and riding out the restart
     keeps a container that was starting from failing with it.
     """
+    admission_hold_seconds: float = 0.0
+    """How long a reserve's worker waits for the agent to admit its first call.
+
+    Only the agent sets it, on a worker it starts while it keeps its listeners
+    closed to prepare, stop or resume a reserve. Until one call goes through, a
+    refused connection is retried this long rather than `connect_retry_seconds`.
+    The monotonic clock stands still while the machine hibernates, so the hold
+    counts only time the machine was awake.
+    """
+    admission_waiting_file: Path | None = None
+    """Present while a hold is under way and a call was refused, telling the agent
+    this worker is built and waits only for the control plane."""
 
     http: InternalHttpClient = field(default_factory=InternalHttpClient)
+    _admitted: bool = field(default=False, init=False)
 
     def set_bearer_token(self, token: str) -> None:
         self.token = token
@@ -241,6 +258,23 @@ class WorkerRepositoryHttpTransport:
     def prepare_shutdown(self, *, timeout_seconds: float) -> None:
         self.timeout_seconds = min(self.timeout_seconds, max(timeout_seconds, 0.1))
         self.connect_retry_seconds = min(self.connect_retry_seconds, self.timeout_seconds)
+        self._admit()
+
+    def _report_waiting(self, marker: Path) -> None:
+        # Without the marker the agent never reports this worker waiting, so its
+        # reserve stays in preparation instead of hibernating. The worker still
+        # waits for admission.
+        try:
+            marker.touch()
+        except OSError:
+            LOGGER.warning("could not report waiting for admission at %s", marker, exc_info=True)
+
+    def _admit(self) -> None:
+        if self._admitted:
+            return
+        self._admitted = True
+        if self.admission_waiting_file is not None:
+            self.admission_waiting_file.unlink(missing_ok=True)
 
     def post(
         self,
@@ -248,7 +282,7 @@ class WorkerRepositoryHttpTransport:
         payload: Mapping[str, JsonValue],
     ) -> JsonObject:
         content = _encoded(payload)
-        deadline = time.monotonic() + self.connect_retry_seconds
+        began = time.monotonic()
         delay = _CONNECT_RETRY_FIRST_DELAY_SECONDS
         while True:
             try:
@@ -260,7 +294,18 @@ class WorkerRepositoryHttpTransport:
                     timeout_seconds=self.timeout_seconds,
                 )
             except InternalHttpConnectError as exc:
-                if time.monotonic() + delay >= deadline:
+                # Read on every attempt, so a shutdown ends a hold already under way.
+                held = not self._admitted and self.admission_hold_seconds > 0
+                if held and self.admission_waiting_file is not None:
+                    self._report_waiting(self.admission_waiting_file)
+                budget = self.admission_hold_seconds if held else self.connect_retry_seconds
+                if time.monotonic() + delay - began >= budget:
+                    if held:
+                        msg = (
+                            "the agent did not admit this reserve worker within "
+                            f"{budget:.0f}s of the machine being awake"
+                        )
+                        raise WorkerRepositoryClientError(msg) from exc
                     raise WorkerRepositoryClientError(str(exc)) from exc
                 time.sleep(delay)
                 delay = min(delay * 2, _CONNECT_RETRY_MAX_DELAY_SECONDS)
@@ -268,6 +313,7 @@ class WorkerRepositoryHttpTransport:
             except InternalHttpError as exc:
                 raise WorkerRepositoryClientError(str(exc)) from exc
             break
+        self._admit()
         raw = response.text
         if response.status_code < 200 or response.status_code >= 300:
             raise http_api_error_from_body(response.status_code, raw)
@@ -1617,6 +1663,8 @@ def build_worker_repository_http_client(
     endpoint: str,
     token: str,
     timeout_seconds: float = 30.0,
+    admission_hold_seconds: float = 0.0,
+    admission_waiting_file: Path | None = None,
     http: InternalHttpClient | None = None,
 ) -> WorkerRepositoryHttpClient:
     if not endpoint:
@@ -1630,6 +1678,8 @@ def build_worker_repository_http_client(
             endpoint=endpoint,
             token=token,
             timeout_seconds=timeout_seconds,
+            admission_hold_seconds=admission_hold_seconds,
+            admission_waiting_file=admission_waiting_file,
             http=http or InternalHttpClient(timeout_seconds=timeout_seconds),
         )
     )

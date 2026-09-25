@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
@@ -117,7 +117,11 @@ from compute.fleet_reserves import (
     reserve_admission,
     unit_reserve_market,
 )
-from compute.machine_lifecycle import machine_lifecycle_allowed, write_machine_lifecycle
+from compute.machine_lifecycle import (
+    RETAINED_MACHINE_LIFECYCLES,
+    machine_lifecycle_allowed,
+    write_machine_lifecycle,
+)
 from compute.offers import (
     ComputeOffer,
     OfferRequest,
@@ -193,8 +197,12 @@ class _PooledCapacityBaseline:
 @dataclass(slots=True)
 class ReserveAgentPreparation:
     preparing: bool = False
+    warm: bool = False
+    """The reserve's worker runs, fenced: it hibernates, or its resume is pending."""
     stop_request_id: str = ""
     resuming: bool = False
+    lagging_resume: bool = False
+    """The machine resumed before its row said so; its agent keeps the reserve as it is."""
 
 
 @dataclass(slots=True)
@@ -351,6 +359,14 @@ class ComputeService:
         record, machine = self.provider_machines.machine_for_record(
             session, pool=pool, record=record, now=current_time
         )
+        if (
+            lifecycle is MachineLifecycle.Joining
+            and machine.lifecycle in RETAINED_MACHINE_LIFECYCLES
+            and record.status != ReservationStatus.Active.value
+        ):
+            # A reserve joins again when its stream authorizes the resume. Its
+            # own report would admit the worker it runs before the stream decides.
+            return machine
         if lifecycle is MachineLifecycle.Joining and machine.lifecycle is MachineLifecycle.Ready:
             # A restarted agent reports joining beside its first stream, whose
             # heartbeat may already have made the machine ready. The report is
@@ -2885,7 +2901,9 @@ class ComputeService:
         release: ReleaseTarget,
         agent_binary_sha256: str,
         prepared_worker_images: Sequence[str],
-        has_active_workers: bool,
+        active_worker_images: Mapping[str, str],
+        admission_waiting_workers: Collection[str],
+        booted_since_prepared: bool,
         prepared_stop: MachineStopPreparationReceipt | None,
     ) -> ReserveAgentPreparation:
         """Authenticate preparation evidence and keep retained hosts out of intake."""
@@ -2929,21 +2947,43 @@ class ComputeService:
                 and record.status == ReservationStatus.Stopping.value
                 else ""
             )
-            instruction = ReserveAgentPreparation(
-                preparing=preparing, stop_request_id=stop_request_id, resuming=resuming
-            )
             stopping_used_machine = bool(stop_request_id)
+            # A machine that booted after its preparation was stopped and started
+            # again, so a row still reading stopping or stopped lags the resume.
+            # Its worker waits, fenced, like a hibernating reserve's, until the
+            # row reads resuming.
+            lagging_resume = booted_since_prepared and record.status in {
+                ReservationStatus.Stopping.value,
+                ReservationStatus.Stopped.value,
+            }
+            warm = preparing and (record.hibernates or lagging_resume) and not stopping_used_machine
+            instruction = ReserveAgentPreparation(
+                preparing=preparing,
+                warm=warm,
+                stop_request_id=stop_request_id,
+                resuming=resuming,
+                lagging_resume=lagging_resume and not stopping_used_machine,
+            )
+            # A hibernating reserve stops with its worker on the release, built and
+            # waiting at its first call; any other stops with none.
+            machine_worker = agent_machine_worker_id(machine_id)
+            worker_ready = (
+                active_worker_images.get(machine_worker) == release_image
+                and machine_worker in admission_waiting_workers
+                if warm
+                else not active_worker_images
+            )
             if stopping_used_machine:
                 if prepared_stop is None:
                     return instruction
-                if prepared_stop.request_id != stop_request_id or has_active_workers:
+                if prepared_stop.request_id != stop_request_id or active_worker_images:
                     raise ConflictError("stop preparation acknowledgment is stale")
                 if ContainerRepository(session).count_live_for_machine(machine_id):
                     raise ConflictError("machine still owns live workloads")
             elif (
                 not worker_prepared
                 or not agent_current
-                or (preparing and has_active_workers)
+                or (preparing and not worker_ready)
                 or record.status
                 in {
                     ReservationStatus.Stopped.value,
@@ -2993,6 +3033,7 @@ class ComputeService:
                 capacity_owner_id=unit.capacity_owner_id,
                 instance_id=record.instance_id,
                 prepared_stop=prepared_stop if stopping_used_machine else None,
+                hibernate=warm and record.hibernates,
                 prepared_release=(
                     (
                         release_agent if agent_current else "",
@@ -3018,6 +3059,7 @@ class ComputeService:
         instance_id: str,
         prepared_stop: MachineStopPreparationReceipt | None,
         prepared_release: tuple[str, str] | None,
+        hibernate: bool,
     ) -> None:
         with self._required_capacity_owner_mutations().mutation_lock(capacity_owner_id):
             current, provider, offer = self._internal_unit_provider(workspace_id, capacity_owner_id)
@@ -3057,8 +3099,13 @@ class ComputeService:
                         current, offer, snapshot, provider=provider.pooled
                     )
             else:
-                provider.pooled.complete_machine_preparation(
-                    self._provider_unit_request(current, offer), instance_id
+                # Applied in the stream that finished the preparation, so the row
+                # reads stopping or active without waiting for a capacity pass.
+                snapshot = provider.pooled.complete_machine_preparation(
+                    self._provider_unit_request(current, offer), instance_id, hibernate=hibernate
+                )
+                self.provider_machines._apply_pooled_snapshot(
+                    current, offer, snapshot, provider=provider.pooled
                 )
             if prepared_release is not None:
                 agent_sha256, worker_image = prepared_release

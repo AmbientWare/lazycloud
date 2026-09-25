@@ -102,6 +102,35 @@ credential while preserving the agent identity and platform image cache. Resumin
 keeps the machine identity and requires a new worker registration and
 request-poll lease.
 
+A reserve prepared without serving keeps its worker slot and credential, and its
+agent records them. A retained machine of a type EC2 can hibernate, with under
+150 GiB of RAM, launches with hibernation configured and a root volume grown by
+its RAM. Its offer lists the usable disk and prices the whole volume. Such a
+reserve runs its worker while it is prepared. Compute asks the provider to
+hibernate it only once that worker runs the release and the agent reports it
+waiting at its first call, so it resumes with both running. Any other reserve,
+a used machine returning to reserve included, stops plainly, and its agent
+starts the recorded worker at the next boot. EC2 refuses to hibernate a guest
+that is not ready yet, so a refusal is retried each pass and becomes a plain
+stop after ten minutes, or at once for an instance launched without
+hibernation. A stop of either kind still pending ten minutes after its request
+is forced.
+
+Until a stream adopts that worker, the agent keeps its control listeners closed.
+The agent starts it with `WORKER_ADMISSION_HOLD_SECONDS`, so the worker retries
+its first call for up to 30 minutes of awake time and then fails; every other
+worker gives up after a minute. The control plane holds the same fence: no
+worker registers on a machine whose provider row is `preparing`, `stopping` or
+`stopped`, or which is `stopping`, `stopped` or `resuming` before its provider
+row is active. While that row is not active, only the stream's resume
+authorization moves a resumed reserve to `joining`, and the agent's own joining
+report leaves the machine alone. Once the provider reports the instance active,
+its report or the next capacity pass moves a machine still in a reserve phase to
+`joining`. A used host retires its credential, so it resumes through the stream.
+An agent that booted after its reserve was prepared says so on each stream. A
+row still reading `stopping` or `stopped` then lags the resume, so the worker
+waits, fenced, as a hibernating reserve's does, rather than being stopped.
+
 A provider lists its regions in the order platform purchases prefer them. When
 offers in two combinations of one region refuse launches within 30 minutes, that
 region ranks after the others, so a shortfall moves to the next region rather than

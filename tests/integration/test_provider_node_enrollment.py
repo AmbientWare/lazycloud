@@ -137,7 +137,7 @@ class _PooledProvider:
 
     def complete_machine_preparation(
         self, request: ProviderUnitRequest, provider_instance_id: str
-    ) -> None:
+    ) -> ProviderUnitSnapshot:
         raise AssertionError("enrollment must not complete reserve preparation")
 
     def refresh_machine(

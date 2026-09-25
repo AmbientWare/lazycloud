@@ -1,16 +1,21 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from threading import Event
 
 import pytest
 from agent.operations import (
     AgentBootstrap,
     AgentCapacityInterruptionNotice,
     AgentState,
+    AgentWorkerContainerPlan,
+    AgentWorkerSlot,
     WorkerExecutor,
 )
-from agent.tunnel import AgentTunnelService
+from agent.tunnel import AgentTunnelRoute, AgentTunnelService
+from agent_app import daemon
 from agent_app.daemon import (
     AgentDaemonOptions,
     AgentDaemonService,
@@ -36,6 +41,8 @@ from gateway.http import (
 )
 from shared.compute_enrollment import (
     AgentCapacityState,
+    AgentWorkerSlotStatus,
+    agent_machine_worker_id,
 )
 from shared.http.agent_identity import (
     AgentCertificateRequest,
@@ -55,7 +62,10 @@ from shared.http.provider_nodes import (
 )
 from shared.http.releases import AgentReleaseRequest, AgentReleaseResponse
 from shared.placement import Placement
+from shared.usage import UsageBillingOwner
 from worker.network_backend import AgentBridgeCallbackFirewall, AgentBridgeNetworkConfig
+
+from gateway import http
 
 
 class _Gateway:
@@ -127,6 +137,9 @@ class _Gateway:
         del request
         return AgentTelemetryResponse(ok=True)
 
+    def reset_connections(self) -> None:
+        pass
+
 
 class _InterruptionGateway(_Gateway):
     def __init__(self, events: list[str], *, unavailable: bool = False) -> None:
@@ -181,6 +194,7 @@ def _service(
     gateway: _Gateway,
     *,
     worker_controller: DockerAgentWorkerController | None = None,
+    executor: WorkerExecutor = WorkerExecutor.External,
 ) -> AgentDaemonService:
     state_store = AgentStateStore(state_dir)
     state_store.save(
@@ -199,7 +213,8 @@ def _service(
         AgentDaemonOptions(
             gateway_url="https://control.example.com",
             state_dir=str(state_dir),
-            executor=WorkerExecutor.External,
+            executor=executor,
+            os_name="linux",
             once=True,
         ),
         client=gateway,
@@ -317,3 +332,228 @@ def test_transport_failures_are_recoverable_so_a_machine_keeps_rejoining() -> No
     assert _recoverable_stream_error(transport_failure)
     assert _recoverable_stream_error(HttpApiError("upstream", status_code=503))
     assert not _recoverable_stream_error(HttpApiError("forbidden", status_code=403))
+
+
+_MACHINE_WORKER = agent_machine_worker_id("machine-one")
+
+
+def _machine_slot(status: AgentWorkerSlotStatus) -> http.AgentWorkerSlot:
+    return http.AgentWorkerSlot(
+        worker_id=_MACHINE_WORKER,
+        worker_token="worker-secret",
+        capacity_owner_id="11111111-1111-4111-8111-111111111111",
+        billing_owner=UsageBillingOwner.PlatformFleet,
+        machine_id="machine-one",
+        worker_image="registry.example/worker:prepared",
+        status=status,
+    )
+
+
+class _SlotGateway(_Gateway):
+    """Answers each stream with the machine's worker slot and reserve instruction.
+
+    It records whether each stream said the machine booted since its reserve
+    was prepared.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.slot = _machine_slot(AgentWorkerSlotStatus.Active)
+        self.preparing = True
+        self.resume_pending = False
+        self.booted_since_prepared: list[bool] = []
+
+    def stream_agent(self, request: StreamAgentRequest) -> StreamAgentResponse:
+        self.booted_since_prepared.append(request.booted_since_reserve_prepared)
+        return StreamAgentResponse(
+            ok=True,
+            credential_id="22222222-2222-4222-8222-222222222222",
+            credential_generation=1,
+            slots=[self.slot],
+            reserve_preparation=self.preparing,
+            reserve_resume_pending=self.resume_pending,
+        )
+
+
+class _Workers(DockerAgentWorkerController):
+    """Docker as the running containers, each numbered in the order it started."""
+
+    def __init__(self, state_dir: Path) -> None:
+        super().__init__(state_dir)
+        self.running: dict[str, tuple[AgentWorkerSlot, int]] = {}
+        self.started = 0
+
+    def wait_for_docker(self, stop: Event | None = None) -> bool:
+        del stop
+        return True
+
+    def _image_present(self, image: str, stop: Event | None = None) -> bool:
+        del image, stop
+        return True
+
+    def _prepare_worker_image(self, image: str, stop: Event) -> None:
+        del image, stop
+
+    def _run_container(self, plan: AgentWorkerContainerPlan, *, stop: Event | None) -> None:
+        del stop
+        self.started += 1
+        self.running[plan.slot.worker_id] = (plan.slot, self.started)
+
+    def _stop(self, slot: AgentWorkerSlot) -> None:
+        self.running.pop(slot.worker_id, None)
+
+    def _running_slot(self, slot: AgentWorkerSlot) -> AgentWorkerSlot | None:
+        return slot.model_copy() if slot.worker_id in self.running else None
+
+    def containers(self) -> dict[str, int]:
+        return {worker_id: started for worker_id, (_, started) in self.running.items()}
+
+    def _reap_forgotten_workers(self, active_worker_ids: set[str]) -> None:
+        del active_worker_ids
+
+
+class _Tunnel(AgentTunnelService):
+    """A connected tunnel that records the containers running when its listeners open."""
+
+    workers: _Workers
+    opened_with: dict[str, int] | None
+
+    def reconcile_listeners(self, hosts: set[str]) -> None:
+        del hosts
+        self.opened_with = self.workers.containers()
+
+    def hold_listeners(self) -> None:
+        self.opened_with = None
+
+    def reconcile_routes(self, routes: Sequence[AgentTunnelRoute]) -> set[str]:
+        del routes
+        return set()
+
+
+@pytest.mark.parametrize(
+    "resumed_slot", [AgentWorkerSlotStatus.Active, AgentWorkerSlotStatus.Draining]
+)
+def test_a_reserve_worker_reaches_the_control_plane_only_once_a_stream_adopts_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    resumed_slot: AgentWorkerSlotStatus,
+) -> None:
+    """A hibernating reserve runs its worker while it is prepared, listeners closed.
+
+    The first stream after the resume keeps that same container if it wants the
+    slot active, and stops it otherwise, before the listeners open.
+    """
+    monkeypatch.setattr(daemon, "BOOT_ID_PATH", tmp_path / "boot_id")
+    (tmp_path / "boot_id").write_text("reserve-boot")
+    gateway = _SlotGateway()
+    workers = _Workers(tmp_path / "agent")
+    service = _service(
+        tmp_path / "agent", gateway, worker_controller=workers, executor=WorkerExecutor.Container
+    )
+    state = service.state_store.load(service.options.gateway_url)
+    assert state is not None
+    tunnel = _Tunnel(
+        state_dir=tmp_path,
+        identity=AgentTunnelIdentity(
+            workspace_id=state.workspace_id,
+            enrollment_id=state.credential_id,
+            credential_generation=state.credential_generation,
+        ),
+        agent_token=state.agent_token,
+        issue_certificate=service.client.issue_agent_certificate,
+        callback_firewall=AgentBridgeCallbackFirewall(
+            config=AgentBridgeNetworkConfig(), owner_id=state.machine_id
+        ),
+    )
+    tunnel.workers = workers
+    tunnel.opened_with = None
+    try:
+        service.run_stream_iteration(state, tunnel=tunnel, before_agent_update=tunnel.close)
+        service.run_stream_iteration(state, tunnel=tunnel, before_agent_update=tunnel.close)
+        prepared = workers.containers()
+        assert set(prepared) == {_MACHINE_WORKER}
+        assert tunnel.opened_with is None
+        assert workers.reserve_worker(state.machine_id) is not None
+        gateway.preparing = False
+        gateway.slot = _machine_slot(resumed_slot)
+        service.run_stream_iteration(state, tunnel=tunnel, before_agent_update=tunnel.close)
+    finally:
+        tunnel.close()
+        workers.close()
+        service._capacity_shutdown.close()
+
+    assert tunnel.opened_with == (prepared if resumed_slot is AgentWorkerSlotStatus.Active else {})
+    assert workers.containers() == tunnel.opened_with
+    assert workers.reserve_worker(state.machine_id) is None
+
+
+def test_a_cold_resumed_reserve_keeps_its_worker_until_its_row_catches_up(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A reserve started again before its row reads resuming keeps the worker it booted.
+
+    Every stream until the resume says the machine booted since its reserve was
+    prepared, so the control plane keeps treating the stale row as a resume and
+    the boot's worker is adopted, not stopped.
+    """
+    boot_id = tmp_path / "boot_id"
+    monkeypatch.setattr(daemon, "BOOT_ID_PATH", boot_id)
+    boot_id.write_text("prepared-boot")
+    gateway = _SlotGateway()
+    prepared = _Workers(tmp_path / "agent")
+    service = _service(
+        tmp_path / "agent", gateway, worker_controller=prepared, executor=WorkerExecutor.Container
+    )
+    state = service.state_store.load(service.options.gateway_url)
+    assert state is not None
+    tunnel = _Tunnel(
+        state_dir=tmp_path,
+        identity=AgentTunnelIdentity(
+            workspace_id=state.workspace_id,
+            enrollment_id=state.credential_id,
+            credential_generation=state.credential_generation,
+        ),
+        agent_token=state.agent_token,
+        issue_certificate=service.client.issue_agent_certificate,
+        callback_firewall=AgentBridgeCallbackFirewall(
+            config=AgentBridgeNetworkConfig(), owner_id=state.machine_id
+        ),
+    )
+    tunnel.opened_with = None
+    try:
+        tunnel.workers = prepared
+        service.run_stream_iteration(state, tunnel=tunnel, before_agent_update=tunnel.close)
+        prepared.close()
+        service._capacity_shutdown.close()
+
+        boot_id.write_text("resumed-boot")
+        resumed = _Workers(tmp_path / "agent")
+        service = _service(
+            tmp_path / "agent",
+            gateway,
+            worker_controller=resumed,
+            executor=WorkerExecutor.Container,
+        )
+        tunnel.workers = resumed
+        service._unconfirmed = service._prepare_boot_worker(
+            service._reserve_worker(state), state.bootstrap
+        )
+        booted = resumed.containers()
+        assert set(booted) == {_MACHINE_WORKER}
+        gateway.booted_since_prepared.clear()
+        gateway.resume_pending = True
+        for _ in range(2):
+            service.run_stream_iteration(state, tunnel=tunnel, before_agent_update=tunnel.close)
+            assert resumed.containers() == booted
+            assert tunnel.opened_with is None
+        gateway.preparing = False
+        gateway.resume_pending = False
+        service.run_stream_iteration(state, tunnel=tunnel, before_agent_update=tunnel.close)
+    finally:
+        tunnel.close()
+        tunnel.workers.close()
+        service._capacity_shutdown.close()
+
+    assert gateway.booted_since_prepared == [True, True, True]
+    assert tunnel.opened_with == booted
+    assert resumed.reserve_worker(state.machine_id) is None

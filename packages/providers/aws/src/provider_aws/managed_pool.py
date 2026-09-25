@@ -122,6 +122,8 @@ class AwsManagedPoolSpec(AwsManagedPoolModel):
     desired_nodes: int = Field(ge=0)
     max_nodes: int = Field(ge=1)
     root_volume_gib: int = Field(ge=50, le=2048)
+    hibernation: bool = False
+    """Launch able to hibernate, so a stopped reserve keeps its memory."""
     node_instance_profile_arn: str
     vpc_id: str = Field(min_length=1)
     subnet_ids: tuple[str, ...] = Field(min_length=2)
@@ -263,12 +265,16 @@ class _TagSpecification(TypedDict):
 
 class _SpotOptions(TypedDict):
     SpotInstanceType: Literal["one-time", "persistent"]
-    InstanceInterruptionBehavior: Literal["terminate", "stop"]
+    InstanceInterruptionBehavior: Literal["terminate", "stop", "hibernate"]
 
 
 class _InstanceMarketOptions(TypedDict):
     MarketType: Literal["spot"]
     SpotOptions: _SpotOptions
+
+
+class _HibernationOptions(TypedDict):
+    Configured: bool
 
 
 class _LaunchTemplateData(TypedDict):
@@ -281,6 +287,7 @@ class _LaunchTemplateData(TypedDict):
     TagSpecifications: list[_TagSpecification]
     UserData: str
     InstanceMarketOptions: NotRequired[_InstanceMarketOptions]
+    HibernationOptions: NotRequired[_HibernationOptions]
 
 
 class AwsManagedPoolEc2Client(AwsSpotPriceClient, AwsNetworkEvidenceClient, Protocol):
@@ -294,7 +301,9 @@ class AwsManagedPoolEc2Client(AwsSpotPriceClient, AwsNetworkEvidenceClient, Prot
         MaxCount: int,
     ) -> Mapping[str, object]: ...
     def start_instances(self, *, InstanceIds: list[str]) -> Mapping[str, object]: ...
-    def stop_instances(self, *, InstanceIds: list[str]) -> Mapping[str, object]: ...
+    def stop_instances(
+        self, *, InstanceIds: list[str], Hibernate: bool = False, Force: bool = False
+    ) -> Mapping[str, object]: ...
     def cancel_spot_instance_requests(
         self, *, SpotInstanceRequestIds: list[str]
     ) -> Mapping[str, object]: ...
@@ -1530,13 +1539,21 @@ def _launch_template_data(
         ],
         "UserData": base64.b64encode(aws_managed_pool_bootstrap_script(spec).encode()).decode(),
     }
+    if spec.hibernation:
+        data["HibernationOptions"] = {"Configured": True}
     if spec.preemptible:
         data["InstanceMarketOptions"] = {
             "MarketType": "spot",
             "SpotOptions": {
                 "SpotInstanceType": spec.spot_request_type,
+                # EC2 rejects any other behaviour on an instance launched able to
+                # hibernate, and an interrupted reserve is replaced either way.
                 "InstanceInterruptionBehavior": (
-                    "stop" if spec.spot_request_type == "persistent" else "terminate"
+                    "terminate"
+                    if spec.spot_request_type != "persistent"
+                    else "hibernate"
+                    if spec.hibernation
+                    else "stop"
                 ),
             },
         }

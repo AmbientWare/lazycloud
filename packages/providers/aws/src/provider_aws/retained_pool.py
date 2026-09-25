@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta
 from enum import StrEnum
 from uuid import uuid4
@@ -34,6 +35,14 @@ from .managed_pool import (
 )
 from .provider_control import upstream_error
 
+LOGGER = logging.getLogger(__name__)
+
+PROVIDER_OPERATION_DEADLINE = timedelta(minutes=10)
+"""How long a launch or a hibernation may take before the pool gives up on it."""
+
+HIBERNATE_AFTER_START = timedelta(minutes=2)
+"""EC2 refuses to hibernate an instance this soon after it starts."""
+
 
 class SlotPhase(StrEnum):
     Preparing = "preparing"
@@ -58,6 +67,13 @@ _REJECTED_LAUNCH_CODES = frozenset(
         "UnauthorizedOperation",
     }
 )
+_HIBERNATION_UNCONFIGURED = "UnsupportedHibernationConfiguration"
+"""EC2's refusal for an instance launched without hibernation, which no retry changes.
+
+Any other refusal is retried. EC2 answers `UnsupportedOperation`, "not ready to
+hibernate yet", until the guest has set up its swap, which took 116 seconds
+after start on a c6a.large and takes longer with more RAM.
+"""
 
 
 class RetainedSlot(AwsManagedPoolModel):
@@ -74,6 +90,12 @@ class RetainedSlot(AwsManagedPoolModel):
     spot_request_id: str = ""
     availability_zone: str = ""
     storage_volume_ids: tuple[str, ...] = ()
+    hibernate: bool = False
+    """The compute side asked for this stop to keep the reserve's memory."""
+    stop_requested_at: datetime | None = None
+    """When EC2 last accepted a stop of either kind; kept only while that stop is pending."""
+    hibernate_refused_since: datetime | None = None
+    """When EC2 first refused to hibernate this stop; kept only while that stop is pending."""
 
 
 class RetainedPoolState(AwsManagedPoolModel):
@@ -127,10 +149,23 @@ class _BlockDevice(_Response):
         return self.ebs.id
 
 
+class _HibernationOptions(_Response):
+    configured: bool = Field(default=False, alias="Configured")
+
+
+class _StateReason(_Response):
+    code: str = Field(default="", alias="Code")
+
+
 class _Instance(_Response):
     id: str = Field(alias="InstanceId")
     token: str = Field(default="", alias="ClientToken")
     state: _State = Field(alias="State")
+    state_reason: _StateReason = Field(default_factory=_StateReason, alias="StateReason")
+    launch_time: datetime | None = Field(default=None, alias="LaunchTime")
+    hibernation: _HibernationOptions = Field(
+        default_factory=_HibernationOptions, alias="HibernationOptions"
+    )
     placement: _Placement = Field(default_factory=_Placement, alias="Placement")
     tags: tuple[_Tag, ...] = Field(default=(), alias="Tags")
     spot_request_id: str = Field(default="", alias="SpotInstanceRequestId")
@@ -267,6 +302,7 @@ class AwsRetainedPool:
         for slot in self.state.slots:
             instance = inventory.get(slot.token)
             if instance is not None:
+                stop_pending = slot.phase is SlotPhase.Stopping and instance.state.name != "stopped"
                 slot = slot.model_copy(
                     update={
                         "instance_id": instance.id,
@@ -278,6 +314,13 @@ class AwsRetainedPool:
                             if device.machine_volume_id
                         )
                         or slot.storage_volume_ids,
+                        # Stop timing belongs to the stop pending now. A slot
+                        # resumed or serving again drops it, so an earlier
+                        # stop's time never forces a later one.
+                        "stop_requested_at": (slot.stop_requested_at if stop_pending else None),
+                        "hibernate_refused_since": (
+                            slot.hibernate_refused_since if stop_pending else None
+                        ),
                         # Only EC2 stops a running, preparing or refreshing
                         # instance; this pool stops one only after moving it to
                         # Stopping. A reserve holds no work, so an interrupted
@@ -301,7 +344,7 @@ class AwsRetainedPool:
                 slot.instance_id
                 and slot.phase is not SlotPhase.Retiring
                 and slot.launch_started_at is not None
-                and utc_now() - slot.launch_started_at > timedelta(minutes=10)
+                and utc_now() - slot.launch_started_at > PROVIDER_OPERATION_DEADLINE
                 and self.provisioner.machine_storage_destroyed(
                     self.spec, slot.instance_id, slot.storage_volume_ids
                 )
@@ -319,7 +362,7 @@ class AwsRetainedPool:
             slot = slot.model_copy(update={"launch_started_at": utc_now()})
             self._update(slot)
         assert slot.launch_started_at is not None
-        if utc_now() - slot.launch_started_at > timedelta(minutes=10):
+        if utc_now() - slot.launch_started_at > PROVIDER_OPERATION_DEADLINE:
             raise RuntimeError(
                 f"EC2 launch {slot.token} has no instance evidence after ten minutes"
             )
@@ -388,6 +431,13 @@ class AwsRetainedPool:
 
     def _start(self, slot: RetainedSlot, instance: _Instance) -> None:
         operation = "start retained instance"
+        # EC2 records a requested hibernation the same way whether the guest
+        # hibernated or fell back to shutting down, so this names the request.
+        LOGGER.info(
+            "starting reserve %s, stopped by %s",
+            instance.id,
+            instance.state_reason.code or "an unrecorded reason",
+        )
         try:
             self.clients.ec2.start_instances(InstanceIds=[instance.id])
         except BotoCoreError as exc:
@@ -413,6 +463,81 @@ class AwsRetainedPool:
                     }
                 )
             )
+
+    def _stop(self, slot: RetainedSlot, instance: _Instance) -> None:
+        """Stop a reserve, hibernating it when the compute side asked for that.
+
+        A hibernation EC2 refuses is tried again each pass and becomes a plain stop
+        once refused for the operation deadline, or at once when the instance was
+        launched without hibernation. A stop of either kind still pending past
+        that deadline is forced, so the reserve always reaches stopped.
+        """
+        now = utc_now()
+        if instance.state.name == "stopping":
+            requested = slot.stop_requested_at
+            if requested is None:
+                # Stopping without a request this pool recorded; time it from now.
+                self._update(slot.model_copy(update={"stop_requested_at": now}))
+            elif now - requested > PROVIDER_OPERATION_DEADLINE:
+                LOGGER.warning(
+                    "reserve %s is still stopping after %s; forcing it to stop",
+                    instance.id,
+                    PROVIDER_OPERATION_DEADLINE,
+                )
+                if self._request_stop(instance, force=True):
+                    self._update(slot.model_copy(update={"stop_requested_at": now}))
+            return
+        if instance.state.name != "running":
+            return
+        if slot.hibernate and instance.hibernation.configured:
+            if (
+                instance.launch_time is not None
+                and now - instance.launch_time < HIBERNATE_AFTER_START
+            ):
+                return
+            refused_since = slot.hibernate_refused_since or now
+            try:
+                self.clients.ec2.stop_instances(InstanceIds=[instance.id], Hibernate=True)
+            except (ClientError, BotoCoreError) as exc:
+                code = (
+                    _client_error_code(exc) if isinstance(exc, ClientError) else type(exc).__name__
+                )
+                if (
+                    code != _HIBERNATION_UNCONFIGURED
+                    and now - refused_since < PROVIDER_OPERATION_DEADLINE
+                ):
+                    LOGGER.warning(
+                        "EC2 refused to hibernate reserve %s (%s); retrying next pass",
+                        instance.id,
+                        code,
+                    )
+                    if slot.hibernate_refused_since is None:
+                        self._update(slot.model_copy(update={"hibernate_refused_since": now}))
+                    return
+                LOGGER.warning(
+                    "EC2 did not hibernate reserve %s (%s); stopping it instead", instance.id, code
+                )
+            else:
+                LOGGER.info("hibernating reserve %s", instance.id)
+                self._update(slot.model_copy(update={"stop_requested_at": now}))
+                return
+        else:
+            LOGGER.info("stopping reserve %s without hibernating", instance.id)
+        if self._request_stop(instance):
+            self._update(slot.model_copy(update={"stop_requested_at": now}))
+
+    def _request_stop(self, instance: _Instance, *, force: bool = False) -> bool:
+        """Ask EC2 to stop `instance`; a refusal is logged and left for the next pass."""
+        try:
+            self.clients.ec2.stop_instances(InstanceIds=[instance.id], Force=force)
+        except (ClientError, BotoCoreError) as exc:
+            LOGGER.warning(
+                "EC2 did not accept the stop of reserve %s (%s); retrying next pass",
+                instance.id,
+                _client_error_code(exc) if isinstance(exc, ClientError) else type(exc).__name__,
+            )
+            return False
+        return True
 
     def _keep_unrefreshed(self, slot: RetainedSlot) -> None:
         # A reserve whose refresh could not start is still usable as it was.
@@ -516,8 +641,8 @@ class AwsRetainedPool:
                 if not self._launch(slot):
                     break
             elif instance is not None:
-                if slot.phase is SlotPhase.Stopping and instance.state.name == "running":
-                    self.clients.ec2.stop_instances(InstanceIds=[instance.id])
+                if slot.phase is SlotPhase.Stopping:
+                    self._stop(slot, instance)
                 elif (
                     slot.phase in {SlotPhase.Resuming, SlotPhase.Refreshing}
                     and instance.state.name == "stopped"
@@ -602,8 +727,13 @@ class AwsRetainedPool:
         held = sum(slot.phase is not SlotPhase.Retiring for slot in self.state.slots)
         return max(self.request.desired_machines + self.request.stopped_machines - held, 0)
 
-    def describe(self) -> ProviderUnitSnapshot:
-        inventory = self._inventory()
+    def describe(self, inventory: dict[str, _Instance] | None = None) -> ProviderUnitSnapshot:
+        """The pool as EC2 reports it, from `inventory` when the caller already read it.
+
+        A stop the caller just requested is not in that inventory yet, and the
+        slot's own phase already reports it as stopping.
+        """
+        inventory = self._inventory() if inventory is None else inventory
         instances: list[ProviderUnitInstance] = []
         for slot in self.state.slots:
             instance = inventory.get(slot.token)
@@ -649,6 +779,7 @@ class AwsRetainedPool:
                         d.machine_volume_id for d in instance.devices if d.machine_volume_id
                     ),
                     booted_template_version=slot.host_revision,
+                    hibernates=instance.hibernation.configured,
                 )
             )
         return ProviderUnitSnapshot(
@@ -684,13 +815,17 @@ class AwsRetainedPool:
             raise ValueError("instance is not owned by this retained pool")
         return slot
 
-    def complete_preparation(self, instance_id: str) -> None:
+    def complete_preparation(self, instance_id: str, *, hibernate: bool) -> ProviderUnitSnapshot:
         slot = self._slot(instance_id)
         if slot.phase in {SlotPhase.Preparing, SlotPhase.Refreshing}:
-            self._update(slot.model_copy(update={"phase": SlotPhase.Stopping}))
+            self._update(
+                slot.model_copy(update={"phase": SlotPhase.Stopping, "hibernate": hibernate})
+            )
         elif slot.phase is SlotPhase.Resuming:
             self._update(slot.model_copy(update={"phase": SlotPhase.Active}))
-        self._actions(self._inventory())
+        inventory = self._inventory()
+        self._actions(inventory)
+        return self.describe(inventory)
 
     def refresh(self, instance_id: str) -> ProviderUnitSnapshot:
         """Start a stopped reserve so its agent prepares it again, then stop it."""
@@ -713,7 +848,11 @@ class AwsRetainedPool:
         )
         if reserves >= self.request.stopped_machines:
             raise ValueError("instance has no admitted stopped reserve slot")
-        self._update(slot.model_copy(update={"serving": False, "phase": SlotPhase.Stopping}))
+        self._update(
+            slot.model_copy(
+                update={"serving": False, "phase": SlotPhase.Stopping, "hibernate": False}
+            )
+        )
         self._actions(self._inventory())
         return self.describe()
 

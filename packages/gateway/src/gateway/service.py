@@ -2259,7 +2259,9 @@ class GatewayControlService:
                     release=release.target,
                     agent_binary_sha256=request.binary_sha256,
                     prepared_worker_images=request.prepared_worker_images,
-                    has_active_workers=bool(request.active_worker_images),
+                    active_worker_images=request.active_worker_images,
+                    admission_waiting_workers=request.admission_waiting_workers,
+                    booted_since_prepared=request.booted_since_reserve_prepared,
                     prepared_stop=request.prepared_stop,
                 )
                 if bootstrap_unit.platform_fleet
@@ -2284,7 +2286,11 @@ class GatewayControlService:
                     active_worker_images=request.active_worker_images,
                     prepared_worker_images=request.prepared_worker_images,
                     agent_binary_sha256=request.binary_sha256,
-                    preparing_reserve=bool(reserve_preparation and reserve_preparation.preparing),
+                    preparing_reserve=bool(
+                        reserve_preparation
+                        and reserve_preparation.preparing
+                        and not reserve_preparation.warm
+                    ),
                 )
             bootstrap = build_agent_bootstrap_config(
                 response_state.workspace_id,
@@ -2305,6 +2311,12 @@ class GatewayControlService:
             routes=[self._agent_route_view(route) for route in snapshot.routes],
             slots=[agent_worker_slot_view(slot) for slot in agent_slots],
             stop_preparation_id=reserve_preparation.stop_request_id if reserve_preparation else "",
+            reserve_resume_pending=bool(reserve_preparation and reserve_preparation.lagging_resume),
+            reserve_preparation=bool(
+                reserve_preparation
+                and reserve_preparation.preparing
+                and not reserve_preparation.stop_request_id
+            ),
             resume_from_stop=bool(reserve_preparation and reserve_preparation.resuming),
         )
 

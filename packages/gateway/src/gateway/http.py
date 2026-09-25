@@ -166,6 +166,10 @@ class StreamAgentRequest(HttpModel):
     binary_sha256: str = Field(default="", pattern=r"^([0-9a-f]{64})?$")
     active_worker_images: dict[str, str] = Field(default_factory=dict)
     prepared_worker_images: list[str] = Field(default_factory=list)
+    admission_waiting_workers: list[str] = Field(default_factory=list)
+    """Held workers that are built and wait only for the agent to admit them."""
+    booted_since_reserve_prepared: bool = False
+    """The machine booted after its reserve was prepared, so it was stopped and started."""
     prepared_stop: MachineStopPreparationReceipt | None = None
 
 
@@ -181,6 +185,12 @@ class StreamAgentResponse(HttpModel):
     routes: list[AgentRoute] = Field(default_factory=list)
     slots: list[AgentWorkerSlot] = Field(default_factory=list)
     stop_preparation_id: str = ""
+    reserve_preparation: bool = False
+    """Set while the machine is prepared as a reserve. The agent holds the slot's
+    worker off the control plane and keeps the slot for the next boot."""
+    reserve_resume_pending: bool = False
+    """The machine was started again before its row reads resuming. The agent holds
+    its worker and keeps the reserve record, with the boot it was prepared in."""
     resume_from_stop: bool = False
 
 

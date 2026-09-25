@@ -883,6 +883,45 @@ systemctl mask update-motd.service update-motd.timer systemd-boot-update.service
 # device node carries, so xfs_growfs refuses to grow / and every node keeps the
 # image's 16 GB root whatever volume it launched with.
 
+# A reserve launched able to hibernate writes its memory to /swap. hibinit-agent
+# creates that file at each cold boot, and acpid hands EC2's hibernate request to
+# it. hibinit-agent's own `resume=` names the root partition by its NVMe name,
+# which follows probe order. Its entry update is off, and once it exits
+# lazycloud-resume names the device by the root filesystem's UUID, which the
+# initrd finds whatever order the disks appear in, and gives the offset of /swap
+# on it. The kernel writes the smallest image it can, freeing its page cache
+# first, so less memory goes to disk and comes back on resume.
+dnf install -y ec2-hibinit-agent acpid
+sed -i 's/^grub-update[[:space:]]*=.*/grub-update = False/' /etc/hibinit-config.cfg
+grep -qx 'grub-update = False' /etc/hibinit-config.cfg
+cat > /usr/local/sbin/lazycloud-resume <<'RESUME'
+#!/bin/sh
+set -eu
+[ "${SERVICE_RESULT:-success}" = success ] && [ -f /swap ] || exit 0
+root_uuid="$(findmnt -no UUID /)"
+offset="$(python3 -c 'import array, fcntl
+block = array.array("L", [0])
+with open("/swap") as swap:
+    fcntl.ioctl(swap.fileno(), 1, block)
+print(block[0])')"
+test -n "${root_uuid}"
+args="resume=UUID=${root_uuid} resume_offset=${offset}"
+for entry in /boot/loader/entries/*.conf; do
+  if ! grep -q -- "${args}" "${entry}"; then
+    grubby --update-kernel=ALL --args="${args}"
+    sync /boot/loader/entries/*.conf /boot/loader/entries
+    exit 0
+  fi
+done
+RESUME
+chmod 0755 /usr/local/sbin/lazycloud-resume
+mkdir -p /etc/systemd/system/hibinit-agent.service.d
+printf '[Service]\\nExecStopPost=/usr/local/sbin/lazycloud-resume\\n' \\
+  > /etc/systemd/system/hibinit-agent.service.d/lazycloud-resume.conf
+systemctl daemon-reload
+systemctl enable hibinit-agent.service acpid.service
+printf 'w /sys/power/image_size - - - - 0\\n' > /etc/tmpfiles.d/lazycloud-hibernate.conf
+
 cat > /etc/lazycloud-node-image.json <<MARKER
 {"recipe_sha256":"${RECIPE_SHA256}","ssm_agent":true,"variant":"__VARIANT__"}
 MARKER

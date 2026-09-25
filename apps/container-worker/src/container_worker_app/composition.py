@@ -14,6 +14,7 @@ from cache.server import (
 from foundation.process import ProcessTimeoutError, run_process
 from networking.internal_http import InternalHttpClient
 from shared.agent_connections import AGENT_TUNNEL_CONTROL_PORT, AGENT_TUNNEL_CONTROL_URL
+from shared.app_identity import AGENT_CONTAINER_TMP_PATH, WORKER_ADMISSION_WAITING_FILE
 from shared.disks import DiskStorage, disk_capacity_bytes
 from shared.identity import TokenKind
 from shared.placement import PlacementKind
@@ -177,6 +178,12 @@ def build_worker_process_services(
         endpoint=AGENT_TUNNEL_CONTROL_URL,
         token=config.worker_token,
         timeout_seconds=config.worker_repository_timeout_seconds,
+        admission_hold_seconds=config.admission_hold_seconds,
+        admission_waiting_file=(
+            Path(AGENT_CONTAINER_TMP_PATH) / WORKER_ADMISSION_WAITING_FILE
+            if config.admission_hold_seconds
+            else None
+        ),
         http=internal_http,
     )
     image_build_scratch = ImageBuildScratchManager(

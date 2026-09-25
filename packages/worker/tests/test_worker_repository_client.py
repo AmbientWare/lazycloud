@@ -1,7 +1,11 @@
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
+from typing import IO
 
+import httpx
+import pytest
+from networking.internal_http import InternalHttpClient, InternalHttpConnectError
 from pydantic import JsonValue
 from shared.placement import Placement
 from shared.scheduling import WorkerExecutionRecord, WorkerExecutionRequest
@@ -10,7 +14,9 @@ from worker.origin_access import CacheOriginCredentialRequest, CacheOriginCreden
 from worker.repository_client import (
     RemoteWorkerCredentialService,
     WorkerRepositoryHttpClient,
+    WorkerRepositoryHttpTransport,
 )
+from worker.repository_errors import WorkerRepositoryClientError
 from worker.repository_payloads import (
     AddWorkerRequest,
     GetContainerCredentialsResponse,
@@ -23,6 +29,8 @@ from worker.tools import (
     ContainerCredentialRequest,
     ContainerCredentials,
 )
+
+from worker import repository_client
 
 _CAPACITY_OWNER_ID = "11111111-1111-4111-8111-111111111111"
 
@@ -153,3 +161,50 @@ class _FakeWorkerRepositoryTransport:
     ) -> Iterator[dict[str, JsonValue]]:
         self.streams.append((path, dict(payload)))
         yield from self._streams.get(path, [])
+
+
+class _RefusedHttp(InternalHttpClient):
+    def request(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: Mapping[str, str] | None = None,
+        content: bytes | Iterable[bytes] | IO[bytes] | None = None,
+        timeout_seconds: float | None = None,
+    ) -> httpx.Response:
+        raise InternalHttpConnectError(f"{method} refused")
+
+
+class _Clock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
+
+
+@pytest.mark.parametrize(
+    ("hold_seconds", "gives_up_at", "error"),
+    [(0.0, 60.0, "refused"), (1800.0, 1800.0, "did not admit this reserve worker")],
+)
+def test_a_refused_worker_waits_longer_only_when_the_agent_holds_it(
+    monkeypatch: pytest.MonkeyPatch, hold_seconds: float, gives_up_at: float, error: str
+) -> None:
+    """A worker gives up on a refused agent after its bound; a held reserve's is the hold."""
+    clock = _Clock()
+    monkeypatch.setattr(repository_client, "time", clock)
+    transport = WorkerRepositoryHttpTransport(
+        endpoint="http://agent.invalid",
+        token="worker-secret",
+        admission_hold_seconds=hold_seconds,
+        http=_RefusedHttp(),
+    )
+
+    with pytest.raises(WorkerRepositoryClientError, match=error):
+        transport.post("/worker-repository/add-worker", {})
+
+    assert gives_up_at - 1 <= clock.now <= gives_up_at

@@ -131,6 +131,8 @@ class ProviderUnitInstance(ContractModel):
     # Opaque host configuration revision. Agent updates applied in place do not
     # change it. Empty means the provider has no configuration evidence.
     booted_template_version: str = ""
+    hibernates: bool = False
+    """Launched able to hibernate; the provider decides it per instance type at launch."""
     billing_started_at: datetime | None = None
     billing_minimum_seconds: int | None = Field(default=None, ge=0)
     billing_quantum_seconds: int | None = Field(default=None, ge=1)
@@ -251,8 +253,14 @@ class PooledCapacityProvider(Protocol):
         ...
 
     def complete_machine_preparation(
-        self, request: ProviderUnitRequest, provider_instance_id: str
-    ) -> None: ...
+        self, request: ProviderUnitRequest, provider_instance_id: str, *, hibernate: bool
+    ) -> ProviderUnitSnapshot:
+        """Stop a prepared reserve, or start serving a resumed one.
+
+        `hibernate` stops the reserve with its memory, which compute asks for only
+        once the worker runs the release and waits at its first call.
+        """
+        ...
 
     def refresh_machine(
         self, request: ProviderUnitRequest, provider_instance_id: str

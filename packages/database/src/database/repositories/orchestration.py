@@ -526,6 +526,16 @@ class MachineRepository:
             select(MachineTable.workspace_id).where(MachineTable.id == machine_id)
         )
 
+    def lifecycle(self, machine_id: str, *, workspace_id: str) -> MachineLifecycle | None:
+        if try_uuid(machine_id) is None:
+            return None
+        value = self.session.scalar(
+            select(MachineTable.lifecycle).where(
+                MachineTable.id == machine_id, MachineTable.workspace_id == workspace_id
+            )
+        )
+        return MachineLifecycle(value) if value is not None else None
+
     def list(self, *, workspace_id: str, status: str | None = None) -> list[Machine]:
         statement = select(MachineTable).where(MachineTable.workspace_id == workspace_id)
         if status is not None:

@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
-from threading import Event, Thread, Timer
+from threading import Event, Lock, Thread, Timer
 from types import TracebackType
 from typing import Protocol
 
@@ -43,6 +43,7 @@ from agent.operations import (
     AgentResourceDetection,
     AgentRuntimeReady,
     AgentState,
+    AgentWorkerContainerPlan,
     AgentWorkerNetwork,
     AgentWorkerReconcileAction,
     AgentWorkerReconcilePlan,
@@ -51,6 +52,7 @@ from agent.operations import (
     WorkerSlotAction,
     agent_state_matches_gateway,
     agent_state_payload,
+    build_agent_worker_dirs,
     normalize_gateway_url,
     parse_nvidia_smi_gpu_devices,
     plan_agent_lock,
@@ -58,6 +60,7 @@ from agent.operations import (
     plan_worker_slot_reconciliation,
     resolve_agent_capacity,
     sanitize_worker_name,
+    worker_slot_kept,
 )
 from agent.service_manager import (
     DEFAULT_AGENT_STATE_DIR,
@@ -71,6 +74,7 @@ from agent.storage_cleanup import (
     prepare_machine_storage_for_stop,
     read_stop_preparation,
 )
+from agent.suspend import SuspendWatch, Wakeup
 from agent.tunnel import AgentTunnelRoute, AgentTunnelService
 from agent.updates import AgentUpdateBlockedError, AgentUpdater
 from compute.provider_nodes import (
@@ -99,9 +103,10 @@ from provider_aws.provider_node_interruption import (
 )
 from pydantic import Field, JsonValue, TypeAdapter, field_validator, model_validator
 from shared.agent_connections import AGENT_TUNNEL_CONTROL_URL
-from shared.app_identity import AGENT_NAME, NAME
+from shared.app_identity import AGENT_NAME, NAME, WORKER_ADMISSION_WAITING_FILE
 from shared.compute_enrollment import (
     AgentCapacityState,
+    AgentWorkerSlotStatus,
     ComputePreflightCheck,
     MachineBootstrapFailureReason,
     agent_machine_worker_id,
@@ -133,7 +138,7 @@ from shared.http.releases import (
 from shared.http_transport import HttpChannel
 from shared.provider_config import ProviderKind
 from shared.routing import BackendRouteState
-from shared.step_timings import StepTimings
+from shared.step_timings import StepTimings, seconds_since_boot
 from shared.timestamps import utc_now
 from worker.configuration import WorkerConfiguration, serialize_worker_configuration
 from worker.network_backend import AgentBridgeCallbackFirewall, AgentBridgeNetworkConfig
@@ -163,12 +168,16 @@ JOIN_RETRY_MAX_SECONDS = 30.0
 AGENT_STATE_FILE = "agent-state.json"
 AGENT_ACTIVE_SLOTS_FILE = "active-worker-slots.json"
 AGENT_LAST_PREPARED_IMAGE_FILE = "last-prepared-worker-image.json"
+AGENT_RESERVE_WORKER_FILE = "reserve-worker.json"
+BOOT_ID_PATH = Path("/proc/sys/kernel/random/boot_id")
 IMAGE_REPORT_WAIT_SECONDS = 1.0
 BOOT_IMAGE_LOOKUP_SECONDS = 3.0
 DOCKER_WAIT_SECONDS = 60.0
 DOCKER_PING_SECONDS = 0.5
 DOCKER_POLL_SECONDS = 0.1
 DEFAULT_DOCKER_SOCKET = "/var/run/docker.sock"
+BOOT_WORKER_START_SECONDS = 60.0
+"""How long `docker run` may take for the reserve's worker started at boot."""
 WORKER_EXIT_LOG_LINES = 200
 DEFAULT_MACHINE_ID_PATHS = (Path("/etc/machine-id"), Path("/var/lib/dbus/machine-id"))
 AGENT_AUTHORITY_REVOKED_DETAILS = frozenset(
@@ -279,6 +288,19 @@ class AgentDaemonRunResult(ContractModel):
     capacity_interrupted: bool = False
 
 
+class AgentReserveWorker(ContractModel):
+    """The worker slot this machine's reserve was prepared with.
+
+    It holds the worker token, as the active slot record does. While it exists
+    the agent keeps its worker listeners closed, and a boot after `boot_id`
+    starts the worker before the first stream.
+    """
+
+    boot_id: str
+    agent_binary_sha256: str
+    slot: AgentWorkerSlot
+
+
 class AgentMachineRegistration(ContractModel):
     machine_fingerprint: str
     hostname: str
@@ -333,6 +355,8 @@ class AgentGatewayClient(AgentLeaveClient, Protocol):
         self,
         request: AgentTelemetryRequest,
     ) -> AgentTelemetryResponse: ...
+
+    def reset_connections(self) -> None: ...
 
 
 @dataclass(slots=True)
@@ -436,6 +460,9 @@ class HttpAgentGatewayClient:
         return AgentTelemetryResponse.model_validate(
             self.channel.post("/gateway/agents/telemetry", _payload(request))
         )
+
+    def reset_connections(self) -> None:
+        self.channel.reset()
 
 
 @dataclass(slots=True)
@@ -675,6 +702,9 @@ class DockerAgentWorkerController:
 
     _images: WorkerImagePreparation = field(init=False)
     _last_prepared: str | None = field(default=None, init=False)
+    _reserve_worker: AgentReserveWorker | None = field(default=None, init=False)
+    _reserve_worker_on_disk: bool = field(default=True, init=False)
+    """False once this process removed the record and has not written one since."""
     _docker_answered: bool = field(default=False, init=False)
     _docker_waited_out: bool = field(default=False, init=False)
     """The minute passed without an answer, so later calls run Docker directly."""
@@ -687,6 +717,11 @@ class DockerAgentWorkerController:
     _docker_deadline: float = field(default=0.0, init=False)
     _docker_socket: str | None = field(default=None, init=False)
     _closing: Event = field(default_factory=Event, init=False)
+    _halted: Event = field(default_factory=Event, init=False)
+    """Set once the capacity shutdown removes every worker; no worker starts after."""
+    _slots_lock: Lock = field(default_factory=Lock, init=False)
+    """Held only to read or write the slot file. The capacity shutdown runs beside
+    the stream, and this orders a start's record against its halt."""
 
     def __post_init__(self) -> None:
         self._images = WorkerImagePreparation(self._prepare_worker_image)
@@ -698,6 +733,10 @@ class DockerAgentWorkerController:
             if self.docker_wait_seconds and Path(self.docker_binary).name == "docker"
             else None
         )
+
+    def wake_on_image_prepared(self, wake: Callable[[], None]) -> None:
+        """Call `wake` whenever a worker image finishes preparing, however it ended."""
+        self._images.on_finished = wake
 
     def wait_for_docker(self, stop: Event | None = None) -> bool:
         """Wait for the Docker daemon to answer; False once it has not in time.
@@ -720,7 +759,11 @@ class DockerAgentWorkerController:
                 return False
             if self._closing.wait(DOCKER_POLL_SECONDS) or (stop is not None and stop.is_set()):
                 return False
-        LOGGER.info("docker answered after %.2fs", time.monotonic() - began)
+        LOGGER.info(
+            "docker answered after %.2fs, at boot+%.2fs",
+            time.monotonic() - began,
+            seconds_since_boot(),
+        )
         self._docker_answered = True
         return True
 
@@ -843,10 +886,6 @@ class DockerAgentWorkerController:
                 continue
             LOGGER.info("pulling %s while the agent updates", image)
 
-    def wait_for_image_preparation(self, timeout_seconds: float) -> bool:
-        """Wait for an image found on the host or a preparation ending; True once one did."""
-        return self._images.wait(timeout_seconds)
-
     def wait_for_boot_image(self, timeout_seconds: float) -> None:
         """Wait for the image started at boot, prepared or looked up, to finish."""
         self._images.wait_for_started(timeout_seconds)
@@ -873,6 +912,97 @@ class DockerAgentWorkerController:
         raise WorkerImagePullError(f"pull worker image {image} failed: {detail}")
 
     @property
+    def reserve_worker_path(self) -> Path:
+        return self.state_dir / AGENT_RESERVE_WORKER_FILE
+
+    def record_reserve_worker(self, slot: AgentWorkerSlot) -> None:
+        record = AgentReserveWorker(
+            boot_id=_boot_id(),
+            agent_binary_sha256=AgentUpdater.running(self.state_dir).binary_sha256(),
+            slot=slot,
+        )
+        if record != self._reserve_worker:
+            _write_json_atomic(self.reserve_worker_path, _payload(record), permissions=0o600)
+            self._reserve_worker = record
+            self._reserve_worker_on_disk = True
+
+    def forget_reserve_worker(self) -> None:
+        if not self._reserve_worker_on_disk:
+            return
+        self.reserve_worker_path.unlink(missing_ok=True)
+        self._reserve_worker = None
+        self._reserve_worker_on_disk = False
+
+    def reserve_worker(self, machine_id: str) -> AgentReserveWorker | None:
+        try:
+            record = AgentReserveWorker.model_validate_json(
+                self.reserve_worker_path.read_text(encoding="utf-8")
+            )
+        except FileNotFoundError:
+            self._reserve_worker_on_disk = False
+            return None
+        except (OSError, ValueError):
+            LOGGER.warning("ignoring the unreadable reserve worker record", exc_info=True)
+            self.forget_reserve_worker()
+            return None
+        if record.slot.machine_id != machine_id:
+            return None
+        self._reserve_worker = record
+        return record
+
+    def reserve_prepared_in_earlier_boot(self) -> bool:
+        """Whether the recorded reserve was prepared before this boot, so the machine was
+        stopped and started since, whatever its provider row still says."""
+        return self._reserve_worker is not None and self._reserve_worker.boot_id != _boot_id()
+
+    def start_reserve_worker(
+        self, record: AgentReserveWorker, bootstrap: AgentBootstrap
+    ) -> AgentWorkerSlot | None:
+        """The reserve's worker, running before the first stream when it can be.
+
+        One still running, after a resume or an agent restart, is returned as
+        it is. A later boot starts it if the agent binary that recorded it is
+        the one running and its image is on disk.
+        """
+        slot = record.slot.model_copy(update={"status": AgentWorkerSlotStatus.Active})
+        if self._running_slot(slot) is not None:
+            return slot
+        if (
+            record.boot_id == _boot_id()
+            or record.agent_binary_sha256 != AgentUpdater.running(self.state_dir).binary_sha256()
+        ):
+            return None
+        if slot.worker_image not in self._images.known():
+            if not self._image_present(slot.worker_image):
+                return None
+            self._images.mark_prepared(slot.worker_image)
+        expired = Event()
+        timer = Timer(BOOT_WORKER_START_SECONDS, expired.set)
+        timer.start()
+        try:
+            self._start(slot, bootstrap, reserve=True, stop=expired)
+        finally:
+            timer.cancel()
+        return slot
+
+    def waiting_for_admission(self, slots: Collection[AgentWorkerSlot]) -> list[str]:
+        """The held workers that are built and wait only for their first call to pass."""
+        return [
+            slot.worker_id
+            for slot in slots
+            if Path(
+                build_agent_worker_dirs(str(self.state_dir), slot.worker_id).tmp,
+                WORKER_ADMISSION_WAITING_FILE,
+            ).exists()
+        ]
+
+    def stop_reserve_worker(self, slot: AgentWorkerSlot) -> None:
+        self._stop(slot)
+        self._save_active_slots(
+            [item for item in self._recorded_slots() if item.worker_id != slot.worker_id]
+        )
+
+    @property
     def active_slots_path(self) -> Path:
         return self.state_dir / AGENT_ACTIVE_SLOTS_FILE
 
@@ -884,6 +1014,10 @@ class DockerAgentWorkerController:
         ]
 
     def _recorded_slots(self) -> list[AgentWorkerSlot]:
+        with self._slots_lock:
+            return self._read_slots()
+
+    def _read_slots(self) -> list[AgentWorkerSlot]:
         if not self.active_slots_path.exists():
             return []
         raw = _JSON_VALUE_ADAPTER.validate_json(self.active_slots_path.read_text(encoding="utf-8"))
@@ -897,6 +1031,7 @@ class DockerAgentWorkerController:
         bootstrap: AgentBootstrap,
         *,
         reported_images: Collection[str],
+        reserve: bool = False,
     ) -> list[AgentWorkerReconcileAction]:
         """Carry out the plan for every slot whose image the control plane knows is here.
 
@@ -904,6 +1039,7 @@ class DockerAgentWorkerController:
         worker image prepared, and its worker registers as draining before that.
         A slot whose image became ready during this call therefore waits for the
         next stream, which the daemon sends at once rather than after an interval.
+        `reserve` starts workers that wait behind the listeners a reserve holds.
         """
         active_by_id = {slot.worker_id: slot for slot in self.active_slots()}
         applied: list[AgentWorkerReconcileAction] = []
@@ -946,7 +1082,7 @@ class DockerAgentWorkerController:
             if action.action in {WorkerSlotAction.Start, WorkerSlotAction.Restart}:
                 if action.slot is None:
                     continue
-                self._start(action.slot, bootstrap)
+                self._start(action.slot, bootstrap, reserve=reserve)
                 active_by_id[action.worker_id] = action.slot
                 applied.append(action)
         self._reap_forgotten_workers(set(active_by_id))
@@ -954,12 +1090,21 @@ class DockerAgentWorkerController:
         return applied
 
     def stop_all(self) -> None:
+        """Remove every worker for good, as the machine is interrupted or the agent leaves."""
+        self._halted.set()
+        self._stop_recorded()
+
+    def _stop_recorded(self) -> None:
         for slot in self._recorded_slots():
             self._stop(slot)
         self._save_active_slots([])
 
     def stop_for_reserve(self, machine_id: str) -> None:
-        self.stop_all()
+        # A used machine's worker credential is retired as it stops, so it resumes
+        # through the stream alone. It does not halt: a stop that is superseded
+        # leaves the machine serving.
+        self.forget_reserve_worker()
+        self._stop_recorded()
         remaining = self.runner.run(
             [
                 self.docker_binary,
@@ -974,8 +1119,10 @@ class DockerAgentWorkerController:
             raise RuntimeError("machine worker containers have not finished stopping")
 
     def gracefully_stop_all(self, *, grace_seconds: float) -> None:
+        """Stop every worker within `grace_seconds`, for good, beside a stream still running."""
         if grace_seconds <= 0:
             raise ValueError("worker shutdown grace must be positive")
+        self._halted.set()
         slots = self._recorded_slots()
         if not slots:
             self._save_active_slots([])
@@ -999,14 +1146,22 @@ class DockerAgentWorkerController:
             msg = f"graceful worker shutdown failed: {stop_result.stderr or stop_result.stdout}"
             raise RuntimeError(msg)
 
-    def _start(self, slot: AgentWorkerSlot, bootstrap: AgentBootstrap) -> None:
+    def _start(
+        self,
+        slot: AgentWorkerSlot,
+        bootstrap: AgentBootstrap,
+        *,
+        reserve: bool = False,
+        stop: Event | None = None,
+    ) -> None:
         image = slot.worker_image or self.worker_image_override
         if not image:
             msg = f"worker image is required for slot {slot.worker_id}"
             raise ValueError(msg)
         if image not in self._images.prepared():
             raise RuntimeError(f"worker image is not prepared for slot {slot.worker_id}")
-        timings = StepTimings()
+        if self._halted.is_set():
+            raise RuntimeError("the machine's workers were shut down")
         plan = plan_worker_container(
             bootstrap,
             slot,
@@ -1019,25 +1174,47 @@ class DockerAgentWorkerController:
             disk_volume_slots=(
                 self.disk_volume_slots() if self.disk_volume_slots is not None else None
             ),
+            reserve=reserve,
         )
         for path in plan.dirs.all_paths():
             Path(path).mkdir(parents=True, exist_ok=True)
+        Path(plan.dirs.tmp, WORKER_ADMISSION_WAITING_FILE).unlink(missing_ok=True)
         _write_worker_configuration_atomic(
             Path(plan.config_path),
             plan.config,
             permissions=0o600,
         )
+        self._run_container(plan, stop=stop)
+        # The shutdown halts before it reads the slot file under this lock, so a
+        # worker is either recorded in time for the shutdown to stop it or sees
+        # the halt here and removes itself.
+        with self._slots_lock:
+            halted = self._halted.is_set()
+            if not halted:
+                recorded = [item for item in self._read_slots() if item.worker_id != slot.worker_id]
+                self._write_slots([*recorded, slot])
+        if halted:
+            self._docker([self.docker_binary, "rm", "-f", plan.name])
+            raise RuntimeError("the machine's workers were shut down while one started")
+
+    def _run_container(self, plan: AgentWorkerContainerPlan, *, stop: Event | None) -> None:
+        timings = StepTimings()
         with timings.step("collect_exit"):
-            self._collect_worker_exit(plan.name, slot.worker_id)
+            self._collect_worker_exit(plan.name, plan.slot.worker_id)
         with timings.step("remove"):
             self._docker([self.docker_binary, "rm", "-f", plan.name])
         args = [self.docker_binary, plan.docker_args[0], "--detach", *plan.docker_args[1:]]
         with timings.step("run"):
-            result = self._docker(args)
-        timings.log(LOGGER, "worker %s container started", slot.worker_id)
+            result = self._docker(args, stop=stop)
+        timings.log(
+            LOGGER,
+            "worker %s container started at boot+%.2fs",
+            plan.slot.worker_id,
+            seconds_since_boot(),
+        )
         if result.returncode != 0:
-            msg = f"start worker slot {slot.worker_id} failed: {result.stderr or result.stdout}"
-            raise RuntimeError(msg)
+            detail = result.stderr or result.stdout
+            raise RuntimeError(f"start worker slot {plan.slot.worker_id} failed: {detail}")
 
     def _stop(self, slot: AgentWorkerSlot) -> None:
         name = f"{AGENT_NAME}-{sanitize_worker_name(slot.worker_id)}"
@@ -1182,6 +1359,10 @@ class DockerAgentWorkerController:
         return namespace
 
     def _save_active_slots(self, slots: list[AgentWorkerSlot]) -> None:
+        with self._slots_lock:
+            self._write_slots([] if self._halted.is_set() else slots)
+
+    def _write_slots(self, slots: list[AgentWorkerSlot]) -> None:
         self.state_dir.mkdir(parents=True, exist_ok=True)
         payload: list[JsonValue] = [
             _payload(slot) for slot in sorted(slots, key=lambda item: item.worker_id)
@@ -1208,6 +1389,11 @@ class AgentDaemonService:
         MachineBootstrapFailureReason.ProviderIdentityFailed
     )
     """What identity resolution reports once its retries run out: the stage it last reached."""
+    _unconfirmed: AgentWorkerSlot | None = None
+    """A reserve's worker, running before a stream has let it reach the control plane."""
+    _suspend: SuspendWatch = field(default_factory=SuspendWatch)
+    _wakeup: Wakeup | None = field(default=None, init=False)
+    """Open only while `run` runs; its pipe, timerfd and watch thread close with it."""
 
     def __post_init__(self) -> None:
         self._capacity_shutdown = CapacityShutdown(
@@ -1280,6 +1466,17 @@ class AgentDaemonService:
             )
 
     def run(self) -> AgentDaemonRunResult:
+        wakeup = Wakeup(on_clock_jump=self.client.reset_connections)
+        self._wakeup = wakeup
+        self.worker_controller.wake_on_image_prepared(wakeup.wake)
+        try:
+            return self._run()
+        finally:
+            self._wakeup = None
+            wakeup.close()
+
+    def _run(self) -> AgentDaemonRunResult:
+        LOGGER.info("agent started at boot+%.2fs", seconds_since_boot())
         self.state_store.begin_run()
         try:
             AgentUpdater.running(self.state_store.state_dir).prune()
@@ -1307,6 +1504,7 @@ class AgentDaemonService:
             raise
         if state.capacity_notice_at is not None:
             self._capacity_shutdown.arm(state.capacity_notice_at)
+        reserve_worker = self._reserve_worker(state)
         iterations = 0
         last_result = AgentDaemonRunResult(
             workspace_id=state.workspace_id,
@@ -1330,22 +1528,21 @@ class AgentDaemonService:
 
         try:
             try:
-                tunnel = self._join_step("tunnel.start", lambda: self._start_tunnel(state))
+                tunnel = self._join_step(
+                    "tunnel.start",
+                    lambda: self._start_tunnel(
+                        state, hold_worker_control=reserve_worker is not None
+                    ),
+                )
             except Exception:
                 self._report_bootstrap_failure(MachineBootstrapFailureReason.NetworkJoinFailed)
                 raise
+            LOGGER.info("agent tunnel connected at boot+%.2fs", seconds_since_boot())
             if saved_state is not None:
                 # A restart or resume joined before; the report only moves a failed
                 # machine back, so it waits for the network the tunnel proved.
                 self._report_phase_aside(MachineLifecycle.Joining)
-            try:
-                self.worker_controller.prepare_worker_image()
-            except WorkerImagePullError:
-                if not self.worker_controller.active_slots():
-                    self._report_bootstrap_failure(
-                        MachineBootstrapFailureReason.WorkerImagePullFailed
-                    )
-                    raise
+            self._unconfirmed = self._prepare_boot_worker(reserve_worker, state.bootstrap)
             last_result = last_result.model_copy(
                 update={
                     "tunnel_connected": tunnel.connected,
@@ -1355,11 +1552,13 @@ class AgentDaemonService:
             while True:
                 next_iteration = iterations + 1
                 try:
+                    self._react_to_sleep(tunnel)
                     state = self.state_store.load(state.gateway_url) or state
                     notice = self._poll_capacity_interruption()
                     if notice is not None:
                         state = self._begin_capacity_interruption(state, notice)
                     if state.capacity_state is AgentCapacityState.Available:
+                        tunnel.wait_connected(self.options.stream_interval_seconds)
                         tunnel.check()
                     last_result = self.run_stream_iteration(
                         state,
@@ -1398,7 +1597,7 @@ class AgentDaemonService:
                         message="agent stream failed; retrying",
                         attrs={"error_type": type(exc).__name__},
                     )
-                    time.sleep(self.options.stream_interval_seconds)
+                    self._sleep(self.options.stream_interval_seconds, tunnel)
                     continue
                 if last_result.capacity_interrupted:
                     return last_result
@@ -1408,7 +1607,7 @@ class AgentDaemonService:
                 iterations = next_iteration
                 if self.options.once:
                     return last_result
-                self._pause_between_streams(self.options.stream_interval_seconds)
+                self._pause_between_streams(self.options.stream_interval_seconds, tunnel)
         except Exception as exc:
             if not agent_authority_was_revoked(exc):
                 raise
@@ -1418,20 +1617,119 @@ class AgentDaemonService:
         finally:
             close_runtime()
 
-    def _pause_between_streams(self, seconds: float) -> None:
-        """Sleep until the next stream, or until a worker image being prepared is ready.
+    def _pause_between_streams(self, seconds: float, tunnel: AgentTunnelService) -> None:
+        """Wait until the next stream, ending early when a worker image finishes preparing.
 
-        A slot waits until a stream has reported its image prepared, so an image
-        that becomes ready ends the pause and the next stream reports it.
+        A slot waits until a stream has reported its image prepared, so the next
+        stream reports it at once.
         """
-        if self.worker_controller.has_unreported_image(self._reported_worker_images):
-            return
-        began = time.monotonic()
-        if self.worker_controller.wait_for_image_preparation(seconds):
-            return
-        remaining = seconds - (time.monotonic() - began)
-        if remaining > 0:
-            time.sleep(remaining)
+        self._sleep(seconds, tunnel, until_image=True)
+
+    def _sleep(
+        self, seconds: float, tunnel: AgentTunnelService, *, until_image: bool = False
+    ) -> None:
+        """Wait, ending early if the machine sleeps and resumes meanwhile."""
+        wakeup = self._wakeup
+        if wakeup is None:
+            raise RuntimeError("the agent waits between streams only while it runs")
+        deadline = time.monotonic() + seconds
+        while (remaining := deadline - time.monotonic()) > 0:
+            if until_image and self.worker_controller.has_unreported_image(
+                self._reported_worker_images
+            ):
+                return
+            wakeup.wait(remaining)
+            if self._react_to_sleep(tunnel):
+                return
+
+    def _react_to_sleep(self, tunnel: AgentTunnelService) -> bool:
+        """After the machine slept, drop its dead connections and restart its timers.
+
+        Every remote connection died while it slept, and the monotonic clock stood
+        still, so a timer set before the sleep fires late.
+        """
+        slept = self._suspend.slept()
+        if not slept:
+            return False
+        LOGGER.info(
+            "machine slept for %.1fs; redialing the tunnel at boot+%.2fs",
+            slept,
+            seconds_since_boot(),
+        )
+        self.client.reset_connections()
+        tunnel.redial()
+        self._capacity_shutdown.rearm()
+        return True
+
+    def _reserve_worker(self, state: AgentState) -> AgentReserveWorker | None:
+        if (
+            state.capacity_state is not AgentCapacityState.Available
+            or state.capacity_notice_at is not None
+            or self.options.executor is not WorkerExecutor.Container
+            or agent_worker_reconcile_os(self.options.os_name) != "linux"
+        ):
+            return None
+        return self.worker_controller.reserve_worker(state.machine_id)
+
+    def _prepare_boot_worker(
+        self, reserve_worker: AgentReserveWorker | None, bootstrap: AgentBootstrap
+    ) -> AgentWorkerSlot | None:
+        """Find the worker image, and for a reserve run its worker, before the first stream.
+
+        The tunnel keeps that worker's listeners closed until a stream adopts or
+        stops it, and a start that fails is left to the stream.
+        """
+        if self.options.executor is not WorkerExecutor.Container:
+            return None
+        self.worker_controller.prepare_worker_image()
+        if reserve_worker is None:
+            return None
+        try:
+            slot = self.worker_controller.start_reserve_worker(reserve_worker, bootstrap)
+        except Exception:
+            LOGGER.warning("starting the reserve's worker at boot failed", exc_info=True)
+            return None
+        if slot is not None:
+            LOGGER.info(
+                "reserve worker %s running at boot+%.2fs", slot.worker_id, seconds_since_boot()
+            )
+        return slot
+
+    def _settle_unconfirmed_worker(
+        self,
+        worker: AgentWorkerSlot,
+        desired_slots: list[AgentWorkerSlot],
+        active_slots: list[AgentWorkerSlot],
+        *,
+        preparing: bool,
+    ) -> list[AgentWorkerSlot]:
+        """Keep a reserve's worker only where the planner would keep it running.
+
+        Anything else, a draining or changed slot, another release, no slot at
+        all, or a container that already exited, stops it here, and the plan
+        then treats the slot as never started.
+        """
+        wanted = next((s for s in desired_slots if s.worker_id == worker.worker_id), None)
+        running = next((s for s in active_slots if s.worker_id == worker.worker_id), None)
+        if wanted is not None and worker_slot_kept(running, wanted):
+            if not preparing:
+                LOGGER.info(
+                    "adopted reserve worker %s at boot+%.2fs",
+                    worker.worker_id,
+                    seconds_since_boot(),
+                )
+            return active_slots
+        LOGGER.info(
+            "stopping reserve worker %s: %s",
+            worker.worker_id,
+            "its container exited before a stream adopted it"
+            if running is None
+            else "the stream wants no slot"
+            if wanted is None
+            else f"the stream wants a {wanted.status.value} slot for {wanted.worker_image}",
+        )
+        self.worker_controller.stop_reserve_worker(worker)
+        return [slot for slot in active_slots if slot.worker_id != worker.worker_id]
 
     def resolve_identity(self) -> AgentState:
         revoked = self.state_store.authority_revoked()
@@ -1515,6 +1813,12 @@ class AgentDaemonService:
                         if slot.worker_image
                     },
                     prepared_worker_images=self._reported_worker_images,
+                    admission_waiting_workers=self.worker_controller.waiting_for_admission(
+                        active_slots
+                    ),
+                    booted_since_reserve_prepared=(
+                        self.worker_controller.reserve_prepared_in_earlier_boot()
+                    ),
                     prepared_stop=read_stop_preparation(self.state_store.state_dir),
                 )
             )
@@ -1530,6 +1834,7 @@ class AgentDaemonService:
         self.state_store.save(state)
         if stream.stop_preparation_id:
             self.worker_controller.stop_for_reserve(state.machine_id)
+            self._unconfirmed = None
             prepare_machine_storage_for_stop(
                 self.state_store.state_dir,
                 machine_id=state.machine_id,
@@ -1558,23 +1863,15 @@ class AgentDaemonService:
             )
             for slot in stream.slots
         ]
-        plan = plan_worker_slot_reconciliation(
+        applied = self._reconcile_workers(
+            state,
             desired_slots,
             active_slots,
-            executor=self.options.executor,
-            os_name=agent_worker_reconcile_os(self.options.os_name),
+            preparing=stream.reserve_preparation,
+            resume_pending=stream.reserve_resume_pending,
+            tunnel=tunnel,
+            timings=timings,
         )
-        network = self.options.worker_network
-        bridge = AgentBridgeNetworkConfig(
-            bridge_name=network.bridge_name,
-            subnet=network.bridge_subnet,
-            ipv6_subnet=network.bridge_ipv6_subnet,
-        )
-        tunnel.reconcile_listeners({bridge.gateway} if desired_slots or active_slots else set())
-        with timings.step("apply_slots"):
-            applied = self.worker_controller.apply(
-                plan, state.bootstrap, reported_images=self._reported_worker_images
-            )
         with timings.step("routes"):
             ready_routes = tunnel.reconcile_routes(
                 [
@@ -1615,9 +1912,10 @@ class AgentDaemonService:
         self._last_applied_actions = actions
         timings.log(
             LOGGER,
-            "agent stream %d applied %s",
+            "agent stream %d applied %s at boot+%.2fs",
             current_iterations,
             actions,
+            seconds_since_boot(),
             level=(
                 logging.INFO
                 if changed or timings.total_seconds() >= SLOW_STREAM_ITERATION_SECONDS
@@ -1651,6 +1949,88 @@ class AgentDaemonService:
             tunnel_connected=tunnel_connected,
             runtime_http_url=runtime_http_url,
         )
+
+    def _reconcile_workers(
+        self,
+        state: AgentState,
+        desired_slots: list[AgentWorkerSlot],
+        active_slots: list[AgentWorkerSlot],
+        *,
+        preparing: bool,
+        resume_pending: bool,
+        tunnel: AgentTunnelService,
+        timings: StepTimings,
+    ) -> list[AgentWorkerReconcileAction]:
+        if self._unconfirmed is not None:
+            active_slots = self._settle_unconfirmed_worker(
+                self._unconfirmed, desired_slots, active_slots, preparing=preparing
+            )
+            self._unconfirmed = None
+        plan = plan_worker_slot_reconciliation(
+            desired_slots,
+            active_slots,
+            executor=self.options.executor,
+            os_name=agent_worker_reconcile_os(self.options.os_name),
+        )
+        network = self.options.worker_network
+        bridge = AgentBridgeNetworkConfig(
+            bridge_name=network.bridge_name,
+            subnet=network.bridge_subnet,
+            ipv6_subnet=network.bridge_ipv6_subnet,
+        )
+        if preparing:
+            tunnel.hold_listeners()
+        else:
+            tunnel.reconcile_listeners({bridge.gateway} if desired_slots or active_slots else set())
+        with timings.step("apply_slots"):
+            applied = self.worker_controller.apply(
+                plan,
+                state.bootstrap,
+                reported_images=self._reported_worker_images,
+                reserve=preparing,
+            )
+        running = {slot.worker_id: slot for slot in active_slots}
+        for action in applied:
+            if action.action is WorkerSlotAction.Stop:
+                running.pop(action.worker_id, None)
+            elif action.slot is not None and action.action in {
+                WorkerSlotAction.Start,
+                WorkerSlotAction.Restart,
+            }:
+                running[action.worker_id] = action.slot
+        self._keep_reserve_worker(
+            desired_slots,
+            running,
+            machine_id=state.machine_id,
+            preparing=preparing,
+            resume_pending=resume_pending,
+        )
+        return applied
+
+    def _keep_reserve_worker(
+        self,
+        desired_slots: list[AgentWorkerSlot],
+        running: dict[str, AgentWorkerSlot],
+        *,
+        machine_id: str,
+        preparing: bool,
+        resume_pending: bool,
+    ) -> None:
+        """Record the worker slot a reserve is prepared with, or clear it once it serves.
+
+        The record is what a boot after the stop starts before its first stream,
+        and a worker already running stays unconfirmed until a stream adopts it.
+        While a resume is pending the record keeps the boot it was prepared in,
+        which is how the control plane tells that resume from a new preparation.
+        """
+        worker_id = agent_machine_worker_id(machine_id)
+        slot = next((item for item in desired_slots if item.worker_id == worker_id), None)
+        if not preparing or slot is None:
+            self.worker_controller.forget_reserve_worker()
+            return
+        if not resume_pending:
+            self.worker_controller.record_reserve_worker(slot)
+        self._unconfirmed = running.get(worker_id)
 
     def _poll_capacity_interruption(self) -> AgentCapacityInterruptionNotice | None:
         detector = self.interruption_detector
@@ -1995,7 +2375,7 @@ class AgentDaemonService:
                 time.sleep(delay)
                 backed_off += delay
 
-    def _start_tunnel(self, state: AgentState) -> AgentTunnelService:
+    def _start_tunnel(self, state: AgentState, *, hold_worker_control: bool) -> AgentTunnelService:
         network = self.options.worker_network
         bridge = AgentBridgeNetworkConfig(
             bridge_name=network.bridge_name,
@@ -2025,6 +2405,7 @@ class AgentDaemonService:
                 AgentTunnelRoute(route.route_id, route.local_target, route.state)
                 for route in registered.routes
             ],
+            listen=not hold_worker_control,
         )
         return tunnel
 
@@ -2444,6 +2825,14 @@ def agent_authority_was_revoked(exc: Exception) -> bool:
         return False
     detail = (exc.detail or str(exc)).strip().lower()
     return detail in AGENT_AUTHORITY_REVOKED_DETAILS
+
+
+def _boot_id() -> str:
+    """This boot's identity, or empty where the kernel does not publish one."""
+    try:
+        return BOOT_ID_PATH.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
 
 
 def _write_json_atomic(path: Path, payload: JsonValue, *, permissions: int) -> None:

@@ -18,7 +18,8 @@ from database.tables.compute import (
     ComputeUnitTable,
 )
 from database.tables.identity import WorkspaceMemberTable, WorkspaceTable
-from database.tables.orchestration import ContainerTable
+from database.tables.orchestration import ContainerTable, MachineTable
+from foundation.ids import try_uuid
 from pydantic import Field
 from shared.capacity import (
     TERMINAL_REASON_MAX_LENGTH,
@@ -166,6 +167,8 @@ class ComputeProviderInstanceRecord(ContractModel):
     # agent was not current when it stopped.
     prepared_agent_sha256: str = ""
     prepared_worker_image: str = ""
+    hibernates: bool = False
+    """Launched able to hibernate, so it stops warm, with its worker running."""
     missing_since: datetime | None = None
     provider_storage_destroyed_at: datetime | None = None
     terminating_reason: str = ""
@@ -1778,6 +1781,7 @@ def _provider_instance_record(row: ComputeProviderInstanceTable) -> ComputeProvi
             "booted_template_version": row.booted_template_version,
             "prepared_agent_sha256": row.prepared_agent_sha256,
             "prepared_worker_image": row.prepared_worker_image,
+            "hibernates": row.hibernates,
             "missing_since": to_utc_or_none(row.missing_since),
             "provider_storage_destroyed_at": to_utc_or_none(row.provider_storage_destroyed_at),
             "terminating_reason": row.terminating_reason,
@@ -1839,6 +1843,7 @@ class ComputeProviderInstanceRepository:
         row.booted_template_version = record.booted_template_version
         row.prepared_agent_sha256 = record.prepared_agent_sha256
         row.prepared_worker_image = record.prepared_worker_image
+        row.hibernates = record.hibernates
         row.missing_since = record.missing_since
         row.provider_storage_destroyed_at = record.provider_storage_destroyed_at
         row.terminating_reason = record.terminating_reason
@@ -2056,6 +2061,26 @@ class ComputeProviderInstanceRepository:
                 updated_at=utc_now(),
             )
         )
+
+    def machine_reserve_phases(
+        self, machine_id: str, *, workspace_id: str
+    ) -> tuple[str, str | None] | None:
+        """A machine's lifecycle and its provider instance's status, in one query.
+
+        None when the machine has no row in the workspace; the status is None
+        when no provider instance names the machine.
+        """
+        if try_uuid(machine_id) is None:
+            return None
+        row = self.session.execute(
+            select(MachineTable.lifecycle, ComputeProviderInstanceTable.status)
+            .outerjoin(
+                ComputeProviderInstanceTable,
+                ComputeProviderInstanceTable.machine_id == MachineTable.id,
+            )
+            .where(MachineTable.id == machine_id, MachineTable.workspace_id == workspace_id)
+        ).one_or_none()
+        return None if row is None else (row[0], row[1])
 
     def get_by_machine(self, machine_id: str) -> ComputeProviderInstanceRecord | None:
         row = self.session.scalars(
