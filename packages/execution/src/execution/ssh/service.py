@@ -19,10 +19,15 @@ from database.repositories.apps import (
 from database.repositories.identity import WorkspaceRepository
 from database.types import DatabaseSession
 from shared.deployment_subdomains import deployment_subdomain
-from shared.deployments import DeploymentKind, StubKind
+from shared.deployments import DeploymentKind, PodRole, StubKind
 from shared.errors import ConflictError, DomainError, NotFoundError
 from shared.http.ssh import SshCertificateResponse, SshHostListResponse, SshHostResponse
-from shared.ssh import SSH_CERTIFICATE_PRINCIPAL, SSH_WORKER_PORT, ssh_host_alias
+from shared.ssh import (
+    SSH_CERTIFICATE_PRINCIPAL,
+    SSH_HOST_LIST_LIMIT,
+    SSH_WORKER_PORT,
+    ssh_host_alias,
+)
 from shared.timestamps import utc_now
 
 from database import AsyncDatabaseClient, DatabaseClient
@@ -62,9 +67,6 @@ class PodSshTunnel:
     backend: socket.socket
 
 
-SSH_HOST_LIST_LIMIT = 100
-
-
 @dataclass(slots=True)
 class SshIdentityService:
     database: DatabaseClient
@@ -97,6 +99,7 @@ class SshIdentityService:
         workspace_id: str,
         app: str | None = None,
         pod: str | None = None,
+        role: PodRole | None = None,
         cursor: str = "",
         limit: int = SSH_HOST_LIST_LIMIT,
     ) -> SshHostListResponse:
@@ -115,6 +118,7 @@ class SshIdentityService:
                 workspace_id=workspace_id,
                 app=app,
                 pod=pod,
+                role=role,
                 after=(after[0], after[1]) if after is not None and len(after) == 2 else None,
                 limit=bounded,
             )
@@ -283,7 +287,6 @@ def _credential_secret(session: DatabaseSession, workspace_id: str) -> str:
 
 
 __all__ = [
-    "SSH_HOST_LIST_LIMIT",
     "PodSshIdentity",
     "PodSshTunnel",
     "PodSshTunnelService",

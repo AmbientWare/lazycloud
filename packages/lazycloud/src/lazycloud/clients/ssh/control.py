@@ -6,8 +6,10 @@ from typing import Protocol
 from urllib.parse import urlencode, urlsplit, urlunsplit
 
 from pydantic import JsonValue
+from shared.deployments import PodRole
 from shared.http.ssh import SshCertificateRequest, SshCertificateResponse, SshHostListResponse
 from shared.http_transport import HttpChannel
+from shared.ssh import SSH_HOST_LIST_LIMIT
 from shared.urls import url_path_segment
 
 from lazycloud.control import workspace_query
@@ -54,12 +56,20 @@ class SshControlClient:
         )
 
     def hosts(
-        self, *, app: str | None = None, pod: str | None = None, cursor: str = ""
+        self,
+        *,
+        app: str | None = None,
+        pod: str | None = None,
+        role: PodRole | None = None,
+        cursor: str = "",
+        limit: int = SSH_HOST_LIST_LIMIT,
     ) -> SshHostListResponse:
         filters = {
-            key: value for key, value in (("app", app), ("pod", pod), ("cursor", cursor)) if value
+            key: value
+            for key, value in (("app", app), ("pod", pod), ("role", role), ("cursor", cursor))
+            if value
         }
-        query = urlencode({**filters, **workspace_query(self.workspace)})
+        query = urlencode({**filters, "limit": limit, **workspace_query(self.workspace)})
         return SshHostListResponse.model_validate(self.channel.get(f"/api/v1/ssh/hosts?{query}"))
 
     def tunnel_url(self, pod: str, *, app: str) -> str:

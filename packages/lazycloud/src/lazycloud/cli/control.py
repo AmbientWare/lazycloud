@@ -7,6 +7,7 @@ from lazycloud.clients.gateway.control import GatewayControlClient
 from lazycloud.clients.observability.control import ObservabilityControlClient
 from lazycloud.clients.resource.control import ResourceControlClient
 from lazycloud.clients.secret.control import SecretControlClient
+from lazycloud.clients.ssh.control import SshControlClient
 from lazycloud.clients.volume.control import VolumeControlClient
 from lazycloud.clients.workspace.control import WorkspaceControlClient
 from lazycloud.control import ControlClientConfig, resolve_control_client_config
@@ -24,6 +25,16 @@ def control_config(
     timeout_seconds: float = 10.0,
 ) -> ControlClientConfig:
     return resolve_control_client_config(workspace=workspace, timeout_seconds=timeout_seconds)
+
+
+def ssh_client(*, workspace: str | None = None) -> SshControlClient:
+    config = control_config(workspace=workspace)
+    return SshControlClient.from_endpoint(
+        config.endpoint,
+        token=config.token,
+        timeout_seconds=config.timeout_seconds,
+        workspace=config.workspace,
+    )
 
 
 def gateway_client(
@@ -160,6 +171,7 @@ __all__ = [
     "gateway_client",
     "observability_client",
     "secret_client",
+    "ssh_client",
     "task_client",
     "volume_client",
     "workspace_client",

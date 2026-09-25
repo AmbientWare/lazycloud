@@ -13,7 +13,7 @@ from shared.http.errors import HttpApiError
 from lazycloud.cli.components.errors import ClientError
 from lazycloud.cli.components.output import emit
 from lazycloud.cli.components.progress import ConnectingIndicator
-from lazycloud.cli.control import control_config, resource_client, workspace_client
+from lazycloud.cli.control import control_config, resource_client, ssh_client, workspace_client
 from lazycloud.clients.resource.control import ResourceControlClient
 from lazycloud.clients.ssh.control import SshControlClient
 from lazycloud.session.ssh import (
@@ -49,11 +49,11 @@ def ssh(
 
 @contextmanager
 def ssh_connection(
-    pod: str, *, app: str | None, workspace: str | None
+    pod: str, *, app: str | None, workspace: str | None, role: PodRole | None = None
 ) -> Iterator[tuple[SshAccess, SshPodHost]]:
     with _setup_errors():
-        client = _client(workspace)
-        listed = list_ssh_hosts(client, app=app, pod=pod)
+        client = ssh_client(workspace=workspace)
+        listed = list_ssh_hosts(client, app=app, pod=pod, role=role)
         access = _access(client, listed.workspace)
         host = _one_host(listed.hosts, pod)
         access.write_hosts([host])
@@ -74,7 +74,7 @@ def ssh_proxy(
     indicator = ConnectingIndicator(
         pod,
         describe=_DevboxPhase(
-            _client(workspace), resource_client(workspace=workspace), pod=pod, app=app
+            ssh_client(workspace=workspace), resource_client(workspace=workspace), pod=pod, app=app
         ),
     ).start()
 
@@ -140,7 +140,9 @@ def ssh_cert(
 ) -> None:
     """Refresh the SSH certificate when it is missing or past half its lifetime."""
     with _setup_errors():
-        access = _access(_client(workspace), workspace or workspace_client().current().name)
+        access = _access(
+            ssh_client(workspace=workspace), workspace or workspace_client().current().name
+        )
         refreshed = access.refresh_certificate(force=force)
     if quiet:
         return
@@ -174,7 +176,7 @@ def ssh_config(
         raise typer.BadParameter("--prune needs every host, so it takes no names")
     removed: list[str] = []
     with _setup_errors():
-        client = _client(workspace)
+        client = ssh_client(workspace=workspace)
         if pods:
             named = [list_ssh_hosts(client, app=app, pod=pod) for pod in pods]
             workspace_name = named[0].workspace
@@ -217,16 +219,6 @@ def ssh_config(
             "ssh_config_updated": included,
         },
         view="\n".join(lines),
-    )
-
-
-def _client(workspace: str | None) -> SshControlClient:
-    config = control_config(workspace=workspace)
-    return SshControlClient.from_endpoint(
-        config.endpoint,
-        token=config.token,
-        timeout_seconds=config.timeout_seconds,
-        workspace=config.workspace,
     )
 
 
