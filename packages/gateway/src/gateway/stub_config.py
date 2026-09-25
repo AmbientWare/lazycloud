@@ -27,6 +27,7 @@ from shared.deployments import DeploymentKind, PodRole
 from shared.gpu import gpu_preference
 from shared.http.gateway import GetOrCreateStubRequest
 from shared.image_building.authoring import ImageBuildStep, ImageSpec
+from shared.image_building.constants import DEFAULT_IMAGE_BASE
 from shared.tasks import RetryPolicy
 from shared.workload_config import (
     StubAutoscalerConfig,
@@ -212,7 +213,7 @@ def deployment_spec_from_stub(stub: StubRecord, *, name: str) -> DeploymentSpec:
         handler=stub.handler,
         domain=config.domain,
         image=ImageSpec(
-            base=image_config.base or "python:3.12-slim",
+            base=image_config.base or DEFAULT_IMAGE_BASE,
             image_id=image_config.image_id,
             python_version=image_config.python_version or "3.12",
             packages=image_config.packages,

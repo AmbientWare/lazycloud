@@ -5,8 +5,9 @@ import shlex
 from collections.abc import Callable
 
 from shared.image_building.authoring import ImageSpec
+from shared.image_building.constants import DEFAULT_IMAGE_BASE
 
-from images.building.constants import DEFAULT_IMAGE_BASE, DOCKER_HUB_REGISTRY
+from images.building.constants import DOCKER_HUB_REGISTRY
 from images.building.models import ImageBuildSourcePlan, ImageSourceReference
 
 _DIGEST_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]*(?:[-_+.][A-Za-z][A-Za-z0-9]*)*:[0-9A-Fa-f]{32,}$")
