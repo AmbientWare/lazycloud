@@ -12,6 +12,7 @@ from shared.deployments import PodRole
 from shared.disks import DiskMount, require_one_writer, validate_disk_mounts
 from shared.http.client_manifests import ClientContract
 from shared.image_building.authoring import ImageBuildStep
+from shared.image_building.constants import DEFAULT_IMAGE_BASE
 from shared.lifecycle import LifecycleHooks
 from shared.mounts import MountAuthMode, validate_mount_auth
 from shared.placement import AvailabilityZone, ProductRegion
@@ -62,7 +63,7 @@ def absolute_health_check_path(value: str) -> str:
 class StubImageConfig(ContractModel):
     image_id: str | None = None
     python_version: str = "3.12"
-    base: str = "python:3.12-slim"
+    base: str = DEFAULT_IMAGE_BASE
     packages: list[str] = Field(default_factory=list)
     commands: list[str] = Field(default_factory=list)
     build_steps: list[ImageBuildStep] = Field(default_factory=list)

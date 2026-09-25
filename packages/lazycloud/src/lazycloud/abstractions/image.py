@@ -177,7 +177,7 @@ class Image:
     ) -> None:
         self.architecture = LinuxArchitecture(architecture)
         self.python_version = normalize_python_version(str(python_version))
-        self.base = base_image or _default_image_base(self.python_version)
+        self.base = base_image or DEFAULT_IMAGE_BASE
         self.packages = tuple(_constructor_python_packages(python_packages))
         self.commands = tuple(str(command) for command in commands)
         self.build_steps = ()
@@ -769,12 +769,6 @@ def _env_items(
             raise ValueError(msg)
         result.append((key, value))
     return result
-
-
-def _default_image_base(python_version: str) -> str:
-    if not python_version.startswith("micromamba"):
-        return f"python:{python_version}-slim"
-    return DEFAULT_IMAGE_BASE
 
 
 def _http_build_step(step: ImageBuildStep) -> BuildStep:

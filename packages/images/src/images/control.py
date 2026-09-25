@@ -21,6 +21,7 @@ from shared.http.images import (
     VerifyImageBuildResponse,
 )
 from shared.image_building.authoring import ImageBuildStep, ImageBuildStepKind, ImageSpec
+from shared.image_building.constants import DEFAULT_IMAGE_BASE
 from shared.image_building.credentials import image_secret_names
 from shared.image_building.records import ImageBuildRecord, ImageRecord
 
@@ -468,7 +469,7 @@ def _image_spec_from_verify(
 ) -> ImageSpec:
     return ImageSpec(
         architecture=request.architecture,
-        base=request.existing_image_uri or "python:3.12-slim",
+        base=request.existing_image_uri or DEFAULT_IMAGE_BASE,
         python_version=request.python_version or "3.12",
         packages=list(request.python_packages),
         commands=list(request.commands),
@@ -492,7 +493,7 @@ def _image_spec_from_build(
 ) -> ImageSpec:
     return ImageSpec(
         architecture=request.architecture,
-        base=request.existing_image_uri or "python:3.12-slim",
+        base=request.existing_image_uri or DEFAULT_IMAGE_BASE,
         python_version=request.python_version or "3.12",
         packages=list(request.python_packages),
         commands=list(request.commands),

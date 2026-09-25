@@ -98,7 +98,10 @@ def plan_python_runtime_setup(image: ImageSpec) -> PythonRuntimeSetupPlan:
         requires_python=True,
         python_version=python_version,
         python_executable=runtime_python,
-        dockerfile_instructions=[UV_COPY_INSTRUCTION],
+        dockerfile_instructions=[
+            UV_COPY_INSTRUCTION,
+            "ENV UV_PYTHON_INSTALL_DIR=/opt/python",
+        ],
         commands=[
             _managed_python_setup_command(python_version, quoted_version=quoted_version),
             _managed_python_link_command(python_version),
@@ -161,6 +164,7 @@ def _managed_python_link_command(python_version: str) -> str:
         'if [ "$source_path" -ef "$target_path" ]; then return 0; fi; '
         'rm -f "$target_path"; fi; ln -s "$source_path" "$target_path"; }; '
         f"runtime_link {prefix_python} /usr/local/bin/python && "
+        f"runtime_link {prefix_python} /usr/local/bin/python3 && "
         f"runtime_link {prefix_python} /usr/local/bin/python{minor} && "
         f'runtime_bin=$(dirname "$(readlink -f {prefix_python})") && '
         '[ -x "$runtime_bin/pip" ] && runtime_link "$runtime_bin/pip" /usr/local/bin/pip'

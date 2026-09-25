@@ -32,8 +32,9 @@ cloud container, and your machine never needs ffmpeg.
 `.add_python_packages(["httpx"])` adds a Python package.
 
 `Image()` alone is the managed Python 3.12 image, and Python 3.10 through 3.14,
-or a patch release such as `3.12.11`, are available. Images are cached by
-content, so an unchanged image never rebuilds.
+or a patch release such as `3.12.11`, are available. Default images use Debian
+slim with uv-managed CPython from Astral's `python-build-standalone` distributions.
+Images are cached by content, so an unchanged image never rebuilds.
 
 ## Create an image from a project
 

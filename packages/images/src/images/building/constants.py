@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-DEFAULT_IMAGE_BASE = "python:3.12-slim"
 DOCKER_HUB_REGISTRY = "docker.io"
 MANAGED_PYTHON_PREFIX = "/opt/runtime-python"
 UV_IMAGE_REFERENCE = (
