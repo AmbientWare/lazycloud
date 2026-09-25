@@ -127,9 +127,38 @@ def login_shell_command(harness: AgentHarness, nonce: str) -> str:
     opener = (
         f'#!/bin/sh\nprintf \'\\033]777;lazycloud-{nonce};%s\\007\' "$1" > "$LAZYCLOUD_LOGIN_TTY"\n'
     )
-    command = shlex.join(AGENT_INSTALLATIONS[harness].login_command)
+    installation = AGENT_INSTALLATIONS[harness]
+    executable = installation.login_command[0]
+    install_command = shlex.join(
+        ["npm", "install", "--global", f"{installation.package}@{installation.version}"]
+    )
+    prerequisites = [
+        (
+            executable,
+            f"Missing '{executable}' on the devbox.\n"
+            "With Node.js 22 and npm installed, run inside the devbox:\n"
+            f"  {install_command}",
+        ),
+        *(
+            (
+                dependency.command,
+                f"Missing '{dependency.command}' on the devbox, required by {executable}. "
+                "On Debian or Ubuntu, run as root there:\n  apt-get update && "
+                f"apt-get install -y --no-install-recommends {dependency.package}",
+            )
+            for dependency in installation.system_dependencies
+        ),
+    ]
+    checks = "".join(
+        f"if ! command -v {shlex.quote(required)} >/dev/null 2>&1; then "
+        f"printf '%s\\n' {shlex.quote(message)} >&2; agent_login_missing=1; fi; "
+        for required, message in prerequisites
+    )
+    command = shlex.join(installation.login_command)
     script = (
-        "set -eu; agent_login_dir=$(mktemp -d /tmp/lazycloud-login.XXXXXXXX); "
+        f"set -eu; agent_login_missing=0; {checks}"
+        '[ "$agent_login_missing" -eq 0 ] || exit 127; '
+        "agent_login_dir=$(mktemp -d /tmp/lazycloud-login.XXXXXXXX); "
         'agent_login_pid=; cleanup() { if [ -n "$agent_login_pid" ]; then '
         'kill -TERM "$agent_login_pid" 2>/dev/null || :; fi; '
         'rm -rf "$agent_login_dir"; }; trap cleanup EXIT; '
