@@ -66,6 +66,7 @@ from agent.service_manager import (
     AgentServiceRuntimeStatus,
     PreflightCheckName,
 )
+from agent.updates import RELEASE_COMPLETE_FILE
 
 AGENT_SOURCE_CACHE_RELATIVE_PATH = Path("cache") / "source-code"
 
@@ -576,13 +577,18 @@ install_from_url() {
     fail "agent artifact SHA-256 mismatch" 1
   fi
   release="$releases/$digest"
-  if [ ! -x "$release/__AGENT_NAME__" ]; then
+  if [ ! -f "$release/__RELEASE_COMPLETE_FILE__" ]; then
     staged="$(mktemp -d "$releases/.release.XXXXXX")"
     if ! tar -xzf "$archive" -C "$staged" || [ ! -x "$staged/__AGENT_NAME__" ]; then
       rm -rf "$staged" "$archive"
       fail "the agent release from $url could not be unpacked" 1
     fi
-    rm -rf "$release"
+    : > "$staged/__RELEASE_COMPLETE_FILE__"
+    if [ -e "$release" ]; then
+      doomed="$releases/.$digest.$$.removing"
+      mv "$release" "$doomed"
+      rm -rf "$doomed"
+    fi
     mv "$staged" "$release"
   fi
   rm -f "$archive"
@@ -719,6 +725,7 @@ main "$@"
     return (
         script.replace("__AGENT_NAME__", name)
         .replace("__HOME_DIR__", HOME_DIR)
+        .replace("__RELEASE_COMPLETE_FILE__", RELEASE_COMPLETE_FILE)
         .replace("__DEFAULT_AGENT_STATE_DIR__", DEFAULT_AGENT_STATE_DIR)
         .replace("__AGENT_RUNTIME_READY_FILE__", AGENT_RUNTIME_READY_FILE)
         .replace("__READY_TIMEOUT_SECONDS__", str(AGENT_SERVICE_READY_TIMEOUT_SECONDS))

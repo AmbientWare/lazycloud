@@ -550,9 +550,18 @@ def _validate_worker_readiness(
         with ThreadPoolExecutor(
             max_workers=len(checks), thread_name_prefix="worker-readiness"
         ) as pool:
-            outcomes = [pool.submit(timed, name) for name in checks]
-        for outcome in outcomes:
-            outcome.result()
+            outcomes = {name: pool.submit(timed, name) for name in checks}
+        failures = {
+            name: error
+            for name, outcome in outcomes.items()
+            if (error := outcome.exception()) is not None
+        }
+        # Every failed check is logged, so a second cause is not hidden behind
+        # the first, which is the one raised.
+        for name, error in failures.items():
+            LOGGER.error("container worker readiness check %s failed", name, exc_info=error)
+        for error in failures.values():
+            raise error
     finally:
         timings.log(LOGGER, "container worker readiness checks")
 

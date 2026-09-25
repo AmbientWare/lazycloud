@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
+import http.client
 from dataclasses import dataclass
 from typing import Protocol
 
-from provider_aws.provider_node_proof import (
-    AwsEc2ProviderNodeIdentityProofProvider,
-    AwsProviderNodeProofError,
-)
+from provider_aws.instance_metadata import AwsProviderNodeProofError
 from pydantic import SecretStr
 from shared.provider_config import ProviderKind
 
@@ -25,6 +23,10 @@ class ProviderNodeIdentityEvidenceError(RuntimeError):
     """Provider-backed node identity evidence could not be created."""
 
 
+class ProviderNodeIdentityUnavailableError(ProviderNodeIdentityEvidenceError):
+    """The instance metadata service did not answer, as it may not early in a boot."""
+
+
 class ProviderNodeIdentityEvidenceProvider(Protocol):
     def create(
         self,
@@ -33,9 +35,24 @@ class ProviderNodeIdentityEvidenceProvider(Protocol):
     ) -> ProviderNodeIdentityEvidence: ...
 
 
+class _NodeProof(Protocol):
+    @property
+    def region(self) -> str: ...
+
+    @property
+    def instance_id(self) -> str: ...
+
+    @property
+    def presigned_url(self) -> SecretStr: ...
+
+
+class _NodeProofProvider(Protocol):
+    def create(self, *, expected_region: str | None = None) -> _NodeProof: ...
+
+
 @dataclass(frozen=True, slots=True)
 class _AwsProviderNodeIdentityEvidenceProvider:
-    provider: AwsEc2ProviderNodeIdentityProofProvider
+    provider: _NodeProofProvider
 
     def create(
         self,
@@ -45,6 +62,8 @@ class _AwsProviderNodeIdentityEvidenceProvider:
         try:
             proof = self.provider.create(expected_region=expected_region)
         except AwsProviderNodeProofError as exc:
+            if isinstance(exc.__cause__, OSError | http.client.HTTPException):
+                raise ProviderNodeIdentityUnavailableError(str(exc)) from exc
             raise ProviderNodeIdentityEvidenceError(str(exc)) from exc
         return ProviderNodeIdentityEvidence(
             provider=ProviderKind.Aws,
@@ -55,4 +74,8 @@ class _AwsProviderNodeIdentityEvidenceProvider:
 
 
 def provider_node_identity_evidence_provider() -> ProviderNodeIdentityEvidenceProvider:
+    # Imported here so a machine a customer joined never loads botocore or the
+    # AWS provider at startup; only a provider node asks for this evidence.
+    from provider_aws.provider_node_proof import AwsEc2ProviderNodeIdentityProofProvider
+
     return _AwsProviderNodeIdentityEvidenceProvider(AwsEc2ProviderNodeIdentityProofProvider())

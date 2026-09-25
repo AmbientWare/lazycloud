@@ -9,15 +9,15 @@ import os
 import re
 import shutil
 import subprocess
-import tarfile
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TypedDict
 
+from deploy.agent_release import is_agent_release
+
 SCHEMA_VERSION = 1
 SUPPORTED_ARCHITECTURES = ("amd64", "arm64")
-AGENT_EXECUTABLE = "lazycloud-agent"
 VERSION_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
 
@@ -191,7 +191,7 @@ def stage_artifacts(
         source = source.resolve()
         if not source.is_file():
             raise RuntimeError(f"agent artifact does not exist: {source}")
-        if not _is_agent_release(source):
+        if not is_agent_release(source):
             raise RuntimeError(f"agent artifact is not an agent release archive: {source}")
         filename = artifact_filename(architecture)
         destination = version_root / filename
@@ -255,16 +255,6 @@ def _validate_version(version: str) -> None:
         raise ValueError(
             "agent artifact version must contain only letters, numbers, dot, dash, or underscore"
         )
-
-
-def _is_agent_release(path: Path) -> bool:
-    """Whether `path` is a gzip tarball with the agent executable at its root."""
-    try:
-        with tarfile.open(path, "r:gz") as archive:
-            executable = archive.getmember(f"./{AGENT_EXECUTABLE}")
-    except (tarfile.TarError, KeyError, OSError):
-        return False
-    return executable.isfile() and bool(executable.mode & 0o111)
 
 
 def _copy_immutable(source: Path, destination: Path) -> None:

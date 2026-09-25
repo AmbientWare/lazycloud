@@ -19,7 +19,7 @@ from shared.compute_policy import UnitName
 _AGENT_SHA256 = "a" * 64
 _AGENT_BINARY_URL = (
     f"https://s3.us-east-1.amazonaws.com/releases/agents/0.1.0/{_AGENT_SHA256}/"
-    "lazycloud-agent-linux-amd64"
+    "lazycloud-agent-linux-amd64.tar.gz"
 )
 _NONCE = "0123456789abcdef0123456789abcdef"
 _ACCESS_KEY = "ASIA0123456789ABCDEF"

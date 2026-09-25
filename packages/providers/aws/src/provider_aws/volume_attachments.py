@@ -14,7 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .instance_catalog import AwsInstanceCatalogEntry, aws_instance_catalog_entry
-from .provider_node_proof import (
+from .instance_metadata import (
     AWS_IMDS_MAX_TEXT_BYTES,
     AWS_IMDS_TIMEOUT_SECONDS,
     AWS_IMDS_TOKEN_TTL_SECONDS,

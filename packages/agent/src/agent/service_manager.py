@@ -240,7 +240,8 @@ def render_systemd_unit(spec: AgentServiceSpec) -> str:
         # is reached before the network is online and stays up until the agent
         # stops, and a simple service counts as started once forked, so Docker
         # starts no later and stops its workers while the agent still carries
-        # their final calls.
+        # their final calls. An interruption's shutdown runs from its timer
+        # ahead of the provider's deadline, while Docker is still up.
         "Wants=docker.service",
         "After=network.target",
         "Before=docker.service",

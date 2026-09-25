@@ -78,7 +78,8 @@ def _enabled_settings() -> _AwsOwnerSettings:
         capacity=AwsCapacitySettings(
             worker_image_digest=(f"registry.example.com/worker@sha256:{'c' * 64}"),
             agent_binary_url=(
-                f"https://releases.example.com/agents/0.1.0/{'b' * 64}/lazycloud-agent-linux-amd64"
+                f"https://releases.example.com/agents/0.1.0/{'b' * 64}/"
+                "lazycloud-agent-linux-amd64.tar.gz"
             ),
             cpu_ami_ids={"us-east-1": "ami-0123456789abcdef0"},
             gpu_ami_ids={"us-east-1": "ami-0fedcba9876543210"},

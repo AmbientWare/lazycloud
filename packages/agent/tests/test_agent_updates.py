@@ -7,7 +7,13 @@ from pathlib import Path
 from typing import BinaryIO
 
 import pytest
-from agent.updates import SUPERVISOR, UPDATE_PENDING_FILE, AgentUpdater, AgentUpdateRestartError
+from agent.updates import (
+    RELEASE_COMPLETE_FILE,
+    SUPERVISOR,
+    UPDATE_PENDING_FILE,
+    AgentUpdater,
+    AgentUpdateRestartError,
+)
 from shared.app_identity import AGENT_NAME
 from shared.releases import AgentArtifact
 
@@ -85,3 +91,33 @@ def test_an_update_switches_the_command_and_keeps_only_the_releases_it_can_retur
     assert sorted(entry.name for entry in releases.iterdir()) == sorted(
         [second.sha256, third.sha256]
     )
+
+
+def test_a_release_left_incomplete_is_unpacked_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A digest directory without its completion mark, as a cut-short removal leaves, goes."""
+
+    def download(url: str, *, timeout: float) -> BinaryIO:
+        del timeout
+        return (tmp_path / url.rsplit("/", 1)[1]).open("rb")
+
+    def restart() -> None:
+        raise _Restarted
+
+    monkeypatch.setattr(updates.urllib.request, "urlopen", download)
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / SUPERVISOR).write_text("")
+    first = _release(tmp_path / "first.tar.gz", "first")
+    second = _release(tmp_path / "second.tar.gz", "second")
+    command = _installed(tmp_path / "prefix", first)
+    incomplete = command.parent.parent / "lib" / AGENT_NAME / second.sha256
+    incomplete.mkdir()
+
+    with pytest.raises(AgentUpdateRestartError):
+        AgentUpdater(command, state).install(second, before_exec=restart)
+
+    assert (incomplete / AGENT_NAME).is_file()
+    assert (incomplete / RELEASE_COMPLETE_FILE).is_file()
+    assert AgentUpdater(command, state).binary_sha256() == second.sha256

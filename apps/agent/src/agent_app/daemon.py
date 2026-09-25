@@ -92,7 +92,6 @@ from provider_aws.provider_node_interruption import (
     AwsEc2SpotInterruptionMonitor,
     AwsSpotInterruptionMonitorError,
 )
-from provider_aws.volume_attachments import AwsInstanceDiskVolumeSlots
 from pydantic import Field, JsonValue, TypeAdapter, field_validator, model_validator
 from shared.agent_connections import AGENT_TUNNEL_CONTROL_URL
 from shared.app_identity import AGENT_NAME, NAME
@@ -137,6 +136,7 @@ from worker.network_backend import AgentBridgeCallbackFirewall, AgentBridgeNetwo
 from agent_app.metrics import agent_metric_snapshot, physical_memory_mb
 from agent_app.provider_identity import (
     ProviderNodeIdentityEvidenceProvider,
+    ProviderNodeIdentityUnavailableError,
     provider_node_identity_evidence_provider,
 )
 from agent_app.telemetry import (
@@ -165,8 +165,9 @@ AGENT_LAST_PREPARED_IMAGE_FILE = "last-prepared-worker-image.json"
 IMAGE_REPORT_WAIT_SECONDS = 1.0
 BOOT_IMAGE_LOOKUP_SECONDS = 3.0
 DOCKER_WAIT_SECONDS = 60.0
-DOCKER_PROBE_SECONDS = 5.0
+DOCKER_PING_SECONDS = 0.5
 DOCKER_POLL_SECONDS = 0.1
+DEFAULT_DOCKER_SOCKET = "/var/run/docker.sock"
 WORKER_EXIT_LOG_LINES = 200
 DEFAULT_MACHINE_ID_PATHS = (Path("/etc/machine-id"), Path("/var/lib/dbus/machine-id"))
 AGENT_AUTHORITY_REVOKED_DETAILS = frozenset(
@@ -584,6 +585,30 @@ class SubprocessCommandRunner:
                 raise
 
 
+def _docker_ping_failure() -> str:
+    """Why Docker's API socket did not answer a ping, or empty when it did.
+
+    A plain request on the unix socket named by DOCKER_HOST, or the default
+    socket: no docker process to start and no timer thread per attempt.
+    """
+    host = os.environ.get("DOCKER_HOST", "")
+    if host and not host.startswith("unix://"):
+        return ""
+    path = host.removeprefix("unix://") or DEFAULT_DOCKER_SOCKET
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+            connection.settimeout(DOCKER_PING_SECONDS)
+            connection.connect(path)
+            connection.sendall(b"GET /_ping HTTP/1.0\r\nHost: docker\r\n\r\n")
+            reply = connection.recv(64)
+    except OSError as exc:
+        return f"{type(exc).__name__}: {exc}"
+    status = reply.split(b"\r\n", 1)[0]
+    if status.startswith(b"HTTP/1.") and status.split(b" ")[1:2] == [b"200"]:
+        return ""
+    return status.decode("ascii", "replace") or "empty reply"
+
+
 def _slot_removal_is_settled(detail: str) -> bool:
     """Report whether a failed ``docker rm -f`` already achieves the desired state.
 
@@ -615,20 +640,24 @@ class DockerAgentWorkerController:
     _docker_answered: bool = field(default=False, init=False)
     _docker_waited_out: bool = field(default=False, init=False)
     """The minute passed without an answer, so later calls run Docker directly."""
-    _docker_deadline: float = field(
-        default_factory=lambda: time.monotonic() + DOCKER_WAIT_SECONDS, init=False
-    )
-    """Docker commands wait for the daemon until this, measured from agent start."""
+    docker_wait_seconds: float = 0.0
+    """How long after the controller starts its Docker calls wait for the daemon.
+
+    Only the daemon sets it, because its unit starts before Docker. A command
+    such as uninstall, and every stop, runs Docker at once and fails fast.
+    """
+    _docker_deadline: float = field(default=0.0, init=False)
 
     def __post_init__(self) -> None:
         self._images = WorkerImagePreparation(self._prepare_worker_image)
+        self._docker_deadline = time.monotonic() + self.docker_wait_seconds
 
     def wait_for_docker(self, stop: Event | None = None) -> bool:
-        """Wait for the Docker daemon to answer, polling; False once it has not in time.
+        """Wait for the Docker daemon to answer; False once it has not in time.
 
-        The agent's unit starts before Docker rather than after it, so any
-        Docker call of a process waits here, up to a minute from agent start,
-        instead of failing or spending a pull's retries while the daemon starts.
+        The daemon's unit starts before Docker rather than after it, so its
+        Docker calls wait here, up to `docker_wait_seconds` from the start,
+        instead of failing or spending a pull's retries while Docker starts.
         A set `stop` ends the wait at once.
         """
         if self._docker_answered:
@@ -636,10 +665,10 @@ class DockerAgentWorkerController:
         if self._docker_waited_out:
             return False
         began = time.monotonic()
-        probe = [self.docker_binary, "version", "--format", "{{.Server.Version}}"]
-        while failure := self._docker_failure(probe, within=DOCKER_PROBE_SECONDS):
+        while failure := _docker_ping_failure():
             if time.monotonic() >= self._docker_deadline:
-                LOGGER.warning("docker did not answer after agent start: %s", failure)
+                if self.docker_wait_seconds:
+                    LOGGER.warning("docker did not answer after agent start: %s", failure)
                 self._docker_waited_out = True
                 return False
             if stop is None:
@@ -651,15 +680,12 @@ class DockerAgentWorkerController:
         return True
 
     def _docker(self, args: list[str], *, stop: Event | None = None) -> CommandResult:
-        """Run a command that needs the Docker daemon, once it has answered or had its minute."""
+        """Run a command that needs the Docker daemon, once it has answered or had its time."""
         self.wait_for_docker(stop)
         return self.runner.run(args, stop=stop)
 
     def _docker_failure(self, args: list[str], *, within: float) -> str:
-        """Why a docker command failed within `within` seconds, or empty when it succeeded.
-
-        Runs at once, without waiting for the daemon, since the wait itself uses it.
-        """
+        """Why a docker command failed within `within` seconds, or empty when it succeeded."""
         expired = Event()
         timer = Timer(within, expired.set)
         timer.start()
@@ -677,18 +703,19 @@ class DockerAgentWorkerController:
         self._images.close()
 
     def prepare_worker_image(self) -> Future[None] | None:
-        """Get the worker image this machine will run ready before the first stream.
+        """Get the worker image this machine will run ready in the background.
 
-        The override, when set, is prepared in the background, pulling if needed.
-        Otherwise the image this machine last had prepared is only looked up: a
-        reserve resumes with it on disk, so the first stream already reports it,
-        and one that is gone is left for the stream to name the image it needs.
+        The override, when set, is prepared, pulling if needed. Otherwise the
+        image this machine last had prepared is only looked up, once Docker
+        answers: a stream reports it as soon as it is found, and one that is
+        gone is left for a stream to name the image it needs. The first stream
+        does not wait for either.
         """
         if self.worker_image_override:
             return self._images.start(self.worker_image_override)
         image = self._last_prepared_image()
-        if image and self._image_present(image):
-            self._images.mark_prepared(image)
+        if image:
+            self._images.look_up(image, self._image_present)
         return None
 
     def _image_present(self, image: str) -> bool:
@@ -877,7 +904,7 @@ class DockerAgentWorkerController:
 
     def stop_for_reserve(self, machine_id: str) -> None:
         self.stop_all()
-        remaining = self._docker(
+        remaining = self.runner.run(
             [
                 self.docker_binary,
                 "ps",
@@ -898,7 +925,7 @@ class DockerAgentWorkerController:
             self._save_active_slots([])
             return
         names = [f"{AGENT_NAME}-{sanitize_worker_name(slot.worker_id)}" for slot in slots]
-        stop_result = self._docker(
+        stop_result = self.runner.run(
             [
                 self.docker_binary,
                 "stop",
@@ -907,7 +934,7 @@ class DockerAgentWorkerController:
                 *names,
             ]
         )
-        remove_result = self._docker([self.docker_binary, "rm", "-f", *names])
+        remove_result = self.runner.run([self.docker_binary, "rm", "-f", *names])
         if remove_result.returncode != 0:
             msg = f"remove stopped workers failed: {remove_result.stderr or remove_result.stdout}"
             raise RuntimeError(msg)
@@ -959,7 +986,7 @@ class DockerAgentWorkerController:
     def _stop(self, slot: AgentWorkerSlot) -> None:
         name = f"{AGENT_NAME}-{sanitize_worker_name(slot.worker_id)}"
         self._collect_worker_exit(name, slot.worker_id)
-        result = self._docker([self.docker_binary, "rm", "-f", name])
+        result = self.runner.run([self.docker_binary, "rm", "-f", name])
         if result.returncode != 0 and not _slot_removal_is_settled(result.stderr or result.stdout):
             msg = f"stop worker slot {slot.worker_id} failed: {result.stderr or result.stdout}"
             raise RuntimeError(msg)
@@ -1005,7 +1032,7 @@ class DockerAgentWorkerController:
         and copying a healthy worker's whole log into telemetry on every
         reconcile would bury the run that has something to say.
         """
-        inspected = self._docker(
+        inspected = self.runner.run(
             [
                 self.docker_binary,
                 "inspect",
@@ -1026,7 +1053,7 @@ class DockerAgentWorkerController:
             exit_code or "unknown",
             oom_killed or "unknown",
         )
-        logs = self._docker(
+        logs = self.runner.run(
             [self.docker_binary, "logs", "--tail", str(WORKER_EXIT_LOG_LINES), name]
         )
         for line in (f"{logs.stdout}\n{logs.stderr}").splitlines():
@@ -1969,6 +1996,7 @@ def build_agent_daemon_service(
             platform=agent_worker_platform(options.os_name, options.arch),
             telemetry=telemetry,
             disk_volume_slots=_provider_disk_volume_slots(options),
+            docker_wait_seconds=DOCKER_WAIT_SECONDS,
         ),
         resource_detector=resource_detector,
         interruption_detector=(
@@ -1984,6 +2012,10 @@ def _provider_disk_volume_slots(options: AgentDaemonOptions) -> Callable[[], int
         return None
     if options.provider is not ProviderKind.Aws:
         raise ValueError(f"provider {options.provider.value!r} has no disk volume support")
+    # Here, not at the top: the instance catalog it reads costs a machine a
+    # customer joined tens of milliseconds at every start, for nothing.
+    from provider_aws.volume_attachments import AwsInstanceDiskVolumeSlots
+
     return AwsInstanceDiskVolumeSlots().slots
 
 
@@ -2320,7 +2352,10 @@ def _recoverable_stream_error(exc: Exception) -> bool:
     # has to be named explicitly or every TLS reset reads as a fatal error.
     if isinstance(exc, HttpTransportError):
         return True
-    if isinstance(exc, AgentStreamRetryableError | WorkerImagePullError):
+    if isinstance(
+        exc,
+        AgentStreamRetryableError | WorkerImagePullError | ProviderNodeIdentityUnavailableError,
+    ):
         return True
     return isinstance(
         exc,

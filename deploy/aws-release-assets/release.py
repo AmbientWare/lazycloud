@@ -15,6 +15,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from deploy.agent_release import is_agent_release
 from deploy.object_storage import put_object
 from provider_aws.account_connection import (
     AwsAccountConnectionTemplatePublication,
@@ -38,7 +39,6 @@ from provider_clients.release_manifest import (
 )
 from pydantic import BaseModel, ConfigDict, Field, RootModel, ValidationError
 
-GZIP_MAGIC = b"\x1f\x8b"
 _ANONYMOUS_READ_ATTEMPTS = 5
 _ANONYMOUS_READ_BACKOFF_SECONDS = 4.0
 _OCI_IMAGE_MANIFEST_MEDIA_TYPE = "application/vnd.oci.image.manifest.v1+json"
@@ -269,9 +269,8 @@ def stage_release(
         raise ValueError("linux/amd64 agent artifact filename is invalid")
     agent_source = agent_version_dir.resolve() / agent.filename
     _verify_file(agent_source, expected_sha256=agent.sha256, expected_size=agent.size_bytes)
-    with agent_source.open("rb") as archive:
-        if archive.read(2) != GZIP_MAGIC:
-            raise ValueError("linux/amd64 agent artifact is not a gzip archive")
+    if not is_agent_release(agent_source):
+        raise ValueError("linux/amd64 agent artifact is not an agent release archive")
 
     template = aws_account_connection_template_bytes()
     template_identity = aws_account_connection_template_identity()
@@ -425,9 +424,8 @@ def validated_local_agent_artifact_root(
     )
     if stat.S_IMODE(agent_path.stat().st_mode) != 0o644:
         raise ValueError("AWS release agent artifact mode must be 0644")
-    with agent_path.open("rb") as archive:
-        if archive.read(2) != GZIP_MAGIC:
-            raise ValueError("AWS release agent artifact is not a gzip archive")
+    if not is_agent_release(agent_path):
+        raise ValueError("AWS release agent artifact is not an agent release archive")
     return resolved_artifact_root
 
 

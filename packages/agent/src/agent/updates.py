@@ -73,6 +73,27 @@ RELEASE_DIGEST_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 STALE_STAGING_SECONDS = 3600
 """How long a download or unpack goes untouched before pruning takes it as abandoned."""
 UPDATE_PENDING_FILE = "agent-update.pending"
+RELEASE_COMPLETE_FILE = ".lazycloud-release-complete"
+"""Written into a release last, when unpacking it is finished; the install script too."""
+
+
+def release_complete(release: Path) -> bool:
+    """Whether `release` was unpacked whole, rather than cut short or half removed."""
+    return (release / RELEASE_COMPLETE_FILE).is_file()
+
+
+def discard_release(entry: Path) -> None:
+    """Remove a release or staging entry without leaving part of it under its own name.
+
+    It is renamed to a dot name first, so an interrupted removal leaves staging
+    that pruning finishes, never a digest directory that looks installed.
+    """
+    if entry.is_dir() and not entry.is_symlink():
+        doomed = entry.with_name(f".{entry.name.lstrip('.')}.{os.getpid()}.removing")
+        os.replace(entry, doomed)
+        shutil.rmtree(doomed)
+    else:
+        entry.unlink(missing_ok=True)
 
 
 @dataclass(slots=True)
@@ -138,14 +159,12 @@ class AgentUpdater:
                 continue
             try:
                 if entry.name.startswith("."):
-                    if entry.lstat().st_mtime > stale_before:
+                    removing = entry.name.endswith(".removing")
+                    if not removing and entry.lstat().st_mtime > stale_before:
                         continue
                 elif not RELEASE_DIGEST_PATTERN.fullmatch(entry.name):
                     continue
-                if entry.is_dir() and not entry.is_symlink():
-                    shutil.rmtree(entry)
-                else:
-                    entry.unlink(missing_ok=True)
+                discard_release(entry)
             except OSError:
                 LOGGER.warning("could not remove the old agent release %s", entry, exc_info=True)
 
@@ -160,7 +179,9 @@ class AgentUpdater:
         if rejected.exists() and rejected.read_text().strip() == artifact.sha256:
             raise RuntimeError("agent release failed startup and was rolled back")
         release = self.release.parent / artifact.sha256
-        if not release.is_dir():
+        if not release_complete(release):
+            if release.exists():
+                discard_release(release)
             self._unpack(artifact, release)
         executable = release / self.command.resolve().name
         _replace_link(self.previous, self.command.resolve())
@@ -202,6 +223,7 @@ class AgentUpdater:
                 unpacked.extractall(staged, filter="data")
             executable = staged / self.command.resolve().name
             subprocess.run([str(executable), "--help"], check=True, capture_output=True, timeout=30)
+            (staged / RELEASE_COMPLETE_FILE).touch()
             _fsync_tree(staged)
             os.replace(staged, release)
             _fsync_directory(release.parent)

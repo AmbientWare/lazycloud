@@ -33,6 +33,15 @@ class WorkerImagePreparation:
         """Record an image found on the host without preparing it again."""
         self._prepared.add(image)
 
+    def look_up(self, image: str, present: Callable[[str], bool]) -> None:
+        """Record `image` as prepared, in the background, if `present` finds it on the host."""
+
+        def check() -> None:
+            if present(image):
+                self._prepared.add(image)
+
+        self._executor.submit(check)
+
     def ensure(self, image: str, *, wait_seconds: float = 0.0) -> bool:
         """Whether `image` is ready, starting its preparation and waiting briefly if not.
 

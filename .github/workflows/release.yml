@@ -152,7 +152,7 @@ jobs:
       - name: Build and stage Linux agent release archives
         if: steps.plan.outputs.rebuild_agent == 'true'
         run: >-
-          uv run --no-project python deploy/agent-binary/build.py build
+          uv run --no-project python -m deploy.agent-binary.build build
           --version "${{ inputs.version }}"
           --output dist/agent-binarys
           --arch amd64
