@@ -16,6 +16,7 @@ from lazycloud.cli.components.errors import (
 )
 from lazycloud.cli.components.output import CliContextState
 from lazycloud.cli.components.runner import run_cli
+from lazycloud.cli.devbox import devbox_app
 from lazycloud.cli.development import dev
 from lazycloud.cli.disks import disk_app
 from lazycloud.cli.domains import domain_app
@@ -314,6 +315,7 @@ def _register_volume_mv(application: typer.Typer) -> None:
 
 
 def _register_public_groups(registry: PublicCliRegistry) -> None:
+    registry.add_group("devbox", devbox_app)
     registry.add_group("profile", profile_app)
     registry.add_group("token", token_app)
     registry.add_group("task", task_app)

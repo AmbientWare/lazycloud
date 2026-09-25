@@ -13,18 +13,23 @@ start to the next, on whichever machine it lands.
 Save this as `dev.py`:
 
 ```python
-from lazycloud import App, Image
+from lazycloud import AgentHarness, App, Image
 
 app = App("dev")
 
-image = Image(python_version="3.12").add_commands(
-    [
-        "apt-get update && apt-get install -y git curl nodejs npm",
-        "npm install -g @anthropic-ai/claude-code @openai/codex opencode-ai",
-    ]
+box = app.devbox(
+    "box",
+    image=Image(python_version="3.12"),
+    disk="100Gi",
+    cpu=4,
+    memory="16Gi",
+    agent_harnesses=[
+        AgentHarness.Codex,
+        AgentHarness.ClaudeCode,
+        AgentHarness.OpenCode,
+        AgentHarness.Pi,
+    ],
 )
-
-box = app.devbox("box", image=image, disk="100Gi", cpu=4, memory="16Gi")
 ```
 
 ```bash
@@ -37,6 +42,43 @@ mounted, so `git clone` your code onto the disk. The image needs no `sshd`.
 
 `disk=` sizes the root disk, which is named after the devbox.
 [Disk pricing](/concepts/disks#pricing) covers what it costs.
+
+## Coding agents
+
+`agent_harnesses` installs the selected agents, Node.js 22, and Git during the
+image build. It defaults to an empty list. The SDK pins agent and Node.js
+versions. Installation requires a Debian or Ubuntu image with root build access;
+`Image.from_id()` cannot accept additional installation steps. Reusing an image
+object for another resource does not add these agents to that resource.
+
+After deployment, authenticate from an interactive terminal on your laptop:
+
+```bash
+lazycloud devbox login box codex
+lazycloud devbox login box claude-code
+lazycloud devbox login box opencode
+lazycloud devbox login box pi
+```
+
+The command runs the agent's native login on the devbox and opens your local
+browser. It reads the callback address from the login URL and temporarily
+forwards that loopback port over SSH before opening the browser. No public
+`ports` entry or device-code authentication is required. Login credentials stay
+in the agent's own files on the devbox disk, outside the built image.
+
+OpenCode prompts for a provider and login method. Select browser login. In Pi,
+run `/login`, select the provider's browser login, and exit Pi when finished.
+Available methods depend on the provider. API keys can also be supplied through
+[secrets](/concepts/secrets).
+
+Browser forwarding requires a local OpenSSH client on macOS, Linux, or WSL and
+a browser on that computer. A dashboard terminal alone cannot open a callback
+listener on your laptop. Finish one login before starting another that uses the
+same port. If a local service already occupies the port, the command fails
+before opening the browser.
+
+Credentials persist with the disk and are accessible to anyone who can access
+that devbox. Use separate devboxes for separate account credentials.
 
 ## What persists
 
