@@ -164,7 +164,6 @@ COPY apps/cache-server/pyproject.toml ./apps/cache-server/pyproject.toml
 COPY apps/cli/pyproject.toml ./apps/cli/pyproject.toml
 COPY apps/container-worker/pyproject.toml ./apps/container-worker/pyproject.toml
 COPY apps/scheduler/pyproject.toml ./apps/scheduler/pyproject.toml
-COPY apps/worker-bootstrap/pyproject.toml ./apps/worker-bootstrap/pyproject.toml
 
 FROM scratch AS workspace-source
 COPY packages /packages

@@ -12,7 +12,6 @@ class DatabaseApplicationName(StrEnum):
     Api = "lazycloud-api"
     Scheduler = "lazycloud-scheduler"
     ConnectionGateway = "lazycloud-connection-gateway"
-    WorkerBootstrap = "lazycloud-worker-bootstrap"
     Admin = "lazycloud-admin"
     Bootstrap = "lazycloud-database-bootstrap"
     Wait = "lazycloud-database-wait"

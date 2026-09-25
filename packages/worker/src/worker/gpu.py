@@ -4,9 +4,9 @@ import os
 import stat
 import subprocess
 import threading
-from collections.abc import Callable, Sequence
+import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from subprocess import CompletedProcess
 from typing import Protocol
 
 from pydantic import Field
@@ -30,6 +30,7 @@ from worker.execution import (
 NVIDIA_GPU_RESOURCE_NAME = "nvidia.com/gpu"
 NVIDIA_VISIBLE_DEVICES_ALL = "all"
 NVIDIA_VISIBLE_DEVICES_VOID = "void"
+NVIDIA_QUERY_TIMEOUT_SECONDS = 5.0
 
 
 class NvidiaSmiDevice(ContractModel):
@@ -298,7 +299,6 @@ class GpuAllocationManager:
 class NvidiaGpuIndexProvider:
     visible_devices: str = NVIDIA_VISIBLE_DEVICES_ALL
     existing_system_bus_ids: set[str] | None = None
-    command_runner: Callable[..., CompletedProcess[str]] = subprocess.run
 
     def available_devices(self) -> list[int]:
         try:
@@ -306,10 +306,10 @@ class NvidiaGpuIndexProvider:
         except RuntimeError:
             return []
 
-    def query_devices(self) -> list[int]:
+    def query_devices(self, *, timeout_seconds: float = NVIDIA_QUERY_TIMEOUT_SECONDS) -> list[int]:
         """The visible GPUs nvidia-smi lists, raising with its own output when it fails."""
         try:
-            result = self.command_runner(
+            result = subprocess.run(
                 [
                     "nvidia-smi",
                     "--query-gpu=pci.domain,pci.bus_id,index,uuid",
@@ -318,11 +318,12 @@ class NvidiaGpuIndexProvider:
                 capture_output=True,
                 text=True,
                 check=False,
+                timeout=timeout_seconds,
             )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(f"nvidia-smi did not answer within {timeout_seconds:g}s") from exc
         except OSError as exc:
             raise RuntimeError(f"nvidia-smi could not run: {exc}") from exc
-        if not isinstance(result, CompletedProcess):
-            raise RuntimeError("nvidia-smi returned no result")
         if result.returncode != 0:
             detail = (result.stderr or result.stdout or "").strip()[-500:]
             raise RuntimeError(f"nvidia-smi exited {result.returncode}: {detail}")
@@ -331,6 +332,26 @@ class NvidiaGpuIndexProvider:
             visible_devices=self.visible_devices or NVIDIA_VISIBLE_DEVICES_ALL,
             existing_system_bus_ids=self.existing_system_bus_ids,
         )
+
+    def require_devices(
+        self, count: int, *, timeout_seconds: float = NVIDIA_QUERY_TIMEOUT_SECONDS
+    ) -> None:
+        """Wait within one deadline for the driver to report every assigned GPU."""
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            try:
+                found = len(
+                    self.query_devices(timeout_seconds=max(deadline - time.monotonic(), 0.001))
+                )
+                if found >= count:
+                    return
+                failure = RuntimeError(f"nvidia-smi lists {found} of the worker's {count} GPUs")
+            except RuntimeError as exc:
+                failure = exc
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise failure
+            time.sleep(min(0.5, remaining))
 
 
 class DynamicGpuAllocationManager:

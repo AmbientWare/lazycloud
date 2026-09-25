@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from importlib.metadata import distributions
 from pathlib import Path, PurePosixPath
 
@@ -14,6 +14,8 @@ from shared.managed_runtime_integrity import (
     managed_package_source_digest,
     managed_runtime_artifact_inventory_digest,
 )
+
+from worker.readiness import run_readiness_checks
 
 MANAGED_RUNTIME_SCHEMA_VERSION = 4
 MANAGED_RUNTIME_PYTHON_VERSIONS = tuple(version.value for version in PythonVersion)
@@ -84,15 +86,13 @@ def load_managed_runtime_catalogs(
     """
     artifact_root = root.resolve()
     manifest = _load_manifest(artifact_root)
-    with ThreadPoolExecutor(
-        max_workers=len(MANAGED_RUNTIME_PYTHON_VERSIONS),
-        thread_name_prefix="managed-runtime",
-    ) as pool:
-        loads = {
-            version: pool.submit(_selected_catalog, artifact_root, manifest, version, architecture)
+    return run_readiness_checks(
+        "managed runtime validation",
+        {
+            version: partial(_selected_catalog, artifact_root, manifest, version, architecture)
             for version in MANAGED_RUNTIME_PYTHON_VERSIONS
-        }
-        return {version: load.result() for version, load in loads.items()}
+        },
+    )
 
 
 def _load_manifest(artifact_root: Path) -> ManagedRuntimeCatalogManifest:

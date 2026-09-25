@@ -15,14 +15,13 @@ from agent.operations import (
     AgentWorkerSlot,
     WorkerExecutor,
 )
+from agent.state import AgentStateStore
 from agent.tunnel import AgentTunnelRoute, AgentTunnelService
-from agent_app import daemon
+from agent.worker_controller import DockerAgentWorkerController, WorkerObservation
 from agent_app.daemon import (
     AgentDaemonOptions,
     AgentDaemonService,
-    AgentStateStore,
     AgentStreamRetryableError,
-    DockerAgentWorkerController,
     _recoverable_stream_error,
     build_agent_daemon_service,
 )
@@ -67,6 +66,7 @@ from shared.placement import Placement
 from shared.usage import UsageBillingOwner
 from worker.network_backend import AgentBridgeCallbackFirewall, AgentBridgeNetworkConfig
 
+from agent import worker_controller
 from gateway import http
 
 
@@ -408,11 +408,10 @@ class _Workers(DockerAgentWorkerController):
         self.running.pop(slot.worker_id, None)
         self.held.discard(slot.worker_id)
 
-    def holds(self, worker_id: str) -> bool:
-        return worker_id in self.held
-
-    def _running_slot(self, slot: AgentWorkerSlot) -> AgentWorkerSlot | None:
-        return slot.model_copy() if slot.worker_id in self.running else None
+    def _running_slot(self, slot: AgentWorkerSlot) -> WorkerObservation | None:
+        if slot.worker_id not in self.running:
+            return None
+        return WorkerObservation(slot.model_copy(), slot.worker_id in self.held)
 
     def containers(self) -> dict[str, int]:
         return {worker_id: started for worker_id, (_, started) in self.running.items()}
@@ -452,7 +451,7 @@ def test_a_reserve_worker_reaches_the_control_plane_only_once_a_stream_adopts_it
     The first stream after the resume keeps that same container if it wants the
     slot active, and stops it otherwise, before the listeners open.
     """
-    monkeypatch.setattr(daemon, "BOOT_ID_PATH", tmp_path / "boot_id")
+    monkeypatch.setattr(worker_controller, "BOOT_ID_PATH", tmp_path / "boot_id")
     (tmp_path / "boot_id").write_text("reserve-boot")
     gateway = _SlotGateway()
     workers = _Workers(tmp_path / "agent")
@@ -506,7 +505,7 @@ def test_a_cold_resumed_reserve_keeps_its_worker_until_its_row_catches_up(
     the boot's worker is adopted, not stopped.
     """
     boot_id = tmp_path / "boot_id"
-    monkeypatch.setattr(daemon, "BOOT_ID_PATH", boot_id)
+    monkeypatch.setattr(worker_controller, "BOOT_ID_PATH", boot_id)
     boot_id.write_text("prepared-boot")
     gateway = _SlotGateway()
     prepared = _Workers(tmp_path / "agent")

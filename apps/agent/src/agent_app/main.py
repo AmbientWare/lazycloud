@@ -48,6 +48,7 @@ from agent.updates import (
     discard_release,
     installed_command,
 )
+from agent.worker_controller import DockerAgentWorkerController
 from compute.provider_nodes import ProviderNodeIdentityProofProvider
 from gateway.http import LeaveAgentRequest
 from pydantic import TypeAdapter, ValidationError
@@ -70,7 +71,6 @@ from agent_app.daemon import (
     AgentGatewayClient,
     AgentLeaveClient,
     AgentProcessLock,
-    DockerAgentWorkerController,
     HttpAgentGatewayClient,
     ProviderInstanceIdentityMode,
     build_agent_daemon_service,

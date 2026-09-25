@@ -225,7 +225,7 @@ def run_container_worker(
         runtime = ContainerWorkerRuntime.production(settings=settings)
     resolved_settings = runtime.settings
     worker_services = runtime.services
-    container_service = _start_container_service(resolved_settings, worker_services)
+    container_service: ContainerServiceHttpServer | None = None
     event_loop: ContainerWorkerEventLoop | None = None
     keepalive_loop: ContainerWorkerKeepaliveLoop | None = None
     retention_loop: WorkerRetentionLoop | None = None
@@ -243,6 +243,7 @@ def run_container_worker(
         shutdown_signal = signum
 
     try:
+        container_service = _start_container_service(resolved_settings, worker_services)
         try:
             with _container_worker_shutdown_handlers(
                 shutdown_event,

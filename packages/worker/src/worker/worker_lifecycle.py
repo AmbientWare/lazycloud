@@ -4,7 +4,6 @@ import logging
 import threading
 import time
 from collections.abc import Callable, Iterable
-from concurrent.futures import Future
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
@@ -22,6 +21,7 @@ from shared.scheduling import (
 from shared.timestamps import utc_now
 
 from worker.events import ContainerRequestContext
+from worker.readiness import WorkerReadiness
 from worker.repository_client import WorkerSourceCacheNotAvailableError
 from worker.status import (
     DEFAULT_WORKER_SPINDOWN_SECONDS,
@@ -30,8 +30,6 @@ from worker.status import (
 )
 
 LOGGER = logging.getLogger(__name__)
-READINESS_PREPARATION_SHUTDOWN_SECONDS = 10.0
-"""How long shutdown waits for a readiness preparation before it cleans up anyway."""
 DEFAULT_WORKER_KEEPALIVE_TTL_SECONDS = 60
 DEFAULT_WORKER_SHUTDOWN_DRAIN_SECONDS = 5.0
 DEFAULT_WORKER_STOP_GRACE_SECONDS = 5.0
@@ -163,25 +161,16 @@ class WorkerLifecycleOrchestrator:
     repository: WorkerLifecycleRepository | None = None
     stopper: WorkerLifecycleContainerStopper | None = None
     registration: WorkerExecutionRecord | None = None
-    readiness_preparer: Callable[[], None] | None = None
-    """Readiness work that registration cannot change. It runs once per process,
-    beside the first registration, which holds a reserve's worker until its machine
-    resumes, so it is done by then."""
-    readiness_validator: Callable[[], None] | None = None
-    """The readiness checks left for after registration, such as whatever a sleep changes."""
+    readiness: WorkerReadiness | None = None
+    storage_recovery: Callable[[], None] | None = None
     cleanup_actions: list[WorkerCleanupAction] = field(default_factory=list)
     keepalive_ttl_seconds: int = DEFAULT_WORKER_KEEPALIVE_TTL_SECONDS
     cleanup_retries: int = DEFAULT_WORKER_CLEANUP_RETRIES
     usage_interval_seconds: float = DEFAULT_WORKER_USAGE_INTERVAL_SECONDS
     _draining: bool = False
+    _closed: bool = False
     _active: dict[str, WorkerActiveContainer] = field(default_factory=dict)
     _lock: threading.RLock = field(default_factory=threading.RLock)
-    _preparation: Future[None] | None = None
-    """How the process's one readiness preparation ended, or that it still runs.
-
-    It runs on a daemon thread, so a preparation that hangs never holds the
-    process open past shutdown's bounded wait.
-    """
 
     @property
     def draining(self) -> bool:
@@ -216,7 +205,8 @@ class WorkerLifecycleOrchestrator:
                     error_message="worker repository is not configured",
                 )
             ]
-        preparation = self._readiness_preparation()
+        if self.readiness is not None:
+            self.readiness.start()
         current_time = now or utc_now()
         registration = registration.model_copy(
             update={
@@ -241,14 +231,13 @@ class WorkerLifecycleOrchestrator:
         )
         if not activation.ok:
             return [added, activation]
-        readiness_validator = self.readiness_validator
-        if preparation is not None or readiness_validator is not None:
+        if self.readiness is not None or self.storage_recovery is not None:
 
             def validate_readiness() -> None:
-                if preparation is not None:
-                    preparation.result()
-                if readiness_validator is not None:
-                    readiness_validator()
+                if self.readiness is not None:
+                    self.readiness.validate()
+                if self.storage_recovery is not None:
+                    self.storage_recovery()
 
             readiness = self._run_repository_step(
                 WorkerLifecycleAction.ValidateReadiness,
@@ -444,48 +433,20 @@ class WorkerLifecycleOrchestrator:
                     timeout_seconds=max(force_stop_wait_seconds, 0.0),
                 )
             )
-        self._settle_readiness_preparation()
-        steps.extend(self._run_cleanup_actions())
+        steps.extend(self.close())
         if remove_worker:
             steps.append(self._remove_worker())
         return WorkerShutdownResult(worker_id=self.worker_id, steps=steps)
 
-    def _readiness_preparation(self) -> Future[None] | None:
-        """The one readiness preparation of this process, started by the first registration."""
+    def close(self) -> list[WorkerLifecycleStepResult]:
+        """Release local resources even when registration never succeeded."""
         with self._lock:
-            preparer = self.readiness_preparer
-            if self._preparation is None and preparer is not None:
-                preparation: Future[None] = Future()
-                preparation.set_running_or_notify_cancel()
-
-                def prepare() -> None:
-                    try:
-                        preparer()
-                    except BaseException as exc:
-                        preparation.set_exception(exc)
-                    else:
-                        preparation.set_result(None)
-
-                threading.Thread(target=prepare, name="worker-readiness", daemon=True).start()
-                self._preparation = preparation
-            return self._preparation
-
-    def _settle_readiness_preparation(self) -> None:
-        """End the preparation before cleanup closes what it sets up, waiting only so long."""
-        with self._lock:
-            preparation = self._preparation
-        if preparation is None:
-            return
-        try:
-            error = preparation.exception(timeout=READINESS_PREPARATION_SHUTDOWN_SECONDS)
-        except TimeoutError:
-            LOGGER.warning(
-                "worker readiness preparation still running after %.0fs; cleaning up anyway",
-                READINESS_PREPARATION_SHUTDOWN_SECONDS,
-            )
-            return
-        if error is not None:
-            LOGGER.warning("worker readiness preparation failed", exc_info=error)
+            if self._closed:
+                return []
+            self._closed = True
+        if self.readiness is not None:
+            self.readiness.close()
+        return self._run_cleanup_actions()
 
     def _wait_for_active_containers(self, *, timeout_seconds: float) -> WorkerLifecycleStepResult:
         deadline = time.monotonic() + timeout_seconds
@@ -556,8 +517,12 @@ class WorkerLifecycleOrchestrator:
                     attempts=attempt,
                     metadata={"name": cleanup.name},
                 )
-            except Exception as exc:  # pragma: no cover - defensive boundary capture
+            except Exception as exc:
                 error = f"{type(exc).__name__}: {exc}"
+                if attempt == retries:
+                    LOGGER.exception(
+                        "worker cleanup %s failed after %d attempts", cleanup.name, retries
+                    )
         return WorkerLifecycleStepResult(
             action=WorkerLifecycleAction.Cleanup,
             status=WorkerLifecycleStatus.Error,

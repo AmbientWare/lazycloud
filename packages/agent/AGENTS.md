@@ -3,6 +3,10 @@
 Reusable behavior for the agent that runs on customer and private-unit machines:
 installation, daemon lifecycle, enrollment, and telemetry.
 
+`worker_controller.py` owns Docker worker management and reserve records.
+`state.py` owns the agent's local identity and readiness markers. A stream
+observes worker containers once and passes those slots to reconciliation.
+
 Process arguments and startup stay in `apps/agent`. API handlers, SDK code, app
 imports, and broad composition stay out.
 

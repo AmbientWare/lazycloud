@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -71,6 +71,7 @@ from worker.image_build_execution import (
 from worker.image_build_runtime_credentials import ImageBuildCredentialLoader
 from worker.memory_pressure import WorkerMemoryPressureWatcher
 from worker.monitoring import ContainerRuntimeMonitor
+from worker.readiness import WorkerReadiness
 from worker.repository_payloads import StreamWorkerEventsRequest
 from worker.request_mounts import WorkerRequestMountCleaner
 from worker.retention import WorkerRetentionService
@@ -215,8 +216,7 @@ def assemble_worker_process_services(
     pool_mode: WorkerPoolMode,
     billing_owner: UsageBillingOwner,
     registration: SchedulerWorkerRecord,
-    readiness_preparer: Callable[[], None] | None = None,
-    readiness_validator: Callable[[], None] | None = None,
+    readiness: WorkerReadiness | None = None,
     event_source: WorkerProcessEventSource | None = None,
     container_service_dependencies: WorkerProcessContainerServiceDependencies | None = None,
     finalization_dependencies: WorkerProcessFinalizationDependencies | None = None,
@@ -331,9 +331,7 @@ def assemble_worker_process_services(
     )
     transport = WorkerContainerServiceTransport(container_service)
 
-    def validate_readiness() -> None:
-        if readiness_validator is not None:
-            readiness_validator()
+    def recover_storage() -> None:
         execution.recover_cleanup(
             [target.container_id for target in container_repository.list_pending_storage_cleanup()]
         )
@@ -345,8 +343,8 @@ def assemble_worker_process_services(
         repository=worker_repository,
         stopper=runtime_stopper,
         registration=registration,
-        readiness_preparer=readiness_preparer,
-        readiness_validator=validate_readiness,
+        readiness=readiness,
+        storage_recovery=recover_storage,
         route_restorer=WorkerRouteRecovery(
             identity=identity,
             containers=container_repository,

@@ -38,7 +38,6 @@ workspace = [
     "container-worker-app",
     "scheduler-app",
     "connection-gateway-app",
-    "worker-bootstrap-app",
     "provider-aws",
     "provider-cloudflare",
     "provider-garage",
@@ -99,7 +98,6 @@ members = [
     "apps/container-worker",
     "apps/scheduler",
     "apps/connection-gateway",
-    "apps/worker-bootstrap",
     "packages/billing",
     "packages/providers/aws",
     "packages/providers/cloudflare",
@@ -147,7 +145,6 @@ storage = { workspace = true }
 storage-client = { workspace = true }
 worker = { workspace = true }
 worker-repository = { workspace = true }
-worker-bootstrap-app = { workspace = true }
 provider-aws = { workspace = true }
 
 [tool.pytest.ini_options]
