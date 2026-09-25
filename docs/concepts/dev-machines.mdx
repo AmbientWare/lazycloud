@@ -17,14 +17,13 @@ from lazycloud import App, Image
 
 app = App("dev")
 
-image = Image(python_version="3.12").add_commands(
-    [
-        "apt-get update && apt-get install -y git curl nodejs npm",
-        "npm install -g @anthropic-ai/claude-code @openai/codex opencode-ai",
-    ]
+box = app.devbox(
+    "box",
+    image=Image(python_version="3.12"),
+    disk="100Gi",
+    cpu=4,
+    memory="16Gi",
 )
-
-box = app.devbox("box", image=image, disk="100Gi", cpu=4, memory="16Gi")
 ```
 
 ```bash
@@ -37,6 +36,46 @@ mounted, so `git clone` your code onto the disk. The image needs no `sshd`.
 
 `disk=` sizes the root disk, which is named after the devbox.
 [Disk pricing](/concepts/disks#pricing) covers what it costs.
+
+## Coding agents
+
+Devboxes install Codex, Claude Code, OpenCode, Pi, Node.js 22, and Git when the
+image builds. The SDK pins the agent and Node.js versions.
+Import `AgentHarness` from `lazycloud` and pass
+`agent_harnesses=[AgentHarness.Codex]` to install only Codex, or
+`agent_harnesses=[]` to skip agent installation.
+
+Installation requires a Debian or Ubuntu image with root build access. Pass
+`agent_harnesses=[]` when using `Image.from_id()` or an image that supplies its
+own tools.
+
+After deployment, authenticate from an interactive terminal on your laptop:
+
+```bash
+lazycloud devbox login box codex
+lazycloud devbox login box claude-code
+lazycloud devbox login box opencode
+lazycloud devbox login box pi
+```
+
+The command starts the agent's login on the devbox and opens your laptop's
+browser. SSH carries the localhost callback back to the devbox. You don't need
+a public `ports` entry or device-code authentication. The agent saves its
+credentials on the devbox disk, outside the built image.
+
+OpenCode prompts for a provider and login method. Select browser login. In Pi,
+run `/login`, select the provider's browser login, and exit Pi when finished.
+Available methods depend on the provider. API keys can also be supplied through
+[secrets](/concepts/secrets).
+
+Browser login requires OpenSSH and a browser on your macOS, Linux, or WSL
+computer. Run the command locally; a dashboard terminal cannot forward a
+callback from your laptop. Finish one login before starting another that uses the
+same port. If a local service already occupies the port, the command fails
+before opening the browser.
+
+Anyone with access to the devbox can read its saved credentials. Use separate
+devboxes for separate accounts.
 
 ## What persists
 

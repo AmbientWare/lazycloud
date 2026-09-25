@@ -107,6 +107,18 @@ that stopped serving SSH or were deleted. `--app` picks the app when several
 apps deploy the same name. The generated config calls two hidden commands
 that carry the connection and renew the login certificate.
 
+## lazycloud devbox login
+
+```bash
+uv run lazycloud devbox login NAME HARNESS [--app <app>] [--workspace <workspace>]
+```
+
+Runs the installed agent's native browser login inside the devbox. `HARNESS` is
+`codex`, `claude-code`, `opencode`, or `pi`. The local CLI opens your browser and
+temporarily forwards the callback over SSH. It requires an interactive terminal
+and does not support `--json`. See [coding agents](/concepts/dev-machines#coding-agents)
+for installation, provider selection, and credential persistence.
+
 ## lazycloud dev
 
 ```bash

@@ -62,6 +62,7 @@ _ADMIN_ROOT_ORDER = (
     "mv",
 )
 _ADMIN_GROUP_ORDER = (
+    "devbox",
     "profile",
     "platform",
     "fleet",

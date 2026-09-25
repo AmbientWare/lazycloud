@@ -23,6 +23,7 @@ import (
 	"github.com/creack/pty"
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -300,6 +301,12 @@ func (s *sshSession) startWithTerminal(cmd *exec.Cmd) error {
 	}
 	defer tty.Close()
 	_ = pty.Setsize(master, &pty.Winsize{Cols: uint16(s.terminal.columns), Rows: uint16(s.terminal.rows)})
+	// Closing a blocking PTY waits for its reader; an idle login would keep
+	// both the terminal and its processes alive after SSH disconnects.
+	if err := syscall.SetNonblock(int(master.Fd()), true); err != nil {
+		_ = master.Close()
+		return err
+	}
 	cmd.Env = append(cmd.Env, "SSH_TTY="+tty.Name())
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = tty, tty, tty
 	cmd.SysProcAttr.Setctty = true
@@ -447,7 +454,16 @@ func (s *sshSession) resize(columns uint32, rows uint32) {
 	}
 	s.terminal.columns, s.terminal.rows = columns, rows
 	if s.terminal.master != nil {
-		_ = pty.Setsize(s.terminal.master, &pty.Winsize{Cols: uint16(columns), Rows: uint16(rows)})
+		// File.Fd switches a polled descriptor back to blocking mode.
+		// Keep resize from disabling interruption of the terminal reader.
+		raw, err := s.terminal.master.SyscallConn()
+		if err == nil {
+			_ = raw.Control(func(fd uintptr) {
+				_ = unix.IoctlSetWinsize(int(fd), unix.TIOCSWINSZ, &unix.Winsize{
+					Col: uint16(columns), Row: uint16(rows),
+				})
+			})
+		}
 	}
 }
 

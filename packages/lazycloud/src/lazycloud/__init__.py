@@ -31,6 +31,7 @@ from lazycloud.abstractions.sandbox import (
 )
 from lazycloud.abstractions.secret import Secret
 from lazycloud.abstractions.volume import CloudBucket, CloudBucketConfig, Volume
+from lazycloud.agent_harness import AgentHarness
 from lazycloud.progress import (
     PendingProgressCallback,
     TaskPendingProgress,
@@ -42,6 +43,7 @@ from lazycloud.session.task import FunctionCall, Task
 from lazycloud.terminal import output
 
 __all__ = [
+    "AgentHarness",
     "App",
     "Artifact",
     "Autoscaler",
