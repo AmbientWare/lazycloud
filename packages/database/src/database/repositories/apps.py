@@ -806,6 +806,18 @@ class StubRepository:
             return
         self.session.execute(statement.values(parked=False, woken_at=woken_at))
 
+    def end_start(self, stub_id: str, *, workspace_id: str, woken_at: datetime) -> None:
+        """Forget the start made at `woken_at`, unless a later start has replaced it."""
+        self.session.execute(
+            update(StubTable)
+            .where(
+                StubTable.id == stub_id,
+                StubTable.workspace_id == workspace_id,
+                StubTable.woken_at == woken_at,
+            )
+            .values(woken_at=None)
+        )
+
     def list_autoscaling_across_workspaces(
         self,
         *,

@@ -19,6 +19,7 @@ from worker.events import (
     StopContainerReason,
     normalize_container_exit_code,
 )
+from worker.repository_payloads import CONTAINER_FAILURE_DETAIL_MAX_LENGTH
 from worker.status import CONTAINER_STATE_TTL_WHILE_PENDING_SECONDS
 
 LOGGER = logging.getLogger(__name__)
@@ -186,7 +187,10 @@ class WorkerContainerFinalizationService:
                 skip=not plan.mark_stopping,
             ),
         ]
-        return ContainerFinalizationResult(plan=plan, steps=steps)
+        result = ContainerFinalizationResult(plan=plan, steps=steps)
+        if not result.ok:
+            LOGGER.error("container finalization failed: %s: %s", plan.container_id, result.errors)
+        return result
 
     def complete_delayed_cleanup(
         self,
@@ -283,7 +287,24 @@ def plan_container_finalization(
         normalized_exit_code=normalized,
         stop_reason=request.stop_reason,
         failed_phase=request.failed_phase,
-        failure_detail=request.failure_detail,
+        failure_detail=_fit_failure_detail(request.failure_detail),
         release_gpu=bool(request.request.gpu or request.request.gpu_count),
         stopping_ttl_seconds=request.stopping_ttl_seconds,
     )
+
+
+_ELIDED = " ... "
+
+
+def _fit_failure_detail(detail: str) -> str:
+    """Keep the head, which names what failed, and the tail, which holds the tool's error.
+
+    A detail past the exit report's bound fails the report before it is sent, and
+    the container then ends without its reason. Tool errors that quote their whole
+    command line pass the bound easily.
+    """
+    if len(detail) <= CONTAINER_FAILURE_DETAIL_MAX_LENGTH:
+        return detail
+    head = (CONTAINER_FAILURE_DETAIL_MAX_LENGTH - len(_ELIDED)) // 2
+    tail = CONTAINER_FAILURE_DETAIL_MAX_LENGTH - len(_ELIDED) - head
+    return detail[:head] + _ELIDED + detail[-tail:]

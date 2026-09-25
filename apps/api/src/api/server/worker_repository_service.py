@@ -383,10 +383,15 @@ FATAL_CONTAINER_STARTUP_PHASES = frozenset(
         ContainerExecutionPhase.AllocatePorts.value,
         ContainerExecutionPhase.PublishContainerRoutes.value,
         ContainerExecutionPhase.SetupNetwork.value,
+        ContainerExecutionPhase.SetupWorkspaceStorage.value,
         ContainerExecutionPhase.SetupMounts.value,
+        ContainerExecutionPhase.PrepareRootfs.value,
         ContainerExecutionPhase.AssignGpu.value,
         ContainerExecutionPhase.BuildSpec.value,
         ContainerExecutionPhase.PrepareRuntime.value,
+        ContainerExecutionPhase.PrepareWorkload.value,
+        ContainerExecutionPhase.CompleteCheckpointStartup.value,
+        ContainerExecutionPhase.MarkRunning.value,
         ContainerExecutionPhase.RunRuntime.value,
     }
 )
