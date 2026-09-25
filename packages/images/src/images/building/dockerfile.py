@@ -7,6 +7,7 @@ import shlex
 
 from pydantic import JsonValue
 from shared.image_building.authoring import PROJECT_BUILD_STEP_KINDS, ImageBuildStepKind, ImageSpec
+from shared.image_building.constants import DEFAULT_IMAGE_BASE
 from shared.image_building.context import fingerprint_build_context
 from shared.image_building.credentials import dedupe_names, image_secret_names
 from shared.image_building.planning import ImageBuildPlan
@@ -14,12 +15,11 @@ from shared.image_building.python import normalize_python_version
 from shared.image_building.requirements import sanitize_python_packages
 
 from images.building.commands import _normalize_step, plan_image_build_commands
-from images.building.constants import DEFAULT_IMAGE_BASE
 from images.building.models import ImageInstallCommandMode, PythonRuntimeSetupAction
 from images.building.projects import PROJECT_ENVIRONMENT
 from images.building.python_runtime import plan_python_runtime_setup
 
-IMAGE_BUILD_IDENTITY_CONTRACT_VERSION = 3
+IMAGE_BUILD_IDENTITY_CONTRACT_VERSION = 4
 
 
 def build_image_plan(image: ImageSpec) -> ImageBuildPlan:
@@ -123,6 +123,11 @@ def _initial_dockerfile_lines(image: ImageSpec) -> list[str]:
         return image.dockerfile.rstrip().splitlines()
 
     lines = [f"FROM {image.base}"]
+    if image.base == DEFAULT_IMAGE_BASE:
+        lines.append(
+            "RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates "
+            "&& rm -rf /var/lib/apt/lists/*"
+        )
     if image.workdir:
         lines.append(f"WORKDIR {image.workdir}")
     return lines
