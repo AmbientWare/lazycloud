@@ -247,6 +247,9 @@ class UpdateContainerStatusResponse(WorkerRepositoryResponse):
     plan: ContainerStatusUpdatePlan | None = None
 
 
+CONTAINER_FAILURE_DETAIL_MAX_LENGTH = 2000
+
+
 class SetContainerExitCodeRequest(ContractModel):
     container_id: str
     exit_code: int
@@ -257,7 +260,7 @@ class SetContainerExitCodeRequest(ContractModel):
     # event also reports it, but arrives after the task is already terminal and is
     # dropped, so it cannot be the only carrier.
     failed_phase: ContainerExecutionPhase | None = None
-    failure_detail: str = Field(default="", max_length=2000)
+    failure_detail: str = Field(default="", max_length=CONTAINER_FAILURE_DETAIL_MAX_LENGTH)
     ttl_seconds: int = 86_400
 
 

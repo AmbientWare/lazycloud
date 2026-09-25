@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"math/rand/v2"
 	"net"
 	"os"
@@ -44,7 +45,15 @@ func lazyFixture(t *testing.T, data []byte, format string) (diskPaths, layer, *m
 		t.Fatal(err)
 	}
 	source := &memorySource{objects: map[string][]byte{}, gets: map[string]int{}}
-	manifest := layerManifest{DiskID: p.id, Generation: 1, VirtualSizeBytes: int64(len(data)), LayerSizeBytes: int64(len(data)), Format: format}
+	l := layer{Seq: 1, Generation: 1, Lazy: true, Raw: format == formatRaw}
+	addLazyLayer(t, p, source, l, data)
+	return p, l, source
+}
+
+// addLazyLayer stores data's non-zero chunks in source and lays out l for it.
+func addLazyLayer(t *testing.T, p diskPaths, source *memorySource, l layer, data []byte) {
+	t.Helper()
+	manifest := layerManifest{DiskID: p.id, Generation: l.Generation, VirtualSizeBytes: int64(len(data)), LayerSizeBytes: int64(len(data)), Format: l.format()}
 	for _, span := range chunkBytes(t, data) {
 		if span.Zero {
 			continue
@@ -53,11 +62,9 @@ func lazyFixture(t *testing.T, data []byte, format string) (diskPaths, layer, *m
 		manifest.Chunks = append(manifest.Chunks, manifestChunk{Offset: span.Offset, Length: span.Length, SHA256: sum})
 		source.objects[diskChunkKey(p.id, sum)] = data[span.Offset : span.Offset+span.Length]
 	}
-	l := layer{Seq: 1, Generation: 1, Lazy: true, Raw: format == formatRaw}
 	if err := createLazyLayer(p, l, manifest); err != nil {
 		t.Fatal(err)
 	}
-	return p, l, source
 }
 
 func randomBytes(size int, seed byte) []byte {
@@ -262,5 +269,84 @@ func TestQemuReadsLazyLayersOverNBD(t *testing.T) {
 				t.Fatal("the image read through the NBD server differs from the complete file")
 			}
 		})
+	}
+}
+
+// The daemon opens a restored chain of several lazy layers under a local head.
+// Each qcow2 layer names its backing file in its header, which qemu must not
+// mix into the NBD options of a lazy layer below it.
+func TestDaemonServesAChainOfLazyLayers(t *testing.T) {
+	if _, err := exec.LookPath(toolDaemon); err != nil {
+		t.Skip("qemu-storage-daemon is not installed")
+	}
+	run := func(name string, args ...string) {
+		t.Helper()
+		if out, err := exec.Command(name, args...).CombinedOutput(); err != nil {
+			t.Fatalf("%s %v: %v: %s", name, args, err, out)
+		}
+	}
+	// A unix socket path is limited to 108 bytes, more than t.TempDir leaves.
+	root, err := os.MkdirTemp("", "ld")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(root) })
+	p := diskPaths{root: root, id: "d"}
+	if err := os.MkdirAll(p.layerDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	source := &memorySource{objects: map[string][]byte{}, gets: map[string]int{}}
+	built := t.TempDir()
+	layers := []layer{{Seq: 1, Generation: 1, Lazy: true}, {Seq: 2, Generation: 2, Lazy: true}, {Seq: 3}}
+	for i, l := range layers {
+		path := filepath.Join(built, l.file())
+		if i == 0 {
+			run(toolImage, "create", "-q", "-f", "qcow2", path, "64M")
+		} else {
+			run(toolImage, "create", "-q", "-f", "qcow2", "-b", layers[i-1].file(), "-F", "qcow2", path, "64M")
+		}
+		run("qemu-io", "-f", "qcow2", "-c", fmt.Sprintf("write -P 0x%x %dM 3M", 0xa0+i, 1+8*i), path)
+	}
+	for _, l := range layers[:2] {
+		data, err := os.ReadFile(filepath.Join(built, l.file()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		addLazyLayer(t, p, source, l, data)
+	}
+	run("cp", filepath.Join(built, layers[2].file()), p.layerPath(layers[2]))
+
+	server := &nbdServer{exports: map[string]nbdExport{}}
+	for _, l := range layers[:2] {
+		lazy := openFixture(t, p, l, source)
+		defer lazy.close()
+		server.exports[l.file()] = lazy
+	}
+	if err := os.MkdirAll(p.runDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("unix", p.layersSocket())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go server.serve(ctx, listener)
+
+	state := &diskState{DiskID: p.id, SizeBytes: 64 << 20, Layers: layers}
+	pid, err := startDaemon(ctx, p, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stopDaemon(context.Background(), p, pid)
+
+	want := filepath.Join(t.TempDir(), "want.raw")
+	got := filepath.Join(t.TempDir(), "got.raw")
+	run(toolImage, "convert", "-O", "raw", filepath.Join(built, layers[2].file()), want)
+	run(toolImage, "convert", "-f", "raw", "-O", "raw", "nbd+unix:///"+exportName+"?socket="+p.nbdSocket(), got)
+	wantBytes, _ := os.ReadFile(want)
+	gotBytes, _ := os.ReadFile(got)
+	if !bytes.Equal(wantBytes, gotBytes) {
+		t.Fatal("the disk the daemon exports differs from the chain it was restored from")
 	}
 }
