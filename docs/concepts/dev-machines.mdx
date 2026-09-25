@@ -40,7 +40,8 @@ mounted, so `git clone` your code onto the disk. The image needs no `sshd`.
 ## Coding agents
 
 Devboxes install Codex, Claude Code, OpenCode, Pi, Node.js 22, Git, and process
-utilities such as `ps` when the image builds. The SDK pins the agent and Node.js versions.
+utilities required by the selected agents, such as `ps` for Codex, when the image
+builds. The SDK pins the agent and Node.js versions.
 Import `AgentHarness` from `lazycloud` and pass
 `agent_harnesses=[AgentHarness.Codex]` to install only Codex, or
 `agent_harnesses=[]` to skip agent installation.
@@ -57,6 +58,10 @@ lazycloud devbox login box claude-code
 lazycloud devbox login box opencode
 lazycloud devbox login box pi
 ```
+
+The command checks that the agent and its required system commands are installed
+on the devbox. If any are missing, it stops and prints installation instructions
+to run inside the devbox. It does not install or upgrade packages during login.
 
 The command starts the agent's login on the devbox and opens your laptop's
 browser. SSH carries the localhost callback back to the devbox. You don't need
