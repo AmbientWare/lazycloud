@@ -93,6 +93,7 @@ COPY --from=agent-artifact-amazon-linux-test \
 RUN digest="$(sha256sum /tmp/lazycloud-agent.tar.gz | cut -d ' ' -f 1)" \
     && mkdir -p "/usr/local/lib/lazycloud-agent/${digest}" \
     && tar -xzf /tmp/lazycloud-agent.tar.gz -C "/usr/local/lib/lazycloud-agent/${digest}" \
+    && : > "/usr/local/lib/lazycloud-agent/${digest}/.lazycloud-release-complete" \
     && ln -s "/usr/local/lib/lazycloud-agent/${digest}/lazycloud-agent" /usr/local/bin/lazycloud-agent \
     && rm /tmp/lazycloud-agent.tar.gz \
     && docker --version \

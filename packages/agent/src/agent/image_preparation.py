@@ -11,6 +11,12 @@ class WorkerImagePreparation:
     _executor: ThreadPoolExecutor = field(
         default_factory=lambda: ThreadPoolExecutor(max_workers=1, thread_name_prefix="worker-image")
     )
+    _lookups: ThreadPoolExecutor = field(
+        default_factory=lambda: ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="worker-image-lookup"
+        )
+    )
+    """Apart from preparations, which would otherwise queue behind a lookup's Docker wait."""
     _prepared: set[str] = field(default_factory=set)
     latest: str = ""
     """The image whose preparation finished most recently in this process."""
@@ -46,7 +52,7 @@ class WorkerImagePreparation:
                 self._prepared.add(image)
                 self._ready.set()
 
-        self._lookup = (image, self._executor.submit(check))
+        self._lookup = (image, self._lookups.submit(check))
 
     def ensure(self, image: str, *, wait_seconds: float = 0.0) -> bool:
         """Whether `image` is ready, starting its preparation and waiting briefly if not.
@@ -81,10 +87,11 @@ class WorkerImagePreparation:
         self._ready.clear()
         return True
 
-    def wait_for_lookup(self, timeout_seconds: float) -> None:
-        """Wait for the lookup in progress to answer, found or not."""
-        if self._lookup is not None:
-            wait_for_futures([self._lookup[1]], timeout=timeout_seconds)
+    def wait_for_started(self, timeout_seconds: float) -> None:
+        """Wait for the preparation and lookup in progress to finish, however they end."""
+        started = [entry[1] for entry in (self._pending, self._lookup) if entry is not None]
+        if started:
+            wait_for_futures(started, timeout=timeout_seconds)
 
     def start(self, image: str) -> Future[None]:
         if self._pending is not None:
@@ -98,4 +105,5 @@ class WorkerImagePreparation:
 
     def close(self) -> None:
         self._stop.set()
+        self._lookups.shutdown(wait=True, cancel_futures=True)
         self._executor.shutdown(wait=True, cancel_futures=True)

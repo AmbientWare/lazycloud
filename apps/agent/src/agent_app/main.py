@@ -44,8 +44,11 @@ from agent.updates import (
     SUPERVISOR,
     SUPERVISOR_SCRIPT,
     AgentUpdateBlockedError,
+    discard_abandoned_removals,
     discard_release,
+    installed_command,
 )
+from compute.provider_nodes import ProviderNodeIdentityProofProvider
 from gateway.http import LeaveAgentRequest
 from pydantic import TypeAdapter, ValidationError
 from shared.app_identity import AGENT_NAME
@@ -72,7 +75,6 @@ from agent_app.daemon import (
     ProviderInstanceIdentityMode,
     build_agent_daemon_service,
 )
-from agent_app.provider_identity import ProviderNodeIdentityEvidenceProvider
 
 
 class AgentCommandArgs(argparse.Namespace):
@@ -155,16 +157,19 @@ def main(argv: list[str] | None = None) -> None:
     except (OSError, RuntimeError, ValueError) as exc:
         parser.exit(1, f"error: {exc}\n")
     removal_error: OSError | None = None
-    if releases is not None and releases.exists():
+    if args.command == "uninstall" and not args.keep_binary:
         # Last, since this process was loaded from one of these releases.
         try:
-            discard_release(releases)
+            if releases is not None and releases.exists():
+                discard_release(releases)
+            for command in _installer_commands():
+                discard_abandoned_removals(command.parent.parent / "lib")
         except OSError as exc:
             removal_error = exc
             result = result.model_copy(update={"binary_removed": False})
     print(result.model_dump_json())
     if removal_error is not None:
-        parser.exit(1, f"error: could not remove the agent releases {releases}: {removal_error}\n")
+        parser.exit(1, f"error: could not remove the agent releases: {removal_error}\n")
     if isinstance(result, AgentDaemonRunResult) and result.authority_revoked:
         # A revoked agent has finished for good. Exiting non-zero is what tells
         # the service manager this was not a clean stop to be restarted.
@@ -192,7 +197,7 @@ def run_agent_daemon(
     client: AgentGatewayClient | None = None,
     worker_controller: DockerAgentWorkerController | None = None,
     resource_detector: Callable[[], AgentResourceDetection] | None = None,
-    provider_identity: ProviderNodeIdentityEvidenceProvider | None = None,
+    provider_identity: ProviderNodeIdentityProofProvider | None = None,
 ) -> AgentDaemonRunResult:
     _configure_daemon_logging()
     service = build_agent_daemon_service(
@@ -472,9 +477,10 @@ def _prepare_join_token_file(args: AgentCommandArgs) -> Path | None:
 
 
 def _agent_binary_path() -> str:
+    """The agent command a unit runs: the installer's link, never a release it points at."""
     raw = Path(sys.argv[0])
     if raw.name == AGENT_NAME and (raw.is_absolute() or raw.parent != Path(".")):
-        return str(raw)
+        return str(installed_command(raw.absolute()) or raw)
     return shutil.which(AGENT_NAME) or AGENT_NAME
 
 
@@ -756,20 +762,24 @@ def _canonical_agent_binary() -> Path | None:
     """
     found = Path(_agent_binary_path()).expanduser().absolute()
     command = found.parent.resolve() / found.name
-    allowed = {
-        path.parent.resolve() / path.name
-        for path in (
-            Path("/usr/local/bin") / AGENT_NAME,
-            Path.home() / f".{AGENT_NAME.removesuffix('-agent')}" / "bin" / AGENT_NAME,
-        )
-    }
-    if command not in allowed or not (command.is_symlink() or command.is_file()):
+    if command not in _installer_commands() or not (command.is_symlink() or command.is_file()):
         return None
     releases = command.parent.parent / "lib" / AGENT_NAME
     if command.is_symlink() and not command.resolve().is_relative_to(releases.resolve()):
         msg = f"{command} links outside the agent releases in {releases}; remove it by hand"
         raise RuntimeError(msg)
     return command
+
+
+def _installer_commands() -> set[Path]:
+    """The paths the install script links the agent command at, as root and as a user."""
+    return {
+        path.parent.resolve() / path.name
+        for path in (
+            Path("/usr/local/bin") / AGENT_NAME,
+            Path.home() / f".{AGENT_NAME.removesuffix('-agent')}" / "bin" / AGENT_NAME,
+        )
+    }
 
 
 def _status_payload(

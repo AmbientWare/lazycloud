@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import http.client
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -9,7 +10,13 @@ from urllib.parse import quote
 from botocore.auth import SigV4QueryAuth
 from botocore.awsrequest import AWSRequest
 from botocore.credentials import Credentials
+from compute.provider_nodes import (
+    ProviderNodeIdentityProof,
+    ProviderNodeIdentityProofError,
+    ProviderNodeIdentityUnavailableError,
+)
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
+from shared.provider_config import ProviderKind
 
 from .instance_catalog import aws_partition_for_region
 from .instance_metadata import (
@@ -180,4 +187,27 @@ def _regional_sts_url(region: str, *, nonce: str) -> str:
     )
 
 
-__all__ = ["AwsEc2ProviderNodeIdentityProofProvider"]
+@dataclass(frozen=True, slots=True)
+class AwsProviderNodeIdentityProofProvider:
+    """An EC2 node's identity proof, with metadata that does not answer marked unavailable."""
+
+    provider: AwsEc2ProviderNodeIdentityProofProvider = field(
+        default_factory=AwsEc2ProviderNodeIdentityProofProvider
+    )
+
+    def create(self, *, expected_region: str | None = None) -> ProviderNodeIdentityProof:
+        try:
+            proof = self.provider.create(expected_region=expected_region)
+        except AwsProviderNodeProofError as exc:
+            if isinstance(exc.__cause__, OSError | http.client.HTTPException):
+                raise ProviderNodeIdentityUnavailableError(str(exc)) from exc
+            raise ProviderNodeIdentityProofError(str(exc)) from exc
+        return ProviderNodeIdentityProof(
+            provider=ProviderKind.Aws,
+            region=proof.region,
+            provider_instance_id=proof.instance_id,
+            proof_url=proof.presigned_url,
+        )
+
+
+__all__ = ["AwsEc2ProviderNodeIdentityProofProvider", "AwsProviderNodeIdentityProofProvider"]

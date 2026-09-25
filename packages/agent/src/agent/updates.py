@@ -94,6 +94,29 @@ RELEASE_COMPLETE_FILE = ".lazycloud-release-complete"
 """Written into a release last, when unpacking it is finished; the install script too."""
 
 
+def installed_command(executable: Path) -> Path | None:
+    """The command link the installer points at `executable`, when it is an installed release.
+
+    The installer unpacks each release to `<prefix>/lib/lazycloud-agent/<digest>/`
+    and links `<prefix>/bin/lazycloud-agent` to its executable.
+    """
+    release = executable.parent
+    releases = release.parent
+    if (
+        RELEASE_DIGEST_PATTERN.fullmatch(release.name)
+        and releases.name == AGENT_NAME
+        and releases.parent.name == "lib"
+    ):
+        return releases.parent.parent / "bin" / AGENT_NAME
+    return None
+
+
+def discard_abandoned_removals(directory: Path) -> None:
+    """Finish removing releases directories an interrupted uninstall renamed in `directory`."""
+    for entry in directory.glob(f".{AGENT_NAME}.*.removing"):
+        shutil.rmtree(entry)
+
+
 def release_complete(release: Path) -> bool:
     """Whether `release` was unpacked whole, rather than cut short or half removed."""
     return (release / RELEASE_COMPLETE_FILE).is_file()
@@ -161,6 +184,8 @@ class AgentUpdater:
             return "the agent runs from a source tree"
         if not RELEASE_DIGEST_PATTERN.fullmatch(self.release.name):
             return "the agent was not installed as a release"
+        if not self.command.is_symlink():
+            return f"the agent command {self.command} is not a link to a release"
         if not (self.state_dir / SUPERVISOR).is_file():
             return "the agent service has no update supervisor"
         rejected = self.state_dir / "agent-update.rejected"
@@ -190,13 +215,12 @@ class AgentUpdater:
         from anywhere else, or from a source tree, keeps everything.
         """
         running = self.release
-        if (
-            running is None
-            or not RELEASE_DIGEST_PATTERN.fullmatch(running.name)
-            or running.parent.name != AGENT_NAME
-            or running.parent.parent.name != "lib"
-        ):
+        if running is None or self.executable is None or not installed_command(self.executable):
             return
+        try:
+            discard_abandoned_removals(running.parent.parent)
+        except OSError:
+            LOGGER.warning("could not remove an abandoned agent releases directory", exc_info=True)
         keep = {running}
         for link in (self.command, self.previous):
             if link.is_symlink():
@@ -303,4 +327,6 @@ __all__ = [
     "AgentUpdateBlockedError",
     "AgentUpdateRestartError",
     "AgentUpdater",
+    "discard_abandoned_removals",
+    "installed_command",
 ]

@@ -73,6 +73,10 @@ from agent.storage_cleanup import (
 )
 from agent.tunnel import AgentTunnelRoute, AgentTunnelService
 from agent.updates import AgentUpdateBlockedError, AgentUpdater
+from compute.provider_nodes import (
+    ProviderNodeIdentityProofProvider,
+    ProviderNodeIdentityUnavailableError,
+)
 from gateway.http import (
     AgentBootstrapConfig,
     AgentTelemetryRequest,
@@ -135,11 +139,6 @@ from worker.configuration import WorkerConfiguration, serialize_worker_configura
 from worker.network_backend import AgentBridgeCallbackFirewall, AgentBridgeNetworkConfig
 
 from agent_app.metrics import agent_metric_snapshot, physical_memory_mb
-from agent_app.provider_identity import (
-    ProviderNodeIdentityEvidenceProvider,
-    ProviderNodeIdentityUnavailableError,
-    provider_node_identity_evidence_provider,
-)
 from agent_app.telemetry import (
     AgentTelemetryBuffer,
     AgentTelemetryEventType,
@@ -770,7 +769,10 @@ class DockerAgentWorkerController:
 
         A no costs one stream; the stream then names the image and prepares it.
         """
-        self.wait_for_docker(stop)
+        if not self.wait_for_docker(stop) and (
+            self._closing.is_set() or (stop is not None and stop.is_set())
+        ):
+            return False
         failure = self._docker_failure(
             [self.docker_binary, "image", "inspect", image], within=BOOT_IMAGE_LOOKUP_SECONDS
         )
@@ -845,9 +847,9 @@ class DockerAgentWorkerController:
         """Wait for an image found on the host or a preparation ending; True once one did."""
         return self._images.wait(timeout_seconds)
 
-    def wait_for_image_lookup(self, timeout_seconds: float) -> None:
-        """Wait for the boot lookup of the last prepared image to answer."""
-        self._images.wait_for_lookup(timeout_seconds)
+    def wait_for_boot_image(self, timeout_seconds: float) -> None:
+        """Wait for the image started at boot, prepared or looked up, to finish."""
+        self._images.wait_for_started(timeout_seconds)
 
     def _prepare_worker_image(self, image: str, stop: Event) -> None:
         try:
@@ -1196,7 +1198,7 @@ class AgentDaemonService:
     resource_detector: AgentResourceDetector | None = None
     interruption_detector: AgentCapacityInterruptionDetector | None = None
     telemetry: AgentTelemetryBuffer = field(default_factory=AgentTelemetryBuffer)
-    provider_identity: ProviderNodeIdentityEvidenceProvider | None = None
+    provider_identity: ProviderNodeIdentityProofProvider | None = None
     _bootstrap_failure_reported: bool = False
     _capacity_shutdown: CapacityShutdown = field(init=False)
     _interruption_reported: bool = False
@@ -1212,11 +1214,11 @@ class AgentDaemonService:
             self.worker_controller, grace_seconds=self.options.interruption_grace_seconds
         )
 
-    def _provider_evidence_provider(self) -> ProviderNodeIdentityEvidenceProvider:
+    def _provider_evidence_provider(self) -> ProviderNodeIdentityProofProvider:
         if self.options.provider is None:
             msg = "provider node reporting requires a provider"
             raise ValueError(msg)
-        return self.provider_identity or provider_node_identity_evidence_provider()
+        return self.provider_identity or _provider_node_identity()
 
     def _report_phase_aside(self, phase: MachineLifecycle) -> None:
         """Report a boot phase on its own thread, so it never holds the tunnel or a stream.
@@ -1233,7 +1235,11 @@ class AgentDaemonService:
                     f"bootstrap_phase.{phase.value}",
                     lambda: self._record_bootstrap_phase(phase),
                 )
-            except Exception:
+            except Exception as exc:
+                if isinstance(exc, HttpApiError) and exc.status_code == 409:
+                    # Enrollment moved the machine past this phase first.
+                    LOGGER.info("the machine is already past %s", phase.value)
+                    return
                 LOGGER.warning("reporting the %s phase failed", phase.value, exc_info=True)
 
         Thread(target=report, name="agent-phase-report", daemon=True).start()
@@ -1495,7 +1501,7 @@ class AgentDaemonService:
         # The first stream waits briefly for an image check started at boot so it
         # can report the image; later streams never wait on a pull in progress.
         if current_iterations == 1:
-            self.worker_controller.wait_for_image_lookup(IMAGE_REPORT_WAIT_SECONDS)
+            self.worker_controller.wait_for_boot_image(IMAGE_REPORT_WAIT_SECONDS)
         self._reported_worker_images = self.worker_controller.prepared_worker_images()
         with timings.step("stream"):
             stream = self.client.stream_agent(
@@ -2030,7 +2036,7 @@ def build_agent_daemon_service(
     worker_controller: DockerAgentWorkerController | None = None,
     resource_detector: AgentResourceDetector | None = None,
     interruption_detector: AgentCapacityInterruptionDetector | None = None,
-    provider_identity: ProviderNodeIdentityEvidenceProvider | None = None,
+    provider_identity: ProviderNodeIdentityProofProvider | None = None,
 ) -> AgentDaemonService:
     state_dir = Path(options.state_dir)
     # One buffer, shared with the worker controller. A worker's exit then rides
@@ -2395,6 +2401,14 @@ def _agent_lock_pid(contents: str) -> int:
             except ValueError:
                 return 0
     return 0
+
+
+def _provider_node_identity() -> ProviderNodeIdentityProofProvider:
+    # Imported here so a machine a customer joined never loads botocore or the
+    # AWS provider at startup; only a provider node asks for a proof.
+    from provider_aws.provider_node_proof import AwsProviderNodeIdentityProofProvider
+
+    return AwsProviderNodeIdentityProofProvider()
 
 
 def _recoverable_stream_error(exc: Exception) -> bool:
