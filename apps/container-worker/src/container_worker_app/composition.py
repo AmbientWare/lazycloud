@@ -7,7 +7,6 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Event
-from urllib.parse import urlparse
 
 from cache.server import (
     FileCacheServer,
@@ -179,8 +178,8 @@ def build_worker_process_services(
     paths = configuration.paths
     identity = _worker_identity(config)
     internal_http = _internal_http_client(config)
-    # A held worker reports waiting only once its readiness preparation succeeded,
-    # so its reserve never hibernates with a worker that is not ready.
+    # A held worker reports waiting only once its local readiness work succeeded,
+    # so its reserve never hibernates with a worker that could not start.
     readiness_prepared = Event()
     repository = repository_client or build_worker_repository_http_client(
         endpoint=AGENT_TUNNEL_CONTROL_URL,
@@ -485,6 +484,14 @@ def build_worker_process_services(
         checkpoint_activity=checkpoint_activity,
         image_unmounter=image_runtime.unmount,
     )
+    readiness_preparer, readiness_validator = _readiness_steps(
+        image_runtime,
+        spec_builder=spec_builder,
+        network_backend=network_backend,
+        prepared=readiness_prepared,
+        gpu_count=execution.capacity.gpu_count,
+        gpu_devices=config.gpu_devices,
+    )
     return assemble_worker_process_services(
         identity=identity,
         dependencies=dependencies,
@@ -497,18 +504,8 @@ def build_worker_process_services(
         pool_mode=execution.pool_mode,
         billing_owner=execution.billing_owner,
         registration=registration,
-        readiness_preparer=lambda: _prepare_worker_readiness(
-            image_runtime,
-            spec_builder=spec_builder,
-            network_backend=network_backend,
-            prepared=readiness_prepared,
-        ),
-        readiness_validator=lambda: _validate_worker_readiness(
-            network_backend=network_backend,
-            external=_url_endpoint(config.public_gateway_url),
-            gpu_count=execution.capacity.gpu_count,
-            gpu_devices=config.gpu_devices,
-        ),
+        readiness_preparer=readiness_preparer,
+        readiness_validator=readiness_validator,
         cleanup_actions=(
             [WorkerCleanupAction(name="prepared-networks", action=network_backend.close)]
             + (
@@ -540,14 +537,38 @@ def build_worker_process_services(
     )
 
 
-def _prepare_worker_readiness(
+def _readiness_steps(
     image_runtime: ImageRuntimeClient | None,
     *,
     spec_builder: OciRuntimeSpecBuilder,
     network_backend: AgentBridgeNetworkBackend,
     prepared: Event,
+    gpu_count: int,
+    gpu_devices: str,
+) -> tuple[Callable[[], None], Callable[[], None]]:
+    """The worker's readiness work: local work beside registration, then the rest after it."""
+    return (
+        lambda: _prepare_worker_readiness(
+            image_runtime, spec_builder=spec_builder, prepared=prepared
+        ),
+        lambda: _validate_worker_readiness(
+            network_backend=network_backend, gpu_count=gpu_count, gpu_devices=gpu_devices
+        ),
+    )
+
+
+def _prepare_worker_readiness(
+    image_runtime: ImageRuntimeClient | None,
+    *,
+    spec_builder: OciRuntimeSpecBuilder,
+    prepared: Event,
 ) -> None:
-    """The readiness checks a sleep cannot change, run while the worker registers."""
+    """The local readiness work, run while the worker registers.
+
+    A reserve's worker is held off the control plane until its machine resumes,
+    so nothing here may call it: the host network waits for the network lock the
+    control plane grants, and runs after registration.
+    """
 
     def image_runtime_health() -> None:
         if image_runtime is None:
@@ -561,7 +582,6 @@ def _prepare_worker_readiness(
         {
             "managed_runtimes": spec_builder.prepare_managed_runtimes,
             "image_runtime": image_runtime_health,
-            "network": network_backend.prepare,
         },
     )
     prepared.set()
@@ -570,14 +590,14 @@ def _prepare_worker_readiness(
 def _validate_worker_readiness(
     *,
     network_backend: AgentBridgeNetworkBackend,
-    external: tuple[str, int] | None,
     gpu_count: int,
     gpu_devices: str,
 ) -> None:
-    """The readiness checks a sleep can change, run once the worker is registered.
+    """The readiness work that needs the control plane or sees what a sleep changes.
 
-    A reserve's worker registers only after its machine resumes, so these see
-    the machine as it woke: its addressing and routes, and its GPUs.
+    A reserve's worker registers only after its machine resumes, so this sets up
+    the host network under the control plane's lock and sees the machine as it
+    woke: its addressing and routes, and its GPUs.
     """
 
     def gpu_presence() -> None:
@@ -597,22 +617,15 @@ def _validate_worker_readiness(
             time.sleep(0.5)
 
     def network() -> None:
+        network_backend.prepare()
         if network_backend.refresh_capabilities():
-            LOGGER.info("host routes changed since readiness preparation; bridge rules re-applied")
-        network_backend.probe_gateway_egress(external)
+            LOGGER.info("host routes changed since the network was prepared; rules re-applied")
+        network_backend.probe_gateway_egress()
 
     checks: dict[str, Callable[[], object]] = {"network": network}
     if gpu_count:
         checks["gpu"] = gpu_presence
     _run_readiness_checks("container worker readiness checks", checks)
-
-
-def _url_endpoint(url: str) -> tuple[str, int] | None:
-    """The host and port a URL names, with its scheme's default port."""
-    parsed = urlparse(url)
-    if not parsed.hostname:
-        return None
-    return parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80)
 
 
 def _run_readiness_checks(label: str, checks: dict[str, Callable[[], object]]) -> None:

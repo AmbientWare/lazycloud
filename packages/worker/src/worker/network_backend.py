@@ -560,13 +560,11 @@ class AgentBridgeNetworkBackend:
             finally:
                 self.ip_allocator.release_network_lock(token)
 
-    def probe_gateway_egress(self, external: tuple[str, int] | None = None) -> None:
-        """Prove a container reaches the agent's control listener, and `external` beyond the host.
+    def probe_gateway_egress(self) -> None:
+        """Prove a container reaches the agent's control listener through the bridge.
 
         The agent opens that listener only once the worker may serve, and a
         sleep can change the host's addressing and routes, so this runs last.
-        Reaching `external` proves the bridge's NAT and routes carry traffic
-        off the host.
         """
         origin = f"http://{self.config.gateway}:{AGENT_TUNNEL_CONTROL_PORT}"
         # The worker, not just the bridge: the veth pair this name derives is created
@@ -579,12 +577,10 @@ class AgentBridgeNetworkBackend:
             startup_kind=WorkerStartupKind.Function,
         )
         script = (
-            "import socket,sys;"
+            "import sys;"
             "from urllib.request import urlopen;"
             "response=urlopen(sys.argv[1],timeout=float(sys.argv[2]));"
-            "200 <= response.status < 300 or sys.exit(1);"
-            "sys.argv[3:] and socket.create_connection("
-            "(sys.argv[3],int(sys.argv[4])),timeout=float(sys.argv[2])).close()"
+            "raise SystemExit(0 if 200 <= response.status < 300 else 1)"
         )
         try:
             self._remove_container_resources(probe_id, release_ip=False)
@@ -617,7 +613,6 @@ class AgentBridgeNetworkBackend:
                         script,
                         f"{origin}/health",
                         str(self.config.gateway_egress_timeout_seconds),
-                        *((external[0], str(external[1])) if external else ()),
                     ],
                 )
             )
