@@ -35,7 +35,6 @@ const (
 	nbdRepAck        uint32 = 1
 	nbdRepInfo       uint32 = 3
 	nbdRepErrUnsup   uint32 = 1<<31 + 1
-	nbdRepErrInvalid uint32 = 1<<31 + 3
 	nbdRepErrUnknown uint32 = 1<<31 + 6
 
 	nbdInfoExport    uint16 = 0
@@ -66,8 +65,7 @@ type nbdExport interface {
 
 type nbdServer struct {
 	exports map[string]nbdExport
-	// failed hears about every read that returned an error to the client.
-	failed func(export string, err error)
+	failed  func(export string, err error)
 }
 
 func (s *nbdServer) serve(ctx context.Context, listener net.Listener) error {
@@ -118,6 +116,7 @@ func (s *nbdServer) negotiate(reader io.Reader, conn io.Writer) (string, nbdExpo
 	if err := binary.Read(reader, binary.BigEndian, &clientFlags); err != nil {
 		return "", nil, err
 	}
+	const flags = nbdTransHasFlags | nbdTransReadOnly | nbdTransSendFlush
 	for {
 		var header struct {
 			Magic  uint64
@@ -134,65 +133,49 @@ func (s *nbdServer) negotiate(reader io.Reader, conn io.Writer) (string, nbdExpo
 		if _, err := io.ReadFull(reader, data); err != nil {
 			return "", nil, err
 		}
+		reply := func(kind uint32, payload []byte) error {
+			return optionReply(conn, header.Option, kind, payload)
+		}
 		switch header.Option {
 		case nbdOptExportName:
-			name := string(data)
-			export := s.exports[name]
+			export := s.exports[string(data)]
 			if export == nil {
-				return "", nil, fmt.Errorf("nbd: no export %q", name)
+				return "", nil, fmt.Errorf("nbd: no export %q", data)
 			}
-			reply := binary.BigEndian.AppendUint64(nil, uint64(export.Size()))
-			reply = binary.BigEndian.AppendUint16(reply, nbdTransHasFlags|nbdTransReadOnly|nbdTransSendFlush)
+			answer := binary.BigEndian.AppendUint64(nil, uint64(export.Size()))
+			answer = binary.BigEndian.AppendUint16(answer, flags)
 			if clientFlags&nbdClientNoZeroes == 0 {
-				reply = append(reply, make([]byte, 124)...)
+				answer = append(answer, make([]byte, 124)...)
 			}
-			_, err := conn.Write(reply)
-			return name, export, err
+			_, err := conn.Write(answer)
+			return string(data), export, err
 		case nbdOptInfo, nbdOptGo:
-			if len(data) < 6 {
-				if err := optionReply(conn, header.Option, nbdRepErrInvalid, nil); err != nil {
-					return "", nil, err
-				}
-				continue
+			var name string
+			if len(data) >= 6 && int(binary.BigEndian.Uint32(data))+6 <= len(data) {
+				name = string(data[4 : 4+binary.BigEndian.Uint32(data)])
 			}
-			length := binary.BigEndian.Uint32(data)
-			if int(length)+6 > len(data) {
-				if err := optionReply(conn, header.Option, nbdRepErrInvalid, nil); err != nil {
-					return "", nil, err
-				}
-				continue
-			}
-			name := string(data[4 : 4+length])
 			export := s.exports[name]
 			if export == nil {
-				if err := optionReply(conn, header.Option, nbdRepErrUnknown, nil); err != nil {
+				if err := reply(nbdRepErrUnknown, nil); err != nil {
 					return "", nil, err
 				}
 				continue
 			}
 			info := binary.BigEndian.AppendUint16(nil, nbdInfoExport)
 			info = binary.BigEndian.AppendUint64(info, uint64(export.Size()))
-			info = binary.BigEndian.AppendUint16(info, nbdTransHasFlags|nbdTransReadOnly|nbdTransSendFlush)
+			info = binary.BigEndian.AppendUint16(info, flags)
 			sizes := binary.BigEndian.AppendUint16(nil, nbdInfoBlockSize)
 			sizes = binary.BigEndian.AppendUint32(sizes, 1)
 			sizes = binary.BigEndian.AppendUint32(sizes, 4096)
 			sizes = binary.BigEndian.AppendUint32(sizes, nbdMaxRequest)
-			for _, reply := range [][]byte{info, sizes} {
-				if err := optionReply(conn, header.Option, nbdRepInfo, reply); err != nil {
-					return "", nil, err
-				}
-			}
-			if err := optionReply(conn, header.Option, nbdRepAck, nil); err != nil {
-				return "", nil, err
-			}
-			if header.Option == nbdOptGo {
-				return name, export, nil
+			err := errors.Join(reply(nbdRepInfo, info), reply(nbdRepInfo, sizes), reply(nbdRepAck, nil))
+			if err != nil || header.Option == nbdOptGo {
+				return name, export, err
 			}
 		case nbdOptAbort:
-			optionReply(conn, header.Option, nbdRepAck, nil)
-			return "", nil, nil
+			return "", nil, reply(nbdRepAck, nil)
 		default:
-			if err := optionReply(conn, header.Option, nbdRepErrUnsup, nil); err != nil {
+			if err := reply(nbdRepErrUnsup, nil); err != nil {
 				return "", nil, err
 			}
 		}

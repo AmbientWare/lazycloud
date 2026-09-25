@@ -16,7 +16,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// chunkSource reads one stored object. objectStore is the production one.
 type chunkSource interface {
 	get(ctx context.Context, key string, limit int64) ([]byte, error)
 }
@@ -45,8 +44,7 @@ type lazyLayer struct {
 	// life ends every fetch when the layer stops being served. A fetch runs
 	// on it rather than on its reader, so the others waiting on the same
 	// chunk still get it when that reader gives up.
-	life context.Context
-	// touched receives the digest of every chunk a read covers.
+	life    context.Context
 	touched func(sum string)
 
 	downloads sync.WaitGroup
@@ -174,7 +172,6 @@ func (l *lazyLayer) complete() bool {
 
 func (l *lazyLayer) Size() int64 { return l.manifest.LayerSizeBytes }
 
-// ReadAt serves a read of the layer, fetching every chunk it touches first.
 func (l *lazyLayer) ReadAt(ctx context.Context, buf []byte, offset int64) error {
 	if err := l.ensure(ctx, offset, int64(len(buf))); err != nil {
 		return err
@@ -183,7 +180,6 @@ func (l *lazyLayer) ReadAt(ctx context.Context, buf []byte, offset int64) error 
 	return err
 }
 
-// ensure makes every chunk under [offset, offset+length) present.
 func (l *lazyLayer) ensure(ctx context.Context, offset, length int64) error {
 	chunks := l.manifest.Chunks
 	first := sort.Search(len(chunks), func(i int) bool { return chunks[i].Offset+chunks[i].Length > offset })
@@ -296,7 +292,6 @@ func (l *lazyLayer) flush() error {
 	return nil
 }
 
-// progress reports how much of the layer is present.
 func (l *lazyLayer) progress() (chunks, present int, bytes, presentBytes int64) {
 	l.mu.Lock()
 	defer l.mu.Unlock()

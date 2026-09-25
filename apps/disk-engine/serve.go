@@ -10,8 +10,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
-	"strconv"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -46,14 +44,12 @@ type serveStatus struct {
 	HotChunks     int        `json:"hot_chunks"`
 	HotDoneAt     *time.Time `json:"hot_done_at,omitempty"`
 	DoneAt        *time.Time `json:"done_at,omitempty"`
-	// FailedReads counts reads that returned an I/O error to the daemon.
-	FailedReads int        `json:"failed_reads"`
-	LastError   string     `json:"last_error,omitempty"`
-	LastErrorAt *time.Time `json:"last_error_at,omitempty"`
-	// OutOfSpace is set once a chunk could not be written for lack of room.
-	OutOfSpace   bool   `json:"out_of_space"`
-	HydrateError string `json:"hydrate_error,omitempty"`
-	HeatError    string `json:"heat_error,omitempty"`
+	FailedReads   int        `json:"failed_reads"`
+	LastError     string     `json:"last_error,omitempty"`
+	LastErrorAt   *time.Time `json:"last_error_at,omitempty"`
+	OutOfSpace    bool       `json:"out_of_space"`
+	HydrateError  string     `json:"hydrate_error,omitempty"`
+	HeatError     string     `json:"heat_error,omitempty"`
 }
 
 type chunkRef struct{ layer, index int }
@@ -422,14 +418,7 @@ func startServer(ctx context.Context, p diskPaths, state *diskState, storePath s
 // serverAlive reports whether pid is this disk's server, by its command line,
 // since a restarted machine may have given the pid to anything.
 func serverAlive(p diskPaths, pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	cmdline, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "cmdline"))
-	if err != nil {
-		return false
-	}
-	args := strings.Split(strings.TrimRight(string(cmdline), "\x00"), "\x00")
+	args := processArgs(pid)
 	return slices.Contains(args, "serve") && slices.Contains(args, p.root) && slices.Contains(args, p.id)
 }
 

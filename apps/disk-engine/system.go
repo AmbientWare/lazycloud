@@ -72,24 +72,53 @@ func pathExists(path string) (bool, error) {
 	return false, err
 }
 
-// qcow2VirtualSize reads the size a qcow2 image presents from its header:
-// the magic "QFI\xfb", then the size as a big-endian uint64 at byte 24.
+// qcow2HeaderBytes covers every field parseQcow2Header reads.
+const qcow2HeaderBytes = 64
+
+// qcow2Header is the part of a qcow2 header the engine reads. Fields are
+// big-endian at fixed offsets after the magic "QFI\xfb".
+type qcow2Header struct {
+	clusterBytes     int64
+	virtualSize      int64
+	l1Entries        int64
+	l1Offset         int64
+	refcountOffset   int64
+	refcountClusters int64
+}
+
+func parseQcow2Header(name string, raw []byte) (qcow2Header, error) {
+	if len(raw) < qcow2HeaderBytes || !bytes.Equal(raw[:4], []byte("QFI\xfb")) {
+		return qcow2Header{}, fmt.Errorf("%s is not a qcow2 image", name)
+	}
+	clusterBits := binary.BigEndian.Uint32(raw[20:24])
+	header := qcow2Header{
+		virtualSize:      int64(binary.BigEndian.Uint64(raw[24:32])),
+		l1Entries:        int64(binary.BigEndian.Uint32(raw[36:40])),
+		l1Offset:         int64(binary.BigEndian.Uint64(raw[40:48])),
+		refcountOffset:   int64(binary.BigEndian.Uint64(raw[48:56])),
+		refcountClusters: int64(binary.BigEndian.Uint32(raw[56:60])),
+	}
+	if clusterBits < 9 || clusterBits > 21 {
+		return header, fmt.Errorf("%s has %d-bit clusters", name, clusterBits)
+	}
+	header.clusterBytes = int64(1) << clusterBits
+	if header.virtualSize <= 0 {
+		return header, fmt.Errorf("%s declares a virtual size of %d", name, header.virtualSize)
+	}
+	return header, nil
+}
+
+// qcow2VirtualSize reads the size a qcow2 image presents from its header.
 func qcow2VirtualSize(path string) (int64, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return 0, err
 	}
 	defer file.Close()
-	header := make([]byte, 32)
-	if _, err := io.ReadFull(file, header); err != nil {
+	raw := make([]byte, qcow2HeaderBytes)
+	if _, err := io.ReadFull(file, raw); err != nil {
 		return 0, fmt.Errorf("read qcow2 header of %s: %w", path, err)
 	}
-	if !bytes.Equal(header[:4], []byte("QFI\xfb")) {
-		return 0, fmt.Errorf("%s is not a qcow2 image", path)
-	}
-	size := int64(binary.BigEndian.Uint64(header[24:32]))
-	if size <= 0 {
-		return 0, fmt.Errorf("%s declares a virtual size of %d", path, size)
-	}
-	return size, nil
+	header, err := parseQcow2Header(path, raw)
+	return header.virtualSize, err
 }

@@ -86,55 +86,52 @@ half each grant's remaining life for as long as the call runs. A file that still
 holds expired credentials fails the call and names the expiry. Signing with them
 anyway would only fail later, partway through an upload.
 
-A restore does not download the chain before the disk starts. Attach creates
-each published layer as a sparse file of its manifest's size, keeps the manifest
-beside it and a bitmap with one bit per chunk, and marks the layer lazy. Only
-the chunks holding each qcow2 layer's header are fetched first, because the
-rebase writes there. `serve`, one process per disk started before the daemon,
-exports every lazy layer read-only over NBD on `run/layers.sock`, and the daemon
-opens those layers through it instead of as files. qemu keeps its own chain,
-qcow2 driver and head; only the bytes under a lazy layer come from somewhere
-else. The alternatives were worse fits: qemu's copy-on-read filter still needs
-something that can fetch a content-addressed chunk, and a FUSE file adds a
-kernel dependency the hosts do not have.
+A restore does not download the chain first. Attach lays out each published
+layer as a sparse file of its manifest's size, with the manifest beside it and
+a bitmap of one bit per chunk, and marks it lazy. It fetches only what opening
+a qcow2 layer reads (header cluster, L1 and refcount tables), because the
+rebase opens every layer. `serve`, one process per disk started before the
+daemon, exports the lazy layers read-only over NBD on `run/lazy.sock`, and the
+daemon opens them through qemu's own nbd driver. The chain, the qcow2 driver
+and the head stay qemu's. qemu's copy-on-read filter would still need something
+that fetches a content-addressed chunk, and FUSE is a kernel dependency the
+hosts do not have.
 
-A read through `serve` fetches every missing chunk it touches, once however many
-readers wait on it, checks its length and sha256 against the manifest, writes
-it into the layer file and marks it present. Later reads are local. The bitmap
-reaches the disk only after the layer file is flushed, so a crash can lose a bit
-but never leaves one naming bytes that were not written; the chunk is fetched
-again. A chunk that fails its check is fetched again, and one that keeps failing
-or cannot be fetched fails the read with EIO and is recorded in `run/serve.json`,
-which `usage` reports so the worker can stop the container with that reason.
-Nothing unverified is ever written into a layer. Credentials come from the
-STORE.json the worker keeps renewed for as long as the disk is attached.
+A read fetches each missing chunk it touches, once however many readers wait,
+checks its length and sha256 against the manifest, writes it into the layer and
+sets its bit. Unverified bytes are never written. The bitmap reaches the disk
+only after the layer file is flushed, so a crash forgets chunks, which are
+fetched again, and never names bytes that were not written. A chunk that still
+cannot be fetched fails the read with EIO; one with no room to land fails it
+too. `serve` records both in `run/serve.json`, which carries its pid so a new
+attachment never reads an old record, and `usage` reports them for the worker
+to stop the container as unreadable or full. Credentials come from a STORE.json
+the worker keeps renewed while `serve` runs. Each GET has its own timeout, and a
+stop cancels every fetch, so `serve` exits well inside the wait `stopServer`
+gives it before killing it; an unflushed bit only costs a refetch.
 
-`serve` also hydrates in the background: first the chunks the heat map names,
-most recently used first, then everything else, newest layer first, at a
-bounded rate on a few connections. A workload read never waits behind it. A
-layer whose bitmap is full opens as a plain file at the next attach, and its
-bitmap and manifest go. A cached local chain whose layers are all complete
-attaches as it always has, with no `serve` at all.
+`serve` hydrates in the background: first the chunks the heat map names, most
+recently used first, then the rest, newest layer first, at a bounded rate.
+Workload reads never queue behind it. Once every lazy layer is complete, the
+next attach opens them as plain files and drops their bitmaps and manifests.
 
-The heat map counts chunks, by the first bytes of their sha256, rather than
-offsets. Chunks are content-addressed, so a map taken over one chain still
-names the same data in the next restore's chain, however the layers were
-arranged. `serve` marks every chunk a read touches, ages the map one window
-every publish interval, and keeps at most 65536 entries. Publish uploads it to
-`disks/<id>/heat` and a restore reads it back; a flatten re-chunks the disk, so
-the map starts over after one. A session that never started `serve` leaves the
-map as it was.
+The heat map names chunks by the first bytes of their sha256, so it still
+applies to whatever chain the next restore gets; a flatten re-chunks the disk
+and starts it over. `serve` marks the chunks reads touch, ages the map every
+publish interval, keeps at most 65536 entries and uploads it to
+`disks/<id>/heat`. It only orders prefetching, so a map that cannot be fetched
+or decoded is dropped, and deleted where it lies, rather than failing a start.
 
-Compaction never writes a lazy layer. It commits published layers into the
-lowest complete layer above the lazy ones, and `usage` counts only what sits
-above that layer. Flattening reads layer files directly, so a publish asked to
-flatten while a lazy layer is incomplete publishes an ordinary layer, and the
-flatten comes with a later publish. A collect follows only a flatten, so it
-never deletes a chunk a lazy layer still needs.
+Compaction never writes a lazy layer: it commits into the lowest local layer
+above them. Flattening reads layer files directly, so it waits until the lazy
+layers are complete and the publish meanwhile is an ordinary layer. Collect
+follows only a flatten, so it never deletes a chunk a lazy layer still needs.
 
-A lazy restore needs room for every layer's stored bytes plus the reserve when
-it starts, because it fills them in as it runs. A chain that does not fit
-restores eagerly as before, committing layers into the base to make room.
+A lazy restore needs room for its layers and for what every other lazy disk
+under the same root has yet to fetch; their manifests and bitmaps are that
+reservation. A chain that does not fit restores eagerly, committing layers into
+the base as it goes. Recover and evict stop a `serve` an interrupted attach left
+running before they touch the disk's files.
 
 Nothing here falls back. A missing binary, a missing `nbd` module, a busy device
 or a mismatched manifest fails the command with the reason on stderr. Hosts load

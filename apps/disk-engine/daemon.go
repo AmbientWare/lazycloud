@@ -197,14 +197,18 @@ func startDaemon(ctx context.Context, p diskPaths, state *diskState) (int, error
 // kernel may have handed the pid to another process, so its command line must
 // name this disk's monitor socket.
 func daemonAlive(p diskPaths, pid int) bool {
+	return strings.Contains(strings.Join(processArgs(pid), " "), p.qmpSocket())
+}
+
+func processArgs(pid int) []string {
 	if pid <= 0 {
-		return false
+		return nil
 	}
 	cmdline, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "cmdline"))
-	if err != nil {
-		return false
+	if err != nil || len(cmdline) == 0 {
+		return nil
 	}
-	return strings.Contains(string(cmdline), p.qmpSocket())
+	return strings.Split(strings.TrimRight(string(cmdline), "\x00"), "\x00")
 }
 
 func stopDaemon(ctx context.Context, p diskPaths, pid int) error {

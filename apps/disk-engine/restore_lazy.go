@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/binary"
 	"fmt"
 	"os"
 	"slices"
@@ -61,11 +60,10 @@ func owedByOthers(p diskPaths) (int64, error) {
 // could not do that only costs prefetch order.
 func restoreLazy(ctx context.Context, p diskPaths, state *diskState, store *objectStore, chain []chainEntry, manifests []layerManifest) ([]string, error) {
 	layers := make([]layer, len(chain))
-	for i, entry := range chain {
+	for i := range chain {
 		layers[i] = state.newLayer()
 		layers[i].Raw = manifests[i].Format == formatRaw
 		layers[i].Lazy = true
-		layers[i].Generation = entry.Generation
 		if err := createLazyLayer(p, layers[i], manifests[i]); err != nil {
 			return nil, err
 		}
@@ -81,33 +79,15 @@ func restoreLazy(ctx context.Context, p diskPaths, state *diskState, store *obje
 		return nil, err
 	}
 	for i, entry := range chain {
-		if i > 0 {
-			below := layers[i-1]
-			if _, err := runTool(ctx, toolImage, "rebase", "-u", "-F", below.format(), "-b", below.file(), p.layerPath(layers[i])); err != nil {
-				return nil, err
-			}
+		if err := stackRestored(ctx, p, state, layers[i], entry, manifests[i]); err != nil {
+			return nil, err
 		}
-		state.Layers = append(state.Layers, layers[i])
-		state.Published = append(state.Published, publishedRecord{
-			Generation:       entry.Generation,
-			ParentGeneration: manifests[i].ParentGeneration,
-			ManifestKey:      entry.ManifestKey,
-			ManifestSHA256:   entry.ManifestSHA256,
-		})
 	}
 	var warnings []string
 	if err := fetchHeat(ctx, p, store); err != nil {
 		warnings = append(warnings, fmt.Sprintf("restoring without prefetch hints: %v", err))
 	}
-	head := state.newLayer()
-	if err := createOverlay(ctx, p.layerPath(head), state.head(), state.SizeBytes); err != nil {
-		return nil, err
-	}
-	state.Layers = append(state.Layers, head)
-	newest := chain[len(chain)-1]
-	state.PublishedGeneration = newest.Generation
-	state.PublishedManifestSHA256 = newest.ManifestSHA256
-	return warnings, nil
+	return warnings, addRestoredHead(ctx, p, state, chain[len(chain)-1])
 }
 
 // fetchHeat copies the disk's heat map from its bucket prefix. A map that does
@@ -133,23 +113,16 @@ func fetchOpenTables(ctx context.Context, p diskPaths, l layer, store chunkSourc
 		return err
 	}
 	defer lazy.close()
-	header := make([]byte, 64)
-	if err := lazy.ReadAt(ctx, header, 0); err != nil {
+	raw := make([]byte, qcow2HeaderBytes)
+	if err := lazy.ReadAt(ctx, raw, 0); err != nil {
 		return err
 	}
-	if string(header[:4]) != "QFI\xfb" {
-		return fmt.Errorf("layer %s is not a qcow2 image", l.file())
+	header, err := parseQcow2Header(l.file(), raw)
+	if err != nil {
+		return err
 	}
-	clusterBits := binary.BigEndian.Uint32(header[20:24])
-	if clusterBits < 9 || clusterBits > 21 {
-		return fmt.Errorf("layer %s has %d-bit clusters", l.file(), clusterBits)
-	}
-	cluster := int64(1) << clusterBits
-	l1Entries := int64(binary.BigEndian.Uint32(header[36:40]))
-	l1Offset := int64(binary.BigEndian.Uint64(header[40:48]))
-	refcountOffset := int64(binary.BigEndian.Uint64(header[48:56]))
-	refcountClusters := int64(binary.BigEndian.Uint32(header[56:60]))
-	for _, span := range [][2]int64{{0, cluster}, {l1Offset, l1Entries * 8}, {refcountOffset, refcountClusters * cluster}} {
+	cluster := header.clusterBytes
+	for _, span := range [][2]int64{{0, cluster}, {header.l1Offset, header.l1Entries * 8}, {header.refcountOffset, header.refcountClusters * cluster}} {
 		if err := lazy.ensure(ctx, span[0], min(span[1], lazy.Size()-span[0])); err != nil {
 			return err
 		}

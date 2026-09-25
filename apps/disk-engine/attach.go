@@ -23,8 +23,8 @@ type attachResult struct {
 	// Lazy is true when the restore fetched no data up front: the published
 	// layers fill in from the bucket as they are read.
 	Lazy bool `json:"lazy"`
-	// Serving is true while `serve` runs for the disk, for as long as it
-	// has layers still lazy.
+	// Serving is true while `serve` runs for the disk, which it does until
+	// every lazy layer is complete.
 	Serving bool `json:"serving"`
 	// Warnings name what the attach skipped that only costs prefetch order.
 	Warnings []string `json:"warnings"`
@@ -343,7 +343,6 @@ func (e *insufficientSpaceError) Error() string {
 	return fmt.Sprintf("insufficient space on %s: need %d, have %d free, reserve %d", e.root, e.need, e.have, e.reserve)
 }
 
-// blockRounded is the space n bytes of a file take in filesystem blocks.
 func blockRounded(n int64) int64 {
 	return (n + filesystemBlockBytes - 1) / filesystemBlockBytes * filesystemBlockBytes
 }
@@ -498,32 +497,46 @@ func restoreChain(ctx context.Context, p diskPaths, state *diskState, store *obj
 			sizes[i] = bytes
 		}
 		restored += sizes[i]
-		next.Generation = entry.Generation
-		if i > 0 {
-			// Backing names are relative, so the chain survives the root moving.
-			below := state.Layers[len(state.Layers)-1]
-			if _, err := runTool(ctx, toolImage, "rebase", "-u", "-F", below.format(), "-b", below.file(), p.layerPath(next)); err != nil {
-				return 0, err
-			}
+		if err := stackRestored(ctx, p, state, next, entry, manifest); err != nil {
+			return 0, err
 		}
-		state.Layers = append(state.Layers, next)
-		state.Published = append(state.Published, publishedRecord{
-			Generation:       entry.Generation,
-			ParentGeneration: manifest.ParentGeneration,
-			ManifestKey:      entry.ManifestKey,
-			ManifestSHA256:   entry.ManifestSHA256,
-		})
 	}
-	top := state.Layers[len(state.Layers)-1]
+	return restored, addRestoredHead(ctx, p, state, chain[len(chain)-1])
+}
+
+// stackRestored puts a restored layer on top of the chain as generation
+// entry. Backing names are relative, so the chain survives the root moving.
+func stackRestored(ctx context.Context, p diskPaths, state *diskState, l layer, entry chainEntry, manifest layerManifest) error {
+	if len(state.Layers) > 0 {
+		if err := rebaseOnto(ctx, p, l, state.head()); err != nil {
+			return err
+		}
+	}
+	l.Generation = entry.Generation
+	state.Layers = append(state.Layers, l)
+	state.Published = append(state.Published, publishedRecord{
+		Generation:       entry.Generation,
+		ParentGeneration: manifest.ParentGeneration,
+		ManifestKey:      entry.ManifestKey,
+		ManifestSHA256:   entry.ManifestSHA256,
+	})
+	return nil
+}
+
+func addRestoredHead(ctx context.Context, p diskPaths, state *diskState, newest chainEntry) error {
 	head := state.newLayer()
-	if err := createOverlay(ctx, p.layerPath(head), top, state.SizeBytes); err != nil {
-		return 0, err
+	if err := createOverlay(ctx, p.layerPath(head), state.head(), state.SizeBytes); err != nil {
+		return err
 	}
 	state.Layers = append(state.Layers, head)
-	newest := chain[len(chain)-1]
 	state.PublishedGeneration = newest.Generation
 	state.PublishedManifestSHA256 = newest.ManifestSHA256
-	return restored, nil
+	return nil
+}
+
+func rebaseOnto(ctx context.Context, p diskPaths, l, below layer) error {
+	_, err := runTool(ctx, toolImage, "rebase", "-u", "-F", below.format(), "-b", below.file(), p.layerPath(l))
+	return err
 }
 
 func attachmentHealthy(p diskPaths, state *diskState) (bool, error) {
@@ -639,7 +652,7 @@ func commitIntoBelow(ctx context.Context, path string, below layer, belowPath st
 func commitHeld(ctx context.Context, p diskPaths, state *diskState) error {
 	base := state.Layers[0]
 	for _, held := range state.Layers[1:] {
-		if _, err := runTool(ctx, toolImage, "rebase", "-u", "-F", base.format(), "-b", base.file(), p.layerPath(held)); err != nil {
+		if err := rebaseOnto(ctx, p, held, base); err != nil {
 			return err
 		}
 		if err := commitIntoBelow(ctx, p.layerPath(held), base, p.layerPath(base)); err != nil {

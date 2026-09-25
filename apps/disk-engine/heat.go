@@ -153,11 +153,3 @@ func loadHeat(p diskPaths) (*heatMap, error) {
 	}
 	return h, nil
 }
-
-func saveHeat(p diskPaths, h *heatMap) error {
-	data, err := h.encode()
-	if err != nil {
-		return err
-	}
-	return writeFileAtomic(p.heatPath(), data)
-}

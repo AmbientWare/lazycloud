@@ -263,11 +263,8 @@ class DiskEngine:
         store_file: Path,
         min_free_bytes: int,
     ) -> DiskEngineAttachResult:
-        """Attach the disk, reading its bucket through `store_file`.
-
-        The engine keeps reading that file after this call returns, for as
-        long as the disk has layers it restored lazily.
-        """
+        """Attach the disk. The engine's `serve` keeps reading `store_file` after
+        this returns, until every lazy layer is complete."""
         chain_path = self._scratch_dir(disk.disk_id) / "chain.json"
         chain_path.write_text(
             json.dumps([entry.model_dump(mode="json") for entry in chain]), encoding="utf-8"
@@ -547,7 +544,7 @@ class _Attached:
     """The container was asked to stop for one of its disks."""
 
     stores: dict[str, _StoreFile] = field(default_factory=dict)
-    """Store files kept renewed for each disk while it is attached, by disk id."""
+    """By disk id, the store files kept renewed while a disk's `serve` runs."""
 
 
 @dataclass(slots=True)
@@ -1246,10 +1243,10 @@ class WorkerDurableDiskService:
         )
 
     def _attached_store(self, attached: _Attached, lease: DiskLease) -> Path:
-        """The store file the engine reads for as long as the disk stays attached.
+        """A store file kept renewed until detach, for `serve` to read.
 
-        A lazily restored disk fetches chunks from its bucket all through its
-        attachment, so its grant is renewed until the release detaches it.
+        Attach needs it before it knows whether `serve` will run; the caller
+        drops it when the attach reports none.
         """
         held = attached.stores.get(lease.disk_id)
         if held is None:
