@@ -111,7 +111,7 @@ class ComputeOfferState:
     phase: ComputeUnitPhase
     provider_state: ComputeUnitProviderState
     registration_timeout_seconds: int
-    reported_memory_mib: int = 0
+    reported_memory_mib: int
 
 
 @dataclass(frozen=True, slots=True)
