@@ -716,14 +716,22 @@ def _validated_state_directory(path: Path) -> Path:
 
 
 def _remove_canonical_agent_binary() -> bool:
-    binary = Path(_agent_binary_path()).expanduser().resolve()
+    """Remove the agent command the installer created and every release it unpacked."""
+    command = Path(_agent_binary_path()).expanduser().absolute()
     allowed = {
         Path("/usr/local/bin") / AGENT_NAME,
         Path.home() / f".{AGENT_NAME.removesuffix('-agent')}" / "bin" / AGENT_NAME,
     }
-    if binary not in allowed or not binary.is_file():
+    releases = command.parent.parent / "lib" / AGENT_NAME
+    if (
+        command not in allowed
+        or not command.is_symlink()
+        or not command.resolve().is_relative_to(releases)
+    ):
         return False
-    binary.unlink()
+    command.unlink()
+    command.with_name(f"{command.name}.previous").unlink(missing_ok=True)
+    shutil.rmtree(releases)
     return True
 
 

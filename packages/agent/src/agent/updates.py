@@ -2,22 +2,23 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shutil
-import stat
 import subprocess
 import sys
+import tarfile
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
-from functools import lru_cache
 from pathlib import Path
 
 from shared.releases import AgentArtifact
 
 SUPERVISOR = "agent-supervisor.sh"
 
-# The supervisor survives exec and can restore a binary that fails before its
-# first successful control exchange. It never changes the machine's credentials.
+# The supervisor survives exec and points the command back at the previous
+# release when a new one fails before its first successful control exchange. It
+# never changes the machine's credentials.
 SUPERVISOR_SCRIPT = """#!/bin/sh
 set -u
 state=$1
@@ -64,65 +65,96 @@ class AgentUpdateRestartError(RuntimeError):
     pass
 
 
-def running_binary_sha256(binary: Path) -> str:
-    """The binary's digest, hashed again only when the file on disk changes.
-
-    A stream asks for it several times and the binary is tens of megabytes.
-    """
-    try:
-        status = binary.stat()
-    except FileNotFoundError:
-        return ""
-    if not stat.S_ISREG(status.st_mode):
-        return ""
-    return _file_sha256(binary, status.st_size, status.st_mtime_ns, status.st_ino)
-
-
-@lru_cache(maxsize=4)
-def _file_sha256(binary: Path, size: int, mtime_ns: int, inode: int) -> str:
-    with binary.open("rb") as handle:
-        if handle.read(4) != b"\x7fELF":
-            return ""
-        handle.seek(0)
-        return hashlib.file_digest(handle, "sha256").hexdigest()
+RELEASE_DIGEST_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+UPDATE_PENDING_FILE = "agent-update.pending"
 
 
 @dataclass(slots=True)
 class AgentUpdater:
-    binary: Path
+    """Installs agent releases beside the running one and switches the command to them.
+
+    `command` is the path the service runs, a symlink to `<digest>/lazycloud-agent`
+    in the directory of unpacked releases. Each release is unpacked once, into a
+    directory named by its archive's verified digest, so that name is the digest
+    the agent reports and nothing is hashed or unpacked when it starts.
+    """
+
+    command: Path
     state_dir: Path
 
     @classmethod
     def running(cls, state_dir: Path) -> AgentUpdater:
-        binary = Path(shutil.which(sys.argv[0]) or sys.argv[0]).resolve()
-        if not binary.is_file():
+        command = Path(shutil.which(sys.argv[0]) or sys.argv[0]).absolute()
+        if not command.exists():
             raise RuntimeError("the running agent executable could not be resolved")
-        return cls(binary, state_dir)
+        return cls(command, state_dir)
+
+    @property
+    def release(self) -> Path:
+        return self.command.resolve().parent
+
+    @property
+    def previous(self) -> Path:
+        return self.command.with_name(f"{self.command.name}.previous")
 
     def binary_sha256(self) -> str:
-        return running_binary_sha256(self.binary)
+        """The digest of the release archive this agent runs from; empty from a source tree."""
+        name = self.release.name
+        return name if RELEASE_DIGEST_PATTERN.fullmatch(name) else ""
 
     def confirm(self) -> None:
-        pending = self.state_dir / "agent-update.pending"
-        if pending.exists() and pending.read_text().strip() == self.binary_sha256():
-            pending.unlink()
+        """Accept a new release once it has streamed, and remove all but it and the previous."""
+        pending = self.state_dir / UPDATE_PENDING_FILE
+        if not pending.exists() or pending.read_text().strip() != self.binary_sha256():
+            return
+        pending.unlink()
+        keep = {self.release}
+        if self.previous.is_symlink():
+            keep.add(self.previous.resolve().parent)
+        for entry in self.release.parent.iterdir():
+            if RELEASE_DIGEST_PATTERN.fullmatch(entry.name) and entry not in keep:
+                shutil.rmtree(entry)
 
     def install(self, artifact: AgentArtifact, *, before_exec: Callable[[], None]) -> None:
         if not (self.state_dir / SUPERVISOR).is_file():
             raise RuntimeError(
                 "agent automatic updates require reinstalling its supervised service"
             )
+        if not self.binary_sha256():
+            raise RuntimeError("agent automatic updates require an installed agent release")
         rejected = self.state_dir / "agent-update.rejected"
         if rejected.exists() and rejected.read_text().strip() == artifact.sha256:
             raise RuntimeError("agent release failed startup and was rolled back")
-        staged = self.binary.with_name(f".{self.binary.name}.download")
-        previous = self.binary.with_name(f"{self.binary.name}.previous")
+        release = self.release.parent / artifact.sha256
+        if not release.is_dir():
+            self._unpack(artifact, release)
+        executable = release / self.command.resolve().name
+        _replace_link(self.previous, self.command.resolve())
+        pending = self.state_dir / UPDATE_PENDING_FILE
+        with pending.open("w") as handle:
+            handle.write(artifact.sha256 + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        _replace_link(self.command, executable)
+        try:
+            before_exec()
+            os.execv(str(self.command), [str(self.command), *sys.argv[1:]])
+        except Exception as exc:
+            raise AgentUpdateRestartError(
+                "agent update could not restart after installation"
+            ) from exc
+
+    def _unpack(self, artifact: AgentArtifact, release: Path) -> None:
+        """Download, verify and unpack a release, then move it into place whole."""
+        archive = release.with_name(f".{release.name}.download")
+        staged = release.with_name(f".{release.name}.partial")
+        shutil.rmtree(staged, ignore_errors=True)
         digest = hashlib.sha256()
         size = 0
         try:
             with (
                 urllib.request.urlopen(artifact.url, timeout=60) as response,
-                staged.open("wb") as handle,
+                archive.open("wb") as handle,
             ):
                 while chunk := response.read(1024 * 1024):
                     size += len(chunk)
@@ -130,30 +162,24 @@ class AgentUpdater:
                         raise RuntimeError("agent update exceeded its declared size")
                     digest.update(chunk)
                     handle.write(chunk)
-                handle.flush()
-                os.fsync(handle.fileno())
             if size != artifact.size_bytes or digest.hexdigest() != artifact.sha256:
                 raise RuntimeError("agent update does not match the published artifact")
-            staged.chmod(0o755)
-            subprocess.run([str(staged), "--help"], check=True, capture_output=True, timeout=30)
-            shutil.copy2(self.binary, previous)
-            with previous.open("rb") as handle:
-                os.fsync(handle.fileno())
-            pending = self.state_dir / "agent-update.pending"
-            with pending.open("w") as handle:
-                handle.write(artifact.sha256 + "\n")
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(staged, self.binary)
-            try:
-                before_exec()
-                os.execv(str(self.binary), [str(self.binary), *sys.argv[1:]])
-            except Exception as exc:
-                raise AgentUpdateRestartError(
-                    "agent update could not restart after installation"
-                ) from exc
+            with tarfile.open(archive, "r:gz") as unpacked:
+                unpacked.extractall(staged, filter="data")
+            executable = staged / self.command.resolve().name
+            subprocess.run([str(executable), "--help"], check=True, capture_output=True, timeout=30)
+            os.sync()
+            os.replace(staged, release)
         finally:
-            staged.unlink(missing_ok=True)
+            archive.unlink(missing_ok=True)
+            shutil.rmtree(staged, ignore_errors=True)
+
+
+def _replace_link(link: Path, target: Path) -> None:
+    temporary = link.with_name(f".{link.name}.{os.getpid()}.link")
+    temporary.unlink(missing_ok=True)
+    temporary.symlink_to(target)
+    os.replace(temporary, link)
 
 
 __all__ = ["SUPERVISOR", "SUPERVISOR_SCRIPT", "AgentUpdateRestartError", "AgentUpdater"]

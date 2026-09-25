@@ -1,4 +1,4 @@
-"""Build immutable standalone agent artifacts."""
+"""Build immutable agent release archives."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import subprocess
+import tarfile
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,6 +17,7 @@ from typing import TypedDict
 
 SCHEMA_VERSION = 1
 SUPPORTED_ARCHITECTURES = ("amd64", "arm64")
+AGENT_EXECUTABLE = "lazycloud-agent"
 VERSION_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
 
@@ -53,7 +55,7 @@ class AgentArtifact:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Build and stage immutable standalone Linux agent artifacts."
+        description="Build and stage immutable Linux agent release archives."
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -189,12 +191,12 @@ def stage_artifacts(
         source = source.resolve()
         if not source.is_file():
             raise RuntimeError(f"agent artifact does not exist: {source}")
-        if not _is_elf(source):
-            raise RuntimeError(f"agent artifact is not a Linux ELF executable: {source}")
+        if not _is_agent_release(source):
+            raise RuntimeError(f"agent artifact is not an agent release archive: {source}")
         filename = artifact_filename(architecture)
         destination = version_root / filename
         _copy_immutable(source, destination)
-        destination.chmod(0o755)
+        destination.chmod(0o644)
         artifact_metadata.append(
             AgentArtifact(
                 os="linux",
@@ -218,7 +220,7 @@ def stage_artifacts(
 
 def artifact_filename(architecture: str) -> str:
     _validate_architecture(architecture)
-    return f"lazycloud-agent-linux-{architecture}"
+    return f"lazycloud-agent-linux-{architecture}.tar.gz"
 
 
 def _parse_artifact_arguments(arguments: list[str]) -> dict[str, Path]:
@@ -255,9 +257,14 @@ def _validate_version(version: str) -> None:
         )
 
 
-def _is_elf(path: Path) -> bool:
-    with path.open("rb") as artifact:
-        return artifact.read(4) == b"\x7fELF"
+def _is_agent_release(path: Path) -> bool:
+    """Whether `path` is a gzip tarball with the agent executable at its root."""
+    try:
+        with tarfile.open(path, "r:gz") as archive:
+            executable = archive.getmember(f"./{AGENT_EXECUTABLE}")
+    except (tarfile.TarError, KeyError, OSError):
+        return False
+    return executable.isfile() and bool(executable.mode & 0o111)
 
 
 def _copy_immutable(source: Path, destination: Path) -> None:

@@ -203,9 +203,8 @@ def materialize_agent_artifact(
             f"{manifest.release_version} publishes for it"
         )
 
-    # Executable, because this is the file a node downloads and runs. Replaced by
-    # rename so a reader never opens a partial one.
-    staged.chmod(0o755)
+    # Replaced by rename so a reader never opens a partial one.
+    staged.chmod(0o644)
     os.replace(staged, destination)
     return destination
 
