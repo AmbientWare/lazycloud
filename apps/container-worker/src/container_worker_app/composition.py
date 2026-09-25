@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 import shutil
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from cache.server import (
@@ -521,17 +523,36 @@ def _validate_worker_readiness(
     spec_builder: OciRuntimeSpecBuilder,
     network_backend: AgentBridgeNetworkBackend,
 ) -> None:
+    """Run the readiness checks side by side, since none depends on another.
+
+    Each still has to pass; the first failure is raised once all have finished.
+    """
     timings = StepTimings()
+
+    def image_runtime_health() -> None:
+        if image_runtime is None:
+            return
+        response = image_runtime.health()
+        if not response.ok:
+            raise RuntimeError(response.error or "image runtime is unavailable")
+
+    checks: dict[str, Callable[[], object]] = {
+        "managed_runtimes": spec_builder.prepare_managed_runtimes,
+        "image_runtime": image_runtime_health,
+        "network": network_backend.initialize,
+    }
+
+    def timed(name: str) -> None:
+        with timings.step(name):
+            checks[name]()
+
     try:
-        with timings.step("managed_runtimes"):
-            spec_builder.prepare_managed_runtimes()
-        if image_runtime is not None:
-            with timings.step("image_runtime"):
-                response = image_runtime.health()
-            if not response.ok:
-                raise RuntimeError(response.error or "image runtime is unavailable")
-        with timings.step("network"):
-            network_backend.initialize()
+        with ThreadPoolExecutor(
+            max_workers=len(checks), thread_name_prefix="worker-readiness"
+        ) as pool:
+            outcomes = [pool.submit(timed, name) for name in checks]
+        for outcome in outcomes:
+            outcome.result()
     finally:
         timings.log(LOGGER, "container worker readiness checks")
 

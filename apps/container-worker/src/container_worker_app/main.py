@@ -20,6 +20,7 @@ from shared.container_requests import StopContainerReason
 from shared.placement import Placement
 from shared.process_liveness import HeartbeatFile, heartbeat_path
 from shared.scheduling import WorkerUnavailableReason
+from shared.step_timings import seconds_since_boot
 from worker.events import WorkerStreamEventKind
 from worker.repository_payloads import StreamWorkerEventsRequest
 from worker.scheduler_requests import WorkerSchedulerRequestResult
@@ -406,6 +407,10 @@ def _report_registration(steps: list[WorkerLifecycleStepResult]) -> None:
             f"container worker registration {step.action.value} {step.status.value}{took}{detail}",
             file=sys.stderr,
         )
+    print(
+        f"container worker registration finished at boot+{seconds_since_boot():.2f}s",
+        file=sys.stderr,
+    )
 
 
 def _reconcile_worker_artifacts(services: ContainerWorkerServices) -> None:

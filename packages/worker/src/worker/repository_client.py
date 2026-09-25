@@ -200,7 +200,9 @@ def _bounded_image_build_log(value: str) -> str:
 
 
 _CONNECT_RETRY_FIRST_DELAY_SECONDS = 0.25
-_CONNECT_RETRY_MAX_DELAY_SECONDS = 4.0
+# A refused connection to the local agent costs nothing, and a worker started at
+# boot waits here for the agent's first stream to open its listener.
+_CONNECT_RETRY_MAX_DELAY_SECONDS = 1.0
 
 
 class WorkerSourceCacheNotAvailableError(WorkerRepositoryClientError):
