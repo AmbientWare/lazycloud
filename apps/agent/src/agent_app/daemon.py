@@ -1822,7 +1822,8 @@ class AgentDaemonService:
                 return result
         timings = StepTimings()
         updater = AgentUpdater.running(self.state_store.state_dir)
-        active_slots = self.worker_controller.active_slots()
+        with timings.step("slots"):
+            active_slots = self.worker_controller.active_slots()
         # The first stream waits briefly for an image check started at boot so it
         # can report the image; later streams never wait on a pull in progress.
         if current_iterations == 1:

@@ -425,6 +425,13 @@ class ProviderMachineReconciler:
                     settled_existing.prepared_worker_image if settled_existing else ""
                 ),
                 "hibernates": instance.hibernates,
+                # Kept only while the resume it authorized is still finishing.
+                "resume_authorized_at": (
+                    settled_existing.resume_authorized_at
+                    if settled_existing is not None
+                    and provider_status == ReservationStatus.Resuming.value
+                    else None
+                ),
                 "missing_since": None,
                 "provider_storage_destroyed_at": settled_existing.provider_storage_destroyed_at
                 if settled_existing

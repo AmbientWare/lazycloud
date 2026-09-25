@@ -215,6 +215,7 @@ def assemble_worker_process_services(
     pool_mode: WorkerPoolMode,
     billing_owner: UsageBillingOwner,
     registration: SchedulerWorkerRecord,
+    readiness_preparer: Callable[[], None] | None = None,
     readiness_validator: Callable[[], None] | None = None,
     event_source: WorkerProcessEventSource | None = None,
     container_service_dependencies: WorkerProcessContainerServiceDependencies | None = None,
@@ -344,6 +345,7 @@ def assemble_worker_process_services(
         repository=worker_repository,
         stopper=runtime_stopper,
         registration=registration,
+        readiness_preparer=readiness_preparer,
         readiness_validator=validate_readiness,
         route_restorer=WorkerRouteRecovery(
             identity=identity,
