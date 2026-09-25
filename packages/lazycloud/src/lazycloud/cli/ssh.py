@@ -42,6 +42,15 @@ def ssh(
     workspace: WorkspaceOption = None,
 ) -> None:
     """Open an SSH session to a devbox or pod. Arguments after `--` go to ssh."""
+    with ssh_connection(pod, app=app, workspace=workspace) as (access, host):
+        status = run_ssh(access.paths.config, host.alias, list(ctx.args))
+    raise typer.Exit(status)
+
+
+@contextmanager
+def ssh_connection(
+    pod: str, *, app: str | None, workspace: str | None
+) -> Iterator[tuple[SshAccess, SshPodHost]]:
     with _setup_errors():
         client = _client(workspace)
         listed = list_ssh_hosts(client, app=app, pod=pod)
@@ -49,8 +58,7 @@ def ssh(
         host = _one_host(listed.hosts, pod)
         access.write_hosts([host])
         access.refresh_certificate()
-        status = run_ssh(access.paths.config, host.alias, list(ctx.args))
-    raise typer.Exit(status)
+        yield access, host
 
 
 def ssh_proxy(
@@ -261,4 +269,4 @@ def _setup_errors() -> Iterator[None]:
         raise ClientError(exc.detail or str(exc), type=exc.code, hint=hint) from exc
 
 
-__all__ = ["ssh", "ssh_cert", "ssh_config", "ssh_proxy"]
+__all__ = ["ssh", "ssh_cert", "ssh_config", "ssh_connection", "ssh_proxy"]
