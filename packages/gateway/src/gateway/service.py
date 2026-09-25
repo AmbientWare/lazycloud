@@ -2231,6 +2231,18 @@ class GatewayControlService:
                     generation=request.generation,
                 )
             if not releases.controls(release):
+                # This answer carries no reserve instruction, which an agent
+                # holding a reserve's worker would take as leave to serve.
+                if self.services.compute.reserve_in_transition(
+                    workspace_id=response_state.workspace_id,
+                    machine_id=response_state.machine_id,
+                ):
+                    return StreamAgentResponse(
+                        ok=False,
+                        retryable=True,
+                        err_msg="worker release activation is pending",
+                        generation=release.generation,
+                    )
                 return StreamAgentResponse(
                     ok=bool(snapshot.slots),
                     retryable=not snapshot.slots,

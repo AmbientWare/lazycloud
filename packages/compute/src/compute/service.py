@@ -120,6 +120,7 @@ from compute.fleet_reserves import (
 from compute.machine_lifecycle import (
     RETAINED_MACHINE_LIFECYCLES,
     machine_lifecycle_allowed,
+    reserve_in_transition,
     write_machine_lifecycle,
 )
 from compute.offers import (
@@ -2891,6 +2892,11 @@ class ComputeService:
                 )
         return True
 
+    def reserve_in_transition(self, *, workspace_id: str, machine_id: str) -> bool:
+        """Whether the machine's reserve is being prepared, stopped or resumed."""
+        with self.context.database.session() as session:
+            return reserve_in_transition(session, machine_id=machine_id, workspace_id=workspace_id)
+
     def prepare_reserved_machine(
         self,
         *,
@@ -2956,7 +2962,8 @@ class ComputeService:
                 ReservationStatus.Stopping.value,
                 ReservationStatus.Stopped.value,
             }
-            warm = preparing and (record.hibernates or lagging_resume) and not stopping_used_machine
+            hibernate = preparing and record.hibernates and not stopping_used_machine
+            warm = hibernate or (preparing and lagging_resume and not stopping_used_machine)
             instruction = ReserveAgentPreparation(
                 preparing=preparing,
                 warm=warm,
@@ -3033,7 +3040,7 @@ class ComputeService:
                 capacity_owner_id=unit.capacity_owner_id,
                 instance_id=record.instance_id,
                 prepared_stop=prepared_stop if stopping_used_machine else None,
-                hibernate=warm and record.hibernates,
+                hibernate=hibernate,
                 prepared_release=(
                     (
                         release_agent if agent_current else "",

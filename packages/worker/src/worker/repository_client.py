@@ -313,10 +313,12 @@ class WorkerRepositoryHttpTransport:
             except InternalHttpError as exc:
                 raise WorkerRepositoryClientError(str(exc)) from exc
             break
-        self._admit()
         raw = response.text
         if response.status_code < 200 or response.status_code >= 300:
+            # A refusal, such as the fence's 409 on a reserve not yet resumed,
+            # leaves the worker held.
             raise http_api_error_from_body(response.status_code, raw)
+        self._admit()
         if not raw:
             return {}
         try:

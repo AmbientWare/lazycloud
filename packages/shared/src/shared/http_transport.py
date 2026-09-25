@@ -20,6 +20,7 @@ from shared.client_version import (
     report_client_version,
 )
 from shared.http.errors import (
+    HttpApiError,
     HttpResponseDecodeError,
     HttpTransportError,
     http_api_error_from_body,
@@ -99,6 +100,8 @@ class HttpChannel:
                 yield response
         except httpx.RequestError as exc:
             raise HttpTransportError(method, url, str(exc)) from exc
+        except (HttpApiError, HttpResponseDecodeError):
+            raise
         except RuntimeError as exc:
             if not client.is_closed:
                 raise

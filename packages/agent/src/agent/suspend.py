@@ -113,23 +113,33 @@ class Wakeup:
     """A wait that ends at its timeout, on `wake()`, or when the machine resumes from sleep.
 
     Only the thread that owns the waiter waits; any thread may call `wake()`.
-    A watch thread blocks on the kernel's clock jump notice and, on each one,
-    calls `on_clock_jump` before waking the waiter, which reaches work the
-    owner is itself blocked in. Where the kernel's timerfd is missing or fails,
-    the wait ends every SLEEP_CHECK_SECONDS instead, so a resume is still noticed.
+    A watch thread blocks on the kernel's clock jump notice. When a jump comes
+    with a real sleep, not a clock step, it calls `on_resume`, which reaches
+    work the owner is itself blocked in, then wakes the waiter. Where the
+    kernel's timerfd is missing or fails, the wait ends every
+    SLEEP_CHECK_SECONDS instead and `watches_resume` is false.
     """
 
-    def __init__(self, on_clock_jump: Callable[[], None] | None = None) -> None:
+    def __init__(self, on_resume: Callable[[], None] | None = None) -> None:
         self._read, self._write = os.pipe()
-        os.set_blocking(self._read, False)
-        os.set_blocking(self._write, False)
-        self._on_clock_jump = on_clock_jump
+        self._stop_read, self._stop_write = os.pipe()
+        for descriptor in (self._read, self._write, self._stop_read, self._stop_write):
+            os.set_blocking(descriptor, False)
+        self._on_resume = on_resume
+        self._suspend = SuspendWatch()
         self._closed = False
         self._jumps = _clock_jumps()
+        self._watch: Thread | None = None
         if self._jumps is not None:
-            Thread(
+            self._watch = Thread(
                 target=self._watch_jumps, args=(self._jumps,), name="clock-jumps", daemon=True
-            ).start()
+            )
+            self._watch.start()
+
+    @property
+    def watches_resume(self) -> bool:
+        """Whether the watch thread acts on each resume, so the owner need not."""
+        return self._jumps is not None
 
     def wake(self) -> None:
         with suppress(BlockingIOError, OSError):
@@ -150,7 +160,9 @@ class Wakeup:
     def _watch_jumps(self, jumps: _ClockJumps) -> None:
         while True:
             try:
-                select.select([jumps.descriptor], [], [])
+                ready, _, _ = select.select([jumps.descriptor, self._stop_read], [], [])
+                if self._stop_read in ready:
+                    return
                 jumps.acknowledge()
             except OSError:
                 if not self._closed:
@@ -161,16 +173,20 @@ class Wakeup:
                     )
                 self._jumps = None
                 return
-            if self._on_clock_jump is not None:
+            if self._suspend.slept() and self._on_resume is not None:
                 try:
-                    self._on_clock_jump()
+                    self._on_resume()
                 except Exception:
-                    LOGGER.warning("acting on a clock jump failed", exc_info=True)
+                    LOGGER.warning("acting on a resume failed", exc_info=True)
             self.wake()
 
     def close(self) -> None:
         self._closed = True
+        with suppress(BlockingIOError, OSError):
+            os.write(self._stop_write, b"\0")
+        if self._watch is not None:
+            self._watch.join(timeout=1.0)
         if self._jumps is not None:
             self._jumps.close()
-        os.close(self._read)
-        os.close(self._write)
+        for descriptor in (self._read, self._write, self._stop_read, self._stop_write):
+            os.close(descriptor)

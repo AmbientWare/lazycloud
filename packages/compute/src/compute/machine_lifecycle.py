@@ -16,7 +16,7 @@ from database.types import DatabaseSession
 from observability.workspace_changes import WorkspaceChangePublisher
 from shared.compute_enrollment import MachineBootstrapFailureReason
 from shared.compute_fleet import Machine, MachineLifecycle, ResourceStatus
-from shared.errors import ConflictError
+from shared.errors import ConflictError, NotFoundError
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
 from shared.timestamps import to_utc, utc_now
 from sqlalchemy import event
@@ -107,6 +107,15 @@ phases alone.
 """
 
 
+_RESERVE_TRANSITION_STATUSES = frozenset(
+    {
+        ReservationStatus.Preparing.value,
+        ReservationStatus.Stopping.value,
+        ReservationStatus.Stopped.value,
+        ReservationStatus.Resuming.value,
+    }
+)
+
 _PREPARED_RESERVE_STATUSES = frozenset(
     {
         ReservationStatus.Preparing.value,
@@ -128,13 +137,25 @@ def reserve_awaits_resume(session: DatabaseSession, *, machine_id: str, workspac
         machine_id, workspace_id=workspace_id
     )
     if phases is None:
-        return True
+        raise NotFoundError(f"machine {machine_id} has no record in this workspace")
     lifecycle, status = MachineLifecycle(phases[0]), phases[1]
     if status in _PREPARED_RESERVE_STATUSES:
         return True
     if lifecycle not in RETAINED_MACHINE_LIFECYCLES:
         return False
     return status != ReservationStatus.Active.value
+
+
+def reserve_in_transition(session: DatabaseSession, *, machine_id: str, workspace_id: str) -> bool:
+    """Whether the machine's reserve is being prepared, stopped or resumed.
+
+    Only a full stream may instruct such a machine, so any shorter answer to its
+    agent is a retry instead.
+    """
+    phases = ComputeProviderInstanceRepository(session).machine_reserve_phases(
+        machine_id, workspace_id=workspace_id
+    )
+    return phases is not None and phases[1] in _RESERVE_TRANSITION_STATUSES
 
 
 _DEFAULT_MESSAGES: dict[MachineLifecycle, str] = {
@@ -339,5 +360,6 @@ __all__ = [
     "machine_lifecycle_allowed",
     "publish_machine_change_on_commit",
     "reserve_awaits_resume",
+    "reserve_in_transition",
     "write_machine_lifecycle",
 ]

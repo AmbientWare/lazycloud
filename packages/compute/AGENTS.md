@@ -116,20 +116,23 @@ stop after ten minutes, or at once for an instance launched without
 hibernation. A stop of either kind still pending ten minutes after its request
 is forced.
 
-Until a stream adopts that worker, the agent keeps its control listeners closed.
-The agent starts it with `WORKER_ADMISSION_HOLD_SECONDS`, so the worker retries
-its first call for up to 30 minutes of awake time and then fails; every other
-worker gives up after a minute. The control plane holds the same fence: no
-worker registers on a machine whose provider row is `preparing`, `stopping` or
-`stopped`, or which is `stopping`, `stopped` or `resuming` before its provider
-row is active. While that row is not active, only the stream's resume
-authorization moves a resumed reserve to `joining`, and the agent's own joining
-report leaves the machine alone. Once the provider reports the instance active,
-its report or the next capacity pass moves a machine still in a reserve phase to
-`joining`. A used host retires its credential, so it resumes through the stream.
-An agent that booted after its reserve was prepared says so on each stream. A
-row still reading `stopping` or `stopped` then lags the resume, so the worker
-waits, fenced, as a hibernating reserve's does, rather than being stopped.
+The reserve-worker protocol. Every party changes state only on the named
+event, and any path not listed leaves it where it is.
+
+| Party | States | Moves when |
+| --- | --- | --- |
+| Agent | serving: listeners open, no reserve record | a full stream says `reserve_preparation`: preparing |
+| | preparing: listeners held, record written with this boot, workers started held, an unheld reserve worker restarted into the hold | a full stream without `reserve_preparation`: serving, adopting the worker by the planner's keep rule or stopping it; `stop_preparation_id`: workers stopped for a used host's stop |
+| | booted from a record: worker started held before the first stream, `booted_since_reserve_prepared` sent on every stream | `reserve_resume_pending`: stays, record untouched; otherwise as preparing |
+| | slept: one connection reset, tunnel redialed, timers rearmed | the next stream, as the state before |
+| Stream answer | not ok, retryable or final, including a release not yet activated for a machine whose reserve is in transition | the agent changes nothing |
+| | ok with `reserve_preparation`, and a warm slot Active or a plain one Draining | compute's row is `preparing`, `stopping` or `stopped` |
+| | ok with `reserve_resume_pending` | the row reads `stopping` or `stopped` while the agent reports a boot since preparation |
+| | ok with `resume_from_stop` and no preparation | the row reads `resuming`; the same stream authorizes the resume |
+| Compute row | `preparing` -> `stopping` -> `stopped` -> `resuming` -> `active` | preparation completes once the worker is ready (warm: release running and waiting; plain: no worker); the pass observes the stop; the pass starts the instance; the stream authorizes the resume |
+| Lifecycle | `stopping`, `stopped`, `resuming` -> `joining` -> `ready` | the stream's resume authorization, or an active row seen by the pass or the agent's joining report; then the heartbeat |
+| Worker | held: refused calls retried up to 30 awake minutes, `admission-waiting` present | a 2xx admits it and removes the marker; a refusal, the fence's 409 included, leaves it held; the hold running out fails it |
+| Fence | refuses registration while the row is `preparing`, `stopping` or `stopped`, or the lifecycle is retained before the row is active; a machine with no row is refused as missing | the row turns active |
 
 A provider lists its regions in the order platform purchases prefer them. When
 offers in two combinations of one region refuse launches within 30 minutes, that

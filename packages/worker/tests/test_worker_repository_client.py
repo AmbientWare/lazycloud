@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Mapping
+from pathlib import Path
 from typing import IO
 
 import httpx
 import pytest
 from networking.internal_http import InternalHttpClient, InternalHttpConnectError
 from pydantic import JsonValue
+from shared.http.errors import HttpApiError
 from shared.placement import Placement
 from shared.scheduling import WorkerExecutionRecord, WorkerExecutionRequest
 from worker.credential_payloads import WorkerCredentialPrincipal
@@ -208,3 +210,43 @@ def test_a_refused_worker_waits_longer_only_when_the_agent_holds_it(
         transport.post("/worker-repository/add-worker", {})
 
     assert gives_up_at - 1 <= clock.now <= gives_up_at
+
+
+class _FencedThenRefusedHttp(InternalHttpClient):
+    def request(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: Mapping[str, str] | None = None,
+        content: bytes | Iterable[bytes] | IO[bytes] | None = None,
+        timeout_seconds: float | None = None,
+    ) -> httpx.Response:
+        if "add-worker" in url:
+            return httpx.Response(409, json={"detail": "machine has not been authorized"})
+        raise InternalHttpConnectError(f"{method} refused")
+
+
+def test_a_fenced_worker_stays_held_after_the_refusal(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The fence's 409 does not admit a held worker, so it keeps waiting and its marker stays."""
+    clock = _Clock()
+    monkeypatch.setattr(repository_client, "time", clock)
+    marker = tmp_path / "admission-waiting"
+    marker.touch()
+    transport = WorkerRepositoryHttpTransport(
+        endpoint="http://agent.invalid",
+        token="worker-secret",
+        admission_hold_seconds=1800.0,
+        admission_waiting_file=marker,
+        http=_FencedThenRefusedHttp(),
+    )
+
+    with pytest.raises(HttpApiError):
+        transport.post("/worker-repository/add-worker", {})
+    with pytest.raises(WorkerRepositoryClientError, match="did not admit this reserve worker"):
+        transport.post("/worker-repository/keepalive", {})
+
+    assert clock.now >= 1799
+    assert marker.exists()
