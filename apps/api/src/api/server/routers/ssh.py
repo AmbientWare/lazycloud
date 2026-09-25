@@ -3,11 +3,13 @@ from __future__ import annotations
 from typing import Annotated
 
 from execution.pods.proxy import PodProxyUnavailable
-from execution.ssh.service import SSH_HOST_LIST_LIMIT, PodSshTunnelService, SshIdentityService
+from execution.ssh.service import PodSshTunnelService, SshIdentityService
 from fastapi import APIRouter, Depends, Query, WebSocket, status
+from shared.deployments import PodRole
 from shared.errors import DomainError
 from shared.http.ssh import SshCertificateRequest, SshCertificateResponse, SshHostListResponse
 from shared.identity import AuthTokenRecord
+from shared.ssh import SSH_HOST_LIST_LIMIT
 
 from api.server.auth import read_workspace, write_token, write_workspace
 from api.server.dependencies import (
@@ -69,11 +71,14 @@ def list_ssh_hosts(
     service: Annotated[SshIdentityService, Depends(ssh_identity_service)],
     app: str | None = None,
     pod: str | None = None,
+    role: PodRole | None = None,
     cursor: str = "",
     limit: int = SSH_HOST_LIST_LIMIT,
 ) -> SshHostListResponse:
     """Every devbox and pod in the workspace that serves SSH, with its pinned host key."""
-    return service.hosts(workspace_id=workspace_id, app=app, pod=pod, cursor=cursor, limit=limit)
+    return service.hosts(
+        workspace_id=workspace_id, app=app, pod=pod, role=role, cursor=cursor, limit=limit
+    )
 
 
 @router.websocket("/api/v1/pods/{name}/ssh")

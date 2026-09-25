@@ -244,7 +244,7 @@ class DevboxService:
                 if container is None and not saving_disk and not waking
                 else None
             )
-        command = ["lazycloud", "ssh", deployment.name]
+        command = ["lazycloud", "devbox", deployment.name, "ssh"]
         if ambiguous:
             command += ["--app", resource.app.name]
         phase, reason = devbox_phase(

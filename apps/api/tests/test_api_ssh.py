@@ -22,7 +22,7 @@ from execution.ssh.service import PodSshTunnel, SshPodTarget, ssh_pod_target
 from fastapi.testclient import TestClient
 from identity.auth import TokenIssuer
 from shared.deployment_records import DeploymentSpec
-from shared.deployments import DeploymentKind
+from shared.deployments import DeploymentKind, PodRole
 from shared.http.ssh import SshCertificateResponse, SshHostListResponse
 from shared.ssh import ssh_host_alias
 from starlette.websockets import WebSocketDisconnect
@@ -60,7 +60,13 @@ def _fixture(services: ApiServices) -> _Fixture:
     outsider_workspace = owned_workspace(control, "ssh-outsider")
     for app, name, ssh in (("dev", "box", True), ("dev", "web", False), ("ci", "box", True)):
         services.deployments.deploy(
-            DeploymentSpec(name=name, kind=DeploymentKind.Pod, metadata={"app": app, "ssh": ssh}),
+            DeploymentSpec(
+                name=name,
+                kind=DeploymentKind.Pod,
+                role=PodRole.Devbox if app == "ci" else PodRole.Service,
+                root_disk_bytes=20 * 1024**3 if app == "ci" else None,
+                metadata={"app": app, "ssh": ssh},
+            ),
             workspace=workspace.id,
         )
     services.deployments.deploy(
@@ -133,7 +139,34 @@ def test_ssh_hosts_list_only_the_workspaces_ssh_pods_and_filter_by_app_and_pod(
         missing = client.get(
             "/api/v1/ssh/hosts", params={**workspace, "pod": "nope"}, headers=fixture.member
         )
+        devboxes = client.get(
+            "/api/v1/ssh/hosts",
+            params={**workspace, "role": "devbox", "limit": 1},
+            headers=fixture.member,
+        )
+        wrong_role = client.get(
+            "/api/v1/ssh/hosts",
+            params={**workspace, "app": "dev", "pod": "box", "role": "devbox"},
+            headers=fixture.member,
+        )
+        isolated_services.deployments.deploy(
+            DeploymentSpec(
+                name="box", kind=DeploymentKind.Pod, metadata={"app": "ci", "ssh": True}
+            ),
+            workspace=fixture.workspace_id,
+        )
+        after_role_change = client.get(
+            "/api/v1/ssh/hosts",
+            params={**workspace, "role": "devbox"},
+            headers=fixture.member,
+        )
 
+    assert [
+        (host.app, host.pod)
+        for host in SshHostListResponse.model_validate_json(devboxes.content).data
+    ] == [("ci", "box")]
+    assert wrong_role.status_code == 404
+    assert SshHostListResponse.model_validate_json(after_role_change.content).data == []
     assert certificate.status_code == 200
     assert SshCertificateResponse.model_validate_json(certificate.content).certificate.startswith(
         "ssh-ed25519-cert-v01@openssh.com "

@@ -64,7 +64,7 @@ async function login() {
     childExit.then((code) => ({ code })),
   ]);
   if (!outcome.reported && outcome.code !== 0) {
-    throw new LoginError('Claude login did not complete. Run lazycloud devbox login again.');
+    throw new LoginError('Claude login did not complete. Retry login for this devbox.');
   }
   // Claude can leave its terminal prompt or shutdown work alive after saving credentials.
   // Its auth status, not terminal output, decides whether login succeeded.

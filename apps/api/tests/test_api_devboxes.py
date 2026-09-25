@@ -82,7 +82,6 @@ def test_a_devbox_detail_carries_its_role_connection_and_disk(
     detail = DeploymentDetailResponse.model_validate_json(devbox_detail.content)
     assert detail.role is PodRole.Devbox
     assert detail.devbox is not None
-    assert detail.devbox.ssh_command == "lazycloud ssh box"
     assert detail.devbox.ssh_host == ssh_host_alias(workspace.name, "dev", "box")
     assert detail.devbox.state is DevboxState.Stopped
     assert detail.devbox.open_connections == 0

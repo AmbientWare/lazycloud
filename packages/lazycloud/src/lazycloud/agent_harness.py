@@ -12,7 +12,7 @@ from shared.image_building.authoring import LinuxArchitecture
 
 class AgentHarness(StringEnum):
     Codex = "codex"
-    ClaudeCode = "claude-code"
+    ClaudeCode = "claude"
     OpenCode = "opencode"
     Pi = "pi"
 
