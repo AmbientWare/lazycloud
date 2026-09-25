@@ -563,7 +563,7 @@ install_from_url() {
   if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
     fail "sha256sum or shasum is required to verify the agent artifact" 1
   fi
-  releases="$(dirname "$(dirname "$command_path")")/lib/__AGENT_NAME__"
+  releases="$(dirname "$(dirname "$command_path")")/lib/__AGENT_RELEASES__"
   mkdir -p "$releases" "$(dirname "$command_path")"
   archive="$(mktemp "$releases/.download.XXXXXX")"
   say "Installing __AGENT_NAME__"
@@ -727,6 +727,7 @@ main "$@"
         .replace("__HOME_DIR__", HOME_DIR)
         .replace("__RELEASE_COMPLETE_FILE__", RELEASE_COMPLETE_FILE)
         .replace("__AGENT_EXECUTABLE__", AGENT_NAME)
+        .replace("__AGENT_RELEASES__", AGENT_NAME)
         .replace("__DEFAULT_AGENT_STATE_DIR__", DEFAULT_AGENT_STATE_DIR)
         .replace("__AGENT_RUNTIME_READY_FILE__", AGENT_RUNTIME_READY_FILE)
         .replace("__READY_TIMEOUT_SECONDS__", str(AGENT_SERVICE_READY_TIMEOUT_SECONDS))

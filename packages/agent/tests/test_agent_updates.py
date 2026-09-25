@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import os
 import tarfile
 from pathlib import Path
 from typing import BinaryIO
@@ -76,6 +77,8 @@ def test_an_update_switches_the_command_and_keeps_only_the_releases_it_can_retur
         updated = AgentUpdater(command, state, command.resolve())
         assert updated.binary_sha256() == artifact.sha256
         assert (state / UPDATE_PENDING_FILE).read_text().strip() == artifact.sha256
+        for entry in releases.iterdir():
+            os.utime(entry, (0, 0))
         updated.confirm()
 
     assert not (state / UPDATE_PENDING_FILE).exists()
@@ -83,6 +86,12 @@ def test_an_update_switches_the_command_and_keeps_only_the_releases_it_can_retur
     assert sorted(entry.name for entry in releases.iterdir()) == sorted(
         [second.sha256, third.sha256]
     )
+    # An install moves its release into place before it links the command to it.
+    unlinked = releases / ("f" * 64)
+    unlinked.mkdir()
+    AgentUpdater(command, state, command.resolve()).prune()
+    assert unlinked.is_dir()
+    unlinked.rmdir()
 
     tampered = third.model_copy(update={"sha256": "0" * 64})
     with pytest.raises(RuntimeError, match="does not match"):

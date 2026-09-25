@@ -58,9 +58,9 @@ class WorkerImagePreparation:
         if image in self.prepared():
             return True
         if self._pending is None:
-            operation = self.start(image)
-            if wait_seconds > 0:
-                wait_for_futures([operation], timeout=wait_seconds)
+            self.start(image)
+        if self._pending is not None and self._pending[0] == image and wait_seconds > 0:
+            wait_for_futures([self._pending[1]], timeout=wait_seconds)
         return image in self.prepared()
 
     def unreported(self, reported: Collection[str]) -> bool:

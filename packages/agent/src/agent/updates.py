@@ -160,9 +160,9 @@ class AgentUpdater:
         if self.release is None:
             return "the agent runs from a source tree"
         if not RELEASE_DIGEST_PATTERN.fullmatch(self.release.name):
-            return "the agent was not installed as a release; run its join command again"
+            return "the agent was not installed as a release"
         if not (self.state_dir / SUPERVISOR).is_file():
-            return "the agent service has no update supervisor; reinstall the service"
+            return "the agent service has no update supervisor"
         rejected = self.state_dir / "agent-update.rejected"
         if rejected.exists() and rejected.read_text().strip() == artifact.sha256:
             return "this release failed startup and was rolled back"
@@ -182,8 +182,9 @@ class AgentUpdater:
         Releases are directories named by their digest, and a download or
         unpack in progress, the updater's or the install script's, is named
         with a leading dot. A release rolled back or superseded goes, and so
-        does staging untouched for STALE_STAGING_SECONDS, which leaves an
-        install running now alone. Each removal is best effort: one that
+        does staging, once untouched for STALE_STAGING_SECONDS. That leaves an
+        install running now alone, and a release it moved into place but has
+        not linked yet. Each removal is best effort: one that
         fails is logged and left for the next start. Only the directory the
         installer lays out, `lib/lazycloud-agent`, holds releases; an agent run
         from anywhere else, or from a source tree, keeps everything.
@@ -205,11 +206,11 @@ class AgentUpdater:
             if entry in keep:
                 continue
             try:
-                if entry.name.startswith("."):
-                    removing = entry.name.endswith(".removing")
-                    if not removing and entry.lstat().st_mtime > stale_before:
-                        continue
-                elif not RELEASE_DIGEST_PATTERN.fullmatch(entry.name):
+                staging = entry.name.startswith(".")
+                if not staging and not RELEASE_DIGEST_PATTERN.fullmatch(entry.name):
+                    continue
+                removing = staging and entry.name.endswith(".removing")
+                if not removing and entry.lstat().st_mtime > stale_before:
                     continue
                 discard_release(entry)
             except OSError:
@@ -284,11 +285,8 @@ class AgentUpdater:
 
 @functools.cache
 def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
     with path.open("rb") as handle:
-        while chunk := handle.read(1024 * 1024):
-            digest.update(chunk)
-    return digest.hexdigest()
+        return hashlib.file_digest(handle, "sha256").hexdigest()
 
 
 def _replace_link(link: Path, target: Path) -> None:

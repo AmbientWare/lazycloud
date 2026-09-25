@@ -351,6 +351,11 @@ class ComputeService:
         record, machine = self.provider_machines.machine_for_record(
             session, pool=pool, record=record, now=current_time
         )
+        if lifecycle is MachineLifecycle.Joining and machine.lifecycle is MachineLifecycle.Ready:
+            # A restarted agent reports joining beside its first stream, whose
+            # heartbeat may already have made the machine ready. The report is
+            # for a failed or draining machine; a ready one stays ready.
+            return machine
         updated = write_machine_lifecycle(
             session,
             machine,

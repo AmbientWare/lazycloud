@@ -157,7 +157,8 @@ SLOW_STREAM_ITERATION_SECONDS = 2.0
 """A stream iteration at least this long logs its step timings even when it changed nothing."""
 DEFAULT_AGENT_HTTP_TIMEOUT_SECONDS = 30.0
 NVIDIA_SMI_TIMEOUT_SECONDS = 5.0
-JOIN_RETRY_SECONDS = 60.0
+JOIN_RETRY_SECONDS = 180.0
+"""How long a startup step spends backing off between attempts before it gives up."""
 JOIN_RETRY_BASE_SECONDS = 0.15
 JOIN_RETRY_MAX_SECONDS = 30.0
 AGENT_STATE_FILE = "agent-state.json"
@@ -770,9 +771,12 @@ class DockerAgentWorkerController:
         A no costs one stream; the stream then names the image and prepares it.
         """
         self.wait_for_docker(stop)
-        return not self._docker_failure(
+        failure = self._docker_failure(
             [self.docker_binary, "image", "inspect", image], within=BOOT_IMAGE_LOOKUP_SECONDS
         )
+        if failure:
+            LOGGER.warning("did not find %s on the host: %s", image, failure)
+        return not failure
 
     def prepared_worker_images(self) -> list[str]:
         prepared = self._images.prepared()
@@ -1952,18 +1956,19 @@ class AgentDaemonService:
 
         The unit starts beside the network rather than after it, so a booting
         machine's first attempts fail until DHCP finishes, about a second later.
-        Retries begin short for that reason, double toward 30 seconds so an
-        outage costs the gateway a few calls per agent, and the last one comes
-        at the minute.
+        Retries begin short for that reason and double toward 30 seconds so an
+        outage costs the gateway a few calls per agent. The budget counts only
+        the backoff, so a gateway that hangs each call to its timeout still gets
+        as many attempts as one that refuses them.
         """
-        deadline = time.monotonic() + JOIN_RETRY_SECONDS
+        backed_off = 0.0
         attempt = 0
         while True:
             try:
                 return operation()
             except Exception as exc:
                 attempt += 1
-                remaining = deadline - time.monotonic()
+                remaining = JOIN_RETRY_SECONDS - backed_off
                 if remaining <= 0 or not _recoverable_stream_error(exc):
                     raise
                 delay = min(
@@ -1982,6 +1987,7 @@ class AgentDaemonService:
                     },
                 )
                 time.sleep(delay)
+                backed_off += delay
 
     def _start_tunnel(self, state: AgentState) -> AgentTunnelService:
         network = self.options.worker_network
