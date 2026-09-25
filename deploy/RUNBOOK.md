@@ -466,7 +466,7 @@ inventory before calling the warm and stopped targets healthy.
 
 ### Capacity headroom upgrade
 
-Revision `0022_capacity_headroom` drops `compute_units.warm_handoff_from`, lets
+Revision `0023_capacity_headroom` drops `compute_units.warm_handoff_from`, lets
 GPU units hold stopped reserves, and adds the live-load index the reserve planner
 reads. Older API and scheduler replicas read and write the dropped column, and an
 older scheduler plans machine-count reserves against the same units, so both stop
