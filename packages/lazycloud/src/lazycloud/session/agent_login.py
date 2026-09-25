@@ -17,6 +17,7 @@ from secrets import token_hex
 from urllib.parse import parse_qs, urlsplit
 
 from lazycloud.agent_harness import AGENT_INSTALLATIONS, AgentHarness
+from lazycloud.session.claude_login import CLAUDE_LOGIN_SCRIPT
 from lazycloud.session.ssh import SshSetupError
 
 
@@ -149,12 +150,22 @@ def login_shell_command(harness: AgentHarness, nonce: str) -> str:
             for dependency in installation.system_dependencies
         ),
     ]
+    if harness is AgentHarness.ClaudeCode:
+        prerequisites.append(
+            (
+                "node",
+                "Claude browser login requires Node.js 22 on the devbox. "
+                "Install Node.js and retry.",
+            )
+        )
     checks = "".join(
         f"if ! command -v {shlex.quote(required)} >/dev/null 2>&1; then "
         f"printf '%s\\n' {shlex.quote(message)} >&2; agent_login_missing=1; fi; "
         for required, message in prerequisites
     )
     command = shlex.join(installation.login_command)
+    if harness is AgentHarness.ClaudeCode:
+        command = shlex.join(["node", "-e", CLAUDE_LOGIN_SCRIPT])
     script = (
         f"set -eu; agent_login_missing=0; {checks}"
         '[ "$agent_login_missing" -eq 0 ] || exit 127; '
