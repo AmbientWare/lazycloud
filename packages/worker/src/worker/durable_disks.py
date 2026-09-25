@@ -31,6 +31,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -148,6 +149,12 @@ class DiskEngineAttachResult(ContractModel):
     lazy: bool = False
     """Nothing was downloaded first; the published layers fill in as they are read."""
 
+    serving: bool = False
+    """The engine is still reading lazy layers from the bucket through the store file."""
+
+    warnings: list[str] = Field(default_factory=list)
+    """What the attach skipped that only costs prefetch order."""
+
 
 class DiskEngineSealResult(ContractModel):
     sealed: bool
@@ -190,6 +197,9 @@ class DiskEngineUsage(ContractModel):
     """Why a read of the disk failed, empty while none has. The workload has
     already seen an I/O error."""
 
+    full: bool = False
+    """A chunk fetched for a lazy layer found no room on the machine."""
+
 
 class DiskEngineLocalDisk(ContractModel):
     disk: str
@@ -218,6 +228,9 @@ class DiskStoreFile(ContractModel):
 
 type DiskStoreSource = Callable[[], DiskStoreFile]
 """Vends a fresh workspace storage grant each time it is called."""
+
+type DiskStore = DiskStoreSource | Path
+"""A grant to vend for one engine call, or a store file already kept renewed."""
 
 
 class DiskChainFileEntry(ContractModel):
@@ -290,7 +303,7 @@ class DiskEngine:
         generation: int,
         parent: int,
         flatten: bool,
-        store: DiskStoreSource,
+        store: DiskStore,
     ) -> DiskEnginePublishResult:
         with self._store_file(self._scratch_dir(disk_id), store) as store_path:
             argv = [
@@ -326,7 +339,7 @@ class DiskEngine:
         self._run(_COMPACT_TIMEOUT_SECONDS, "compact", *self._disk_args(root, disk_id))
 
     def collect(
-        self, root: Path, disk_id: str, *, generation: int, store: DiskStoreSource
+        self, root: Path, disk_id: str, *, generation: int, store: DiskStore
     ) -> DiskEngineCollectResult:
         with self._store_file(self._scratch_dir(disk_id), store) as store_path:
             output = self._run(
@@ -373,7 +386,9 @@ class DiskEngine:
         path.mkdir(parents=True, exist_ok=True, mode=0o700)
         return path
 
-    def _store_file(self, directory: Path, store: DiskStoreSource) -> _StoreFile:
+    def _store_file(self, directory: Path, store: DiskStore) -> AbstractContextManager[Path]:
+        if isinstance(store, Path):
+            return nullcontext(store)
         return _StoreFile(directory / "store.json", store)
 
     def _run(self, timeout_seconds: float, *argv: str) -> str:
@@ -493,6 +508,9 @@ class DiskLease(ContractModel):
 
     volume_id: str = ""
     """The provider volume holding this disk's layers; empty on host storage."""
+
+    serving: bool = False
+    """The engine reads lazy layers of this disk from the bucket while it is attached."""
 
     mountpoint: str = ""
     detached: bool = False
@@ -640,7 +658,12 @@ class WorkerDurableDiskService:
                 with timings.step("engine"):
                     result = self._attach_with_space(attached, lease, disk, root, mountpoint, chain)
                 lease.mountpoint = result.mountpoint
+                lease.serving = result.serving
+                if not result.serving:
+                    self._drop_store(attached, lease)
                 self._save(record)
+                for warning in result.warnings:
+                    LOGGER.warning("disk %s: %s", disk.name, warning)
                 timings.log(
                     LOGGER,
                     "disk %s attached for container %s at generation %d "
@@ -778,9 +801,7 @@ class WorkerDurableDiskService:
                     self._resume_published(attached, lease)
                 self._publish_layers(attached, lease, pending=pending, live=False)
             self.engine.detach(root, lease.disk_id)
-            held = attached.stores.pop(lease.disk_id, None)
-            if held is not None:
-                held.__exit__(None, None, None)
+            self._drop_store(attached, lease)
             lease.detached = True
             self._save(attached.leases)
         if lease.volume_id and self.volumes is not None:
@@ -917,6 +938,8 @@ class WorkerDurableDiskService:
             for lease in attached.leases.disks:
                 if lease.released or lease.detached or attached.stopping:
                     continue
+                if not lease.volume_id and not lease.serving:
+                    continue
                 try:
                     self._check_disk(attached, lease)
                 except Exception:
@@ -925,7 +948,13 @@ class WorkerDurableDiskService:
     def _check_disk(self, attached: _Attached, lease: DiskLease) -> None:
         """Stop the container once its disk failed a read, and watch a volume's room."""
         usage = self.engine.usage(self._root(lease), lease.disk_id)
-        if usage.unreadable:
+        if usage.full:
+            self._stop(
+                attached,
+                StopContainerReason.DiskFull,
+                f"disk {lease.name} had no room for data it fetched from workspace storage",
+            )
+        elif usage.unreadable:
             self._stop(
                 attached,
                 StopContainerReason.DiskUnavailable,
@@ -1225,13 +1254,24 @@ class WorkerDurableDiskService:
         held = attached.stores.get(lease.disk_id)
         if held is None:
             held = _StoreFile(
-                self.engine.attached_store_path(lease.disk_id), self._store(attached, lease)
+                self.engine.attached_store_path(lease.disk_id), self._vend(attached, lease)
             )
             held.__enter__()
             attached.stores[lease.disk_id] = held
         return held.path
 
-    def _store(self, attached: _Attached, lease: DiskLease) -> DiskStoreSource:
+    def _drop_store(self, attached: _Attached, lease: DiskLease) -> None:
+        held = attached.stores.pop(lease.disk_id, None)
+        if held is not None:
+            held.__exit__(None, None, None)
+
+    def _store(self, attached: _Attached, lease: DiskLease) -> DiskStore:
+        """The store file the disk already holds, so it has one grant at a time,
+        or a grant to vend for the call."""
+        held = attached.stores.get(lease.disk_id)
+        return held.path if held is not None else self._vend(attached, lease)
+
+    def _vend(self, attached: _Attached, lease: DiskLease) -> DiskStoreSource:
         """Vends workspace bucket credentials for one engine call, and again as they age.
 
         Vended on the disk's lease rather than the container's scheduler state,
