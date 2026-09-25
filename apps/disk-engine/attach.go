@@ -27,7 +27,7 @@ type attachResult struct {
 	// every lazy layer is complete.
 	Serving bool `json:"serving"`
 	// Warnings name what the attach skipped that only costs prefetch order.
-	Warnings []string `json:"warnings"`
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 func runAttach(ctx context.Context, args []string) (any, error) {
