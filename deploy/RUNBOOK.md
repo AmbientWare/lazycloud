@@ -482,8 +482,8 @@ groups keep serving and retire when idle; new GPU capacity is retained EC2.
 ### Agent directory release upgrade
 
 The agent ships as a release archive unpacked once per digest, and the node
-image boots without an initrd, masks the login banner and boot loader services,
-and orders the agent before Docker rather than after the network. An older agent
+image masks the login banner and boot loader services and orders the agent
+before Docker rather than after the network. An older agent
 cannot update into the new layout, so every platform machine and stopped reserve
 is replaced rather than upgraded.
 
@@ -495,8 +495,10 @@ is replaced rather than upgraded.
 3. Terminate every platform machine and every stopped reserve through their
    groups and pools.
 4. Ship. The release builds the agent archive. No migration runs.
-5. Scale the scheduler back and restore Argo's automatic sync. The planner
-   launches fresh machines and reserves on the new image.
+5. Restore Argo's automatic sync and wait until `lazycloud-prod` reports the
+   new revision Synced before scaling the scheduler back. Argo first re-syncs
+   its cached revision, and a scheduler running then buys machines on the old
+   image. The planner then launches fresh machines and reserves on the new one.
 6. Machines customers joined and connected-cloud nodes run the old agent too.
    Run their join command again right after the Ship.
 
@@ -505,7 +507,7 @@ gateway drains its machine, and the agent downloads the archive again on every
 stream, until the machine is joined again.
 
 IAM and Redis need no change. A node on the new image logs `docker answered
-after` from its agent, and `/proc/cmdline` shows `root=PARTUUID=`.
+after` from its agent, and `df -h /` shows its whole root volume.
 
 ### Python invocation format upgrade
 
