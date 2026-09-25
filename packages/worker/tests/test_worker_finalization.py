@@ -5,6 +5,7 @@ from datetime import datetime
 
 from scheduler.state import ContainerStatusUpdatePlan, SchedulerContainerStatus
 from shared.containers import ContainerExecutionPhase
+from shared.timestamps import utc_now
 from worker.events import (
     ContainerExitCode,
     ContainerRequestContext,
@@ -16,6 +17,7 @@ from worker.finalization import (
     WorkerContainerFinalizationService,
     plan_container_finalization,
 )
+from worker.repository_payloads import SetContainerExitCodeRequest
 from worker.status import CONTAINER_STATE_TTL_WHILE_PENDING_SECONDS
 
 
@@ -129,6 +131,33 @@ def test_worker_container_finalizer_records_exit_and_immediate_cleanup() -> None
         (ContainerFinalizationStep.RemoveUploads, "ctr-1"),
         (ContainerFinalizationStep.RemoveSourceWorkspace, "ctr-1"),
     ]
+
+
+def test_an_overlong_startup_failure_still_fits_the_exit_report() -> None:
+    detail = (
+        "DiskEngineError: lazycloud-disk attach failed: "
+        + "--blockdev {...} " * 400
+        + "exit status 1: qemu-storage-daemon: Could not open backing file"
+    )
+    plan = plan_container_finalization(
+        ContainerFinalizationRequest(
+            request=ContainerRequestContext(container_id="ctr-1"),
+            exit_code=1,
+            failed_phase=ContainerExecutionPhase.PrepareRootfs,
+            failure_detail=detail,
+        )
+    )
+
+    report = SetContainerExitCodeRequest(
+        container_id=plan.container_id,
+        exit_code=plan.normalized_exit_code,
+        exited_at=utc_now(),
+        failed_phase=plan.failed_phase,
+        failure_detail=plan.failure_detail,
+    )
+
+    assert report.failure_detail.startswith("DiskEngineError: lazycloud-disk attach failed: ")
+    assert report.failure_detail.endswith("qemu-storage-daemon: Could not open backing file")
 
 
 def test_worker_container_finalizer_delayed_cleanup_forces_and_deletes_state() -> None:
