@@ -28,6 +28,17 @@ _named_devbox = typer.Typer(help="Log in, connect, or inspect a devbox by name."
 
 
 class DevboxGroup(TyperGroup):
+    def resolve_command(
+        self, ctx: Context, args: list[str]
+    ) -> tuple[str | None, Command | None, list[str]]:
+        # A box may itself be named "list".
+        if len(args) > 1 and args[0] in self.commands:
+            named = get_group(_named_devbox)
+            if args[1] in named.commands:
+                named.name = args[0]
+                return args[0], named, args[1:]
+        return super().resolve_command(ctx, args)
+
     def list_commands(self, ctx: Context) -> list[str]:
         return [*super().list_commands(ctx), "NAME"]
 
