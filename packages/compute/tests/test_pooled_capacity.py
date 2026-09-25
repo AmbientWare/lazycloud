@@ -4386,15 +4386,18 @@ def test_a_resumed_reserve_registers_no_worker_until_its_stream_authorizes_the_r
     assert not awaits_resume()
     assert observed() == (ReservationStatus.Resuming.value, MachineLifecycle.Joining)
 
-    # A later stream finishes the provider's bookkeeping even once the agent has
-    # updated past the release, and leaves a machine its heartbeat made ready.
+    # Only the authorizing stream tells the agent it resumed. A later one, even
+    # from an agent updated past the release, leaves the row to the capacity
+    # pass, which finishes it and leaves a machine its heartbeat made ready.
     with service_context.database.session() as session:
         machine = MachineRepository(session).get(machine_id, workspace_id=unit.workspace_id)
         assert machine is not None
         write_machine_lifecycle(
             session, machine, MachineLifecycle.Ready, workspace_changes=compute.workspace_changes
         )
-    assert stream(agent_binary_sha256="b" * 64).resuming
+    assert not stream(agent_binary_sha256="b" * 64).resuming
+    assert observed() == (ReservationStatus.Resuming.value, MachineLifecycle.Ready)
+    compute.reconcile_unit_capacity(unit.id, now=now)
     assert observed() == (ReservationStatus.Active.value, MachineLifecycle.Ready)
     with service_context.database.session() as session:
         machine = MachineRepository(session).get(machine_id, workspace_id=unit.workspace_id)

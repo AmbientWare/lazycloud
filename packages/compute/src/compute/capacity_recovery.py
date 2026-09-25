@@ -414,7 +414,7 @@ class CapacityRecoveryService:
                     target.id, record.operation_id
                 )
                 machines = ComputeProviderInstanceRepository(session).list_for_pool(
-                    target.id, status=ReservationStatus.Active.value
+                    target.id, statuses=(ReservationStatus.Active.value,)
                 )
             if operation is None and (
                 target.provider_state.degraded_reason is not None

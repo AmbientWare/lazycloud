@@ -160,7 +160,6 @@ from compute.purchase_policy import assess_fleet_purchase
 from compute.reclaim import ComputeReclaimPolicy
 from compute.reserve_state import FleetReserveState
 from compute.source_cache_storage import SourceCacheStorageLifecycleService
-from compute.stop_rechecks import StopRechecks
 from compute.telemetry import AGENT_HEARTBEAT_TIMEOUT_SECONDS
 
 LOGGER = logging.getLogger(__name__)
@@ -223,33 +222,9 @@ class ComputeService:
         default_factory=dict, init=False, repr=False
     )
     source_cache_lifecycle: SourceCacheStorageLifecycleService = field(init=False)
-    _stop_rechecks: StopRechecks = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         self.source_cache_lifecycle = SourceCacheStorageLifecycleService(self.context)
-        self._stop_rechecks = StopRechecks(self._recheck_stopping_unit)
-
-    def _recheck_stopping_unit(self, workspace_id: str, capacity_owner_id: str) -> bool:
-        """Record the unit as its provider reports it; true while a stop is still under way."""
-        try:
-            with self._required_capacity_owner_mutations().mutation_lock(capacity_owner_id):
-                current, provider, offer = self._internal_unit_provider(
-                    workspace_id, capacity_owner_id
-                )
-                if provider.pooled is None or current.phase in ENDED_UNIT_PHASES:
-                    return False
-                snapshot = provider.pooled.describe_unit(
-                    self._provider_unit_request(current, offer)
-                )
-                self.provider_machines._apply_pooled_snapshot(
-                    current, offer, snapshot, provider=provider.pooled
-                )
-        except CapacityReservationLockContendedError:
-            return True
-        return any(
-            instance.stop_requested and instance.status == ProviderMachineStatus.Stopping
-            for instance in snapshot.instances
-        )
 
     def pooled_offer_rejection(
         self,
@@ -331,7 +306,6 @@ class ComputeService:
             workspace_changes=self.workspace_changes,
             scheduler_hooks=self.scheduler_hooks,
             source_cache_lifecycle=self.source_cache_lifecycle,
-            stop_rechecks=self._stop_rechecks,
         )
 
     def record_provider_node_lifecycle(
@@ -2959,12 +2933,10 @@ class ComputeService:
             machine = MachineRepository(session).get(machine_id, workspace_id=workspace_id)
             if unit is None or machine is None:
                 raise ConflictError("reserve preparation lost its capacity owner")
-            # The stream that authorizes a resume moves the lifecycle to joining,
-            # which opens the fence, and answers without waiting on the provider.
-            # A later stream finishes the provider's bookkeeping whatever release
-            # the machine holds by then, since it already serves.
-            authorizing_resume = resuming and machine.lifecycle in RETAINED_MACHINE_LIFECYCLES
-            finishing_resume = resuming and not authorizing_resume
+            if resuming and machine.lifecycle not in RETAINED_MACHINE_LIFECYCLES:
+                # An earlier stream authorized the resume; the machine serves, and
+                # only that stream tells the agent it resumed.
+                return ReserveAgentPreparation()
             # Only a used machine returning to reserve cleans tenant storage before
             # it stops, and returning sets its row to stopping. A reserve being
             # prepared again keeps its row at preparing until it finishes, even
@@ -3015,7 +2987,7 @@ class ComputeService:
                     raise ConflictError("stop preparation acknowledgment is stale")
                 if ContainerRepository(session).count_live_for_machine(machine_id):
                     raise ConflictError("machine still owns live workloads")
-            elif not finishing_resume and (
+            elif (
                 not worker_prepared
                 or not agent_current
                 or (preparing and not worker_ready)
@@ -3043,9 +3015,7 @@ class ComputeService:
                 # it takes requests whether or not an update is recorded.
                 WorkerReleaseRepository(session).cancel_machine_update(machine_id)
             target = MachineLifecycle.Stopping if preparing else MachineLifecycle.Joining
-            if (preparing or authorizing_resume) and machine_lifecycle_allowed(
-                machine.lifecycle, target
-            ):
+            if machine_lifecycle_allowed(machine.lifecycle, target):
                 write_machine_lifecycle(
                     session,
                     machine,
@@ -3053,7 +3023,7 @@ class ComputeService:
                     workspace_changes=self.workspace_changes,
                     workspace_id=workspace_id,
                 )
-            if authorizing_resume and enrollment.capacity_notice_at is None:
+            if resuming and enrollment.capacity_notice_at is None:
                 ComputeMachineEnrollmentRepository(session).save(
                     enrollment.model_copy(
                         update={
@@ -3063,7 +3033,9 @@ class ComputeService:
                         }
                     )
                 )
-        if authorizing_resume:
+        if resuming:
+            # Joining opens the fence, so the resumed worker registers without
+            # waiting on the provider; the capacity pass finishes the row.
             return instruction
         try:
             self._finish_reserved_machine_preparation(
@@ -3084,8 +3056,7 @@ class ComputeService:
             )
         except CapacityReservationLockContendedError as contended:
             # Another pass holds the pool's lease for a few seconds of provider
-            # calls. A resuming machine takes its worker slot on this stream
-            # anyway, and the next stream finishes the bookkeeping.
+            # calls; the next stream finishes the bookkeeping.
             LOGGER.info("reserve preparation for %s deferred: %s", machine_id, contended)
         return instruction
 
@@ -4179,6 +4150,29 @@ class ComputeService:
                     )
                 )
 
+    @staticmethod
+    def _authorized_resumes(
+        session: DatabaseSession,
+        unit: ComputeUnitRecord,
+        records: Sequence[ComputeProviderInstanceRecord],
+    ) -> list[str]:
+        """Resuming instances whose stream authorized the resume, which the pass finishes.
+
+        The authorizing stream moves the machine out of its reserve phases and
+        leaves the provider's bookkeeping to the pass.
+        """
+        machines = MachineRepository(session)
+        return [
+            record.instance_id
+            for record in records
+            if record.status == ReservationStatus.Resuming.value
+            and record.instance_id is not None
+            and record.machine_id is not None
+            and (machine := machines.get(record.machine_id, workspace_id=unit.workspace_id))
+            is not None
+            and machine.lifecycle not in RETAINED_MACHINE_LIFECYCLES
+        ]
+
     def _reconcile_pooled_pool(
         self,
         pool_id: str,
@@ -4225,16 +4219,35 @@ class ComputeService:
                 now=now,
             )
             with self.context.database.session() as session:
-                retiring = ComputeProviderInstanceRepository(session).list_for_pool(
-                    current.id, status=ReservationStatus.Terminating.value
+                records = ComputeProviderInstanceRepository(session).list_for_pool(
+                    current.id,
+                    statuses=(
+                        ReservationStatus.Terminating.value,
+                        ReservationStatus.Resuming.value,
+                    ),
                 )
-            for record in retiring:
-                if record.instance_id is None or record.missing_since is not None:
+                resumed = self._authorized_resumes(session, current, records)
+            for record in records:
+                if (
+                    record.status != ReservationStatus.Terminating.value
+                    or record.instance_id is None
+                    or record.missing_since is not None
+                ):
                     continue
                 with dispatch_fence.dispatch_lock(current.capacity_owner_id):
                     pooled.release_machine(
                         self._provider_unit_request(current, offer), record.instance_id
                     )
+            for instance_id in resumed:
+                current = self.provider_machines._apply_pooled_snapshot(
+                    current,
+                    offer,
+                    pooled.complete_machine_preparation(
+                        self._provider_unit_request(current, offer), instance_id, hibernate=False
+                    ),
+                    provider=pooled,
+                    now=now,
+                )
             request = self._provider_unit_request(current, offer)
             if request.desired_machines == 0 and request.stopped_machines == 0:
                 with dispatch_fence.dispatch_lock(current.capacity_owner_id):

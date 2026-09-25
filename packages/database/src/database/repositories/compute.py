@@ -1859,7 +1859,7 @@ class ComputeProviderInstanceRepository:
         pool_id: str,
         *,
         for_update: bool = False,
-        status: str | None = None,
+        statuses: Collection[str] = (),
         excluded_statuses: Collection[str] = (),
     ) -> list[ComputeProviderInstanceRecord]:
         statement = (
@@ -1870,8 +1870,8 @@ class ComputeProviderInstanceRepository:
                 ComputeProviderInstanceTable.id.asc(),
             )
         )
-        if status is not None:
-            statement = statement.where(ComputeProviderInstanceTable.status == status)
+        if statuses:
+            statement = statement.where(ComputeProviderInstanceTable.status.in_(statuses))
         if excluded_statuses:
             statement = statement.where(
                 ComputeProviderInstanceTable.status.not_in(excluded_statuses)
