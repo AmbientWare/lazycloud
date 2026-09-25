@@ -176,11 +176,17 @@ class AgentUpdater:
         with a leading dot. A release rolled back or superseded goes, and so
         does staging untouched for STALE_STAGING_SECONDS, which leaves an
         install running now alone. Each removal is best effort: one that
-        fails is logged and left for the next start. An agent run from a source
-        tree has no releases and keeps everything.
+        fails is logged and left for the next start. Only the directory the
+        installer lays out, `lib/lazycloud-agent`, holds releases; an agent run
+        from anywhere else, or from a source tree, keeps everything.
         """
         running = self.release
-        if running is None or not RELEASE_DIGEST_PATTERN.fullmatch(running.name):
+        if (
+            running is None
+            or not RELEASE_DIGEST_PATTERN.fullmatch(running.name)
+            or running.parent.name != AGENT_NAME
+            or running.parent.parent.name != "lib"
+        ):
             return
         keep = {running}
         for link in (self.command, self.previous):

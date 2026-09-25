@@ -11,6 +11,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.verification import PolicyBuilder, Store
 from pydantic import BaseModel, Field
+from shared.durable_files import fsync_directory
 
 
 class _CertificateBundle(BaseModel):
@@ -57,7 +58,7 @@ class TunnelCredentials:
                 output.flush()
                 os.fsync(output.fileno())
             os.replace(temporary, self.bundle_path)
-            _sync_directory(self.bundle_path.parent)
+            fsync_directory(self.bundle_path.parent)
         finally:
             Path(temporary).unlink(missing_ok=True)
 
@@ -126,7 +127,7 @@ def _private_key(key_path: Path) -> ec.EllipticCurvePrivateKey:
                 os.fsync(output.fileno())
             try:
                 os.link(temporary, key_path)
-                _sync_directory(key_path.parent)
+                fsync_directory(key_path.parent)
             except FileExistsError:
                 pass
         finally:
@@ -140,11 +141,3 @@ def _private_key(key_path: Path) -> ec.EllipticCurvePrivateKey:
     ):
         raise ValueError("Tunnel private key must use P-256")
     return loaded
-
-
-def _sync_directory(directory: Path) -> None:
-    descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)

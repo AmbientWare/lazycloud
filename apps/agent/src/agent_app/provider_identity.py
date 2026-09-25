@@ -32,6 +32,7 @@ class ProviderNodeIdentityEvidenceProvider(Protocol):
         self,
         *,
         expected_region: str | None = None,
+        deadline: float | None = None,
     ) -> ProviderNodeIdentityEvidence: ...
 
 
@@ -47,7 +48,9 @@ class _NodeProof(Protocol):
 
 
 class _NodeProofProvider(Protocol):
-    def create(self, *, expected_region: str | None = None) -> _NodeProof: ...
+    def create(
+        self, *, expected_region: str | None = None, deadline: float | None = None
+    ) -> _NodeProof: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,9 +61,10 @@ class _AwsProviderNodeIdentityEvidenceProvider:
         self,
         *,
         expected_region: str | None = None,
+        deadline: float | None = None,
     ) -> ProviderNodeIdentityEvidence:
         try:
-            proof = self.provider.create(expected_region=expected_region)
+            proof = self.provider.create(expected_region=expected_region, deadline=deadline)
         except AwsProviderNodeProofError as exc:
             if isinstance(exc.__cause__, OSError | http.client.HTTPException):
                 raise ProviderNodeIdentityUnavailableError(str(exc)) from exc

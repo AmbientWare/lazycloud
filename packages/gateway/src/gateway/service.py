@@ -2284,6 +2284,7 @@ class GatewayControlService:
                     active_worker_images=request.active_worker_images,
                     prepared_worker_images=request.prepared_worker_images,
                     agent_binary_sha256=request.binary_sha256,
+                    update_blocked=bool(request.update_blocked),
                     preparing_reserve=bool(reserve_preparation and reserve_preparation.preparing),
                 )
             bootstrap = build_agent_bootstrap_config(
@@ -2407,6 +2408,7 @@ class GatewayControlService:
         active_worker_images: Mapping[str, str],
         prepared_worker_images: Sequence[str],
         agent_binary_sha256: str,
+        update_blocked: bool = False,
         preparing_reserve: bool = False,
     ) -> list[ComputeAgentWorkerSlotState]:
         slots = self.compute_states.list_agent_worker_slot_states(
@@ -2419,8 +2421,12 @@ class GatewayControlService:
         existing = next((slot for slot in slots if slot.worker_id == worker_id), None)
 
         target_image = release.target.worker_image
+        # An agent that cannot apply the release keeps serving on its own until
+        # it is joined again, so nothing waits for it to update.
         agent_current = (
-            release.target.agent is None or agent_binary_sha256 == release.target.agent.sha256
+            update_blocked
+            or release.target.agent is None
+            or agent_binary_sha256 == release.target.agent.sha256
         )
         slot_status = AgentWorkerSlotStatus.Active
         active_image = active_worker_images.get(worker_id, "")
@@ -2433,7 +2439,15 @@ class GatewayControlService:
             if worker is not None and worker.agent_binary_sha256 == agent_binary_sha256:
                 worker_releases.complete_update(worker)
             update_generation = worker_releases.update_generation(worker_id, agent_state.machine_id)
-            continuing_rollout = update_generation == release.generation
+            if update_blocked and update_generation:
+                worker_releases.cancel_machine_update(agent_state.machine_id)
+            continuing_rollout = not update_blocked and update_generation == release.generation
+        if update_blocked and update_generation and worker is not None:
+            self.scheduler_worker_lookup.release_worker_rollout_slot(
+                worker.capacity_owner_id, worker.worker_id, image_revision
+            )
+            if worker.status is SchedulerWorkerStatus.Draining:
+                worker = self.scheduler_worker_lookup.resume_worker_registration(worker)
         if (
             worker is not None
             and active_image == target_image
@@ -2445,7 +2459,7 @@ class GatewayControlService:
                 worker.worker_id,
                 image_revision,
             )
-        needs_update = (
+        needs_update = not update_blocked and (
             active_image != target_image
             or not agent_current
             # An unfinished release owns intake even when the installed image is current.

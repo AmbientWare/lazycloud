@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from secrets import token_hex
@@ -54,18 +55,23 @@ class AwsEc2ProviderNodeIdentityProofProvider:
     )
     timeout_seconds: float = AWS_IMDS_TIMEOUT_SECONDS
 
-    def create(self, *, expected_region: str | None = None) -> AwsStsGetCallerIdentityProof:
+    def create(
+        self, *, expected_region: str | None = None, deadline: float | None = None
+    ) -> AwsStsGetCallerIdentityProof:
+        """Sign an identity proof; `deadline`, on the monotonic clock, bounds every call."""
         region = _validated_region(expected_region) if expected_region is not None else None
         token = self._text(
             method="PUT",
             path="/latest/api/token",
             headers={"X-aws-ec2-metadata-token-ttl-seconds": str(AWS_IMDS_TOKEN_TTL_SECONDS)},
+            deadline=deadline,
         )
         metadata_headers = {"X-aws-ec2-metadata-token": token}
         instance_id = self._text(
             method="GET",
             path="/latest/meta-data/instance-id",
             headers=metadata_headers,
+            deadline=deadline,
         ).lower()
         if not _INSTANCE_ID_PATTERN.fullmatch(instance_id):
             raise AwsProviderNodeProofError("EC2 metadata returned an invalid instance ID")
@@ -74,6 +80,7 @@ class AwsEc2ProviderNodeIdentityProofProvider:
                 method="GET",
                 path="/latest/meta-data/placement/region",
                 headers=metadata_headers,
+                deadline=deadline,
             )
         )
         if region is not None and observed_region != region:
@@ -85,12 +92,14 @@ class AwsEc2ProviderNodeIdentityProofProvider:
             method="GET",
             path="/latest/meta-data/iam/security-credentials/",
             headers=metadata_headers,
+            deadline=deadline,
         )
         if not _ROLE_NAME_PATTERN.fullmatch(role_name):
             raise AwsProviderNodeProofError("EC2 metadata returned an invalid role name")
         credentials = self._credentials(
             path=f"/latest/meta-data/iam/security-credentials/{quote(role_name, safe='')}",
             headers=metadata_headers,
+            deadline=deadline,
         )
         if credentials.code != "Success":
             raise AwsProviderNodeProofError("EC2 instance role credentials are unavailable")
@@ -119,12 +128,24 @@ class AwsEc2ProviderNodeIdentityProofProvider:
             instance_id=instance_id,
         )
 
-    def _text(self, *, method: str, path: str, headers: dict[str, str]) -> str:
+    def _timeout(self, deadline: float | None) -> float:
+        if deadline is None:
+            return self.timeout_seconds
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise AwsProviderNodeProofError(
+                "EC2 metadata did not answer in time"
+            ) from TimeoutError()
+        return min(self.timeout_seconds, remaining)
+
+    def _text(
+        self, *, method: str, path: str, headers: dict[str, str], deadline: float | None
+    ) -> str:
         response = self.transport.request(
             method=method,
             path=path,
             headers=headers,
-            timeout_seconds=self.timeout_seconds,
+            timeout_seconds=self._timeout(deadline),
             max_response_bytes=AWS_IMDS_MAX_TEXT_BYTES,
         )
         if response.status_code != 200:
@@ -144,12 +165,13 @@ class AwsEc2ProviderNodeIdentityProofProvider:
         *,
         path: str,
         headers: dict[str, str],
+        deadline: float | None,
     ) -> _AwsInstanceRoleCredentials:
         response = self.transport.request(
             method="GET",
             path=path,
             headers=headers,
-            timeout_seconds=self.timeout_seconds,
+            timeout_seconds=self._timeout(deadline),
             max_response_bytes=AWS_IMDS_MAX_CREDENTIAL_BYTES,
         )
         if response.status_code != 200:

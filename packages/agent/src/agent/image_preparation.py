@@ -15,10 +15,13 @@ class WorkerImagePreparation:
     latest: str = ""
     """The image whose preparation finished most recently in this process."""
     _pending: tuple[str, Future[None]] | None = None
-    _lookup: Future[None] | None = None
+    _lookup: tuple[str, Future[None]] | None = None
+    _ready: Event = field(default_factory=Event)
+    """Set when a lookup finds its image or a preparation ends; cleared once read."""
     _stop: Event = field(default_factory=Event)
 
     def prepared(self) -> list[str]:
+        self._ready.clear()
         pending = self._pending
         if pending is not None and pending[1].done():
             self._pending = None
@@ -45,8 +48,9 @@ class WorkerImagePreparation:
         def check() -> None:
             if present(image, self._stop):
                 self._prepared.add(image)
+                self._ready.set()
 
-        self._lookup = self._executor.submit(check)
+        self._lookup = (image, self._executor.submit(check))
 
     def ensure(self, image: str, *, wait_seconds: float = 0.0) -> bool:
         """Whether `image` is ready, starting its preparation and waiting briefly if not.
@@ -59,8 +63,13 @@ class WorkerImagePreparation:
             return True
         if self._pending is None:
             self.start(image)
-        if wait_seconds > 0:
-            self.wait(wait_seconds)
+        own = [
+            entry[1]
+            for entry in (self._pending, self._lookup)
+            if entry is not None and entry[0] == image
+        ]
+        if own and wait_seconds > 0:
+            wait_for_futures(own, timeout=wait_seconds, return_when=FIRST_COMPLETED)
         return image in self.prepared()
 
     def unreported(self, reported: Collection[str]) -> bool:
@@ -75,18 +84,16 @@ class WorkerImagePreparation:
         return bool(self._prepared.difference(reported))
 
     def wait(self, timeout_seconds: float) -> bool:
-        """Wait for an image being prepared or looked up; True when one finished."""
-        waiting: list[Future[None]] = []
-        if self._pending is not None:
-            waiting.append(self._pending[1])
-        if self._lookup is not None:
-            waiting.append(self._lookup)
-        if not waiting:
+        """Wait for a lookup to find its image or a preparation to end; True when one did."""
+        if not self._ready.wait(timeout_seconds):
             return False
-        done, _ = wait_for_futures(waiting, timeout=timeout_seconds, return_when=FIRST_COMPLETED)
-        if self._lookup is not None and self._lookup in done:
-            self._lookup = None
-        return bool(done)
+        self._ready.clear()
+        return True
+
+    def wait_for_lookup(self, timeout_seconds: float) -> None:
+        """Wait for the lookup in progress to answer, found or not."""
+        if self._lookup is not None:
+            wait_for_futures([self._lookup[1]], timeout=timeout_seconds)
 
     def start(self, image: str) -> Future[None]:
         if self._pending is not None:
@@ -94,6 +101,7 @@ class WorkerImagePreparation:
                 raise RuntimeError("another worker image is being prepared")
             return self._pending[1]
         operation = self._executor.submit(self.prepare, image, self._stop)
+        operation.add_done_callback(lambda _: self._ready.set())
         self._pending = (image, operation)
         return operation
 

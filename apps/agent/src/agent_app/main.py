@@ -606,6 +606,13 @@ def _manage_service(args: AgentCommandArgs) -> tuple[AgentServiceOperationResult
         uid=os.getuid(),
     )
     service_path = Path(plan.target_path).expanduser()
+    # Checked before anything is stopped or removed, so a command it must not
+    # remove fails the uninstall with everything still in place.
+    command = (
+        _canonical_agent_binary()
+        if action is ServiceLifecycleAction.Uninstall and not args.keep_binary
+        else None
+    )
     state_dir: Path | None = None
     saved_state: AgentState | None = None
     if plan.remove_state:
@@ -635,8 +642,10 @@ def _manage_service(args: AgentCommandArgs) -> tuple[AgentServiceOperationResult
         if state_removed:
             shutil.rmtree(state_dir)
     commands.extend(_run_service_commands(plan.after_removal))
-    if action is ServiceLifecycleAction.Uninstall and not args.keep_binary:
-        releases = _remove_canonical_agent_binary()
+    if command is not None:
+        command.unlink()
+        command.with_name(f"{command.name}.previous").unlink(missing_ok=True)
+        releases = command.parent.parent / "lib" / AGENT_NAME
     result = AgentServiceOperationResult(
         action=action,
         platform=selected_platform,
@@ -724,16 +733,14 @@ def _validated_state_directory(path: Path) -> Path:
     return resolved
 
 
-def _remove_canonical_agent_binary() -> Path | None:
-    """Remove the agent command the installer created; return the releases it unpacked.
+def _canonical_agent_binary() -> Path | None:
+    """The agent command the installer created, which uninstall removes with its releases.
 
     None when the command sits outside the installer's paths, so a binary an
     operator placed is left alone. At an installer path, whatever is found goes:
     the link to a release, or a single executable an older installer wrote. A
-    link that leads outside the releases, or anything that cannot be removed,
-    raises rather than leaving the agent half installed. The releases directory
-    is returned rather than removed: this process runs from it, so the caller
-    removes it after its output.
+    link that leads outside the releases raises. The releases directory is
+    removed last, by the caller: this process runs from it.
     """
     found = Path(_agent_binary_path()).expanduser().absolute()
     command = found.parent.resolve() / found.name
@@ -750,9 +757,7 @@ def _remove_canonical_agent_binary() -> Path | None:
     if command.is_symlink() and not command.resolve().is_relative_to(releases.resolve()):
         msg = f"{command} links outside the agent releases in {releases}; remove it by hand"
         raise RuntimeError(msg)
-    command.unlink()
-    command.with_name(f"{command.name}.previous").unlink(missing_ok=True)
-    return releases
+    return command
 
 
 def _status_payload(

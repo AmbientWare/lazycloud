@@ -309,6 +309,8 @@ class AgentGatewayClient(AgentLeaveClient, Protocol):
     def record_provider_node_bootstrap_phase(
         self,
         request: ProviderNodeBootstrapPhaseRequest,
+        *,
+        timeout_seconds: float | None = None,
     ) -> ProviderNodeBootstrapFailureResponse: ...
 
     def stream_agent(self, request: StreamAgentRequest) -> StreamAgentResponse: ...
@@ -379,9 +381,15 @@ class HttpAgentGatewayClient:
     def record_provider_node_bootstrap_phase(
         self,
         request: ProviderNodeBootstrapPhaseRequest,
+        *,
+        timeout_seconds: float | None = None,
     ) -> ProviderNodeBootstrapFailureResponse:
         return ProviderNodeBootstrapFailureResponse.model_validate(
-            self.channel.post("/gateway/provider-nodes/bootstrap-phase", _payload(request))
+            self.channel.post(
+                "/gateway/provider-nodes/bootstrap-phase",
+                _payload(request),
+                timeout_seconds=timeout_seconds,
+            )
         )
 
     def leave_agent(self, request: LeaveAgentRequest) -> LeaveAgentResponse:
@@ -592,34 +600,38 @@ def docker_socket_path() -> str | None:
     """The unix socket the docker CLI would talk to, or None if that is not a local socket.
 
     As the CLI resolves it: DOCKER_HOST, else the context named by DOCKER_CONTEXT
-    or the docker config's `currentContext`, else the default socket.
+    or the docker config's `currentContext`, else the default socket. A named
+    context whose metadata cannot be read is None too: its endpoint is unknown.
     """
     host = os.environ.get("DOCKER_HOST", "")
     if not host:
         config_dir = Path(os.environ.get("DOCKER_CONFIG") or Path.home() / ".docker")
         context = os.environ.get("DOCKER_CONTEXT", "")
-        try:
-            if not context:
+        if not context:
+            try:
                 config = _JSON_VALUE_ADAPTER.validate_json(
                     (config_dir / "config.json").read_bytes()
                 )
-                current = config.get("currentContext") if isinstance(config, dict) else None
-                context = current if isinstance(current, str) else ""
-            if context and context != "default":
-                digest = hashlib.sha256(context.encode()).hexdigest()
+            except FileNotFoundError:
+                config = None
+            except (OSError, ValueError):
+                return None
+            current = config.get("currentContext") if isinstance(config, dict) else None
+            context = current if isinstance(current, str) else ""
+        if context and context != "default":
+            digest = hashlib.sha256(context.encode()).hexdigest()
+            try:
                 meta = _JSON_VALUE_ADAPTER.validate_json(
                     (config_dir / "contexts" / "meta" / digest / "meta.json").read_bytes()
                 )
-                endpoints = meta.get("Endpoints") if isinstance(meta, dict) else None
-                docker = endpoints.get("docker") if isinstance(endpoints, dict) else None
-                named = docker.get("Host") if isinstance(docker, dict) else None
-                if not isinstance(named, str):
-                    return None
-                host = named
-        except FileNotFoundError:
-            pass
-        except (OSError, ValueError):
-            return None
+            except (OSError, ValueError):
+                return None
+            endpoints = meta.get("Endpoints") if isinstance(meta, dict) else None
+            docker = endpoints.get("docker") if isinstance(endpoints, dict) else None
+            named = docker.get("Host") if isinstance(docker, dict) else None
+            if not isinstance(named, str):
+                return None
+            host = named
     if not host:
         return DEFAULT_DOCKER_SOCKET
     return host.removeprefix("unix://") if host.startswith("unix://") else None
@@ -689,9 +701,13 @@ class DockerAgentWorkerController:
     def __post_init__(self) -> None:
         self._images = WorkerImagePreparation(self._prepare_worker_image)
         self._docker_deadline = time.monotonic() + self.docker_wait_seconds
-        # Resolved once: a socket that is not local, or cannot be resolved,
-        # means no wait, and Docker calls run at once.
-        self._docker_socket = docker_socket_path() if self.docker_wait_seconds else None
+        # Resolved once: another container CLI, or a socket that is not local
+        # or cannot be resolved, means no wait, and Docker calls run at once.
+        self._docker_socket = (
+            docker_socket_path()
+            if self.docker_wait_seconds and Path(self.docker_binary).name == "docker"
+            else None
+        )
 
     def wait_for_docker(self, stop: Event | None = None) -> bool:
         """Wait for the Docker daemon to answer; False once it has not in time.
@@ -832,8 +848,12 @@ class DockerAgentWorkerController:
             LOGGER.info("pulling %s while the agent updates", image)
 
     def wait_for_image_preparation(self, timeout_seconds: float) -> bool:
-        """Wait for a worker image being prepared; True once it has finished."""
+        """Wait for an image found on the host or a preparation ending; True once one did."""
         return self._images.wait(timeout_seconds)
+
+    def wait_for_image_lookup(self, timeout_seconds: float) -> None:
+        """Wait for the boot lookup of the last prepared image to answer."""
+        self._images.wait_for_lookup(timeout_seconds)
 
     def _prepare_worker_image(self, image: str, stop: Event) -> None:
         try:
@@ -1188,7 +1208,7 @@ class AgentDaemonService:
     _interruption_reported: bool = False
     _reported_worker_images: list[str] = field(default_factory=list)
     _last_applied_actions: str = "nothing"
-    _update_refused: str = ""
+    _update_blocked: str = ""
 
     def __post_init__(self) -> None:
         self._capacity_shutdown = CapacityShutdown(
@@ -1211,22 +1231,31 @@ class AgentDaemonService:
     def _report_joining(self) -> None:
         """Report joining, retrying briefly while the network comes up beside the agent.
 
-        It runs before the tunnel and the first stream, so it gets only a few
-        seconds; a machine that fails it still joins through its stream.
+        It runs before the tunnel and the first stream, so every metadata and
+        gateway call shares one deadline a few seconds out; a machine that fails
+        it still joins through its stream.
         """
+        deadline = time.monotonic() + JOINING_REPORT_SECONDS
         try:
             self._join_step(
                 "bootstrap_phase.joining",
-                lambda: self._record_bootstrap_phase(MachineLifecycle.Joining),
+                lambda: self._record_bootstrap_phase(MachineLifecycle.Joining, deadline=deadline),
                 budget_seconds=JOINING_REPORT_SECONDS,
             )
         except Exception:
             LOGGER.warning("reporting the joining phase failed", exc_info=True)
 
-    def _record_bootstrap_phase(self, phase: MachineLifecycle) -> None:
+    def _record_bootstrap_phase(
+        self, phase: MachineLifecycle, *, deadline: float | None = None
+    ) -> None:
         if not self.options.provider_enrollment_request:
             return
-        proof = self._provider_evidence_provider().create()
+        proof = self._provider_evidence_provider().create(deadline=deadline)
+        timeout_seconds = None
+        if deadline is not None:
+            timeout_seconds = deadline - time.monotonic()
+            if timeout_seconds <= 0:
+                raise TimeoutError(f"the {phase.value} report ran out of time")
         self.client.record_provider_node_bootstrap_phase(
             ProviderNodeBootstrapPhaseRequest(
                 enrollment_request_id=self.options.provider_enrollment_request,
@@ -1235,7 +1264,8 @@ class AgentDaemonService:
                 provider_instance_id=proof.provider_instance_id,
                 identity_proof_url=proof.proof_url.get_secret_value(),
                 phase=phase,
-            )
+            ),
+            timeout_seconds=timeout_seconds,
         )
 
     def _report_bootstrap_failure(self, reason: MachineBootstrapFailureReason) -> None:
@@ -1478,7 +1508,7 @@ class AgentDaemonService:
         # The first stream waits briefly for an image check started at boot so it
         # can report the image; later streams never wait on a pull in progress.
         if current_iterations == 1:
-            self.worker_controller.wait_for_image_preparation(IMAGE_REPORT_WAIT_SECONDS)
+            self.worker_controller.wait_for_image_lookup(IMAGE_REPORT_WAIT_SECONDS)
         self._reported_worker_images = self.worker_controller.prepared_worker_images()
         with timings.step("stream"):
             stream = self.client.stream_agent(
@@ -1493,6 +1523,7 @@ class AgentDaemonService:
                     },
                     prepared_worker_images=self._reported_worker_images,
                     prepared_stop=read_stop_preparation(self.state_store.state_dir),
+                    update_blocked=self._update_blocked,
                 )
             )
         if not stream.ok:
@@ -1605,22 +1636,20 @@ class AgentDaemonService:
             raise RuntimeError("agent release instruction is stale")
         state = state.model_copy(update={"release_generation": release.generation})
         self.state_store.save(state)
-        if release.update_agent and release.agent is not None:
-            blocker = updater.update_blocker(release.agent)
-            if blocker:
-                # Logged once per release, not on every stream, and never fatal:
-                # the agent keeps serving on the release it has.
-                refusal = f"{release.agent.sha256}:{blocker}"
-                if refusal != self._update_refused:
-                    self._update_refused = refusal
-                    LOGGER.warning(
-                        "not updating the agent to %s: %s", release.agent.sha256, blocker
-                    )
-            else:
-                self.worker_controller.pull_detached(
-                    {slot.worker_image for slot in desired_slots if slot.worker_image}
-                )
-                updater.install(release.agent, before_exec=before_agent_update)
+        agent = release.agent
+        blocker = ""
+        if agent is not None and agent.sha256 != updater.binary_sha256():
+            blocker = updater.update_blocker(agent)
+            if blocker and blocker != self._update_blocked:
+                LOGGER.warning("not updating the agent to %s: %s", agent.sha256, blocker)
+        # The next stream reports it, so the gateway stops holding the machine
+        # for an update it cannot take; the agent keeps serving on its release.
+        self._update_blocked = blocker
+        if release.update_agent and agent is not None and not blocker:
+            self.worker_controller.pull_detached(
+                {slot.worker_image for slot in desired_slots if slot.worker_image}
+            )
+            updater.install(agent, before_exec=before_agent_update)
         return AgentDaemonRunResult(
             workspace_id=state.workspace_id,
             placement=state.placement.key,
