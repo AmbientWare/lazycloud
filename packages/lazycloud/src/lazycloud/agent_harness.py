@@ -18,14 +18,23 @@ class AgentHarness(StringEnum):
 
 
 @dataclass(frozen=True)
+class AgentSystemDependency:
+    command: str
+    package: str
+
+
+@dataclass(frozen=True)
 class AgentInstallation:
     package: str
     version: str
     login_command: tuple[str, ...]
+    system_dependencies: tuple[AgentSystemDependency, ...] = ()
 
 
 AGENT_INSTALLATIONS = {
-    AgentHarness.Codex: AgentInstallation("@openai/codex", "0.156.1", ("codex", "login")),
+    AgentHarness.Codex: AgentInstallation(
+        "@openai/codex", "0.156.1", ("codex", "login"), (AgentSystemDependency("ps", "procps"),)
+    ),
     AgentHarness.ClaudeCode: AgentInstallation(
         "@anthropic-ai/claude-code", "2.1.282", ("claude", "auth", "login")
     ),
@@ -60,12 +69,19 @@ def agent_install_commands(
         shlex.quote(f"{AGENT_INSTALLATIONS[item].package}@{AGENT_INSTALLATIONS[item].version}")
         for item in selected
     ]
+    system_packages = shlex.join(
+        dict.fromkeys(
+            dependency.package
+            for item in selected
+            for dependency in AGENT_INSTALLATIONS[item].system_dependencies
+        )
+    )
     return [
         "command -v apt-get >/dev/null || "
         "{ echo 'Agent harness installation requires a Debian or Ubuntu image' >&2; exit 1; }; "
         "apt-get update && "
         "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "
-        "ca-certificates curl git procps xz-utils libstdc++6 libatomic1 "
+        f"ca-certificates curl git xz-utils libstdc++6 libatomic1 {system_packages} "
         "&& rm -rf /var/lib/apt/lists/*",
         "set -eu; agent_install_dir=$(mktemp -d); "
         "trap 'rm -rf \"$agent_install_dir\"' EXIT; "
