@@ -65,7 +65,8 @@ def agent_install_commands(
         "{ echo 'Agent harness installation requires a Debian or Ubuntu image' >&2; exit 1; }; "
         "apt-get update && "
         "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "
-        "ca-certificates curl git xz-utils libstdc++6 libatomic1 && rm -rf /var/lib/apt/lists/*",
+        "ca-certificates curl git procps xz-utils libstdc++6 libatomic1 "
+        "&& rm -rf /var/lib/apt/lists/*",
         "set -eu; agent_install_dir=$(mktemp -d); "
         "trap 'rm -rf \"$agent_install_dir\"' EXIT; "
         "curl --fail --silent --show-error --location "
