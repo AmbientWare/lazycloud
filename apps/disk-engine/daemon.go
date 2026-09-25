@@ -111,33 +111,55 @@ func fileChild(path string) map[string]any {
 	return map[string]any{"driver": "file", "filename": path}
 }
 
-// chainNode describes layers[0..top] as one nested blockdev with every node
-// named, so seal and compact can address layers directly.
-func chainNode(p diskPaths, layers []layer, top int) map[string]any {
-	node := map[string]any{
-		"driver":    layers[top].format(),
-		"node-name": layers[top].node(),
-		"file":      fileChild(p.layerPath(layers[top])),
-	}
-	if layers[top].Lazy {
-		// Read through `serve`, which fetches what the file does not hold yet.
-		node["read-only"] = true
-		node["file"] = map[string]any{
-			"driver":    "nbd",
-			"read-only": true,
-			"server":    map[string]any{"type": "unix", "path": p.layersSocket()},
-			"export":    layers[top].file(),
+// layerNodes describes the chain as one blockdev per layer, each naming the
+// layer below by node name. A nested description would let qemu take each
+// qcow2 header's backing file name as the filename of the layer below, which
+// an NBD child refuses. Every node is named, so seal and compact can address
+// layers directly.
+func layerNodes(p diskPaths, state *diskState) []map[string]any {
+	head := len(state.Layers) - 1
+	// Compaction commits zeroes a discard left in the head into the layer it
+	// compacts into, the lowest one the daemon opens as a file; detecting them
+	// there frees its space instead of writing them.
+	target := state.lowestLocal()
+	compacts := target < head
+	nodes := make([]map[string]any, 0, len(state.Layers))
+	for i, l := range state.Layers {
+		node := map[string]any{
+			"driver":    l.format(),
+			"node-name": l.node(),
+			"file":      fileChild(p.layerPath(l)),
 		}
-	}
-	if top == 0 {
-		// A raw base takes no backing option at all.
-		if !layers[0].Raw {
+		if l.Lazy {
+			// Read through `serve`, which fetches what the file does not hold yet.
+			node["read-only"] = true
+			node["file"] = map[string]any{
+				"driver":    "nbd",
+				"read-only": true,
+				"server":    map[string]any{"type": "unix", "path": p.layersSocket()},
+				"export":    l.file(),
+			}
+		} else if i < head {
+			// Sealed; a commit into it reopens it for writing.
+			node["read-only"] = true
+			node["auto-read-only"] = true
+		}
+		switch {
+		case i > 0:
+			node["backing"] = state.Layers[i-1].node()
+		case !l.Raw:
+			// A raw base takes no backing option at all.
 			node["backing"] = nil
 		}
-	} else {
-		node["backing"] = chainNode(p, layers, top-1)
+		if i == head || (compacts && i == target) {
+			node["discard"] = "unmap"
+		}
+		if compacts && i == target {
+			node["detect-zeroes"] = "unmap"
+		}
+		nodes = append(nodes, node)
 	}
-	return node
+	return nodes
 }
 
 func startDaemon(ctx context.Context, p diskPaths, state *diskState) (int, error) {
@@ -152,34 +174,24 @@ func startDaemon(ctx context.Context, p diskPaths, state *diskState) (int, error
 			return 0, err
 		}
 	}
-	head := chainNode(p, state.Layers, len(state.Layers)-1)
-	head["discard"] = "unmap"
-	// Compaction commits zeroes a discard left in the head into the layer it
-	// compacts into, the lowest one the daemon opens as a file; detecting them
-	// there frees its space instead of writing them.
-	target := state.lowestLocal()
-	base := head
-	for i := len(state.Layers) - 1; i > target; i-- {
-		base = base["backing"].(map[string]any)
-	}
-	if target < len(state.Layers)-1 {
-		base["discard"] = "unmap"
-		base["detect-zeroes"] = "unmap"
-	}
-	graph, err := json.Marshal(head)
-	if err != nil {
-		return 0, err
-	}
-	_, err = runTool(ctx, toolDaemon,
+	args := []string{
 		"--daemonize",
 		"--pidfile", p.pidFile(),
-		"--chardev", "socket,id=monitor,path="+p.qmpSocket()+",server=on,wait=off",
+		"--chardev", "socket,id=monitor,path=" + p.qmpSocket() + ",server=on,wait=off",
 		"--monitor", "chardev=monitor",
-		"--blockdev", string(graph),
+	}
+	for _, node := range layerNodes(p, state) {
+		spec, err := json.Marshal(node)
+		if err != nil {
+			return 0, err
+		}
+		args = append(args, "--blockdev", string(spec))
+	}
+	args = append(args,
 		"--nbd-server", "addr.type=unix,addr.path="+p.nbdSocket(),
 		"--export", "type=nbd,id="+exportID+",node-name="+state.head().node()+",name="+exportName+",writable=on",
 	)
-	if err != nil {
+	if _, err := runTool(ctx, toolDaemon, args...); err != nil {
 		return 0, err
 	}
 	raw, err := os.ReadFile(p.pidFile())
