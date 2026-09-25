@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from datetime import datetime
 from threading import Event
@@ -12,6 +13,7 @@ from shared.scheduling import (
     WorkerUnavailableReason,
 )
 from worker.worker_lifecycle import (
+    WorkerCleanupAction,
     WorkerLifecycleAction,
     WorkerLifecycleOrchestrator,
     WorkerLifecycleStatus,
@@ -21,14 +23,17 @@ from worker.worker_lifecycle import (
 class _HeldRepository:
     """Registration held until the readiness preparation has finished, as a reserve's is."""
 
-    def __init__(self, prepared: Event) -> None:
+    def __init__(self, prepared: Event, *, refuse: bool = False) -> None:
         self.prepared = prepared
+        self.refuse = refuse
         self.available = False
 
     def add_worker(
         self, worker: WorkerExecutionRecord, *, ttl_seconds: int = 0, now: datetime | None = None
     ) -> WorkerExecutionRecord:
         del ttl_seconds, now
+        if self.refuse:
+            raise RuntimeError("the fence refused this worker")
         if not self.prepared.wait(timeout=5):
             raise AssertionError("readiness preparation did not run beside registration")
         return worker
@@ -83,11 +88,37 @@ def _lifecycle(
 def test_readiness_preparation_finishes_while_registration_is_held() -> None:
     prepared = Event()
     repository = _HeldRepository(prepared)
+    runs: list[None] = []
 
-    steps = _lifecycle(repository, prepared.set).register_available()
+    def prepare() -> None:
+        runs.append(None)
+        prepared.set()
 
-    assert all(step.ok for step in steps)
+    lifecycle = _lifecycle(repository, prepare)
+    assert all(step.ok for step in lifecycle.register_available())
+    assert all(step.ok for step in lifecycle.register_available())
+
     assert repository.available
+    assert len(runs) == 1
+
+
+def test_shutdown_finishes_the_preparation_before_cleanup_closes_its_network() -> None:
+    finished = Event()
+    closed_after: list[bool] = []
+
+    def prepare() -> None:
+        time.sleep(0.2)
+        finished.set()
+
+    lifecycle = _lifecycle(_HeldRepository(Event(), refuse=True), prepare)
+    lifecycle.cleanup_actions.append(
+        WorkerCleanupAction(name="network", action=lambda: closed_after.append(finished.is_set()))
+    )
+
+    assert not all(step.ok for step in lifecycle.register_available())
+    lifecycle.shutdown(drain_timeout_seconds=0, remove_worker=False)
+
+    assert closed_after == [True]
 
 
 def test_a_failed_readiness_preparation_keeps_the_worker_unavailable() -> None:

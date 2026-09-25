@@ -301,18 +301,31 @@ class NvidiaGpuIndexProvider:
     command_runner: Callable[..., CompletedProcess[str]] = subprocess.run
 
     def available_devices(self) -> list[int]:
-        result = self.command_runner(
-            [
-                "nvidia-smi",
-                "--query-gpu=pci.domain,pci.bus_id,index,uuid",
-                "--format=csv,noheader,nounits",
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if not isinstance(result, CompletedProcess) or result.returncode != 0:
+        try:
+            return self.query_devices()
+        except RuntimeError:
             return []
+
+    def query_devices(self) -> list[int]:
+        """The visible GPUs nvidia-smi lists, raising with its own output when it fails."""
+        try:
+            result = self.command_runner(
+                [
+                    "nvidia-smi",
+                    "--query-gpu=pci.domain,pci.bus_id,index,uuid",
+                    "--format=csv,noheader,nounits",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError as exc:
+            raise RuntimeError(f"nvidia-smi could not run: {exc}") from exc
+        if not isinstance(result, CompletedProcess):
+            raise RuntimeError("nvidia-smi returned no result")
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "").strip()[-500:]
+            raise RuntimeError(f"nvidia-smi exited {result.returncode}: {detail}")
         return available_gpu_indices(
             result.stdout,
             visible_devices=self.visible_devices or NVIDIA_VISIBLE_DEVICES_ALL,

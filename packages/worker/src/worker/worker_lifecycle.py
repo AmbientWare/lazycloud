@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from collections.abc import Callable, Iterable
-from concurrent.futures import Future
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
@@ -28,6 +29,7 @@ from worker.status import (
     plan_worker_spindown,
 )
 
+LOGGER = logging.getLogger(__name__)
 DEFAULT_WORKER_KEEPALIVE_TTL_SECONDS = 60
 DEFAULT_WORKER_SHUTDOWN_DRAIN_SECONDS = 5.0
 DEFAULT_WORKER_STOP_GRACE_SECONDS = 5.0
@@ -160,8 +162,9 @@ class WorkerLifecycleOrchestrator:
     stopper: WorkerLifecycleContainerStopper | None = None
     registration: WorkerExecutionRecord | None = None
     readiness_preparer: Callable[[], None] | None = None
-    """Readiness work that registration cannot change. It runs beside registration,
-    which holds a reserve's worker until its machine resumes, so it is done by then."""
+    """Readiness work that registration cannot change. It runs once per process,
+    beside the first registration, which holds a reserve's worker until its machine
+    resumes, so it is done by then."""
     readiness_validator: Callable[[], None] | None = None
     """The readiness checks left for after registration, such as whatever a sleep changes."""
     cleanup_actions: list[WorkerCleanupAction] = field(default_factory=list)
@@ -171,6 +174,12 @@ class WorkerLifecycleOrchestrator:
     _draining: bool = False
     _active: dict[str, WorkerActiveContainer] = field(default_factory=dict)
     _lock: threading.RLock = field(default_factory=threading.RLock)
+    _preparer: ThreadPoolExecutor = field(
+        default_factory=lambda: ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="worker-readiness"
+        )
+    )
+    _preparation: Future[None] | None = None
 
     @property
     def draining(self) -> bool:
@@ -205,9 +214,7 @@ class WorkerLifecycleOrchestrator:
                     error_message="worker repository is not configured",
                 )
             ]
-        preparation = (
-            _in_background(self.readiness_preparer) if self.readiness_preparer is not None else None
-        )
+        preparation = self._readiness_preparation()
         current_time = now or utc_now()
         registration = registration.model_copy(
             update={
@@ -435,10 +442,28 @@ class WorkerLifecycleOrchestrator:
                     timeout_seconds=max(force_stop_wait_seconds, 0.0),
                 )
             )
+        self._settle_readiness_preparation()
         steps.extend(self._run_cleanup_actions())
         if remove_worker:
             steps.append(self._remove_worker())
         return WorkerShutdownResult(worker_id=self.worker_id, steps=steps)
+
+    def _readiness_preparation(self) -> Future[None] | None:
+        """The one readiness preparation of this process, started by the first registration."""
+        with self._lock:
+            if self._preparation is None and self.readiness_preparer is not None:
+                self._preparation = self._preparer.submit(self.readiness_preparer)
+            return self._preparation
+
+    def _settle_readiness_preparation(self) -> None:
+        """End the preparation before cleanup closes what it sets up."""
+        with self._lock:
+            preparation = self._preparation
+        if preparation is not None and not preparation.cancel():
+            error = preparation.exception()
+            if error is not None:
+                LOGGER.warning("worker readiness preparation failed", exc_info=error)
+        self._preparer.shutdown(wait=True, cancel_futures=True)
 
     def _wait_for_active_containers(self, *, timeout_seconds: float) -> WorkerLifecycleStepResult:
         deadline = time.monotonic() + timeout_seconds
@@ -551,19 +576,3 @@ class WorkerLifecycleOrchestrator:
         if isinstance(result, WorkerRemovalResult):
             metadata["requeued_count"] = str(result.requeued_count)
         return WorkerLifecycleStepResult(action=action, metadata=metadata)
-
-
-def _in_background(work: Callable[[], None]) -> Future[None]:
-    """Run `work` on its own thread; the future holds how it ended."""
-    future: Future[None] = Future()
-
-    def run() -> None:
-        try:
-            work()
-        except BaseException as exc:
-            future.set_exception(exc)
-        else:
-            future.set_result(None)
-
-    threading.Thread(target=run, name="worker-readiness", daemon=True).start()
-    return future

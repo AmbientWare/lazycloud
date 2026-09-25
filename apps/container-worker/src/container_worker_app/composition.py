@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import shutil
+import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -156,6 +157,8 @@ from .settings import WorkerSettings
 
 LOGGER = logging.getLogger(__name__)
 RUNTIME_VERSION_PROBE_TIMEOUT_SECONDS = 5.0
+GPU_PRESENCE_WAIT_SECONDS = 5.0
+"""How long readiness waits for nvidia-smi to list every GPU before it fails."""
 
 
 def build_worker_process_services(
@@ -567,11 +570,20 @@ def _validate_worker_readiness(
     """
 
     def gpu_presence() -> None:
-        found = len(
-            NvidiaGpuIndexProvider(visible_devices=gpu_devices or "all").available_devices()
-        )
-        if found < gpu_count:
-            raise RuntimeError(f"nvidia-smi lists {found} of the worker's {gpu_count} GPUs")
+        # A driver may take a moment to answer after the machine wakes.
+        deadline = time.monotonic() + GPU_PRESENCE_WAIT_SECONDS
+        gpus = NvidiaGpuIndexProvider(visible_devices=gpu_devices or "all")
+        while True:
+            try:
+                found = len(gpus.query_devices())
+                if found >= gpu_count:
+                    return
+                failure = RuntimeError(f"nvidia-smi lists {found} of the worker's {gpu_count} GPUs")
+            except RuntimeError as exc:
+                failure = exc
+            if time.monotonic() >= deadline:
+                raise failure
+            time.sleep(0.5)
 
     checks: dict[str, Callable[[], object]] = {"network": network_backend.probe_gateway_egress}
     if gpu_count:
