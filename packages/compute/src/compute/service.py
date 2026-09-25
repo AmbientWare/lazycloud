@@ -52,6 +52,7 @@ from shared.compute_enrollment import (
     ComputeMachineEnrollmentStatus,
     MachineBootstrapFailureReason,
     MachineStopPreparationReceipt,
+    agent_machine_worker_id,
 )
 from shared.compute_fleet import Machine, MachineLifecycle, ResourceStatus, Worker
 from shared.compute_policy import (
@@ -88,7 +89,6 @@ from shared.routing import PrivateUnitFallback
 from shared.timestamps import to_utc, utc_now
 from shared.usage import UsageBillingOwner
 
-from compute.agent_control import agent_machine_worker_id
 from compute.aws_connections import AwsAccountPoolDrain
 from compute.capacity_errors import (
     CapacityReservationConflictError,
@@ -351,6 +351,11 @@ class ComputeService:
         record, machine = self.provider_machines.machine_for_record(
             session, pool=pool, record=record, now=current_time
         )
+        if lifecycle is MachineLifecycle.Joining and machine.lifecycle is MachineLifecycle.Ready:
+            # A restarted agent reports joining beside its first stream, whose
+            # heartbeat may already have made the machine ready. The report is
+            # for a failed or draining machine; a ready one stays ready.
+            return machine
         updated = write_machine_lifecycle(
             session,
             machine,

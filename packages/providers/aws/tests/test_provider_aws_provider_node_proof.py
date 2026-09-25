@@ -5,11 +5,8 @@ from dataclasses import dataclass, field
 from urllib.parse import parse_qs, urlparse
 
 import pytest
-from provider_aws.provider_node_proof import (
-    AwsEc2ProviderNodeIdentityProofProvider,
-    AwsInstanceMetadataResponse,
-    AwsProviderNodeProofError,
-)
+from provider_aws.instance_metadata import AwsInstanceMetadataResponse, AwsProviderNodeProofError
+from provider_aws.provider_node_proof import AwsEc2ProviderNodeIdentityProofProvider
 
 
 @dataclass(slots=True)

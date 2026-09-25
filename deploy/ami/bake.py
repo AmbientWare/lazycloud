@@ -874,6 +874,39 @@ systemctl enable --now amazon-ssm-agent
 # silent, so a bake that cannot offer it is not worth shipping.
 systemctl is-enabled amazon-ssm-agent
 
+# Every boot pays for every boot service. update-motd rebuilds a login banner
+# no one reads, and systemd-boot-update manages a boot loader this image does
+# not use.
+systemctl mask update-motd.service update-motd.timer systemd-boot-update.service
+
+# Boot straight from the root partition. With NVMe and XFS built into the kernel
+# an initrd only adds a second userspace before the real one. An entry keeps its
+# initrd unless the kernel it boots has both built in.
+test "$(findmnt -no FSTYPE /)" = xfs
+root_partuuid="$(blkid -s PARTUUID -o value "$(findmnt -no SOURCE /)")"
+test -n "${root_partuuid}"
+boot_args="root=PARTUUID=${root_partuuid} rootfstype=xfs rootwait"
+for entry in /boot/loader/entries/*.conf; do
+  kernel="$(sed -n 's#^linux[[:space:]]*/\\{0,1\\}\\(boot/\\)\\{0,1\\}vmlinuz-##p' "${entry}")"
+  config="/lib/modules/${kernel}/config"
+  [ -r "${config}" ] || config="/boot/config-${kernel}"
+  if grep -qx 'CONFIG_NVME_CORE=y' "${config}" \\
+      && grep -qx 'CONFIG_BLK_DEV_NVME=y' "${config}" \\
+      && grep -qx 'CONFIG_XFS_FS=y' "${config}"; then
+    sed -i -e '/^initrd[[:space:]]/d' \\
+      -e "s#root=UUID=[^[:space:]]*#${boot_args}#" \\
+      "${entry}"
+    grep -q "${boot_args}" "${entry}"
+    if grep -q '^initrd[[:space:]]' "${entry}"; then
+      echo "an initrd line survived in ${entry}" >&2
+      exit 1
+    fi
+    echo "boots without an initrd: ${entry}"
+  else
+    echo "keeps its initrd, since NVMe or XFS is a module in ${kernel}: ${entry}"
+  fi
+done
+
 cat > /etc/lazycloud-node-image.json <<MARKER
 {"recipe_sha256":"${RECIPE_SHA256}","ssm_agent":true,"variant":"__VARIANT__"}
 MARKER

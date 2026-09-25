@@ -14,7 +14,7 @@ import re
 import urllib.request
 from urllib.parse import urlparse
 
-from provider_aws import AwsAccountConnectionTemplatePublication
+from provider_aws.account_connection import AwsAccountConnectionTemplatePublication
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from shared.releases import AgentArtifact, ReleaseTarget
 
@@ -25,7 +25,7 @@ BUCKET_NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
 REGION_PATTERN = re.compile(r"^(us-gov|us|af|ap|ca|cn|eu|il|me|mx|sa)-[a-z0-9-]+-[0-9]+$")
 WORKER_IMAGE_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._:/-]*@sha256:[0-9a-f]{64}$")
 AGENT_BINARY_DIRECTORY = "agent-binarys"
-AGENT_AMD64_FILENAME = "lazycloud-agent-linux-amd64"
+AGENT_AMD64_FILENAME = "lazycloud-agent-linux-amd64.tar.gz"
 
 
 class ReleaseModel(BaseModel):

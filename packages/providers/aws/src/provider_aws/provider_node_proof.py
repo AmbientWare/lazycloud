@@ -5,90 +5,36 @@ import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from secrets import token_hex
-from typing import Protocol
 from urllib.parse import quote
 
 from botocore.auth import SigV4QueryAuth
 from botocore.awsrequest import AWSRequest
 from botocore.credentials import Credentials
+from compute.provider_nodes import (
+    ProviderNodeIdentityProof,
+    ProviderNodeIdentityProofError,
+    ProviderNodeIdentityUnavailableError,
+)
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
+from shared.provider_config import ProviderKind
 
 from .instance_catalog import aws_partition_for_region
+from .instance_metadata import (
+    AWS_IMDS_MAX_TEXT_BYTES,
+    AWS_IMDS_TIMEOUT_SECONDS,
+    AWS_IMDS_TOKEN_TTL_SECONDS,
+    AwsDirectInstanceMetadataTransport,
+    AwsInstanceMetadataTransport,
+    AwsProviderNodeProofError,
+)
 from .provider_node_identity import AWS_STS_PROOF_NONCE_KEY, AwsStsGetCallerIdentityProof
 
-AWS_IMDS_HOST = "169.254.169.254"
-AWS_IMDS_TOKEN_TTL_SECONDS = 21_600
-AWS_IMDS_TIMEOUT_SECONDS = 2.0
-AWS_IMDS_MAX_TEXT_BYTES = 2048
 AWS_IMDS_MAX_CREDENTIAL_BYTES = 16 * 1024
 AWS_STS_PROOF_EXPIRY_SECONDS = 60
 
 _INSTANCE_ID_PATTERN = re.compile(r"^i-[0-9a-f]{8,17}$")
 _REGION_PATTERN = re.compile(r"^(us-gov|us|af|ap|ca|cn|eu|il|me|mx|sa)-[a-z0-9-]+-[0-9]+$")
 _ROLE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9+=,.@_-]{1,64}$")
-
-
-class AwsProviderNodeProofError(RuntimeError):
-    """Raised when strict EC2 instance identity proof creation fails."""
-
-
-@dataclass(frozen=True, slots=True)
-class AwsInstanceMetadataResponse:
-    status_code: int
-    body: bytes
-
-
-class AwsInstanceMetadataTransport(Protocol):
-    def request(
-        self,
-        *,
-        method: str,
-        path: str,
-        headers: dict[str, str],
-        timeout_seconds: float,
-        max_response_bytes: int,
-    ) -> AwsInstanceMetadataResponse: ...
-
-
-@dataclass(frozen=True, slots=True)
-class AwsDirectInstanceMetadataTransport:
-    host: str = AWS_IMDS_HOST
-
-    def request(
-        self,
-        *,
-        method: str,
-        path: str,
-        headers: dict[str, str],
-        timeout_seconds: float,
-        max_response_bytes: int,
-    ) -> AwsInstanceMetadataResponse:
-        if self.host != AWS_IMDS_HOST:
-            raise AwsProviderNodeProofError("EC2 metadata host must use the link-local endpoint")
-        if method not in {"GET", "PUT"} or not path.startswith("/latest/"):
-            raise AwsProviderNodeProofError("invalid EC2 metadata request")
-        connection = http.client.HTTPConnection(self.host, timeout=timeout_seconds)
-        try:
-            connection.request(method, path, headers=headers)
-            response = connection.getresponse()
-            content_length = response.getheader("Content-Length")
-            if content_length is not None:
-                try:
-                    declared_length = int(content_length)
-                except ValueError as exc:
-                    raise AwsProviderNodeProofError(
-                        "EC2 metadata returned an invalid content length"
-                    ) from exc
-                if declared_length < 0 or declared_length > max_response_bytes:
-                    raise AwsProviderNodeProofError("EC2 metadata response exceeds size limit")
-            body = response.read(max_response_bytes + 1)
-        except (OSError, http.client.HTTPException) as exc:
-            raise AwsProviderNodeProofError("EC2 metadata service is unavailable") from exc
-        finally:
-            connection.close()
-        if len(body) > max_response_bytes:
-            raise AwsProviderNodeProofError("EC2 metadata response exceeds size limit")
-        return AwsInstanceMetadataResponse(status_code=response.status, body=body)
 
 
 class _AwsInstanceRoleCredentials(BaseModel):
@@ -241,11 +187,27 @@ def _regional_sts_url(region: str, *, nonce: str) -> str:
     )
 
 
-__all__ = [
-    "AWS_IMDS_HOST",
-    "AwsDirectInstanceMetadataTransport",
-    "AwsEc2ProviderNodeIdentityProofProvider",
-    "AwsInstanceMetadataResponse",
-    "AwsInstanceMetadataTransport",
-    "AwsProviderNodeProofError",
-]
+@dataclass(frozen=True, slots=True)
+class AwsProviderNodeIdentityProofProvider:
+    """An EC2 node's identity proof, with metadata that does not answer marked unavailable."""
+
+    provider: AwsEc2ProviderNodeIdentityProofProvider = field(
+        default_factory=AwsEc2ProviderNodeIdentityProofProvider
+    )
+
+    def create(self, *, expected_region: str | None = None) -> ProviderNodeIdentityProof:
+        try:
+            proof = self.provider.create(expected_region=expected_region)
+        except AwsProviderNodeProofError as exc:
+            if isinstance(exc.__cause__, OSError | http.client.HTTPException):
+                raise ProviderNodeIdentityUnavailableError(str(exc)) from exc
+            raise ProviderNodeIdentityProofError(str(exc)) from exc
+        return ProviderNodeIdentityProof(
+            provider=ProviderKind.Aws,
+            region=proof.region,
+            provider_instance_id=proof.instance_id,
+            proof_url=proof.presigned_url,
+        )
+
+
+__all__ = ["AwsEc2ProviderNodeIdentityProofProvider", "AwsProviderNodeIdentityProofProvider"]

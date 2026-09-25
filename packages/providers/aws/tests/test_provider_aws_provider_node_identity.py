@@ -10,8 +10,9 @@ import pytest
 from botocore.auth import SigV4QueryAuth
 from botocore.awsrequest import AWSRequest
 from botocore.credentials import Credentials
-from provider_aws import (
+from provider_aws.provider_node_identity import (
     AWS_STS_PROOF_NONCE_KEY,
+    AWS_STS_PROOF_TIMEOUT_SECONDS,
     AwsProviderNodeIdentityError,
     AwsProviderNodeIdentityErrorCode,
     AwsProviderNodeIdentityTarget,
@@ -21,7 +22,6 @@ from provider_aws import (
     AwsStsGetCallerIdentityProof,
     AwsStsProofHttpResponse,
 )
-from provider_aws.provider_node_identity import AWS_STS_PROOF_TIMEOUT_SECONDS
 from pydantic import SecretStr, ValidationError
 
 _ACCOUNT_ID = "123456789012"

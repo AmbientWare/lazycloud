@@ -13,8 +13,8 @@ from fastapi.testclient import TestClient
 def _write_artifact(root: Path, version: str) -> Path:
     version_root = root / version
     version_root.mkdir(parents=True, exist_ok=True)
-    path = version_root / "lazycloud-agent-linux-amd64"
-    path.write_bytes(b"\x7fELF agent binary")
+    path = version_root / "lazycloud-agent-linux-amd64.tar.gz"
+    path.write_bytes(b"agent release archive")
     return path
 
 

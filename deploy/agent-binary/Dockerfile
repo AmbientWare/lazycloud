@@ -39,25 +39,33 @@ RUN --mount=type=cache,id=agent-artifact-uv-${TARGETARCH},target=/root/.cache/uv
         "pyinstaller-hooks-contrib==2026.6" \
         "setuptools==83.0.0"
 
+# A directory release rather than one self-unpacking file: a onefile executable
+# unpacks its whole runtime into /tmp on every start. The archive is unpacked
+# once per release, into a directory named by its digest.
 RUN case "${TARGETARCH}" in amd64|arm64) ;; \
       *) echo "unsupported agent artifact architecture: ${TARGETARCH}" >&2; exit 2 ;; \
     esac \
     && python -m PyInstaller \
         --clean \
         --noconfirm \
-        --onefile \
+        --onedir \
         --strip \
-        --name "lazycloud-agent-linux-${TARGETARCH}" \
-        --distpath /out \
+        --name lazycloud-agent \
+        --distpath /tmp/pyinstaller-dist \
         --workpath /tmp/pyinstaller-build \
         --specpath /tmp/pyinstaller-spec \
         apps/agent/src/agent_app/main.py \
-    && "/out/lazycloud-agent-linux-${TARGETARCH}" --help >/dev/null
+    && /tmp/pyinstaller-dist/lazycloud-agent/lazycloud-agent --help >/dev/null \
+    && mkdir -p /out \
+    && tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner \
+        -C /tmp/pyinstaller-dist/lazycloud-agent -cf /tmp/lazycloud-agent.tar . \
+    && gzip -n -c /tmp/lazycloud-agent.tar > "/out/lazycloud-agent-linux-${TARGETARCH}.tar.gz"
 
+# The Amazon Linux image carries no tar, so it runs the unpacked release built above.
 FROM ${AMAZON_LINUX_IMAGE} AS agent-artifact-amazon-linux-test
-ARG TARGETARCH
+COPY --from=agent-artifact-build /tmp/pyinstaller-dist/lazycloud-agent/ /opt/lazycloud-agent/
+RUN /opt/lazycloud-agent/lazycloud-agent --help >/dev/null
 COPY --from=agent-artifact-build /out/ /out/
-RUN "/out/lazycloud-agent-linux-${TARGETARCH}" --help >/dev/null
 
 FROM scratch AS agent-artifact
 COPY --from=agent-artifact-amazon-linux-test /out/ /
@@ -78,10 +86,17 @@ RUN apt-get update \
 
 COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=agent-artifact-amazon-linux-test \
-    "/out/lazycloud-agent-linux-${TARGETARCH}" \
-    /usr/local/bin/lazycloud-agent
+    "/out/lazycloud-agent-linux-${TARGETARCH}.tar.gz" \
+    /tmp/lazycloud-agent.tar.gz
 
-RUN docker --version \
+# The layout the install script creates on a node.
+RUN digest="$(sha256sum /tmp/lazycloud-agent.tar.gz | cut -d ' ' -f 1)" \
+    && mkdir -p "/usr/local/lib/lazycloud-agent/${digest}" \
+    && tar -xzf /tmp/lazycloud-agent.tar.gz -C "/usr/local/lib/lazycloud-agent/${digest}" \
+    && : > "/usr/local/lib/lazycloud-agent/${digest}/.lazycloud-release-complete" \
+    && ln -s "/usr/local/lib/lazycloud-agent/${digest}/lazycloud-agent" /usr/local/bin/lazycloud-agent \
+    && rm /tmp/lazycloud-agent.tar.gz \
+    && docker --version \
     && lazycloud-agent --help >/dev/null
 
 ENTRYPOINT ["lazycloud-agent"]

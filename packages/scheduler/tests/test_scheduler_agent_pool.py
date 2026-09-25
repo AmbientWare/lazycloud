@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from compute.agent_control import DEFAULT_PRIVATE_EXECUTOR, agent_machine_worker_id
 from compute.state import ComputeAgentTokenState
 from scheduler.agent_pool import (
     AgentPoolConfig,
@@ -11,7 +10,12 @@ from scheduler.agent_pool import (
 )
 from scheduler.fleet import SchedulerWorkerStatus
 from scheduler.state import RedisSchedulerWorkerRepository, SchedulerWorkerRecord
-from shared.compute_enrollment import AgentCapacityState, ComputePreflightCheck
+from shared.compute_enrollment import (
+    DEFAULT_PRIVATE_EXECUTOR,
+    AgentCapacityState,
+    ComputePreflightCheck,
+    agent_machine_worker_id,
+)
 from shared.container_requests import schedulable_capacity
 from shared.placement import Placement
 from shared.scheduling import WorkerUnavailableReason

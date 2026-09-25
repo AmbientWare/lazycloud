@@ -105,18 +105,18 @@ dist/connected-aws/$VERSION/
     connection-template.json
   agent-binarys/
     $VERSION/
-      lazycloud-agent-linux-amd64
+      lazycloud-agent-linux-amd64.tar.gz
 ```
 
 The agent object's `local_path` is relative to the bundle. No machine-specific
 artifact root is written to the published manifest. `validate-local` checks the
-retained executable and derives its absolute `agent-binarys` root from the local
+retained agent archive and derives its absolute `agent-binarys` root from the local
 manifest path.
 
 ## What a deployment configures
 
 The deployment records one immutable `LAZYCLOUD_RELEASE_MANIFEST_URL`. It names
-platform image digests, the worker image, agent executable, authorization template,
+platform image digests, the worker image, agent archive, authorization template,
 and host AMIs. Ship selects the complete release automatically. Argo activates it
 after the platform is healthy; see `deploy/RUNBOOK.md`.
 
@@ -139,7 +139,7 @@ intend to publish. Publication is immutable; inspect the staged bundle before
 the `publish` command:
 
 ```sh
-uv run --no-project python deploy/agent-binary/build.py build \
+uv run --group workspace python -m deploy.agent-binary.build build \
   --version "$VERSION" --output dist/agent-binarys --arch amd64
 
 uv run --group workspace python -m deploy.aws-release-assets.release stage \
@@ -162,7 +162,7 @@ uv run --group workspace python -m deploy.aws-release-assets.release verify \
 
 Staging, local validation, and publication are idempotent for identical bytes
 and fail on any collision. Local validation verifies the canonical manifest,
-every retained artifact digest and size, the executable mode, and the bundled
+every retained artifact digest, size and mode, and the bundled
 connection-template policy without contacting AWS. Release objects and image
 digests are durable production artifacts; retain the staged bundle at the path
 used for Compose activation so its read-only agent-binary mount remains valid.

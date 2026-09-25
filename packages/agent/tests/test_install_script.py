@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import os
 import shutil
 import subprocess
+import tarfile
 from pathlib import Path
 
 from agent.operations import (
@@ -117,8 +119,8 @@ def test_install_script_verifies_pinned_versioned_agent_before_replacement(tmp_p
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
     _fake_uname(fake_bin)
-    source_agent = _executable(
-        tmp_path / "source-agent",
+    source_agent = _release_archive(
+        tmp_path / "source-agent.tar.gz",
         '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$AGENT_ARGS_FILE"\n',
     )
     _executable(
@@ -182,15 +184,16 @@ printf '%s\n' "$url" > "$DOWNLOAD_URL_FILE"
         .endswith("/install/agent/2026.07.14/linux/amd64")
     )
     assert args_file.read_text(encoding="utf-8").splitlines()[0] == "join"
-    assert installed_agent.read_bytes() == source_agent.read_bytes()
-    assert installed_agent.stat().st_mode & 0o111
+    release = home / ".lazycloud" / "lib" / AGENT_NAME / digest
+    assert installed_agent.is_symlink()
+    assert installed_agent.resolve() == (release / AGENT_NAME).resolve()
 
 
 def test_install_script_rejects_agent_artifact_digest_mismatch(tmp_path: Path) -> None:
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
     _fake_uname(fake_bin)
-    source_agent = _executable(tmp_path / "source-agent", "#!/bin/sh\nexit 0\n")
+    source_agent = _release_archive(tmp_path / "source-agent.tar.gz", "#!/bin/sh\nexit 0\n")
     _executable(
         fake_bin / "curl",
         """#!/bin/sh
@@ -238,7 +241,7 @@ cp "$SOURCE_AGENT" "$out"
     assert completed.returncode == 1
     assert "SHA-256 mismatch" in completed.stderr
     assert installed_agent.read_bytes() == b"previous agent"
-    assert not list(installed_agent.parent.glob(".agent.*"))
+    assert not list((home / ".lazycloud" / "lib" / AGENT_NAME).iterdir())
 
 
 def test_install_script_refuses_missing_docker_when_install_is_disabled(tmp_path: Path) -> None:
@@ -497,6 +500,17 @@ if [ "${1:-}" = "-s" ]; then printf 'Linux\\n'; else printf 'x86_64\\n'; fi
     _executable(fake_bin / "wg", "#!/bin/sh\nexit 0\n")
     _executable(fake_bin / "ip", "#!/bin/sh\nexit 0\n")
     _executable(fake_bin / "iptables", "#!/bin/sh\nexit 0\n")
+
+
+def _release_archive(path: Path, executable: str) -> Path:
+    """An agent release: a gzip tarball with the agent executable at its root."""
+    payload = executable.encode()
+    with tarfile.open(path, "w:gz") as archive:
+        member = tarfile.TarInfo(f"./{AGENT_NAME}")
+        member.size = len(payload)
+        member.mode = 0o755
+        archive.addfile(member, io.BytesIO(payload))
+    return path
 
 
 def _executable(path: Path, contents: str) -> Path:

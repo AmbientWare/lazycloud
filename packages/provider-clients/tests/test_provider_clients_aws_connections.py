@@ -11,7 +11,7 @@ from agent.binary import AgentBinarySettings
 from compute.aws_connections import AwsAccountConnectionValidationError
 from compute.capacity_errors import ProviderAuthorizationPendingError
 from compute.offers import ComputeOffer
-from provider_aws import (
+from provider_aws.account_connection import (
     AwsAccountAuthorizationCleanupResult,
     AwsAccountAuthorizationCleanupStatus,
     AwsAccountAuthorizationValidation,
@@ -21,12 +21,11 @@ from provider_aws import (
     AwsExistingAccountAuthorizationValidation,
     AwsExistingAccountAuthorizationValidationInput,
     AwsManagedNodeIdentity,
-    AwsManagedPoolBinaries,
     AwsPendingAccountAuthorization,
-    Boto3AwsManagedPoolClientProvider,
     aws_account_connection_template_identity,
 )
 from provider_aws.instance_catalog import AWS_ALLOWED_OFFERS
+from provider_aws.managed_pool import AwsManagedPoolBinaries, Boto3AwsManagedPoolClientProvider
 from provider_clients import (
     AwsAccountConnectionComponents,
     configured_aws_account_connection_components,
@@ -79,7 +78,8 @@ def _enabled_settings() -> _AwsOwnerSettings:
         capacity=AwsCapacitySettings(
             worker_image_digest=(f"registry.example.com/worker@sha256:{'c' * 64}"),
             agent_binary_url=(
-                f"https://releases.example.com/agents/0.1.0/{'b' * 64}/lazycloud-agent-linux-amd64"
+                f"https://releases.example.com/agents/0.1.0/{'b' * 64}/"
+                "lazycloud-agent-linux-amd64.tar.gz"
             ),
             cpu_ami_ids={"us-east-1": "ami-0123456789abcdef0"},
             gpu_ami_ids={"us-east-1": "ami-0fedcba9876543210"},

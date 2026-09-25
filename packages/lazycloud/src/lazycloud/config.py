@@ -12,6 +12,7 @@ from secrets import token_hex
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from shared.app_identity import ENV_PREFIX
+from shared.durable_files import fsync_directory
 from shared.paths import state_home
 
 from lazycloud.json_contracts import validate_json_object
@@ -378,7 +379,7 @@ def _write_config_document(
     except BaseException:
         staged.unlink(missing_ok=True)
         raise
-    _fsync_directory(directory)
+    fsync_directory(directory)
 
 
 def _prepared_config_directory(directory: Path) -> Path:
@@ -403,14 +404,6 @@ def _prepared_config_directory(directory: Path) -> Path:
         msg = f"profile config directory is writable by every user: {directory}"
         raise ConfigError(msg)
     return directory
-
-
-def _fsync_directory(directory: Path) -> None:
-    descriptor = os.open(directory, os.O_RDONLY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
 
 
 def _normalize_config(config: ClientConfig | Mapping[str, JsonValue]) -> ClientConfig:

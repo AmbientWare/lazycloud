@@ -8,7 +8,7 @@ from urllib.parse import parse_qs, quote, urlparse
 
 import pytest
 from botocore.exceptions import ClientError
-from provider_aws import (
+from provider_aws.account_connection import (
     AwsAccountAuthorizationCleanupStatus,
     AwsAccountAuthorizationValidationError,
     AwsAccountAuthorizationValidationErrorCode,
@@ -17,24 +17,22 @@ from provider_aws import (
     AwsAccountConnectionTarget,
     AwsAccountConnectionTemplatePublication,
     AwsActiveAccountAuthorization,
+    AwsConnectionCloudFormationClient,
+    AwsConnectionEc2Client,
+    AwsConnectionIamClient,
+    AwsConnectionStsClient,
     AwsExistingAccountAuthorizationValidationInput,
     AwsNodeBucketAccessGrant,
-    AwsProviderControlError,
     Boto3AwsAccountAuthorizationControl,
     Boto3AwsAccountConnectionValidator,
     Boto3AwsNodeBucketAccessControl,
     aws_account_connection_template_bytes,
     aws_account_connection_template_identity,
     aws_node_bucket_access_policy,
-    parse_aws_connection_stack_cleanup_action,
-    validate_aws_account_connection_template_policy,
 )
-from provider_aws.account_connection import (
-    AwsConnectionCloudFormationClient,
-    AwsConnectionEc2Client,
-    AwsConnectionIamClient,
-    AwsConnectionStsClient,
-)
+from provider_aws.account_connection_policy import validate_aws_account_connection_template_policy
+from provider_aws.customer_actions import parse_aws_connection_stack_cleanup_action
+from provider_aws.provider_control import AwsProviderControlError
 from pydantic import JsonValue, SecretStr, TypeAdapter
 from shared.aws_connections import AwsAccountNetwork
 

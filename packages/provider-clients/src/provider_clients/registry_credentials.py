@@ -6,7 +6,7 @@ from images.building import (
     ImageRegistryCredentialKind,
     ImageRegistryCredentialPayload,
 )
-from provider_aws import AwsProvider, AwsProviderSettings
+from provider_aws.provider import AwsProvider, AwsProviderSettings
 from shared.image_building.credentials import ImageCredentialEnvVar, parse_ecr_registry
 
 

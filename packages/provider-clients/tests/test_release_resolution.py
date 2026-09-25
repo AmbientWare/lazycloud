@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from agent.binary import AgentBinaryEnvironmentSettings
-from provider_aws import aws_account_connection_template_identity
+from provider_aws.account_connection import aws_account_connection_template_identity
 from provider_clients.release import deployment_release
 from provider_clients.release_manifest import (
     AGENT_AMD64_FILENAME,

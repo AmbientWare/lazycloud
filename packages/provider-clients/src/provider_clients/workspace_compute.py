@@ -17,18 +17,13 @@ from compute.providers import (
 from networking.settings import (
     validate_remote_provider_network_configuration,
 )
-from provider_aws import (
-    AWS_INSTANCE_CATALOG,
-    AwsAccountConnectionTarget,
-    AwsInstanceCategory,
-    AwsManagedPoolBinaries,
-    AwsPooledCapacityProvider,
-    AwsRegionalPrices,
-    Boto3AwsManagedPoolClientProvider,
-)
+from provider_aws.account_connection import AwsAccountConnectionTarget
+from provider_aws.instance_catalog import AWS_INSTANCE_CATALOG, AwsInstanceCategory
+from provider_aws.managed_pool import AwsManagedPoolBinaries, Boto3AwsManagedPoolClientProvider
 from provider_aws.platform_pool import AwsPlatformCapacityProvider
+from provider_aws.pooled_provider import AwsPooledCapacityProvider
 from provider_aws.spot_prices import AwsSpotQuoteCache
-from provider_aws.supplier_prices import AWS_REGIONAL_PRICES
+from provider_aws.supplier_prices import AWS_REGIONAL_PRICES, AwsRegionalPrices
 from pydantic import SecretStr
 from shared.aws_connections import (
     AwsAccountAuthorizationPhase,

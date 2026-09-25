@@ -11,7 +11,12 @@ from datetime import UTC, datetime
 import grpc.aio
 from coordination.agent_connections import RedisAgentConnectionDirectory
 from cryptography.hazmat.primitives import hashes
-from shared.http.agent_tunnel import TunnelPacket, TunnelPacketKind, TunnelRouteRequest
+from shared.http.agent_tunnel import (
+    TUNNEL_OPEN_TIMEOUT_SECONDS,
+    TunnelPacket,
+    TunnelPacketKind,
+    TunnelRouteRequest,
+)
 
 from networking.tunnel_protocol import (
     ROUTE_METHOD,
@@ -144,6 +149,11 @@ class TunnelRouteClient:
         try:
             await bridge_socket(GrpcPacketStream(incoming, call.write), reader, writer)
             await call.done_writing()
+            # Both directions ended, so the gateway is closing the call with its
+            # status. Cancelling before that arrives races the status, which gRPC
+            # on the gateway logs as a failed servicer.
+            async with asyncio.timeout(TUNNEL_OPEN_TIMEOUT_SECONDS):
+                await call.code()
         except (OSError, grpc.RpcError):
             LOGGER.debug("Agent backend stream disconnected")
         except ExceptionGroup as exc:

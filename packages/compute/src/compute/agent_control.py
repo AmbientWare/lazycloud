@@ -14,11 +14,14 @@ from foundation.network import worker_network_prefix
 from foundation.shell import shell_quote
 from pydantic import Field, field_validator
 from shared.compute_enrollment import (
+    DEFAULT_PRIVATE_EXECUTOR,
+    AgentBootstrapConfig,
     AgentCapacityState,
     AgentWorkerSlotStatus,
     ComputeMachineEnrollmentStatus,
     ComputePreflightCheck,
     MachineReadinessPhase,
+    agent_machine_worker_id,
 )
 from shared.placement import Placement
 
@@ -36,11 +39,11 @@ from shared.usage import UsageBillingOwner
 
 from compute.projection import (
     PoolConfig,
-    PrivateUnitFallback,
     PrivateUnitState,
     normalize_unit_config,
     parse_ttl_seconds,
 )
+from compute.providers import MachineWorkerAvailability
 from compute.state import (
     ComputeAgentTokenState,
     ComputeAgentWorkerSlotState,
@@ -48,7 +51,6 @@ from compute.state import (
 )
 
 DEFAULT_PRIVATE_JOIN_TTL_SECONDS = 30 * 60
-DEFAULT_PRIVATE_EXECUTOR = "container"
 AGENT_STREAM_REFRESH_SECONDS = 30.0
 AGENT_STREAM_HEARTBEAT_SECONDS = 10.0
 AGENT_STREAM_EVENT_COALESCE_SECONDS = 0.025
@@ -187,20 +189,6 @@ class AgentImageConfig(ContractModel):
     local_cache_enabled: bool = True
 
 
-class AgentBootstrapConfig(ContractModel):
-    gateway_public_http_url: str
-    gateway_grpc_host: str = ""
-    gateway_grpc_port: int = 443
-    gateway_grpc_tls: bool = True
-    workspace_id: str
-    placement: Placement
-    executor: str = DEFAULT_PRIVATE_EXECUTOR
-    fallback: PrivateUnitFallback = PrivateUnitFallback.Internal
-    image_registry_store: str = ""
-    image_clip_version: int = 2
-    image_local_cache_enabled: bool = True
-
-
 class AgentStreamTimingPlan(ContractModel):
     refresh_seconds: float = AGENT_STREAM_REFRESH_SECONDS
     heartbeat_seconds: float = AGENT_STREAM_HEARTBEAT_SECONDS
@@ -304,24 +292,6 @@ def agent_machine_id(
     return str(
         uuid5(NAMESPACE_URL, f"agent-machine\x00{workspace_id}\x00{placement.key}\x00{id_seed}")
     )
-
-
-def agent_machine_worker_id(machine_id: str) -> str:
-    return str(uuid5(NAMESPACE_URL, f"agent-worker\x00{machine_id}"))
-
-
-class MachineWorkerAvailability(StrEnum):
-    """What the scheduler's hot state can say about one machine's worker.
-
-    Three answers rather than two, because the reclaim terminates billable
-    machines on this and a bool cannot separate "the worker says no" from "we
-    have not heard". The hot record carries a short TTL, so its absence is a
-    silence, not a verdict.
-    """
-
-    Available = "available"
-    Unavailable = "unavailable"
-    Unknown = "unknown"
 
 
 class MachineWorkerState(Protocol):

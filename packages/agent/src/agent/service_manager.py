@@ -17,6 +17,8 @@ from shared.app_identity import (
 from shared.compute_enrollment import PreflightSeverity
 from shared.contracts import ContractModel
 
+from agent.updates import AGENT_UPDATE_BLOCKED_EXIT_STATUS
+
 DEFAULT_AGENT_SERVICE_NAME = AGENT_NAME
 DEFAULT_AGENT_SERVICE_DESCRIPTION = AGENT_SERVICE_DESCRIPTION
 DEFAULT_AGENT_STATE_DIR = f"{STATE_DIR}/agent"
@@ -234,8 +236,17 @@ def render_systemd_unit(spec: AgentServiceSpec) -> str:
     lines = [
         "[Unit]",
         f"Description={spec.description}",
-        "Wants=network-online.target docker.service",
-        "After=network-online.target docker.service",
+        # The agent retries its first control-plane calls until the network is
+        # up and touches Docker only once it answers, so it waits for neither.
+        # Orderings are symmetric, so these two act at shutdown: network.target
+        # is reached before the network is online and stays up until the agent
+        # stops, and a simple service counts as started once forked, so Docker
+        # starts no later and stops its workers while the agent still carries
+        # their final calls. An interruption's shutdown runs from its timer
+        # ahead of the provider's deadline, while Docker is still up.
+        "Wants=docker.service",
+        "After=network.target",
+        "Before=docker.service",
         # A machine that cannot reach the control plane must keep trying, so the
         # limit is sized to outlast a full bootstrap phase deadline of gateway
         # unavailability (300s at RestartSec=15 is 20 starts; 40 doubles it).
@@ -257,6 +268,8 @@ def render_systemd_unit(spec: AgentServiceSpec) -> str:
             # `on-failure`, not `always`: the agent exits non-zero for every
             # reason worth retrying, and a revoked one must be allowed to stop.
             "Restart=on-failure",
+            # An agent that cannot apply an ordered update waits to be joined again.
+            f"RestartPreventExitStatus={AGENT_UPDATE_BLOCKED_EXIT_STATUS}",
             "RestartSec=15",
             "KillSignal=SIGINT",
             "TimeoutStopSec=30",

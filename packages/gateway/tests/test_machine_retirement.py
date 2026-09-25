@@ -4,7 +4,6 @@ from datetime import timedelta
 from uuid import uuid4
 
 from api.server.services import ApiServices
-from compute.agent_control import agent_machine_worker_id
 from control.service import ControlPlaneService
 from database.repositories.compute import (
     ComputeJoinCredentialRepository,
@@ -19,6 +18,7 @@ from database.repositories.orchestration import (
 from gateway.http import JoinAgentRequest, LeaveAgentRequest
 from operations.container_shutdown import DatabaseDurableWorkerAbsence
 from scheduler.state import RedisSchedulerWorkerRepository
+from shared.compute_enrollment import agent_machine_worker_id
 from shared.compute_fleet import ResourceStatus
 from shared.compute_policy import UnitName
 from shared.container_requests import ContainerShutdownTarget

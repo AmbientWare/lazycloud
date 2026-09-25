@@ -42,6 +42,7 @@ from shared.placement import Placement
 from shared.timestamps import utc_now
 from shared.usage import UsageBillingOwner
 from worker.configuration import (
+    DEFAULT_DISK_ROOT,
     DEFAULT_WORKER_CONFIG_PATH,
     WORKER_CONFIG_PATH_ENV,
     WorkerCapacityConfiguration,
@@ -51,7 +52,6 @@ from worker.configuration import (
     WorkerNetworkConfiguration,
     WorkerPathConfiguration,
 )
-from worker.durable_disks import DEFAULT_DISK_ROOT
 from worker.events import WorkerPoolMode
 from worker.execution import (
     DEFAULT_CONTAINER_BRIDGE_NAME,
@@ -66,6 +66,7 @@ from agent.service_manager import (
     AgentServiceRuntimeStatus,
     PreflightCheckName,
 )
+from agent.updates import RELEASE_COMPLETE_FILE
 
 AGENT_SOURCE_CACHE_RELATIVE_PATH = Path("cache") / "source-code"
 
@@ -115,14 +116,14 @@ class AgentHostStatus(ContractModel):
     service: AgentServiceRuntimeStatus
 
 
-def agent_binary_filename(
+def agent_artifact_filename(
     os_name: AgentInstallOS,
     arch: AgentInstallArch,
     *,
     binary_name: str = AGENT_NAME,
 ) -> str:
     name = normalize_agent_binary_name(binary_name)
-    return f"{name}-{os_name.value}-{arch.value}"
+    return f"{name}-{os_name.value}-{arch.value}.tar.gz"
 
 
 def build_agent_install_script(
@@ -547,43 +548,60 @@ install_agent() {
   install_from_url "$artifact_url" "$AGENT_BIN"
 }
 
+# A release unpacks once, into a directory named by its archive's digest, and the
+# command links to the executable inside it. The agent reports that digest and
+# updates itself by unpacking the next release beside it and moving the link.
 install_from_url() {
   url="$1"
-  destination="$2"
-  destination_dir="$(dirname "$destination")"
-  mkdir -p "$destination_dir"
-  temporary="$(mktemp "$destination_dir/.agent.XXXXXX")"
-  say "Installing __AGENT_NAME__"
-  if ! download_file "$url" "$temporary"; then
-    rm -f "$temporary"
-    fail "unable to download the agent binary from $url" 1
+  command_path="$2"
+  if [ -d "$command_path" ] && [ ! -L "$command_path" ]; then
+    fail "$command_path is a directory; remove it before installing" 1
   fi
-  if [ -n "$AGENT_SHA256" ]; then
-    verify_sha256 "$temporary" "$AGENT_SHA256" "agent artifact"
+  if ! command -v tar >/dev/null 2>&1 || ! command -v gzip >/dev/null 2>&1; then
+    fail "tar and gzip are required to unpack the agent release" 1
   fi
-  chmod 0755 "$temporary"
-  if [ -d "$destination" ]; then
-    rm -f "$temporary"
-    fail "$destination is a directory; remove it before installing" 1
-  fi
-  mv -f "$temporary" "$destination"
-}
-
-verify_sha256() {
-  file="$1"
-  expected="$2"
-  artifact="${3:-artifact}"
-  if command -v sha256sum >/dev/null 2>&1; then
-    actual="$(sha256sum "$file" | awk '{print $1}')"
-  elif command -v shasum >/dev/null 2>&1; then
-    actual="$(shasum -a 256 "$file" | awk '{print $1}')"
-  else
-    rm -f "$file"
+  if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
     fail "sha256sum or shasum is required to verify the agent artifact" 1
   fi
-  if [ "$actual" != "$expected" ]; then
-    rm -f "$file"
-    fail "$artifact SHA-256 mismatch" 1
+  releases="$(dirname "$(dirname "$command_path")")/lib/__AGENT_RELEASES__"
+  mkdir -p "$releases" "$(dirname "$command_path")"
+  archive="$(mktemp "$releases/.download.XXXXXX")"
+  say "Installing __AGENT_NAME__"
+  if ! download_file "$url" "$archive"; then
+    rm -f "$archive"
+    fail "unable to download the agent release from $url" 1
+  fi
+  digest="$(file_sha256 "$archive")"
+  if [ -n "$AGENT_SHA256" ] && [ "$digest" != "$AGENT_SHA256" ]; then
+    rm -f "$archive"
+    fail "agent artifact SHA-256 mismatch" 1
+  fi
+  release="$releases/$digest"
+  if [ ! -f "$release/__RELEASE_COMPLETE_FILE__" ]; then
+    staged="$(mktemp -d "$releases/.release.XXXXXX")"
+    if ! tar -xzf "$archive" -C "$staged" || [ ! -x "$staged/__AGENT_EXECUTABLE__" ]; then
+      rm -rf "$staged" "$archive"
+      fail "the agent release from $url could not be unpacked" 1
+    fi
+    : > "$staged/__RELEASE_COMPLETE_FILE__"
+    if [ -e "$release" ]; then
+      doomed="$releases/.$digest.$$.removing"
+      mv "$release" "$doomed"
+      rm -rf "$doomed"
+    fi
+    mv "$staged" "$release"
+  fi
+  rm -f "$archive"
+  link="$(dirname "$command_path")/.__AGENT_NAME__.$$.link"
+  ln -s "$release/__AGENT_EXECUTABLE__" "$link"
+  mv -f "$link" "$command_path"
+}
+
+file_sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    shasum -a 256 "$1" | awk '{print $1}'
   fi
 }
 
@@ -707,6 +725,9 @@ main "$@"
     return (
         script.replace("__AGENT_NAME__", name)
         .replace("__HOME_DIR__", HOME_DIR)
+        .replace("__RELEASE_COMPLETE_FILE__", RELEASE_COMPLETE_FILE)
+        .replace("__AGENT_EXECUTABLE__", AGENT_NAME)
+        .replace("__AGENT_RELEASES__", AGENT_NAME)
         .replace("__DEFAULT_AGENT_STATE_DIR__", DEFAULT_AGENT_STATE_DIR)
         .replace("__AGENT_RUNTIME_READY_FILE__", AGENT_RUNTIME_READY_FILE)
         .replace("__READY_TIMEOUT_SECONDS__", str(AGENT_SERVICE_READY_TIMEOUT_SECONDS))
