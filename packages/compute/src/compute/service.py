@@ -3010,8 +3010,15 @@ class ComputeService:
                 # registers a new worker, which must match the active release before
                 # it takes requests whether or not an update is recorded.
                 WorkerReleaseRepository(session).cancel_machine_update(machine_id)
+            # Joining opens the fence to the resumed worker, so this stream answers
+            # at once and the next finishes the provider's bookkeeping, which reads
+            # EC2. Only the first resumed stream moves the lifecycle, so a later one
+            # never takes a ready machine back to joining.
+            authorizing_resume = resuming and machine.lifecycle in RETAINED_MACHINE_LIFECYCLES
             target = MachineLifecycle.Stopping if preparing else MachineLifecycle.Joining
-            if machine_lifecycle_allowed(machine.lifecycle, target):
+            if (preparing or authorizing_resume) and machine_lifecycle_allowed(
+                machine.lifecycle, target
+            ):
                 write_machine_lifecycle(
                     session,
                     machine,
@@ -3029,6 +3036,8 @@ class ComputeService:
                         }
                     )
                 )
+        if authorizing_resume:
+            return instruction
         try:
             self._finish_reserved_machine_preparation(
                 workspace_id=workspace_id,

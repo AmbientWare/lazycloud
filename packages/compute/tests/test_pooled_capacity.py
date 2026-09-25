@@ -4357,27 +4357,48 @@ def test_a_resumed_reserve_registers_no_worker_until_its_stream_authorizes_the_r
     )
     assert awaits_resume()
 
-    preparation = compute.prepare_reserved_machine(
-        workspace_id=unit.workspace_id,
-        machine_id=machine_id,
-        credential_id=enrollment.id,
-        credential_generation=enrollment.credential_generation,
-        release=_RESERVE_RELEASE,
-        agent_binary_sha256="a" * 64,
-        prepared_worker_images=[_RESERVE_RELEASE.worker_image],
-        active_worker_images={agent_machine_worker_id(machine_id): _RESERVE_RELEASE.worker_image},
-        admission_waiting_workers=[agent_machine_worker_id(machine_id)],
-        booted_since_prepared=True,
-        prepared_stop=None,
-    )
+    def stream() -> ReserveAgentPreparation:
+        return compute.prepare_reserved_machine(
+            workspace_id=unit.workspace_id,
+            machine_id=machine_id,
+            credential_id=enrollment.id,
+            credential_generation=enrollment.credential_generation,
+            release=_RESERVE_RELEASE,
+            agent_binary_sha256="a" * 64,
+            prepared_worker_images=[_RESERVE_RELEASE.worker_image],
+            active_worker_images={
+                agent_machine_worker_id(machine_id): _RESERVE_RELEASE.worker_image
+            },
+            admission_waiting_workers=[agent_machine_worker_id(machine_id)],
+            booted_since_prepared=True,
+            prepared_stop=None,
+        )
 
-    assert preparation.resuming
+    def observed() -> tuple[str, MachineLifecycle]:
+        with service_context.database.session() as session:
+            record = ComputeProviderInstanceRepository(session).get_by_machine(machine_id)
+            machine = MachineRepository(session).get(machine_id, workspace_id=unit.workspace_id)
+        assert record is not None and machine is not None
+        return record.status, machine.lifecycle
+
+    # The authorizing stream opens the fence without waiting on the provider.
+    assert stream().resuming
     assert not awaits_resume()
+    assert observed() == (ReservationStatus.Resuming.value, MachineLifecycle.Joining)
+
+    # The next stream finishes the provider's bookkeeping and leaves a machine
+    # its heartbeat made ready where it is.
     with service_context.database.session() as session:
-        record = ComputeProviderInstanceRepository(session).get_by_machine(machine_id)
         machine = MachineRepository(session).get(machine_id, workspace_id=unit.workspace_id)
-    assert record is not None and record.status == ReservationStatus.Active.value
-    assert machine is not None and machine.lifecycle is MachineLifecycle.Joining
+        assert machine is not None
+        write_machine_lifecycle(
+            session, machine, MachineLifecycle.Ready, workspace_changes=compute.workspace_changes
+        )
+    assert stream().resuming
+    assert observed() == (ReservationStatus.Active.value, MachineLifecycle.Ready)
+    with service_context.database.session() as session:
+        machine = MachineRepository(session).get(machine_id, workspace_id=unit.workspace_id)
+    assert machine is not None
 
     # A serving machine left in a reserve phase by a stop no one recorded still
     # joins on its own report, since no stream will authorize it again.
