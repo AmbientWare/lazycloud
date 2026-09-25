@@ -11,7 +11,6 @@ from uuid import uuid4
 
 import pytest
 from api.server.services import ApiServices
-from compute.agent_control import DEFAULT_PRIVATE_EXECUTOR, agent_machine_worker_id
 from compute.state import ComputeAgentTokenState, RedisComputeStateRepository
 from control.service import ControlPlaneService
 from coordination.event_bus import EventBusEvent, EventBusEventType, event_id_for_event, event_key
@@ -85,6 +84,7 @@ from scheduler.state import (
 )
 from scheduler.workers import SchedulerWorkerAdminService
 from shared.billing_quotes import ContainerShape
+from shared.compute_enrollment import DEFAULT_PRIVATE_EXECUTOR, agent_machine_worker_id
 from shared.container_requests import OciRuntimeName, StopContainerReason, capacity_memory_mib
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.contracts import ContractModel

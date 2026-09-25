@@ -38,7 +38,7 @@ from database.repositories.compute import (
 )
 from database.repositories.orchestration import MachineRepository
 from gateway.provider_enrollment import ProviderNodeEnrollmentService
-from provider_aws import AWS_STS_PROOF_NONCE_KEY
+from provider_aws.provider_node_identity import AWS_STS_PROOF_NONCE_KEY
 from provider_clients import AwsProviderNodeIdentityAdapter, ProviderNodeIdentityHttpResponse
 from shared.aws_connections import (
     AwsAccountAuthorizationGeneration,

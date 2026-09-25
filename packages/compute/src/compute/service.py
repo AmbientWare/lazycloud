@@ -52,6 +52,7 @@ from shared.compute_enrollment import (
     ComputeMachineEnrollmentStatus,
     MachineBootstrapFailureReason,
     MachineStopPreparationReceipt,
+    agent_machine_worker_id,
 )
 from shared.compute_fleet import Machine, MachineLifecycle, ResourceStatus, Worker
 from shared.compute_policy import (
@@ -88,7 +89,6 @@ from shared.routing import PrivateUnitFallback
 from shared.timestamps import to_utc, utc_now
 from shared.usage import UsageBillingOwner
 
-from compute.agent_control import agent_machine_worker_id
 from compute.aws_connections import AwsAccountPoolDrain
 from compute.capacity_errors import (
     CapacityReservationConflictError,

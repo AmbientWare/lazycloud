@@ -11,7 +11,7 @@ from agent.binary import AgentBinarySettings
 from compute.aws_connections import AwsAccountConnectionValidationError
 from compute.capacity_errors import ProviderAuthorizationPendingError
 from compute.offers import ComputeOffer
-from provider_aws import (
+from provider_aws.account_connection import (
     AwsAccountAuthorizationCleanupResult,
     AwsAccountAuthorizationCleanupStatus,
     AwsAccountAuthorizationValidation,
@@ -21,12 +21,11 @@ from provider_aws import (
     AwsExistingAccountAuthorizationValidation,
     AwsExistingAccountAuthorizationValidationInput,
     AwsManagedNodeIdentity,
-    AwsManagedPoolBinaries,
     AwsPendingAccountAuthorization,
-    Boto3AwsManagedPoolClientProvider,
     aws_account_connection_template_identity,
 )
 from provider_aws.instance_catalog import AWS_ALLOWED_OFFERS
+from provider_aws.managed_pool import AwsManagedPoolBinaries, Boto3AwsManagedPoolClientProvider
 from provider_clients import (
     AwsAccountConnectionComponents,
     configured_aws_account_connection_components,

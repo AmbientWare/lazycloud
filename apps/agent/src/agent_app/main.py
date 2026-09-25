@@ -41,7 +41,6 @@ from agent.service_manager import (
 from agent.storage_cleanup import prepare_source_cache_destruction
 from agent.updates import SUPERVISOR, SUPERVISOR_SCRIPT
 from gateway.http import LeaveAgentRequest
-from provider_clients import ProviderNodeIdentityEvidenceProvider
 from pydantic import TypeAdapter, ValidationError
 from shared.app_identity import AGENT_NAME
 from shared.http.errors import HttpApiError
@@ -67,6 +66,7 @@ from agent_app.daemon import (
     ProviderInstanceIdentityMode,
     build_agent_daemon_service,
 )
+from agent_app.provider_identity import ProviderNodeIdentityEvidenceProvider
 
 
 class AgentCommandArgs(argparse.Namespace):

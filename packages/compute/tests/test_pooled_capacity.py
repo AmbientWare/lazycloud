@@ -8,7 +8,6 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
-from compute.agent_control import MachineWorkerAvailability, agent_machine_worker_id
 from compute.aws_configuration import AWS_COMPUTE_CONFIGURATION
 from compute.block_volumes import BlockVolumeProvider
 from compute.capacity_errors import (
@@ -26,6 +25,7 @@ from compute.offers import ComputeOffer, ReservationStatus
 from compute.provider_state import ProviderUnitStateService
 from compute.providers import (
     ComputeProviderResolver,
+    MachineWorkerAvailability,
     ProviderCapacityPhase,
     ProviderOfferEligibility,
     ProviderUnitBootstrap,
@@ -70,8 +70,8 @@ from database.tables.compute import ComputeCapacityOperationTable
 from database.tables.orchestration import MachineTable
 from database.types import DatabaseSession
 from identity.platform import PlatformNamespaceService
-from provider_aws import AwsManagedPoolBinaries, Boto3AwsManagedPoolClientProvider
 from provider_aws.instance_catalog import AWS_ALLOWED_OFFERS
+from provider_aws.managed_pool import AwsManagedPoolBinaries, Boto3AwsManagedPoolClientProvider
 from provider_clients.workspace_compute import WorkspaceComputeProviderResolver
 from scheduler.capacity_reservations import (
     CapacityAcquisitionStatus as SchedulerCapacityAcquisitionStatus,
@@ -107,6 +107,7 @@ from shared.compute_enrollment import (
     ComputeMachineEnrollmentStatus,
     MachineBootstrapFailureReason,
     MachineReadinessPhase,
+    agent_machine_worker_id,
 )
 from shared.compute_fleet import Machine, MachineLifecycle, ResourceStatus, Worker
 from shared.compute_policy import (

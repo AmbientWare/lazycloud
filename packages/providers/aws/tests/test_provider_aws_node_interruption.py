@@ -4,12 +4,12 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 import pytest
-from provider_aws import (
+from provider_aws.provider_node_interruption import (
     AwsEc2SpotInterruptionMonitor,
-    AwsInstanceMetadataResponse,
     AwsSpotInterruptionAction,
     AwsSpotInterruptionMonitorError,
 )
+from provider_aws.provider_node_proof import AwsInstanceMetadataResponse
 
 
 @dataclass(slots=True)

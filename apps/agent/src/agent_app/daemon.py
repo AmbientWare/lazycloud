@@ -72,7 +72,6 @@ from agent.storage_cleanup import (
 )
 from agent.tunnel import AgentTunnelRoute, AgentTunnelService
 from agent.updates import AgentUpdater
-from compute.agent_control import agent_machine_worker_id
 from gateway.http import (
     AgentBootstrapConfig,
     AgentTelemetryRequest,
@@ -89,15 +88,11 @@ from gateway.http import (
     UpdateAgentRouteStatusResponse,
 )
 from networking.tunnel_agent import AgentTunnelRevokedError
-from provider_aws import (
+from provider_aws.provider_node_interruption import (
     AwsEc2SpotInterruptionMonitor,
     AwsSpotInterruptionMonitorError,
 )
 from provider_aws.volume_attachments import AwsInstanceDiskVolumeSlots
-from provider_clients import (
-    ProviderNodeIdentityEvidenceProvider,
-    provider_node_identity_evidence_provider,
-)
 from pydantic import Field, JsonValue, TypeAdapter, field_validator, model_validator
 from shared.agent_connections import AGENT_TUNNEL_CONTROL_URL
 from shared.app_identity import AGENT_NAME, NAME
@@ -105,6 +100,7 @@ from shared.compute_enrollment import (
     AgentCapacityState,
     ComputePreflightCheck,
     MachineBootstrapFailureReason,
+    agent_machine_worker_id,
 )
 from shared.compute_fleet import MachineLifecycle
 from shared.contracts import ContractModel
@@ -139,6 +135,10 @@ from worker.configuration import WorkerConfiguration, serialize_worker_configura
 from worker.network_backend import AgentBridgeCallbackFirewall, AgentBridgeNetworkConfig
 
 from agent_app.metrics import agent_metric_snapshot, physical_memory_mb
+from agent_app.provider_identity import (
+    ProviderNodeIdentityEvidenceProvider,
+    provider_node_identity_evidence_provider,
+)
 from agent_app.telemetry import (
     AgentTelemetryBuffer,
     AgentTelemetryEventType,

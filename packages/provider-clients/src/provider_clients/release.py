@@ -12,7 +12,7 @@ from pathlib import Path, PurePosixPath
 
 from agent.binary import AgentBinaryEnvironmentSettings, AgentBinarySettings
 from control.release_settings import ReleaseSettings
-from provider_aws import aws_account_connection_template_identity
+from provider_aws.account_connection import aws_account_connection_template_identity
 from pydantic import ValidationError
 from shared.transport_retry import TransientRetryPolicy, call_with_transient_retry
 

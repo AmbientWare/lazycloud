@@ -16,12 +16,12 @@ import urllib.request
 from pathlib import Path
 
 from deploy.object_storage import put_object
-from provider_aws import (
+from provider_aws.account_connection import (
     AwsAccountConnectionTemplatePublication,
     aws_account_connection_template_bytes,
     aws_account_connection_template_identity,
-    validate_aws_account_connection_template_policy,
 )
+from provider_aws.account_connection_policy import validate_aws_account_connection_template_policy
 from provider_clients.release_manifest import (
     AGENT_AMD64_FILENAME,
     AGENT_BINARY_DIRECTORY,

@@ -58,7 +58,7 @@ from operations.container_shutdown import (
     DatabaseContainerStorageRelease,
     DatabaseDurableWorkerAbsence,
 )
-from provider_aws import AwsEcrImageRegistry
+from provider_aws.provider import AwsEcrImageRegistry
 from provider_aws.storage_access import AwsStorageAccessSettings, AwsStorageAccessSource
 from provider_clients import (
     workspace_compute_provider_resolver,

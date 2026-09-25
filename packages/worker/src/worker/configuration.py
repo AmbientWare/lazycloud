@@ -5,12 +5,11 @@ from typing import Self
 
 import yaml
 from pydantic import Field, field_validator, model_validator
-from shared.app_identity import ENV_PREFIX, NAME, WORKER_CHECKPOINT_ROOT
+from shared.app_identity import ENV_PREFIX, NAME, WORKER_BUNDLE_ROOT, WORKER_CHECKPOINT_ROOT
 from shared.contracts import ContractModel
 from shared.usage import UsageBillingOwner
 
 from worker.container_rootfs import DEFAULT_CONTAINER_ROOTFS_ROOT
-from worker.durable_disks import DEFAULT_DISK_ROOT
 from worker.events import WorkerPoolMode
 from worker.execution import (
     DEFAULT_CONTAINER_BRIDGE_NAME,
@@ -25,13 +24,13 @@ from worker.image_build_scratch import (
     DEFAULT_IMAGE_BUILD_STALE_SECONDS,
 )
 from worker.image_lifecycle import DEFAULT_IMAGE_CACHE_PATH
-from worker.oci_runtime import DEFAULT_WORKER_BUNDLE_ROOT, DEFAULT_WORKER_IMAGE_MOUNT_ROOT
 from worker.runtime_config import OciRuntimeName
-from worker.source_code import (
-    DEFAULT_SOURCE_CACHE_MAX_BYTES,
-    DEFAULT_SOURCE_CACHE_MAX_ENTRIES,
-)
 
+DEFAULT_DISK_ROOT = "/var/lib/lazycloud/disks"
+DEFAULT_WORKER_BUNDLE_ROOT = WORKER_BUNDLE_ROOT
+DEFAULT_WORKER_IMAGE_MOUNT_ROOT = "/mnt/images"
+DEFAULT_SOURCE_CACHE_MAX_BYTES = 1024 * 1024 * 1024
+DEFAULT_SOURCE_CACHE_MAX_ENTRIES = 32
 # The prefix is load-bearing: the suite clears LAZYCLOUD_-prefixed variables, so
 # an unprefixed name would let a file left at the default path on one developer's
 # machine decide what the tests observe.

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
-from compute.agent_control import MachineWorkerAvailability, agent_machine_worker_id
+from compute.providers import MachineWorkerAvailability
 from compute.state import (
     ComputeAgentTokenState,
     ComputeJoinTokenState,
@@ -14,6 +14,7 @@ from pydantic import JsonValue
 from scheduler.compute_hooks import SchedulerComputeHooks
 from scheduler.fleet import SchedulerWorkerStatus
 from scheduler.state import RedisSchedulerWorkerRepository, SchedulerWorkerRecord
+from shared.compute_enrollment import agent_machine_worker_id
 from shared.placement import Placement
 from shared.timestamps import utc_now
 

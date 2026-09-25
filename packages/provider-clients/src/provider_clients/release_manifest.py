@@ -14,7 +14,7 @@ import re
 import urllib.request
 from urllib.parse import urlparse
 
-from provider_aws import AwsAccountConnectionTemplatePublication
+from provider_aws.account_connection import AwsAccountConnectionTemplatePublication
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from shared.releases import AgentArtifact, ReleaseTarget
 

@@ -42,6 +42,7 @@ from shared.placement import Placement
 from shared.timestamps import utc_now
 from shared.usage import UsageBillingOwner
 from worker.configuration import (
+    DEFAULT_DISK_ROOT,
     DEFAULT_WORKER_CONFIG_PATH,
     WORKER_CONFIG_PATH_ENV,
     WorkerCapacityConfiguration,
@@ -51,7 +52,6 @@ from worker.configuration import (
     WorkerNetworkConfiguration,
     WorkerPathConfiguration,
 )
-from worker.durable_disks import DEFAULT_DISK_ROOT
 from worker.events import WorkerPoolMode
 from worker.execution import (
     DEFAULT_CONTAINER_BRIDGE_NAME,

@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 from datetime import UTC, datetime
 
-from provider_aws import AwsProvider
+from provider_aws.provider import AwsProvider
 
 
 def test_ecr_authorization_accepts_boto3_response_metadata() -> None:

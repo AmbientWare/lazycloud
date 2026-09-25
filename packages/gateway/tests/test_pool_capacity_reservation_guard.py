@@ -11,7 +11,7 @@ import pytest
 from api.server.routers.gateway.agents import router as agent_router
 from api.server.service_dependencies import gateway_service
 from api.server.services import ApiServices
-from compute.agent_control import agent_machine_worker_id, hash_compute_token
+from compute.agent_control import hash_compute_token
 from compute.capacity_errors import CapacityReservationLockContendedError
 from compute.service import ComputeService
 from compute.state import RedisComputeStateRepository
@@ -40,6 +40,7 @@ from shared.compute_enrollment import (
     AgentWorkerSlotStatus,
     ComputePreflightCheck,
     PreflightSeverity,
+    agent_machine_worker_id,
 )
 from shared.compute_policy import (
     ComputeCapacityMode,

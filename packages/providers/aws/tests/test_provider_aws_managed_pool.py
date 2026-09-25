@@ -20,8 +20,10 @@ from compute.providers import (
 from database.context import ServiceContext
 from database.repositories.compute import ComputeUnitRepository
 from identity.platform import PlatformNamespaceService
-from provider_aws import (
-    AwsAccountConnectionTarget,
+from provider_aws.account_connection import AwsAccountConnectionTarget
+from provider_aws.managed_pool import (
+    AWS_MANAGED_POOL_TAG,
+    AWS_MANAGED_POOL_TAG_VALUE,
     AwsManagedPoolBinaries,
     AwsManagedPoolBootstrap,
     AwsManagedPoolClients,
@@ -30,19 +32,14 @@ from provider_aws import (
     AwsManagedPoolProvisioningError,
     AwsManagedPoolResourceIds,
     AwsManagedPoolSpec,
-    AwsPooledCapacityProvider,
-    AwsProviderControlError,
-    AwsProviderControlErrorCode,
-    AwsRegionalPrices,
-)
-from provider_aws.managed_pool import (
-    AWS_MANAGED_POOL_TAG,
-    AWS_MANAGED_POOL_TAG_VALUE,
     _ScalingActivity,
 )
 from provider_aws.network_egress import NetworkFilter
+from provider_aws.pooled_provider import AwsPooledCapacityProvider
+from provider_aws.provider_control import AwsProviderControlError, AwsProviderControlErrorCode
 from provider_aws.retained_pool import AwsRetainedPool, RetainedPoolState, RetainedSlot, SlotPhase
 from provider_aws.spot_prices import AwsSpotQuoteCache
+from provider_aws.supplier_prices import AwsRegionalPrices
 from pydantic import SecretStr, TypeAdapter, ValidationError
 from shared.aws_connections import AwsAccountNetwork
 from shared.capacity import CapacityFailureCode, CapacityOwnerKind, CapacityOwnerSource

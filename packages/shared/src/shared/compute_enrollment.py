@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from uuid import NAMESPACE_URL, uuid5
+
 from pydantic import Field
 
 from shared.contracts import ContractModel
 from shared.enums import StringEnum
+from shared.placement import Placement
+from shared.routing import PrivateUnitFallback
 
 
 class MachineStopPreparationReceipt(ContractModel):
@@ -93,7 +97,31 @@ class ComputePreflightCheck(ContractModel):
         return self.severity is PreflightSeverity.Error
 
 
+DEFAULT_PRIVATE_EXECUTOR = "container"
+
+
+class AgentBootstrapConfig(ContractModel):
+    gateway_public_http_url: str
+    gateway_grpc_host: str = ""
+    gateway_grpc_port: int = 443
+    gateway_grpc_tls: bool = True
+    workspace_id: str
+    placement: Placement
+    executor: str = DEFAULT_PRIVATE_EXECUTOR
+    fallback: PrivateUnitFallback = PrivateUnitFallback.Internal
+    image_registry_store: str = ""
+    image_clip_version: int = 2
+    image_local_cache_enabled: bool = True
+
+
+def agent_machine_worker_id(machine_id: str) -> str:
+    """The id of a machine's worker, which the agent and the control plane each derive."""
+    return str(uuid5(NAMESPACE_URL, f"agent-worker\x00{machine_id}"))
+
+
 __all__ = [
+    "DEFAULT_PRIVATE_EXECUTOR",
+    "AgentBootstrapConfig",
     "AgentCapacityState",
     "AgentWorkerSlotStatus",
     "ComputeCredentialStatus",
@@ -102,4 +130,5 @@ __all__ = [
     "MachineBootstrapFailureReason",
     "MachineReadinessPhase",
     "PreflightSeverity",
+    "agent_machine_worker_id",
 ]

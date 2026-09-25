@@ -16,7 +16,7 @@ from compute.bucket_access import AwsDeploymentBucketAccessService
 from compute.context import ComputeContext
 from coordination.redis_client import RedisClient
 from observability.workspace_changes import WorkspaceChangePublisher
-from provider_aws import require_resolvable_aws_credentials
+from provider_aws.account_connection import require_resolvable_aws_credentials
 from provider_aws.provider_node_identity import AWS_STS_PROOF_CONNECT_TIMEOUT_SECONDS
 from provider_clients import configured_aws_account_connection_components
 from provider_clients.provider_nodes import (
