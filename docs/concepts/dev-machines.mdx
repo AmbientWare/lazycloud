@@ -68,6 +68,11 @@ browser. SSH carries the localhost callback back to the devbox. You don't need
 a public `ports` entry or device-code authentication. The agent saves its
 credentials on the devbox disk, outside the built image.
 
+For Claude Code, the command verifies the saved login and completes its first-run
+configuration before closing the connection. An existing login is reused. To
+switch accounts, run `claude auth logout` inside the devbox before logging in
+again. Project trust and permission prompts still appear when you start Claude.
+
 OpenCode prompts for a provider and login method. Select browser login. In Pi,
 run `/login`, select the provider's browser login, and exit Pi when finished.
 Available methods depend on the provider. API keys can also be supplied through

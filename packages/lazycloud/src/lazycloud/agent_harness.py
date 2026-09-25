@@ -36,7 +36,10 @@ AGENT_INSTALLATIONS = {
         "@openai/codex", "0.156.1", ("codex", "login"), (AgentSystemDependency("ps", "procps"),)
     ),
     AgentHarness.ClaudeCode: AgentInstallation(
-        "@anthropic-ai/claude-code", "2.1.282", ("claude", "auth", "login")
+        "@anthropic-ai/claude-code",
+        "2.1.282",
+        ("claude", "auth", "login"),
+        (AgentSystemDependency("script", "util-linux"),),
     ),
     AgentHarness.OpenCode: AgentInstallation(
         "opencode-ai", "1.18.32", ("opencode", "auth", "login")
