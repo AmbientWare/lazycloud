@@ -513,8 +513,9 @@ after` from its agent, and `df -h /` shows its whole root volume.
 
 Reserves on instance types EC2 can hibernate stop with their worker running and
 fenced. The agent and the control plane change their stream contract together,
-and an older node image has neither hibinit-agent nor the resume arguments, so
-the fleet is replaced again, the same way as the directory release upgrade:
+and an older node image leaves acpid off, so EC2's hibernate request never
+reaches it. The fleet is replaced again, the same way as the directory release
+upgrade:
 Node Images on `main`, pause Argo and scale the scheduler to zero, terminate
 every platform machine and stopped reserve, Ship, then restore. Migration
 `0025_reserve_hibernation` adds `compute_provider_instances.hibernates`.
@@ -522,11 +523,13 @@ every platform machine and stopped reserve, Ship, then restore. Migration
 IAM needs no change: `ec2:StopInstances` covers a hibernating stop, and the root
 volume is encrypted with the account's default EBS key. Redis needs no clearing.
 
-The node image boots without an initrd, so the kernel finds the hibernation
-image through `resume=PARTUUID=... resume_offset=...` on the boot entry, which
-`lazycloud-resume` writes after hibinit-agent. hibinit-agent's own entry update
-is off, because it names the root by an NVMe device name. On a reserve,
-`grep resume= /proc/cmdline` shows the PARTUUID form after its first cold boot.
+hibinit-agent writes `resume=PARTUUID=... resume_offset=...` to the boot entry
+at a reserve's first cold boot, and the initrd finds the root partition by that
+PARTUUID. On a reserve, `grep resume= /proc/cmdline` shows it from the second
+boot on. Every cold boot logs `systemd-hibernate-resume@dev-disk-by-partuuid-...`
+from the initrd, and a resume logs `PM: hibernation: hibernation exit`. Each
+cold boot of a reserve also rebuilds its initrd, about ten seconds of CPU beside
+the agent's start.
 
 A reserve that hibernated logs `hibernating reserve` in the scheduler, and on
 resume `starting reserve ..., stopped by Client.UserInitiatedHibernate`. Its agent
