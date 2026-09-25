@@ -22,10 +22,8 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from lazycloud.clients.aws import create_connection_stack
-from provider_aws import (
-    aws_account_connection_template_identity,
-    parse_aws_connection_stack_cleanup_action,
-)
+from provider_aws.account_connection import aws_account_connection_template_identity
+from provider_aws.customer_actions import parse_aws_connection_stack_cleanup_action
 from pydantic import BaseModel, Field, RootModel
 from shared.aws_connections import AwsConnectionStackAction
 

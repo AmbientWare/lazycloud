@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from urllib.parse import urlparse
 
 from agent.binary import AgentBinarySettings
-from provider_aws import AwsManagedPoolBinaries
+from provider_aws.managed_pool import AwsManagedPoolBinaries
 from provider_aws.platform import AwsPlatformBinding
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict

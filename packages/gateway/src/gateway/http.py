@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from compute.agent_control import AgentBootstrapConfig
 from pydantic import Field, JsonValue, field_validator
 from pydantic.json_schema import SkipJsonSchema
 from shared.bytes_transport import decode_bytes, encode_bytes
 from shared.capacity import CAPACITY_OWNER_ID_PATTERN
 from shared.compute_enrollment import (
+    AgentBootstrapConfig,
     AgentCapacityState,
     AgentWorkerSlotStatus,
     ComputePreflightCheck,

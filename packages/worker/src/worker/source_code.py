@@ -17,6 +17,7 @@ from shared.app_identity import SOURCE_CACHE_DIR
 from shared.container_requests import WORKER_USER_CODE_VOLUME, RequestMount
 from shared.contracts import ContractModel
 
+from worker.configuration import DEFAULT_SOURCE_CACHE_MAX_BYTES, DEFAULT_SOURCE_CACHE_MAX_ENTRIES
 from worker.events import ContainerRequestContext
 from worker.execution import stub_code_cache_key
 from worker.source_capacity import SourceCapacityError, require_source_space
@@ -24,8 +25,6 @@ from worker.source_capacity import SourceCapacityError, require_source_space
 SOURCE_CACHE_READY_FILE = ".source-cache-ready"
 SOURCE_WORKSPACE_OWNER_FILE = ".source-workspace-owner"
 WORKSPACE_READY_FILE = ".workspace-ready"
-DEFAULT_SOURCE_CACHE_MAX_BYTES = 1024 * 1024 * 1024
-DEFAULT_SOURCE_CACHE_MAX_ENTRIES = 32
 DEFAULT_SOURCE_CACHE_ROOT = Path("/var/lib/lazycloud/source-cache")
 
 
@@ -439,8 +438,6 @@ def _copy_directory_contents_atomic(
 
 
 __all__ = [
-    "DEFAULT_SOURCE_CACHE_MAX_BYTES",
-    "DEFAULT_SOURCE_CACHE_MAX_ENTRIES",
     "SOURCE_CACHE_READY_FILE",
     "SOURCE_WORKSPACE_OWNER_FILE",
     "SourceCachePurgeResult",

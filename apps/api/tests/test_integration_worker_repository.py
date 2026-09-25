@@ -15,7 +15,7 @@ from api.server.services import ApiServices
 from api.server.worker_repository_service import (
     WorkerRepositoryService,
 )
-from compute.agent_control import agent_machine_worker_id, hash_compute_token
+from compute.agent_control import hash_compute_token
 from compute.state import (
     RedisComputeStateRepository,
 )
@@ -81,6 +81,7 @@ from shared.compute_enrollment import (
     AgentCapacityState,
     ComputePreflightCheck,
     PreflightSeverity,
+    agent_machine_worker_id,
 )
 from shared.compute_fleet import Machine
 from shared.compute_policy import (

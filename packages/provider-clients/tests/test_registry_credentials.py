@@ -7,7 +7,7 @@ from images.building.models import (
     ImageRegistryCredentialKind,
     ImageRegistryCredentialPayload,
 )
-from provider_aws import AwsProvider, EcrAuthorization
+from provider_aws.provider import AwsProvider, EcrAuthorization
 from provider_clients.registry_credentials import ProductionRegistryCredentialResolver
 from shared.image_building.credentials import ImageCredentialEnvVar
 

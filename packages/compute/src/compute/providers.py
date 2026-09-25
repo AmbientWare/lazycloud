@@ -23,7 +23,6 @@ from shared.placement import Placement
 from shared.timestamps import to_utc
 from shared.urls import normalize_http_origin
 
-from compute.agent_control import MachineWorkerAvailability
 from compute.block_volumes import BlockVolumeProvider, BlockVolumeProviders, BlockVolumeScope
 from compute.offers import ComputeOffer
 from compute.provider_nodes import ProviderNodeAdmission
@@ -419,6 +418,20 @@ def joined_unit_identity(
         "\0".join(("compute-joined", workspace_id, placement.key, provider)),
     )
     return str(identity), UnitName(f"joined-{identity.hex[:24]}")
+
+
+class MachineWorkerAvailability(StrEnum):
+    """What the scheduler's hot state can say about one machine's worker.
+
+    Three answers rather than two, because the reclaim terminates billable
+    machines on this and a bool cannot separate "the worker says no" from "we
+    have not heard". The hot record carries a short TTL, so its absence is a
+    silence, not a verdict.
+    """
+
+    Available = "available"
+    Unavailable = "unavailable"
+    Unknown = "unknown"
 
 
 class ComputeSchedulerHooks(Protocol):

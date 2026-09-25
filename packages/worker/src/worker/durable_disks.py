@@ -75,7 +75,6 @@ from worker.workspace_credential_refresh import REFRESH_AT_FRACTION
 LOGGER = logging.getLogger(__name__)
 
 DISK_ENGINE_BINARY = "lazycloud-disk"
-DEFAULT_DISK_ROOT = "/var/lib/lazycloud/disks"
 DEFAULT_DISK_RUN_ROOT = "/run/lazycloud/disks"
 DISK_LAYERS_DIR_NAME = "layers"
 DISK_LEASES_DIR_NAME = "leases"
@@ -1362,7 +1361,6 @@ def _require_path_segment(value: str, *, field: str) -> None:
 
 
 __all__ = [
-    "DEFAULT_DISK_ROOT",
     "DEFAULT_DISK_RUN_ROOT",
     "DISK_ENGINE_BINARY",
     "ContainerDiskLeases",

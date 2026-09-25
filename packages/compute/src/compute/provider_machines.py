@@ -39,6 +39,7 @@ from shared.compute_enrollment import (
     ComputeMachineEnrollmentStatus,
     MachineBootstrapFailureReason,
     MachineReadinessPhase,
+    agent_machine_worker_id,
 )
 from shared.compute_fleet import (
     PENDING_MACHINE_LIFECYCLES,
@@ -61,10 +62,6 @@ from shared.errors import (
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
 from shared.timestamps import to_utc, utc_now
 
-from compute.agent_control import (
-    MachineWorkerAvailability,
-    agent_machine_worker_id,
-)
 from compute.context import ComputeContext
 from compute.machine_lifecycle import (
     machine_lifecycle_allowed,
@@ -77,6 +74,7 @@ from compute.offers import (
 from compute.providers import (
     ComputeSchedulerHooks,
     DirectMachineProvider,
+    MachineWorkerAvailability,
     PooledCapacityProvider,
     ProviderCapacityPhase,
     ProviderMachineStatus,

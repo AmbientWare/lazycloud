@@ -1,12 +1,8 @@
 from __future__ import annotations
 
-from compute.agent_control import (
-    AgentWorkerTokenPlan,
-    agent_machine_worker_id,
-    plan_agent_worker_slot,
-)
+from compute.agent_control import AgentWorkerTokenPlan, plan_agent_worker_slot
 from compute.state import ComputeAgentTokenState
-from shared.compute_enrollment import AgentCapacityState
+from shared.compute_enrollment import AgentCapacityState, agent_machine_worker_id
 from shared.placement import Placement
 from shared.usage import UsageBillingOwner
 

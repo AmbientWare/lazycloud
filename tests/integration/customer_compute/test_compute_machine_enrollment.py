@@ -9,7 +9,7 @@ from uuid import UUID, uuid4
 import pytest
 from api.server.services import ApiServices
 from api.server.workspace_deletion import WorkspaceDeletionService
-from compute.agent_control import agent_machine_worker_id, hash_compute_token
+from compute.agent_control import hash_compute_token
 from compute.state import ComputeAgentTokenState, RedisComputeStateRepository
 from control.service import ControlPlaneService
 from database.repositories.compute import (
@@ -49,6 +49,7 @@ from shared.compute_enrollment import (
     ComputePreflightCheck,
     MachineReadinessPhase,
     PreflightSeverity,
+    agent_machine_worker_id,
 )
 from shared.compute_fleet import MachineLifecycle
 from shared.compute_policy import (

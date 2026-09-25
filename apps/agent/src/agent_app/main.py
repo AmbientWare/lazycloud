@@ -39,9 +39,17 @@ from agent.service_manager import (
     resolve_service_platform,
 )
 from agent.storage_cleanup import prepare_source_cache_destruction
-from agent.updates import SUPERVISOR, SUPERVISOR_SCRIPT
+from agent.updates import (
+    AGENT_UPDATE_BLOCKED_EXIT_STATUS,
+    SUPERVISOR,
+    SUPERVISOR_SCRIPT,
+    AgentUpdateBlockedError,
+    discard_abandoned_removals,
+    discard_release,
+    installed_command,
+)
+from compute.provider_nodes import ProviderNodeIdentityProofProvider
 from gateway.http import LeaveAgentRequest
-from provider_clients import ProviderNodeIdentityEvidenceProvider
 from pydantic import TypeAdapter, ValidationError
 from shared.app_identity import AGENT_NAME
 from shared.http.errors import HttpApiError
@@ -130,6 +138,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> None:
     parser = build_parser()
     args = parser.parse_args(argv, namespace=AgentCommandArgs())
+    releases: Path | None = None
     try:
         if args.command == "join":
             result = run_agent_daemon(_daemon_options(args))
@@ -142,10 +151,25 @@ def main(argv: list[str] | None = None) -> None:
                 service_name=args.service_name,
             )
         else:
-            result = _manage_service(args)
+            result, releases = _manage_service(args)
+    except AgentUpdateBlockedError as exc:
+        parser.exit(AGENT_UPDATE_BLOCKED_EXIT_STATUS, f"error: {exc}; run its join command again\n")
     except (OSError, RuntimeError, ValueError) as exc:
         parser.exit(1, f"error: {exc}\n")
+    removal_error: OSError | None = None
+    if args.command == "uninstall" and not args.keep_binary:
+        # Last, since this process was loaded from one of these releases.
+        try:
+            if releases is not None and releases.exists():
+                discard_release(releases)
+            for command in _installer_commands():
+                discard_abandoned_removals(command.parent.parent / "lib")
+        except OSError as exc:
+            removal_error = exc
+            result = result.model_copy(update={"binary_removed": False})
     print(result.model_dump_json())
+    if removal_error is not None:
+        parser.exit(1, f"error: could not remove the agent releases: {removal_error}\n")
     if isinstance(result, AgentDaemonRunResult) and result.authority_revoked:
         # A revoked agent has finished for good. Exiting non-zero is what tells
         # the service manager this was not a clean stop to be restarted.
@@ -173,7 +197,7 @@ def run_agent_daemon(
     client: AgentGatewayClient | None = None,
     worker_controller: DockerAgentWorkerController | None = None,
     resource_detector: Callable[[], AgentResourceDetection] | None = None,
-    provider_identity: ProviderNodeIdentityEvidenceProvider | None = None,
+    provider_identity: ProviderNodeIdentityProofProvider | None = None,
 ) -> AgentDaemonRunResult:
     _configure_daemon_logging()
     service = build_agent_daemon_service(
@@ -453,9 +477,10 @@ def _prepare_join_token_file(args: AgentCommandArgs) -> Path | None:
 
 
 def _agent_binary_path() -> str:
+    """The agent command a unit runs: the installer's link, never a release it points at."""
     raw = Path(sys.argv[0])
     if raw.name == AGENT_NAME and (raw.is_absolute() or raw.parent != Path(".")):
-        return str(raw)
+        return str(installed_command(raw.absolute()) or raw)
     return shutil.which(AGENT_NAME) or AGENT_NAME
 
 
@@ -586,7 +611,8 @@ def _service_status(
     )
 
 
-def _manage_service(args: AgentCommandArgs) -> AgentServiceOperationResult:
+def _manage_service(args: AgentCommandArgs) -> tuple[AgentServiceOperationResult, Path | None]:
+    """Run a service action; also the releases directory uninstall leaves for last."""
     action = ServiceLifecycleAction(args.command)
     selected_platform = _resolve_service_platform(args.target)
     _require_service_manager(selected_platform, mutation=True)
@@ -598,6 +624,13 @@ def _manage_service(args: AgentCommandArgs) -> AgentServiceOperationResult:
         uid=os.getuid(),
     )
     service_path = Path(plan.target_path).expanduser()
+    # Checked before anything is stopped or removed, so a command it must not
+    # remove fails the uninstall with everything still in place.
+    command = (
+        _canonical_agent_binary()
+        if action is ServiceLifecycleAction.Uninstall and not args.keep_binary
+        else None
+    )
     state_dir: Path | None = None
     saved_state: AgentState | None = None
     if plan.remove_state:
@@ -618,7 +651,7 @@ def _manage_service(args: AgentCommandArgs) -> AgentServiceOperationResult:
             )
     service_removed = False
     state_removed = False
-    binary_removed = False
+    releases: Path | None = None
     if plan.remove_service:
         service_removed = service_path.exists()
         service_path.unlink(missing_ok=True)
@@ -627,9 +660,11 @@ def _manage_service(args: AgentCommandArgs) -> AgentServiceOperationResult:
         if state_removed:
             shutil.rmtree(state_dir)
     commands.extend(_run_service_commands(plan.after_removal))
-    if action is ServiceLifecycleAction.Uninstall and not args.keep_binary:
-        binary_removed = _remove_canonical_agent_binary()
-    return AgentServiceOperationResult(
+    if command is not None:
+        command.unlink()
+        command.with_name(f"{command.name}.previous").unlink(missing_ok=True)
+        releases = command.parent.parent / "lib" / AGENT_NAME
+    result = AgentServiceOperationResult(
         action=action,
         platform=selected_platform,
         service_name=plan.service_name,
@@ -638,8 +673,9 @@ def _manage_service(args: AgentCommandArgs) -> AgentServiceOperationResult:
         remote_leave=remote_leave,
         service_removed=service_removed,
         state_removed=state_removed,
-        binary_removed=binary_removed,
+        binary_removed=releases is not None,
     )
+    return result, releases
 
 
 def _load_agent_state_for_removal(state_dir: Path, *, service_path: Path) -> AgentState | None:
@@ -715,16 +751,35 @@ def _validated_state_directory(path: Path) -> Path:
     return resolved
 
 
-def _remove_canonical_agent_binary() -> bool:
-    binary = Path(_agent_binary_path()).expanduser().resolve()
-    allowed = {
-        Path("/usr/local/bin") / AGENT_NAME,
-        Path.home() / f".{AGENT_NAME.removesuffix('-agent')}" / "bin" / AGENT_NAME,
+def _canonical_agent_binary() -> Path | None:
+    """The agent command the installer created, which uninstall removes with its releases.
+
+    None when the command sits outside the installer's paths, so a binary an
+    operator placed is left alone. At an installer path, whatever is found goes:
+    the link to a release, or a single executable an older installer wrote. A
+    link that leads outside the releases raises. The releases directory is
+    removed last, by the caller: this process runs from it.
+    """
+    found = Path(_agent_binary_path()).expanduser().absolute()
+    command = found.parent.resolve() / found.name
+    if command not in _installer_commands() or not (command.is_symlink() or command.is_file()):
+        return None
+    releases = command.parent.parent / "lib" / AGENT_NAME
+    if command.is_symlink() and not command.resolve().is_relative_to(releases.resolve()):
+        msg = f"{command} links outside the agent releases in {releases}; remove it by hand"
+        raise RuntimeError(msg)
+    return command
+
+
+def _installer_commands() -> set[Path]:
+    """The paths the install script links the agent command at, as root and as a user."""
+    return {
+        path.parent.resolve() / path.name
+        for path in (
+            Path("/usr/local/bin") / AGENT_NAME,
+            Path.home() / f".{AGENT_NAME.removesuffix('-agent')}" / "bin" / AGENT_NAME,
+        )
     }
-    if binary not in allowed or not binary.is_file():
-        return False
-    binary.unlink()
-    return True
 
 
 def _status_payload(

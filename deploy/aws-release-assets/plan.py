@@ -45,7 +45,7 @@ WORKER_FIXED_INPUTS = (
     "deploy/managed-runtime/",
     "uv.lock",
 )
-AGENT_FIXED_INPUTS = ("deploy/agent-binary/", "uv.lock")
+AGENT_FIXED_INPUTS = ("deploy/agent-binary/", "deploy/agent_release.py", "uv.lock")
 
 
 @dataclass(frozen=True, slots=True)

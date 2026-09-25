@@ -1,4 +1,4 @@
-"""Build immutable standalone agent artifacts."""
+"""Build immutable agent release archives."""
 
 from __future__ import annotations
 
@@ -13,6 +13,8 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TypedDict
+
+from deploy.agent_release import is_agent_release
 
 SCHEMA_VERSION = 1
 SUPPORTED_ARCHITECTURES = ("amd64", "arm64")
@@ -53,7 +55,7 @@ class AgentArtifact:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Build and stage immutable standalone Linux agent artifacts."
+        description="Build and stage immutable Linux agent release archives."
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -189,12 +191,12 @@ def stage_artifacts(
         source = source.resolve()
         if not source.is_file():
             raise RuntimeError(f"agent artifact does not exist: {source}")
-        if not _is_elf(source):
-            raise RuntimeError(f"agent artifact is not a Linux ELF executable: {source}")
+        if not is_agent_release(source):
+            raise RuntimeError(f"agent artifact is not an agent release archive: {source}")
         filename = artifact_filename(architecture)
         destination = version_root / filename
         _copy_immutable(source, destination)
-        destination.chmod(0o755)
+        destination.chmod(0o644)
         artifact_metadata.append(
             AgentArtifact(
                 os="linux",
@@ -218,7 +220,7 @@ def stage_artifacts(
 
 def artifact_filename(architecture: str) -> str:
     _validate_architecture(architecture)
-    return f"lazycloud-agent-linux-{architecture}"
+    return f"lazycloud-agent-linux-{architecture}.tar.gz"
 
 
 def _parse_artifact_arguments(arguments: list[str]) -> dict[str, Path]:
@@ -253,11 +255,6 @@ def _validate_version(version: str) -> None:
         raise ValueError(
             "agent artifact version must contain only letters, numbers, dot, dash, or underscore"
         )
-
-
-def _is_elf(path: Path) -> bool:
-    with path.open("rb") as artifact:
-        return artifact.read(4) == b"\x7fELF"
 
 
 def _copy_immutable(source: Path, destination: Path) -> None:

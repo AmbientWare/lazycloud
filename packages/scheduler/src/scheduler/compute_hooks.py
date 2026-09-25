@@ -4,10 +4,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
-from compute.agent_control import MachineWorkerAvailability, agent_machine_worker_id
 from compute.offers import ComputeOffer
+from compute.providers import MachineWorkerAvailability
 from compute.state import ComputeUnitState, ComputeUnitStatus
 from coordination.process_presence import ProcessPresenceReader
+from shared.compute_enrollment import agent_machine_worker_id
 from shared.compute_policy import ComputeUnitPhase, ComputeUnitRecord
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus, WorkerUnavailableReason
 from shared.timestamps import utc_now

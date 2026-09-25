@@ -44,9 +44,26 @@ class ProviderNodeIdentityVerifier(Protocol):
     ) -> VerifiedProviderNodeIdentity: ...
 
 
+class ProviderNodeIdentityProofError(RuntimeError):
+    """A provider node could not prove its identity."""
+
+
+class ProviderNodeIdentityUnavailableError(ProviderNodeIdentityProofError):
+    """The provider's metadata service did not answer, as it may not early in a boot."""
+
+
+class ProviderNodeIdentityProofProvider(Protocol):
+    """Signs the identity a provider node presents when it enrolls or reports a boot phase."""
+
+    def create(self, *, expected_region: str | None = None) -> ProviderNodeIdentityProof: ...
+
+
 __all__ = [
     "ProviderNodeAdmission",
     "ProviderNodeIdentityProof",
+    "ProviderNodeIdentityProofError",
+    "ProviderNodeIdentityProofProvider",
+    "ProviderNodeIdentityUnavailableError",
     "ProviderNodeIdentityVerifier",
     "VerifiedProviderNodeIdentity",
 ]

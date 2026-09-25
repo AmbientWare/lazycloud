@@ -20,8 +20,10 @@ from compute.providers import (
 from database.context import ServiceContext
 from database.repositories.compute import ComputeUnitRepository
 from identity.platform import PlatformNamespaceService
-from provider_aws import (
-    AwsAccountConnectionTarget,
+from provider_aws.account_connection import AwsAccountConnectionTarget
+from provider_aws.managed_pool import (
+    AWS_MANAGED_POOL_TAG,
+    AWS_MANAGED_POOL_TAG_VALUE,
     AwsManagedPoolBinaries,
     AwsManagedPoolBootstrap,
     AwsManagedPoolClients,
@@ -30,19 +32,14 @@ from provider_aws import (
     AwsManagedPoolProvisioningError,
     AwsManagedPoolResourceIds,
     AwsManagedPoolSpec,
-    AwsPooledCapacityProvider,
-    AwsProviderControlError,
-    AwsProviderControlErrorCode,
-    AwsRegionalPrices,
-)
-from provider_aws.managed_pool import (
-    AWS_MANAGED_POOL_TAG,
-    AWS_MANAGED_POOL_TAG_VALUE,
     _ScalingActivity,
 )
 from provider_aws.network_egress import NetworkFilter
+from provider_aws.pooled_provider import AwsPooledCapacityProvider
+from provider_aws.provider_control import AwsProviderControlError, AwsProviderControlErrorCode
 from provider_aws.retained_pool import AwsRetainedPool, RetainedPoolState, RetainedSlot, SlotPhase
 from provider_aws.spot_prices import AwsSpotQuoteCache
+from provider_aws.supplier_prices import AwsRegionalPrices
 from pydantic import SecretStr, TypeAdapter, ValidationError
 from shared.aws_connections import AwsAccountNetwork
 from shared.capacity import CapacityFailureCode, CapacityOwnerKind, CapacityOwnerSource
@@ -437,7 +434,7 @@ def _spec(*, desired_nodes: int = 1, max_nodes: int = 2) -> AwsManagedPoolSpec:
             agent_sha256="a" * 64,
             agent_binary_url=(
                 f"https://s3.us-east-1.amazonaws.com/releases/agents/0.1.0/{'a' * 64}/"
-                "lazycloud-agent-linux-amd64"
+                "lazycloud-agent-linux-amd64.tar.gz"
             ),
         ),
     )
@@ -948,7 +945,7 @@ def _pool_request(provider_ref: str) -> ProviderUnitRequest:
             agent_sha256="a" * 64,
             agent_binary_url=(
                 f"https://s3.us-east-1.amazonaws.com/releases/agents/0.1.0/{'a' * 64}/"
-                "lazycloud-agent-linux-amd64"
+                "lazycloud-agent-linux-amd64.tar.gz"
             ),
         ),
         provider_state=ComputeUnitProviderState(),

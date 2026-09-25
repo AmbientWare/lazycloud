@@ -22,13 +22,14 @@ from foundation.process import (
     start_managed_command,
 )
 from pydantic import JsonValue
-from shared.app_identity import CONTAINER_HELPER_PATH, WORKER_BUNDLE_ROOT
+from shared.app_identity import CONTAINER_HELPER_PATH
 from shared.container_requests import WORKER_USER_CODE_VOLUME, StopContainerReason
 from shared.env import parse_environment
 from shared.image_building.authoring import LinuxArchitecture
 from shared.ssh import SSH_CONTAINER_HOST_KEY_PATH, SSH_CONTAINER_USER_CA_PATH
 
 import worker.oci_spec
+from worker.configuration import DEFAULT_WORKER_BUNDLE_ROOT, DEFAULT_WORKER_IMAGE_MOUNT_ROOT
 from worker.container_client.models import ContainerExecResponse
 from worker.container_execution import (
     ContainerExecutionContext,
@@ -97,8 +98,6 @@ from worker.sandbox_server import (
     WORKER_CONTAINER_UPLOADS_MOUNT_PATH,
 )
 
-DEFAULT_WORKER_BUNDLE_ROOT = WORKER_BUNDLE_ROOT
-DEFAULT_WORKER_IMAGE_MOUNT_ROOT = "/mnt/images"
 OCI_HOSTS_PATH = "/etc/hosts"
 OCI_RESOLV_CONF_PATH = "/etc/resolv.conf"
 OCI_CONFIG_FILE_NAME = "config.json"

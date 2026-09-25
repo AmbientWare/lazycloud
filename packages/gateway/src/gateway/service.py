@@ -20,7 +20,6 @@ from compute.agent_control import (
     WorkerTokenKind,
     WorkerTokenRecord,
     agent_install_command,
-    agent_machine_worker_id,
     build_agent_bootstrap_config,
     hash_compute_token,
     hash_machine_fingerprint,
@@ -129,6 +128,7 @@ from shared.compute_enrollment import (
     ComputeMachineEnrollmentStatus,
     MachineBootstrapFailureReason,
     MachineReadinessPhase,
+    agent_machine_worker_id,
 )
 from shared.compute_fleet import Machine, MachineLifecycle, ResourceStatus, Worker
 from shared.compute_policy import (

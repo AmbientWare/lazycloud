@@ -5,13 +5,16 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Protocol
 
-from compute.agent_control import DEFAULT_PRIVATE_EXECUTOR, agent_machine_worker_id
 from compute.projection import PoolConfig, normalize_unit_config
 from compute.state import ComputeAgentTokenState, ComputeUnitState
 from compute.telemetry import agent_machine_connected, agent_telemetry_state
 from pydantic import Field
 from shared.capacity import CAPACITY_OWNER_ID_PATTERN, CapacityOwnerKind
-from shared.compute_enrollment import AgentCapacityState
+from shared.compute_enrollment import (
+    DEFAULT_PRIVATE_EXECUTOR,
+    AgentCapacityState,
+    agent_machine_worker_id,
+)
 from shared.compute_policy import (
     ComputeUnitRecord,
 )

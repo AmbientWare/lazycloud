@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import http.client as http_client
 import json
 import logging
@@ -20,7 +21,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
-from threading import Event, Timer
+from threading import Event, Thread, Timer
 from types import TracebackType
 from typing import Protocol
 
@@ -71,8 +72,11 @@ from agent.storage_cleanup import (
     read_stop_preparation,
 )
 from agent.tunnel import AgentTunnelRoute, AgentTunnelService
-from agent.updates import AgentUpdater
-from compute.agent_control import agent_machine_worker_id
+from agent.updates import AgentUpdateBlockedError, AgentUpdater
+from compute.provider_nodes import (
+    ProviderNodeIdentityProofProvider,
+    ProviderNodeIdentityUnavailableError,
+)
 from gateway.http import (
     AgentBootstrapConfig,
     AgentTelemetryRequest,
@@ -89,14 +93,9 @@ from gateway.http import (
     UpdateAgentRouteStatusResponse,
 )
 from networking.tunnel_agent import AgentTunnelRevokedError
-from provider_aws import (
+from provider_aws.provider_node_interruption import (
     AwsEc2SpotInterruptionMonitor,
     AwsSpotInterruptionMonitorError,
-)
-from provider_aws.volume_attachments import AwsInstanceDiskVolumeSlots
-from provider_clients import (
-    ProviderNodeIdentityEvidenceProvider,
-    provider_node_identity_evidence_provider,
 )
 from pydantic import Field, JsonValue, TypeAdapter, field_validator, model_validator
 from shared.agent_connections import AGENT_TUNNEL_CONTROL_URL
@@ -105,6 +104,7 @@ from shared.compute_enrollment import (
     AgentCapacityState,
     ComputePreflightCheck,
     MachineBootstrapFailureReason,
+    agent_machine_worker_id,
 )
 from shared.compute_fleet import MachineLifecycle
 from shared.contracts import ContractModel
@@ -156,14 +156,19 @@ SLOW_STREAM_ITERATION_SECONDS = 2.0
 """A stream iteration at least this long logs its step timings even when it changed nothing."""
 DEFAULT_AGENT_HTTP_TIMEOUT_SECONDS = 30.0
 NVIDIA_SMI_TIMEOUT_SECONDS = 5.0
-JOIN_MAX_ATTEMPTS = 6
-JOIN_RETRY_BASE_SECONDS = 2.0
+JOIN_RETRY_SECONDS = 180.0
+"""How long a startup step spends backing off between attempts before it gives up."""
+JOIN_RETRY_BASE_SECONDS = 0.15
 JOIN_RETRY_MAX_SECONDS = 30.0
 AGENT_STATE_FILE = "agent-state.json"
 AGENT_ACTIVE_SLOTS_FILE = "active-worker-slots.json"
 AGENT_LAST_PREPARED_IMAGE_FILE = "last-prepared-worker-image.json"
 IMAGE_REPORT_WAIT_SECONDS = 1.0
 BOOT_IMAGE_LOOKUP_SECONDS = 3.0
+DOCKER_WAIT_SECONDS = 60.0
+DOCKER_PING_SECONDS = 0.5
+DOCKER_POLL_SECONDS = 0.1
+DEFAULT_DOCKER_SOCKET = "/var/run/docker.sock"
 WORKER_EXIT_LOG_LINES = 200
 DEFAULT_MACHINE_ID_PATHS = (Path("/etc/machine-id"), Path("/var/lib/dbus/machine-id"))
 AGENT_AUTHORITY_REVOKED_DETAILS = frozenset(
@@ -581,6 +586,67 @@ class SubprocessCommandRunner:
                 raise
 
 
+def docker_socket_path() -> str | None:
+    """The unix socket the docker CLI would talk to, or None if that is not a local socket.
+
+    As the CLI resolves it: DOCKER_HOST, else the context named by DOCKER_CONTEXT
+    or the docker config's `currentContext`, else the default socket. A named
+    context whose metadata cannot be read is None too: its endpoint is unknown.
+    """
+    host = os.environ.get("DOCKER_HOST", "")
+    if not host:
+        config_dir = Path(os.environ.get("DOCKER_CONFIG") or Path.home() / ".docker")
+        context = os.environ.get("DOCKER_CONTEXT", "")
+        if not context:
+            try:
+                config = _JSON_VALUE_ADAPTER.validate_json(
+                    (config_dir / "config.json").read_bytes()
+                )
+            except FileNotFoundError:
+                config = None
+            except (OSError, ValueError):
+                return None
+            current = config.get("currentContext") if isinstance(config, dict) else None
+            context = current if isinstance(current, str) else ""
+        if context and context != "default":
+            digest = hashlib.sha256(context.encode()).hexdigest()
+            try:
+                meta = _JSON_VALUE_ADAPTER.validate_json(
+                    (config_dir / "contexts" / "meta" / digest / "meta.json").read_bytes()
+                )
+            except (OSError, ValueError):
+                return None
+            endpoints = meta.get("Endpoints") if isinstance(meta, dict) else None
+            docker = endpoints.get("docker") if isinstance(endpoints, dict) else None
+            named = docker.get("Host") if isinstance(docker, dict) else None
+            if not isinstance(named, str):
+                return None
+            host = named
+    if not host:
+        return DEFAULT_DOCKER_SOCKET
+    return host.removeprefix("unix://") if host.startswith("unix://") else None
+
+
+def _docker_ping_failure(path: str) -> str:
+    """Why Docker's API socket did not answer a ping, or empty when it did.
+
+    A plain request on the unix socket: no docker process to start and no timer
+    thread per attempt.
+    """
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+            connection.settimeout(DOCKER_PING_SECONDS)
+            connection.connect(path)
+            connection.sendall(b"GET /_ping HTTP/1.0\r\nHost: docker\r\n\r\n")
+            reply = connection.recv(64)
+    except OSError as exc:
+        return f"{type(exc).__name__}: {exc}"
+    status = reply.split(b"\r\n", 1)[0]
+    if status.startswith(b"HTTP/1.") and status.split(b" ")[1:2] == [b"200"]:
+        return ""
+    return status.decode("ascii", "replace") or "empty reply"
+
+
 def _slot_removal_is_settled(detail: str) -> bool:
     """Report whether a failed ``docker rm -f`` already achieves the desired state.
 
@@ -609,46 +675,110 @@ class DockerAgentWorkerController:
 
     _images: WorkerImagePreparation = field(init=False)
     _last_prepared: str | None = field(default=None, init=False)
+    _docker_answered: bool = field(default=False, init=False)
+    _docker_waited_out: bool = field(default=False, init=False)
+    """The minute passed without an answer, so later calls run Docker directly."""
+    docker_wait_seconds: float = 0.0
+    """How long after the controller starts its Docker calls wait for the daemon.
+
+    Only the daemon sets it, because its unit starts before Docker. A command
+    such as uninstall, and every stop, runs Docker at once and fails fast.
+    """
+    _docker_deadline: float = field(default=0.0, init=False)
+    _docker_socket: str | None = field(default=None, init=False)
+    _closing: Event = field(default_factory=Event, init=False)
 
     def __post_init__(self) -> None:
         self._images = WorkerImagePreparation(self._prepare_worker_image)
+        self._docker_deadline = time.monotonic() + self.docker_wait_seconds
+        # Resolved once: another container CLI, or a socket that is not local
+        # or cannot be resolved, means no wait, and Docker calls run at once.
+        self._docker_socket = (
+            docker_socket_path()
+            if self.docker_wait_seconds and Path(self.docker_binary).name == "docker"
+            else None
+        )
+
+    def wait_for_docker(self, stop: Event | None = None) -> bool:
+        """Wait for the Docker daemon to answer; False once it has not in time.
+
+        The daemon's unit starts before Docker rather than after it, so its
+        Docker calls wait here, up to `docker_wait_seconds` from the start,
+        instead of failing or spending a pull's retries while Docker starts.
+        A set `stop`, or the controller closing, ends the wait at once.
+        """
+        if self._docker_answered:
+            return True
+        socket_path = self._docker_socket
+        if self._docker_waited_out or socket_path is None:
+            return False
+        began = time.monotonic()
+        while failure := _docker_ping_failure(socket_path):
+            if time.monotonic() >= self._docker_deadline:
+                LOGGER.warning("docker did not answer after agent start: %s", failure)
+                self._docker_waited_out = True
+                return False
+            if self._closing.wait(DOCKER_POLL_SECONDS) or (stop is not None and stop.is_set()):
+                return False
+        LOGGER.info("docker answered after %.2fs", time.monotonic() - began)
+        self._docker_answered = True
+        return True
+
+    def _docker(self, args: list[str], *, stop: Event | None = None) -> CommandResult:
+        """Run a command that needs the Docker daemon, once it has answered or had its time."""
+        self.wait_for_docker(stop)
+        return self.runner.run(args, stop=stop)
+
+    def _docker_failure(self, args: list[str], *, within: float) -> str:
+        """Why a docker command failed within `within` seconds, or empty when it succeeded."""
+        expired = Event()
+        timer = Timer(within, expired.set)
+        timer.start()
+        try:
+            result = self.runner.run(args, stop=expired)
+        except Exception as exc:
+            return f"{type(exc).__name__}: {exc}"
+        finally:
+            timer.cancel()
+        if result.returncode == 0:
+            return ""
+        return (result.stderr or result.stdout).strip()[-300:] or f"exit {result.returncode}"
 
     def close(self) -> None:
+        self._closing.set()
         self._images.close()
 
     def prepare_worker_image(self) -> Future[None] | None:
-        """Get the worker image this machine will run ready before the first stream.
+        """Get the worker image this machine will run ready in the background.
 
-        The override, when set, is prepared in the background, pulling if needed.
-        Otherwise the image this machine last had prepared is only looked up: a
-        reserve resumes with it on disk, so the first stream already reports it,
-        and one that is gone is left for the stream to name the image it needs.
+        The override, when set, is prepared, pulling if needed. Otherwise the
+        image this machine last had prepared is only looked up, once Docker
+        answers: a stream reports it as soon as it is found, and one that is
+        gone is left for a stream to name the image it needs. The first stream
+        does not wait for either.
         """
         if self.worker_image_override:
             return self._images.start(self.worker_image_override)
         image = self._last_prepared_image()
-        if image and self._image_present(image):
-            self._images.mark_prepared(image)
+        if image:
+            self._images.look_up(image, self._image_present)
         return None
 
-    def _image_present(self, image: str) -> bool:
+    def _image_present(self, image: str, stop: Event | None = None) -> bool:
         """Whether docker has the image, answered within a few seconds or taken as no.
 
         A no costs one stream; the stream then names the image and prepares it.
         """
-        expired = Event()
-        timer = Timer(BOOT_IMAGE_LOOKUP_SECONDS, expired.set)
-        timer.start()
-        try:
-            inspected = self.runner.run(
-                [self.docker_binary, "image", "inspect", image], stop=expired
-            )
-        except Exception:
-            LOGGER.warning("looking up worker image %s at boot failed", image, exc_info=True)
+        if not self.wait_for_docker(stop) and (
+            self._closing.is_set() or (stop is not None and stop.is_set())
+        ):
             return False
-        finally:
-            timer.cancel()
-        return inspected.returncode == 0
+        failure = self._docker_failure(
+            [self.docker_binary, "image", "inspect", image], within=BOOT_IMAGE_LOOKUP_SECONDS
+        )
+        if failure:
+            LOGGER.warning("did not find %s on the host: %s", image, failure)
+        return not failure
 
     def prepared_worker_images(self) -> list[str]:
         prepared = self._images.prepared()
@@ -699,7 +829,7 @@ class DockerAgentWorkerController:
         # stop this update, so the pending result is left uncollected here.
         for image in sorted(set(images) - self._images.known()):
             try:
-                self.runner.run(
+                self._docker(
                     [
                         "sh",
                         "-c",
@@ -714,8 +844,12 @@ class DockerAgentWorkerController:
             LOGGER.info("pulling %s while the agent updates", image)
 
     def wait_for_image_preparation(self, timeout_seconds: float) -> bool:
-        """Wait for a worker image being prepared; True once it has finished."""
+        """Wait for an image found on the host or a preparation ending; True once one did."""
         return self._images.wait(timeout_seconds)
+
+    def wait_for_boot_image(self, timeout_seconds: float) -> None:
+        """Wait for the image started at boot, prepared or looked up, to finish."""
+        self._images.wait_for_started(timeout_seconds)
 
     def _prepare_worker_image(self, image: str, stop: Event) -> None:
         try:
@@ -724,12 +858,12 @@ class DockerAgentWorkerController:
             raise WorkerImagePullError(f"worker image preparation timed out: {image}") from exc
 
     def _pull_worker_image(self, image: str, stop: Event) -> None:
-        inspected = self.runner.run([self.docker_binary, "image", "inspect", image], stop=stop)
+        inspected = self._docker([self.docker_binary, "image", "inspect", image], stop=stop)
         if inspected.returncode == 0:
             return
         failures: list[str] = []
         for attempt in range(3):
-            pulled = self.runner.run([self.docker_binary, "pull", image], stop=stop)
+            pulled = self._docker([self.docker_binary, "pull", image], stop=stop)
             if pulled.returncode == 0:
                 return
             failures.append((pulled.stderr or pulled.stdout).strip()[-1000:])
@@ -896,10 +1030,10 @@ class DockerAgentWorkerController:
         with timings.step("collect_exit"):
             self._collect_worker_exit(plan.name, slot.worker_id)
         with timings.step("remove"):
-            self.runner.run([self.docker_binary, "rm", "-f", plan.name])
+            self._docker([self.docker_binary, "rm", "-f", plan.name])
         args = [self.docker_binary, plan.docker_args[0], "--detach", *plan.docker_args[1:]]
         with timings.step("run"):
-            result = self.runner.run(args)
+            result = self._docker(args)
         timings.log(LOGGER, "worker %s container started", slot.worker_id)
         if result.returncode != 0:
             msg = f"start worker slot {slot.worker_id} failed: {result.stderr or result.stdout}"
@@ -923,7 +1057,7 @@ class DockerAgentWorkerController:
         runs. That costs nothing on a node that lives ten minutes and grows
         without bound on a machine an owner keeps.
         """
-        listed = self.runner.run(
+        listed = self._docker(
             [
                 self.docker_binary,
                 "ps",
@@ -945,7 +1079,7 @@ class DockerAgentWorkerController:
             if worker_id and worker_id in active_worker_ids:
                 continue
             self._collect_worker_exit(name, worker_id)
-            self.runner.run([self.docker_binary, "rm", "-f", name])
+            self._docker([self.docker_binary, "rm", "-f", name])
 
     def _collect_worker_exit(self, name: str, worker_id: str) -> None:
         """Take a stopped worker's account before its container is removed.
@@ -998,14 +1132,14 @@ class DockerAgentWorkerController:
             '{{if eq (index (split . "=") 0) "WORKER_AGENT_BINARY_SHA256"}}'
             '{{index (split . "=") 1}}{{end}}{{end}}\n{{.HostConfig.NetworkMode}}'
         )
-        result = self.runner.run([self.docker_binary, "inspect", "-f", template, name])
+        result = self._docker([self.docker_binary, "inspect", "-f", template, name])
         running, _, remaining = result.stdout.strip().partition("\n")
         digest, _, namespace = remaining.partition("\n")
         if result.returncode != 0 or running != "true":
             return None
         expected_namespace = self.worker_network.name
         if expected_namespace.startswith("container:"):
-            owner = self.runner.run(
+            owner = self._docker(
                 [
                     self.docker_binary,
                     "inspect",
@@ -1034,7 +1168,7 @@ class DockerAgentWorkerController:
         return observed
 
     def _container_network_namespace(self, container: str) -> str:
-        result = self.runner.run(
+        result = self._docker(
             [self.docker_binary, "exec", container, "readlink", "/proc/self/ns/net"]
         )
         namespace = result.stdout.strip()
@@ -1064,41 +1198,64 @@ class AgentDaemonService:
     resource_detector: AgentResourceDetector | None = None
     interruption_detector: AgentCapacityInterruptionDetector | None = None
     telemetry: AgentTelemetryBuffer = field(default_factory=AgentTelemetryBuffer)
-    provider_identity: ProviderNodeIdentityEvidenceProvider | None = None
+    provider_identity: ProviderNodeIdentityProofProvider | None = None
     _bootstrap_failure_reported: bool = False
     _capacity_shutdown: CapacityShutdown = field(init=False)
     _interruption_reported: bool = False
     _reported_worker_images: list[str] = field(default_factory=list)
     _last_applied_actions: str = "nothing"
+    _identity_failure: MachineBootstrapFailureReason = (
+        MachineBootstrapFailureReason.ProviderIdentityFailed
+    )
+    """What identity resolution reports once its retries run out: the stage it last reached."""
 
     def __post_init__(self) -> None:
         self._capacity_shutdown = CapacityShutdown(
             self.worker_controller, grace_seconds=self.options.interruption_grace_seconds
         )
 
-    def _provider_evidence_provider(self) -> ProviderNodeIdentityEvidenceProvider:
+    def _provider_evidence_provider(self) -> ProviderNodeIdentityProofProvider:
         if self.options.provider is None:
             msg = "provider node reporting requires a provider"
             raise ValueError(msg)
-        return self.provider_identity or provider_node_identity_evidence_provider()
+        return self.provider_identity or _provider_node_identity()
 
-    def _report_bootstrap_phase(self, phase: MachineLifecycle) -> None:
-        """Best effort: a phase report must not prevent enrollment retries."""
+    def _report_phase_aside(self, phase: MachineLifecycle) -> None:
+        """Report a boot phase on its own thread, so it never holds the tunnel or a stream.
+
+        It retries within the join budget and logs a final failure; a machine
+        that misses it still joins through its stream.
+        """
         if not self.options.provider_enrollment_request:
             return
-        with suppress(Exception):
-            provider = self._provider_evidence_provider()
-            proof = provider.create()
-            self.client.record_provider_node_bootstrap_phase(
-                ProviderNodeBootstrapPhaseRequest(
-                    enrollment_request_id=self.options.provider_enrollment_request,
-                    provider=proof.provider,
-                    region=proof.region,
-                    provider_instance_id=proof.provider_instance_id,
-                    identity_proof_url=proof.proof_url.get_secret_value(),
-                    phase=phase,
+
+        def report() -> None:
+            try:
+                self._join_step(
+                    f"bootstrap_phase.{phase.value}",
+                    lambda: self._record_bootstrap_phase(phase),
                 )
+            except Exception as exc:
+                if isinstance(exc, HttpApiError) and exc.status_code == 409:
+                    # Enrollment moved the machine past this phase first.
+                    LOGGER.info("the machine is already past %s", phase.value)
+                    return
+                LOGGER.warning("reporting the %s phase failed", phase.value, exc_info=True)
+
+        Thread(target=report, name="agent-phase-report", daemon=True).start()
+
+    def _record_bootstrap_phase(self, phase: MachineLifecycle) -> None:
+        proof = self._provider_evidence_provider().create()
+        self.client.record_provider_node_bootstrap_phase(
+            ProviderNodeBootstrapPhaseRequest(
+                enrollment_request_id=self.options.provider_enrollment_request,
+                provider=proof.provider,
+                region=proof.region,
+                provider_instance_id=proof.provider_instance_id,
+                identity_proof_url=proof.proof_url.get_secret_value(),
+                phase=phase,
             )
+        )
 
     def _report_bootstrap_failure(self, reason: MachineBootstrapFailureReason) -> None:
         if not self.options.provider_enrollment_request or self._bootstrap_failure_reported:
@@ -1124,12 +1281,21 @@ class AgentDaemonService:
 
     def run(self) -> AgentDaemonRunResult:
         self.state_store.begin_run()
+        try:
+            AgentUpdater.running(self.state_store.state_dir).prune()
+        except Exception:
+            LOGGER.warning("pruning old agent releases failed", exc_info=True)
         saved_state = self.state_store.load(self.options.gateway_url)
         if saved_state is not None and saved_state.capacity_notice_at is not None:
             self._capacity_shutdown.arm(saved_state.capacity_notice_at)
         try:
             if saved_state is None:
-                self._report_bootstrap_phase(MachineLifecycle.Booting)
+                # Before enrolling: the join records joining, and booting cannot follow it.
+                self._report_phase_aside(MachineLifecycle.Booting)
+                # Enrollment reports Docker in its preflight. Its wait stays out
+                # of the network retry budget below.
+                if self.options.executor is WorkerExecutor.Container:
+                    self.worker_controller.wait_for_docker()
             state = self._join_step("identity.resolve", self.resolve_identity)
         except Exception:
             try:
@@ -1137,11 +1303,10 @@ class AgentDaemonService:
                     self._capacity_shutdown.stop()
             finally:
                 self._capacity_shutdown.close()
-                self._report_bootstrap_failure(MachineBootstrapFailureReason.ProviderIdentityFailed)
+                self._report_bootstrap_failure(self._identity_failure)
             raise
         if state.capacity_notice_at is not None:
             self._capacity_shutdown.arm(state.capacity_notice_at)
-        self._report_bootstrap_phase(MachineLifecycle.Joining)
         iterations = 0
         last_result = AgentDaemonRunResult(
             workspace_id=state.workspace_id,
@@ -1169,6 +1334,10 @@ class AgentDaemonService:
             except Exception:
                 self._report_bootstrap_failure(MachineBootstrapFailureReason.NetworkJoinFailed)
                 raise
+            if saved_state is not None:
+                # A restart or resume joined before; the report only moves a failed
+                # machine back, so it waits for the network the tunnel proved.
+                self._report_phase_aside(MachineLifecycle.Joining)
             try:
                 self.worker_controller.prepare_worker_image()
             except WorkerImagePullError:
@@ -1332,7 +1501,7 @@ class AgentDaemonService:
         # The first stream waits briefly for an image check started at boot so it
         # can report the image; later streams never wait on a pull in progress.
         if current_iterations == 1:
-            self.worker_controller.wait_for_image_preparation(IMAGE_REPORT_WAIT_SECONDS)
+            self.worker_controller.wait_for_boot_image(IMAGE_REPORT_WAIT_SECONDS)
         self._reported_worker_images = self.worker_controller.prepared_worker_images()
         with timings.step("stream"):
             stream = self.client.stream_agent(
@@ -1460,6 +1629,12 @@ class AgentDaemonService:
         state = state.model_copy(update={"release_generation": release.generation})
         self.state_store.save(state)
         if release.update_agent and release.agent is not None:
+            blocker = updater.update_blocker(release.agent)
+            if blocker:
+                # The machine stays drained for the update, so serving on is no
+                # option; exiting for good shows it failed until it is joined again.
+                msg = f"cannot update the agent to {release.agent.sha256}: {blocker}"
+                raise AgentUpdateBlockedError(msg)
             self.worker_controller.pull_detached(
                 {slot.worker_image for slot in desired_slots if slot.worker_image}
             )
@@ -1680,9 +1855,9 @@ class AgentDaemonService:
     def _enroll_provider_node(self, *, gateway_url: str) -> AgentState:
         if self.options.provider is None:
             raise ValueError("provider node enrollment requires a provider")
+        self._identity_failure = MachineBootstrapFailureReason.ProviderIdentityFailed
         registration = self._machine_registration()
-        proof_provider = self._provider_evidence_provider()
-        proof = proof_provider.create()
+        proof = self._provider_evidence_provider().create()
         if proof.provider is not self.options.provider:
             raise ValueError("provider node identity evidence returned the wrong provider")
         enrollment = ProviderNodeEnrollmentRequest(
@@ -1707,23 +1882,8 @@ class AgentDaemonService:
             preflight=registration.preflight,
             requested_schedulable=registration.schedulable,
         )
-        try:
-            response = self.client.enroll_provider_node(enrollment)
-        except Exception:
-            self._bootstrap_failure_reported = True
-            with suppress(Exception):
-                failed_proof = proof_provider.create()
-                self.client.record_provider_node_bootstrap_failure(
-                    ProviderNodeBootstrapFailureRequest(
-                        enrollment_request_id=self.options.provider_enrollment_request,
-                        provider=failed_proof.provider,
-                        region=failed_proof.region,
-                        provider_instance_id=failed_proof.provider_instance_id,
-                        identity_proof_url=failed_proof.proof_url.get_secret_value(),
-                        failure_reason=MachineBootstrapFailureReason.AgentEnrollmentFailed,
-                    )
-                )
-            raise
+        self._identity_failure = MachineBootstrapFailureReason.AgentEnrollmentFailed
+        response = self.client.enroll_provider_node(enrollment)
         return _agent_state_from_join_response(response, gateway_url=gateway_url)
 
     def _machine_registration(self) -> AgentMachineRegistration:
@@ -1799,18 +1959,28 @@ class AgentDaemonService:
         it ran once and exited. A single gateway TLS reset therefore killed the agent
         process, and systemd eventually stopped restarting it, leaving a billing
         machine with no agent. Startup gets the same tolerance as steady state.
+
+        The unit starts beside the network rather than after it, so a booting
+        machine's first attempts fail until DHCP finishes, about a second later.
+        Retries begin short for that reason and double toward 30 seconds so an
+        outage costs the gateway a few calls per agent. The budget counts only
+        the backoff, so a gateway that hangs each call to its timeout still gets
+        as many attempts as one that refuses them.
         """
+        backed_off = 0.0
         attempt = 0
         while True:
             try:
                 return operation()
             except Exception as exc:
                 attempt += 1
-                if attempt >= JOIN_MAX_ATTEMPTS or not _recoverable_stream_error(exc):
+                remaining = JOIN_RETRY_SECONDS - backed_off
+                if remaining <= 0 or not _recoverable_stream_error(exc):
                     raise
                 delay = min(
                     JOIN_RETRY_BASE_SECONDS * (2 ** (attempt - 1)),
                     JOIN_RETRY_MAX_SECONDS,
+                    remaining,
                 )
                 self.telemetry.enqueue_event(
                     event_type=AgentTelemetryEventType.Agent,
@@ -1823,6 +1993,7 @@ class AgentDaemonService:
                     },
                 )
                 time.sleep(delay)
+                backed_off += delay
 
     def _start_tunnel(self, state: AgentState) -> AgentTunnelService:
         network = self.options.worker_network
@@ -1865,7 +2036,7 @@ def build_agent_daemon_service(
     worker_controller: DockerAgentWorkerController | None = None,
     resource_detector: AgentResourceDetector | None = None,
     interruption_detector: AgentCapacityInterruptionDetector | None = None,
-    provider_identity: ProviderNodeIdentityEvidenceProvider | None = None,
+    provider_identity: ProviderNodeIdentityProofProvider | None = None,
 ) -> AgentDaemonService:
     state_dir = Path(options.state_dir)
     # One buffer, shared with the worker controller. A worker's exit then rides
@@ -1887,6 +2058,7 @@ def build_agent_daemon_service(
             platform=agent_worker_platform(options.os_name, options.arch),
             telemetry=telemetry,
             disk_volume_slots=_provider_disk_volume_slots(options),
+            docker_wait_seconds=DOCKER_WAIT_SECONDS,
         ),
         resource_detector=resource_detector,
         interruption_detector=(
@@ -1902,6 +2074,10 @@ def _provider_disk_volume_slots(options: AgentDaemonOptions) -> Callable[[], int
         return None
     if options.provider is not ProviderKind.Aws:
         raise ValueError(f"provider {options.provider.value!r} has no disk volume support")
+    # Here, not at the top: the instance catalog it reads costs a machine a
+    # customer joined tens of milliseconds at every start, for nothing.
+    from provider_aws.volume_attachments import AwsInstanceDiskVolumeSlots
+
     return AwsInstanceDiskVolumeSlots().slots
 
 
@@ -2227,6 +2403,14 @@ def _agent_lock_pid(contents: str) -> int:
     return 0
 
 
+def _provider_node_identity() -> ProviderNodeIdentityProofProvider:
+    # Imported here so a machine a customer joined never loads botocore or the
+    # AWS provider at startup; only a provider node asks for a proof.
+    from provider_aws.provider_node_proof import AwsProviderNodeIdentityProofProvider
+
+    return AwsProviderNodeIdentityProofProvider()
+
+
 def _recoverable_stream_error(exc: Exception) -> bool:
     if isinstance(exc, AgentAuthorityRevokedError | AgentTunnelRevokedError):
         return False
@@ -2238,7 +2422,10 @@ def _recoverable_stream_error(exc: Exception) -> bool:
     # has to be named explicitly or every TLS reset reads as a fatal error.
     if isinstance(exc, HttpTransportError):
         return True
-    if isinstance(exc, AgentStreamRetryableError | WorkerImagePullError):
+    if isinstance(
+        exc,
+        AgentStreamRetryableError | WorkerImagePullError | ProviderNodeIdentityUnavailableError,
+    ):
         return True
     return isinstance(
         exc,

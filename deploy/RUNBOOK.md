@@ -479,6 +479,34 @@ a minute. Restore Argo's automatic sync. Redis needs no clearing: the planner's
 keys are new, and no stored hot-state model changed. Existing GPU Auto Scaling
 groups keep serving and retire when idle; new GPU capacity is retained EC2.
 
+### Agent directory release upgrade
+
+The agent ships as a release archive unpacked once per digest, and the node
+image boots without an initrd, masks the login banner and boot loader services,
+and orders the agent before Docker rather than after the network. An older agent
+cannot update into the new layout, so every platform machine and stopped reserve
+is replaced rather than upgraded.
+
+1. Run the Node Images workflow on `main` for the CPU and GPU variants. Release
+   reads the node image catalog, so it has to be current before Ship.
+2. Pause Argo automatic sync on `root` and record its settings. Scale the
+   scheduler to zero, so the planner does not resume or launch a machine on the
+   old image while the fleet is replaced.
+3. Terminate every platform machine and every stopped reserve through their
+   groups and pools.
+4. Ship. The release builds the agent archive. No migration runs.
+5. Scale the scheduler back and restore Argo's automatic sync. The planner
+   launches fresh machines and reserves on the new image.
+6. Machines customers joined and connected-cloud nodes run the old agent too.
+   Run their join command again right after the Ship.
+
+An agent from before this release cannot apply the archive as an update. The
+gateway drains its machine, and the agent downloads the archive again on every
+stream, until the machine is joined again.
+
+IAM and Redis need no change. A node on the new image logs `docker answered
+after` from its agent, and `/proc/cmdline` shows `root=PARTUUID=`.
+
 ### Python invocation format upgrade
 
 Python invocation format 2 preserves Python object graphs and resolves function

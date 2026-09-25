@@ -70,7 +70,7 @@ def service_graph(
             worker_image_digest=f"worker@sha256:{'0' * 64}",
             agent_binary_url=(
                 f"https://s3.us-east-1.amazonaws.com/releases/agents/test/{'0' * 64}/"
-                "lazycloud-agent-linux-amd64"
+                "lazycloud-agent-linux-amd64.tar.gz"
             ),
             cpu_ami_ids={"us-east-1": "ami-00000000000000000"},
             gpu_ami_ids={"us-east-1": "ami-00000000000000000"},

@@ -10,19 +10,16 @@ from compute.provider_nodes import (
     ProviderNodeIdentityVerifier,
     VerifiedProviderNodeIdentity,
 )
-from provider_aws import (
-    AwsEc2ProviderNodeIdentityProofProvider,
+from provider_aws import provider_node_identity
+from provider_aws.provider_node_identity import (
     AwsProviderNodeIdentityError,
     AwsProviderNodeIdentityErrorCode,
     AwsProviderNodeIdentityTarget,
     AwsProviderNodeIdentityTransportError,
-    AwsProviderNodeProofError,
     AwsProviderNodeReplayGuardError,
     AwsStsGetCallerIdentityProof,
     AwsStsProofHttpResponse,
-    provider_node_identity,
 )
-from pydantic import SecretStr
 from shared.compute_policy import ComputeUnitRecord
 from shared.errors import InvalidInputError, UpstreamUnavailableError
 from shared.provider_config import ProviderKind
@@ -57,51 +54,6 @@ class ProviderNodeIdentityReplayGuard(Protocol):
 
 class ProviderNodeIdentityReplayError(RuntimeError):
     """The durable provider identity replay claim could not complete."""
-
-
-@dataclass(frozen=True, slots=True)
-class ProviderNodeIdentityEvidence:
-    provider: ProviderKind
-    region: str
-    provider_instance_id: str
-    proof_url: SecretStr
-
-
-class ProviderNodeIdentityEvidenceError(RuntimeError):
-    """Provider-backed node identity evidence could not be created."""
-
-
-class ProviderNodeIdentityEvidenceProvider(Protocol):
-    def create(
-        self,
-        *,
-        expected_region: str | None = None,
-    ) -> ProviderNodeIdentityEvidence: ...
-
-
-@dataclass(frozen=True, slots=True)
-class _AwsProviderNodeIdentityEvidenceProvider:
-    provider: AwsEc2ProviderNodeIdentityProofProvider
-
-    def create(
-        self,
-        *,
-        expected_region: str | None = None,
-    ) -> ProviderNodeIdentityEvidence:
-        try:
-            proof = self.provider.create(expected_region=expected_region)
-        except AwsProviderNodeProofError as exc:
-            raise ProviderNodeIdentityEvidenceError(str(exc)) from exc
-        return ProviderNodeIdentityEvidence(
-            provider=ProviderKind.Aws,
-            region=proof.region,
-            provider_instance_id=proof.instance_id,
-            proof_url=proof.presigned_url,
-        )
-
-
-def provider_node_identity_evidence_provider() -> ProviderNodeIdentityEvidenceProvider:
-    return _AwsProviderNodeIdentityEvidenceProvider(AwsEc2ProviderNodeIdentityProofProvider())
 
 
 @dataclass(frozen=True, slots=True)
@@ -206,13 +158,9 @@ class AwsProviderNodeIdentityAdapter(ProviderNodeIdentityVerifier):
 
 __all__ = [
     "AwsProviderNodeIdentityAdapter",
-    "ProviderNodeIdentityEvidence",
-    "ProviderNodeIdentityEvidenceError",
-    "ProviderNodeIdentityEvidenceProvider",
     "ProviderNodeIdentityHttpClient",
     "ProviderNodeIdentityHttpError",
     "ProviderNodeIdentityHttpResponse",
     "ProviderNodeIdentityReplayError",
     "ProviderNodeIdentityReplayGuard",
-    "provider_node_identity_evidence_provider",
 ]

@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
-from compute.agent_control import agent_machine_worker_id
 from compute.state import ComputeAgentTokenState
+from shared.compute_enrollment import agent_machine_worker_id
 from shared.placement import Placement
 from shared.scheduling import (
     SchedulerContainerState,

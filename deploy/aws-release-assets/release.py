@@ -15,13 +15,14 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from deploy.agent_release import is_agent_release
 from deploy.object_storage import put_object
-from provider_aws import (
+from provider_aws.account_connection import (
     AwsAccountConnectionTemplatePublication,
     aws_account_connection_template_bytes,
     aws_account_connection_template_identity,
-    validate_aws_account_connection_template_policy,
 )
+from provider_aws.account_connection_policy import validate_aws_account_connection_template_policy
 from provider_clients.release_manifest import (
     AGENT_AMD64_FILENAME,
     AGENT_BINARY_DIRECTORY,
@@ -268,9 +269,8 @@ def stage_release(
         raise ValueError("linux/amd64 agent artifact filename is invalid")
     agent_source = agent_version_dir.resolve() / agent.filename
     _verify_file(agent_source, expected_sha256=agent.sha256, expected_size=agent.size_bytes)
-    with agent_source.open("rb") as executable:
-        if executable.read(4) != b"\x7fELF":
-            raise ValueError("linux/amd64 agent artifact is not an ELF executable")
+    if not is_agent_release(agent_source):
+        raise ValueError("linux/amd64 agent artifact is not an agent release archive")
 
     template = aws_account_connection_template_bytes()
     template_identity = aws_account_connection_template_identity()
@@ -284,7 +284,7 @@ def stage_release(
     agent_path = release_root / agent_local
     _write_immutable(template_path, template)
     _copy_immutable(agent_source, agent_path)
-    agent_path.chmod(0o755)
+    agent_path.chmod(0o644)
 
     template_key = (
         f"{normalized_prefix}/connection-templates/{template_identity.sha256}/template.json"
@@ -422,11 +422,10 @@ def validated_local_agent_artifact_root(
         expected_sha256=manifest.agent_artifact_sha256,
         expected_size=agent_object.size_bytes,
     )
-    if stat.S_IMODE(agent_path.stat().st_mode) != 0o755:
-        raise ValueError("AWS release agent artifact mode must be 0755")
-    with agent_path.open("rb") as executable:
-        if executable.read(4) != b"\x7fELF":
-            raise ValueError("AWS release agent artifact is not an ELF executable")
+    if stat.S_IMODE(agent_path.stat().st_mode) != 0o644:
+        raise ValueError("AWS release agent artifact mode must be 0644")
+    if not is_agent_release(agent_path):
+        raise ValueError("AWS release agent artifact is not an agent release archive")
     return resolved_artifact_root
 
 

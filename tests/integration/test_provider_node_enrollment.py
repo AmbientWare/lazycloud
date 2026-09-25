@@ -38,7 +38,7 @@ from database.repositories.compute import (
 )
 from database.repositories.orchestration import MachineRepository
 from gateway.provider_enrollment import ProviderNodeEnrollmentService
-from provider_aws import AWS_STS_PROOF_NONCE_KEY
+from provider_aws.provider_node_identity import AWS_STS_PROOF_NONCE_KEY
 from provider_clients import AwsProviderNodeIdentityAdapter, ProviderNodeIdentityHttpResponse
 from shared.aws_connections import (
     AwsAccountAuthorizationGeneration,
@@ -628,7 +628,7 @@ class _Bootstrap:
             agent_sha256="a" * 64,
             agent_binary_url=(
                 f"https://s3.us-east-1.amazonaws.com/releases/agents/0.1.0/{'a' * 64}/"
-                "lazycloud-agent-linux-amd64"
+                "lazycloud-agent-linux-amd64.tar.gz"
             ),
         )
 

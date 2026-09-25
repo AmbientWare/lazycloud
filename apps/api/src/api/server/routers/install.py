@@ -7,7 +7,7 @@ from pathlib import Path
 from agent.operations import (
     AgentInstallArch,
     AgentInstallOS,
-    agent_binary_filename,
+    agent_artifact_filename,
     build_agent_install_script,
 )
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -134,7 +134,7 @@ def _agent_binary_path(
     *,
     binary_name: str,
 ) -> Path:
-    return binary_dir / agent_binary_filename(os_name, arch, binary_name=binary_name)
+    return binary_dir / agent_artifact_filename(os_name, arch, binary_name=binary_name)
 
 
 def _sha256(path: Path) -> str:

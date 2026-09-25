@@ -6,6 +6,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 from shared.compute_enrollment import MachineStopPreparationReceipt
+from shared.durable_files import fsync_directory
 from worker.source_cache_cleanup import (
     WorkerSourceCacheDestructionReceipt,
     destroy_source_cache_storage,
@@ -27,11 +28,7 @@ def _write_receipt(path: Path, payload: str) -> None:
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, path)
-        descriptor = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
+        fsync_directory(path.parent)
     finally:
         temporary.unlink(missing_ok=True)
 

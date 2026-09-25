@@ -149,19 +149,19 @@ jobs:
             --summary "${GITHUB_STEP_SUMMARY}" \
             --github-output "${GITHUB_OUTPUT}"
 
-      - name: Build and stage Linux agent executables
+      - name: Build and stage Linux agent release archives
         if: steps.plan.outputs.rebuild_agent == 'true'
         run: >-
-          uv run --no-project python deploy/agent-binary/build.py build
+          uv run --group workspace python -m deploy.agent-binary.build build
           --version "${{ inputs.version }}"
           --output dist/agent-binarys
           --arch amd64
 
       # The same bytes the previous release published, staged under this
-      # version. The stage tool verifies the hash and the ELF header the way it
+      # version. The stage tool verifies the hash and the archive the way it
       # does for a fresh build, and the object is republished under this
       # version's key so the manifest's object list is complete on its own.
-      - name: Reuse the previous release's agent executable
+      - name: Reuse the previous release's agent archive
         if: steps.plan.outputs.rebuild_agent != 'true'
         shell: bash
         run: |
@@ -169,21 +169,21 @@ jobs:
           version="${{ inputs.version }}"
           directory="dist/agent-binarys/${version}"
           mkdir -p "${directory}"
-          curl -fsSL -o "${directory}/lazycloud-agent-linux-amd64" \
+          curl -fsSL -o "${directory}/lazycloud-agent-linux-amd64.tar.gz" \
             "${{ steps.plan.outputs.previous_agent_url }}"
-          echo "${{ steps.plan.outputs.previous_agent_sha256 }}  ${directory}/lazycloud-agent-linux-amd64" | sha256sum -c -
-          chmod 0755 "${directory}/lazycloud-agent-linux-amd64"
+          echo "${{ steps.plan.outputs.previous_agent_sha256 }}  ${directory}/lazycloud-agent-linux-amd64.tar.gz" | sha256sum -c -
+          chmod 0644 "${directory}/lazycloud-agent-linux-amd64.tar.gz"
           python3 - "${version}" "${directory}" <<'PY'
           import json, os, sys
           version, directory = sys.argv[1], sys.argv[2]
-          path = os.path.join(directory, "lazycloud-agent-linux-amd64")
+          path = os.path.join(directory, "lazycloud-agent-linux-amd64.tar.gz")
           manifest = {
               "schema_version": 1,
               "version": "${{ steps.plan.outputs.previous_agent_version }}",
               "artifacts": [{
                   "os": "linux",
                   "arch": "amd64",
-                  "filename": "lazycloud-agent-linux-amd64",
+                  "filename": "lazycloud-agent-linux-amd64.tar.gz",
                   "sha256": "${{ steps.plan.outputs.previous_agent_sha256 }}",
                   "size_bytes": os.path.getsize(path),
               }],

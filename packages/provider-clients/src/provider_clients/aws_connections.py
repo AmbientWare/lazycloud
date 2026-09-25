@@ -21,7 +21,7 @@ from compute.bucket_access import (
 from networking.settings import (
     validate_remote_provider_network_configuration,
 )
-from provider_aws import (
+from provider_aws.account_connection import (
     AwsAccountAuthorizationCleanupResult,
     AwsAccountAuthorizationValidation,
     AwsAccountAuthorizationValidationError,
@@ -37,14 +37,13 @@ from provider_aws import (
     AwsManagedNodeIdentity,
     AwsNodeBucketAccessGrant,
     AwsPendingAccountAuthorization,
-    AwsProviderControlError,
-    AwsProviderControlErrorCode,
     Boto3AwsAccountAuthorizationControl,
     Boto3AwsAccountConnectionValidator,
-    Boto3AwsCapacityImageSharing,
     Boto3AwsNodeBucketAccessControl,
     aws_account_connection_template_identity,
 )
+from provider_aws.capacity_images import Boto3AwsCapacityImageSharing
+from provider_aws.provider_control import AwsProviderControlError, AwsProviderControlErrorCode
 from pydantic import SecretStr
 from shared.aws_connections import (
     AwsAccountAuthorizationGeneration,

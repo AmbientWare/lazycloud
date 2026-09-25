@@ -126,7 +126,7 @@ from operations.container_shutdown import (
     DatabaseDurableWorkerAbsence,
 )
 from operations.management import ManagementService
-from provider_aws import AwsProvider, AwsProviderSettings
+from provider_aws.provider import AwsProvider, AwsProviderSettings
 from provider_clients import (
     AwsProviderNodeIdentityAdapter,
     ProductionRegistryCredentialResolver,
