@@ -42,7 +42,7 @@ def machine_capacity(cpu_millicores: int, memory_mib: int, gpu_count: int) -> Ca
     )
 
 
-def unit_growable(
+def _growable(
     unit: PlatformReserveUnitRow, *, purchasable_providers: frozenset[str], now: datetime
 ) -> bool:
     """Whether a reserve may resume or buy in this unit.
@@ -81,8 +81,7 @@ def fleet_reserve_snapshot(
             nominal_cpu_millicores=unit.cpu_millicores,
             desired=unit.desired,
             stopped=unit.stopped,
-            retained=unit.retained,
-            growable=unit_growable(unit, purchasable_providers=purchasable_providers, now=now),
+            growable=_growable(unit, purchasable_providers=purchasable_providers, now=now),
             enabled=unit.provider_ref in purchasable_providers,
         )
         for unit in rows.units
@@ -187,11 +186,7 @@ def reserve_admission(
     for unit in units:
         market = unit_reserve_market(preemptible=unit.preemptible, gpu_type=unit.gpu_type)
         machine = machine_capacity(unit.cpu_millicores, unit.memory_mib, unit.gpu_count)
-        held[market] = held.get(market, Capacity()) + Capacity(
-            machine.cpu_millicores * unit.stopped,
-            machine.memory_mib * unit.stopped,
-            machine.gpu_count * unit.stopped,
-        )
+        held[market] = held.get(market, Capacity()) + machine * unit.stopped
     withheld: set[str] = set()
     for unit in units:
         market = unit_reserve_market(preemptible=unit.preemptible, gpu_type=unit.gpu_type)
@@ -212,6 +207,5 @@ __all__ = [
     "fleet_reserve_snapshot",
     "machine_capacity",
     "reserve_admission",
-    "unit_growable",
     "unit_reserve_market",
 ]

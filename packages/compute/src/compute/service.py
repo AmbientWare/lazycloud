@@ -4,7 +4,7 @@ import logging
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
@@ -78,7 +78,7 @@ from shared.errors import (
     NotFoundError,
     UpstreamUnavailableError,
 )
-from shared.gpu import gpu_preference_accepts, normalize_gpu_type
+from shared.gpu import GPU_ANY, gpu_preference_accepts, normalize_gpu_type
 from shared.http.worker_network import WorkerEgressPolicy
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
 from shared.identity import WorkspaceStatus
@@ -101,6 +101,7 @@ from compute.fleet_policy import (
     Capacity,
     FleetCapacityPolicy,
     FleetReservePlan,
+    FleetReserveSnapshot,
     GrowthKind,
     MachineRole,
     MarketReservePlan,
@@ -781,20 +782,6 @@ class ComputeService:
                     and desired_unit > available
                     and desired_unit > current_units
                 ):
-                    if locked_pool.platform_fleet:
-                        shape = request.shape
-                        self._retire_incompatible_reserves(
-                            session,
-                            gpu=shape.gpu_count > 0,
-                            hosts=lambda unit: (
-                                unit.worker_cpu_millicores >= shape.cpu_millicores
-                                and unit.worker_memory_mib >= shape.memory_mib
-                                and unit.worker_gpu_count >= shape.gpu_count
-                                and unit.worker_gpu_type == shape.gpu_type
-                                and shape.runtime in unit.worker_runtimes
-                                and (shape.preemptible or not unit.worker_preemptible)
-                            ),
-                        )
                     return _capacity_result(
                         request,
                         CapacityAcquisitionStatus.AtLimit,
@@ -3144,28 +3131,16 @@ class ComputeService:
             if can_retain and stopped_target is not None:
                 # The used machine becomes a reserve only while the market's
                 # reserves, without it, fall short of the target the planner set.
-                held = Capacity()
-                for unit_id, count, cpu, memory, gpu in units.platform_stopped_reserves(
-                    preemptible=current.worker_preemptible, gpu_type=current.worker_gpu_type
-                ):
-                    if unit_id == current.id:
-                        continue
-                    other = machine_capacity(cpu, memory, gpu)
-                    held = held + Capacity(
-                        other.cpu_millicores * count,
-                        other.memory_mib * count,
-                        other.gpu_count * count,
-                    )
-                own = machine_capacity(
+                held = machine_capacity(
                     current.worker_cpu_millicores,
                     current.worker_memory_mib,
                     current.worker_gpu_count,
-                )
-                held = held + Capacity(
-                    own.cpu_millicores * (retained - 1),
-                    own.memory_mib * (retained - 1),
-                    own.gpu_count * (retained - 1),
-                )
+                ) * (retained - 1)
+                for unit_id, count, cpu, memory, gpu in units.platform_stopped_reserves(
+                    preemptible=current.worker_preemptible, gpu_type=current.worker_gpu_type
+                ):
+                    if unit_id != current.id:
+                        held = held + machine_capacity(cpu, memory, gpu) * count
                 gpu = _pool_gpu_capacity(current)
                 can_retain = (
                     desired
@@ -3471,85 +3446,82 @@ class ComputeService:
         snapshot = fleet_reserve_snapshot(
             rows, self.fleet_policy, purchasable_providers=purchasable, now=now
         )
-        units = {unit.unit_id: unit for unit in snapshot.units}
-        conditions = ReserveConditions(
-            now=now,
-            lightly_used_since=self.reserve_state.published().lightly_used_since,
-            recovering=frozenset(
-                units[machine.unit_id].market
-                for machine in snapshot.machines
-                if machine.protected and machine.state is ReserveMachineState.Draining
-            ),
-            consolidating=self.reserve_state.cooling_markets(),
-        )
-        plan = plan_market_reserve(self.fleet_policy, snapshot, conditions)
-        growing = frozenset(market.market for market in plan.markets if market.growth)
-        if growing:
-            with self.context.database.session() as session:
-                demand = ContainerRepository(session).unplaced_platform_demand()
-            waiting = frozenset(
-                market
-                for market in growing
-                if (
-                    normalize_gpu_type(market.gpu_type) in demand.gpu_types
-                    if market.gpu_type
-                    else demand.preemptible_cpu
-                    if market.preemptible
-                    else demand.cpu
-                )
-            )
-            if waiting:
-                plan = plan_market_reserve(
-                    self.fleet_policy,
-                    snapshot,
-                    ReserveConditions(
-                        now=now,
-                        lightly_used_since=conditions.lightly_used_since,
-                        demand=waiting,
-                        recovering=conditions.recovering,
-                        consolidating=conditions.consolidating,
-                    ),
-                )
+        plan = self._plan_reserves(snapshot, now=now)
         self.reserve_state.publish(PublishedReservePlan.of(plan))
-        unit_rows = {unit.id: unit for unit in rows.units}
+        units = {unit.id: unit for unit in rows.units}
+        markets = {unit.unit_id: unit.market for unit in snapshot.units}
         for market in plan.markets:
             self._log_market_plan(market)
             zones = frozenset(
                 instance.availability_zone
                 for instance in rows.instances
-                if units[instance.unit_id].market == market.market
+                if markets[instance.unit_id] == market.market
                 and instance.status != ReservationStatus.Terminating.value
             )
             try:
-                self._apply_market_plan(market, unit_rows, providers, zones=zones, now=now)
+                self._apply_market_plan(market, units, providers, zones=zones, now=now)
             except CapacityReservationLockContendedError:
-                LOGGER.debug(
-                    "platform reserve for %s deferred: a unit lease is held", market.market.key
-                )
+                LOGGER.debug("platform reserve for %s deferred: a lease is held", market.market.key)
             except CapacityReservationLeaseLostError:
                 raise
             except (CapacityLimitReachedError, ConflictError, UpstreamUnavailableError) as exc:
                 LOGGER.warning("platform reserve for %s not applied: %s", market.market.key, exc)
             except Exception:
                 LOGGER.exception("platform reserve for %s failed", market.market.key)
-        serving = {
-            unit_id: sum(
-                machine.unit_id == unit_id and machine.state is ReserveMachineState.Serving
+        for unit in rows.units:
+            if unit.phase is not ComputeUnitPhase.Degraded or not unit.desired:
+                continue
+            serving = sum(
+                machine.unit_id == unit.id and machine.state is ReserveMachineState.Serving
                 for machine in snapshot.machines
             )
-            for unit_id in unit_rows
-        }
-        for unit in rows.units:
-            if unit.phase is ComputeUnitPhase.Degraded and unit.desired:
-                try:
-                    self._release_unclaimed_failed_capacity(
-                        unit.id, serving=serving[unit.id], now=now
-                    )
-                except CapacityReservationLockContendedError:
-                    continue
-                except Exception:
-                    LOGGER.exception("releasing failed capacity in %s failed", unit.id)
+            try:
+                self._release_unclaimed_failed_capacity(unit.id, serving=serving, now=now)
+            except CapacityReservationLockContendedError:
+                continue
+            except Exception:
+                LOGGER.exception("releasing failed capacity in %s failed", unit.id)
         return plan
+
+    def _plan_reserves(self, snapshot: FleetReserveSnapshot, *, now: datetime) -> FleetReservePlan:
+        """Plan, then plan again without growth where work is already waiting.
+
+        Waiting work is read only when a plan grows, so a settled fleet costs no
+        second statement.
+        """
+        assert self.reserve_state is not None
+        markets = {unit.unit_id: unit.market for unit in snapshot.units}
+        conditions = ReserveConditions(
+            now=now,
+            lightly_used_since=self.reserve_state.published().lightly_used_since,
+            recovering=frozenset(
+                markets[machine.unit_id]
+                for machine in snapshot.machines
+                if machine.protected and machine.state is ReserveMachineState.Draining
+            ),
+            consolidating=self.reserve_state.cooling_markets(),
+        )
+        plan = plan_market_reserve(self.fleet_policy, snapshot, conditions)
+        growing = [market.market for market in plan.markets if market.growth]
+        if not growing:
+            return plan
+        with self.context.database.session() as session:
+            demand = ContainerRepository(session).unplaced_platform_demand()
+        cards = frozenset(normalize_gpu_type(card) for card in demand.gpu_types)
+        waiting = frozenset(
+            market
+            for market in growing
+            if (
+                bool(cards & {market.gpu_type, GPU_ANY})
+                if market.gpu_type
+                else demand.preemptible_cpu
+                if market.preemptible
+                else demand.cpu
+            )
+        )
+        if not waiting:
+            return plan
+        return plan_market_reserve(self.fleet_policy, snapshot, replace(conditions, demand=waiting))
 
     def _log_market_plan(self, plan: MarketReservePlan) -> None:
         # Every replica plans in turn; a line per change rather than per pass.
@@ -3560,7 +3532,8 @@ class ComputeService:
             else "none"
         )
         decision = (
-            f"load {_describe_capacity(plan.load)}, running free "
+            f"{'quiet' if plan.quiet else 'loaded'}, load {_describe_capacity(plan.load)}, "
+            "running free "
             f"{_describe_capacity(plan.warm_free)} of {_describe_capacity(plan.warm_target)}, "
             f"stopped {_describe_capacity(plan.stopped_capacity)} of "
             f"{_describe_capacity(plan.stopped_target)}, growth {growth}, "
@@ -3589,12 +3562,12 @@ class ComputeService:
         if growth is None:
             return
         if growth.kind is GrowthKind.Resume:
-            unit = units[growth.unit_id]
+            current = self.get_internal_unit(units[growth.unit_id].workspace_id, growth.unit_id)
             LOGGER.info("resuming a %s reserve for %s headroom", growth.role.value, plan.market.key)
             self.scale_internal_unit(
-                unit.workspace_id,
-                unit.id,
-                unit.desired + 1,
+                current.workspace_id,
+                current.id,
+                current.desired_machines + 1,
                 before_mutation=_policy_owned_scale,
                 now=now,
             )

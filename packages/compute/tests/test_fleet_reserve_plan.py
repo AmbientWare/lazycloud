@@ -32,7 +32,6 @@ def _unit(
     memory: int = 16 * 1024,
     desired: int = 0,
     stopped: int = 0,
-    retained: int = 0,
     growable: bool = True,
 ) -> ReserveUnit:
     return ReserveUnit(
@@ -43,7 +42,6 @@ def _unit(
         nominal_cpu_millicores=cpu,
         desired=desired,
         stopped=stopped,
-        retained=retained,
         growable=growable,
     )
 

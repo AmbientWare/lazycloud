@@ -17,8 +17,9 @@ REGION_FAILURE_WINDOW = timedelta(minutes=30)
 REGION_COOLING_FAILURES = 2
 """Refusals from this many offers of one region within the window move new
 purchases to the next region. One refusal names a sold-out instance type or
-zone; two in the same region usually mean the region is short, and the warm
-pass tries one new offer a minute, too slowly to walk a region type by type."""
+zone; two in the same region usually mean the region is short, and the reserve
+planner buys one machine per market a minute, too slowly to walk a region type
+by type."""
 
 
 class ReservationStatus(StrEnum):

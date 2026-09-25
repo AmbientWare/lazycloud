@@ -41,6 +41,11 @@ class Capacity:
             self.gpu_count - other.gpu_count,
         )
 
+    def __mul__(self, count: int) -> Capacity:
+        return Capacity(
+            self.cpu_millicores * count, self.memory_mib * count, self.gpu_count * count
+        )
+
     def covers(self, other: Capacity) -> bool:
         """Whether this is at least `other` in every dimension."""
         return (
@@ -255,7 +260,6 @@ class ReserveUnit:
     nominal_cpu_millicores: int
     desired: int
     stopped: int
-    retained: int
     growable: bool
     """Whether a resume or purchase may go here: healthy, not cooling, and purchasable."""
 
@@ -435,19 +439,16 @@ def _plan_market(
     load = total(machine.load for machine in working)
     launching = total(
         unit.machine
+        * max(
+            unit.desired
+            - sum(
+                machine.unit_id == unit.unit_id and machine.state is not ReserveMachineState.Reserve
+                for machine in machines
+            ),
+            0,
+        )
         for unit in market_units
         if unit.enabled
-        for _ in range(
-            max(
-                unit.desired
-                - sum(
-                    machine.unit_id == unit.unit_id
-                    and machine.state is not ReserveMachineState.Reserve
-                    for machine in machines
-                ),
-                0,
-            )
-        )
     )
     warm_free = (
         total((units[machine.unit_id].machine - machine.load).clamped() for machine in warm)
@@ -492,9 +493,7 @@ def _plan_market(
         )
         for unit in market_units
     }
-    stopped_capacity = total(
-        unit.machine for unit in market_units for _ in range(stopped[unit.unit_id])
-    )
+    stopped_capacity = total(unit.machine * stopped[unit.unit_id] for unit in market_units)
     stopped_deficit = (stopped_target - stopped_capacity).clamped()
     if not stopped_deficit.empty:
         if growth is None and may_grow:

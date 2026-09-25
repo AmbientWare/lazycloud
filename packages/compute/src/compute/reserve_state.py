@@ -19,8 +19,8 @@ from shared.contracts import ContractModel
 
 from compute.fleet_policy import Capacity, FleetReservePlan, ReserveMarket
 
-PLAN_INTERVAL_SECONDS = 60
-EARLY_PLAN_SECONDS = 20
+_PLAN_SECONDS = 60
+_EARLY_PLAN_SECONDS = 20
 """The shortest gap between two plans when pressure brings one forward."""
 
 _PUBLISHED_SECONDS = 5 * 60
@@ -98,12 +98,12 @@ class RedisFleetReserveState:
 
     def claim_plan(self, *, early: bool) -> bool:
         """Whether this replica plans now: once a minute fleet-wide, sooner under pressure."""
-        if early and not self.redis.set(self._key("early"), "1", ex=EARLY_PLAN_SECONDS, nx=True):
+        if early and not self.redis.set(self._key("early"), "1", ex=_EARLY_PLAN_SECONDS, nx=True):
             return False
         if early:
-            self.redis.set(self._key("plan"), "1", ex=PLAN_INTERVAL_SECONDS)
+            self.redis.set(self._key("plan"), "1", ex=_PLAN_SECONDS)
             return True
-        return self.redis.set(self._key("plan"), "1", ex=PLAN_INTERVAL_SECONDS, nx=True)
+        return self.redis.set(self._key("plan"), "1", ex=_PLAN_SECONDS, nx=True)
 
     def pressure_ready(
         self, market: ReserveMarket, *, under_pressure: bool, now: datetime, sustained_seconds: int
@@ -168,8 +168,6 @@ class RedisFleetReserveState:
 
 
 __all__ = [
-    "EARLY_PLAN_SECONDS",
-    "PLAN_INTERVAL_SECONDS",
     "Consolidation",
     "FleetReserveState",
     "MarketTargets",
