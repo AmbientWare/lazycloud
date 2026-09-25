@@ -104,8 +104,6 @@ class ProviderUnitRequest(ContractModel):
             raise ValueError("desired machines cannot be negative")
         if self.max_machines <= 0 or self.desired_machines > self.max_machines:
             raise ValueError("invalid pooled capacity bounds")
-        if self.stopped_machines and self.offer.gpu_count:
-            raise ValueError("stopped reserves require CPU capacity")
         if self.desired_machines + self.stopped_machines > self.max_machines:
             raise ValueError("running and stopped commitments exceed the pool limit")
         if self.generation <= 0:
@@ -315,15 +313,6 @@ class CapacityOwnerMutationLease(Protocol):
     """Serialize provider mutations and fence destructive changes from dispatch."""
 
     def mutation_lock(self, capacity_owner_id: str) -> AbstractContextManager[None]: ...
-
-    def pressure_ready(
-        self,
-        capacity_owner_id: str,
-        *,
-        under_pressure: bool,
-        now: datetime,
-        sustained_seconds: int,
-    ) -> bool: ...
 
     def dispatch_lock(self, capacity_owner_id: str) -> AbstractContextManager[None]: ...
 

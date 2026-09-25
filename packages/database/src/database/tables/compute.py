@@ -65,15 +65,19 @@ $$;
 
 class ComputeUnitTable(IdTable, DatabaseBase):
     __tablename__ = "compute_units"
-    warm_handoff_from: Mapped[list[str]] = mapped_column(
-        ARRAY(uuid_type), nullable=False, default=list, server_default=text("'{}'")
-    )
     provider_reconcile_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     drain_reconcile_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     __table_args__: tuple[SchemaItem, ...] = (
         UniqueConstraint("workspace_id", "name", name="uq_compute_units_workspace_name"),
         UniqueConstraint("capacity_owner_id", name="uq_compute_units_capacity_owner_id"),
         Index("ix_compute_units_workspace_placement", "workspace_id", "placement"),
+        Index(
+            "ix_compute_units_platform_live",
+            "id",
+            postgresql_where=text(
+                "platform_fleet IS TRUE AND visibility = 'internal' AND phase <> 'deleted'"
+            ),
+        ),
         Index(
             "ix_compute_units_active_provider_gpu",
             "provider_ref",
@@ -104,8 +108,8 @@ class ComputeUnitTable(IdTable, DatabaseBase):
         ),
         CheckConstraint(
             "stopped_machines >= 0 AND retiring_stopped_machines >= 0 "
-            "AND desired_machines + stopped_machines <= max_machines AND (stopped_machines = 0 OR "
-            "(platform_fleet AND worker_gpu_count = 0))",
+            "AND desired_machines + stopped_machines <= max_machines "
+            "AND (stopped_machines = 0 OR platform_fleet)",
             name="ck_compute_units_stopped_capacity",
         ),
         CheckConstraint(
@@ -221,6 +225,25 @@ class ComputeUnitTable(IdTable, DatabaseBase):
     replacement_template_version: Mapped[str] = mapped_column(String(160), nullable=False)
 
 
+class ComputeNodeShapeTable(DatabaseBase):
+    """The least memory an enrolled machine of one nominal shape reported.
+
+    Machines report less memory than their offer's nominal size, and every
+    machine of a shape reports about the same, so the fact is kept once per shape
+    rather than on each unit.
+    """
+
+    __tablename__ = "compute_node_shapes"
+    __table_args__ = (
+        CheckConstraint("reported_memory_mib > 0", name="ck_compute_node_shapes_memory"),
+    )
+
+    cpu_millicores: Mapped[int] = mapped_column(Integer, primary_key=True)
+    memory_mib: Mapped[int] = mapped_column(Integer, primary_key=True)
+    gpu_count: Mapped[int] = mapped_column(Integer, primary_key=True)
+    reported_memory_mib: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
 class ComputeCapacityOperationTable(IdTable, DatabaseBase):
     __tablename__ = "compute_capacity_operations"
     __table_args__: tuple[SchemaItem, ...] = (
@@ -332,6 +355,13 @@ class ComputeProviderInstanceTable(IdTable, DatabaseBase):
             "ix_compute_provider_instances_stopped",
             "pool_id",
             postgresql_where=text("status = 'stopped' AND missing_since IS NULL"),
+        ),
+        # The reserve planner reads every live instance each minute; terminal
+        # history stays out of the index it reads through.
+        Index(
+            "ix_compute_provider_instances_live",
+            "pool_id",
+            postgresql_where=text("status NOT IN ('deleted', 'failed')"),
         ),
         Index("ix_compute_provider_instances_renewal", "billing_renewal_at"),
         Index(

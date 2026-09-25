@@ -167,6 +167,7 @@ class ProviderNodeEnrollmentService:
         bound = instances.bind_machine(pool.id, request.provider_instance_id, joined.machine_id)
         if bound is None:
             raise ConflictError("provider node is no longer available for enrollment")
+        ComputeUnitRepository(session).record_node_memory(pool.id, request.capacity.memory_mb)
         if bound.first_enrolled_at is None:
             # This survives deletion of the machine row and its foreign-key binding.
             now = utc_now()

@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
 
 from pydantic import Field
 from shared.compute_policy import ComputeCapacityMode, ComputeUnitRecord
-from shared.container_requests import OciRuntimeName, capacity_with_overhead
+from shared.container_requests import OciRuntimeName, node_fits_request, node_memory
 from shared.contracts import ContractModel
 from shared.gpu import gpu_preference_accepts, gpu_preference_rank
 from shared.supplier_costs import SupplierCostTerms, SupplierCpuUnit
@@ -17,8 +17,9 @@ REGION_FAILURE_WINDOW = timedelta(minutes=30)
 REGION_COOLING_FAILURES = 2
 """Refusals from this many offers of one region within the window move new
 purchases to the next region. One refusal names a sold-out instance type or
-zone; two in the same region usually mean the region is short, and the warm
-pass tries one new offer a minute, too slowly to walk a region type by type."""
+zone; two in the same region usually mean the region is short, and the reserve
+planner buys one machine per market a minute, too slowly to walk a region type
+by type."""
 
 
 class ReservationStatus(StrEnum):
@@ -211,9 +212,17 @@ def record_purchase_terms(unit: ComputeUnitRecord, offer: ComputeOffer) -> Compu
     )
 
 
-def filter_offers(offers: list[ComputeOffer], request: OfferRequest) -> list[ComputeOffer]:
-    required_cpu = capacity_with_overhead(request.min_cpu_millicores)
-    required_memory = capacity_with_overhead(request.min_memory_mb)
+def filter_offers(
+    offers: list[ComputeOffer],
+    request: OfferRequest,
+    *,
+    reported_memory: Mapping[tuple[int, int, int], int] | None = None,
+) -> list[ComputeOffer]:
+    """The offers that serve the request, sized by what their machines report when known.
+
+    `reported_memory` maps a nominal CPU, memory and card count to the memory
+    machines of that shape report.
+    """
     selected: list[ComputeOffer] = []
     for offer in offers:
         if request.offer_id and offer.id != request.offer_id:
@@ -226,9 +235,17 @@ def filter_offers(offers: list[ComputeOffer], request: OfferRequest) -> list[Com
             continue
         if offer.preemptible and not request.preemptible:
             continue
-        if offer.cpu_millicores < required_cpu:
-            continue
-        if offer.memory_mb < required_memory:
+        if not node_fits_request(
+            offer.cpu_millicores,
+            node_memory(
+                offer.memory_mb,
+                (reported_memory or {}).get(
+                    (offer.cpu_millicores, offer.memory_mb, offer.gpu_count), 0
+                ),
+            ),
+            cpu_millicores=request.min_cpu_millicores,
+            memory_mib=request.min_memory_mb,
+        ):
             continue
         if offer.storage_mb < request.min_storage_mb:
             continue

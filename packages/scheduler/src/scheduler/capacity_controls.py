@@ -67,12 +67,16 @@ class SchedulerCapacityControllerProvider:
         ]
 
     def capacity_acquisition_controllers(self) -> list[CapacityAcquisitionController]:
+        reported = self.services.compute.reported_node_memory()
         controllers: list[CapacityAcquisitionController] = [
             ComputeUnitCapacityController(
                 unit.workspace_id,
                 unit,
                 self.services.compute,
                 self.workers,
+                reported.get(
+                    (unit.worker_cpu_millicores, unit.worker_memory_mib, unit.worker_gpu_count), 0
+                ),
             )
             for unit in self.services.compute.list_units_across_workspaces(
                 capacity_owner_kind=CapacityOwnerKind.PooledProvider

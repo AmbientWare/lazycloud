@@ -6,15 +6,19 @@ from datetime import datetime
 from uuid import uuid4
 
 from database.repositories.identity import WorkspaceRepository
+from database.repositories.orchestration import pinned_container
 from database.tables.aws_connections import AwsAccountConnectionTable
+from database.tables.capacity_recovery import CapacityRecoveryTable
 from database.tables.compute import (
     ComputeCapacityOperationTable,
     ComputeJoinCredentialTable,
     ComputeMachineEnrollmentTable,
+    ComputeNodeShapeTable,
     ComputeProviderInstanceTable,
     ComputeUnitTable,
 )
 from database.tables.identity import WorkspaceMemberTable, WorkspaceTable
+from database.tables.orchestration import ContainerTable
 from pydantic import Field
 from shared.capacity import (
     TERMINAL_REASON_MAX_LENGTH,
@@ -37,6 +41,8 @@ from shared.compute_policy import (
     ComputeUnitVisibility,
 )
 from shared.compute_reconciliation import ComputeReconciliationKind
+from shared.container_requests import CONTAINER_MEMORY_RESERVATION_PERCENT
+from shared.containers import LIVE_CONTAINER_STATUSES
 from shared.contracts import ContractModel
 from shared.errors import ConflictError
 from shared.identity import WorkspaceRole, WorkspaceStatus
@@ -44,6 +50,7 @@ from shared.placement import Placement
 from shared.supplier_costs import SupplierCostTerms, SupplierCpuUnit
 from shared.timestamps import to_utc, to_utc_or_none, utc_now
 from sqlalchemy import (
+    BigInteger,
     Select,
     String,
     and_,
@@ -52,14 +59,17 @@ from sqlalchemy import (
     delete,
     exists,
     func,
+    literal,
     or_,
     select,
     text,
     tuple_,
     update,
 )
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import ColumnElement
 
 
 class ComputeCapacityOperationRecord(ContractModel):
@@ -168,11 +178,74 @@ class ComputeProviderInstanceRecord(ContractModel):
 
 @dataclass(frozen=True, slots=True)
 class ComputeReserveInstance:
-    """A stopped platform CPU reserve machine."""
+    """A stopped platform reserve machine."""
 
     pool_id: str
     instance_id: str
     machine_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class PlatformReserveUnitRow:
+    id: str
+    workspace_id: str
+    provider_ref: str
+    preemptible: bool
+    gpu_type: str
+    gpu_count: int
+    cpu_millicores: int
+    memory_mib: int
+    reported_memory_mib: int
+    desired: int
+    stopped: int
+    retiring_stopped: int
+    retained: int
+    observed: int
+    provider_committed: int
+    phase: ComputeUnitPhase
+    degraded_reason: str | None
+    degraded_at: datetime | None
+    last_capacity_failure_at: datetime | None
+    registration_timeout_seconds: int
+    replacement_machine_id: str
+    billing_minimum_seconds: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class PlatformReserveInstanceRow:
+    unit_id: str
+    status: str
+    instance_id: str | None
+    machine_id: str | None
+    availability_zone: str
+    billing_started_at: datetime | None
+    missing: bool
+    capacity_state: AgentCapacityState | None
+    protected: bool
+    containers: int
+    pinned: int
+    load_cpu_millicores: int
+    load_memory_mib: int
+    load_gpu_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class StoppedReserveUnitRow:
+    id: str
+    preemptible: bool
+    gpu_type: str
+    cpu_millicores: int
+    memory_mib: int
+    reported_memory_mib: int
+    gpu_count: int
+    stopped: int
+    resumable: bool
+
+
+@dataclass(frozen=True, slots=True)
+class PlatformReserveRows:
+    units: tuple[PlatformReserveUnitRow, ...]
+    instances: tuple[PlatformReserveInstanceRow, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -391,7 +464,6 @@ def _compute_unit_record(row: ComputeUnitTable) -> ComputeUnitRecord:
             "observed_machines": row.observed_machines,
             "replacement_machine_id": row.replacement_machine_id,
             "replacement_template_version": row.replacement_template_version,
-            "warm_handoff_from": row.warm_handoff_from,
             "generation": row.generation,
             "phase": row.phase,
             "provider_state": ComputeUnitProviderState(
@@ -430,37 +502,300 @@ def _compute_unit_record(row: ComputeUnitTable) -> ComputeUnitRecord:
 class ComputeUnitRepository:
     session: Session
 
-    def platform_cpu_market_targets(self, *, preemptible: bool) -> tuple[int, int]:
-        row = self.session.execute(
-            select(
-                func.coalesce(func.sum(ComputeUnitTable.desired_machines), 0),
-                func.coalesce(func.sum(ComputeUnitTable.stopped_machines), 0),
-            ).where(
-                ComputeUnitTable.platform_fleet.is_(True),
-                ComputeUnitTable.worker_preemptible.is_(preemptible),
-                ComputeUnitTable.worker_gpu_count == 0,
-                or_(ComputeUnitTable.desired_machines > 0, ComputeUnitTable.stopped_machines > 0),
-            )
-        ).one()
-        return int(row[0]), int(row[1])
+    def platform_reserve_rows(self) -> PlatformReserveRows:
+        """Every platform unit holding capacity, its live machines, and their load.
 
-    def prepared_capacity_owner_ids(self) -> frozenset[str]:
-        return frozenset(
-            str(value)
-            for value in self.session.scalars(
-                select(ComputeUnitTable.id).where(
-                    ComputeUnitTable.platform_fleet.is_(True),
-                    ComputeUnitTable.phase.not_in(
-                        (ComputeUnitPhase.Deleting.value, ComputeUnitPhase.Deleted.value)
-                    ),
-                    exists().where(
-                        ComputeProviderInstanceTable.pool_id == ComputeUnitTable.id,
-                        ComputeProviderInstanceTable.status == "stopped",
-                        ComputeProviderInstanceTable.missing_since.is_(None),
-                    ),
+        One statement, because the reserve planner reads it every minute. Terminal
+        instances and retired units stay out, and load is summed from the live
+        container reservations on each machine through the partial live index.
+        """
+        unit = ComputeUnitTable
+        instance = ComputeProviderInstanceTable
+        container = ContainerTable
+        enrollment = ComputeMachineEnrollmentTable
+        recovery = CapacityRecoveryTable
+        reserved_memory = (
+            container.scheduling_memory_mib * CONTAINER_MEMORY_RESERVATION_PERCENT + 99
+        ) / 100
+        load = (
+            select(
+                container.runtime_machine_id.label("machine_id"),
+                func.count().label("containers"),
+                func.count().filter(pinned_container()).label("pinned"),
+                func.sum(container.scheduling_cpu_millicores).label("cpu"),
+                func.sum(reserved_memory).label("memory"),
+                func.sum(container.scheduling_gpu_count).label("gpu"),
+            )
+            .where(
+                container.status.in_([status.value for status in LIVE_CONTAINER_STATUSES]),
+                container.runtime_machine_id != "",
+            )
+            .group_by(container.runtime_machine_id)
+            .subquery()
+        )
+        protected = or_(
+            cast(instance.machine_id, String) == unit.replacement_machine_id,
+            exists().where(
+                recovery.completed_at.is_(None),
+                or_(
+                    recovery.source_machine_id == instance.machine_id,
+                    recovery.replacement_machine_id == instance.machine_id,
+                ),
+            ),
+        )
+        rows = self.session.execute(
+            select(
+                unit.id,
+                unit.workspace_id,
+                unit.provider_ref,
+                unit.worker_preemptible,
+                unit.worker_gpu_type,
+                unit.worker_gpu_count,
+                unit.worker_cpu_millicores,
+                unit.worker_memory_mib,
+                unit.desired_machines,
+                unit.stopped_machines,
+                unit.retiring_stopped_machines,
+                unit.min_machines,
+                unit.observed_machines,
+                unit.provider_committed_machines,
+                unit.phase,
+                unit.degraded_reason,
+                unit.degraded_at,
+                unit.last_capacity_failure_at,
+                unit.registration_timeout_seconds,
+                unit.replacement_machine_id,
+                cast(unit.offer_cost_terms.op("->>")("billing_minimum_seconds"), BigInteger),
+                instance.status,
+                instance.instance_id,
+                instance.machine_id,
+                instance.availability_zone,
+                instance.billing_started_at,
+                instance.missing_since.is_not(None),
+                enrollment.capacity_state,
+                protected,
+                func.coalesce(load.c.containers, 0),
+                func.coalesce(load.c.pinned, 0),
+                func.coalesce(load.c.cpu, 0),
+                func.coalesce(load.c.memory, 0),
+                func.coalesce(load.c.gpu, 0),
+                _reported_memory(),
+            )
+            .select_from(unit)
+            .outerjoin(ComputeNodeShapeTable, _same_shape(unit))
+            .outerjoin(
+                instance,
+                and_(instance.pool_id == unit.id, instance.status.not_in(("deleted", "failed"))),
+            )
+            .outerjoin(
+                enrollment,
+                and_(
+                    enrollment.machine_id == instance.machine_id,
+                    enrollment.workspace_id == unit.workspace_id,
+                    enrollment.status == ComputeMachineEnrollmentStatus.Active.value,
+                ),
+            )
+            .outerjoin(load, load.c.machine_id == cast(instance.machine_id, String))
+            .where(
+                unit.visibility == ComputeUnitVisibility.Internal.value,
+                unit.platform_fleet.is_(True),
+                unit.phase != ComputeUnitPhase.Deleted.value,
+                or_(
+                    instance.id.is_not(None),
+                    unit.desired_machines > 0,
+                    unit.stopped_machines > 0,
+                    unit.retiring_stopped_machines > 0,
+                    unit.min_machines > 0,
+                ),
+            )
+            .order_by(unit.id, instance.id)
+        ).tuples()
+        units: dict[str, PlatformReserveUnitRow] = {}
+        instances: list[PlatformReserveInstanceRow] = []
+        for row in rows:
+            unit_id = str(row[0])
+            if unit_id not in units:
+                units[unit_id] = PlatformReserveUnitRow(
+                    id=unit_id,
+                    workspace_id=str(row[1]),
+                    provider_ref=row[2],
+                    preemptible=row[3],
+                    gpu_type=row[4],
+                    gpu_count=row[5],
+                    cpu_millicores=row[6],
+                    memory_mib=row[7],
+                    reported_memory_mib=row[34],
+                    desired=row[8],
+                    stopped=row[9],
+                    retiring_stopped=row[10],
+                    retained=row[11],
+                    observed=row[12],
+                    provider_committed=row[13],
+                    phase=ComputeUnitPhase(row[14]),
+                    degraded_reason=row[15],
+                    degraded_at=to_utc_or_none(row[16]),
+                    last_capacity_failure_at=to_utc_or_none(row[17]),
+                    registration_timeout_seconds=row[18],
+                    replacement_machine_id=row[19],
+                    billing_minimum_seconds=row[20],
+                )
+            if row[21] is None:
+                continue
+            instances.append(
+                PlatformReserveInstanceRow(
+                    unit_id=unit_id,
+                    status=row[21],
+                    instance_id=row[22],
+                    machine_id=str(row[23]) if row[23] is not None else None,
+                    availability_zone=row[24],
+                    billing_started_at=to_utc_or_none(row[25]),
+                    missing=bool(row[26]),
+                    capacity_state=AgentCapacityState(row[27]) if row[27] is not None else None,
+                    protected=bool(row[28]),
+                    containers=int(row[29]),
+                    pinned=int(row[30]),
+                    load_cpu_millicores=int(row[31]),
+                    load_memory_mib=int(row[32]),
+                    load_gpu_count=int(row[33]),
                 )
             )
+        return PlatformReserveRows(units=tuple(units.values()), instances=tuple(instances))
+
+    def record_node_memory(self, unit_id: str, memory_mib: int) -> None:
+        """Keep the least memory a machine of this unit's shape has reported."""
+        if memory_mib <= 0:
+            return
+        unit = ComputeUnitTable
+        shape = ComputeNodeShapeTable
+        statement = postgresql_insert(shape).from_select(
+            ["cpu_millicores", "memory_mib", "gpu_count", "reported_memory_mib"],
+            select(
+                unit.worker_cpu_millicores,
+                unit.worker_memory_mib,
+                unit.worker_gpu_count,
+                literal(memory_mib, BigInteger),
+            ).where(unit.id == unit_id),
         )
+        self.session.execute(
+            statement.on_conflict_do_update(
+                index_elements=[shape.cpu_millicores, shape.memory_mib, shape.gpu_count],
+                set_={
+                    "reported_memory_mib": func.least(
+                        shape.reported_memory_mib, statement.excluded.reported_memory_mib
+                    )
+                },
+            )
+        )
+
+    def reported_node_memory(self) -> dict[tuple[int, int, int], int]:
+        """The least memory reported for each nominal CPU, memory and card count."""
+        shape = ComputeNodeShapeTable
+        return {
+            (cpu, memory, gpu): int(reported)
+            for cpu, memory, gpu, reported in self.session.execute(
+                select(
+                    shape.cpu_millicores,
+                    shape.memory_mib,
+                    shape.gpu_count,
+                    shape.reported_memory_mib,
+                )
+            ).tuples()
+        }
+
+    def platform_running_cpu_millicores(self) -> int:
+        """Nominal CPU the platform CPU fleet runs, a replacement's surge included."""
+        unit = ComputeUnitTable
+        surge = case((func.coalesce(unit.replacement_machine_id, "") != "", 1), else_=0)
+        return int(
+            self.session.scalar(
+                select(
+                    func.coalesce(
+                        func.sum((unit.desired_machines + surge) * unit.worker_cpu_millicores), 0
+                    )
+                ).where(
+                    unit.visibility == ComputeUnitVisibility.Internal.value,
+                    unit.platform_fleet.is_(True),
+                    unit.worker_gpu_count == 0,
+                    unit.phase != ComputeUnitPhase.Deleted.value,
+                    or_(unit.desired_machines > 0, surge > 0),
+                )
+            )
+            or 0
+        )
+
+    def platform_stopped_reserves(
+        self, *, preemptible: bool, gpu_type: str
+    ) -> list[tuple[str, int, int, int, int, int]]:
+        """Each of a market's units holding stopped reserves: its id, the count, and one
+        machine's nominal CPU, nominal and reported memory, and cards."""
+        unit = ComputeUnitTable
+        return [
+            (str(unit_id), int(stopped), int(cpu), int(memory), int(reported), int(gpu))
+            for unit_id, stopped, cpu, memory, reported, gpu in self.session.execute(
+                select(
+                    unit.id,
+                    unit.stopped_machines,
+                    unit.worker_cpu_millicores,
+                    unit.worker_memory_mib,
+                    _reported_memory(),
+                    unit.worker_gpu_count,
+                )
+                .outerjoin(ComputeNodeShapeTable, _same_shape(unit))
+                .where(
+                    unit.visibility == ComputeUnitVisibility.Internal.value,
+                    unit.platform_fleet.is_(True),
+                    unit.worker_preemptible.is_(preemptible),
+                    unit.worker_gpu_type == gpu_type,
+                    unit.stopped_machines > 0,
+                )
+            ).tuples()
+        ]
+
+    def stopped_reserve_units(self) -> list[StoppedReserveUnitRow]:
+        """Platform units holding stopped reserves, and whether one can resume now."""
+        unit = ComputeUnitTable
+        resumable = exists().where(
+            ComputeProviderInstanceTable.pool_id == unit.id,
+            ComputeProviderInstanceTable.status == "stopped",
+            ComputeProviderInstanceTable.missing_since.is_(None),
+        )
+        return [
+            StoppedReserveUnitRow(
+                id=str(unit_id),
+                preemptible=preemptible,
+                gpu_type=gpu_type,
+                cpu_millicores=cpu,
+                memory_mib=memory,
+                reported_memory_mib=reported,
+                gpu_count=gpu,
+                stopped=stopped,
+                resumable=bool(ready),
+            )
+            for unit_id, preemptible, gpu_type, cpu, memory, reported, gpu, stopped, ready in (
+                self.session.execute(
+                    select(
+                        unit.id,
+                        unit.worker_preemptible,
+                        unit.worker_gpu_type,
+                        unit.worker_cpu_millicores,
+                        unit.worker_memory_mib,
+                        _reported_memory(),
+                        unit.worker_gpu_count,
+                        unit.stopped_machines,
+                        resumable,
+                    )
+                    .outerjoin(ComputeNodeShapeTable, _same_shape(unit))
+                    .where(
+                        unit.platform_fleet.is_(True),
+                        unit.visibility == ComputeUnitVisibility.Internal.value,
+                        unit.phase.not_in(
+                            (ComputeUnitPhase.Deleting.value, ComputeUnitPhase.Deleted.value)
+                        ),
+                        or_(unit.stopped_machines > 0, resumable),
+                    )
+                ).tuples()
+            )
+        ]
 
     def offer_states(
         self,
@@ -555,7 +890,6 @@ class ComputeUnitRepository:
         row.source = record.source
         row.expires_at = record.expires_at
         row.updated_at = utc_now()
-        row.warm_handoff_from = list(record.warm_handoff_from)
         self._write_columns(row, record)
         return _compute_unit_record(row)
 
@@ -962,16 +1296,16 @@ class ComputeUnitRepository:
         provider_state: ComputeUnitProviderState,
         replacement_machine_id: str | None = None,
         replacement_template_version: str | None = None,
+        stopped_machines: int | None = None,
     ) -> ComputeUnitRecord | None:
         current = self.get(pool_id, for_update=True)
         if current is None or current.generation != expected_generation:
             return None
+        stopped = current.stopped_machines if stopped_machines is None else stopped_machines
         updated = current.model_copy(
             update={
                 "desired_machines": desired_machines,
-                "stopped_machines": min(
-                    current.stopped_machines, max(max_machines - desired_machines, 0)
-                ),
+                "stopped_machines": max(min(stopped, max_machines - desired_machines), 0),
                 "max_machines": max_machines,
                 "observed_machines": observed_machines,
                 "generation": current.generation + 1,
@@ -1670,7 +2004,7 @@ class ComputeProviderInstanceRepository:
     def stale_platform_reserves(
         self, *, agent_sha256: str, worker_image: str
     ) -> list[ComputeReserveInstance]:
-        """Stopped platform CPU reserves prepared with anything but this release."""
+        """Stopped platform reserves prepared with anything but this release."""
         table = ComputeProviderInstanceTable
         rows = self.session.execute(
             select(table.pool_id, table.instance_id, table.machine_id)
@@ -1685,7 +2019,6 @@ class ComputeProviderInstanceRepository:
                     table.prepared_worker_image != worker_image,
                 ),
                 ComputeUnitTable.platform_fleet.is_(True),
-                ComputeUnitTable.worker_gpu_count == 0,
             )
             .order_by(table.created_at.asc(), table.id.asc())
         ).tuples()
@@ -1694,21 +2027,6 @@ class ComputeProviderInstanceRepository:
             for pool_id, instance_id, machine_id in rows
             if pool_id is not None and instance_id is not None and machine_id is not None
         ]
-
-    def reserve_counts(self, pool_ids: Collection[str]) -> dict[str, int]:
-        if not pool_ids:
-            return {}
-        table = ComputeProviderInstanceTable
-        rows = self.session.execute(
-            select(table.pool_id, func.count())
-            .where(
-                table.pool_id.in_(pool_ids),
-                table.status.in_(("preparing", "stopping", "stopped")),
-                table.missing_since.is_(None),
-            )
-            .group_by(table.pool_id)
-        ).tuples()
-        return {pool_id: count for pool_id, count in rows if pool_id is not None}
 
     def platform_reserve_in_preparation(self) -> bool:
         table = ComputeProviderInstanceTable
@@ -1720,7 +2038,6 @@ class ComputeProviderInstanceRepository:
                         table.status.in_(("preparing", "stopping")),
                         table.missing_since.is_(None),
                         ComputeUnitTable.platform_fleet.is_(True),
-                        ComputeUnitTable.worker_gpu_count == 0,
                     )
                 )
             )
@@ -2384,3 +2701,16 @@ class ComputeMachineEnrollmentRepository:
             statement = statement.with_for_update()
         row = self.session.scalars(statement).first()
         return _machine_enrollment_record(row) if row is not None else None
+
+
+def _same_shape(unit: type[ComputeUnitTable]) -> ColumnElement[bool]:
+    shape = ComputeNodeShapeTable
+    return and_(
+        shape.cpu_millicores == unit.worker_cpu_millicores,
+        shape.memory_mib == unit.worker_memory_mib,
+        shape.gpu_count == unit.worker_gpu_count,
+    )
+
+
+def _reported_memory() -> ColumnElement[int]:
+    return func.coalesce(ComputeNodeShapeTable.reported_memory_mib, 0)

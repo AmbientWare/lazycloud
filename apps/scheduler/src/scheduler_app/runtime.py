@@ -20,6 +20,7 @@ from images.settings import ImageBuildContainerSettings
 from images.submission import ImageBuildSubmissionService
 from scheduler.adapters import (
     DatabaseCapacityAllocationOwners,
+    DatabaseMachineContainers,
     EndpointDispatchAutoscalingReader,
 )
 from scheduler.agent_pool import SchedulerAgentPoolService
@@ -46,6 +47,7 @@ from scheduler.preemption import (
     SchedulerWorkerMaintenanceService,
     SchedulerWorkerPreemptionService,
 )
+from scheduler.reserves import FleetConsolidationService
 from scheduler.service import (
     MANAGED_COMPUTE_RECONCILE_INTERVAL_SECONDS,
     Scheduler,
@@ -295,6 +297,24 @@ class SchedulerRuntime:
                     capacity_controllers.worker_pool_drain_controllers,
                     capacity_reservations,
                 ),
+                consolidation=(
+                    FleetConsolidationService(
+                        compute=scheduler_services.compute,
+                        containers=DatabaseMachineContainers(scheduler_services.context.database),
+                        workers=worker_states,
+                        stopper=scheduler_services.containers,
+                        leases=capacity_reservations,
+                        state=scheduler_services.compute.reserve_state,
+                        cooldown_seconds=(
+                            scheduler_services.compute.fleet_policy.consolidation_cooldown_seconds
+                        ),
+                        deadline_seconds=(
+                            scheduler_services.compute.fleet_policy.consolidation_deadline_seconds
+                        ),
+                    )
+                    if scheduler_services.compute.reserve_state is not None
+                    else None
+                ),
                 capacity_interruptions=SchedulerCapacityInterruptionService(
                     SchedulerWorkerPreemptionService(
                         worker_states,
@@ -383,6 +403,7 @@ def _container_requests_with_capacity(
         capacity_reservations=capacity_reservations,
         backfill_preemption=base.backfill_preemption,
         usage=base.usage,
+        reserve_state=base.reserve_state,
         requeue_delay_seconds=base.requeue_delay_seconds,
         max_retry_count=base.max_retry_count,
         max_retry_age_seconds=base.max_retry_age_seconds,

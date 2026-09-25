@@ -31,32 +31,52 @@ policy. The AWS connection pointer belongs only to capacity backed by an actual
 AWS connection. Platform bindings need no customer connection row. Account
 admission owns plan concurrency and billing limits.
 
-`FleetCapacityPolicy` owns platform CPU/GPU node limits and CPU warm minimums by
-purchase market. Platform growth and planned replacement share a PostgreSQL
-transaction lock before reading commitments or changing a unit. Terminating
-nodes consume headroom until their absence is observed. Providers can replace
-failed machines autonomously, so observed physical counts may briefly exceed
-the platform's admitted commitments. Customer-owned capacity stays outside these
-totals and serializes changes through its capacity workspace.
+`FleetCapacityPolicy` owns the platform's node limits, its running vCPU cap and
+each market's headroom. Platform growth and planned replacement share a
+PostgreSQL transaction lock before reading commitments or changing a unit.
+Terminating nodes consume headroom until their absence is observed. Providers can
+replace failed machines autonomously, so observed physical counts may briefly
+exceed the platform's admitted commitments. Customer-owned capacity stays outside
+these totals and serializes changes through its capacity workspace.
 
-Warm reconciliation maintains a baseline of usable workers in each purchase
-market. Workers serving requests count toward it. Healthy pools retain their
-baseline; market changes transfer it one worker at a time. Retiring assets count
-until the provider confirms their absence. Market changes, machine replacement
-and worker updates share the platform maintenance lock. A zero minimum disables
-that market's baseline. Floor changes preserve active work until it drains.
-Customer capacity cannot satisfy the platform baseline.
+Platform reserves are headroom, not machine counts. A market is the purchase
+market work accepted, Spot or On-Demand, and for GPUs the card. Each keeps running
+headroom and stopped headroom in CPU, memory and cards: a floor, a share of the
+market's reserved load, and a ceiling. The Spot stopped target also covers the
+busiest Spot machine's load, so an interruption resumes onto reserves. Defaults:
+Spot keeps 12 vCPU and 24 GiB running (two small machines) and 28 vCPU and
+100 GiB stopped (one large); On-Demand keeps nothing running and one small and one
+large stopped; T4, A10G and L4 keep one stopped On-Demand card, larger cards none.
+Headroom is measured in schedulable capacity, what a node gives containers. A
+node's memory is the least its shape's enrolled machines reported, kept once per
+nominal CPU, memory and card count in `compute_node_shapes`, and the offer's
+nominal size until one enrolls.
 
-CPU reserves have separate stopped targets for Spot and On-Demand, independent
-of their running warm minimums. Running targets, stopped targets, preparation,
-and retiring assets share the CPU fleet budget. Placement prefers compatible
-stopped capacity before buying another node, and within each the zone where the
-workload's disk left a cached volume. Queued CPU work
-takes priority over reserve replenishment. A stopped target being removed keeps
-its commitment until provider observation confirms its removal; disk destruction
-still requires the existing provider evidence.
+`plan_market_reserve` is pure and runs on one scheduler replica a minute, or
+sooner when a market's running headroom stays short for a minute. It reads one
+snapshot statement. Growth resumes a stopped machine in the market before it buys
+one: the smallest while the market's load is within its running floor, the largest
+above it, and a purchase follows the same rule with small and large machines.
+Idle machines beyond the running target are released largest first when quiet.
+Stopped reserves are prepared, one per market per pass, while demand waits for
+none; a large one when the shortfall exceeds a small machine. Reserves above the
+target retire. A market with waiting work or an interruption recovery takes no
+reserve growth, so a request's purchase is never behind a reserve's. A resume
+lowers the unit's stopped count, so refilling a reserve is always the planner's
+decision. Spot-tolerant work may resume an On-Demand reserve only while the
+On-Demand reserves left still meet their floor; otherwise it buys a new machine
+in that unit and the reserve stays stopped, because a retained pool resumes a
+reserve only when its running and stopped counts leave no room to launch. A slot
+being retired is not counted, so it neither delays a launch nor forces a resume.
 
-New platform AWS CPU pools own EC2 instances directly. Spot launches use
+A unit's `min_machines` is the planner's count of serving machines the idle drain
+keeps, and the drain keeps its busy machines first. Running, stopped, preparing and
+retiring machines share the fleet budget; stopped machines do not count against the
+running vCPU cap. A stopped target being removed keeps its commitment until
+provider observation confirms its removal; disk destruction still requires the
+existing provider evidence.
+
+Platform AWS pools, CPU and GPU, own EC2 instances directly. Spot launches use
 persistent requests with stop interruption behavior. Cleanup cancels each request
 before terminating its instance and holds capacity until its disks are gone.
 PostgreSQL checkpoints record launch intent before provider mutations. Their
@@ -64,47 +84,42 @@ revision fences concurrent writers and stale inventory responses. Existing
 Auto Scaling groups retain their recorded resource owner through cleanup.
 
 The agent proves its current binary and worker image before initial preparation
-completes, and the provider row records them. A stopped reserve that predates the
-active release is started and prepared again, one machine at a time and only while
-no CPU work waits, so a resume never updates itself first. The scheduler looks for
-such reserves within one capacity pass of a release activating, then each minute. A refused reserve launch
-or an interrupted reserve leaves the pool serving. Until the failure's cooldown
-passes, that market keeps the reserves it holds and buys no more; the shortfall
-goes to another market. Finishing a preparation needs the
-pool's lease, and a stream that finds it held defers that step instead of failing. Returning a used host requires a durable drain, no live workloads,
-stopped worker processes, and a receipt fenced to the stop request and cache
-generation. Cleanup removes tenant files and retires the worker credential while
-preserving the agent identity and platform image cache. Resuming keeps the machine
-identity and requires a new worker registration and request-poll lease.
+completes, and the provider row records them. A GPU reserve also proves its image
+and driver: its enrollment reports the unit's cards through the driver and passes
+preflight before it stops. A stopped reserve that predates the active release is
+started and prepared again, one machine at a time and only while no platform work
+waits, so a resume never updates itself first. The scheduler looks for such
+reserves within one capacity pass of a release activating, then each minute. A
+refused reserve launch or an interrupted reserve leaves the pool serving. Until
+the failure's cooldown passes, that unit keeps the reserves it holds and buys no
+more; the shortfall goes to another unit. Finishing a preparation needs the pool's
+lease, and a stream that finds it held defers that step instead of failing.
+Returning a used host requires a durable drain, no live workloads, stopped worker
+processes, and a receipt fenced to the stop request and cache generation. A used
+host becomes a reserve only while its market's reserves fall short of the last
+plan's stopped target. Cleanup removes tenant files and retires the worker
+credential while preserving the agent identity and platform image cache. Resuming
+keeps the machine identity and requires a new worker registration and
+request-poll lease.
 
-CPU headroom grows after reserved CPU or RAM leaves at most 20 percent free for
-60 seconds. Redis owns that observation window across scheduler replicas; pending
-capacity prevents duplicate growth. Each enabled stopped market retains its
-configured minimum or 20 percent of its running target, whichever is larger.
-A zero stopped minimum disables that market's reserve. The default stopped
-minimums are one Spot and one On-Demand, so On-Demand work such as a devbox
-resumes a stopped machine instead of buying one. Keep the running Spot floor at two
-until live preparation, restart, refill, interruption,
-and cleanup acceptance passes; then lower it to one within the same four-node cap.
+A provider lists its regions in the order platform purchases prefer them. When
+offers in two combinations of one region refuse launches within 30 minutes, that
+region ranks after the others, so a shortfall moves to the next region rather than
+walking the sold-out one type by type. Within a region, reserve purchases prefer
+zones the market does not run in yet. A provider interruption notice closes new
+admission on its machine and records one durable recovery obligation. Recovery buys
+compatible capacity outside that combination, within the existing fleet cap, and
+platform capacity may recover in another region. Multiple threatened machines may
+recover together. Planned updates yield to recovery, and a source remains
+protected from elective retirement and consolidation until its replacement
+accepts requests. The interruption deadline still stops work on time. Rebalance
+advisories are not read: in a scarce Spot market EC2 posts one at boot, and acting
+on it retired every Spot machine before it served.
 
-Within each purchase market, warm workers prefer distinct provider, region,
-availability-zone and instance-type combinations. A provider lists its regions in
-the order platform purchases prefer them. When offers in two combinations of one
-region refuse launches within 30 minutes, that region ranks after the others, so
-a warm shortfall moves to the next region rather than walking the sold-out one
-type by type. Serving warm machines stay where they are. A provider interruption
-notice closes new admission on its machine and records one durable recovery
-obligation. Recovery buys compatible capacity outside that combination, within
-the existing fleet cap, and platform capacity may recover in another region. Multiple threatened machines may recover together. Planned updates
-yield to recovery, and a source remains protected from elective retirement until
-its replacement accepts requests. The interruption deadline still stops work on
-time. Rebalance advisories are not read: in a scarce Spot market EC2 posts one
-at boot, and acting on it retired every Spot machine before it served.
-
-PostgreSQL stores handoff sources, purchase demand IDs and fulfillment timestamps
-outside JSON projections, so older writers preserve them. The database rejects
-changes to a terminal operation's outcome or named machine, and rejects attempts
-to restore its released ownership.
+PostgreSQL stores purchase demand IDs and fulfillment timestamps outside JSON
+projections, so older writers preserve them. The database rejects changes to a
+terminal operation's outcome or named machine, and rejects attempts to restore its
+released ownership.
 
 Supplier quotes are immutable component estimates recorded when a node is first
 observed. A unit records its prepared offer; reconciling its existing nodes must
@@ -142,7 +157,7 @@ machine or removing a slot is a lifecycle operation, not a consequence of a
 placement status.
 
 A connected cloud account's provisioning policy is defined in code. Customers
-choose workload resources, not node types, warm floors, or acquisition limits.
+choose workload resources, not node types, reserves, or acquisition limits.
 Provider catalogs define the supported machine types. Removing a type must stop
 new purchases while preserving observation, draining, and deletion of owned nodes.
 
@@ -155,11 +170,11 @@ charging Spot-tolerant work the non-preemptible premium.
 
 Compare revenue with the complete compute, root disk and public IPv4 quote.
 Unknown prices refuse platform purchases. Apply the same decision to selection,
-warm capacity, growth and platform-controlled restoration. Customer-owned
+reserves, growth and platform-controlled restoration. Customer-owned
 infrastructure stays outside the platform margin policy. Existing nodes remain
 observable and drainable after their offer fails purchase admission. Purchase
 permission belongs to the code-defined provider policy. Disabled platform providers
-remain resolvable for cleanup but cannot grow or receive warm targets. Their
+remain resolvable for cleanup but cannot grow or hold reserves. Their
 provider-managed launch processes must also stop; in-flight launches still settle
 through enrollment and reconciliation. The margin assessment does not cap future
 Spot prices or autonomous replacement prices on enabled providers.
@@ -226,8 +241,8 @@ Deletion requires durable intent. Missing provider resources move a unit to
 `Provisioning`. Preparing capacity can revive a fully `Deleted` unit with a new
 generation. A `Deleting` unit cannot reactivate while provider teardown is in flight.
 
-Empty internal platform units retire when they hold no capacity, warm floor,
-active work, reservations, or pending replacement.
+Empty internal platform units retire when they hold no capacity, retained
+machines, active work, reservations, or pending replacement.
 New units retain their idle-drain grace period unless their binding is obsolete.
 Retirement holds the reservation mutation and dispatch leases, checks durable
 demand and provider storage destruction, and preserves the unit and machine

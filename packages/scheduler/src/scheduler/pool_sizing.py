@@ -173,7 +173,6 @@ def plan_worker_pool_sizing(
     authoritative_units: int,
     state: CapacityPoolSizingSnapshot,
     now: datetime | None = None,
-    pressure_ready: bool = False,
 ) -> WorkerPoolSizingPlan:
     current_time = now or utc_now()
     sizing_state = state
@@ -190,7 +189,9 @@ def plan_worker_pool_sizing(
         pool.min_machines,
         0 if initial_target_reached else pool.initial_machines,
     )
-    if not pool.scaling_enabled:
+    if not pool.scaling_enabled or pool.platform_fleet:
+        # Platform units grow for demand through reservations and for headroom
+        # through compute's reserve planner; nothing here adds to them.
         return WorkerPoolSizingPlan(
             action=WorkerPoolSizingAction.None_,
             capacity_owner_id=pool.capacity_owner_id,
@@ -199,7 +200,11 @@ def plan_worker_pool_sizing(
             target_units=current_units,
             headroom=headroom,
             initial_target_reached=initial_target_reached,
-            reason="worker-pool scaling is disabled",
+            reason=(
+                "platform reserves are planned by compute"
+                if pool.platform_fleet
+                else "worker-pool scaling is disabled"
+            ),
         )
     if current_units > registered_units:
         return WorkerPoolSizingPlan(
@@ -213,7 +218,7 @@ def plan_worker_pool_sizing(
             reason="authoritative capacity is awaiting worker registration",
         )
     needs_baseline = registered_units < baseline
-    needs_headroom = _below_minimum_headroom(pool, headroom) or pressure_ready
+    needs_headroom = _below_minimum_headroom(pool, headroom)
     if not needs_baseline and not needs_headroom:
         return WorkerPoolSizingPlan(
             action=WorkerPoolSizingAction.None_,
@@ -313,9 +318,6 @@ def _below_minimum_headroom(
     pool: ComputeUnitRecord,
     headroom: WorkerPoolEffectiveHeadroom,
 ) -> bool:
-    if pool.platform_fleet:
-        workers = headroom.available_workers + headroom.unclaimed_pending_workers
-        return workers < pool.min_machines
     return (
         headroom.cpu_millicores < pool.min_free_cpu_millicores
         or headroom.memory_mib < pool.min_free_memory_mib
