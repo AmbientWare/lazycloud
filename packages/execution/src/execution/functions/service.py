@@ -1248,7 +1248,7 @@ class FunctionControlService:
         if not self.services.containers.accepting_work(request.container_id):
             return FunctionClaimResponse()
         task = self.services.tasks.claim_and_start(
-            request.stub_id, container_id=request.container_id
+            request.stub_id, container_id=request.container_id, claim_id=request.claim_id
         )
         if task is None:
             return FunctionClaimResponse()

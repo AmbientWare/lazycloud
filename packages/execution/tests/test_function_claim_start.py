@@ -68,6 +68,51 @@ def test_claim_commits_one_running_attempt_before_returning_work(
         assert attempt.attempt_number == claimed.attempt_number
 
 
+def test_retried_claim_returns_the_task_it_already_took(
+    isolated_services: ApiServices,
+) -> None:
+    stub = ControlPlaneService(
+        isolated_services.context,
+    ).create_stub("claim-retry", kind=StubKind.Function, handler="main:hello")
+    container = ContainerRecord(
+        id=str(uuid4()),
+        name="claim-retry",
+        image="python",
+        command=[],
+        workspace_id=stub.workspace_id,
+        stub_id=stub.id,
+        status=ContainerStatus.Running,
+    )
+    tasks = [
+        isolated_services.tasks.create(
+            f"claim-retry-{index}",
+            workspace_id=stub.workspace_id,
+            stub_id=stub.id,
+            invocation=FunctionJsonInvocation(),
+        )
+        for index in range(2)
+    ]
+    with isolated_services.context.database.session() as session:
+        ContainerRepository(session).upsert(container)
+        for task in tasks:
+            TaskRepository(session).mark_claimable(task.id, at=utc_now())
+    lost_claim = str(uuid4())
+
+    def claim(claim_id: str) -> Task | None:
+        return isolated_services.tasks.claim_and_start(
+            stub.id, container_id=container.id, claim_id=claim_id
+        )
+
+    first = claim(lost_claim)
+    retried = claim(lost_claim)
+    fresh = claim(str(uuid4()))
+    assert first is not None and retried is not None and fresh is not None
+    assert retried.id == first.id
+    assert fresh.id != first.id
+    with isolated_services.context.database.session() as session:
+        assert len(TaskAttemptRepository(session).list_for_task(first.id)) == 1
+
+
 def test_idle_retirement_fences_claims_without_releasing_physical_capacity(
     isolated_services: ApiServices,
 ) -> None:

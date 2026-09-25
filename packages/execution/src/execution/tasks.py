@@ -378,19 +378,30 @@ class TaskService:
                 attempts.upsert(latest)
         return updated
 
-    def claim_and_start(self, stub_id: str, *, container_id: str) -> Task | None:
+    def claim_and_start(
+        self, stub_id: str, *, container_id: str, claim_id: str | None = None
+    ) -> Task | None:
         resolved_container_id = required_uuid(container_id, field="container_id")
+        resolved_claim_id = optional_uuid(claim_id, field="claim_id")
         with self.context.database.session() as session:
             claimed = TaskRepository(session).claim_for_stub(
-                stub_id, container_id=resolved_container_id, limit=1
+                stub_id,
+                container_id=resolved_container_id,
+                limit=1,
+                claim_id=resolved_claim_id,
             )
             if not claimed:
                 return None
+            [task] = claimed
+            # Fresh claims are pending; a running one is this claim's own retry.
+            if task.status is TaskStatus.Running:
+                return task
             persisted = self._start_task_in_session(
                 session,
-                claimed[0],
+                task,
                 resolved_container_id=resolved_container_id,
                 claim=True,
+                claim_id=resolved_claim_id,
             )
         self._publish_task_started(persisted)
         return persisted.task
@@ -414,6 +425,7 @@ class TaskService:
         *,
         resolved_container_id: str | None,
         claim: bool,
+        claim_id: str | None = None,
     ) -> _TaskStartPersistence:
         task_repository = TaskRepository(session)
         current = task_repository.get_for_update_across_workspaces(task.id)
@@ -478,7 +490,7 @@ class TaskService:
             latest.started_at = latest.started_at or now
             if attempt_container_id:
                 latest.container_id = attempt_container_id
-            attempt_repository.upsert(latest)
+            attempt_repository.upsert(latest, claim_id=claim_id)
         else:
             attempt_repository.create(
                 TaskAttempt(
@@ -489,7 +501,8 @@ class TaskService:
                     attempt_number=saved.attempt_number,
                     status=TaskStatus.Running,
                     started_at=now,
-                )
+                ),
+                claim_id=claim_id,
             )
             attempt_started = True
         return _TaskStartPersistence(

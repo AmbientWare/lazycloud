@@ -283,6 +283,7 @@ class TaskRepository:
         *,
         container_id: str,
         limit: int,
+        claim_id: str | None = None,
     ) -> list[Task]:
         """Take up to `limit` runnable tasks for this stub, binding them to a container.
 
@@ -294,17 +295,38 @@ class TaskRepository:
 
         Only tasks whose inputs have resolved are visible here, so a dependent
         cannot be picked up before the results it is waiting on exist.
+
+        A `claim_id` this container already used answers with the task it took,
+        still running, or with nothing once that attempt has ended. The lookup
+        follows the container row lock, so a retry racing its own first request
+        waits for that commit instead of missing it and taking a second task.
         """
 
         if limit <= 0:
             return []
-        if not ContainerRolloutRepository(self.session).accepting_work(
-            container_id, stub_id=stub_id
-        ):
+        rollouts = ContainerRolloutRepository(self.session)
+        admitting = rollouts.accepting_work(container_id, stub_id=stub_id)
+        if claim_id is not None:
+            prior = self.session.execute(
+                select(TaskTable, TaskAttemptTable.status, TaskAttemptTable.attempt_number)
+                .join(TaskAttemptTable, TaskAttemptTable.task_id == TaskTable.id)
+                .where(
+                    TaskAttemptTable.container_id == container_id,
+                    TaskAttemptTable.claim_id == claim_id,
+                )
+            ).one_or_none()
+            if prior is not None:
+                row, attempt_status, attempt_number = prior
+                resumable = (
+                    attempt_status == TaskStatus.Running.value
+                    and attempt_number == row.attempt_number
+                    and row.status == TaskStatus.Running.value
+                    and row.container_id == container_id
+                )
+                return [task_from_table(row)] if resumable else []
+        if not admitting:
             return []
-        ContainerRolloutRepository(self.session).record_workload_ready(
-            container_id, now=datetime.now(UTC)
-        )
+        rollouts.record_workload_ready(container_id, now=datetime.now(UTC))
         rows = (
             self.session.scalars(
                 select(TaskTable)
@@ -995,17 +1017,17 @@ class TaskAttemptRepository:
             )
         )
 
-    def create(self, attempt: TaskAttempt) -> TaskAttempt:
+    def create(self, attempt: TaskAttempt, *, claim_id: str | None = None) -> TaskAttempt:
         """System-authority write; ownership comes from the attempt record."""
         if attempt.workspace_id is not None:
             WorkspaceRepository(self.session).lock_active_owner(attempt.workspace_id)
-        row = TaskAttemptTable(id=attempt.id)
+        row = TaskAttemptTable(id=attempt.id, claim_id=claim_id)
         write_task_attempt_row(row, attempt)
         self.session.add(row)
         self.session.flush()
         return task_attempt_from_table(row)
 
-    def upsert(self, attempt: TaskAttempt) -> TaskAttempt:
+    def upsert(self, attempt: TaskAttempt, *, claim_id: str | None = None) -> TaskAttempt:
         """System-authority write keyed by attempt id; ownership comes from the record."""
         if attempt.workspace_id is not None:
             WorkspaceRepository(self.session).lock_active_owner(attempt.workspace_id)
@@ -1016,6 +1038,8 @@ class TaskAttemptRepository:
         elif row.workspace_id != attempt.workspace_id or row.task_id != attempt.task_id:
             raise ConflictError("task attempt ownership cannot change")
         write_task_attempt_row(row, attempt)
+        if claim_id is not None:
+            row.claim_id = claim_id
         self.session.flush()
         return task_attempt_from_table(row)
 

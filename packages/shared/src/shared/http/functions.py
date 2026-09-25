@@ -87,10 +87,15 @@ class FunctionClaimRequest(HttpModel):
     Names the stub rather than a task, because a pooled container is started for
     the function and not for any particular call — which call it serves is
     decided here, by whichever claim wins the row.
+
+    `claim_id` is chosen by the caller and resent unchanged when a claim's
+    response is lost, so the retry is answered with the task the first request
+    already took instead of a second one.
     """
 
     stub_id: str
     container_id: str
+    claim_id: str | None = None
 
 
 class FunctionClaimedTask(HttpModel):

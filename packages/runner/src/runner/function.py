@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from multiprocessing import Pipe, Process
 from types import FrameType
 from typing import Any, Protocol, TextIO
+from uuid import uuid4
 
 import cloudpickle
 from foundation.handler_loading import evict_user_code_modules, load_callable
@@ -307,15 +308,34 @@ class FunctionRunner:
         """
 
         idle_since = time.monotonic()
+        claim_id = str(uuid4())
         while shutdown is None or not shutdown.is_set():
             if self._retired.is_set():
                 return 0
             if not self._begin_invocation():
                 time.sleep(self.config.poll_interval_seconds)
                 continue
+            task = None
             try:
-                task = self.claim()
-                if task is not None:
+                try:
+                    claimed = self.claim(claim_id)
+                except Exception as exc:
+                    # Keep the claim id: the server may have assigned a task whose
+                    # response was lost, and resending the id recovers it. A
+                    # control plane that cannot be reached is not an empty queue,
+                    # so say so on the container's own stream.
+                    print(f"function claim failed: {exc}", file=sys.stderr, flush=True)
+                    claimed = None
+                else:
+                    claim_id = str(uuid4())
+                if claimed is not None:
+                    task = ClaimedTask(
+                        task_id=claimed.task_id,
+                        root_task_id=claimed.root_task_id or claimed.task_id,
+                        attempt_number=claimed.attempt_number,
+                        max_attempts=claimed.max_attempts,
+                        invocation=decode_function_invocation(claimed),
+                    )
                     self.run_task(task)
             finally:
                 with self._generation_lock:
@@ -368,33 +388,17 @@ class FunctionRunner:
             self._retired.set()
         return response.retired
 
-    def claim(self) -> ClaimedTask | None:
-        try:
-            response = FunctionClaimResponse.model_validate(
-                self.control.post(
-                    "/api/v1/functions/claim",
-                    FunctionClaimRequest(
-                        stub_id=self.config.stub_id,
-                        container_id=self.container_id,
-                    ).model_dump(mode="json"),
-                )
+    def claim(self, claim_id: str) -> FunctionClaimedTask | None:
+        return FunctionClaimResponse.model_validate(
+            self.control.post(
+                "/api/v1/functions/claim",
+                FunctionClaimRequest(
+                    stub_id=self.config.stub_id,
+                    container_id=self.container_id,
+                    claim_id=claim_id,
+                ).model_dump(mode="json"),
             )
-        except Exception as exc:
-            # A control plane that cannot be reached is not an empty queue. Say so
-            # on the container's own stream — there is no task to attribute it to.
-            print(f"function claim failed: {exc}", file=sys.stderr, flush=True)
-            time.sleep(self.config.poll_interval_seconds)
-            return None
-        if response.task is None:
-            return None
-        claimed = response.task
-        return ClaimedTask(
-            task_id=claimed.task_id,
-            root_task_id=claimed.root_task_id or claimed.task_id,
-            attempt_number=claimed.attempt_number,
-            max_attempts=claimed.max_attempts,
-            invocation=decode_function_invocation(claimed),
-        )
+        ).task
 
     def run_task(self, task: ClaimedTask) -> None:
         with self._active_lock:
