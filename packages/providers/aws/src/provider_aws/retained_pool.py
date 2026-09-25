@@ -780,6 +780,8 @@ class AwsRetainedPool:
                     ),
                     booted_template_version=slot.host_revision,
                     hibernates=instance.hibernation.configured,
+                    stop_requested=status is ProviderMachineStatus.Stopping
+                    and slot.stop_requested_at is not None,
                 )
             )
         return ProviderUnitSnapshot(

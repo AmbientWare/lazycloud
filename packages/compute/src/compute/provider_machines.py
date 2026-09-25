@@ -87,6 +87,7 @@ from compute.providers import (
 )
 from compute.reclaim import ComputeReclaimPolicy
 from compute.source_cache_storage import SourceCacheStorageLifecycleService
+from compute.stop_rechecks import StopRechecks
 
 
 def provider_billing_renewal(
@@ -254,6 +255,13 @@ class ProviderUnitBootstrapFactory(Protocol):
 LOGGER = logging.getLogger(__name__)
 
 
+def _stop_pending(snapshot: ProviderUnitSnapshot) -> bool:
+    return any(
+        instance.stop_requested and instance.status == ProviderMachineStatus.Stopping
+        for instance in snapshot.instances
+    )
+
+
 @dataclass(slots=True)
 class ProviderMachineReconciler:
     """Reconciles durable provider rows against what a provider reports."""
@@ -264,6 +272,7 @@ class ProviderMachineReconciler:
     workspace_changes: WorkspaceChangePublisher | None
     scheduler_hooks: ComputeSchedulerHooks | None
     source_cache_lifecycle: SourceCacheStorageLifecycleService
+    stop_rechecks: StopRechecks | None = None
 
     def _sync_pooled_instances(
         self,
@@ -896,6 +905,8 @@ class ProviderMachineReconciler:
             change=WorkspaceChangeType.Updated,
             resource_id=updated.id,
         )
+        if self.stop_rechecks is not None and _stop_pending(snapshot):
+            self.stop_rechecks.watch(updated.workspace_id, updated.capacity_owner_id)
         return updated
 
     def _terminate_provider_record(

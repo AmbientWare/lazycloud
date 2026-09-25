@@ -1439,8 +1439,10 @@ def test_a_reserve_hibernates_only_when_asked_and_always_reaches_a_stop(
     request = pool.request.model_copy(update={"purchases_enabled": False})
     clients = AwsManagedPoolClients(ec2=ec2, autoscaling=_AutoScaling())
     _save_slot(pool, request, slot)
-    AwsRetainedPool(request, pool.spec, clients, pool.checkpoints).ensure()
+    first = AwsRetainedPool(request, pool.spec, clients, pool.checkpoints).ensure()
     assert ec2.stops == first_pass
+    # Compute rechecks only an instance whose stop the provider accepted.
+    assert [instance.stop_requested for instance in first.instances] == [bool(first_pass)]
     [stopping] = RetainedPoolState.model_validate(pool.checkpoints.load(request).attributes).slots
     overdue = now - timedelta(minutes=11)
     _save_slot(

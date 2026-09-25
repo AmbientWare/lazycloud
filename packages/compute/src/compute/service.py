@@ -160,6 +160,7 @@ from compute.purchase_policy import assess_fleet_purchase
 from compute.reclaim import ComputeReclaimPolicy
 from compute.reserve_state import FleetReserveState
 from compute.source_cache_storage import SourceCacheStorageLifecycleService
+from compute.stop_rechecks import StopRechecks
 from compute.telemetry import AGENT_HEARTBEAT_TIMEOUT_SECONDS
 
 LOGGER = logging.getLogger(__name__)
@@ -222,9 +223,33 @@ class ComputeService:
         default_factory=dict, init=False, repr=False
     )
     source_cache_lifecycle: SourceCacheStorageLifecycleService = field(init=False)
+    _stop_rechecks: StopRechecks = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         self.source_cache_lifecycle = SourceCacheStorageLifecycleService(self.context)
+        self._stop_rechecks = StopRechecks(self._recheck_stopping_unit)
+
+    def _recheck_stopping_unit(self, workspace_id: str, capacity_owner_id: str) -> bool:
+        """Record the unit as its provider reports it; true while a stop is still under way."""
+        try:
+            with self._required_capacity_owner_mutations().mutation_lock(capacity_owner_id):
+                current, provider, offer = self._internal_unit_provider(
+                    workspace_id, capacity_owner_id
+                )
+                if provider.pooled is None or current.phase in ENDED_UNIT_PHASES:
+                    return False
+                snapshot = provider.pooled.describe_unit(
+                    self._provider_unit_request(current, offer)
+                )
+                self.provider_machines._apply_pooled_snapshot(
+                    current, offer, snapshot, provider=provider.pooled
+                )
+        except CapacityReservationLockContendedError:
+            return True
+        return any(
+            instance.stop_requested and instance.status == ProviderMachineStatus.Stopping
+            for instance in snapshot.instances
+        )
 
     def pooled_offer_rejection(
         self,
@@ -306,6 +331,7 @@ class ComputeService:
             workspace_changes=self.workspace_changes,
             scheduler_hooks=self.scheduler_hooks,
             source_cache_lifecycle=self.source_cache_lifecycle,
+            stop_rechecks=self._stop_rechecks,
         )
 
     def record_provider_node_lifecycle(

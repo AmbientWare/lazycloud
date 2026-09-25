@@ -133,6 +133,8 @@ class ProviderUnitInstance(ContractModel):
     booted_template_version: str = ""
     hibernates: bool = False
     """Launched able to hibernate; the provider decides it per instance type at launch."""
+    stop_requested: bool = False
+    """The provider accepted a stop or hibernation for it that has not finished."""
     billing_started_at: datetime | None = None
     billing_minimum_seconds: int | None = Field(default=None, ge=0)
     billing_quantum_seconds: int | None = Field(default=None, ge=1)
