@@ -2,6 +2,8 @@ import * as THREE from "three";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
 
+import { createDevboxFocus } from "./devboxFocus";
+
 const AGENTS = ["codex", "claude-code", "opencode", "pi"];
 const ASSEMBLED_COUNT = 27;
 const COUNT = ASSEMBLED_COUNT + 36;
@@ -58,20 +60,21 @@ export async function createDevboxScene(
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   const scene = new THREE.Scene();
   scene.add(new THREE.HemisphereLight("#e0e5e9", "#111519", 1.2));
-  const key = new THREE.DirectionalLight("#e2e8ed", 2);
+  const key = new THREE.DirectionalLight("#c2eaf8", 2);
   key.position.set(-3, 7, 4);
-  const rim = new THREE.DirectionalLight("#7cabc4", 1.2);
+  const rim = new THREE.DirectionalLight("#76d6f5", 0.8);
   rim.position.set(4, 2, -5);
   scene.add(key, rim);
   const studio = new RoomEnvironment();
   const reflection = new THREE.PMREMGenerator(renderer);
   const environment = reflection.fromScene(studio, 0.04);
   scene.environment = environment.texture;
-  scene.environmentIntensity = 0.35;
+  scene.environmentIntensity = 0.2;
   studio.dispose();
   reflection.dispose();
 
   const camera = new THREE.PerspectiveCamera(34, 1, 0.1, 60);
+  const focusEffect = createDevboxFocus(renderer, camera);
   const cameraDirection = new THREE.Vector3(6, 5, 12).normalize();
   camera.position.copy(cameraDirection).multiplyScalar(15);
   camera.lookAt(0, 0, 0);
@@ -85,8 +88,19 @@ export async function createDevboxScene(
   grainBitmap.width = grainBitmap.height = 360;
   const grainContext = grainBitmap.getContext("2d");
   if (!grainContext) throw new Error("The surface texture canvas is unavailable");
-  grainContext.fillStyle = "#bdbdbd";
+  const face = grainContext.createLinearGradient(0, 0, 360, 360);
+  face.addColorStop(0, "#263c48");
+  face.addColorStop(0.45, "#141e26");
+  face.addColorStop(1, "#1a303b");
+  grainContext.fillStyle = face;
   grainContext.fillRect(0, 0, 360, 360);
+  const highlight = grainContext.createRadialGradient(40, 0, 0, 40, 0, 340);
+  highlight.addColorStop(0, "rgb(118 214 245 / 12%)");
+  highlight.addColorStop(0.5, "rgb(118 214 245 / 3%)");
+  highlight.addColorStop(1, "rgb(118 214 245 / 0%)");
+  grainContext.fillStyle = highlight;
+  grainContext.fillRect(0, 0, 360, 360);
+  grainContext.globalAlpha = 0.8;
   grainContext.drawImage(grainImage, 0, 0, 360, 360);
   const grain = new THREE.CanvasTexture(grainBitmap);
   grain.colorSpace = THREE.SRGBColorSpace;
@@ -96,18 +110,19 @@ export async function createDevboxScene(
   function surface(color: string) {
     const material = new THREE.MeshStandardMaterial({
       color,
-      roughness: 0.78,
-      metalness: 0.12,
+      roughness: 0.94,
+      metalness: 0.04,
       map: grain,
-      bumpMap: grain,
-      bumpScale: 0.016,
+      emissive: "#ffffff",
+      emissiveMap: grain,
+      emissiveIntensity: 0.18,
     });
     materials.push(material);
     return material;
   }
-  const bodyMaterial = surface("#30383e");
-  const capMaterial = surface("#20272c");
-  const seamMaterial = new THREE.MeshBasicMaterial({ color: "#527f96" });
+  const bodyMaterial = surface("#ffffff");
+  const capMaterial = surface("#b1c6d2");
+  const seamMaterial = new THREE.MeshBasicMaterial({ color: "#456b7b" });
   materials.push(seamMaterial);
   const bodyGeometry = new RoundedBoxGeometry(0.94, 0.94, 0.94, 4, 0.055);
   const capGeometry = new RoundedBoxGeometry(0.86, 0.024, 0.86, 3, 0.01);
@@ -158,7 +173,7 @@ export async function createDevboxScene(
 
   const shellGeometry = new RoundedBoxGeometry(2.87, 2.87, 2.87, 5, 0.09);
   geometries.push(shellGeometry);
-  const shellMaterial = surface("#30383e");
+  const shellMaterial = surface("#ffffff");
   shellMaterial.transparent = true;
   const shell = new THREE.Mesh(shellGeometry, shellMaterial);
   scene.add(shell);
@@ -184,7 +199,7 @@ export async function createDevboxScene(
       (Math.floor(index / 3) % 3) - 1,
       Math.floor(index / 9) - 1,
     ).multiplyScalar(0.96);
-    const size = background ? 0.6 + (index % 4) * 0.1 : 0.65 + (index % 5) * 0.11;
+    const size = (background ? 0.6 + (index % 4) * 0.1 : 0.65 + (index % 5) * 0.11) * 0.9;
     const rotation =
       index < 3
         ? foregroundRotations[index]
@@ -331,7 +346,7 @@ export async function createDevboxScene(
       agentMarks[index % AGENTS.length].mesh.setMatrixAt(Math.floor(index / AGENTS.length), matrix);
     });
     for (const mesh of instances) mesh.instanceMatrix.needsUpdate = true;
-    renderer.render(scene, camera);
+    focusEffect.render(scene, shell.position, ease(expansion));
   }
   function tick(now: number) {
     animation = 0;
@@ -374,12 +389,13 @@ export async function createDevboxScene(
     camera.position.copy(cameraDirection).multiplyScalar(distance);
     camera.updateProjectionMatrix();
     const mobile = width < 1024;
+    const centerY = mobile ? -0.57 : 0;
     const halfHeight = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * distance;
     const halfWidth = halfHeight * camera.aspect;
     const focus = right
       .clone()
       .multiplyScalar(mobile ? 0 : -halfWidth * 0.46)
-      .addScaledVector(up, mobile ? -halfHeight * 0.57 : 0);
+      .addScaledVector(up, halfHeight * centerY);
     shell.position.copy(focus);
     cubes.forEach((cube, index) => {
       let x: number;
@@ -396,6 +412,8 @@ export async function createDevboxScene(
         x = ((slot % 5) - 2) * 0.51 + Math.sin(index * 4.7) * 0.09;
         y = (Math.floor(slot / 5) - 2) * 0.49 + Math.cos(index * 2.3) * 0.08;
       }
+      x *= 0.84;
+      y = THREE.MathUtils.lerp(centerY, y, 0.84);
       const depth = cube.background
         ? -4 - (index % 5) * 1.2
         : index < 3
@@ -409,9 +427,10 @@ export async function createDevboxScene(
         .addScaledVector(up, y * halfHeight * depthScale)
         .addScaledVector(cameraDirection, depth);
       if (cube.background) cube.origin.copy(cube.target);
-      if (index < 3) cube.size = mobile ? 0.98 : 1.4;
+      if (index < 3) cube.size = mobile ? 0.84 : 1.18;
     });
     renderer.setSize(width, height, false);
+    focusEffect.resize(width, height);
     requestDraw();
   }
   function transitionTo(target: 0 | 1) {
@@ -497,6 +516,7 @@ export async function createDevboxScene(
       for (const material of materials) material.dispose();
       for (const texture of textures) texture.dispose();
       environment.dispose();
+      focusEffect.dispose();
       renderer.dispose();
     },
   };
