@@ -161,6 +161,10 @@ class _Controller:
     def reservation_shape(self, request: SchedulerWorkerRequest) -> CapacityRequestShape:
         return _shape()
 
+    @property
+    def reported_memory_mib(self) -> int:
+        return 0
+
     def ensure_capacity(
         self,
         reservation: CapacityProvisioningReservation,
@@ -244,11 +248,6 @@ class _SizingSnapshots:
 
 @dataclass(slots=True)
 class _UnusedComputeCapacity(_SizingSnapshots):
-    def observe_pool_pressure(
-        self, capacity_owner_id: str, *, free_capacity_percent: int, now: datetime
-    ) -> bool:
-        raise AssertionError("capacity selection must not observe activity pressure")
-
     def fulfill_acquired_capacity(
         self, request: CapacityFulfillmentRequest
     ) -> CapacityOperationStatus:
@@ -432,39 +431,6 @@ class _Events:
     ) -> CloudEventRecord:
         _ = event_type, data, event_id
         raise RuntimeError("event sink is intentionally unavailable")
-
-
-def test_capacity_pressure_requires_a_continuous_window_across_replicas(
-    real_redis_actors: RealRedisActors,
-) -> None:
-    first = _repository(real_redis_actors)
-    second = _repository(real_redis_actors)
-    now = datetime.now(UTC)
-    assert not first.pressure_ready(OWNER_ID, under_pressure=True, now=now, sustained_seconds=60)
-    assert not second.pressure_ready(
-        OWNER_ID,
-        under_pressure=True,
-        now=now + timedelta(seconds=59),
-        sustained_seconds=60,
-    )
-    assert second.pressure_ready(
-        OWNER_ID,
-        under_pressure=True,
-        now=now + timedelta(seconds=60),
-        sustained_seconds=60,
-    )
-    assert not first.pressure_ready(
-        OWNER_ID,
-        under_pressure=False,
-        now=now + timedelta(seconds=61),
-        sustained_seconds=60,
-    )
-    assert not second.pressure_ready(
-        OWNER_ID,
-        under_pressure=True,
-        now=now + timedelta(seconds=90),
-        sustained_seconds=60,
-    )
 
 
 def test_reservation_is_idempotent_per_request_and_reuses_compatible_capacity(
@@ -777,7 +743,7 @@ def test_capacity_reservation_reuses_machine_during_prepared_worker_update(
     )
     unit = _managed_pool()
     controller = ComputeUnitCapacityController(
-        unit.workspace_id, unit, _UnusedComputeCapacity(unit), workers
+        unit.workspace_id, unit, _UnusedComputeCapacity(unit), workers, 0
     )
     reservation = CapacityProvisioningReservation(
         id="worker-update-demand",
@@ -800,6 +766,7 @@ def test_fixed_pool_rejects_cross_workspace_and_oversized_capacity_requests() ->
         _managed_pool(),
         _UnusedComputeCapacity(_managed_pool()),
         _WorkerRepository(),
+        0,
     )
     assert compute.accepts(_request("fits"))
     assert not compute.accepts(
@@ -817,7 +784,7 @@ def test_fixed_pool_rejects_cross_workspace_and_oversized_capacity_requests() ->
 def test_platform_capacity_accepts_customer_cold_requests_in_the_requested_market() -> None:
     unit = _managed_pool().model_copy(update={"platform_fleet": True})
     controller = ComputeUnitCapacityController(
-        unit.workspace_id, unit, _UnusedComputeCapacity(unit), _WorkerRepository()
+        unit.workspace_id, unit, _UnusedComputeCapacity(unit), _WorkerRepository(), 0
     )
     request = _request("customer-cold-capacity").model_copy(update={"preemptible": False})
 

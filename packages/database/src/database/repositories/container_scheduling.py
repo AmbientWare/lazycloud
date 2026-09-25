@@ -15,7 +15,7 @@ from sqlalchemy import Select, func, select, update
 from sqlalchemy.orm import Session, load_only, undefer
 
 
-def _request_statement(*, include_payload: bool = True) -> Select[tuple[ContainerTable]]:
+def scheduling_request_statement(*, include_payload: bool = True) -> Select[tuple[ContainerTable]]:
     projection = load_only(
         ContainerTable.capacity_retry_at,
         ContainerTable.id,
@@ -60,7 +60,9 @@ class ContainerSchedulingRepository:
 
     def submit(self, request: SchedulerWorkerRequest, *, now: datetime) -> bool:
         row = self.session.scalar(
-            _request_statement().where(ContainerTable.id == request.container_id).with_for_update()
+            scheduling_request_statement()
+            .where(ContainerTable.id == request.container_id)
+            .with_for_update()
         )
         if row is None or row.workspace_id != request.workspace_id:
             raise ConflictError("scheduling request does not own the container")
@@ -79,7 +81,7 @@ class ContainerSchedulingRepository:
 
     def recoverable(self, *, now: datetime, limit: int) -> list[SchedulerWorkerRequest]:
         rows = self.session.scalars(
-            _request_statement()
+            scheduling_request_statement()
             .where(
                 ContainerTable.scheduling_requested_at.is_not(None),
                 ContainerTable.scheduling_reconcile_at <= now,
@@ -102,7 +104,9 @@ class ContainerSchedulingRepository:
         self, request: SchedulerWorkerRequest, *, now: datetime
     ) -> SchedulerWorkerRequest:
         row = self.session.scalar(
-            _request_statement().where(ContainerTable.id == request.container_id).with_for_update()
+            scheduling_request_statement()
+            .where(ContainerTable.id == request.container_id)
+            .with_for_update()
         )
         if row is None or row.workspace_id != request.workspace_id:
             raise ConflictError("capacity demand does not own the container")
@@ -118,7 +122,7 @@ class ContainerSchedulingRepository:
 
     def capacity_due(self, *, now: datetime, limit: int) -> list[SchedulerWorkerRequest]:
         rows = self.session.scalars(
-            _request_statement(include_payload=False)
+            scheduling_request_statement(include_payload=False)
             .where(
                 ContainerTable.scheduling_requested_at.is_not(None),
                 ContainerTable.capacity_retry_at <= now,
@@ -134,7 +138,7 @@ class ContainerSchedulingRepository:
         self, container_id: str, *, now: datetime
     ) -> SchedulerWorkerRequest | None:
         row = self.session.scalar(
-            _request_statement(include_payload=False).where(
+            scheduling_request_statement(include_payload=False).where(
                 ContainerTable.id == container_id,
                 ContainerTable.scheduling_requested_at.is_not(None),
                 ContainerTable.capacity_retry_at <= now,
@@ -169,7 +173,7 @@ class ContainerSchedulingRepository:
 
     def request_for(self, container_id: str) -> SchedulerWorkerRequest | None:
         row = self.session.scalar(
-            _request_statement().where(
+            scheduling_request_statement().where(
                 ContainerTable.id == container_id,
                 ContainerTable.scheduling_requested_at.is_not(None),
             )

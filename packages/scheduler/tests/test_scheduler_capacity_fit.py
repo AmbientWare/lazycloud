@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import pytest
+from compute.offers import OfferRequest, filter_offers, pooled_cloud_offer
+from scheduler.capacity_reservations import CapacityRequestShape
 from scheduler.tools import (
     SchedulingDecision,
     SchedulingRequest,
@@ -8,8 +10,12 @@ from scheduler.tools import (
     plan_scheduling_batch,
     select_worker_for_request,
 )
+from shared.container_requests import node_memory as reported_node_memory
+from shared.container_requests import schedulable_capacity
 from shared.disks import DiskStorage
 from shared.placement import Placement, PlacementKind
+from shared.scheduling import SchedulerWorkerRequest
+from shared.supplier_costs import SupplierCostTerms
 
 
 def _gpu_worker(gpu_type: str) -> WorkerCapacity:
@@ -336,3 +342,72 @@ def test_workers_on_one_machine_share_its_disk_budget(storage: DiskStorage) -> N
         SchedulingDecision.Dispatch,
         SchedulingDecision.ProvisionWorker,
     ]
+
+
+@pytest.mark.parametrize(
+    ("node_cpu", "node_memory", "reported_memory"),
+    [
+        (8_000, 16 * 1024, 0),
+        (8_000, 16 * 1024, 15_338),
+        (8_000, 32 * 1024, 31_600),
+        (32_000, 128 * 1024, 0),
+        (4_000, 16 * 1024, 15_338),
+    ],
+)
+def test_purchase_reservation_and_placement_agree_on_fit(
+    node_cpu: int, node_memory: int, reported_memory: int
+) -> None:
+    """A machine bought or resumed for a request is one placement puts it on, sized
+    by the memory machines of its shape report once one has enrolled."""
+    offer = pooled_cloud_offer(
+        offer_id="offer",
+        provider="aws",
+        cloud="aws",
+        instance_type="node",
+        region="us-east-1",
+        cpu_millicores=node_cpu,
+        memory_mb=node_memory,
+        cost_terms=SupplierCostTerms(),
+        capability_key="node",
+    )
+    shape = CapacityRequestShape(cpu_millicores=node_cpu, memory_mib=node_memory)
+    allocatable = schedulable_capacity(reported_node_memory(node_memory, reported_memory))
+    worker = WorkerCapacity(
+        worker_id="worker-1",
+        placement=Placement.platform(),
+        free_cpu=schedulable_capacity(node_cpu) / 1000,
+        free_memory_mib=allocatable,
+        total_cpu=schedulable_capacity(node_cpu) / 1000,
+        total_memory_mib=allocatable,
+        total_gpu=0,
+    )
+    assert shape.schedulable(reported_memory_mib=reported_memory).memory_mib == allocatable
+    for cpu in range(250, node_cpu + 1, 250):
+        for memory in range(256, node_memory + 1, 64):
+            purchase = bool(
+                filter_offers(
+                    [offer],
+                    OfferRequest(min_cpu_millicores=cpu, min_memory_mb=memory),
+                    reported_memory={(node_cpu, node_memory, 0): reported_memory},
+                )
+            )
+            reservation = shape.can_host(
+                SchedulerWorkerRequest(
+                    workspace_id="00000000-0000-0000-0000-000000000001",
+                    stub_id="stub-1",
+                    container_id="container-1",
+                    placement=Placement.platform(),
+                    cpu_millicores=cpu,
+                    memory_mib=memory,
+                ),
+                reported_memory_mib=reported_memory,
+            )
+            placement = worker.can_fit(
+                SchedulingRequest(
+                    id="request-1",
+                    placement=Placement.platform(),
+                    cpu=cpu / 1000,
+                    memory_mib=memory,
+                )
+            )
+            assert purchase == reservation == placement, (cpu, memory)

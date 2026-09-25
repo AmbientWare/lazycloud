@@ -887,6 +887,11 @@ def _idle_machine_candidate(
     reserve_idle_machines: int,
     replacement_machine_id: str = "",
 ) -> _IdleMachineCandidate | None:
+    busy = {
+        machine_id
+        for machine_id, workers in workers_by_machine.items()
+        if _pool_has_active_containers(workers, requests, containers)
+    }
     healthy_machines = [
         (machine_id, workers)
         for machine_id, workers in workers_by_machine.items()
@@ -895,9 +900,13 @@ def _idle_machine_candidate(
             for worker in workers
         )
     ]
+    # A unit's retained count covers its busy machines first, so the machines it
+    # keeps idle are the ones the reserve planner counted and not ones that
+    # happen to be older than a busy one.
     healthy_machines.sort(
         key=lambda item: (
             item[0] == replacement_machine_id,
+            item[0] not in busy,
             min(worker.created_at for worker in item[1]),
             item[0],
         )
@@ -908,7 +917,7 @@ def _idle_machine_candidate(
     candidates: list[_IdleMachineCandidate] = []
     idle_count = 0
     for machine_id, workers in workers_by_machine.items():
-        if _pool_has_active_containers(workers, requests, containers):
+        if machine_id in busy:
             continue
         idle_workers = _idle_workers(workers, now, idle_seconds)
         if len(idle_workers) != len(workers):

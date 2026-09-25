@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from enum import StrEnum
 
 from pydantic import Field, JsonValue, model_validator
+from shared.container_requests import capacity_memory_mib, fits_reservation
 from shared.contracts import ContractModel
 from shared.disks import DiskStorage
 from shared.gpu import gpu_preference_accepts
@@ -41,6 +42,8 @@ class SchedulingRequest(ContractModel):
     payload: JsonValue = None
     cpu: float = 1
     memory_mib: int = 512
+    """The memory request; the container reserves `capacity_memory_mib` of it."""
+
     gpu: list[str] = Field(default_factory=list)
     """Models this request accepts, best first; empty asks for no GPU."""
 
@@ -116,6 +119,8 @@ class WorkerCapacity(ContractModel):
     total_disk_volumes: int = Field(default=0, ge=0)
     disk_storage: DiskStorage = DiskStorage.Host
     pending: bool = False
+    consolidating: bool = False
+    """The reserve planner means to empty this machine, so it takes work last."""
 
     @model_validator(mode="after")
     def free_capacity_cannot_exceed_total_capacity(self) -> WorkerCapacity:
@@ -171,8 +176,9 @@ class WorkerCapacity(ContractModel):
             return "worker is GPU-only"
         if self.free_cpu < request.cpu:
             return f"free cpu {self.free_cpu} < {request.cpu}"
-        if self.free_memory_mib < request.memory_mib:
-            return f"free memory {self.free_memory_mib}MiB < {request.memory_mib}MiB"
+        if not self.fits_resources(request):
+            reserved = capacity_memory_mib(request.memory_mib)
+            return f"free memory {self.free_memory_mib}MiB < {reserved}MiB reserved"
         if self.free_gpu < request.gpu_count:
             return f"free gpu {self.free_gpu} < {request.gpu_count}"
         return self.disk_rejection(request)
@@ -204,10 +210,17 @@ class WorkerCapacity(ContractModel):
         ):
             return False
         return (
-            self.free_cpu >= request.cpu
-            and self.free_memory_mib >= request.memory_mib
+            self.fits_resources(request)
             and self.free_gpu >= request.gpu_count
             and not self.disk_rejection(request)
+        )
+
+    def fits_resources(self, request: SchedulingRequest) -> bool:
+        return fits_reservation(
+            _millicores(self.free_cpu),
+            self.free_memory_mib,
+            cpu_millicores=_millicores(request.cpu),
+            memory_mib=request.memory_mib,
         )
 
     def reserve(self, request: SchedulingRequest) -> WorkerCapacity:
@@ -215,12 +228,16 @@ class WorkerCapacity(ContractModel):
         return self.model_copy(
             update={
                 "free_cpu": self.free_cpu - request.cpu,
-                "free_memory_mib": self.free_memory_mib - request.memory_mib,
+                "free_memory_mib": self.free_memory_mib - capacity_memory_mib(request.memory_mib),
                 "free_gpu": self.free_gpu - request.gpu_count,
                 "free_disk_bytes": self.free_disk_bytes - disk_bytes,
                 "free_disk_volumes": self.free_disk_volumes - disk_volumes,
             }
         )
+
+
+def _millicores(cores: float) -> int:
+    return round(cores * 1000)
 
 
 class PlannedDispatch(ContractModel):
@@ -296,34 +313,42 @@ def select_worker_for_request(
     *,
     include_pending: bool = False,
 ) -> WorkerCapacity | None:
+    everyone = list(workers)
     candidates = [
         worker
-        for worker in workers
+        for worker in everyone
         if (include_pending or not worker.pending) and worker.can_fit(request)
     ]
     if not candidates:
         return None
-    # The fullest worker that still fits, not the emptiest. Spreading reads as
-    # the safer choice and quietly costs a floor under the pool: work lands on
-    # whichever machine is least busy, so every machine keeps being touched,
-    # none is ever idle long enough to release, and a pool settles at the number
-    # of machines it takes to keep them all warm rather than the number the work
-    # needs. Packing leaves machines genuinely empty, which is the only thing
-    # the idle drain can act on.
+    # Packing leaves machines empty, which is the only thing the idle
+    # drain and the reserve planner can act on. Spreading reads as the safer
+    # choice and keeps every machine touched, so none is ever idle long enough to
+    # release and a pool settles at the machines it takes to keep them all warm.
     #
-    # Priority tiers above that packing and below liveness. Above, because as a
-    # tiebreak on a tuple of floats it would decide almost nothing and read as
-    # implemented while doing nothing. Below `pending`, because a pending worker
-    # has not registered yet: preferring one over a worker that can run the
-    # request now leaves the request waiting beside capacity that was ready.
-    # Within a tier the key is unchanged, so packing stays exact, and a tier
-    # that receives nothing empties faster than it does today.
+    # Priority tiers above packing and below liveness. A pending worker has not
+    # registered yet, and preferring one leaves the request waiting beside a
+    # worker that can run it now. The preferred worker holds local state such as
+    # a disk's layers, and the preferred zone can reattach the disk's cached
+    # volume, so both rank above packing, which would otherwise outweigh them.
     #
-    # The worker named as preferred holds local state the request would otherwise
-    # download, such as a disk's layers. It ranks under priority, so work still
-    # fills the highest tier first, and over packing, which it would otherwise
-    # never outweigh. The preferred zone is the same kind of preference one step
-    # wider: any worker there can reattach the disk's cached volume.
+    # Busy machines take work before empty ones, the busiest first, so empty
+    # machines stay empty for the drain. Among empty machines the smallest that
+    # fits goes first, keeping large machines free for large requests. A machine
+    # the planner means to consolidate takes work only when nothing else fits.
+    #
+    # Work that cannot be moved later is the exception in a quiet market: it goes
+    # to the smallest machine, so the large ones it would otherwise pin can still
+    # be released once they are idle.
+    pin_small = not request.preemptible and _quiet(
+        [
+            worker
+            for worker in everyone
+            if worker.placement == request.placement
+            and not worker.preemptible
+            and bool(worker.gpu_type) == bool(request.gpu_count)
+        ]
+    )
     return min(
         candidates,
         key=lambda item: (
@@ -332,42 +357,37 @@ def select_worker_for_request(
             not request.preferred_worker_id or item.worker_id != request.preferred_worker_id,
             not request.preferred_availability_zone
             or item.availability_zone != request.preferred_availability_zone,
-            *_post_placement_headroom(item, request),
+            item.consolidating,
+            *(_smallest_first(item) if pin_small else ()),
+            *_busiest_first(item),
             item.worker_id,
         ),
     )
 
 
-def _post_placement_headroom(
-    worker: WorkerCapacity,
-    request: SchedulingRequest,
-) -> tuple[float, ...]:
-    headroom = [
-        (worker.free_cpu - request.cpu) / worker.total_cpu if worker.total_cpu > 0 else 0.0,
-        (worker.free_memory_mib - request.memory_mib) / worker.total_memory_mib
-        if worker.total_memory_mib > 0
-        else 0.0,
-    ]
-    if request.gpu_count > 0:
-        headroom.append(
-            (worker.free_gpu - request.gpu_count) / worker.total_gpu
-            if worker.total_gpu > 0
-            else 0.0
-        )
-    disk_bytes, disk_volumes = worker.disk_claim(request)
-    if disk_bytes > 0:
-        headroom.append(
-            (worker.free_disk_bytes - disk_bytes) / worker.total_disk_bytes
-            if worker.total_disk_bytes > 0
-            else 0.0
-        )
-    if disk_volumes > 0:
-        headroom.append(
-            (worker.free_disk_volumes - disk_volumes) / worker.total_disk_volumes
-            if worker.total_disk_volumes > 0
-            else 0.0
-        )
-    return tuple(sorted(headroom))
+def _reserved(worker: WorkerCapacity) -> tuple[float, int]:
+    return worker.total_cpu - worker.free_cpu, worker.total_memory_mib - worker.free_memory_mib
+
+
+def _smallest_first(worker: WorkerCapacity) -> tuple[float, ...]:
+    return (worker.total_cpu, worker.total_memory_mib)
+
+
+def _busiest_first(worker: WorkerCapacity) -> tuple[float, ...]:
+    cpu, memory = _reserved(worker)
+    if cpu > 0 or memory > 0:
+        return (0, -cpu, -memory, -worker.total_cpu, -worker.total_memory_mib)
+    return (1, 0, 0, worker.total_cpu, worker.total_memory_mib)
+
+
+def _quiet(workers: list[WorkerCapacity]) -> bool:
+    """Whether every candidate's load together would fit on the smallest of them."""
+    if not workers:
+        return True
+    smallest = min(workers, key=_smallest_first)
+    cpu = sum(_reserved(worker)[0] for worker in workers)
+    memory = sum(_reserved(worker)[1] for worker in workers)
+    return cpu <= smallest.total_cpu and memory <= smallest.total_memory_mib
 
 
 def _share_disk_claim(
@@ -427,7 +447,7 @@ def plan_scheduling_batch(
                     worker_id=worker.worker_id,
                     request_id=request.id,
                     cpu=request.cpu,
-                    memory_mib=request.memory_mib,
+                    memory_mib=capacity_memory_mib(request.memory_mib),
                     gpu_count=request.gpu_count,
                     disk_bytes=disk_bytes,
                     disk_volumes=disk_volumes,
@@ -460,7 +480,7 @@ def plan_scheduling_batch(
                     worker_id=pending_worker.worker_id,
                     request_id=request.id,
                     cpu=request.cpu,
-                    memory_mib=request.memory_mib,
+                    memory_mib=capacity_memory_mib(request.memory_mib),
                     gpu_count=request.gpu_count,
                     disk_bytes=disk_bytes,
                     disk_volumes=disk_volumes,

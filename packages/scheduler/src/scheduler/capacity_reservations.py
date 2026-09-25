@@ -37,7 +37,14 @@ from shared.capacity import (
 )
 from shared.capacity import CapacityReleaseRequest as ComputeCapacityReleaseRequest
 from shared.compute_policy import ComputeUnitRecord, UnitName
-from shared.container_requests import OciRuntimeName, capacity_memory_mib
+from shared.container_requests import (
+    OciRuntimeName,
+    capacity_memory_mib,
+    fits_reservation,
+    node_fits_request,
+    node_memory,
+    schedulable_capacity,
+)
 from shared.contracts import ContractModel
 from shared.errors import CapacityLimitReachedError, UpstreamUnavailableError
 from shared.gpu import gpu_preference_accepts
@@ -173,16 +180,33 @@ class CapacityRequestShape(ContractModel):
             raise ValueError("capacity reservation GPU type and count must be configured together")
         return self
 
-    def can_host(self, request: SchedulerWorkerRequest) -> bool:
+    def can_host(self, request: SchedulerWorkerRequest, *, reported_memory_mib: int = 0) -> bool:
+        """Whether an empty machine of this nominal shape takes the request."""
+        return self.serves(request) and node_fits_request(
+            self.cpu_millicores,
+            node_memory(self.memory_mib, reported_memory_mib),
+            cpu_millicores=request.cpu_millicores,
+            memory_mib=request.memory_mib,
+        )
+
+    def schedulable(self, *, reported_memory_mib: int) -> CapacityRequestShape:
+        """What a machine of this shape gives containers, as its worker will advertise."""
+        return self.model_copy(
+            update={
+                "cpu_millicores": schedulable_capacity(self.cpu_millicores),
+                "memory_mib": schedulable_capacity(
+                    node_memory(self.memory_mib, reported_memory_mib)
+                ),
+            }
+        )
+
+    def serves(self, request: SchedulerWorkerRequest) -> bool:
+        """Everything about the request but its CPU and memory amounts."""
         if request.region is not None and self.region != request.region:
             return False
         if request.availability_zone and self.availability_zone != request.availability_zone:
             return False
         requested_gpu = gpu_count_for_capacity(request.gpu, request.gpu_count)
-        if self.cpu_millicores < request.cpu_millicores:
-            return False
-        if self.memory_mib < capacity_memory_mib(request.memory_mib):
-            return False
         if self.gpu_count < requested_gpu:
             return False
         if requested_gpu <= 0 and self.gpu_count > 0:
@@ -253,6 +277,12 @@ class CapacityProvisioningReservation(ContractModel):
     def allocation_shape(self) -> CapacityRequestShape:
         return self.schedulable_shape or self.acquisition_shape
 
+    @property
+    def allocatable_capacity(self) -> tuple[int, int]:
+        """CPU millicores and memory MiB its allocations may reserve in total."""
+        shape = self.schedulable_shape or self.acquisition_shape.schedulable(reported_memory_mib=0)
+        return shape.cpu_millicores, shape.memory_mib
+
 
 class CapacityAcquisitionResult(ContractModel):
     status: CapacityAcquisitionStatus
@@ -319,6 +349,9 @@ class CapacityAcquisitionController(Protocol):
 
     def reservation_shape(self, request: SchedulerWorkerRequest) -> CapacityRequestShape: ...
 
+    @property
+    def reported_memory_mib(self) -> int: ...
+
     def ensure_capacity(
         self,
         reservation: CapacityProvisioningReservation,
@@ -355,9 +388,6 @@ class CapacityWorkerRepository(Protocol):
 
 
 class ComputeCapacityService(Protocol):
-    def observe_pool_pressure(
-        self, capacity_owner_id: str, *, free_capacity_percent: int, now: datetime
-    ) -> bool: ...
     def fulfill_acquired_capacity(
         self, request: CapacityFulfillmentRequest
     ) -> CapacityOperationStatus: ...
@@ -383,6 +413,8 @@ class ComputeUnitCapacityController:
     unit: ComputeUnitRecord
     compute: ComputeCapacityService
     workers: CapacityWorkerRepository
+    reported_memory_mib: int
+    """The memory machines of the unit's shape report, or 0 until one has enrolled."""
 
     @property
     def capacity_owner_id(self) -> str:
@@ -440,7 +472,9 @@ class ComputeUnitCapacityController:
             return False
         if request.placement != self.unit.placement:
             return False
-        return self.reservation_shape(request).can_host(request)
+        return self.reservation_shape(request).can_host(
+            request, reported_memory_mib=self.reported_memory_mib
+        )
 
     def reservation_shape(self, request: SchedulerWorkerRequest) -> CapacityRequestShape:
         return CapacityRequestShape(
@@ -485,22 +519,6 @@ class ComputeUnitCapacityController:
             registered_units=registered_units,
             authoritative_units=authoritative_units,
             state=state,
-            pressure_ready=(
-                self.compute.observe_pool_pressure(
-                    self.capacity_owner_id,
-                    free_capacity_percent=(
-                        min(
-                            headroom.cpu_millicores * 100 // headroom.total_cpu_millicores,
-                            headroom.memory_mib * 100 // headroom.total_memory_mib,
-                        )
-                        if headroom.total_cpu_millicores and headroom.total_memory_mib
-                        else 100
-                    ),
-                    now=now,
-                )
-                if self.unit.platform_fleet and not self.unit.worker_gpu_count
-                else False
-            ),
             now=now,
         )
         retry_at = scale_up_retry_at(self.unit, state)
@@ -600,8 +618,8 @@ class ComputeUnitCapacityController:
                     or worker.machine_id == reservation.target_machine_id
                 )
                 and reservation.acquisition_shape.worker_capabilities_match(worker)
-                and worker.total_cpu_millicores >= reservation.acquisition_shape.cpu_millicores
-                and worker.total_memory_mib >= reservation.acquisition_shape.memory_mib
+                and worker.total_cpu_millicores >= reservation.allocatable_capacity[0]
+                and worker.total_memory_mib >= reservation.allocatable_capacity[1]
             ):
                 return CapacityAcquisitionResult(
                     status=CapacityAcquisitionStatus.ExistingPending,
@@ -754,25 +772,6 @@ class RedisCapacityReservationRepository:
     def has_open_reservations(self, capacity_owner_id: str) -> bool:
         return any(reservation.open for reservation in self.list_for_owner(capacity_owner_id))
 
-    def pressure_ready(
-        self,
-        capacity_owner_id: str,
-        *,
-        under_pressure: bool,
-        now: datetime,
-        sustained_seconds: int,
-    ) -> bool:
-        key = self.redis.key(
-            self.keys.namespace, "capacity-pressure", _owner_key(capacity_owner_id)
-        )
-        if not under_pressure:
-            self.redis.delete(key)
-            return False
-        self.redis.set(key, str(now.timestamp()), nx=True, ex=sustained_seconds * 2)
-        value = self.redis.get(key)
-        self.redis.expire(key, sustained_seconds * 2)
-        return value is not None and now.timestamp() - float(redis_text(value)) >= sustained_seconds
-
     @contextmanager
     def mutation_lock(
         self,
@@ -907,6 +906,7 @@ class RedisCapacityReservationRepository:
         request: SchedulerWorkerRequest,
         shape: CapacityRequestShape,
         registration_timeout: timedelta,
+        reported_memory_mib: int = 0,
         desired_unit: int = 0,
         now: datetime | None = None,
     ) -> CapacityReservationDecision:
@@ -945,6 +945,7 @@ class RedisCapacityReservationRepository:
                 placement=placement,
                 owner_kind=owner_kind,
                 acquisition_shape=shape,
+                schedulable_shape=shape.schedulable(reported_memory_mib=reported_memory_mib),
                 workload_preemptible=request.preemptible,
                 operation_id=reservation_id,
                 desired_unit=desired_unit,
@@ -1166,7 +1167,7 @@ class RedisCapacityReservationRepository:
             self.list_for_owner(capacity_owner_id),
             key=lambda item: not (item.acquisition_created or item.desired_unit > 0),
         ):
-            if not reservation.accepting_allocations or not reservation.allocation_shape.can_host(
+            if not reservation.accepting_allocations or not reservation.allocation_shape.serves(
                 request
             ):
                 continue
@@ -1175,10 +1176,14 @@ class RedisCapacityReservationRepository:
             used_memory = sum(item.memory_mib for item in allocations)
             used_gpu = sum(item.gpu_count for item in allocations)
             requested_gpu = gpu_count_for_capacity(request.gpu, request.gpu_count)
+            cpu_millicores, memory_mib = reservation.allocatable_capacity
             if (
-                used_cpu + request.cpu_millicores <= reservation.allocation_shape.cpu_millicores
-                and used_memory + capacity_memory_mib(request.memory_mib)
-                <= reservation.allocation_shape.memory_mib
+                fits_reservation(
+                    cpu_millicores - used_cpu,
+                    memory_mib - used_memory,
+                    cpu_millicores=request.cpu_millicores,
+                    memory_mib=request.memory_mib,
+                )
                 and used_gpu + requested_gpu <= reservation.allocation_shape.gpu_count
             ):
                 return reservation
@@ -1217,21 +1222,6 @@ class CapacityReservationService:
     reservations: RedisCapacityReservationRepository
     controllers: Callable[[], Iterable[CapacityAcquisitionController]]
     allocation_owners: CapacityAllocationOwnerDirectory | None = None
-
-    def pressure_ready(
-        self,
-        capacity_owner_id: str,
-        *,
-        under_pressure: bool,
-        now: datetime,
-        sustained_seconds: int,
-    ) -> bool:
-        return self.reservations.pressure_ready(
-            capacity_owner_id,
-            under_pressure=under_pressure,
-            now=now,
-            sustained_seconds=sustained_seconds,
-        )
 
     @contextmanager
     def mutation_lock(self, capacity_owner_id: str) -> Iterator[None]:
@@ -1478,6 +1468,7 @@ class CapacityReservationService:
                 owner_kind=controller.owner_kind,
                 request=request,
                 shape=controller.reservation_shape(request),
+                reported_memory_mib=controller.reported_memory_mib,
                 registration_timeout=controller.registration_timeout,
                 now=now,
             )

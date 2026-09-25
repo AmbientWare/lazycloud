@@ -314,7 +314,7 @@ def test_stopped_capacity_holds_its_budget_through_resume_and_retirement(
         assert units.platform_capacity_usage(gpu=False) == 2
         sizing = units.sizing_for_owner(unit.id)
         assert sizing is not None and sizing.desired_machines == 0
-        assert units.prepared_capacity_owner_ids() == {unit.id}
+        assert {row.id for row in units.stopped_reserve_units() if row.resumable} == {unit.id}
         resumed = units.update_capacity(
             unit.id,
             expected_generation=unit.generation,
@@ -338,7 +338,7 @@ def test_stopped_capacity_holds_its_budget_through_resume_and_retirement(
         assert units.platform_capacity_usage(gpu=False) == 2
         for instance in instances.list_for_pool(unit.id):
             instances.upsert(instance.model_copy(update={"status": "deleted"}))
-        assert not units.prepared_capacity_owner_ids()
+        assert not any(row.resumable for row in units.stopped_reserve_units())
         assert units.platform_capacity_usage(gpu=False) == 2
         units.upsert(resumed.model_copy(update={"stopped_machines": 0}))
         assert units.platform_capacity_usage(gpu=False) == 1

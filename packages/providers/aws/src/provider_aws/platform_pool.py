@@ -20,21 +20,16 @@ class AwsPlatformCapacityProvider(AwsPooledCapacityProvider):
     checkpoints: ProviderUnitStateCheckpoints = field(kw_only=True)
 
     def list_offers(self, *, root_volume_gib: int) -> Iterable[ComputeOffer]:
+        # Every platform offer is retained, so CPU and GPU machines alike can stop
+        # as reserves. Units recorded under the plain capability key are Auto
+        # Scaling groups bought before; they keep that owner through cleanup.
         for offer in super(AwsPlatformCapacityProvider, self).list_offers(
             root_volume_gib=root_volume_gib
         ):
-            yield (
-                offer.model_copy(update={"capability_key": f"{offer.capability_key}:retained"})
-                if not offer.gpu_count
-                else offer
-            )
+            yield offer.model_copy(update={"capability_key": f"{offer.capability_key}:retained"})
 
     def list_reserve_offers(self, *, root_volume_gib: int) -> Iterable[ComputeOffer]:
-        return (
-            offer
-            for offer in self.list_offers(root_volume_gib=root_volume_gib)
-            if not offer.gpu_count
-        )
+        return self.list_offers(root_volume_gib=root_volume_gib)
 
     @staticmethod
     def _retained(request: ProviderUnitRequest) -> bool:

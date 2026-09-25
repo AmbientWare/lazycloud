@@ -12,6 +12,7 @@ from typing import Protocol
 
 from compute.capacity_errors import CapacityReservationConflictError
 from compute.request_placement import ComputeCapacityPurchase
+from compute.reserve_state import FleetReserveState
 from control.releases import DeploymentReleaseService
 from coordination.wake_signal import WakeSignalPublisher
 from pydantic import JsonValue
@@ -393,6 +394,9 @@ class SchedulerContainerRequestService:
     capacity_reservations: SchedulerCapacityReservations | None = None
     backfill_preemption: SchedulerGpuBackfillPreemptionService | None = None
     usage: SchedulerUsageRecorder | None = None
+    reserve_state: FleetReserveState | None = None
+    """Where the reserve planner names the machines it means to consolidate."""
+
     requeue_delay_seconds: float = DEFAULT_SCHEDULER_REQUEUE_DELAY_SECONDS
     max_retry_count: int = DEFAULT_MAX_SCHEDULE_RETRY_COUNT
     max_retry_age_seconds: float = DEFAULT_MAX_SCHEDULE_RETRY_DURATION.total_seconds()
@@ -627,11 +631,17 @@ class SchedulerContainerRequestService:
             if self.capacity_reservations is not None
             else {}
         )
+        consolidating = (
+            self.reserve_state.consolidation_candidates()
+            if self.reserve_state is not None
+            else frozenset[str]()
+        )
         worker_capacities = [
-            _worker_capacity(
+            worker_capacity(
                 worker,
                 now=current_time,
                 reserved_capacity=reserved_by_worker.get(worker.worker_id),
+                consolidating=worker.machine_id in consolidating,
             )
             for worker in schedulable_workers
         ]
@@ -643,7 +653,7 @@ class SchedulerContainerRequestService:
             outcome.request_id: outcome
             for outcome in plan_scheduling_batch(
                 [
-                    _scheduling_request(
+                    scheduling_request(
                         request,
                         owner_user_id=owners_by_workspace_id[request.workspace_id],
                         provisionable=self.capacity_reservations is not None,
@@ -652,7 +662,7 @@ class SchedulerContainerRequestService:
                 ],
                 worker_capacities,
                 queued_gpu_requests=[
-                    _scheduling_request(
+                    scheduling_request(
                         queued,
                         owner_user_id=self.workspace_owners.owner_user_id(queued.workspace_id),
                     )
@@ -800,9 +810,9 @@ class SchedulerContainerRequestService:
     ) -> SchedulerContainerDispatchResult | None:
         if not claim.request.gpu or self.backfill_preemption is None:
             return None
-        request = _scheduling_request(claim.request, owner_user_id=owner_user_id)
+        request = scheduling_request(claim.request, owner_user_id=owner_user_id)
         for worker in workers:
-            if not gpu_request_matches_worker(request, _worker_capacity(worker, now=now)):
+            if not gpu_request_matches_worker(request, worker_capacity(worker, now=now)):
                 continue
             try:
                 recovering = self.backfill_preemption.recover(
@@ -1617,13 +1627,12 @@ def container_state_for_request(
     )
 
 
-def _scheduling_request(
+def scheduling_request(
     request: SchedulerWorkerRequest,
     *,
     owner_user_id: str,
     provisionable: bool = True,
 ) -> SchedulingRequest:
-    memory_mib = capacity_memory_mib(request.memory_mib)
     cpu = request.cpu_millicores / 1000
     gpu_count = gpu_count_for_capacity(request.gpu, request.gpu_count)
     return SchedulingRequest(
@@ -1635,7 +1644,7 @@ def _scheduling_request(
         queue=request.stub_id or "containers",
         payload=request.payload,
         cpu=cpu,
-        memory_mib=memory_mib,
+        memory_mib=request.memory_mib,
         gpu_count=gpu_count,
         gpu=list(request.gpu),
         disk_bytes=request.disk_bytes,
@@ -1669,7 +1678,7 @@ def _placement_failure_detail(
     placement = request.placement.key
     if not workers:
         return f"{reason}: no schedulable workers (placement {placement})"
-    scheduling = _scheduling_request(
+    scheduling = scheduling_request(
         request,
         owner_user_id=owner_user_id,
         provisionable=False,
@@ -1677,18 +1686,19 @@ def _placement_failure_detail(
     rejections = [
         f"{worker.worker_id[:8]} in {worker.placement.key}: {detail}"
         for worker in workers[:3]
-        if (detail := _worker_capacity(worker, now=now).fit_rejection(scheduling))
+        if (detail := worker_capacity(worker, now=now).fit_rejection(scheduling))
     ]
     if not rejections:
         return f"{reason} (placement {placement})"
     return f"{reason}: placement {placement}; " + "; ".join(rejections)
 
 
-def _worker_capacity(
+def worker_capacity(
     worker: SchedulerWorkerRecord,
     *,
     now: datetime,
     reserved_capacity: WorkerReservedCapacity | None = None,
+    consolidating: bool = False,
 ) -> WorkerCapacity:
     reserved = reserved_capacity or WorkerReservedCapacity()
     claimed_bytes, claimed_volumes = disk_claim(
@@ -1719,6 +1729,7 @@ def _worker_capacity(
         total_disk_volumes=worker.total_disk_volumes,
         disk_storage=worker.disk_storage,
         pending=worker.request_intake_status(at=now) is SchedulerWorkerStatus.Pending,
+        consolidating=consolidating,
     )
 
 

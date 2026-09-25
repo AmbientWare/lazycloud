@@ -5,7 +5,7 @@ from datetime import datetime
 from control.service import ControlPlaneService
 from database.records.apps import AutoscalingStubRecord, StubRecord
 from database.repositories.endpoint_dispatch import EndpointDispatchRepository
-from database.repositories.orchestration import ContainerRepository
+from database.repositories.orchestration import ContainerRepository, MachineContainer
 from shared.containers import ContainerStatus
 from shared.identity import WorkspaceRecord
 from shared.timestamps import utc_now
@@ -97,3 +97,12 @@ class SchedulerWorkloadDirectoryAdapter:
             workspace=workspace,
             fields={"metadata.autoscaling_enabled": enabled},
         ).stub
+
+
+@dataclass(frozen=True, slots=True)
+class DatabaseMachineContainers:
+    database: DatabaseClient
+
+    def live_on_machine(self, machine_id: str) -> list[MachineContainer]:
+        with self.database.session() as session:
+            return ContainerRepository(session).live_on_machine(machine_id)

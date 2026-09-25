@@ -13,6 +13,7 @@ from compute.provider_state import ProviderUnitStateService
 from compute.providers import ResolvedBlockVolumes
 from compute.reclaim import ComputeReclaimPolicy
 from compute.request_placement import ComputeCapacityPlacementService
+from compute.reserve_state import RedisFleetReserveState
 from compute.service import ComputeService
 from compute.state import RedisComputeStateRepository
 from compute.telemetry import AGENT_INTAKE_PRESENCE_ROLE
@@ -352,6 +353,7 @@ class SchedulerAppServices:
             worker_repository,
             agent_intake=RedisProcessPresence(redis, AGENT_INTAKE_PRESENCE_ROLE),
         )
+        reserve_state = RedisFleetReserveState(redis)
         compute = ComputeService(
             context,
             provider_resolver=provider_resolver,
@@ -360,6 +362,7 @@ class SchedulerAppServices:
             workspace_changes=workspace_changes,
             reclaim=capacity.reclaim,
             capacity_owner_mutations=RedisCapacityReservationRepository(redis),
+            reserve_state=reserve_state,
         )
         container_runtime_state = RedisContainerRuntimeStateRepository(redis)
         scheduling_persistence = ContainerSchedulingPersistenceService(
@@ -380,6 +383,7 @@ class SchedulerAppServices:
             lifecycle_events=stream_events,
             workspace_owners=DatabaseWorkspaceOwners(context),
             disk_volume_attachments=DatabaseDiskVolumeAttachments(context),
+            reserve_state=reserve_state,
         )
         container_shutdowns = ContainerShutdownService(
             container_repository,

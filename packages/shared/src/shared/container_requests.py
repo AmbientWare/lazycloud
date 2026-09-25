@@ -27,34 +27,15 @@ CONTAINER_HEALTH_PATH = "/health"
 DEFAULT_CONTAINER_DISK_LIMIT_BYTES = 100 * 1024**3
 
 NODE_OVERHEAD_FACTOR = 1.10
-"""How much larger than the request a node has to be before it can host it.
+"""How much of a node the agent, the container runtime and the host's daemons keep.
 
-The agent, the container runtime and the host's own daemons take their share
-before a container gets anything, so a request that exactly equals a node's
-advertised size leaves nothing for the processes that start the container.
-
-Applied to the request rather than deducted from the offer because it is a fact
-about every node this platform launches, not about any one workload. Both places
-that decide whether capacity fits a shape read it, so a pool judged able to host
-a request is sized the way a new pool would have been.
+They take their share before a container gets anything, so a node advertises
+its size divided by this and placement fills only that.
 """
 
 
-def capacity_with_overhead(value: int) -> int:
-    """A resource floor raised by what the node spends on itself."""
-    if value <= 0:
-        return value
-    return math.ceil(value * NODE_OVERHEAD_FACTOR)
-
-
 def schedulable_capacity(total: int) -> int:
-    """What a node can give containers, after what the platform takes.
-
-    The inverse of `capacity_with_overhead`, and the reason both exist: selection
-    buys a node at least this much larger than the request, and the node then has
-    to advertise less than it physically holds or placement fills back in the
-    headroom selection just paid for.
-    """
+    """What a node can give containers, after what the platform takes."""
     if total <= 0:
         return total
     return int(total / NODE_OVERHEAD_FACTOR)
@@ -67,6 +48,44 @@ def capacity_memory_mib(memory_mib: int) -> int:
     if memory_mib <= 0:
         return memory_mib
     return (memory_mib * CONTAINER_MEMORY_RESERVATION_PERCENT + 99) // 100
+
+
+def fits_reservation(
+    free_cpu_millicores: int, free_memory_mib: int, *, cpu_millicores: int, memory_mib: int
+) -> bool:
+    """Whether capacity a node can give containers takes this request.
+
+    `free_*` is schedulable capacity, what a worker advertises less what it has
+    already reserved. `memory_mib` is the request, and the container reserves
+    `capacity_memory_mib` of it. Purchase, reservation and placement all decide
+    fit through this function or `node_fits_request`, so a machine bought or
+    resumed for a request is one placement puts it on.
+    """
+    return free_cpu_millicores >= cpu_millicores and free_memory_mib >= capacity_memory_mib(
+        memory_mib
+    )
+
+
+def node_memory(nominal_mib: int, reported_mib: int) -> int:
+    """The memory a node of this nominal size has once one has reported it.
+
+    A node's operating system reports less than its nominal size, and its worker
+    advertises from the report. Until a node of the size has reported, the
+    nominal size stands in.
+    """
+    return reported_mib if 0 < reported_mib < nominal_mib else nominal_mib
+
+
+def node_fits_request(
+    node_cpu_millicores: int, node_memory_mib: int, *, cpu_millicores: int, memory_mib: int
+) -> bool:
+    """Whether an empty node of this size takes this request."""
+    return fits_reservation(
+        schedulable_capacity(node_cpu_millicores),
+        schedulable_capacity(node_memory_mib),
+        cpu_millicores=cpu_millicores,
+        memory_mib=memory_mib,
+    )
 
 
 def billable_memory_capacity(memory_mib: int) -> int:
@@ -468,10 +487,12 @@ __all__ = [
     "WorkerStartupKind",
     "billable_memory_capacity",
     "capacity_memory_mib",
-    "capacity_with_overhead",
     "container_cpu_ceiling_millicores",
     "container_memory_ceiling_mib",
     "container_memory_limit_mib",
+    "fits_reservation",
+    "node_fits_request",
+    "node_memory",
     "schedulable_capacity",
     "select_memory_eviction_candidate",
 ]

@@ -106,9 +106,10 @@ available until its units have completed cleanup.
 
 Zero-capacity reconciliation observes the owned unit and applies zero without
 consulting the purchase catalog or creating a missing unit. Idle retirement
-does not depend on a replacement enrolling. The shared drain service preserves
-warm floors and provisioning reservations; compute also checks durable live
-work across every workspace using the unit before scaling it to zero.
+does not depend on a replacement enrolling. The shared drain service keeps the
+machines the reserve planner retains and preserves provisioning reservations;
+compute also checks durable live work across every workspace using the unit
+before scaling it to zero.
 
 Adapters return the same typed snapshots, machine identities, billing clocks,
 and provisioning phases. They must not report a missing, never-created unit
@@ -117,8 +118,11 @@ retryable; retries must not create duplicate billable resources.
 
 ## AWS resources
 
-AWS capacity uses IAM roles, its VPC and subnets, AMIs, and Auto Scaling groups,
-buying Spot or On-Demand nodes per purchase market. A node proves its identity
+AWS capacity uses IAM roles, its VPC and subnets, and AMIs, buying Spot or
+On-Demand nodes per purchase market. Platform capacity, CPU and GPU, launches EC2
+instances directly so a machine can stop as a reserve and resume in seconds;
+customer connections use Auto Scaling groups, and platform groups bought before
+keep their owner until cleanup. A node proves its identity
 with a signed EC2 instance identity request. These details stay in the AWS
 adapter and composition. Every enrolled node runs the same agent, runtime,
 authenticated outbound tunnel, worker protocol, and metering.
@@ -146,13 +150,14 @@ expired credentials, and exact cleanup. GCP and Azure are not supported today.
 ## Verify a rollout
 
 Read the current provider definitions and `compute.fleet_policy` before
-choosing acceptance workloads. Warm targets and eligible shapes can change.
+choosing acceptance workloads. Headroom targets and eligible shapes can change.
 
 After rollout, submit small and larger CPU/memory jobs to prove reuse and
 resource-based node selection, then an AWS GPU job. Poll durable units,
 provider resources, enrollment, scheduler state, and worker logs together.
-Verify results and usage charges. Confirm cold nodes and their IPs disappear
-after drain, while the intended warm baseline remains. Do not reset production
+Verify results and usage charges. Confirm idle nodes beyond the running
+headroom and their IPs disappear after drain, while each market's running and
+stopped headroom remains. Do not reset production
 data or delete unrelated resources during acceptance.
 
 Use a billing-enabled account for workload checks. An administrator token does
@@ -162,7 +167,8 @@ failed with its reason and clean up dispatch credentials, not keep retrying.
 Record the release commit and the live scenarios that passed. Image-build
 checks alone do not prove workload execution or cleanup.
 
-For teardown, stop new workload admission, lower warm floors, and drain through
-the compute service before removing credentials or persistent infrastructure.
-Preserve the binding and current application until exact cleanup is proven.
-Deleting a warm node alone triggers its replacement and is not a teardown.
+For teardown, stop new workload admission, disable the provider's purchases so it
+holds no reserves, and drain through the compute service before removing
+credentials or persistent infrastructure. Preserve the binding and current
+application until exact cleanup is proven. Deleting a retained node alone triggers
+its replacement and is not a teardown.

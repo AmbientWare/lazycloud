@@ -12,6 +12,7 @@ from shared.errors import UpstreamUnavailableError
 from shared.placement import Placement, ProductRegion, product_region
 
 from compute.context import ComputeContext
+from compute.fleet_reserves import ReserveAdmission
 from compute.offers import ComputeOffer, OfferRequest, filter_offers, offer_selection_key
 from compute.providers import ResolvedComputeProvider
 
@@ -19,7 +20,7 @@ LOGGER = logging.getLogger(__name__)
 
 
 class PooledCapacityOwner(Protocol):
-    def prepared_capacity_owner_ids(self) -> frozenset[str]: ...
+    def reserve_admission(self) -> ReserveAdmission: ...
     def pooled_providers(self, workspace_id: str) -> tuple[ResolvedComputeProvider, ...]: ...
 
     def pooled_offer_rejection(
@@ -30,9 +31,11 @@ class PooledCapacityOwner(Protocol):
         preemptible: bool,
     ) -> str | None: ...
 
-    def pooled_offer_owner_id(
-        self, provider: ResolvedComputeProvider, offer: ComputeOffer
-    ) -> str: ...
+    def pooled_offer_owners(
+        self, provider: ResolvedComputeProvider, offers: list[ComputeOffer]
+    ) -> dict[str, str]: ...
+
+    def reported_node_memory(self) -> dict[tuple[int, int, int], int]: ...
 
     def prepare_pooled_offer(
         self,
@@ -87,8 +90,9 @@ class ComputeCapacityPlacementService:
             min_gpu_count=requirements.gpu_count,
             nodes=1,
         )
-        offers: list[tuple[ResolvedComputeProvider, ComputeOffer]] = []
+        offers: list[tuple[ResolvedComputeProvider, ComputeOffer, str]] = []
         failures: list[str] = []
+        reported_memory = self.compute.reported_node_memory()
         for provider in providers:
             policy = provider.policy
             if provider.pooled is None or policy is None or not policy.can_purchase:
@@ -112,17 +116,19 @@ class ComputeCapacityPlacementService:
                         and offer.cost_terms.complete_hourly_cost_micros is not None
                     ],
                     purchase,
+                    reported_memory=reported_memory,
                 )
             except Exception:
                 LOGGER.exception("provider offer discovery failed for %s", provider.ref)
                 failures.append(provider.ref)
                 continue
-            offers.extend((provider, offer) for offer in candidates)
+            owners = self.compute.pooled_offer_owners(provider, candidates)
+            offers.extend((provider, offer, owners[offer.id]) for offer in candidates)
+        admission = self.compute.reserve_admission()
         purchases: dict[str, ComputeCapacityPurchase] = {}
-        for provider, offer in sorted(
+        for provider, offer, owner_id in sorted(
             offers, key=lambda item: offer_selection_key(item[1], purchase)
         ):
-            owner_id = self.compute.pooled_offer_owner_id(provider, offer)
             purchases.setdefault(
                 owner_id,
                 ComputeCapacityPurchase(
@@ -141,7 +147,13 @@ class ComputeCapacityPlacementService:
             )
         # A stopped reserve starts in seconds and a purchase takes a minute, so any
         # prepared pool comes first; within each, the disk's cached volume zone.
-        prepared = self.compute.prepared_capacity_owner_ids()
+        # Spot-tolerant work buys into a withheld On-Demand unit without resuming
+        # its reserve, so that unit ranks as a purchase for it.
+        prepared = (
+            admission.prepared - admission.withheld_from_preemptible
+            if requirements.preemptible
+            else admission.prepared
+        )
         preferred = request.preferred_availability_zone
         return tuple(
             sorted(

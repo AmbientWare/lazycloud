@@ -60,11 +60,6 @@ class _CapacityOwnerMutations:
     active_dispatch_owner_id: str = ""
     open_reservations: bool = False
 
-    def pressure_ready(
-        self, capacity_owner_id: str, *, under_pressure: bool, now: datetime, sustained_seconds: int
-    ) -> bool:
-        raise AssertionError("explicit pool scaling must not observe activity pressure")
-
     @contextmanager
     def mutation_lock(self, capacity_owner_id: str) -> Iterator[None]:
         assert not self.active_owner_id
