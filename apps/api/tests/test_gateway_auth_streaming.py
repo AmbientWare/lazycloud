@@ -20,6 +20,7 @@ from shared.compute_fleet import Machine
 from shared.compute_policy import (
     UnitName,
 )
+from shared.errors import ObjectOperationInProgressError, domain_error_code
 from shared.identity import TokenKind
 from shared.placement import Placement
 from storage.service import ObjectStorage
@@ -209,6 +210,9 @@ def test_object_upload_authorizes_before_creating_or_completing_a_claim(
         assert client.post("/gateway/objects/uploads", json=request).status_code == 401
         started = client.post("/gateway/objects/uploads", json=request, headers=_auth(token))
         assert started.status_code == 200
+        busy = client.post("/gateway/objects/uploads", json=request, headers=_auth(token))
+        assert busy.status_code == 409
+        assert _response_object(busy)["code"] == domain_error_code(ObjectOperationInProgressError)
         payload = _response_object(started)
         object_id = _required_string(payload, "object_id")
         upload = payload["upload"]

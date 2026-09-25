@@ -81,8 +81,8 @@ class RecordingFunctionService:
     # never reach admission or claiming, and a fake that returned a plausible
     # value would let a route that started calling one of them keep passing.
 
-    def unclaimed_task_counts(self, stub_ids: Sequence[str]) -> dict[str, int]:
-        raise AssertionError(f"unexpected unclaimed_task_counts call: {stub_ids}")
+    def task_demand_counts(self, stub_ids: Sequence[str]) -> dict[str, int]:
+        raise AssertionError(f"unexpected task_demand_counts call: {stub_ids}")
 
     def start_function_container(self, stub_id: str) -> bool:
         raise AssertionError(f"unexpected start_function_container call: {stub_id}")

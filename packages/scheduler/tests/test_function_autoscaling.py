@@ -168,7 +168,7 @@ def test_function_autoscaler_records_what_it_decided(
         metric_value(
             "autoscaler_signal",
             **metric_labels,
-            signal="unclaimed_tasks",
+            signal="task_demand",
         )
         == 3
     )
@@ -180,7 +180,7 @@ def test_function_autoscaler_records_what_it_decided(
             target_id=stub.id,
         )
     assert state is not None
-    assert state.signal_name == "unclaimed_tasks"
+    assert state.signal_name == "task_demand"
     assert state.signal_value == 3
     assert state.decision == "scale-up"
     assert len(state.last_actions) == 2
@@ -190,6 +190,34 @@ def test_function_autoscaler_records_what_it_decided(
         target_id=stub.id,
     )
     assert [event.action for event in history.events] == ["function.autoscaler.scale_decision"]
+
+
+def test_claimed_backlog_keeps_the_containers_started_for_it(
+    isolated_services: ApiServices,
+) -> None:
+    scheduler = _Scheduler()
+    services = replace(
+        isolated_services,
+        containers=replace(isolated_services.containers, scheduler=scheduler),
+    )
+    redis = RedisClient(FakeRedis(), key_prefix="test")
+    stub = _create_function_stub(services, max_containers=3)
+    _enqueue_invocations(services, stub, count=3)
+    autoscaler = _function_autoscaler(services, redis)
+    [started] = autoscaler.reconcile()
+    assert started.desired_containers == 3
+    ready = _pending_containers(services, stub)[0]
+    with services.context.database.session() as session:
+        ContainerRepository(session).upsert(
+            ready.model_copy(update={"status": ContainerStatus.Running})
+        )
+    assert services.tasks.claim_and_start(stub.id, container_id=ready.id) is not None
+
+    [result] = autoscaler.reconcile()
+
+    assert result.signal_value == 3
+    assert result.desired_containers == 3
+    assert [action.action for action in result.actions] == []
 
 
 @pytest.mark.parametrize("delivery", ["missing", "queued", "inflight"])

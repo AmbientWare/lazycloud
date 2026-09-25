@@ -12,7 +12,7 @@ from database.tables.images import CheckpointTable, ImageBuildTable, ImageTable
 from database.tables.storage import ObjectTable
 from pydantic import JsonValue
 from shared.checkpoints import CheckpointRecord
-from shared.errors import ConflictError
+from shared.errors import ConflictError, ObjectOperationInProgressError
 from shared.image_building.records import ImageBuildRecord, ImageRecord
 from shared.objects import ObjectRecord
 from shared.runtime_paths import archive_path_digest, normalize_runtime_path
@@ -160,7 +160,9 @@ class CleanupRepository:
             )
         ).first()
         if claimed is not None:
-            raise ConflictError(f"object operation is in progress: {record.bucket}/{record.key}")
+            raise ObjectOperationInProgressError(
+                f"object operation is in progress: {record.bucket}/{record.key}"
+            )
 
     def assert_object_location_available(
         self,
@@ -182,7 +184,7 @@ class CleanupRepository:
             )
         ).first()
         if claimed is not None:
-            raise ConflictError(f"object operation is in progress: {bucket}/{key}")
+            raise ObjectOperationInProgressError(f"object operation is in progress: {bucket}/{key}")
 
     def assert_checkpoint_available(self, checkpoint_id: str) -> None:
         self.lock_keys({f"checkpoint:{checkpoint_id}"})
