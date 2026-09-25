@@ -3600,7 +3600,11 @@ class ComputeService:
             unit = self._prepare_pooled_offer(
                 provider=provider,
                 offer=offer,
-                requirements=ComputeResourceRequirements(preemptible=plan.market.preemptible),
+                requirements=ComputeResourceRequirements(
+                    preemptible=plan.market.preemptible,
+                    gpu=[offer.gpu] if offer.gpu else [],
+                    gpu_count=offer.gpu_count,
+                ),
                 desired_machines=0,
                 root_volume_gib=policy.root_volume_gib,
                 idle_timeout_seconds=policy.idle_timeout_seconds,

@@ -83,7 +83,7 @@ class Capacity:
         return Capacity().covers(self)
 
 
-def total(items: Iterable[Capacity]) -> Capacity:
+def _total(items: Iterable[Capacity]) -> Capacity:
     result = Capacity()
     for item in items:
         result = result + item
@@ -116,7 +116,7 @@ class MarketReserve(ContractModel):
 
 _GIB = 1024
 
-SPOT_RESERVE = MarketReserve(
+_SPOT_RESERVE = MarketReserve(
     # Two small machines when quiet, so a start lands on a warm worker.
     warm=HeadroomTarget(
         floor=Capacity(12_000, 24 * _GIB),
@@ -130,7 +130,7 @@ SPOT_RESERVE = MarketReserve(
         maximum=Capacity(96_000, 384 * _GIB),
     ),
 )
-ON_DEMAND_RESERVE = MarketReserve(
+_ON_DEMAND_RESERVE = MarketReserve(
     # One small and one large stopped machine: a small devbox and a large one
     # each resume in seconds instead of waiting for a purchase.
     stopped=HeadroomTarget(
@@ -188,8 +188,8 @@ class FleetCapacityPolicy(ContractModel):
 
     large_machine_cpu_millicores: int = Field(default=32_000, gt=0)
     large_machine_memory_mib_per_cpu: int = Field(default=4 * _GIB, gt=0)
-    spot: MarketReserve = SPOT_RESERVE
-    on_demand: MarketReserve = ON_DEMAND_RESERVE
+    spot: MarketReserve = _SPOT_RESERVE
+    on_demand: MarketReserve = _ON_DEMAND_RESERVE
     gpu: dict[str, MarketReserve] = Field(
         default_factory=lambda: {
             GpuType.T4.value: _ONE_CARD_RESERVE,
@@ -436,8 +436,8 @@ def _plan_market(
         and units[machine.unit_id].enabled
     ]
     working = [machine for machine in machines if machine.state is not ReserveMachineState.Reserve]
-    load = total(machine.load for machine in working)
-    launching = total(
+    load = _total(machine.load for machine in working)
+    launching = _total(
         unit.machine
         * max(
             unit.desired
@@ -451,7 +451,7 @@ def _plan_market(
         if unit.enabled
     )
     warm_free = (
-        total((units[machine.unit_id].machine - machine.load).clamped() for machine in warm)
+        _total((units[machine.unit_id].machine - machine.load).clamped() for machine in warm)
         + launching
     )
     warm_target = reserve.warm.target(load)
@@ -493,7 +493,7 @@ def _plan_market(
         )
         for unit in market_units
     }
-    stopped_capacity = total(unit.machine * stopped[unit.unit_id] for unit in market_units)
+    stopped_capacity = _total(unit.machine * stopped[unit.unit_id] for unit in market_units)
     stopped_deficit = (stopped_target - stopped_capacity).clamped()
     if not stopped_deficit.empty:
         if growth is None and may_grow:

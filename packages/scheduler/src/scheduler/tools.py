@@ -321,7 +321,7 @@ def select_worker_for_request(
     ]
     if not candidates:
         return None
-    # Packing leaves machines genuinely empty, which is the only thing the idle
+    # Packing leaves machines empty, which is the only thing the idle
     # drain and the reserve planner can act on. Spreading reads as the safer
     # choice and keeps every machine touched, so none is ever idle long enough to
     # release and a pool settles at the machines it takes to keep them all warm.
