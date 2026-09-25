@@ -4,9 +4,8 @@ import logging
 import shutil
 import time
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
-from threading import Event
 
 from cache.server import (
     FileCacheServer,
@@ -180,7 +179,7 @@ def build_worker_process_services(
     internal_http = _internal_http_client(config)
     # A held worker reports waiting only once its local readiness work succeeded,
     # so its reserve never hibernates with a worker that could not start.
-    readiness_prepared = Event()
+    readiness: Future[None] = Future()
     repository = repository_client or build_worker_repository_http_client(
         endpoint=AGENT_TUNNEL_CONTROL_URL,
         token=config.worker_token,
@@ -191,7 +190,7 @@ def build_worker_process_services(
             if config.admission_hold_seconds
             else None
         ),
-        admission_ready=readiness_prepared,
+        admission_readiness=readiness,
         http=internal_http,
     )
     image_build_scratch = ImageBuildScratchManager(
@@ -488,7 +487,7 @@ def build_worker_process_services(
         image_runtime,
         spec_builder=spec_builder,
         network_backend=network_backend,
-        prepared=readiness_prepared,
+        readiness=readiness,
         gpu_count=execution.capacity.gpu_count,
         gpu_devices=config.gpu_devices,
     )
@@ -542,14 +541,14 @@ def _readiness_steps(
     *,
     spec_builder: OciRuntimeSpecBuilder,
     network_backend: AgentBridgeNetworkBackend,
-    prepared: Event,
+    readiness: Future[None],
     gpu_count: int,
     gpu_devices: str,
 ) -> tuple[Callable[[], None], Callable[[], None]]:
     """The worker's readiness work: local work beside registration, then the rest after it."""
     return (
         lambda: _prepare_worker_readiness(
-            image_runtime, spec_builder=spec_builder, prepared=prepared
+            image_runtime, spec_builder=spec_builder, readiness=readiness
         ),
         lambda: _validate_worker_readiness(
             network_backend=network_backend, gpu_count=gpu_count, gpu_devices=gpu_devices
@@ -561,7 +560,7 @@ def _prepare_worker_readiness(
     image_runtime: ImageRuntimeClient | None,
     *,
     spec_builder: OciRuntimeSpecBuilder,
-    prepared: Event,
+    readiness: Future[None],
 ) -> None:
     """The local readiness work, run while the worker registers.
 
@@ -577,14 +576,18 @@ def _prepare_worker_readiness(
         if not response.ok:
             raise RuntimeError(response.error or "image runtime is unavailable")
 
-    _run_readiness_checks(
-        "container worker readiness preparation",
-        {
-            "managed_runtimes": spec_builder.prepare_managed_runtimes,
-            "image_runtime": image_runtime_health,
-        },
-    )
-    prepared.set()
+    try:
+        _run_readiness_checks(
+            "container worker readiness preparation",
+            {
+                "managed_runtimes": spec_builder.prepare_managed_runtimes,
+                "image_runtime": image_runtime_health,
+            },
+        )
+    except BaseException as exc:
+        readiness.set_exception(exc)
+        raise
+    readiness.set_result(None)
 
 
 def _validate_worker_readiness(

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Mapping
+from concurrent.futures import Future
 from pathlib import Path
-from threading import Event
 from typing import IO
 
 import httpx
@@ -253,26 +253,49 @@ def test_a_fenced_worker_stays_held_after_the_refusal(
     assert marker.exists()
 
 
-@pytest.mark.parametrize("prepared", [False, True])
-def test_a_held_worker_reports_waiting_only_once_its_readiness_is_prepared(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, prepared: bool
+@pytest.mark.parametrize(
+    ("outcome", "error", "waited", "reported"),
+    [
+        ("running", "did not admit this reserve worker", 5.0, False),
+        ("prepared", "did not admit this reserve worker", 5.0, True),
+        ("failed", "readiness preparation failed during the admission hold", 0.0, False),
+    ],
+)
+def test_a_held_worker_waits_on_its_readiness_preparation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    outcome: str,
+    error: str,
+    waited: float,
+    reported: bool,
 ) -> None:
-    """A reserve hibernates once its worker waits, so an unprepared worker never says it does."""
-    monkeypatch.setattr(repository_client, "time", _Clock())
+    """A held worker says it waits only once prepared, and a failed preparation ends the hold.
+
+    A reserve hibernates once its worker waits, and one whose preparation failed
+    would otherwise hold until the reserve timed out, hiding the cause.
+    """
+    clock = _Clock()
+    monkeypatch.setattr(repository_client, "time", clock)
     marker = tmp_path / "admission-waiting"
-    ready = Event()
-    if prepared:
-        ready.set()
+    readiness: Future[None] = Future()
+    if outcome == "prepared":
+        readiness.set_result(None)
+    elif outcome == "failed":
+        readiness.set_exception(RuntimeError("managed runtime catalog is unavailable"))
     transport = WorkerRepositoryHttpTransport(
         endpoint="http://agent.invalid",
         token="worker-secret",
         admission_hold_seconds=5.0,
         admission_waiting_file=marker,
-        admission_ready=ready,
+        admission_readiness=readiness,
         http=_RefusedHttp(),
     )
 
-    with pytest.raises(WorkerRepositoryClientError, match="did not admit this reserve worker"):
+    with pytest.raises(WorkerRepositoryClientError, match=error):
         transport.post("/worker-repository/add-worker", {})
 
-    assert marker.exists() is prepared
+    if waited:
+        assert waited - 1 <= clock.now <= waited
+    else:
+        assert clock.now == 0
+    assert marker.exists() is reported

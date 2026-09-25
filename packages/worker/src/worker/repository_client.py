@@ -4,11 +4,11 @@ import json
 import logging
 import time
 from collections.abc import Generator, Iterator, Mapping
+from concurrent.futures import Future
 from contextlib import closing
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from threading import Event
 from typing import Literal, Protocol, runtime_checkable
 from urllib.parse import urlparse
 
@@ -249,9 +249,10 @@ class WorkerRepositoryHttpTransport:
     admission_waiting_file: Path | None = None
     """Present while a hold is under way and a call was refused, telling the agent
     this worker is built and waits only for the control plane."""
-    admission_ready: Event | None = None
-    """Set once the worker's readiness preparation has succeeded. Until then it
-    is not built, so a refused call reports no waiting."""
+    admission_readiness: Future[None] | None = None
+    """How the worker's readiness preparation ended. Until it succeeds the worker
+    is not built, so a refused call reports no waiting; once it fails the hold
+    ends with that failure, so the worker exits with its cause at once."""
 
     http: InternalHttpClient = field(default_factory=InternalHttpClient)
     _admitted: bool = field(default=False, init=False)
@@ -300,10 +301,16 @@ class WorkerRepositoryHttpTransport:
             except InternalHttpConnectError as exc:
                 # Read on every attempt, so a shutdown ends a hold already under way.
                 held = not self._admitted and self.admission_hold_seconds > 0
+                readiness = self.admission_readiness
+                if held and readiness is not None and readiness.done():
+                    failure = readiness.exception()
+                    if failure is not None:
+                        msg = f"readiness preparation failed during the admission hold: {failure}"
+                        raise WorkerRepositoryClientError(msg) from failure
                 if (
                     held
                     and self.admission_waiting_file is not None
-                    and (self.admission_ready is None or self.admission_ready.is_set())
+                    and (readiness is None or readiness.done())
                 ):
                     self._report_waiting(self.admission_waiting_file)
                 budget = self.admission_hold_seconds if held else self.connect_retry_seconds
@@ -1675,7 +1682,7 @@ def build_worker_repository_http_client(
     timeout_seconds: float = 30.0,
     admission_hold_seconds: float = 0.0,
     admission_waiting_file: Path | None = None,
-    admission_ready: Event | None = None,
+    admission_readiness: Future[None] | None = None,
     http: InternalHttpClient | None = None,
 ) -> WorkerRepositoryHttpClient:
     if not endpoint:
@@ -1691,7 +1698,7 @@ def build_worker_repository_http_client(
             timeout_seconds=timeout_seconds,
             admission_hold_seconds=admission_hold_seconds,
             admission_waiting_file=admission_waiting_file,
-            admission_ready=admission_ready,
+            admission_readiness=admission_readiness,
             http=http or InternalHttpClient(timeout_seconds=timeout_seconds),
         )
     )

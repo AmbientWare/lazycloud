@@ -4,7 +4,7 @@ import logging
 import threading
 import time
 from collections.abc import Callable, Iterable
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
@@ -176,12 +176,12 @@ class WorkerLifecycleOrchestrator:
     _draining: bool = False
     _active: dict[str, WorkerActiveContainer] = field(default_factory=dict)
     _lock: threading.RLock = field(default_factory=threading.RLock)
-    _preparer: ThreadPoolExecutor = field(
-        default_factory=lambda: ThreadPoolExecutor(
-            max_workers=1, thread_name_prefix="worker-readiness"
-        )
-    )
     _preparation: Future[None] | None = None
+    """How the process's one readiness preparation ended, or that it still runs.
+
+    It runs on a daemon thread, so a preparation that hangs never holds the
+    process open past shutdown's bounded wait.
+    """
 
     @property
     def draining(self) -> bool:
@@ -453,27 +453,39 @@ class WorkerLifecycleOrchestrator:
     def _readiness_preparation(self) -> Future[None] | None:
         """The one readiness preparation of this process, started by the first registration."""
         with self._lock:
-            if self._preparation is None and self.readiness_preparer is not None:
-                self._preparation = self._preparer.submit(self.readiness_preparer)
+            preparer = self.readiness_preparer
+            if self._preparation is None and preparer is not None:
+                preparation: Future[None] = Future()
+                preparation.set_running_or_notify_cancel()
+
+                def prepare() -> None:
+                    try:
+                        preparer()
+                    except BaseException as exc:
+                        preparation.set_exception(exc)
+                    else:
+                        preparation.set_result(None)
+
+                threading.Thread(target=prepare, name="worker-readiness", daemon=True).start()
+                self._preparation = preparation
             return self._preparation
 
     def _settle_readiness_preparation(self) -> None:
         """End the preparation before cleanup closes what it sets up, waiting only so long."""
         with self._lock:
             preparation = self._preparation
-        if preparation is not None and not preparation.cancel():
-            try:
-                error = preparation.exception(timeout=READINESS_PREPARATION_SHUTDOWN_SECONDS)
-            except TimeoutError:
-                LOGGER.warning(
-                    "worker readiness preparation still running after %.0fs; cleaning up anyway",
-                    READINESS_PREPARATION_SHUTDOWN_SECONDS,
-                )
-                self._preparer.shutdown(wait=False, cancel_futures=True)
-                return
-            if error is not None:
-                LOGGER.warning("worker readiness preparation failed", exc_info=error)
-        self._preparer.shutdown(wait=True, cancel_futures=True)
+        if preparation is None:
+            return
+        try:
+            error = preparation.exception(timeout=READINESS_PREPARATION_SHUTDOWN_SECONDS)
+        except TimeoutError:
+            LOGGER.warning(
+                "worker readiness preparation still running after %.0fs; cleaning up anyway",
+                READINESS_PREPARATION_SHUTDOWN_SECONDS,
+            )
+            return
+        if error is not None:
+            LOGGER.warning("worker readiness preparation failed", exc_info=error)
 
     def _wait_for_active_containers(self, *, timeout_seconds: float) -> WorkerLifecycleStepResult:
         deadline = time.monotonic() + timeout_seconds

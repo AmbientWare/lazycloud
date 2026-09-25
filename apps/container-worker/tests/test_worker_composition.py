@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from concurrent.futures import Future
 from pathlib import Path
-from threading import Event
 from typing import IO
 
 import httpx
@@ -106,19 +106,19 @@ def test_readiness_preparation_finishes_while_the_control_plane_refuses_the_work
         capacity_owner_id=_CAPACITY_OWNER_ID,
         worker_token="worker-token",
     )
-    prepared = Event()
+    readiness: Future[None] = Future()
     prepare, validate = composition._readiness_steps(
         _ImageRuntime(),
         spec_builder=_SpecBuilder(bundle_root=tmp_path),
         network_backend=composition._client_network_backend(settings, client),
-        prepared=prepared,
+        readiness=readiness,
         gpu_count=0,
         gpu_devices="",
     )
 
     prepare()
 
-    assert prepared.is_set()
+    assert readiness.done() and readiness.exception() is None
     assert agent.calls == []
     with pytest.raises(WorkerRepositoryClientError, match="did not admit this reserve worker"):
         validate()
