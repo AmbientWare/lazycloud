@@ -121,14 +121,15 @@ event, and any path not listed leaves it where it is.
 
 | Party | States | Moves when |
 | --- | --- | --- |
-| Agent | serving: listeners open, no reserve record | a full stream says `reserve_preparation`: preparing |
-| | preparing: listeners held, record written with this boot, workers started held, an unheld reserve worker restarted into the hold | a full stream without `reserve_preparation`: serving, adopting the worker by the planner's keep rule or stopping it; `stop_preparation_id`: workers stopped for a used host's stop |
-| | booted from a record: worker started held before the first stream, `booted_since_reserve_prepared` sent on every stream | `reserve_resume_pending`: stays, record untouched; otherwise as preparing |
+| Agent | serving: listeners open, no reserve record | `reserve` says `prepare`: preparing |
+| | preparing: listeners held, record written with this boot, workers started held, an unheld reserve worker restarted into the hold | `serve`: serving, adopting the worker by the planner's keep rule or stopping it; `keep`: stays; `stop_preparation_id`: workers stopped for a used host's stop |
+| | booted from a record: worker started held before the first stream, `booted_since_reserve_prepared` sent on every stream | `resume_pending` or `keep`: stays, record untouched; otherwise as preparing |
 | | slept: one connection reset, tunnel redialed, timers rearmed | the next stream, as the state before |
-| Stream answer | not ok, retryable or final, including a release not yet activated for a machine whose reserve is in transition | the agent changes nothing |
-| | ok with `reserve_preparation`, and a warm slot Active or a plain one Draining | compute's row is `preparing`, `stopping` or `stopped` |
-| | ok with `reserve_resume_pending` | the row reads `stopping` or `stopped` while the agent reports a boot since preparation |
-| | ok with `resume_from_stop` and no preparation | the row reads `resuming`; the same stream authorizes the resume |
+| Stream answer | not ok, retryable or final | the agent changes nothing |
+| | ok with `reserve` `keep`, the default: a release not yet activated, or a used host's stop | an agent holding a worker keeps holding it |
+| | ok with `prepare`, and a warm slot Active or a plain one Draining | compute's row is `preparing`, `stopping` or `stopped` |
+| | ok with `resume_pending` | the row reads `stopping` or `stopped` while the agent reports a boot since preparation |
+| | ok with `serve` | the machine is no prepared reserve; with `resume_from_stop` the row reads `resuming` and the same stream authorizes the resume |
 | Compute row | `preparing` -> `stopping` -> `stopped` -> `resuming` -> `active` | preparation completes once the worker is ready (warm: release running and waiting; plain: no worker); the pass observes the stop; the pass starts the instance; the stream authorizes the resume |
 | Lifecycle | `stopping`, `stopped`, `resuming` -> `joining` -> `ready` | the stream's resume authorization, or an active row seen by the pass or the agent's joining report; then the heartbeat |
 | Worker | held: refused calls retried up to 30 awake minutes, `admission-waiting` present | a 2xx admits it and removes the marker; a refusal, the fence's 409 included, leaves it held; the hold running out fails it |

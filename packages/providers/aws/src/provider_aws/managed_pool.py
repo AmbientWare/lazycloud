@@ -79,6 +79,9 @@ _SAFE_VERSION_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 _DEFAULT_ROOT_DEVICE_NAME = "/dev/xvda"
 
 
+AWS_MAX_ROOT_VOLUME_GIB = 2048
+
+
 class AwsManagedPoolModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -121,7 +124,7 @@ class AwsManagedPoolSpec(AwsManagedPoolModel):
     ami_id: str = Field(pattern=_AMI_PATTERN.pattern)
     desired_nodes: int = Field(ge=0)
     max_nodes: int = Field(ge=1)
-    root_volume_gib: int = Field(ge=50, le=2048)
+    root_volume_gib: int = Field(ge=50, le=AWS_MAX_ROOT_VOLUME_GIB)
     hibernation: bool = False
     """Launch able to hibernate, so a stopped reserve keeps its memory."""
     node_instance_profile_arn: str

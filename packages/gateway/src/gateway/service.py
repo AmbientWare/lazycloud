@@ -39,7 +39,7 @@ from compute.machine_lifecycle import machine_lifecycle_allowed, write_machine_l
 from compute.policy import WorkspaceComputePolicyService
 from compute.projection import PoolConfig
 from compute.providers import joined_unit_identity
-from compute.service import ComputeService
+from compute.service import ComputeService, ReserveAgentPreparation
 from compute.state import (
     AsyncRedisComputeStateRepository,
     ComputeAgentTokenState,
@@ -123,6 +123,7 @@ from shared.app_slug import app_slug_or_default, validate_app_slug
 from shared.capacity import UnitName
 from shared.compute_enrollment import (
     AgentCapacityState,
+    AgentReserveInstruction,
     AgentWorkerSlotStatus,
     ComputeCredentialStatus,
     ComputeMachineEnrollmentStatus,
@@ -2231,18 +2232,6 @@ class GatewayControlService:
                     generation=request.generation,
                 )
             if not releases.controls(release):
-                # This answer carries no reserve instruction, which an agent
-                # holding a reserve's worker would take as leave to serve.
-                if self.services.compute.reserve_in_transition(
-                    workspace_id=response_state.workspace_id,
-                    machine_id=response_state.machine_id,
-                ):
-                    return StreamAgentResponse(
-                        ok=False,
-                        retryable=True,
-                        err_msg="worker release activation is pending",
-                        generation=release.generation,
-                    )
                 return StreamAgentResponse(
                     ok=bool(snapshot.slots),
                     retryable=not snapshot.slots,
@@ -2323,12 +2312,7 @@ class GatewayControlService:
             routes=[self._agent_route_view(route) for route in snapshot.routes],
             slots=[agent_worker_slot_view(slot) for slot in agent_slots],
             stop_preparation_id=reserve_preparation.stop_request_id if reserve_preparation else "",
-            reserve_resume_pending=bool(reserve_preparation and reserve_preparation.lagging_resume),
-            reserve_preparation=bool(
-                reserve_preparation
-                and reserve_preparation.preparing
-                and not reserve_preparation.stop_request_id
-            ),
+            reserve=_reserve_instruction(reserve_preparation),
             resume_from_stop=bool(reserve_preparation and reserve_preparation.resuming),
         )
 
@@ -3388,6 +3372,17 @@ def _agent_state_from_enrollment(
         last_heartbeat_at=enrollment.last_heartbeat_at,
         last_disconnect_at=enrollment.last_disconnect_at,
     )
+
+
+def _reserve_instruction(preparation: ReserveAgentPreparation | None) -> AgentReserveInstruction:
+    """Serve only a machine that is not a prepared reserve; a used host's stop keeps."""
+    if preparation is None or not preparation.preparing:
+        return AgentReserveInstruction.Serve
+    if preparation.stop_request_id:
+        return AgentReserveInstruction.Keep
+    if preparation.lagging_resume:
+        return AgentReserveInstruction.ResumePending
+    return AgentReserveInstruction.Prepare
 
 
 def _agent_readiness_phase(state: ComputeAgentTokenState) -> MachineReadinessPhase:

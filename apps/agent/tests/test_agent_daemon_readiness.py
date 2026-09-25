@@ -7,6 +7,7 @@ from threading import Event
 
 import pytest
 from agent.operations import (
+    WORKER_ADMISSION_HOLD_ENV,
     AgentBootstrap,
     AgentCapacityInterruptionNotice,
     AgentState,
@@ -41,6 +42,7 @@ from gateway.http import (
 )
 from shared.compute_enrollment import (
     AgentCapacityState,
+    AgentReserveInstruction,
     AgentWorkerSlotStatus,
     agent_machine_worker_id,
 )
@@ -359,8 +361,7 @@ class _SlotGateway(_Gateway):
     def __init__(self) -> None:
         super().__init__()
         self.slot = _machine_slot(AgentWorkerSlotStatus.Active)
-        self.preparing = True
-        self.resume_pending = False
+        self.reserve = AgentReserveInstruction.Prepare
         self.booted_since_prepared: list[bool] = []
 
     def stream_agent(self, request: StreamAgentRequest) -> StreamAgentResponse:
@@ -370,8 +371,7 @@ class _SlotGateway(_Gateway):
             credential_id="22222222-2222-4222-8222-222222222222",
             credential_generation=1,
             slots=[self.slot],
-            reserve_preparation=self.preparing,
-            reserve_resume_pending=self.resume_pending,
+            reserve=self.reserve,
         )
 
 
@@ -381,6 +381,7 @@ class _Workers(DockerAgentWorkerController):
     def __init__(self, state_dir: Path) -> None:
         super().__init__(state_dir)
         self.running: dict[str, tuple[AgentWorkerSlot, int]] = {}
+        self.held: set[str] = set()
         self.started = 0
 
     def wait_for_docker(self, stop: Event | None = None) -> bool:
@@ -398,9 +399,17 @@ class _Workers(DockerAgentWorkerController):
         del stop
         self.started += 1
         self.running[plan.slot.worker_id] = (plan.slot, self.started)
+        if WORKER_ADMISSION_HOLD_ENV in plan.env:
+            self.held.add(plan.slot.worker_id)
+        else:
+            self.held.discard(plan.slot.worker_id)
 
     def _stop(self, slot: AgentWorkerSlot) -> None:
         self.running.pop(slot.worker_id, None)
+        self.held.discard(slot.worker_id)
+
+    def holds(self, worker_id: str) -> bool:
+        return worker_id in self.held
 
     def _running_slot(self, slot: AgentWorkerSlot) -> AgentWorkerSlot | None:
         return slot.model_copy() if slot.worker_id in self.running else None
@@ -474,7 +483,7 @@ def test_a_reserve_worker_reaches_the_control_plane_only_once_a_stream_adopts_it
         assert set(prepared) == {_MACHINE_WORKER}
         assert tunnel.opened_with is None
         assert workers.reserve_worker(state.machine_id) is not None
-        gateway.preparing = False
+        gateway.reserve = AgentReserveInstruction.Serve
         gateway.slot = _machine_slot(resumed_slot)
         service.run_stream_iteration(state, tunnel=tunnel, before_agent_update=tunnel.close)
     finally:
@@ -541,13 +550,12 @@ def test_a_cold_resumed_reserve_keeps_its_worker_until_its_row_catches_up(
         booted = resumed.containers()
         assert set(booted) == {_MACHINE_WORKER}
         gateway.booted_since_prepared.clear()
-        gateway.resume_pending = True
+        gateway.reserve = AgentReserveInstruction.ResumePending
         for _ in range(2):
             service.run_stream_iteration(state, tunnel=tunnel, before_agent_update=tunnel.close)
             assert resumed.containers() == booted
             assert tunnel.opened_with is None
-        gateway.preparing = False
-        gateway.resume_pending = False
+        gateway.reserve = AgentReserveInstruction.Serve
         service.run_stream_iteration(state, tunnel=tunnel, before_agent_update=tunnel.close)
     finally:
         tunnel.close()

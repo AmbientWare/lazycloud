@@ -118,9 +118,9 @@ from compute.fleet_reserves import (
     unit_reserve_market,
 )
 from compute.machine_lifecycle import (
+    PREPARED_RESERVE_STATUSES,
     RETAINED_MACHINE_LIFECYCLES,
     machine_lifecycle_allowed,
-    reserve_in_transition,
     write_machine_lifecycle,
 )
 from compute.offers import (
@@ -2892,11 +2892,6 @@ class ComputeService:
                 )
         return True
 
-    def reserve_in_transition(self, *, workspace_id: str, machine_id: str) -> bool:
-        """Whether the machine's reserve is being prepared, stopped or resumed."""
-        with self.context.database.session() as session:
-            return reserve_in_transition(session, machine_id=machine_id, workspace_id=workspace_id)
-
     def prepare_reserved_machine(
         self,
         *,
@@ -2920,11 +2915,7 @@ class ComputeService:
             record = ComputeProviderInstanceRepository(session).get_by_machine(machine_id)
             if record is None or record.pool_id is None or record.instance_id is None:
                 return ReserveAgentPreparation()
-            preparing = record.status in {
-                ReservationStatus.Preparing.value,
-                ReservationStatus.Stopping.value,
-                ReservationStatus.Stopped.value,
-            }
+            preparing = record.status in PREPARED_RESERVE_STATUSES
             resuming = record.status == ReservationStatus.Resuming.value
             if not preparing and not resuming:
                 return ReserveAgentPreparation()
@@ -2958,18 +2949,23 @@ class ComputeService:
             # again, so a row still reading stopping or stopped lags the resume.
             # Its worker waits, fenced, like a hibernating reserve's, until the
             # row reads resuming.
-            lagging_resume = booted_since_prepared and record.status in {
-                ReservationStatus.Stopping.value,
-                ReservationStatus.Stopped.value,
-            }
+            lagging_resume = (
+                booted_since_prepared
+                and not stopping_used_machine
+                and record.status
+                in {
+                    ReservationStatus.Stopping.value,
+                    ReservationStatus.Stopped.value,
+                }
+            )
             hibernate = preparing and record.hibernates and not stopping_used_machine
-            warm = hibernate or (preparing and lagging_resume and not stopping_used_machine)
+            warm = hibernate or lagging_resume
             instruction = ReserveAgentPreparation(
                 preparing=preparing,
                 warm=warm,
                 stop_request_id=stop_request_id,
                 resuming=resuming,
-                lagging_resume=lagging_resume and not stopping_used_machine,
+                lagging_resume=lagging_resume,
             )
             # A hibernating reserve stops with its worker on the release, built and
             # waiting at its first call; any other stops with none.

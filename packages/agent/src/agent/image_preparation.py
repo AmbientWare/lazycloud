@@ -53,8 +53,7 @@ class WorkerImagePreparation:
         def check() -> None:
             if present(image, self._stop):
                 self._prepared.add(image)
-                if self.on_finished is not None:
-                    self.on_finished()
+                self._finished()
 
         self._lookup = (image, self._lookups.submit(check))
 
@@ -97,10 +96,13 @@ class WorkerImagePreparation:
             return self._pending[1]
         operation = self._executor.submit(self.prepare, image, self._stop)
         self._pending = (image, operation)
-        if self.on_finished is not None:
-            finished = self.on_finished
-            operation.add_done_callback(lambda _: finished())
+        operation.add_done_callback(lambda _: self._finished())
         return operation
+
+    def _finished(self) -> None:
+        # Read when an image finishes, not when it starts, so a cleared hook stays cleared.
+        if (finished := self.on_finished) is not None:
+            finished()
 
     def close(self) -> None:
         self._stop.set()

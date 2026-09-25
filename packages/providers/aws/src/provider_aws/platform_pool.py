@@ -11,9 +11,19 @@ from compute.providers import (
 )
 
 from .instance_catalog import aws_instance_catalog_entry
-from .managed_pool import AwsManagedPoolSpec
+from .managed_pool import AWS_MAX_ROOT_VOLUME_GIB, AwsManagedPoolSpec
 from .pooled_provider import AwsPooledCapacityProvider
 from .retained_pool import AwsRetainedPool, RetainedPoolState
+
+
+def _hibernation_swap_gib(instance_type: str, root_volume_gib: int) -> int:
+    """The root volume a retained machine adds to hibernate, or 0 when it stops plainly.
+
+    A type whose grown root would pass the largest root volume a node launches
+    with stops plainly instead.
+    """
+    swap_gib = aws_instance_catalog_entry(instance_type).hibernation_swap_gib
+    return swap_gib if root_volume_gib + swap_gib <= AWS_MAX_ROOT_VOLUME_GIB else 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,7 +40,7 @@ class AwsPlatformCapacityProvider(AwsPooledCapacityProvider):
             root_volume_gib=root_volume_gib
         ):
             update: dict[str, object] = {"capability_key": f"{offer.capability_key}:retained"}
-            swap_gib = aws_instance_catalog_entry(offer.instance_type).hibernation_swap_gib
+            swap_gib = _hibernation_swap_gib(offer.instance_type, root_volume_gib)
             prices = self.regional_prices.get(offer.region)
             if swap_gib and prices is not None:
                 update["cost_terms"] = offer.cost_terms.model_copy(
@@ -53,11 +63,11 @@ class AwsPlatformCapacityProvider(AwsPooledCapacityProvider):
         spec = super(AwsPlatformCapacityProvider, self)._spec(request)
         if not self._retained(request):
             return spec
-        entry = aws_instance_catalog_entry(request.offer.instance_type)
+        swap_gib = _hibernation_swap_gib(request.offer.instance_type, request.root_volume_gib)
         return spec.model_copy(
             update={
-                "hibernation": entry.hibernates,
-                "root_volume_gib": request.root_volume_gib + entry.hibernation_swap_gib,
+                "hibernation": bool(swap_gib),
+                "root_volume_gib": request.root_volume_gib + swap_gib,
                 "spot_request_type": (
                     "persistent" if request.offer.preemptible else spec.spot_request_type
                 ),

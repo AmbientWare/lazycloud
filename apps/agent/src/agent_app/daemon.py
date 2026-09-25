@@ -32,6 +32,7 @@ from agent.operations import (
     AGENT_MANAGED_LABEL,
     AGENT_RUNTIME_READY_FILE,
     AGENT_WORKER_ID_LABEL,
+    WORKER_ADMISSION_HOLD_ENV,
     AgentAuthorityRevoked,
     AgentBootstrap,
     AgentCapacity,
@@ -106,6 +107,7 @@ from shared.agent_connections import AGENT_TUNNEL_CONTROL_URL
 from shared.app_identity import AGENT_NAME, NAME, WORKER_ADMISSION_WAITING_FILE
 from shared.compute_enrollment import (
     AgentCapacityState,
+    AgentReserveInstruction,
     AgentWorkerSlotStatus,
     ComputePreflightCheck,
     MachineBootstrapFailureReason,
@@ -718,8 +720,6 @@ class DockerAgentWorkerController:
     _docker_socket: str | None = field(default=None, init=False)
     _closing: Event = field(default_factory=Event, init=False)
     _halted: Event = field(default_factory=Event, init=False)
-    _held: set[str] = field(default_factory=set, init=False)
-    """Workers this process started under the admission hold."""
     """Set once the capacity shutdown removes every worker; no worker starts after."""
     _slots_lock: Lock = field(default_factory=Lock, init=False)
     """Held only to read or write the slot file. The capacity shutdown runs beside
@@ -736,7 +736,7 @@ class DockerAgentWorkerController:
             else None
         )
 
-    def wake_on_image_prepared(self, wake: Callable[[], None]) -> None:
+    def wake_on_image_prepared(self, wake: Callable[[], None] | None) -> None:
         """Call `wake` whenever a worker image finishes preparing, however it ended."""
         self._images.on_finished = wake
 
@@ -999,8 +999,18 @@ class DockerAgentWorkerController:
         ]
 
     def holds(self, worker_id: str) -> bool:
-        """Whether this process started the worker under the admission hold."""
-        return worker_id in self._held
+        """Whether the worker's container was started under the admission hold.
+
+        Read from the container, so it survives an agent restart or update.
+        """
+        name = f"{AGENT_NAME}-{sanitize_worker_name(worker_id)}"
+        template = (
+            '{{range .Config.Env}}{{if eq (index (split . "=") 0) "'
+            + WORKER_ADMISSION_HOLD_ENV
+            + '"}}held{{end}}{{end}}'
+        )
+        result = self._docker([self.docker_binary, "inspect", "-f", template, name])
+        return result.returncode == 0 and result.stdout.strip() == "held"
 
     def stop_reserve_worker(self, slot: AgentWorkerSlot) -> None:
         self._stop(slot)
@@ -1168,10 +1178,6 @@ class DockerAgentWorkerController:
             raise RuntimeError(f"worker image is not prepared for slot {slot.worker_id}")
         if self._halted.is_set():
             raise RuntimeError("the machine's workers were shut down")
-        if reserve:
-            self._held.add(slot.worker_id)
-        else:
-            self._held.discard(slot.worker_id)
         plan = plan_worker_container(
             bootstrap,
             slot,
@@ -1401,6 +1407,9 @@ class AgentDaemonService:
     """What identity resolution reports once its retries run out: the stage it last reached."""
     _unconfirmed: AgentWorkerSlot | None = None
     """A reserve's worker, running before a stream has let it reach the control plane."""
+    _holding: bool = False
+    """Whether the worker listeners are held for a reserve. Only a stream that says
+    serve releases them; one that says keep leaves them held."""
     _suspend: SuspendWatch = field(default_factory=SuspendWatch)
     _wakeup: Wakeup | None = field(default=None, init=False)
     """Open only while `run` runs; its pipe, timerfd and watch thread close with it."""
@@ -1482,6 +1491,7 @@ class AgentDaemonService:
         try:
             return self._run()
         finally:
+            self.worker_controller.wake_on_image_prepared(None)
             self._wakeup = None
             wakeup.close()
 
@@ -1515,6 +1525,7 @@ class AgentDaemonService:
         if state.capacity_notice_at is not None:
             self._capacity_shutdown.arm(state.capacity_notice_at)
         reserve_worker = self._reserve_worker(state)
+        self._holding = reserve_worker is not None
         iterations = 0
         last_result = AgentDaemonRunResult(
             workspace_id=state.workspace_id,
@@ -1561,6 +1572,9 @@ class AgentDaemonService:
             )
             while True:
                 next_iteration = iterations + 1
+                # A tunnel still down after a whole interval's wait has already
+                # spent the retry's pause.
+                waited_out = False
                 try:
                     self._react_to_sleep(tunnel)
                     state = self.state_store.load(state.gateway_url) or state
@@ -1568,7 +1582,7 @@ class AgentDaemonService:
                     if notice is not None:
                         state = self._begin_capacity_interruption(state, notice)
                     if state.capacity_state is AgentCapacityState.Available:
-                        tunnel.wait_connected(self.options.stream_interval_seconds)
+                        waited_out = not tunnel.wait_connected(self.options.stream_interval_seconds)
                         tunnel.check()
                     last_result = self.run_stream_iteration(
                         state,
@@ -1607,7 +1621,8 @@ class AgentDaemonService:
                         message="agent stream failed; retrying",
                         attrs={"error_type": type(exc).__name__},
                     )
-                    self._sleep(self.options.stream_interval_seconds, tunnel)
+                    if not waited_out:
+                        self._sleep(self.options.stream_interval_seconds, tunnel)
                     continue
                 if last_result.capacity_interrupted:
                     return last_result
@@ -1666,10 +1681,6 @@ class AgentDaemonService:
             slept,
             seconds_since_boot(),
         )
-        # One reset per sleep: a reset fails calls under way, and a call the
-        # gateway already served would then run again.
-        if self._wakeup is None or not self._wakeup.watches_resume:
-            self.client.reset_connections()
         tunnel.redial()
         self._capacity_shutdown.rearm()
         return True
@@ -1876,14 +1887,19 @@ class AgentDaemonService:
             )
             for slot in stream.slots
         ]
-        applied = self._reconcile_workers(
-            state,
-            desired_slots,
-            active_slots,
-            preparing=stream.reserve_preparation,
-            resume_pending=stream.reserve_resume_pending,
-            tunnel=tunnel,
-            timings=timings,
+        applied = (
+            []
+            if stream.reserve is AgentReserveInstruction.Keep and self._holding
+            else self._reconcile_workers(
+                state,
+                desired_slots,
+                active_slots,
+                preparing=stream.reserve
+                in {AgentReserveInstruction.Prepare, AgentReserveInstruction.ResumePending},
+                resume_pending=stream.reserve is AgentReserveInstruction.ResumePending,
+                tunnel=tunnel,
+                timings=timings,
+            )
         )
         with timings.step("routes"):
             ready_routes = tunnel.reconcile_routes(
@@ -1993,6 +2009,7 @@ class AgentDaemonService:
             subnet=network.bridge_subnet,
             ipv6_subnet=network.bridge_ipv6_subnet,
         )
+        self._holding = preparing
         if preparing:
             tunnel.hold_listeners()
         else:
@@ -2029,8 +2046,7 @@ class AgentDaemonService:
 
         One admitted before its preparation began never waits at the fence, so
         a warm preparation could not finish. The plan then starts it again,
-        under the hold. A worker left from before an agent restart counts as
-        unheld and restarts once.
+        under the hold.
         """
         worker_id = agent_machine_worker_id(machine_id)
         running = next((slot for slot in active_slots if slot.worker_id == worker_id), None)

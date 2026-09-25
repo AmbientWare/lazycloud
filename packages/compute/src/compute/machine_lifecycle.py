@@ -107,16 +107,7 @@ phases alone.
 """
 
 
-_RESERVE_TRANSITION_STATUSES = frozenset(
-    {
-        ReservationStatus.Preparing.value,
-        ReservationStatus.Stopping.value,
-        ReservationStatus.Stopped.value,
-        ReservationStatus.Resuming.value,
-    }
-)
-
-_PREPARED_RESERVE_STATUSES = frozenset(
+PREPARED_RESERVE_STATUSES = frozenset(
     {
         ReservationStatus.Preparing.value,
         ReservationStatus.Stopping.value,
@@ -139,23 +130,11 @@ def reserve_awaits_resume(session: DatabaseSession, *, machine_id: str, workspac
     if phases is None:
         raise NotFoundError(f"machine {machine_id} has no record in this workspace")
     lifecycle, status = MachineLifecycle(phases[0]), phases[1]
-    if status in _PREPARED_RESERVE_STATUSES:
+    if status in PREPARED_RESERVE_STATUSES:
         return True
     if lifecycle not in RETAINED_MACHINE_LIFECYCLES:
         return False
     return status != ReservationStatus.Active.value
-
-
-def reserve_in_transition(session: DatabaseSession, *, machine_id: str, workspace_id: str) -> bool:
-    """Whether the machine's reserve is being prepared, stopped or resumed.
-
-    Only a full stream may instruct such a machine, so any shorter answer to its
-    agent is a retry instead.
-    """
-    phases = ComputeProviderInstanceRepository(session).machine_reserve_phases(
-        machine_id, workspace_id=workspace_id
-    )
-    return phases is not None and phases[1] in _RESERVE_TRANSITION_STATUSES
 
 
 _DEFAULT_MESSAGES: dict[MachineLifecycle, str] = {
@@ -354,12 +333,12 @@ def publish_machine_change_on_commit(
 
 __all__ = [
     "MACHINE_LIFECYCLE_TRANSITIONS",
+    "PREPARED_RESERVE_STATUSES",
     "RETAINED_MACHINE_LIFECYCLES",
     "advance_machine_lifecycle",
     "lifecycle_failure_message",
     "machine_lifecycle_allowed",
     "publish_machine_change_on_commit",
     "reserve_awaits_resume",
-    "reserve_in_transition",
     "write_machine_lifecycle",
 ]

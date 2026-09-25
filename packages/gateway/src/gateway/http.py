@@ -7,6 +7,7 @@ from shared.capacity import CAPACITY_OWNER_ID_PATTERN
 from shared.compute_enrollment import (
     AgentBootstrapConfig,
     AgentCapacityState,
+    AgentReserveInstruction,
     AgentWorkerSlotStatus,
     ComputePreflightCheck,
     MachineStopPreparationReceipt,
@@ -185,12 +186,7 @@ class StreamAgentResponse(HttpModel):
     routes: list[AgentRoute] = Field(default_factory=list)
     slots: list[AgentWorkerSlot] = Field(default_factory=list)
     stop_preparation_id: str = ""
-    reserve_preparation: bool = False
-    """Set while the machine is prepared as a reserve. The agent holds the slot's
-    worker off the control plane and keeps the slot for the next boot."""
-    reserve_resume_pending: bool = False
-    """The machine was started again before its row reads resuming. The agent holds
-    its worker and keeps the reserve record, with the boot it was prepared in."""
+    reserve: AgentReserveInstruction = AgentReserveInstruction.Keep
     resume_from_stop: bool = False
 
 

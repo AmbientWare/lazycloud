@@ -81,6 +81,8 @@ AGENT_RUNTIME_READY_FILE = "runtime-ready.json"
 AGENT_AUTHORITY_REVOKED_FILE = "authority-revoked.json"
 AGENT_SERVICE_READY_TIMEOUT_SECONDS = 180
 RESERVE_WORKER_ADMISSION_HOLD_SECONDS = 30 * 60
+WORKER_ADMISSION_HOLD_ENV = "WORKER_ADMISSION_HOLD_SECONDS"
+"""Set on a worker's container when it starts under the admission hold."""
 """Awake time a reserve's worker waits behind closed listeners before it fails.
 
 It covers preparing the reserve, the wait until EC2 accepts a hibernation, and
@@ -1402,7 +1404,7 @@ def plan_worker_container(
         # itself available.
     }
     if reserve:
-        env["WORKER_ADMISSION_HOLD_SECONDS"] = str(RESERVE_WORKER_ADMISSION_HOLD_SECONDS)
+        env[WORKER_ADMISSION_HOLD_ENV] = str(RESERVE_WORKER_ADMISSION_HOLD_SECONDS)
     if slot.gpu_count > 0:
         assignment = slot.gpu_assignment or "all"
         env["NVIDIA_VISIBLE_DEVICES"] = assignment
