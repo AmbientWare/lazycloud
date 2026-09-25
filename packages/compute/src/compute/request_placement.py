@@ -12,6 +12,7 @@ from shared.errors import UpstreamUnavailableError
 from shared.placement import Placement, ProductRegion, product_region
 
 from compute.context import ComputeContext
+from compute.fleet_reserves import ReserveAdmission
 from compute.offers import ComputeOffer, OfferRequest, filter_offers, offer_selection_key
 from compute.providers import ResolvedComputeProvider
 
@@ -19,7 +20,7 @@ LOGGER = logging.getLogger(__name__)
 
 
 class PooledCapacityOwner(Protocol):
-    def prepared_capacity_owner_ids(self) -> frozenset[str]: ...
+    def reserve_admission(self) -> ReserveAdmission: ...
     def pooled_providers(self, workspace_id: str) -> tuple[ResolvedComputeProvider, ...]: ...
 
     def pooled_offer_rejection(
@@ -118,11 +119,14 @@ class ComputeCapacityPlacementService:
                 failures.append(provider.ref)
                 continue
             offers.extend((provider, offer) for offer in candidates)
+        admission = self.compute.reserve_admission()
         purchases: dict[str, ComputeCapacityPurchase] = {}
         for provider, offer in sorted(
             offers, key=lambda item: offer_selection_key(item[1], purchase)
         ):
             owner_id = self.compute.pooled_offer_owner_id(provider, offer)
+            if requirements.preemptible and owner_id in admission.withheld_from_preemptible:
+                continue
             purchases.setdefault(
                 owner_id,
                 ComputeCapacityPurchase(
@@ -141,7 +145,7 @@ class ComputeCapacityPlacementService:
             )
         # A stopped reserve starts in seconds and a purchase takes a minute, so any
         # prepared pool comes first; within each, the disk's cached volume zone.
-        prepared = self.compute.prepared_capacity_owner_ids()
+        prepared = admission.prepared
         preferred = request.preferred_availability_zone
         return tuple(
             sorted(

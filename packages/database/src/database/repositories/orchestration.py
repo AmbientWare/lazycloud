@@ -22,6 +22,7 @@ from database.repositories.cleanup import CleanupRepository
 from database.repositories.identity import WorkspaceRepository
 from database.tables.container_rollouts import ContainerRolloutDrainTable
 from database.tables.identity import WorkspaceMemberTable
+from database.tables.images import ImageBuildAttemptTable
 from database.tables.orchestration import (
     AgentLeaseTable,
     AgentTable,
@@ -668,22 +669,63 @@ class StartupFailure:
     reason: str
 
 
+def pinned_container() -> ColumnElement[bool]:
+    """A container the platform may not move: it did not accept interruption, or it
+    must run on one named worker. Every other container may be stopped and
+    rescheduled elsewhere, as a preemption would."""
+    return or_(
+        ContainerTable.scheduling_preemptible.is_(False),
+        ContainerTable.scheduling_required_worker_id != "",
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class MachineContainer:
+    id: str
+    workspace_id: str
+    pinned: bool
+    image_build: bool
+
+
+@dataclass(frozen=True, slots=True)
+class UnplacedPlatformDemand:
+    preemptible_cpu: bool = False
+    cpu: bool = False
+    gpu_types: frozenset[str] = frozenset()
+    """Every card an unplaced GPU request accepts."""
+
+    @property
+    def any(self) -> bool:
+        return self.cpu or bool(self.gpu_types)
+
+
 @dataclass(slots=True)
 class ContainerRepository:
     session: Session
 
-    def has_unplaced_platform_cpu_work(self) -> bool:
-        return bool(
-            self.session.scalar(
-                select(
-                    exists().where(
-                        ContainerTable.status == ContainerStatus.Pending.value,
-                        ContainerTable.worker_id.is_(None),
-                        ContainerTable.scheduling_placement == Placement.platform().key,
-                        ContainerTable.scheduling_gpu_count == 0,
-                    )
-                )
-            )
+    def unplaced_platform_demand(self) -> UnplacedPlatformDemand:
+        """Which platform markets have requests still waiting for a worker."""
+        unplaced = and_(
+            ContainerTable.status == ContainerStatus.Pending.value,
+            ContainerTable.scheduling_requested_at.is_not(None),
+            ContainerTable.runtime_worker_id == "",
+            ContainerTable.scheduling_placement == Placement.platform().key,
+        )
+        cpu = self.session.execute(
+            select(
+                func.count().filter(ContainerTable.scheduling_preemptible.is_(True)),
+                func.count(),
+            ).where(unplaced, ContainerTable.scheduling_gpu_count == 0)
+        ).one()
+        cards = self.session.scalars(
+            select(func.unnest(ContainerTable.scheduling_gpu))
+            .where(unplaced, ContainerTable.scheduling_gpu_count > 0)
+            .distinct()
+        )
+        return UnplacedPlatformDemand(
+            preemptible_cpu=bool(cpu[0]),
+            cpu=bool(cpu[1]),
+            gpu_types=frozenset(str(card) for card in cards),
         )
 
     def has_live_for_placement(
@@ -1095,6 +1137,34 @@ class ContainerRepository:
             text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
             {"lock_key": f"stub-container-capacity:{stub_id}"},
         )
+
+    def live_on_machine(self, machine_id: str) -> list[MachineContainer]:
+        """The live containers a machine holds, and whether each may be moved."""
+        rows = self.session.execute(
+            select(
+                ContainerTable.id,
+                ContainerTable.workspace_id,
+                pinned_container(),
+                exists().where(ImageBuildAttemptTable.container_id == ContainerTable.id),
+            )
+            .where(
+                or_(
+                    ContainerTable.machine_id == machine_id,
+                    ContainerTable.runtime_machine_id == machine_id,
+                ),
+                ContainerTable.status.in_([status.value for status in LIVE_CONTAINER_STATUSES]),
+            )
+            .order_by(ContainerTable.id)
+        ).tuples()
+        return [
+            MachineContainer(
+                id=str(container_id),
+                workspace_id=str(workspace_id),
+                pinned=bool(pinned),
+                image_build=bool(build),
+            )
+            for container_id, workspace_id, pinned, build in rows
+        ]
 
     def count_live_for_machine(self, machine_id: str) -> int:
         """How much work would be taken away with this machine.

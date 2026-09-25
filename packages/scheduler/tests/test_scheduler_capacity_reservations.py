@@ -244,11 +244,6 @@ class _SizingSnapshots:
 
 @dataclass(slots=True)
 class _UnusedComputeCapacity(_SizingSnapshots):
-    def observe_pool_pressure(
-        self, capacity_owner_id: str, *, free_capacity_percent: int, now: datetime
-    ) -> bool:
-        raise AssertionError("capacity selection must not observe activity pressure")
-
     def fulfill_acquired_capacity(
         self, request: CapacityFulfillmentRequest
     ) -> CapacityOperationStatus:
@@ -432,39 +427,6 @@ class _Events:
     ) -> CloudEventRecord:
         _ = event_type, data, event_id
         raise RuntimeError("event sink is intentionally unavailable")
-
-
-def test_capacity_pressure_requires_a_continuous_window_across_replicas(
-    real_redis_actors: RealRedisActors,
-) -> None:
-    first = _repository(real_redis_actors)
-    second = _repository(real_redis_actors)
-    now = datetime.now(UTC)
-    assert not first.pressure_ready(OWNER_ID, under_pressure=True, now=now, sustained_seconds=60)
-    assert not second.pressure_ready(
-        OWNER_ID,
-        under_pressure=True,
-        now=now + timedelta(seconds=59),
-        sustained_seconds=60,
-    )
-    assert second.pressure_ready(
-        OWNER_ID,
-        under_pressure=True,
-        now=now + timedelta(seconds=60),
-        sustained_seconds=60,
-    )
-    assert not first.pressure_ready(
-        OWNER_ID,
-        under_pressure=False,
-        now=now + timedelta(seconds=61),
-        sustained_seconds=60,
-    )
-    assert not second.pressure_ready(
-        OWNER_ID,
-        under_pressure=True,
-        now=now + timedelta(seconds=90),
-        sustained_seconds=60,
-    )
 
 
 def test_reservation_is_idempotent_per_request_and_reuses_compatible_capacity(

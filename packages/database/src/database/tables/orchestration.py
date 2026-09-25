@@ -289,6 +289,20 @@ class ContainerTable(IdTable, DatabaseBase):
         ),
         Index("ix_containers_worker_status", "worker_id", "status"),
         Index("ix_containers_machine_status", "machine_id", "status"),
+        # What each machine's live containers reserve, read by the fleet reserve
+        # planner every minute. Covering, so the sum never visits the heap.
+        Index(
+            "ix_containers_live_runtime_machine",
+            "runtime_machine_id",
+            postgresql_where=text("status IN ('pending', 'running') AND runtime_machine_id <> ''"),
+            postgresql_include=[
+                "scheduling_cpu_millicores",
+                "scheduling_memory_mib",
+                "scheduling_gpu_count",
+                "scheduling_preemptible",
+                "scheduling_required_worker_id",
+            ],
+        ),
         Index(
             "ix_containers_live_expiry",
             "expires_at",

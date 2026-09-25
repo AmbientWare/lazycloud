@@ -70,11 +70,6 @@ from tests.workspaces import workspace_owner_user_id
 
 
 class _RecordingCapacityReservationGuard:
-    def pressure_ready(
-        self, capacity_owner_id: str, *, under_pressure: bool, now: datetime, sustained_seconds: int
-    ) -> bool:
-        raise AssertionError("enrollment must not observe activity pressure")
-
     def __init__(self, *, open_reservations: bool) -> None:
         self.open_reservations = open_reservations
         self.active_capacity_owner_id = ""

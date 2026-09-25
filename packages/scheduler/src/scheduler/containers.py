@@ -12,6 +12,7 @@ from typing import Protocol
 
 from compute.capacity_errors import CapacityReservationConflictError
 from compute.request_placement import ComputeCapacityPurchase
+from compute.reserve_state import FleetReserveState
 from control.releases import DeploymentReleaseService
 from coordination.wake_signal import WakeSignalPublisher
 from pydantic import JsonValue
@@ -393,6 +394,9 @@ class SchedulerContainerRequestService:
     capacity_reservations: SchedulerCapacityReservations | None = None
     backfill_preemption: SchedulerGpuBackfillPreemptionService | None = None
     usage: SchedulerUsageRecorder | None = None
+    reserve_state: FleetReserveState | None = None
+    """Where the reserve planner names the machines it means to consolidate."""
+
     requeue_delay_seconds: float = DEFAULT_SCHEDULER_REQUEUE_DELAY_SECONDS
     max_retry_count: int = DEFAULT_MAX_SCHEDULE_RETRY_COUNT
     max_retry_age_seconds: float = DEFAULT_MAX_SCHEDULE_RETRY_DURATION.total_seconds()
@@ -627,11 +631,17 @@ class SchedulerContainerRequestService:
             if self.capacity_reservations is not None
             else {}
         )
+        consolidating = (
+            frozenset(self.reserve_state.published().consolidation_candidates)
+            if self.reserve_state is not None
+            else frozenset[str]()
+        )
         worker_capacities = [
             _worker_capacity(
                 worker,
                 now=current_time,
                 reserved_capacity=reserved_by_worker.get(worker.worker_id),
+                consolidating=worker.machine_id in consolidating,
             )
             for worker in schedulable_workers
         ]
@@ -1688,6 +1698,7 @@ def _worker_capacity(
     *,
     now: datetime,
     reserved_capacity: WorkerReservedCapacity | None = None,
+    consolidating: bool = False,
 ) -> WorkerCapacity:
     reserved = reserved_capacity or WorkerReservedCapacity()
     claimed_bytes, claimed_volumes = disk_claim(
@@ -1718,6 +1729,7 @@ def _worker_capacity(
         total_disk_volumes=worker.total_disk_volumes,
         disk_storage=worker.disk_storage,
         pending=worker.request_intake_status(at=now) is SchedulerWorkerStatus.Pending,
+        consolidating=consolidating,
     )
 
 

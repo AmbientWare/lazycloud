@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable, Iterable, Iterator
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
-from uuid import NAMESPACE_URL, uuid4, uuid5
+from uuid import uuid4
 
 import pytest
 from compute.agent_control import MachineWorkerAvailability, agent_machine_worker_id
@@ -14,11 +13,15 @@ from compute.aws_configuration import AWS_COMPUTE_CONFIGURATION
 from compute.block_volumes import BlockVolumeProvider
 from compute.capacity_errors import (
     CapacityReservationConflictError,
-    CapacityReservationLeaseLostError,
     CapacityReservationLockContendedError,
 )
 from compute.capacity_recovery import record_capacity_risk
-from compute.fleet_policy import FleetCapacityPolicy, WarmCapacityUnit, plan_warm_capacity
+from compute.fleet_policy import (
+    Capacity,
+    FleetCapacityPolicy,
+    HeadroomTarget,
+    MarketReserve,
+)
 from compute.offers import ComputeOffer, ReservationStatus
 from compute.provider_state import ProviderUnitStateService
 from compute.providers import (
@@ -37,6 +40,7 @@ from compute.request_placement import (
     ComputeCapacityPlacementRequest,
     ComputeCapacityPlacementService,
 )
+from compute.reserve_state import RedisFleetReserveState
 from compute.service import ComputeService, ReserveAgentPreparation
 from compute.state import RedisComputeStateRepository
 from compute.supplier_costs import SupplierCostInspectionService
@@ -53,7 +57,6 @@ from database.repositories.compute import (
     ComputeProviderInstanceRepository,
     ComputeUnitRepository,
 )
-from database.repositories.container_scheduling import ContainerSchedulingRepository
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.orchestration import (
     ContainerRepository,
@@ -116,7 +119,6 @@ from shared.compute_policy import (
 )
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.errors import (
-    CapacityLimitReachedError,
     ConflictError,
     NotFoundError,
     UpstreamUnavailableError,
@@ -329,11 +331,6 @@ class _AsyncScaleDownProvider(_PooledProvider):
 
 @dataclass(slots=True)
 class _MutationLeases:
-    def pressure_ready(
-        self, capacity_owner_id: str, *, under_pressure: bool, now: datetime, sustained_seconds: int
-    ) -> bool:
-        raise AssertionError("capacity mutation test must not observe activity pressure")
-
     on_acquire: Callable[[str], None] | None = None
     acquired: list[str] = field(default_factory=list)
     held: set[str] = field(default_factory=set)
@@ -462,212 +459,6 @@ class _SchedulerHooks:
         self.revoked_join_tokens.append(token_hash)
 
 
-@pytest.mark.parametrize("preemptible", [True, False])
-def test_stopped_reserve_reconciliation_admits_once_and_holds_retiring_capacity(
-    service_context: ServiceContext,
-    preemptible: bool,
-) -> None:
-    provider = _PooledProvider()
-    provider.offer = provider.offer.model_copy(
-        update={
-            "preemptible": preemptible,
-            "cost_terms": provider.offer.cost_terms.model_copy(
-                update={"compute_hourly_micros": 100_000}
-            ),
-        }
-    )
-    provider.reserve_offers = (provider.offer,)
-    resolved = _Resolver(
-        provider,
-        service_context,
-        allowed_offers=(
-            ProviderOfferEligibility(
-                region=provider.offer.region,
-                instance_type=provider.offer.instance_type,
-                preemptible=preemptible,
-            ),
-        ),
-    )._resolved()
-    assert resolved.policy is not None and resolved.policy.platform_fleet
-    workspace_id = resolved.policy.workspace_id
-    resolver = WorkspaceComputeProviderResolver(
-        connections=lambda _workspace: (),
-        capacity_workspace=lambda _connection: workspace_id,
-        binaries_by_region={},
-        client_provider=Boto3AwsManagedPoolClientProvider.from_default_chain(),
-        platform_providers=lambda: (resolved,),
-    )
-    compute = ComputeService(
-        service_context,
-        provider_resolver=resolver,
-        pool_bootstrap_factory=_bootstrap,
-        capacity_owner_mutations=_MutationLeases(),
-        scheduler_hooks=_SchedulerHooks(),
-        fleet_policy=FleetCapacityPolicy(
-            max_cpu_instances=2,
-            warm_cpu_preemptible_min=0,
-            stopped_cpu_preemptible_target=2 if preemptible else 0,
-            stopped_cpu_non_preemptible_target=0 if preemptible else 2,
-        ),
-    )
-    now = datetime.now(UTC)
-    compute.reconcile_platform_warm_capacity(now=now)
-    with service_context.database.session() as session:
-        [first] = ComputeUnitRepository(session).list_platform_internal()
-        assert first.stopped_machines == 2
-        assert first.desired_machines == 0
-        assert first.worker_preemptible is preemptible
-    compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=60))
-    with service_context.database.session() as session:
-        [repeated] = ComputeUnitRepository(session).list_platform_internal()
-        assert repeated.generation == first.generation
-        assert ComputeUnitRepository(session).platform_capacity_usage(gpu=False) == 2
-    compute.fleet_policy = compute.fleet_policy.model_copy(
-        update={
-            "stopped_cpu_preemptible_target"
-            if preemptible
-            else "stopped_cpu_non_preemptible_target": 1
-        }
-    )
-    compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=120))
-    with service_context.database.session() as session:
-        [retiring] = ComputeUnitRepository(session).list_platform_internal()
-        assert retiring.stopped_machines == 1
-        assert retiring.retiring_stopped_machines == 1
-        assert ComputeUnitRepository(session).platform_capacity_usage(gpu=False) == 2
-
-    request = SchedulerWorkerRequest(
-        container_id=str(uuid4()),
-        stub_id="reserve-demand",
-        workspace_id=workspace_id,
-        cpu_millicores=provider.offer.cpu_millicores * 2,
-        memory_mib=1024,
-        placement=Placement.platform(),
-        preemptible=preemptible,
-    )
-    with service_context.database.session() as session:
-        ContainerRepository(session).upsert(
-            ContainerRecord(
-                id=request.container_id,
-                name="waiting-for-larger-node",
-                image="",
-                command=[],
-                workspace_id=workspace_id,
-            )
-        )
-        ContainerSchedulingRepository(session).submit(request, now=now)
-    with pytest.raises(CapacityLimitReachedError):
-        compute.prepare_pooled_offer(
-            provider=resolved,
-            offer=provider.offer.model_copy(update={"cpu_millicores": request.cpu_millicores}),
-            requirements=ComputeResourceRequirements(
-                cpu_millicores=request.cpu_millicores,
-                memory_mb=request.memory_mib,
-                preemptible=preemptible,
-            ),
-        )
-    with service_context.database.session() as session:
-        [retiring] = ComputeUnitRepository(session).list_platform_internal()
-        assert retiring.stopped_machines == 0
-        assert retiring.retiring_stopped_machines == 2
-        assert ComputeUnitRepository(session).platform_capacity_usage(gpu=False) == 2
-
-
-def test_stopped_reserves_leave_room_for_missing_warm_capacity() -> None:
-    plan = plan_warm_capacity(
-        (WarmCapacityUnit("warm", desired=1, committed=1, ready=1, floor=1, eligible=True),),
-        target_unit_id="replacement",
-        minimum=2,
-        fleet_baseline=2,
-        fleet_limit=4,
-        fleet_committed=3,
-        fleet_stopped_machines=2,
-        maintenance_busy=False,
-        targets={"warm": 1, "replacement": 1},
-    )
-    assert plan.target_machines == 1
-    assert plan.floors == {"warm": 1, "replacement": 1}
-
-
-def test_rejected_reserve_moves_to_another_offer_after_cleanup(
-    service_context: ServiceContext,
-) -> None:
-    provider = _PooledProvider()
-    provider.offer = provider.offer.model_copy(
-        update={
-            "preemptible": True,
-            "cost_terms": provider.offer.cost_terms.model_copy(
-                update={"compute_hourly_micros": 100_000}
-            ),
-        }
-    )
-    alternative = provider.offer.model_copy(
-        update={
-            "id": "another-zone",
-            "capability_key": provider.offer.capability_key + ":another-zone",
-            "cost_terms": provider.offer.cost_terms.model_copy(
-                update={"compute_hourly_micros": 120_000}
-            ),
-        }
-    )
-    provider.reserve_offers = (provider.offer, alternative)
-    resolved = _Resolver(
-        provider,
-        service_context,
-        allowed_offers=(
-            ProviderOfferEligibility(
-                region=provider.offer.region,
-                instance_type=provider.offer.instance_type,
-                preemptible=True,
-            ),
-        ),
-    )._resolved()
-    assert resolved.policy is not None
-    workspace_id = resolved.policy.workspace_id
-    resolver = WorkspaceComputeProviderResolver(
-        connections=lambda _workspace: (),
-        capacity_workspace=lambda _connection: workspace_id,
-        binaries_by_region={},
-        client_provider=Boto3AwsManagedPoolClientProvider.from_default_chain(),
-        platform_providers=lambda: (resolved,),
-    )
-    compute = ComputeService(
-        service_context,
-        provider_resolver=resolver,
-        pool_bootstrap_factory=_bootstrap,
-        capacity_owner_mutations=_MutationLeases(),
-        scheduler_hooks=_SchedulerHooks(),
-        fleet_policy=FleetCapacityPolicy(
-            max_cpu_instances=2,
-            warm_cpu_preemptible_min=0,
-            stopped_cpu_preemptible_target=2,
-            stopped_cpu_non_preemptible_target=0,
-        ),
-    )
-    now = datetime.now(UTC)
-    compute.reconcile_platform_warm_capacity(now=now)
-    with service_context.database.session() as session:
-        [first] = ComputeUnitRepository(session).list_platform_internal()
-    provider.last_capacity_failure_at = now
-    provider.last_capacity_failure_code = CapacityFailureCode.CapacityUnavailable
-    compute.reconcile_unit_capacity(first.id, now=now)
-    with service_context.database.session() as session:
-        failed = ComputeUnitRepository(session).get(first.id)
-        assert failed is not None
-        assert failed.provider_state.degraded_reason is None
-        assert failed.provider_state.last_capacity_failure_at == now
-    compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=1))
-    compute.reconcile_unit_capacity(first.id, now=now + timedelta(seconds=301))
-    compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=302))
-    with service_context.database.session() as session:
-        retired = ComputeUnitRepository(session).get(first.id)
-        assert retired is not None and retired.phase is ComputeUnitPhase.Deleted
-        [replacement] = ComputeUnitRepository(session).list_platform_internal()
-        assert replacement.capability_key == alternative.capability_key
-        assert replacement.stopped_machines == 2
-        assert ComputeUnitRepository(session).platform_capacity_usage(gpu=False) == 2
-
-
 def test_provider_launch_checkpoint_survives_stale_snapshot_and_rejects_stale_writer(
     service_context: ServiceContext,
 ) -> None:
@@ -774,9 +565,7 @@ def test_internal_pool_scale_enforces_fleet_capacity_across_providers(
                     }
                 )
             )
-    compute.fleet_policy = FleetCapacityPolicy(
-        max_cpu_instances=fleet_limit, warm_cpu_preemptible_min=0
-    )
+    compute.fleet_policy = FleetCapacityPolicy(max_cpu_instances=fleet_limit)
 
     if expect_capacity_conflict:
         with pytest.raises(ConflictError, match="capacity limit"):
@@ -890,7 +679,7 @@ def test_purchase_admission_respects_fleet_headroom_and_market_cooldown(
         ] == [unit.id]
     now = datetime.now(UTC)
     if market_state == "full":
-        compute.fleet_policy = FleetCapacityPolicy(max_cpu_instances=0, warm_cpu_preemptible_min=0)
+        compute.fleet_policy = FleetCapacityPolicy(max_cpu_instances=0)
     elif market_state == "cooling":
         candidates[0].prepare()
         with service_context.database.session() as session:
@@ -963,7 +752,7 @@ def test_waiting_capacity_claim_resumes_after_fleet_headroom_reopens(
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=reservations,
         scheduler_hooks=_SchedulerHooks(),
-        fleet_policy=FleetCapacityPolicy(max_cpu_instances=1, warm_cpu_preemptible_min=0),
+        fleet_policy=FleetCapacityPolicy(max_cpu_instances=1),
     )
     requirements = ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024)
     pool = compute.prepare_pooled_capacity(
@@ -1109,223 +898,6 @@ def test_platform_capacity_reconciles_without_an_aws_connection(
     assert restarted.reconcile_pooled_capacity()[0].id == unit.id
     scaled = restarted.scale_internal_unit(workspace_id, unit.id, 3, before_mutation=_allow_scale)
     assert scaled.desired_machines == 3
-
-
-def test_warm_lock_contention_does_not_skip_provider_reconciliation(
-    committed_service_context: ServiceContext,
-    real_redis_actors: RealRedisActors,
-) -> None:
-    _seed_connection(committed_service_context)
-    leases = RedisCapacityReservationRepository(real_redis_actors.client())
-    compute = ComputeService(
-        committed_service_context,
-        provider_resolver=_Resolver(_PooledProvider(), committed_service_context),
-        pool_bootstrap_factory=_bootstrap,
-        capacity_owner_mutations=leases,
-    )
-    unit = compute.prepare_pooled_capacity(
-        workspace="default",
-        requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
-        region="us-east-1",
-        desired_machines=1,
-        root_volume_gib=200,
-    )
-    warm_owner = str(uuid5(NAMESPACE_URL, "lazycloud:platform-warm-capacity"))
-    with leases.mutation_lock(warm_owner), ThreadPoolExecutor(max_workers=1) as executor:
-        reconciled = executor.submit(compute.reconcile_pooled_capacity).result(timeout=10)
-    assert [(item.id, item.observed_machines) for item in reconciled] == [(unit.id, 1)]
-
-
-def test_warm_reconciliation_propagates_lost_capacity_lease(
-    service_context: ServiceContext,
-) -> None:
-    _seed_connection(service_context, platform_fleet=True)
-
-    class PlatformResolver(_Resolver):
-        def list_platform_providers(self) -> Iterable[ResolvedComputeProvider]:
-            return (self._resolved(),)
-
-    resolver = PlatformResolver(_PooledProvider(), service_context)
-
-    def lose_unit_lease(capacity_owner_id: str) -> None:
-        if capacity_owner_id == owner_id:
-            raise CapacityReservationLeaseLostError("capacity lease was replaced")
-
-    compute = ComputeService(
-        service_context,
-        provider_resolver=resolver,
-        capacity_owner_mutations=_MutationLeases(on_acquire=lose_unit_lease),
-        fleet_policy=FleetCapacityPolicy(
-            warm_cpu_preemptible_min=0, warm_cpu_non_preemptible_min=1
-        ),
-    )
-    owner_id = compute.pooled_offer_owner_id(resolver._resolved(), resolver.provider.offer)
-    with pytest.raises(CapacityReservationLeaseLostError, match="lease was replaced"):
-        compute.reconcile_platform_warm_capacity(now=datetime.now(UTC))
-
-
-def test_two_warm_workers_use_distinct_availability_zones(service_context: ServiceContext) -> None:
-    with service_context.database.session() as session:
-        workspace_id = PlatformNamespaceService(service_context.database).get().id
-    providers: list[ResolvedComputeProvider] = []
-    for zone in ("use1-az1", "use1-az2"):
-        offer = _offer().model_copy(
-            update={
-                "provider": f"aws:{zone}",
-                "id": zone,
-                "capability_key": zone,
-                "availability_zone": zone,
-                "preemptible": True,
-                "cost_terms": SupplierCostTerms(
-                    compute_hourly_micros=100_000,
-                    root_disk_hourly_micros=0,
-                    public_ipv4_hourly_micros=0,
-                ),
-            }
-        )
-        providers.append(
-            ResolvedComputeProvider(
-                ref=offer.provider,
-                capacity_mode=ComputeCapacityMode.Pooled,
-                pooled=_PooledProvider(offer=offer),
-                policy=ResolvedProviderPolicy(
-                    workspace_id=workspace_id,
-                    placement=Placement.platform(),
-                    platform_fleet=True,
-                    default_region=offer.region,
-                    allowed_regions=(offer.region,),
-                    allowed_offers=(
-                        ProviderOfferEligibility(
-                            region=offer.region,
-                            instance_type=offer.instance_type,
-                            preemptible=True,
-                        ),
-                    ),
-                ),
-            )
-        )
-    resolver = WorkspaceComputeProviderResolver(
-        connections=lambda _workspace: (),
-        capacity_workspace=lambda _connection: workspace_id,
-        binaries_by_region={},
-        client_provider=Boto3AwsManagedPoolClientProvider.from_default_chain(),
-        platform_providers=lambda: tuple(providers),
-    )
-    compute = ComputeService(
-        service_context,
-        provider_resolver=resolver,
-        scheduler_hooks=_SchedulerHooks(),
-        capacity_owner_mutations=_MutationLeases(),
-        pool_bootstrap_factory=_bootstrap,
-    )
-    now = datetime.now(UTC)
-    compute.reconcile_platform_warm_capacity(now=now)
-    with service_context.database.session() as session:
-        units = ComputeUnitRepository(session).list_platform_internal(gpu=False)
-    assert len(units) == 2
-    assert {unit.offer_availability_zone for unit in units} == {"use1-az1", "use1-az2"}
-    assert all(unit.min_machines == unit.desired_machines == 1 for unit in units)
-    compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=60))
-    with service_context.database.session() as session:
-        units = ComputeUnitRepository(session).list_platform_internal(gpu=False)
-    assert len(units) == 2 and sum(unit.desired_machines for unit in units) == 2
-
-
-def test_warm_shortfall_moves_to_the_next_region_while_one_refuses_launches(
-    service_context: ServiceContext,
-) -> None:
-    with service_context.database.session() as session:
-        workspace_id = PlatformNamespaceService(service_context.database).get().id
-    regions = ("us-east-2", "us-west-1")
-    providers: list[ResolvedComputeProvider] = []
-    for region, zone, hourly in (
-        ("us-east-2", "use2-az1", 100_000),
-        ("us-east-2", "use2-az2", 100_000),
-        ("us-west-1", "usw1-az1", 150_000),
-    ):
-        offer = _offer().model_copy(
-            update={
-                "provider": f"aws:{zone}",
-                "id": zone,
-                "capability_key": zone,
-                "region": region,
-                "availability_zone": zone,
-                "preemptible": True,
-                "cost_terms": SupplierCostTerms(
-                    compute_hourly_micros=hourly,
-                    root_disk_hourly_micros=0,
-                    public_ipv4_hourly_micros=0,
-                ),
-            }
-        )
-        providers.append(
-            ResolvedComputeProvider(
-                ref=offer.provider,
-                capacity_mode=ComputeCapacityMode.Pooled,
-                pooled=_PooledProvider(offer=offer),
-                policy=ResolvedProviderPolicy(
-                    workspace_id=workspace_id,
-                    placement=Placement.platform(),
-                    platform_fleet=True,
-                    default_region=regions[0],
-                    allowed_regions=regions,
-                    allowed_offers=(
-                        ProviderOfferEligibility(
-                            region=region, instance_type=offer.instance_type, preemptible=True
-                        ),
-                    ),
-                ),
-            )
-        )
-    resolver = WorkspaceComputeProviderResolver(
-        connections=lambda _workspace: (),
-        capacity_workspace=lambda _connection: workspace_id,
-        binaries_by_region={},
-        client_provider=Boto3AwsManagedPoolClientProvider.from_default_chain(),
-        platform_providers=lambda: tuple(providers),
-    )
-    compute = ComputeService(
-        service_context,
-        provider_resolver=resolver,
-        scheduler_hooks=_SchedulerHooks(),
-        capacity_owner_mutations=_MutationLeases(),
-        pool_bootstrap_factory=_bootstrap,
-    )
-    now = datetime.now(UTC)
-    # Both of the preferred region's offers refused a launch eleven minutes ago:
-    # past their own cooldown, so either could be tried again.
-    refused_at = now - timedelta(minutes=11)
-    for provider in providers[:2]:
-        assert provider.pooled is not None
-        offer = next(iter(provider.pooled.list_offers(root_volume_gib=200)))
-        unit = compute.prepare_pooled_offer(
-            provider=provider,
-            offer=offer,
-            requirements=ComputeResourceRequirements(preemptible=True),
-        )
-        with service_context.database.session() as session:
-            ComputeUnitRepository(session).upsert(
-                unit.model_copy(
-                    update={
-                        "phase": ComputeUnitPhase.Degraded,
-                        "provider_state": unit.provider_state.model_copy(
-                            update={
-                                "degraded_reason": "provider_acquisition_rejected",
-                                "degraded_at": refused_at,
-                                "last_capacity_failure_at": refused_at,
-                            }
-                        ),
-                    }
-                )
-            )
-
-    compute.reconcile_platform_warm_capacity(now=now)
-
-    with service_context.database.session() as session:
-        units = ComputeUnitRepository(session).list_platform_internal(gpu=False)
-    warm = {unit.offer_availability_zone: unit.desired_machines for unit in units}
-    assert warm["usw1-az1"] == 1
-    assert sum(warm.values()) == 2
 
 
 @pytest.mark.parametrize(
@@ -1537,182 +1109,6 @@ def test_two_interrupted_workers_admit_distinct_replacements_once(
         assert CapacityRecoveryRepository(session).protected_sources(source.id) == set()
 
 
-def test_fleet_warm_targets_reuse_retired_identity_and_keep_serving_floor(
-    service_context: ServiceContext,
-) -> None:
-    with service_context.database.session() as session:
-        workspace_id = PlatformNamespaceService(service_context.database).get().id
-    providers: list[ResolvedComputeProvider] = []
-    suppliers: dict[str, _PooledProvider] = {}
-    for name, cost, preemptible in (
-        ("expensive", 120_000, True),
-        ("cheap", 100_000, True),
-        ("regular", 200_000, False),
-    ):
-        offer = _offer().model_copy(
-            update={
-                "provider": f"aws:{name}",
-                "preemptible": preemptible,
-                "cost_terms": SupplierCostTerms(
-                    compute_hourly_micros=cost,
-                    root_disk_hourly_micros=0,
-                    public_ipv4_hourly_micros=0,
-                ),
-            }
-        )
-        suppliers[name] = _PooledProvider(offer=offer)
-        providers.append(
-            ResolvedComputeProvider(
-                ref=offer.provider,
-                capacity_mode=ComputeCapacityMode.Pooled,
-                pooled=suppliers[name],
-                policy=ResolvedProviderPolicy(
-                    workspace_id=workspace_id,
-                    placement=Placement.platform(),
-                    platform_fleet=True,
-                    default_region=offer.region,
-                    allowed_regions=(offer.region,),
-                    allowed_offers=(
-                        ProviderOfferEligibility(
-                            region=offer.region,
-                            instance_type=offer.instance_type,
-                            preemptible=preemptible,
-                        ),
-                    ),
-                ),
-            )
-        )
-    resolver = WorkspaceComputeProviderResolver(
-        connections=lambda _workspace: (),
-        capacity_workspace=lambda _connection: workspace_id,
-        binaries_by_region={},
-        client_provider=Boto3AwsManagedPoolClientProvider.from_default_chain(),
-        platform_providers=lambda: tuple(providers),
-    )
-    hooks = _SchedulerHooks()
-    compute = ComputeService(
-        service_context,
-        provider_resolver=resolver,
-        capacity_owner_mutations=_MutationLeases(),
-        pool_bootstrap_factory=_bootstrap,
-        scheduler_hooks=hooks,
-        fleet_policy=FleetCapacityPolicy(
-            warm_cpu_preemptible_min=1, warm_cpu_non_preemptible_min=1
-        ),
-    )
-    prepared = compute.prepare_pooled_offer(
-        provider=providers[1],
-        offer=suppliers["cheap"].offer,
-        requirements=ComputeResourceRequirements(preemptible=True),
-    )
-    adopted_id = str(uuid4())
-    with service_context.database.session() as session:
-        repository = ComputeUnitRepository(session)
-        repository.delete(prepared.id, workspace_id=workspace_id)
-        repository.upsert(
-            prepared.model_copy(
-                update={
-                    "id": adopted_id,
-                    "capacity_owner_id": adopted_id,
-                    "phase": ComputeUnitPhase.Deleted,
-                    "status": ComputeUnitPhase.Deleted.value,
-                }
-            )
-        )
-    now = datetime.now(UTC)
-    compute.reconcile_platform_warm_capacity(now=now)
-    with service_context.database.session() as session:
-        units = ComputeUnitRepository(session).list_internal(workspace_id=workspace_id)
-    assert {unit.provider_ref: unit.min_machines for unit in units} == {
-        "aws:cheap": 1,
-        "aws:regular": 1,
-    }
-    assert {unit.worker_preemptible for unit in units} == {False, True}
-    assert next(unit.id for unit in units if unit.provider_ref == "aws:cheap") == adopted_id
-
-    compute.fleet_policy = FleetCapacityPolicy(warm_cpu_preemptible_min=1)
-    compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=1))
-    with service_context.database.session() as session:
-        units = ComputeUnitRepository(session).list_internal(workspace_id=workspace_id)
-    assert {unit.provider_ref: unit.min_machines for unit in units} == {
-        "aws:cheap": 1,
-        "aws:regular": 0,
-    }
-    regular = next(unit for unit in units if unit.provider_ref == "aws:regular")
-    compute.scale_internal_unit(workspace_id, regular.id, 0, before_mutation=_allow_scale)
-
-    cheap = next(unit for unit in units if unit.provider_ref == "aws:cheap")
-    compute.reconcile_unit_capacity(cheap.id, now=now + timedelta(seconds=2))
-    _seed_serving_machine(
-        service_context,
-        cheap,
-        hooks,
-        machine_id=str(uuid4()),
-        instance_id="i-00000000000000000",
-        now=now + timedelta(seconds=2),
-    )
-    suppliers["cheap"].offer = suppliers["cheap"].offer.model_copy(
-        update={
-            "cost_terms": suppliers["cheap"].offer.cost_terms.model_copy(
-                update={"compute_hourly_micros": 500_000}
-            )
-        }
-    )
-
-    for offset in (3, 4):
-        compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=offset))
-        with service_context.database.session() as session:
-            units = ComputeUnitRepository(session).list_internal(workspace_id=workspace_id)
-        assert {unit.provider_ref: unit.min_machines for unit in units} == {
-            "aws:cheap": 1,
-            "aws:expensive": 1,
-            "aws:regular": 0,
-        }
-    replacement = next(unit for unit in units if unit.provider_ref == "aws:expensive")
-    compute.reconcile_unit_capacity(replacement.id, now=now + timedelta(seconds=5))
-    _seed_serving_machine(
-        service_context,
-        replacement,
-        hooks,
-        machine_id=str(uuid4()),
-        instance_id="i-00000000000000000",
-        now=now + timedelta(seconds=6),
-    )
-    compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=7))
-    with service_context.database.session() as session:
-        units = ComputeUnitRepository(session).list_internal(workspace_id=workspace_id)
-    assert {unit.provider_ref: unit.min_machines for unit in units} == {
-        "aws:cheap": 0,
-        "aws:expensive": 1,
-        "aws:regular": 0,
-    }
-
-    desired_before_disable = {unit.id: unit.desired_machines for unit in units}
-    for index, provider in enumerate(providers):
-        assert provider.policy is not None
-        providers[index] = ResolvedComputeProvider(
-            ref=provider.ref,
-            capacity_mode=provider.capacity_mode,
-            pooled=provider.pooled,
-            policy=provider.policy.model_copy(update={"purchases_enabled": False}),
-        )
-    for supplier in suppliers.values():
-        supplier.catalog_failure = RuntimeError("disabled catalog must not be queried")
-
-    compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=8))
-    with service_context.database.session() as session:
-        units = ComputeUnitRepository(session).list_internal(workspace_id=workspace_id)
-    assert all(
-        unit.initial_machines
-        == unit.min_machines
-        == unit.min_free_cpu_millicores
-        == unit.min_free_memory_mib
-        == 0
-        for unit in units
-    )
-    assert {unit.id: unit.desired_machines for unit in units} == desired_before_disable
-
-
 def test_authorization_revalidation_preserves_pool_floor_and_owned_acquisition(
     service_context: ServiceContext,
 ) -> None:
@@ -1722,9 +1118,6 @@ def test_authorization_revalidation_preserves_pool_floor_and_owned_acquisition(
         provider_resolver=_Resolver(_PooledProvider(), service_context),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
-        fleet_policy=FleetCapacityPolicy(
-            warm_cpu_preemptible_min=0, warm_cpu_non_preemptible_min=1
-        ),
     )
     pool = compute.prepare_pooled_capacity(
         workspace="default",
@@ -1783,7 +1176,6 @@ def test_authorization_revalidation_preserves_pool_floor_and_owned_acquisition(
     )
     observed = compute.reconcile_unit_capacity(pool.id)
     assert observed is not None and observed.phase is before.phase
-    compute.reconcile_platform_warm_capacity(now=datetime.now(UTC))
     blocked = compute.ensure_capacity(
         acquisition.model_copy(
             update={"reservation_id": str(uuid4()), "operation_id": str(uuid4())}
@@ -1797,200 +1189,6 @@ def test_authorization_revalidation_preserves_pool_floor_and_owned_acquisition(
             ComputeCapacityOperationRepository(session).get(pool.id, acquisition.operation_id)
             == operation
         )
-
-
-@pytest.mark.parametrize(
-    ("floor_transferred", "serving_baseline"), [(False, 0), (True, 0), (False, 2)]
-)
-def test_failed_warm_purchase_preserves_serving_baseline_and_releases_unused_capacity(
-    service_context: ServiceContext,
-    floor_transferred: bool,
-    serving_baseline: int,
-) -> None:
-    with service_context.database.session() as session:
-        workspace_id = PlatformNamespaceService(service_context.database).get().id
-    providers: list[ResolvedComputeProvider] = []
-    suppliers: list[_PooledProvider] = []
-    for name, price in (("cheap", 100_000), ("fallback", 120_000)):
-        offer = _offer().model_copy(
-            update={
-                "provider": f"aws:{name}",
-                "preemptible": True,
-                "cost_terms": SupplierCostTerms(
-                    compute_hourly_micros=price,
-                    root_disk_hourly_micros=0,
-                    public_ipv4_hourly_micros=0,
-                ),
-            }
-        )
-        suppliers.append(_PooledProvider(offer=offer))
-        providers.append(
-            ResolvedComputeProvider(
-                ref=offer.provider,
-                capacity_mode=ComputeCapacityMode.Pooled,
-                pooled=suppliers[-1],
-                policy=ResolvedProviderPolicy(
-                    workspace_id=workspace_id,
-                    placement=Placement.platform(),
-                    platform_fleet=True,
-                    default_region=offer.region,
-                    allowed_regions=(offer.region,),
-                    allowed_offers=(
-                        ProviderOfferEligibility(
-                            region=offer.region,
-                            instance_type=offer.instance_type,
-                            preemptible=True,
-                        ),
-                    ),
-                ),
-            )
-        )
-    resolver = WorkspaceComputeProviderResolver(
-        connections=lambda _workspace: (),
-        capacity_workspace=lambda _connection: workspace_id,
-        binaries_by_region={},
-        client_provider=Boto3AwsManagedPoolClientProvider.from_default_chain(),
-        platform_providers=lambda: tuple(providers),
-    )
-    leases = _MutationLeases()
-    hooks = _SchedulerHooks()
-    compute = ComputeService(
-        service_context,
-        provider_resolver=resolver,
-        capacity_owner_mutations=leases,
-        pool_bootstrap_factory=_bootstrap,
-        scheduler_hooks=hooks,
-        fleet_policy=FleetCapacityPolicy(
-            max_cpu_instances=serving_baseline + 1,
-            warm_cpu_preemptible_min=max(serving_baseline, 1),
-        ),
-    )
-    now = datetime.now(UTC)
-    compute.reconcile_platform_warm_capacity(now=now)
-    with service_context.database.session() as session:
-        cheap = ComputeUnitRepository(session).list_internal(workspace_id=workspace_id)[0]
-    suppliers[0].max_observed_machines = serving_baseline
-    if serving_baseline:
-        compute.reconcile_unit_capacity(cheap.id, now=now)
-        machine_id = ""
-        for index in range(serving_baseline):
-            machine_id = str(uuid4())
-            _seed_serving_machine(
-                service_context,
-                cheap,
-                hooks,
-                machine_id=machine_id,
-                instance_id=f"i-{index:017x}",
-                now=now,
-            )
-        compute.begin_internal_unit_replacement(
-            workspace_id, cheap.id, machine_id, template_version="next"
-        )
-        compute.scale_internal_unit(
-            workspace_id, cheap.id, serving_baseline, before_mutation=_allow_scale
-        )
-    suppliers[0].last_capacity_failure_at = now
-    failed = compute.reconcile_unit_capacity(cheap.id, now=now + timedelta(seconds=1))
-    assert failed is not None
-    assert failed.provider_state.degraded_reason == "provider_acquisition_rejected"
-    assert failed.provider_state.last_capacity_failure_at == now
-
-    if floor_transferred:
-        with service_context.database.session() as session:
-            ComputeUnitRepository(session).upsert(
-                failed.model_copy(
-                    update={
-                        "min_machines": 0,
-                        "initial_machines": 0,
-                        "min_free_cpu_millicores": 0,
-                        "min_free_memory_mib": 0,
-                    }
-                )
-            )
-
-    leases.reserved_owners.add(cheap.capacity_owner_id)
-    compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=2))
-    with service_context.database.session() as session:
-        protected = ComputeUnitRepository(session).get(cheap.id)
-    assert protected is not None and protected.desired_machines == max(serving_baseline, 1)
-    leases.reserved_owners.clear()
-    if serving_baseline:
-        suppliers[0].capacity_failure = RuntimeError("provider capacity unavailable")
-        compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=2))
-        retained = compute.get_internal_unit(workspace_id, cheap.id)
-        assert (retained.desired_machines, retained.min_machines) == (2, 2)
-        assert not retained.replacement_machine_id
-        assert retained.provider_state.degraded_reason == "provider_acquisition_rejected"
-        assert suppliers[0].desired == 3
-        suppliers[0].capacity_failure = None
-    compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=2))
-    with service_context.database.session() as session:
-        units = ComputeUnitRepository(session).list_internal(workspace_id=workspace_id)
-    assert {unit.provider_ref: (unit.desired_machines, unit.min_machines) for unit in units} == {
-        "aws:cheap": (serving_baseline, serving_baseline),
-        "aws:fallback": (1, 1),
-    }
-    retained = next(unit for unit in units if unit.provider_ref == "aws:cheap")
-    assert not retained.replacement_machine_id
-    assert retained.provider_state.degraded_at == failed.provider_state.degraded_at
-    assert retained.provider_state.degraded_reason == "provider_acquisition_rejected"
-    assert suppliers[0].desired == serving_baseline
-    fallback = next(unit for unit in units if unit.provider_ref == "aws:fallback")
-    compute.reconcile_unit_capacity(fallback.id, now=now + timedelta(seconds=3))
-    assert suppliers[1].desired == 1
-
-    if serving_baseline:
-        assert fallback.warm_handoff_from == (cheap.id,)
-        _seed_serving_machine(
-            service_context,
-            fallback,
-            hooks,
-            machine_id=str(uuid4()),
-            instance_id="i-00000000000000000",
-            now=now + timedelta(seconds=3),
-        )
-        compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=4))
-        retained = compute.get_internal_unit(workspace_id, cheap.id)
-        assert (retained.desired_machines, retained.min_machines) == (2, 1)
-        compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=5))
-        retained = compute.get_internal_unit(workspace_id, cheap.id)
-        fallback = compute.get_internal_unit(workspace_id, fallback.id)
-        assert (retained.desired_machines, retained.min_machines) == (1, 1)
-        assert (fallback.desired_machines, fallback.min_machines) == (1, 1)
-        # Missing provider assets hold fleet capacity until absence settles.
-        compute.reconcile_unit_capacity(cheap.id, now=now + timedelta(seconds=126))
-        compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=127))
-        fallback = compute.get_internal_unit(workspace_id, fallback.id)
-        assert (fallback.desired_machines, fallback.min_machines) == (2, 2)
-        compute.reconcile_unit_capacity(fallback.id, now=now + timedelta(seconds=128))
-        _seed_serving_machine(
-            service_context,
-            fallback,
-            hooks,
-            machine_id=str(uuid4()),
-            instance_id="i-00000000000000001",
-            now=now + timedelta(seconds=128),
-        )
-        compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=129))
-        retained = compute.get_internal_unit(workspace_id, cheap.id)
-        assert (retained.desired_machines, retained.min_machines) == (1, 0)
-        compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=130))
-        retained = compute.get_internal_unit(workspace_id, cheap.id)
-        assert (retained.desired_machines, retained.min_machines) == (0, 0)
-        assert suppliers[0].desired == 0
-        assert suppliers[1].desired == 2
-        compute.reconcile_unit_capacity(cheap.id, now=now + timedelta(seconds=251))
-        compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=252))
-        fallback = compute.get_internal_unit(workspace_id, fallback.id)
-        assert not fallback.warm_handoff_from
-
-    compute.fleet_policy = FleetCapacityPolicy(max_cpu_instances=1, warm_cpu_preemptible_min=0)
-    compute.reconcile_platform_warm_capacity(now=now + timedelta(seconds=253))
-    compute.scale_internal_unit(workspace_id, fallback.id, 0, before_mutation=_allow_scale)
-    compute.clear_capacity_degradation(workspace_id, cheap.capacity_owner_id)
-    retried = compute.scale_internal_unit(workspace_id, cheap.id, 1, before_mutation=_allow_scale)
-    assert retried.provider_state.degraded_reason is None
-    assert retried.provider_state.last_capacity_failure_at == now
 
 
 def test_acquired_node_costs_survive_offer_changes_and_catalog_loss(
@@ -4439,125 +3637,6 @@ def test_failed_empty_market_retires_and_only_new_demand_reopens_it(
     assert revived.id in {unit.id for unit in compute.list_units_across_workspaces()}
 
 
-def test_warm_handoff_keeps_one_surge_until_retiring_assets_are_gone() -> None:
-    old_id, target_id = str(uuid4()), str(uuid4())
-    old = WarmCapacityUnit(old_id, desired=2, committed=2, ready=2, floor=2, eligible=False)
-    first = plan_warm_capacity(
-        (old,),
-        target_unit_id=target_id,
-        minimum=2,
-        fleet_baseline=2,
-        fleet_limit=4,
-        fleet_committed=2,
-        maintenance_busy=False,
-    )
-    assert first.target_machines == 1
-    assert first.floors == {old_id: 2, target_id: 1}
-    assert first.handoff_from == (old_id,)
-    new = WarmCapacityUnit(
-        target_id,
-        desired=1,
-        committed=1,
-        ready=1,
-        floor=1,
-        eligible=True,
-        handoff_from=first.handoff_from,
-    )
-    while_retiring = plan_warm_capacity(
-        (old, new),
-        target_unit_id=target_id,
-        minimum=2,
-        fleet_baseline=2,
-        fleet_limit=4,
-        fleet_committed=3,
-        maintenance_busy=False,
-    )
-    assert while_retiring.target_machines == 1
-    assert while_retiring.floors == {old_id: 1, target_id: 1}
-    settled_old = WarmCapacityUnit(
-        old_id,
-        desired=1,
-        committed=1,
-        ready=1,
-        floor=1,
-        eligible=False,
-    )
-    next_machine = plan_warm_capacity(
-        (settled_old, new),
-        target_unit_id=target_id,
-        minimum=2,
-        fleet_baseline=2,
-        fleet_limit=4,
-        fleet_committed=2,
-        maintenance_busy=False,
-    )
-    assert next_machine.target_machines == 2
-    assert next_machine.floors == {old_id: 1, target_id: 2}
-    while_updating = plan_warm_capacity(
-        (old,),
-        target_unit_id=target_id,
-        minimum=2,
-        fleet_baseline=2,
-        fleet_limit=4,
-        fleet_committed=2,
-        maintenance_busy=True,
-    )
-    assert while_updating.target_machines == 0
-
-
-def test_recovered_warm_market_releases_handoff_after_surplus_retires() -> None:
-    source = WarmCapacityUnit("source", desired=1, committed=2, ready=1, floor=1, eligible=True)
-    target = WarmCapacityUnit(
-        "target",
-        desired=1,
-        committed=1,
-        ready=1,
-        floor=1,
-        eligible=True,
-        handoff_from=("source",),
-    )
-    retiring = plan_warm_capacity(
-        (source, target),
-        target_unit_id="target",
-        targets={"source": 1, "target": 1},
-        minimum=2,
-        fleet_baseline=2,
-        fleet_limit=4,
-        fleet_committed=3,
-        maintenance_busy=False,
-    )
-    assert retiring.handoff_from == ("source",)
-    source = WarmCapacityUnit("source", desired=1, committed=1, ready=1, floor=1, eligible=True)
-    settled = plan_warm_capacity(
-        (source, target),
-        target_unit_id="target",
-        targets={"source": 1, "target": 1},
-        minimum=2,
-        fleet_baseline=2,
-        fleet_limit=4,
-        fleet_committed=2,
-        maintenance_busy=False,
-    )
-    assert settled.handoff_from == ()
-    assert settled.floors == {"source": 1, "target": 1}
-    assert settled.target_machines == 1
-
-    retiring_source = WarmCapacityUnit(
-        "source", desired=0, committed=2, ready=2, floor=0, eligible=True
-    )
-    retiring = plan_warm_capacity(
-        (retiring_source,),
-        target_unit_id="target",
-        minimum=2,
-        fleet_baseline=2,
-        fleet_limit=4,
-        fleet_committed=2,
-        maintenance_busy=False,
-    )
-    assert retiring.target_machines == 1
-    assert retiring.floors == {"source": 0, "target": 1}
-
-
 def test_retirement_cannot_revive_until_provider_deletion_finishes(
     service_context: ServiceContext,
 ) -> None:
@@ -5097,6 +4176,7 @@ class _ContendedLeases(_MutationLeases):
 
 def test_stopped_reserve_from_an_older_release_is_prepared_again_and_records_the_release(
     service_context: ServiceContext,
+    real_redis_actors: RealRedisActors,
 ) -> None:
     provider = _ReserveProvider()
     provider.reserve_offers = (provider.offer,)
@@ -5124,14 +4204,19 @@ def test_stopped_reserve_from_an_older_release_is_prepared_again_and_records_the
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=leases,
         scheduler_hooks=_SchedulerHooks(),
+        reserve_state=RedisFleetReserveState(real_redis_actors.client()),
         fleet_policy=FleetCapacityPolicy(
-            warm_cpu_preemptible_min=0,
-            stopped_cpu_preemptible_target=0,
-            stopped_cpu_non_preemptible_target=1,
+            small_machine_cpu_millicores=provider.offer.cpu_millicores,
+            small_machine_memory_mib=provider.offer.memory_mb,
+            spot=MarketReserve(),
+            on_demand=MarketReserve(
+                stopped=HeadroomTarget(floor=Capacity(1_000, 1_024), maximum=Capacity(1_000, 1_024))
+            ),
+            gpu={},
         ),
     )
     now = datetime.now(UTC)
-    compute.reconcile_platform_warm_capacity(now=now)
+    compute.reconcile_platform_reserves(now=now)
     with service_context.database.session() as session:
         [unit] = ComputeUnitRepository(session).list_platform_internal()
     compute.reconcile_unit_capacity(unit.id, now=now)

@@ -323,7 +323,7 @@ class AwsRetainedPool:
             raise RuntimeError(
                 f"EC2 launch {slot.token} has no instance evidence after ten minutes"
             )
-        operation = "launch retained CPU instance"
+        operation = "launch retained instance"
         try:
             launched = self.clients.ec2.run_instances(
                 LaunchTemplate={
@@ -387,7 +387,7 @@ class AwsRetainedPool:
         return True
 
     def _start(self, slot: RetainedSlot, instance: _Instance) -> None:
-        operation = "start retained CPU instance"
+        operation = "start retained instance"
         try:
             self.clients.ec2.start_instances(InstanceIds=[instance.id])
         except BotoCoreError as exc:

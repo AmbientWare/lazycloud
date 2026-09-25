@@ -65,9 +65,6 @@ $$;
 
 class ComputeUnitTable(IdTable, DatabaseBase):
     __tablename__ = "compute_units"
-    warm_handoff_from: Mapped[list[str]] = mapped_column(
-        ARRAY(uuid_type), nullable=False, default=list, server_default=text("'{}'")
-    )
     provider_reconcile_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     drain_reconcile_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     __table_args__: tuple[SchemaItem, ...] = (
@@ -104,8 +101,8 @@ class ComputeUnitTable(IdTable, DatabaseBase):
         ),
         CheckConstraint(
             "stopped_machines >= 0 AND retiring_stopped_machines >= 0 "
-            "AND desired_machines + stopped_machines <= max_machines AND (stopped_machines = 0 OR "
-            "(platform_fleet AND worker_gpu_count = 0))",
+            "AND desired_machines + stopped_machines <= max_machines "
+            "AND (stopped_machines = 0 OR platform_fleet)",
             name="ck_compute_units_stopped_capacity",
         ),
         CheckConstraint(

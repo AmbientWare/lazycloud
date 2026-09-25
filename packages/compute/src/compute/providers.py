@@ -316,15 +316,6 @@ class CapacityOwnerMutationLease(Protocol):
 
     def mutation_lock(self, capacity_owner_id: str) -> AbstractContextManager[None]: ...
 
-    def pressure_ready(
-        self,
-        capacity_owner_id: str,
-        *,
-        under_pressure: bool,
-        now: datetime,
-        sustained_seconds: int,
-    ) -> bool: ...
-
     def dispatch_lock(self, capacity_owner_id: str) -> AbstractContextManager[None]: ...
 
     def has_open_reservations(self, capacity_owner_id: str) -> bool: ...

@@ -76,6 +76,7 @@ from scheduler.preemption import (
     SchedulerCapacityInterruptionService,
     WorkerPreemptionResult,
 )
+from scheduler.reserves import FleetConsolidationService, reserve_free_capacity
 from scheduler.services import SchedulerAutoscalingTargetService, SchedulerServices
 
 LOGGER = logging.getLogger(__name__)
@@ -465,6 +466,7 @@ class SchedulerCapacityControls:
     capacity_reservations: CapacityReservationService | None = None
     worker_pool_drain: WorkerPoolDrainService | None = None
     capacity_interruptions: SchedulerCapacityInterruptionService | None = None
+    consolidation: FleetConsolidationService | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -926,6 +928,8 @@ class Scheduler:
             preemptions = self._best_effort_recover_unsettled_preemptions(limit=container_limit)
         with timings.step("agent_pools"):
             agent_pools = self._best_effort_reconcile_agent_pools(now=now)
+        with timings.step("reserves"):
+            self._best_effort_plan_reserves(now=now)
         with timings.step("managed_compute"):
             managed_compute = self._best_effort_reconcile_managed_compute(now=now)
         with timings.step("reserve_refresh"):
@@ -1667,6 +1671,32 @@ class Scheduler:
         except Exception:
             LOGGER.exception("scheduler managed compute reconciliation failed")
             return []
+
+    def _best_effort_plan_reserves(self, *, now: datetime | None) -> None:
+        """Plan platform headroom on its minute, sooner when a market stays short.
+
+        Every pass reads the workers' free capacity from Redis; compute plans only
+        when it holds the fleet-wide claim, so a replica's pass costs no database
+        read until its turn.
+        """
+        if self.services is None:
+            return
+        current_time = now or utc_now()
+        compute = self.runtime_services.compute
+        try:
+            workers = (
+                self.workloads.containers.workers.list_workers()
+                if self.workloads.containers is not None
+                else []
+            )
+            early = compute.observe_reserve_pressure(
+                reserve_free_capacity(workers, now=current_time), now=current_time
+            )
+            plan = compute.reconcile_platform_reserves(now=current_time, early=early)
+            if self.capacity.consolidation is not None:
+                self.capacity.consolidation.reconcile(plan, now=current_time)
+        except Exception:
+            LOGGER.exception("platform reserve planning failed")
 
     def _best_effort_refresh_stale_reserves(self, *, now: datetime | None) -> None:
         """Prepare stopped reserves again for the active release.
