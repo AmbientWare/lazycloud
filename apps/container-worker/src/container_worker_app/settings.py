@@ -14,6 +14,7 @@ from pydantic_settings import (
     YamlConfigSettingsSource,
 )
 from shared.capacity import CAPACITY_OWNER_ID_PATTERN
+from shared.env import GATEWAY_GRPC_HOST_ENV, GATEWAY_GRPC_PORT_ENV
 from shared.placement import Placement
 from worker.configuration import (
     WORKER_CONFIG_PATH_ENV,
@@ -139,6 +140,9 @@ class WorkerSettings(BaseSettings):
         default="",
         validation_alias="WORKER_CACHE_ENDPOINT",
     )
+    gateway_grpc_host: str = Field(default="", validation_alias=GATEWAY_GRPC_HOST_ENV)
+    """The platform's public gateway, which readiness reaches to prove egress off the host."""
+    gateway_grpc_port: int = Field(default=443, validation_alias=GATEWAY_GRPC_PORT_ENV)
     cache_service_token: str = Field(
         default="",
         validation_alias="LAZYCLOUD_CACHE_SERVICE_TOKEN",

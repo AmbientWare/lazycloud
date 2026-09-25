@@ -498,6 +498,11 @@ def build_worker_process_services(
         ),
         readiness_validator=lambda: _validate_worker_readiness(
             network_backend=network_backend,
+            external=(
+                (config.gateway_grpc_host, config.gateway_grpc_port)
+                if config.gateway_grpc_host
+                else None
+            ),
             gpu_count=execution.capacity.gpu_count,
             gpu_devices=config.gpu_devices,
         ),
@@ -560,6 +565,7 @@ def _prepare_worker_readiness(
 def _validate_worker_readiness(
     *,
     network_backend: AgentBridgeNetworkBackend,
+    external: tuple[str, int] | None,
     gpu_count: int,
     gpu_devices: str,
 ) -> None:
@@ -585,7 +591,12 @@ def _validate_worker_readiness(
                 raise failure
             time.sleep(0.5)
 
-    checks: dict[str, Callable[[], object]] = {"network": network_backend.probe_gateway_egress}
+    def network() -> None:
+        if network_backend.refresh_capabilities():
+            LOGGER.info("host routes changed since readiness preparation; bridge rules re-applied")
+        network_backend.probe_gateway_egress(external)
+
+    checks: dict[str, Callable[[], object]] = {"network": network}
     if gpu_count:
         checks["gpu"] = gpu_presence
     _run_readiness_checks("container worker readiness checks", checks)
