@@ -4,6 +4,12 @@ Container execution: sequencing, runtime configuration, networking, mounts,
 metrics and OOM handling, events, supervision, checkpoints, and finalization, all
 behind narrow protocols.
 
+`readiness.py` owns startup preparation and validation. Preparation runs during
+the admission hold and must not call the control plane. Its completion also
+gates the admission-waiting marker. Network and GPU validation run after
+registration. Readiness threads must not keep a stopped worker process alive;
+local cleanup also runs when registration never succeeded.
+
 Process entrypoints, API and SDK code, app state, and broad composition stay
 outside. Worker-repository payloads live here with the worker, and the client
 raises HTTP errors rather than returning soft results.

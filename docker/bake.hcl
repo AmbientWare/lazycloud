@@ -8,7 +8,6 @@ group "default" {
     "scheduler",
     "connection-gateway",
     "cache-server",
-    "worker-bootstrap",
     "cli",
     "database-bootstrap",
     "agent",
@@ -22,7 +21,6 @@ group "control-plane" {
     "scheduler",
     "connection-gateway",
     "cache-server",
-    "worker-bootstrap",
     "cli",
     "database-bootstrap",
   ]
@@ -61,12 +59,6 @@ target "cache-server" {
   inherits = ["_control-plane"]
   target   = "cache-server"
   tags     = ["cache-server:${TAG}"]
-}
-
-target "worker-bootstrap" {
-  inherits = ["_control-plane"]
-  target   = "worker-bootstrap"
-  tags     = ["worker-bootstrap:${TAG}"]
 }
 
 target "cli" {

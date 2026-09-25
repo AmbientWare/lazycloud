@@ -11,7 +11,7 @@ resource "aws_ecr_repository" "image" {
     "scheduler",
     "connection-gateway",
     "cache-server",
-    "worker-bootstrap",
+    "worker-bootstrap", # Retain published images after retiring the bootstrap process.
     "cli",
     "database-bootstrap",
   ])

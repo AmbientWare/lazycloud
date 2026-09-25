@@ -39,7 +39,7 @@ from compute.machine_lifecycle import machine_lifecycle_allowed, write_machine_l
 from compute.policy import WorkspaceComputePolicyService
 from compute.projection import PoolConfig
 from compute.providers import joined_unit_identity
-from compute.service import ComputeService, ReserveAgentPreparation
+from compute.service import ComputeService, ReserveAgentPreparation, ReservePreparationPhase
 from compute.state import (
     AsyncRedisComputeStateRepository,
     ComputeAgentTokenState,
@@ -2268,7 +2268,13 @@ class GatewayControlService:
                 if bootstrap_unit.platform_fleet
                 else None
             )
-            if reserve_preparation and reserve_preparation.preparing and request.prepared_stop:
+            preparing = reserve_preparation is not None and reserve_preparation.phase in {
+                ReservePreparationPhase.PreparingCold,
+                ReservePreparationPhase.PreparingWarm,
+                ReservePreparationPhase.StoppingUsed,
+                ReservePreparationPhase.ResumePending,
+            }
+            if preparing and request.prepared_stop:
                 self._prune_agent_worker_slots(
                     response_state,
                     keep_worker_id="",
@@ -2289,8 +2295,11 @@ class GatewayControlService:
                     agent_binary_sha256=request.binary_sha256,
                     preparing_reserve=bool(
                         reserve_preparation
-                        and reserve_preparation.preparing
-                        and not reserve_preparation.warm
+                        and reserve_preparation.phase
+                        in {
+                            ReservePreparationPhase.PreparingCold,
+                            ReservePreparationPhase.StoppingUsed,
+                        }
                     ),
                 )
             bootstrap = build_agent_bootstrap_config(
@@ -2313,7 +2322,10 @@ class GatewayControlService:
             slots=[agent_worker_slot_view(slot) for slot in agent_slots],
             stop_preparation_id=reserve_preparation.stop_request_id if reserve_preparation else "",
             reserve=_reserve_instruction(reserve_preparation),
-            resume_from_stop=bool(reserve_preparation and reserve_preparation.resuming),
+            resume_from_stop=bool(
+                reserve_preparation
+                and reserve_preparation.phase is ReservePreparationPhase.ResumeAuthorized
+            ),
         )
 
     def record_agent_capacity_interruption(
@@ -3375,14 +3387,17 @@ def _agent_state_from_enrollment(
 
 
 def _reserve_instruction(preparation: ReserveAgentPreparation | None) -> AgentReserveInstruction:
-    """Serve only a machine that is not a prepared reserve; a used host's stop keeps."""
-    if preparation is None or not preparation.preparing:
+    if preparation is None:
         return AgentReserveInstruction.Serve
-    if preparation.stop_request_id:
-        return AgentReserveInstruction.Keep
-    if preparation.lagging_resume:
-        return AgentReserveInstruction.ResumePending
-    return AgentReserveInstruction.Prepare
+    match preparation.phase:
+        case ReservePreparationPhase.StoppingUsed:
+            return AgentReserveInstruction.Keep
+        case ReservePreparationPhase.ResumePending:
+            return AgentReserveInstruction.ResumePending
+        case ReservePreparationPhase.PreparingCold | ReservePreparationPhase.PreparingWarm:
+            return AgentReserveInstruction.Prepare
+        case ReservePreparationPhase.Serving | ReservePreparationPhase.ResumeAuthorized:
+            return AgentReserveInstruction.Serve
 
 
 def _agent_readiness_phase(state: ComputeAgentTokenState) -> MachineReadinessPhase:

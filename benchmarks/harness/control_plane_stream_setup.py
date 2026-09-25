@@ -316,14 +316,12 @@ class ControlPlaneStreamProvisioner:
         emit_progress("provision-worker-ready", worker_id=worker_id, role=role)
         return worker
 
-    # No HTTP route mints a worker bootstrap token. The worker-bootstrap
-    # process writes one through the identity service, and this opens the
-    # same owners it does.
+    # Worker credentials are issued through the identity service, not an HTTP route.
     @staticmethod
     @contextmanager
     def _auth_service() -> Iterator[AuthService]:
         database = DatabaseClient.from_settings(
-            DatabaseSettings(application_name=DatabaseApplicationName.WorkerBootstrap)
+            DatabaseSettings(application_name=DatabaseApplicationName.Test)
         )
         redis = RedisClient.from_settings()
         try:

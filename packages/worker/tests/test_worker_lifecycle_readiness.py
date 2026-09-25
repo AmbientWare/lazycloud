@@ -12,6 +12,7 @@ from shared.scheduling import (
     WorkerRemovalResult,
     WorkerUnavailableReason,
 )
+from worker.readiness import WorkerReadiness
 from worker.worker_lifecycle import (
     WorkerCleanupAction,
     WorkerLifecycleAction,
@@ -81,7 +82,7 @@ def _lifecycle(
             capacity_owner_id="11111111-1111-4111-8111-111111111111",
             status=SchedulerWorkerStatus.Pending,
         ),
-        readiness_preparer=preparer,
+        readiness=WorkerReadiness(preparation_checks={"runtime": preparer}),
     )
 
 
@@ -102,7 +103,7 @@ def test_readiness_preparation_finishes_while_registration_is_held() -> None:
     assert len(runs) == 1
 
 
-def test_shutdown_finishes_the_preparation_before_cleanup_closes_its_network() -> None:
+def test_close_finishes_preparation_and_cleans_up_an_unregistered_worker() -> None:
     finished = Event()
     closed_after: list[bool] = []
 
@@ -112,11 +113,12 @@ def test_shutdown_finishes_the_preparation_before_cleanup_closes_its_network() -
 
     lifecycle = _lifecycle(_HeldRepository(Event(), refuse=True), prepare)
     lifecycle.cleanup_actions.append(
-        WorkerCleanupAction(name="network", action=lambda: closed_after.append(finished.is_set()))
+        WorkerCleanupAction(name="runtime", action=lambda: closed_after.append(finished.is_set()))
     )
 
     assert not all(step.ok for step in lifecycle.register_available())
-    lifecycle.shutdown(drain_timeout_seconds=0, remove_worker=False)
+    lifecycle.close()
+    lifecycle.close()
 
     assert closed_after == [True]
 

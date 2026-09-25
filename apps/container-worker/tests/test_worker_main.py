@@ -15,7 +15,7 @@ from container_worker_app.main import (
     ContainerWorkerShutdownRequested,
     run_container_worker,
 )
-from container_worker_app.runtime import ContainerWorkerServices
+from container_worker_app.runtime import ContainerWorkerLifecycle, ContainerWorkerServices
 from container_worker_app.settings import WorkerSettings
 from shared.container_requests import StopContainerReason
 from shared.scheduling import WorkerUnavailableReason
@@ -29,7 +29,9 @@ from worker.scheduler_requests import (
 from worker.status import WorkerSpindownPlan, plan_worker_spindown
 from worker.worker_lifecycle import (
     DEFAULT_WORKER_KEEPALIVE_TTL_SECONDS,
+    WorkerCleanupAction,
     WorkerLifecycleAction,
+    WorkerLifecycleOrchestrator,
     WorkerLifecycleStatus,
     WorkerLifecycleStepResult,
     WorkerShutdownResult,
@@ -150,6 +152,21 @@ def test_a_worker_that_never_registered_leaves_no_record_behind() -> None:
     assert lifecycle.shutdown_remove_worker == [True]
 
 
+def test_worker_cleans_up_when_http_service_cannot_start(tmp_path: Path) -> None:
+    with (tmp_path / "worker-resource").open("wb") as resource:
+        lifecycle = WorkerLifecycleOrchestrator(
+            worker_id="worker-1",
+            route_restorer=lambda: None,
+            cleanup_actions=[WorkerCleanupAction(name="resource", action=resource.close)],
+        )
+        with pytest.raises(ValueError, match="container service transport is required"):
+            run_container_worker(
+                settings=WorkerSettings(container_service_port=1),
+                services=_Services(processor=_UnexpectedProcessor(), lifecycle=lifecycle),
+            )
+        assert resource.closed
+
+
 def test_worker_deregisters_when_startup_after_registration_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -258,6 +275,9 @@ class _UnexpectedProcessor:
 
 @dataclass(slots=True)
 class _Lifecycle:
+    def close(self) -> list[WorkerLifecycleStepResult]:
+        return []
+
     registered: bool = False
     shutdown_calls: int = 0
     shutdown_remove_worker: list[bool] = field(default_factory=list)
@@ -323,7 +343,7 @@ class _Services:
         | _UnexpectedProcessor
         | _IdleProcessor
     )
-    lifecycle: _Lifecycle
+    lifecycle: ContainerWorkerLifecycle
     event_source: None = None
     worker_events: None = None
     retention: None = None

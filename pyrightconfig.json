@@ -9,7 +9,6 @@
     "apps/cli",
     "apps/container-worker",
     "apps/scheduler",
-    "apps/worker-bootstrap",
     "packages",
     "packages/shared/src/shared",
     "packages/foundation/src/foundation",

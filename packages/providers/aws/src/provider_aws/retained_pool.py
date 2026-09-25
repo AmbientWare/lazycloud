@@ -807,8 +807,7 @@ class AwsRetainedPool:
             current_template_version=self.state.host_revision,
         )
 
-    def _slot(self, instance_id: str) -> RetainedSlot:
-        inventory = self._inventory()
+    def _slot(self, instance_id: str, inventory: dict[str, _Instance]) -> RetainedSlot:
         self._record_instances(inventory)
         slot = next((s for s in self.state.slots if s.instance_id == instance_id), None)
         if slot is None:
@@ -816,30 +815,32 @@ class AwsRetainedPool:
         return slot
 
     def complete_preparation(self, instance_id: str, *, hibernate: bool) -> ProviderUnitSnapshot:
-        slot = self._slot(instance_id)
+        inventory = self._inventory()
+        slot = self._slot(instance_id, inventory)
         if slot.phase in {SlotPhase.Preparing, SlotPhase.Refreshing}:
             self._update(
                 slot.model_copy(update={"phase": SlotPhase.Stopping, "hibernate": hibernate})
             )
         elif slot.phase is SlotPhase.Resuming:
             self._update(slot.model_copy(update={"phase": SlotPhase.Active}))
-        inventory = self._inventory()
         self._actions(inventory)
         return self.describe(inventory)
 
     def refresh(self, instance_id: str) -> ProviderUnitSnapshot:
         """Start a stopped reserve so its agent prepares it again, then stop it."""
-        slot = self._slot(instance_id)
+        inventory = self._inventory()
+        slot = self._slot(instance_id, inventory)
         if slot.phase is not SlotPhase.Stopped or slot.serving:
             raise ValueError("only a stopped reserve can be prepared again")
         self._update(slot.model_copy(update={"phase": SlotPhase.Refreshing}))
-        self._actions(self._inventory())
+        self._actions(inventory)
         return self.describe()
 
     def stop(self, instance_id: str) -> ProviderUnitSnapshot:
-        slot = self._slot(instance_id)
+        inventory = self._inventory()
+        slot = self._slot(instance_id, inventory)
         if slot.phase in {SlotPhase.Stopping, SlotPhase.Stopped}:
-            self._actions(self._inventory())
+            self._actions(inventory)
             return self.describe()
         if slot.phase is not SlotPhase.Active:
             raise ValueError("only a drained active instance can return to reserve")
@@ -853,7 +854,7 @@ class AwsRetainedPool:
                 update={"serving": False, "phase": SlotPhase.Stopping, "hibernate": False}
             )
         )
-        self._actions(self._inventory())
+        self._actions(inventory)
         return self.describe()
 
     def release(self, instance_id: str) -> ProviderUnitSnapshot:
