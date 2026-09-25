@@ -21,7 +21,10 @@ releasing earlier lets the next container start from a generation the holder was
 about to replace. Chunks and manifests live under `disks/<id>/` in the workspace
 bucket, and deleting a disk removes that prefix and nothing beside it. After a
 self-contained generation is recorded, its holder deletes the chunks and
-manifests only older generations used.
+manifests only older generations used. The same chunks serve a restore on any
+machine: the engine fetches each on first read, so a start does not wait for
+the disk to download. The prefix also holds a small heat map naming the chunks
+the last session read; it is a hint and bills nothing.
 
 On a provider machine each disk gets its own block volume, created in the
 machine's zone at `disk_volume_size_bytes` of the declared size and attached for

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"time"
 )
@@ -105,9 +106,14 @@ func headDirty(ctx context.Context, p diskPaths, state *diskState) (bool, error)
 }
 
 type usageResult struct {
-	// UnmergedBytes is the space the layers above the base occupy. A
-	// compaction needs room to copy each of them into the base.
+	// UnmergedBytes is the space the layers above the one compaction commits
+	// into occupy. A compaction needs room to copy each of them into it.
 	UnmergedBytes int64 `json:"unmerged_bytes"`
+	// Unreadable says why a read of a lazy layer failed, empty while none
+	// has. The workload has already seen the I/O error.
+	Unreadable string `json:"unreadable"`
+	// Full is set once a lazy layer had no room for a chunk it fetched.
+	Full bool `json:"full"`
 }
 
 // runUsage reads the disk's state without its lock, because the worker asks
@@ -124,12 +130,31 @@ func runUsage(ctx context.Context, args []string) (any, error) {
 		return nil, err
 	}
 	var result usageResult
-	for _, l := range state.Layers[1:] {
+	// Compaction commits into the lowest local layer, so it is not unmerged,
+	// except for a head over lazy layers: nothing can commit into that.
+	unmerged := state.lowestLocal() + 1
+	if state.hasLazy() {
+		unmerged = min(unmerged, len(state.Layers)-1)
+	}
+	for _, l := range state.Layers[min(unmerged, len(state.Layers)):] {
 		allocated, err := allocatedBytes(p.layerPath(l))
 		if err != nil {
 			return nil, err
 		}
 		result.UnmergedBytes += allocated
+	}
+	if state.Attachment != nil && state.hasLazy() {
+		status, err := readServeStatus(p, state.ServerPID)
+		if err != nil {
+			return nil, err
+		}
+		result.Full = status.OutOfSpace
+		switch {
+		case status.FailedReads > 0:
+			result.Unreadable = fmt.Sprintf("%d reads failed; the last: %s", status.FailedReads, status.LastError)
+		case state.Attachment.Mounted && !serverAlive(p, state.ServerPID):
+			result.Unreadable = fmt.Sprintf("the process serving its lazy layers exited; see %s", p.serveLog())
+		}
 	}
 	return result, nil
 }

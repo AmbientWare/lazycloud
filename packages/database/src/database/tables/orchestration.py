@@ -305,7 +305,7 @@ class ContainerTable(IdTable, DatabaseBase):
         CheckConstraint(
             "termination_reason IN "
             "('TTL', 'USER', 'SCHEDULER', 'PREEMPTED', 'ADMIN', 'UNFUNDED', "
-            "'MEMORY_EVICTED', 'DISK_FULL', 'UNKNOWN')",
+            "'MEMORY_EVICTED', 'DISK_FULL', 'DISK_UNAVAILABLE', 'UNKNOWN')",
             name="ck_containers_termination_reason",
         ),
         CheckConstraint(

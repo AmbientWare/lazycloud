@@ -155,6 +155,18 @@ func (s *objectStore) get(ctx context.Context, key string, limit int64) ([]byte,
 	return data, nil
 }
 
+// getIfExists is get for an object that may never have been written.
+func (s *objectStore) getIfExists(ctx context.Context, key string, limit int64) ([]byte, bool, error) {
+	data, err := s.get(ctx, key, limit)
+	var missing *types.NoSuchKey
+	var response *smithyhttp.ResponseError
+	if errors.As(err, &missing) ||
+		(errors.As(err, &response) && response.HTTPStatusCode() == http.StatusNotFound) {
+		return nil, false, nil
+	}
+	return data, err == nil, err
+}
+
 type storedObject struct {
 	Key  string
 	Size int64
