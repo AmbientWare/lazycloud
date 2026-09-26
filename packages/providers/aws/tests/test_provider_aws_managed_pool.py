@@ -606,7 +606,10 @@ def test_rejected_launch_releases_only_proven_unused_capacity(
         unit = units.get(pool.request.unit_id)
         assert unit is not None
         units.upsert(unit.model_copy(update={"desired_machines": 0, "stopped_machines": 0}))
-        assert units.platform_capacity_usage(gpu=False) == int(bool(sdk_retries))
+        commitments = {
+            row.id: row.provider_committed for row in units.platform_reserve_rows().units
+        }
+        assert commitments.get(unit.id, 0) == int(bool(sdk_retries))
     [slot] = RetainedPoolState.model_validate(state.attributes).slots
     if sdk_retries:
         assert slot.launch_started_at is not None
@@ -631,7 +634,8 @@ def test_rejected_launch_releases_only_proven_unused_capacity(
             pool.checkpoints.load(pool.request).attributes
         ).slots
         with service_context.database.session() as session:
-            assert ComputeUnitRepository(session).platform_capacity_usage(gpu=False) == 1
+            [committed] = ComputeUnitRepository(session).platform_reserve_rows().units
+            assert committed.provider_committed == 1
     else:
         assert slot.launch_started_at is None
         assert restarted.delete().phase is ProviderCapacityPhase.Deleted

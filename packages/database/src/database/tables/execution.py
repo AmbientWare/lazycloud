@@ -167,6 +167,12 @@ class TaskAttemptTable(IdTable, DatabaseBase):
         nullable=True,
     )
     claim_id: Mapped[str | None] = mapped_column(uuid_type, nullable=True)
+    execution_entry_upper_bound_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    execution_entry_reported_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     attempt_number: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String(80), nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

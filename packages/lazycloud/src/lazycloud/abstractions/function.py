@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import io
 import pickle
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
@@ -39,6 +40,7 @@ from shared.deployment_records import (
 )
 from shared.deployments import DeploymentKind
 from shared.env import HOT_RELOAD_ENV
+from shared.execution_entry import record_execution_entry
 from shared.function_payloads import (
     FunctionCallPersistentId,
     FunctionCloudpickleInvocation,
@@ -255,6 +257,8 @@ class Function(Generic[P, R]):
         prepared_args, prepared_kwargs = prepare_arguments(
             self.func, args, kwargs, self.inputs, encoding=encoding
         )
+        if not inspect.iscoroutinefunction(self.func):
+            record_execution_entry()
         return serialize_result(
             self.func, self.func(*prepared_args, **prepared_kwargs), self.outputs
         )

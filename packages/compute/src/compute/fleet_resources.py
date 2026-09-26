@@ -89,6 +89,36 @@ class ReserveMarket:
 
 
 @dataclass(frozen=True, slots=True)
+class ReservePlacement:
+    region: str = ""
+    zone: str = ""
+    architecture: str = ""
+    runtime: str = ""
+    runtimes: tuple[str, ...] = ()
+
+    def accepts(self, offered: ReservePlacement) -> bool:
+        return (not self.runtime or self.runtime in (*offered.runtimes, offered.runtime)) and all(
+            not requested or requested == available
+            for requested, available in (
+                (self.region, offered.region),
+                (self.zone, offered.zone),
+                (self.architecture, offered.architecture),
+            )
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ReserveDemand:
+    capacity: Capacity
+    placement: ReservePlacement = ReservePlacement()
+    count: int = 1
+
+    def __post_init__(self) -> None:
+        if self.count < 1 or self.capacity.empty or not self.capacity.covers(Capacity()):
+            raise ValueError("reserve demand requires positive count and resources")
+
+
+@dataclass(frozen=True, slots=True)
 class ReserveOffer:
     key: str
     market: ReserveMarket
@@ -98,3 +128,5 @@ class ReserveOffer:
     stopped_hourly_cost_micros: int
     supports_reserve: bool
     preference_rank: tuple[int, ...] = ()
+    placement: ReservePlacement = ReservePlacement()
+    supports_hibernation: bool = False

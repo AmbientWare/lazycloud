@@ -492,13 +492,14 @@ def build_worker_process_services(
     }
     readiness.validation_checks = {"network": network_readiness}
     if execution.capacity.gpu_count:
-        readiness.validation_checks = {
-            **readiness.validation_checks,
-            "gpu": partial(
-                NvidiaGpuIndexProvider(visible_devices=config.gpu_devices or "all").require_devices,
-                execution.capacity.gpu_count,
-            ),
-        }
+        gpu_readiness = partial(
+            NvidiaGpuIndexProvider(visible_devices=config.gpu_devices or "all").require_devices,
+            execution.capacity.gpu_count,
+        )
+        # Driver initialization can overlap preparation; devices still need a
+        # fresh check after admission resumes.
+        readiness.preparation_checks = {**readiness.preparation_checks, "gpu": gpu_readiness}
+        readiness.validation_checks = {**readiness.validation_checks, "gpu": gpu_readiness}
     return assemble_worker_process_services(
         identity=identity,
         dependencies=dependencies,

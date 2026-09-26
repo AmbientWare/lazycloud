@@ -73,7 +73,7 @@ def test_startup_report_keeps_failed_and_overdue_containers_in_the_cohort(
     assert report.functions.failed_before_readiness == 1
     assert report.functions.request_to_ready.observed == 2
     assert report.functions.request_to_ready.p50_seconds == 3
-    assert report.warm_execution_measurement == "unavailable"
+    assert report.execution.reported_entries == 0
     empty = StartupLatencyService(isolated_services.context.database).read(
         workspace_id=str(uuid4()), now=now
     )

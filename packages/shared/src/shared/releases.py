@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import Field
 
+from shared.capacity_maintenance import CapacityMaintenanceKind, CapacityMaintenancePhase
 from shared.contracts import ContractModel
 from shared.enums import StringEnum
 
@@ -72,11 +75,24 @@ class ReleaseMachineStatus(ContractModel):
     reason: str = ""
 
 
+class ReleaseMaintenanceStatus(ContractModel):
+    operation_id: str
+    source_machine_id: str
+    replacement_machine_id: str | None
+    capacity_owner_id: str
+    kind: CapacityMaintenanceKind
+    phase: CapacityMaintenancePhase
+    reason: str
+    last_progress_at: datetime
+    stalled: bool
+
+
 class FleetReleaseStatus(ContractModel):
     release: ActiveRelease
     complete: bool
     machines: list[ReleaseMachineStatus]
     pending_capacity_owners: list[str]
+    maintenance: list[ReleaseMaintenanceStatus] = Field(default_factory=list)
 
 
 __all__ = [
@@ -86,6 +102,7 @@ __all__ = [
     "FleetReleaseStatus",
     "ReleaseMachinePhase",
     "ReleaseMachineStatus",
+    "ReleaseMaintenanceStatus",
     "ReleaseTarget",
     "RuntimeArtifacts",
 ]

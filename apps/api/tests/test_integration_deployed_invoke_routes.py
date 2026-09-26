@@ -28,6 +28,8 @@ from shared.http.endpoints import (
 from shared.http.functions import (
     FunctionClaimRequest,
     FunctionClaimResponse,
+    FunctionExecutionEntryRequest,
+    FunctionExecutionEntryResponse,
     FunctionInvokeBody,
     FunctionInvokeResponse,
     FunctionMonitorRequest,
@@ -106,6 +108,16 @@ class RecordingFunctionService:
 
     def function_claim(self, request: FunctionClaimRequest) -> FunctionClaimResponse:
         raise AssertionError(f"unexpected function_claim call: {request}")
+
+    async def function_claim_wait(
+        self, request: FunctionClaimRequest, *, workspace_id: str
+    ) -> FunctionClaimResponse:
+        raise AssertionError(f"unexpected function_claim_wait call: {request}")
+
+    def function_execution_entry(
+        self, request: FunctionExecutionEntryRequest, *, workspace_id: str
+    ) -> FunctionExecutionEntryResponse:
+        raise AssertionError(f"unexpected function_execution_entry call: {request}")
 
     def function_retire(
         self,

@@ -31,9 +31,10 @@ policy. The AWS connection pointer belongs only to capacity backed by an actual
 AWS connection. Platform bindings need no customer connection row. Account
 admission owns plan concurrency and billing limits.
 
-`FleetCapacityPolicy` owns the platform's node limits, its running vCPU cap and
-each market's headroom. Platform growth and planned replacement share a
-PostgreSQL transaction lock before reading commitments or changing a unit.
+`FleetCapacityPolicy` owns each market's useful headroom. Fleet sizing has no
+spending budget, node ceiling or running vCPU ceiling. Growth and planned
+replacement share a PostgreSQL transaction lock before reading commitments or
+changing a unit.
 Terminating nodes consume headroom until their absence is observed. Providers can
 replace failed machines autonomously, so observed physical counts may briefly
 exceed the platform's admitted commitments. Customer-owned capacity stays outside
@@ -46,8 +47,8 @@ under the fleet transaction lock. Failed operations retain their commitments
 until cleanup is observed. Host-template replacement keeps its separate provider
 pair because it replaces the host itself. Attached machines update in place.
 
-The maintenance planner admits concurrent operations within the fleet's spare
-resources, ready headroom and temporary spending cap. Replacements must accept
+The maintenance planner admits concurrent operations from ready headroom and
+exclusive source and replacement ownership. Replacements must accept
 requests on the target release and satisfy the source's placement, runtime,
 storage and allocation constraints. Admission rechecks under the dispatch lease.
 Running work drains under its existing preemption policy. A release remains
@@ -59,19 +60,32 @@ Platform reserves are schedulable headroom in CPU, memory and GPU cards for each
 purchase market. Warm nodes serve requests. Compatible stopped or hibernated
 nodes replenish warm headroom, and new purchases replenish reserves. Pending
 launches count toward commitments but cannot justify retiring ready capacity.
+Hibernation capability and stop intent never prove that memory was preserved.
+Unknown stop outcomes use ordinary boot estimates until enough observed resumes,
+including cold fallbacks, establish their timing. Agent suspend evidence records
+the previous activation's observed outcome after resume. Each activation retains
+its request, provider-running, preparation, intake and failure timestamps in
+`capacity_activations`; telemetry cannot open admission. CPU quiet floors are small,
+and GPU headroom follows demand instead of retaining an idle card of every model.
+CPU reserve targets prefer hibernation when supported. Accepted hibernation
+requests count toward preparation commitments without proving memory preservation.
+Plain-stop fallbacks retain their slower timing and prevent repeated replacement
+purchases for the same hibernation shortfall.
 
-The forecast combines pending requests, recent container arrivals and the next
-known invocation of enabled platform schedules. Warm headroom covers the resume
-horizon; warm plus stopped headroom covers the cumulative provision horizon.
-Both include the regular planner interval. The initial activation horizons are
-explicit policy estimates, not measured resume percentiles. Resource floors,
-ceilings and fleet budgets still apply. A demand shape must fit one host;
+The forecast combines pending requests, recent container arrivals, invocation
+backlog and enabled schedules. Observed lifetimes bound expected occupancy.
+Location, architecture and runtime requirements survive aggregation. Warm headroom
+covers the time needed to replenish it. The shorter resume or boot horizon applies
+only when compatible ready reserves cover the forecast. Otherwise provisioning
+determines the lead time. Both horizons include the planner interval. Activation
+estimates use measured p95 after enough successful observations; estimates remain
+explicit while samples are sparse. A demand shape must fit one host;
 aggregate spare resources across smaller hosts do not establish that.
 
 `plan_market_reserve` runs once a minute across all replicas. Sustained pressure
 may bring a pass forward, at most once every twenty seconds. One snapshot query
-reads live fleet allocations, one bounded query aggregates arrivals and backlog,
-and one indexed query reads schedules in the forecast window. The planner compares
+reads live fleet allocations. Forecast queries aggregate recent arrivals, live
+invocation backlog, known schedules and activation measurements. The planner compares
 approved node combinations by running or preparation-plus-storage cost. Request
 acquisition separately packs compatible due requests using the same resource and
 offer values. Disk-backed requests retain individual acquisition because storage
@@ -81,19 +95,23 @@ Growth resumes compatible reserves before purchasing. Requests and interruption
 recovery take priority over elective preparation. Retention preserves ready
 headroom and hosts that uniquely fit required shapes. Consolidation considers
 movable work, quoted savings, dwell time and cooldown; it cannot move pinned work.
+Idle oversized hosts may receive a smaller replacement after its preparation cost
+is recovered within the planning horizon. The source remains until replacement
+intake is ready, and launch intents suppress another purchase. Consolidation
+retains its named destinations and rechecks placement under their dispatch leases
+before stopping movable work.
 Node memory uses the least observed memory for its nominal shape, or nominal
 memory until that shape enrolls.
 
 Spot-tolerant work may resume an On-Demand reserve only while the On-Demand
 reserves left meet their floor. Otherwise it buys capacity in that unit.
 A resumed slot leaves the stopped count; replenishing it belongs to the planner.
-Retiring slots hold their budget until provider cleanup confirms their removal.
+Retiring slots retain their cleanup obligations until provider absence is proved.
 
 A unit's `min_machines` is the planner's count of serving machines the idle drain
 keeps, and the drain keeps its busy machines first. Running, stopped, preparing and
-retiring machines share the fleet budget; stopped machines do not count against the
-running vCPU cap. A stopped target being removed keeps its commitment until
-provider observation confirms its removal; disk destruction still requires the
+retiring machines remain counted once. A stopped target being removed keeps its
+commitment until provider observation confirms its removal; disk destruction requires the
 existing provider evidence.
 
 Platform AWS pools, CPU and GPU, own EC2 instances directly. Spot launches use
@@ -107,7 +125,7 @@ The agent proves its current binary and worker image before initial preparation
 completes, and the provider row records them. A GPU reserve also proves its image
 and driver: its enrollment reports the unit's cards through the driver and passes
 preflight before it stops. A stopped reserve that predates the active release is
-started and prepared again within the shared maintenance budget while no platform
+started and prepared again while ready headroom permits and no platform
 work waits, so a resume never updates itself first. The scheduler looks for such
 reserves within one capacity pass of a release activating, then each minute. A
 refused reserve launch or an interrupted reserve leaves the pool serving. Until
@@ -161,7 +179,7 @@ region ranks after the others, so a shortfall moves to the next region rather th
 walking the sold-out one type by type. Within a region, reserve purchases prefer
 zones the market does not run in yet. A provider interruption notice closes new
 admission on its machine and records one durable recovery obligation. Recovery buys
-compatible capacity outside that combination, within the existing fleet cap, and
+compatible capacity outside that combination, and
 platform capacity may recover in another region. Multiple threatened machines may
 recover together. Planned updates yield to recovery, and a source remains
 protected from elective retirement and consolidation until its replacement

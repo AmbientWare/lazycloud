@@ -10,6 +10,11 @@ from uuid import NAMESPACE_URL, uuid5
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 from shared.capacity import CapacityFailureCode
+from shared.capacity_lifecycle import (
+    CapacityActivationKind,
+    CapacitySleepMode,
+    CapacitySleepOutcome,
+)
 from shared.compute_policy import (
     ComputeCapacityMode,
     ComputeUnitProviderState,
@@ -133,6 +138,11 @@ class ProviderUnitInstance(ContractModel):
     booted_template_version: str = ""
     hibernates: bool = False
     """Launched able to hibernate; the provider decides it per instance type at launch."""
+    stop_mode: CapacitySleepMode | None = None
+    sleep_outcome: CapacitySleepOutcome = CapacitySleepOutcome.Unknown
+    activation_kind: CapacityActivationKind = CapacityActivationKind.Provision
+    activation_requested_at: datetime | None = None
+    provider_running_at: datetime | None = None
     billing_started_at: datetime | None = None
     billing_minimum_seconds: int | None = Field(default=None, ge=0)
     billing_quantum_seconds: int | None = Field(default=None, ge=1)

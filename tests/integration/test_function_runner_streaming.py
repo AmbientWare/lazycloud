@@ -8,6 +8,7 @@ from api.server.services import ApiServices
 from control.service import ControlPlaneService, StubKind, StubRecord
 from execution.functions.service import FunctionControlService
 from gateway.service import GatewayControlService
+from observability.startup_latency import StartupLatencyService
 from observability.stream_state import AsyncTaskChangeReader
 from pydantic import JsonValue, TypeAdapter
 from runner.function import (
@@ -27,6 +28,7 @@ from shared.function_payloads import (
 )
 from shared.http.functions import (
     FunctionClaimRequest,
+    FunctionExecutionEntryRequest,
     FunctionInvokeBody,
     FunctionInvokeResponse,
     FunctionRetireRequest,
@@ -87,7 +89,14 @@ def stream_value(value):
         ("stdout", "beta"),
         ("stdout", "gamma"),
     ]
-    assert async_services.tasks.get(task_id).status is TaskStatus.Complete
+    task = async_services.tasks.get(task_id)
+    assert task.status is TaskStatus.Complete
+    assert task.workspace_id is not None
+    report = StartupLatencyService(async_services.context.database).read(
+        workspace_id=task.workspace_id
+    )
+    assert report.execution.reported_entries == 1
+    assert report.execution.missing_entry_evidence == 0
 
 
 @pytest.mark.anyio
@@ -260,6 +269,12 @@ class _FunctionRunnerServiceChannel:
         if path == "/api/v1/functions/claim":
             response = self.function_service.function_claim(
                 FunctionClaimRequest.model_validate(payload)
+            )
+            return _JSON_OBJECT_ADAPTER.validate_json(response.model_dump_json())
+        if path == "/api/v1/functions/execution-entry":
+            response = self.function_service.function_execution_entry(
+                FunctionExecutionEntryRequest.model_validate(payload),
+                workspace_id=self._task_workspace_id(payload),
             )
             return _JSON_OBJECT_ADAPTER.validate_json(response.model_dump_json())
         if path == "/gateway/functions/retire":

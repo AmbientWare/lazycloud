@@ -36,6 +36,7 @@ from database.tables.billing_plan_changes import BillingPlanChangeIntentTable
 from database.tables.billing_preferences import BillingPreferencesTable
 from database.tables.billing_rates import ComputeRateTable, DiskRateTable, PlatformRateTable
 from database.tables.billing_webhook_events import BillingWebhookEventTable
+from database.tables.capacity_activations import CapacityActivationTable
 from database.tables.capacity_maintenance import CapacityMaintenanceTable
 from database.tables.capacity_recovery import CapacityRecoveryTable
 from database.tables.compute import (
@@ -131,6 +132,7 @@ __all__ = [
     "BillingPreferencesTable",
     "BillingWebhookEventTable",
     "CacheEntryTable",
+    "CapacityActivationTable",
     "CapacityMaintenanceTable",
     "CapacityRecoveryTable",
     "CheckpointTable",

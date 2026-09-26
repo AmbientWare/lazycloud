@@ -138,6 +138,20 @@ class CapacityMaintenanceRepository:
             )
         ]
 
+    def progress_for_pools(
+        self, pool_ids: Collection[str]
+    ) -> list[tuple[CapacityMaintenanceRecord, int]]:
+        table = CapacityMaintenanceTable
+        return [
+            (_record(row), timeout)
+            for row, timeout in self.session.execute(
+                select(table, ComputeUnitTable.registration_timeout_seconds)
+                .join(ComputeUnitTable, ComputeUnitTable.id == table.pool_id)
+                .where(table.pool_id.in_(pool_ids), table.completed_at.is_(None))
+                .order_by(table.created_at, table.id)
+            ).tuples()
+        ]
+
     def active_for_placement(self, placement: Placement) -> list[CapacityMaintenanceRecord]:
         table = CapacityMaintenanceTable
         return [

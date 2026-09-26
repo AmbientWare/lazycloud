@@ -261,6 +261,12 @@ def scheduler_startup_latency(
             "overdue without readiness": report.functions.overdue_without_readiness,
             "request to ready p95 seconds": report.functions.request_to_ready.p95_seconds,
             "warm execution measurement": report.warm_execution_measurement,
+            "warm execution p95 upper bound seconds": (
+                report.execution.warm_request_to_entry_upper_bound.p95_seconds
+            ),
+            "execution entries reported": report.execution.reported_entries,
+            "missing execution evidence": report.execution.missing_entry_evidence,
+            "platform activation groups": len(report.platform_activations),
             "limitations": list(report.limitations),
         },
         tone="info",

@@ -1778,6 +1778,8 @@ class Scheduler:
                 now=current_time,
             )
             self.runtime_services.compute.refresh_stale_reserves(release, now=current_time)
+        except CapacityReservationLockContendedError:
+            LOGGER.debug("release reconciliation deferred: another controller holds the lease")
         except Exception:
             LOGGER.exception("scheduler release reconciliation failed")
 

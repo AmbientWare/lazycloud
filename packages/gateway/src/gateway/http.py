@@ -171,6 +171,8 @@ class StreamAgentRequest(HttpModel):
     """Held workers that are built and wait only for the agent to admit them."""
     booted_since_reserve_prepared: bool = False
     """The machine booted after its reserve was prepared, so it was stopped and started."""
+    resumed_since_reserve_prepared: bool = False
+    """The running agent observed the suspended clock gap while holding a reserve."""
     prepared_stop: MachineStopPreparationReceipt | None = None
 
 

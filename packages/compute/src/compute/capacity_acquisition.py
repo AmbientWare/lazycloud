@@ -29,7 +29,6 @@ class CapacityAcquisitionPlan:
 class _Packing:
     cost: int
     remaining: tuple[int, ...]
-    cpu: int
     offers: tuple[int, ...]
     allocations: tuple[tuple[int, ...], ...]
 
@@ -37,15 +36,12 @@ class _Packing:
 def plan_request_capacity(
     offers: Sequence[ReserveOffer],
     requests: Sequence[Capacity],
-    *,
-    machine_limit: int,
-    running_cpu_millicores: int,
 ) -> CapacityAcquisitionPlan:
     """Select a bounded-cost packing; every request must fit a single selected node.
 
     Callers filter offers and requests to the same placement and runtime constraints.
     Search keeps at most 64 incomplete packings after each added node. It returns
-    uncovered requests explicitly when prices, limits or available shapes prevent
+    uncovered requests explicitly when available shapes prevent
     a complete plan. Complete plans minimize cost among the packings explored.
     """
     if any(not request.covers(Capacity()) for request in requests):
@@ -72,16 +68,15 @@ def plan_request_capacity(
             reverse=True,
         )
     )
-    states = [_Packing(0, order, 0, (), ())]
+    states = [_Packing(0, order, (), ())]
     partial = states[0]
     best: _Packing | None = None
-    for _ in range(max(0, min(machine_limit, len(requests)))):
-        expanded: dict[tuple[tuple[int, ...], int], _Packing] = {}
+    for _ in range(len(requests)):
+        expanded: dict[tuple[int, ...], _Packing] = {}
         for state in states:
             for offer_index, offer in enumerate(candidates):
-                cpu = state.cpu + (0 if offer.market.gpu_type else offer.nominal_cpu_millicores)
                 cost = state.cost + offer.hourly_cost_micros
-                if cpu > running_cpu_millicores or (best is not None and cost >= best.cost):
+                if best is not None and cost >= best.cost:
                     continue
                 free = offer.machine
                 remaining: list[int] = []
@@ -97,14 +92,13 @@ def plan_request_capacity(
                 next_state = _Packing(
                     cost,
                     tuple(remaining),
-                    cpu,
                     (*state.offers, offer_index),
                     (*state.allocations, tuple(placed)),
                 )
                 if not remaining:
                     best = next_state
                 else:
-                    key = (next_state.remaining, cpu)
+                    key = next_state.remaining
                     if key not in expanded or cost < expanded[key].cost:
                         expanded[key] = next_state
         states = sorted(

@@ -33,6 +33,7 @@ from shared.deployment_records import (
     VolumeMount,
 )
 from shared.deployments import DEFAULT_ENDPOINT_METHODS, DeploymentKind
+from shared.execution_entry import record_execution_entry
 from shared.function_payloads import FunctionPayloadEncoding
 from shared.gpu import GpuInput, gpu_preference
 from shared.http.endpoints import StartEndpointServeResponse
@@ -279,6 +280,8 @@ class Endpoint(Generic[P, R]):
         prepared_args, prepared_kwargs = prepare_arguments(
             self.func, args, kwargs, self.inputs, encoding=encoding
         )
+        if not inspect.iscoroutinefunction(self.func):
+            record_execution_entry()
         return serialize_result(
             self.func, self.func(*prepared_args, **prepared_kwargs), self.outputs
         )

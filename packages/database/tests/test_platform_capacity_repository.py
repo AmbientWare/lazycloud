@@ -4,7 +4,6 @@ from uuid import uuid4
 
 import pytest
 from database.repositories.aws_connections import AwsAccountConnectionRepository
-from database.repositories.capacity_maintenance import CapacityMaintenanceRepository
 from database.repositories.capacity_recovery import CapacityRecoveryRepository
 from database.repositories.compute import (
     ComputeCapacityOperationRecord,
@@ -14,7 +13,6 @@ from database.repositories.compute import (
     ComputeUnitRepository,
 )
 from database.repositories.identity import UserRepository, WorkspaceRepository
-from database.repositories.orchestration import MachineRepository
 from database.tables.capacity_recovery import CapacityRecoveryTable
 from database.tables.compute import ComputeCapacityOperationTable, ComputeUnitTable
 from identity.platform import PlatformNamespaceService
@@ -25,8 +23,6 @@ from shared.capacity import (
     CapacityOwnerKind,
     CapacityOwnerSource,
 )
-from shared.capacity_maintenance import CapacityMaintenanceKind, CapacityMaintenanceRecord
-from shared.compute_fleet import Machine
 from shared.compute_policy import (
     ComputeCapacityMode,
     ComputeUnitPhase,
@@ -184,23 +180,18 @@ def test_capacity_batches_share_work_and_keep_empty_pool_audits_progressing(
         } == updated_at
 
 
-def test_fleet_capacity_counts_commitments_and_retiring_nodes_once(
+def test_platform_pool_inventory_excludes_customer_capacity(
     database: DatabaseClient,
 ) -> None:
     with database.session() as session:
         workspace = PlatformNamespaceService(database).initialize()
         customer = WorkspaceRepository(session).create(name="customer")
         repository = ComputeUnitRepository(session)
-        old_machine_id = str(uuid4())
-        MachineRepository(session).upsert(
-            Machine(id=old_machine_id, provider="aws"), workspace_id=workspace.id
-        )
         reserved = repository.upsert(
             _platform_unit(workspace.id, "aws").model_copy(
                 update={
                     "desired_machines": 2,
                     "observed_machines": 2,
-                    "replacement_machine_id": old_machine_id,
                     "worker_preemptible": True,
                 }
             )
@@ -249,31 +240,6 @@ def test_fleet_capacity_counts_commitments_and_retiring_nodes_once(
                 max_machines=90,
             )
         )
-        instances = ComputeProviderInstanceRepository(session)
-        for unit, statuses in (
-            (reserved, ("active", "terminating")),
-            (draining, ("terminating", "terminating", "deleted", "failed")),
-        ):
-            for status in statuses:
-                instances.upsert(
-                    ComputeProviderInstanceRecord(
-                        id=str(uuid4()),
-                        pool_id=unit.id,
-                        provider=unit.provider,
-                        offer_id=unit.offer_id,
-                        instance_id=str(uuid4()),
-                        machine_id=(
-                            old_machine_id
-                            if unit.id == reserved.id and status == "terminating"
-                            else None
-                        ),
-                        status=status,
-                        source="pooled",
-                    )
-                )
-        assert repository.platform_capacity_usage(gpu=False) == 10
-        assert repository.platform_capacity_usage(gpu=False, excluding_unit_id=reserved.id) == 7
-        assert repository.platform_capacity_usage(gpu=True) == 2
         assert {unit.id for unit in repository.list_platform_internal()} == {
             reserved.id,
             draining.id,
@@ -285,7 +251,7 @@ def test_fleet_capacity_counts_commitments_and_retiring_nodes_once(
         ] == [reserved.id]
 
 
-def test_stopped_capacity_holds_its_budget_through_resume_and_retirement(
+def test_stopped_capacity_moves_to_serving_and_stops_being_resumable(
     database: DatabaseClient,
 ) -> None:
     workspace = PlatformNamespaceService(database).initialize()
@@ -313,7 +279,6 @@ def test_stopped_capacity_holds_its_budget_through_resume_and_retirement(
                     source="pooled",
                 )
             )
-        assert units.platform_capacity_usage(gpu=False) == 2
         sizing = units.sizing_for_owner(unit.id)
         assert sizing is not None and sizing.desired_machines == 0
         assert {row.id for row in units.stopped_reserve_units() if row.resumable} == {unit.id}
@@ -328,7 +293,6 @@ def test_stopped_capacity_holds_its_budget_through_resume_and_retirement(
         )
         assert resumed is not None
         assert resumed.stopped_machines == 1
-        assert units.platform_capacity_usage(gpu=False) == 2
         units.upsert(
             resumed.model_copy(
                 update={
@@ -337,88 +301,6 @@ def test_stopped_capacity_holds_its_budget_through_resume_and_retirement(
                 }
             )
         )
-        assert units.platform_capacity_usage(gpu=False) == 2
         for instance in instances.list_for_pool(unit.id):
             instances.upsert(instance.model_copy(update={"status": "deleted"}))
         assert not any(row.resumable for row in units.stopped_reserve_units())
-        assert units.platform_capacity_usage(gpu=False) == 2
-        units.upsert(resumed.model_copy(update={"stopped_machines": 0}))
-        assert units.platform_capacity_usage(gpu=False) == 1
-
-
-def test_fleet_capacity_lock_serializes_purchases_across_units(
-    database: DatabaseClient,
-) -> None:
-    with database.session() as session:
-        workspace_id = PlatformNamespaceService(database).initialize().id
-        units = [_platform_unit(workspace_id, "aws") for _ in range(2)]
-    ready = Barrier(2)
-
-    def purchase(unit: ComputeUnitRecord) -> bool:
-        with database.session() as session:
-            repository = ComputeUnitRepository(session)
-            ready.wait(timeout=5)
-            repository.lock_platform_capacity()
-            if repository.platform_capacity_usage(gpu=False) >= 1:
-                return False
-            repository.upsert(unit.model_copy(update={"desired_machines": 1}))
-            return True
-
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        assert sorted(executor.map(purchase, units)) == [False, True]
-    with database.session() as session:
-        assert ComputeUnitRepository(session).platform_capacity_usage(gpu=False) == 1
-
-
-def test_reserve_refresh_reserves_running_cpu_once_before_and_after_provider_start(
-    database: DatabaseClient,
-) -> None:
-    workspace = PlatformNamespaceService(database).initialize()
-    now = utc_now()
-    with database.session() as session:
-        units = ComputeUnitRepository(session)
-        unit = units.upsert(
-            _platform_unit(workspace.id, "aws").model_copy(
-                update={
-                    "stopped_machines": 1,
-                    "worker_cpu_millicores": 8000,
-                }
-            )
-        )
-        source_id = str(uuid4())
-        MachineRepository(session).upsert(
-            Machine(id=source_id, provider="aws", capacity_owner_id=unit.id),
-            workspace_id=workspace.id,
-        )
-        instances = ComputeProviderInstanceRepository(session)
-        instance = instances.upsert(
-            ComputeProviderInstanceRecord(
-                id=str(uuid4()),
-                pool_id=unit.id,
-                provider="aws",
-                offer_id=unit.offer_id,
-                instance_id=str(uuid4()),
-                machine_id=source_id,
-                status="stopped",
-                source="pooled",
-            )
-        )
-        assert units.platform_running_cpu_millicores() == 0
-        CapacityMaintenanceRepository(session).start(
-            CapacityMaintenanceRecord(
-                id=str(uuid4()),
-                pool_id=unit.id,
-                source_machine_id=source_id,
-                release_generation=1,
-                kind=CapacityMaintenanceKind.ReserveRefresh,
-                running_cpu_millicores=8000,
-                hourly_cost_micros=100000,
-                created_at=now,
-                updated_at=now,
-            )
-        )
-        assert units.platform_running_cpu_millicores() == 8000
-        instances.upsert(instance.model_copy(update={"status": "preparing"}))
-        assert units.platform_running_cpu_millicores() == 8000
-        units.upsert(unit.model_copy(update={"stopped_machines": 2}))
-        assert units.platform_running_cpu_millicores() == 16000

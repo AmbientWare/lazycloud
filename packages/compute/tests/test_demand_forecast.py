@@ -83,3 +83,21 @@ def test_scheduled_capacity_uses_its_horizon_without_becoming_arrival_rate() -> 
     assert forecast.short_arrivals.empty
     assert forecast.scheduled_total == request * 3
     assert forecast.largest_request == request
+
+
+def test_short_jobs_and_nonoverlapping_schedules_use_occupancy() -> None:
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    request = Capacity(1_000, 2_048)
+    forecast = forecast_demand(
+        [DemandSample(now, request, count=60, duration_seconds=5)],
+        now=now,
+        resume_seconds=60,
+        provision_seconds=300,
+        scheduled=[
+            DemandSample(now + timedelta(seconds=offset), request, duration_seconds=10)
+            for offset in (10, 30, 50)
+        ],
+    )
+    assert forecast.scheduled_total == request
+    assert forecast.total == request * 7
+    assert forecast.warm == forecast.total

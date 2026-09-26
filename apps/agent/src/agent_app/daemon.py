@@ -483,6 +483,7 @@ class AgentDaemonService:
     """Whether the worker listeners are held for a reserve. Only a stream that says
     serve releases them; one that says keep leaves them held."""
     _suspend: SuspendWatch = field(default_factory=SuspendWatch)
+    _resumed_since_prepared: bool = False
     _wakeup: Wakeup | None = field(default=None, init=False)
     """Open only while `run` runs; its pipe, timerfd and watch thread close with it."""
 
@@ -742,6 +743,7 @@ class AgentDaemonService:
         slept = self._suspend.slept()
         if not slept:
             return False
+        self._resumed_since_prepared = self._holding
         LOGGER.info(
             "machine slept for %.1fs; redialing the tunnel at boot+%.2fs",
             slept,
@@ -912,6 +914,7 @@ class AgentDaemonService:
                     booted_since_reserve_prepared=(
                         self.worker_controller.reserve_prepared_in_earlier_boot()
                     ),
+                    resumed_since_reserve_prepared=self._resumed_since_prepared,
                     prepared_stop=read_stop_preparation(self.state_store.state_dir),
                 )
             )
@@ -922,6 +925,7 @@ class AgentDaemonService:
             raise RuntimeError(msg)
         state = _agent_state_from_stream_response(state, stream)
         if stream.resume_from_stop and state.capacity_notice_at is None:
+            self._resumed_since_prepared = False
             finish_stop_preparation(self.state_store.state_dir)
             state = state.model_copy(update={"capacity_state": AgentCapacityState.Available})
         self.state_store.save(state)

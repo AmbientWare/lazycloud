@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from collections.abc import Collection
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import uuid4
 
+from database.repositories.capacity_activations import CapacityActivationRepository
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.orchestration import pinned_container
 from database.tables.aws_connections import AwsAccountConnectionTable
@@ -29,6 +30,7 @@ from shared.capacity import (
     CapacityOperationStatus,
     CapacityOwnerKind,
 )
+from shared.capacity_lifecycle import CapacitySleepMode, CapacitySleepOutcome
 from shared.compute_enrollment import (
     AgentCapacityState,
     ComputeCredentialStatus,
@@ -47,7 +49,7 @@ from shared.compute_reconciliation import ComputeReconciliationKind
 from shared.container_requests import CONTAINER_MEMORY_RESERVATION_PERCENT
 from shared.containers import LIVE_CONTAINER_STATUSES
 from shared.contracts import ContractModel
-from shared.errors import ConflictError
+from shared.errors import ConflictError, StaleProviderStateError
 from shared.identity import WorkspaceRole, WorkspaceStatus
 from shared.placement import Placement
 from shared.supplier_costs import SupplierCostTerms, SupplierCpuUnit
@@ -170,7 +172,11 @@ class ComputeProviderInstanceRecord(ContractModel):
     prepared_agent_sha256: str = ""
     prepared_worker_image: str = ""
     hibernates: bool = False
-    """Launched able to hibernate, so it stops warm, with its worker running."""
+    """Hibernation capability, independent of the requested stop or its outcome."""
+    stop_mode: CapacitySleepMode | None = None
+    sleep_outcome: CapacitySleepOutcome = CapacitySleepOutcome.Unknown
+    activation_requested_at: datetime | None = None
+    provider_running_at: datetime | None = None
     resume_authorized_at: datetime | None = None
     """When a stream authorized this reserve's resume; cleared once the row is active."""
     missing_since: datetime | None = None
@@ -221,6 +227,11 @@ class PlatformReserveUnitRow:
     maintenance_surge_machines: int = 0
     maintenance_running_cpu_millicores: int = 0
     maintenance_reserve_refreshes: int = 0
+    region: str = ""
+    availability_zone: str = ""
+    architecture: str = ""
+    runtimes: tuple[str, ...] = ()
+    supports_hibernation: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -242,6 +253,8 @@ class PlatformReserveInstanceRow:
     prepared_worker_image: str = ""
     prepared_agent_sha256: str = ""
     surge_covered: bool = False
+    stop_mode: CapacitySleepMode | None = None
+    sleep_outcome: CapacitySleepOutcome = CapacitySleepOutcome.Unknown
 
 
 @dataclass(frozen=True, slots=True)
@@ -468,6 +481,7 @@ def _compute_unit_record(row: ComputeUnitTable) -> ComputeUnitRecord:
             else None,
             "offer_storage_mib": row.offer_storage_mib,
             "offer_availability_zone": row.offer_availability_zone,
+            "offer_architecture": row.offer_architecture,
             "supplier_cpu_unit": row.supplier_cpu_unit,
             "supplier_cpu_count": row.supplier_cpu_count,
             "desired_machines": row.desired_machines,
@@ -628,6 +642,13 @@ class ComputeUnitRepository:
                         CapacityMaintenanceTable.surge_machines > 0,
                     ),
                 ),
+                instance.stop_mode,
+                instance.sleep_outcome,
+                unit.region,
+                unit.offer_availability_zone,
+                func.coalesce(func.nullif(unit.offer_architecture, ""), instance.architecture),
+                unit.worker_runtimes,
+                func.bool_or(instance.hibernates).over(partition_by=unit.id),
             )
             .select_from(unit)
             .outerjoin(maintenance, maintenance.c.pool_id == unit.id)
@@ -654,6 +675,7 @@ class ComputeUnitRepository:
                     unit.desired_machines > 0,
                     unit.stopped_machines > 0,
                     unit.retiring_stopped_machines > 0,
+                    unit.provider_committed_machines > 0,
                     unit.min_machines > 0,
                     maintenance.c.pool_id.is_not(None),
                 ),
@@ -693,6 +715,11 @@ class ComputeUnitRepository:
                     maintenance_surge_machines=row[39],
                     maintenance_running_cpu_millicores=row[40],
                     maintenance_reserve_refreshes=row[41],
+                    region=row[45],
+                    availability_zone=row[46],
+                    architecture=row[47] or "",
+                    runtimes=tuple(row[48]),
+                    supports_hibernation=bool(row[49]),
                 )
             if row[21] is None:
                 continue
@@ -715,6 +742,8 @@ class ComputeUnitRepository:
                     prepared_worker_image=row[37] or "",
                     prepared_agent_sha256=row[38] or "",
                     surge_covered=bool(row[42]),
+                    stop_mode=CapacitySleepMode(row[43]) if row[43] is not None else None,
+                    sleep_outcome=CapacitySleepOutcome(row[44]),
                 )
             )
         return PlatformReserveRows(units=tuple(units.values()), instances=tuple(instances))
@@ -760,80 +789,20 @@ class ComputeUnitRepository:
             ).tuples()
         }
 
-    def platform_running_cpu_millicores(self) -> int:
-        """Running commitments, including reserve preparation and unfinished cleanup."""
+    def platform_maintenance_pool_ids(self) -> list[str]:
+        """Platform pools that still hold capacity or unfinished maintenance."""
         unit = ComputeUnitTable
-        instance = ComputeProviderInstanceTable
-        physical = (
-            select(
-                instance.pool_id,
-                func.count().filter(instance.status != "stopped").label("running"),
-                func.count().filter(instance.status == "stopped").label("stopped"),
-            )
-            .where(instance.status.not_in(("deleted", "failed")))
-            .group_by(instance.pool_id)
-            .subquery()
-        )
-        surge = case((func.coalesce(unit.replacement_machine_id, "") != "", 1), else_=0)
-        maintenance = (
-            select(
-                CapacityMaintenanceTable.pool_id,
-                func.sum(CapacityMaintenanceTable.running_cpu_millicores).label("cpu"),
-                func.count()
-                .filter(CapacityMaintenanceTable.kind == "reserve_refresh")
-                .label("refreshes"),
-            )
-            .where(CapacityMaintenanceTable.completed_at.is_(None))
-            .group_by(CapacityMaintenanceTable.pool_id)
-            .subquery()
-        )
-        preparing = func.greatest(
-            unit.stopped_machines
-            - func.coalesce(physical.c.stopped, 0)
-            - func.coalesce(maintenance.c.refreshes, 0),
-            0,
-        )
-        committed = (
-            unit.desired_machines + surge + preparing
-        ) * unit.worker_cpu_millicores + func.coalesce(maintenance.c.cpu, 0)
-        running = func.greatest(
-            committed, func.coalesce(physical.c.running, 0) * unit.worker_cpu_millicores
-        )
-        return int(
-            self.session.scalar(
-                select(func.coalesce(func.sum(running), 0))
-                .outerjoin(physical, physical.c.pool_id == unit.id)
-                .outerjoin(maintenance, maintenance.c.pool_id == unit.id)
-                .where(
-                    unit.visibility == ComputeUnitVisibility.Internal.value,
-                    unit.platform_fleet.is_(True),
-                    unit.worker_gpu_count == 0,
-                    unit.phase != ComputeUnitPhase.Deleted.value,
-                    running > 0,
-                )
-            )
-            or 0
-        )
-
-    def platform_maintenance_fleet(self) -> tuple[list[str], int]:
-        """Live pool identities and fleet size used for maintenance concurrency admission."""
-        unit = ComputeUnitTable
-        rows = (
-            self.session.execute(
-                select(
-                    unit.id,
-                    func.sum(
-                        func.greatest(
-                            unit.desired_machines + unit.stopped_machines, unit.observed_machines
-                        )
-                    ).over(),
-                ).where(
+        return list(
+            self.session.scalars(
+                select(unit.id).where(
                     unit.visibility == ComputeUnitVisibility.Internal.value,
                     unit.platform_fleet.is_(True),
                     or_(
                         unit.desired_machines > 0,
                         unit.stopped_machines > 0,
                         unit.observed_machines > 0,
+                        unit.retiring_stopped_machines > 0,
+                        unit.provider_committed_machines > 0,
                         exists().where(
                             CapacityMaintenanceTable.pool_id == unit.id,
                             CapacityMaintenanceTable.completed_at.is_(None),
@@ -841,10 +810,7 @@ class ComputeUnitRepository:
                     ),
                 )
             )
-            .tuples()
-            .all()
         )
-        return [identity for identity, _ in rows], int(rows[0][1]) if rows else 0
 
     def platform_stopped_reserves(
         self, *, preemptible: bool, gpu_type: str
@@ -1364,103 +1330,6 @@ class ComputeUnitRepository:
             {"lock_key": "compute:platform-capacity"},
         )
 
-    def platform_capacity_usage(self, *, gpu: bool, excluding_unit_id: str | None = None) -> int:
-        statement = self._platform_capacity_commitments(gpu=gpu)
-        if excluding_unit_id is not None:
-            statement = statement.where(ComputeUnitTable.id != excluding_unit_id)
-        commitments = statement.subquery()
-        return int(
-            self.session.scalar(select(func.coalesce(func.sum(commitments.c.committed), 0))) or 0
-        )
-
-    def platform_capacity_by_unit(self, *, gpu: bool) -> dict[str, int]:
-        return {
-            str(unit_id): committed
-            for unit_id, committed in self.session.execute(
-                self._platform_capacity_commitments(gpu=gpu)
-            ).tuples()
-        }
-
-    @staticmethod
-    def _platform_capacity_commitments(*, gpu: bool) -> Select[tuple[str, int]]:
-        # Retiring nodes still bill after desired capacity is reduced or replaced.
-        # An explicitly paired replacement already occupies the unit's surge slot.
-        live_instances = (
-            select(
-                ComputeProviderInstanceTable.pool_id,
-                func.count().label("count"),
-                func.count()
-                .filter(
-                    ComputeProviderInstanceTable.status == "terminating",
-                    ~exists().where(
-                        CapacityMaintenanceTable.source_machine_id
-                        == ComputeProviderInstanceTable.machine_id,
-                        CapacityMaintenanceTable.completed_at.is_(None),
-                        CapacityMaintenanceTable.surge_machines > 0,
-                    ),
-                    or_(
-                        ComputeProviderInstanceTable.machine_id.is_(None),
-                        cast(ComputeProviderInstanceTable.machine_id, String)
-                        != func.coalesce(ComputeUnitTable.replacement_machine_id, ""),
-                    ),
-                )
-                .label("retiring_count"),
-            )
-            .join(ComputeUnitTable, ComputeUnitTable.id == ComputeProviderInstanceTable.pool_id)
-            .where(ComputeProviderInstanceTable.status.not_in(("deleted", "failed")))
-            .group_by(ComputeProviderInstanceTable.pool_id)
-            .subquery()
-        )
-        surge = (
-            case(
-                (
-                    func.coalesce(ComputeUnitTable.replacement_machine_id, "") != "",
-                    1,
-                ),
-                else_=0,
-            )
-            + select(func.coalesce(func.sum(CapacityMaintenanceTable.surge_machines), 0))
-            .where(
-                CapacityMaintenanceTable.pool_id == ComputeUnitTable.id,
-                CapacityMaintenanceTable.completed_at.is_(None),
-            )
-            .scalar_subquery()
-        )
-        return (
-            select(
-                ComputeUnitTable.id,
-                func.greatest(
-                    ComputeUnitTable.desired_machines
-                    + ComputeUnitTable.stopped_machines
-                    + ComputeUnitTable.retiring_stopped_machines
-                    + surge
-                    + func.coalesce(live_instances.c.retiring_count, 0),
-                    ComputeUnitTable.observed_machines,
-                    func.coalesce(live_instances.c.count, 0),
-                    ComputeUnitTable.provider_committed_machines,
-                ).label("committed"),
-            )
-            .outerjoin(live_instances, live_instances.c.pool_id == ComputeUnitTable.id)
-            .where(
-                ComputeUnitTable.visibility == ComputeUnitVisibility.Internal.value,
-                ComputeUnitTable.platform_fleet.is_(True),
-                or_(
-                    ComputeUnitTable.desired_machines > 0,
-                    ComputeUnitTable.stopped_machines > 0,
-                    ComputeUnitTable.retiring_stopped_machines > 0,
-                    ComputeUnitTable.observed_machines > 0,
-                    ComputeUnitTable.provider_committed_machines > 0,
-                    live_instances.c.count > 0,
-                    surge > 0,
-                ),
-                (
-                    ComputeUnitTable.worker_gpu_count > 0
-                    if gpu
-                    else ComputeUnitTable.worker_gpu_count == 0
-                ),
-            )
-        )
-
     def update_capacity(
         self,
         pool_id: str,
@@ -1588,7 +1457,9 @@ class ComputeUnitRepository:
             row.provider_state_revision is not None
             and row.provider_state_revision > record.provider_state.revision
         ):
-            raise ConflictError("provider operation state changed during capacity mutation")
+            raise StaleProviderStateError(
+                "provider operation state changed during capacity mutation"
+            )
         row.provider_ref = record.provider_ref
         row.capacity_owner_id = record.capacity_owner_id
         row.capacity_owner_kind = record.capacity_owner_kind.value
@@ -1626,6 +1497,7 @@ class ComputeUnitRepository:
         )
         row.offer_storage_mib = record.offer_storage_mib
         row.offer_availability_zone = record.offer_availability_zone
+        row.offer_architecture = record.offer_architecture
         row.supplier_cpu_unit = record.supplier_cpu_unit.value
         row.supplier_cpu_count = record.supplier_cpu_count
         row.replacement_machine_id = record.replacement_machine_id
@@ -1956,6 +1828,10 @@ def _provider_instance_record(row: ComputeProviderInstanceTable) -> ComputeProvi
             "prepared_agent_sha256": row.prepared_agent_sha256,
             "prepared_worker_image": row.prepared_worker_image,
             "hibernates": row.hibernates,
+            "stop_mode": row.stop_mode,
+            "sleep_outcome": row.sleep_outcome,
+            "activation_requested_at": to_utc_or_none(row.activation_requested_at),
+            "provider_running_at": to_utc_or_none(row.provider_running_at),
             "resume_authorized_at": to_utc_or_none(row.resume_authorized_at),
             "missing_since": to_utc_or_none(row.missing_since),
             "provider_storage_destroyed_at": to_utc_or_none(row.provider_storage_destroyed_at),
@@ -1980,6 +1856,7 @@ class ComputeProviderInstanceRepository:
     def upsert(self, record: ComputeProviderInstanceRecord) -> ComputeProviderInstanceRecord:
         record = ComputeProviderInstanceRecord.model_validate(dict(record))
         row = self.session.get(ComputeProviderInstanceTable, record.id)
+        previous_status = row.status if row is not None else None
         if row is None:
             row = ComputeProviderInstanceTable(id=record.id, created_at=record.created_at)
             self.session.add(row)
@@ -2019,6 +1896,10 @@ class ComputeProviderInstanceRepository:
         row.prepared_agent_sha256 = record.prepared_agent_sha256
         row.prepared_worker_image = record.prepared_worker_image
         row.hibernates = record.hibernates
+        row.stop_mode = record.stop_mode.value if record.stop_mode is not None else None
+        row.sleep_outcome = record.sleep_outcome.value
+        row.activation_requested_at = record.activation_requested_at
+        row.provider_running_at = record.provider_running_at
         row.resume_authorized_at = record.resume_authorized_at
         row.missing_since = record.missing_since
         row.provider_storage_destroyed_at = record.provider_storage_destroyed_at
@@ -2028,6 +1909,11 @@ class ComputeProviderInstanceRepository:
         row.last_error = record.last_error
         row.updated_at = utc_now()
         self.session.flush()
+        if (
+            record.status in {"failed", "deleted", "terminating"}
+            and previous_status != record.status
+        ):
+            CapacityActivationRepository(self.session).record_failed(record.id, at=row.updated_at)
         return _provider_instance_record(row)
 
     def list_for_pool(
@@ -2056,16 +1942,23 @@ class ComputeProviderInstanceRepository:
             statement = statement.with_for_update()
         return [_provider_instance_record(row) for row in self.session.scalars(statement)]
 
-    def authorize_resume(self, record_id: str) -> None:
+    def authorize_resume(
+        self, record_id: str, *, outcome: CapacitySleepOutcome = CapacitySleepOutcome.Unknown
+    ) -> None:
         """Mark a resuming reserve's resume as authorized, for the capacity pass to finish."""
-        self.session.execute(
+        now = utc_now()
+        authorized = self.session.scalar(
             update(ComputeProviderInstanceTable)
             .where(
                 ComputeProviderInstanceTable.id == record_id,
                 ComputeProviderInstanceTable.status == "resuming",
+                ComputeProviderInstanceTable.resume_authorized_at.is_(None),
             )
-            .values(resume_authorized_at=utc_now())
+            .values(resume_authorized_at=now)
+            .returning(ComputeProviderInstanceTable.id)
         )
+        if authorized is not None:
+            CapacityActivationRepository(self.session).authorize(record_id, at=now, outcome=outcome)
 
     def list_for_reconciliation(
         self,
@@ -2194,7 +2087,13 @@ class ComputeProviderInstanceRepository:
         }
 
     def stale_platform_reserves(
-        self, *, agent_sha256: str, worker_image: str, limit: int
+        self,
+        *,
+        agent_sha256: str,
+        worker_image: str,
+        release_generation: int,
+        now: datetime,
+        limit: int,
     ) -> list[ComputeReserveInstance]:
         """Stopped platform reserves prepared with anything but this release."""
         table = ComputeProviderInstanceTable
@@ -2211,6 +2110,25 @@ class ComputeProviderInstanceRepository:
                     table.prepared_worker_image != worker_image,
                 ),
                 ComputeUnitTable.platform_fleet.is_(True),
+                ComputeUnitTable.phase.not_in(
+                    (ComputeUnitPhase.Deleting.value, ComputeUnitPhase.Deleted.value)
+                ),
+                func.nullif(ComputeUnitTable.degraded_reason, "").is_(None),
+                ~exists().where(
+                    CapacityMaintenanceTable.source_machine_id == table.machine_id,
+                    CapacityMaintenanceTable.completed_at.is_(None),
+                    or_(
+                        CapacityMaintenanceTable.kind != "reserve_refresh",
+                        CapacityMaintenanceTable.release_generation > release_generation,
+                        and_(
+                            CapacityMaintenanceTable.phase != "planned",
+                            CapacityMaintenanceTable.updated_at
+                            + ComputeUnitTable.registration_timeout_seconds
+                            * literal(timedelta(seconds=1))
+                            > now,
+                        ),
+                    ),
+                ),
             )
             .order_by(table.created_at.asc(), table.id.asc())
             .limit(limit)

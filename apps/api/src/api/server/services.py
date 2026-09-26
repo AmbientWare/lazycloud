@@ -198,6 +198,8 @@ from shared.http.endpoints import (
 from shared.http.functions import (
     FunctionClaimRequest,
     FunctionClaimResponse,
+    FunctionExecutionEntryRequest,
+    FunctionExecutionEntryResponse,
     FunctionInvokeBody,
     FunctionInvokeResponse,
     FunctionMonitorRequest,
@@ -343,6 +345,14 @@ class FunctionApiService(Protocol):
     ) -> int: ...
 
     def function_claim(self, request: FunctionClaimRequest) -> FunctionClaimResponse: ...
+
+    def function_execution_entry(
+        self, request: FunctionExecutionEntryRequest, *, workspace_id: str
+    ) -> FunctionExecutionEntryResponse: ...
+
+    async def function_claim_wait(
+        self, request: FunctionClaimRequest, *, workspace_id: str
+    ) -> FunctionClaimResponse: ...
 
     def function_retire(
         self,
