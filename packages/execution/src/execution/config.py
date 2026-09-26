@@ -26,6 +26,8 @@ from shared.resources import parse_memory_mib
 from shared.workload_config import (
     cpu_limit_at_or_above_request,
     memory_limit_at_or_above_request,
+    requested_cpu_millicores,
+    requested_memory_mib,
 )
 
 type ManagedPythonExecutable = Literal[
@@ -203,10 +205,7 @@ class ContainerResourceConfig(BaseModel):
 
     @property
     def requested_cpu_millicores(self) -> int:
-        if self.cpu_millicores:
-            return self.cpu_millicores
-        request, _ = request_and_limit(self.cpu)
-        return int(float(request) * 1000) if request is not None else 0
+        return requested_cpu_millicores(self.cpu, self.cpu_millicores)
 
     @property
     def limit_cpu_millicores(self) -> int:
@@ -218,10 +217,7 @@ class ContainerResourceConfig(BaseModel):
 
     @property
     def requested_memory_mib(self) -> int:
-        if self.memory_mib:
-            return self.memory_mib
-        request, _ = request_and_limit(self.memory)
-        return parse_memory_mib(request) or 0
+        return requested_memory_mib(self.memory, self.memory_mib)
 
     @property
     def limit_memory_mib(self) -> int:

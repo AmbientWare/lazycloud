@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import replace
 from datetime import datetime, timedelta
 
@@ -367,7 +368,9 @@ class _IdentityPlacement:
     def place(self, request: SchedulerWorkerRequest) -> SchedulerWorkerRequest:
         return request
 
-    def purchase_candidates(self, request: SchedulerWorkerRequest) -> tuple[()]:
+    def purchase_candidates(
+        self, request: SchedulerWorkerRequest, *, cohort: Sequence[SchedulerWorkerRequest] = ()
+    ) -> tuple[()]:
         return ()
 
 

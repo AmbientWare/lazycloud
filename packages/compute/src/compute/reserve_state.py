@@ -17,11 +17,12 @@ from coordination.redis_serialization import dump_model_json, load_model_json, r
 from pydantic import Field
 from shared.contracts import ContractModel
 
-from compute.fleet_policy import Capacity, FleetReservePlan, ReserveMarket
-
-_PLAN_SECONDS = 60
-_EARLY_PLAN_SECONDS = 20
-"""The shortest gap between two plans when pressure brings one forward."""
+from compute.fleet_policy import (
+    RESERVE_EARLY_PLAN_INTERVAL_SECONDS,
+    RESERVE_PLAN_INTERVAL_SECONDS,
+    FleetReservePlan,
+)
+from compute.fleet_resources import Capacity, ReserveMarket
 
 _PUBLISHED_SECONDS = 5 * 60
 
@@ -96,12 +97,14 @@ class RedisFleetReserveState:
 
     def claim_plan(self, *, early: bool) -> bool:
         """Whether this replica plans now: once a minute fleet-wide, sooner under pressure."""
-        if early and not self.redis.set(self._key("early"), "1", ex=_EARLY_PLAN_SECONDS, nx=True):
+        if early and not self.redis.set(
+            self._key("early"), "1", ex=RESERVE_EARLY_PLAN_INTERVAL_SECONDS, nx=True
+        ):
             return False
         if early:
-            self.redis.set(self._key("plan"), "1", ex=_PLAN_SECONDS)
+            self.redis.set(self._key("plan"), "1", ex=RESERVE_PLAN_INTERVAL_SECONDS)
             return True
-        return self.redis.set(self._key("plan"), "1", ex=_PLAN_SECONDS, nx=True)
+        return self.redis.set(self._key("plan"), "1", ex=RESERVE_PLAN_INTERVAL_SECONDS, nx=True)
 
     def pressure_ready(
         self, market: ReserveMarket, *, under_pressure: bool, now: datetime, sustained_seconds: int

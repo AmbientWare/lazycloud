@@ -298,7 +298,7 @@ class _IdentityPlacement:
         return request
 
     def purchase_candidates(
-        self, request: SchedulerWorkerRequest
+        self, request: SchedulerWorkerRequest, *, cohort: Sequence[SchedulerWorkerRequest] = ()
     ) -> tuple[ComputeCapacityPurchase, ...]:
         return (ComputeCapacityPurchase(OWNER_ID, lambda: None),)
 
@@ -1132,7 +1132,7 @@ def test_capacity_backoff_preserves_purchase_cooldown_but_fails_removed_pools(
         purchases = 0
 
         def purchase_candidates(
-            self, request: SchedulerWorkerRequest
+            self, request: SchedulerWorkerRequest, *, cohort: Sequence[SchedulerWorkerRequest] = ()
         ) -> tuple[ComputeCapacityPurchase, ...]:
             self.purchases += 1
             if missing_pool:

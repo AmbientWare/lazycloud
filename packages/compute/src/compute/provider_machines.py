@@ -218,7 +218,7 @@ def provider_unit_request(
 def provider_unit_operational_capacity(pool: ComputeUnitRecord) -> tuple[int, int]:
     """Capacity sent to the provider, including an active replacement surge."""
 
-    surge = int(bool(pool.replacement_machine_id))
+    surge = int(bool(pool.replacement_machine_id)) + pool.maintenance_surge_machines
     desired = pool.desired_machines + surge
     return desired, max(pool.max_machines, desired, 1)
 

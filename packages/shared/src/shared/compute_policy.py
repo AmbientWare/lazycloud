@@ -163,8 +163,9 @@ class ComputeUnitRecord(CapacityOwnerIdentity):
     permission to shrink the pool.
     """
     replacement_template_version: str = Field(default="", max_length=160)
-    replacement_release_generation: int = Field(default=0, ge=0)
-    replacement_reason: str = Field(default="", max_length=512)
+    maintenance_surge_machines: int = Field(default=0, ge=0)
+    """Additional serving machines requested by unfinished maintenance operations."""
+    maintenance_active: bool = False
     generation: int = Field(default=1, ge=1)
     phase: ComputeUnitPhase = ComputeUnitPhase.Ready
     provider_state: ComputeUnitProviderState = Field(default_factory=ComputeUnitProviderState)

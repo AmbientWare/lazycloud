@@ -4,6 +4,7 @@ from uuid import uuid4
 
 import pytest
 from database.repositories.aws_connections import AwsAccountConnectionRepository
+from database.repositories.capacity_maintenance import CapacityMaintenanceRepository
 from database.repositories.capacity_recovery import CapacityRecoveryRepository
 from database.repositories.compute import (
     ComputeCapacityOperationRecord,
@@ -24,6 +25,7 @@ from shared.capacity import (
     CapacityOwnerKind,
     CapacityOwnerSource,
 )
+from shared.capacity_maintenance import CapacityMaintenanceKind, CapacityMaintenanceRecord
 from shared.compute_fleet import Machine
 from shared.compute_policy import (
     ComputeCapacityMode,
@@ -366,3 +368,57 @@ def test_fleet_capacity_lock_serializes_purchases_across_units(
         assert sorted(executor.map(purchase, units)) == [False, True]
     with database.session() as session:
         assert ComputeUnitRepository(session).platform_capacity_usage(gpu=False) == 1
+
+
+def test_reserve_refresh_reserves_running_cpu_once_before_and_after_provider_start(
+    database: DatabaseClient,
+) -> None:
+    workspace = PlatformNamespaceService(database).initialize()
+    now = utc_now()
+    with database.session() as session:
+        units = ComputeUnitRepository(session)
+        unit = units.upsert(
+            _platform_unit(workspace.id, "aws").model_copy(
+                update={
+                    "stopped_machines": 1,
+                    "worker_cpu_millicores": 8000,
+                }
+            )
+        )
+        source_id = str(uuid4())
+        MachineRepository(session).upsert(
+            Machine(id=source_id, provider="aws", capacity_owner_id=unit.id),
+            workspace_id=workspace.id,
+        )
+        instances = ComputeProviderInstanceRepository(session)
+        instance = instances.upsert(
+            ComputeProviderInstanceRecord(
+                id=str(uuid4()),
+                pool_id=unit.id,
+                provider="aws",
+                offer_id=unit.offer_id,
+                instance_id=str(uuid4()),
+                machine_id=source_id,
+                status="stopped",
+                source="pooled",
+            )
+        )
+        assert units.platform_running_cpu_millicores() == 0
+        CapacityMaintenanceRepository(session).start(
+            CapacityMaintenanceRecord(
+                id=str(uuid4()),
+                pool_id=unit.id,
+                source_machine_id=source_id,
+                release_generation=1,
+                kind=CapacityMaintenanceKind.ReserveRefresh,
+                running_cpu_millicores=8000,
+                hourly_cost_micros=100000,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        assert units.platform_running_cpu_millicores() == 8000
+        instances.upsert(instance.model_copy(update={"status": "preparing"}))
+        assert units.platform_running_cpu_millicores() == 8000
+        units.upsert(unit.model_copy(update={"stopped_machines": 2}))
+        assert units.platform_running_cpu_millicores() == 16000

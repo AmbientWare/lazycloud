@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-from compute.fleet_policy import ReserveMarket
+from compute.fleet_resources import ReserveMarket
 from compute.reserve_state import RedisFleetReserveState
 from database.context import ServiceContext
 from database.mappers.containers import write_scheduling_request

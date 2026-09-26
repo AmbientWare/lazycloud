@@ -81,6 +81,16 @@ class StubImageConfig(ContractModel):
     entrypoint: list[str] = Field(default_factory=list)
 
 
+def requested_cpu_millicores(cpu: CpuRequest | None, explicit: int = 0) -> int:
+    request, _ = request_and_limit(cpu)
+    return explicit or (int(float(request) * 1000) if request is not None else 0)
+
+
+def requested_memory_mib(memory: MemoryRequest | None, explicit: int = 0) -> int:
+    request, _ = request_and_limit(memory)
+    return explicit or parse_memory_mib(request) or 0
+
+
 class StubRuntimeConfig(ContractModel):
     region: ProductRegion | None = None
     availability_zone: AvailabilityZone = ""
@@ -352,4 +362,6 @@ __all__ = [
     "StubTaskPolicy",
     "StubVolumeConfig",
     "StubVolumeProviderConfig",
+    "requested_cpu_millicores",
+    "requested_memory_mib",
 ]

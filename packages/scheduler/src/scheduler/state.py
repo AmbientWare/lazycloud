@@ -425,40 +425,6 @@ redis.call("SET", KEYS[6], ARGV[2], "EX", ARGV[10])
 return requeued
 """
 
-CLAIM_WORKER_ROLLOUT_SLOT_SCRIPT = """
-local expired = redis.call("ZRANGEBYSCORE", KEYS[1], "-inf", ARGV[3])
-for _, worker_id in ipairs(expired) do
-    redis.call("ZREM", KEYS[1], worker_id)
-    redis.call("HDEL", KEYS[2], worker_id)
-end
-if redis.call("ZSCORE", KEYS[1], ARGV[1]) then
-    redis.call("ZADD", KEYS[1], ARGV[4], ARGV[1])
-    redis.call("HSET", KEYS[2], ARGV[1], ARGV[2])
-    redis.call("EXPIRE", KEYS[1], ARGV[6])
-    redis.call("EXPIRE", KEYS[2], ARGV[6])
-    return 1
-end
-if redis.call("ZCARD", KEYS[1]) >= tonumber(ARGV[5]) then
-    return 0
-end
-redis.call("ZADD", KEYS[1], ARGV[4], ARGV[1])
-redis.call("HSET", KEYS[2], ARGV[1], ARGV[2])
-redis.call("EXPIRE", KEYS[1], ARGV[6])
-redis.call("EXPIRE", KEYS[2], ARGV[6])
-return 1
-"""
-
-RELEASE_WORKER_ROLLOUT_SLOT_SCRIPT = """
-if redis.call("HGET", KEYS[2], ARGV[1]) ~= ARGV[2] then
-    return 0
-end
-redis.call("ZREM", KEYS[1], ARGV[1])
-redis.call("HDEL", KEYS[2], ARGV[1])
-if redis.call("ZCARD", KEYS[1]) == 0 then
-    redis.call("DEL", KEYS[1], KEYS[2])
-end
-return 1
-"""
 
 RESERVE_CONCURRENCY_SCRIPT = """
 if redis.call("EXISTS", KEYS[2]) == 1 then
@@ -823,22 +789,6 @@ class SchedulerStateKeys:
 
     def unit_replicas(self, capacity_owner_id: str) -> str:
         return self.redis.key(self.namespace, "units", capacity_owner_id, "replicas")
-
-    def worker_rollout_slots(self, capacity_owner_id: str) -> str:
-        return self.redis.key(
-            self.namespace,
-            "capacity-owners",
-            capacity_owner_key_segment(capacity_owner_id),
-            "worker-rollout-slots",
-        )
-
-    def worker_rollout_revisions(self, capacity_owner_id: str) -> str:
-        return self.redis.key(
-            self.namespace,
-            "capacity-owners",
-            capacity_owner_key_segment(capacity_owner_id),
-            "worker-rollout-revisions",
-        )
 
     def network_container_ip(self, network_prefix: str, container_id: str) -> str:
         return self.redis.key("worker-network", network_prefix, "containers", container_id, "ip")
@@ -1226,41 +1176,6 @@ class RedisSchedulerWorkerRepository:
             now=now,
         )
 
-    def has_worker_rollout_slot(self, capacity_owner_id: str, worker_id: str) -> bool:
-        members = self.redis.sorted_set_range_by_score(
-            self.keys.worker_rollout_slots(capacity_owner_id), utc_now().timestamp(), "+inf"
-        )
-        return worker_id in redis_serialization.redis_strings(members)
-
-    def claim_worker_rollout_slot(
-        self,
-        capacity_owner_id: str,
-        worker_id: str,
-        target_revision: str,
-        *,
-        max_unavailable: int,
-        now: datetime,
-        ttl_seconds: int = 300,
-    ) -> bool:
-        if max_unavailable <= 0:
-            return False
-        expires_at = now.timestamp() + max(ttl_seconds, 1)
-        key_ttl_seconds = max(ttl_seconds * 2, 2)
-        return bool(
-            self.redis.eval_scalar(
-                CLAIM_WORKER_ROLLOUT_SLOT_SCRIPT,
-                2,
-                self.keys.worker_rollout_slots(capacity_owner_id),
-                self.keys.worker_rollout_revisions(capacity_owner_id),
-                worker_id,
-                target_revision,
-                now.timestamp(),
-                expires_at,
-                max_unavailable,
-                key_ttl_seconds,
-            )
-        )
-
     def resume_worker_registration(self, worker: SchedulerWorkerRecord) -> SchedulerWorkerRecord:
         def write() -> SchedulerWorkerRecord:
             current = self.get_worker(worker.worker_id)
@@ -1334,23 +1249,6 @@ class RedisSchedulerWorkerRepository:
             return updated
 
         return self._with_worker_lock(worker.worker_id, write)
-
-    def release_worker_rollout_slot(
-        self,
-        capacity_owner_id: str,
-        worker_id: str,
-        target_revision: str,
-    ) -> bool:
-        return bool(
-            self.redis.eval_scalar(
-                RELEASE_WORKER_ROLLOUT_SLOT_SCRIPT,
-                2,
-                self.keys.worker_rollout_slots(capacity_owner_id),
-                self.keys.worker_rollout_revisions(capacity_owner_id),
-                worker_id,
-                target_revision,
-            )
-        )
 
     def _transition_worker_requests(
         self,

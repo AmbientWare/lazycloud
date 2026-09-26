@@ -2858,7 +2858,6 @@ def test_worker_update_fences_previous_runtime_after_activation_and_redis_loss(
         draining = service.workers.get_worker(slot.worker_id)
         assert draining is not None and draining.status is SchedulerWorkerStatus.Draining
         assert draining.request_poll_expires_at is None
-        superseded_generation = following.generation
         if supersede_release:
             following = select_worker_release("worker:latest")
         current_request = request.model_copy(
@@ -2919,11 +2918,6 @@ def test_worker_update_fences_previous_runtime_after_activation_and_redis_loss(
                 WorkerReleaseRepository(session).update_generation(slot.worker_id, machine_id)
                 == following.generation
             )
-        if supersede_release:
-            assert not service.workers.release_worker_rollout_slot(
-                slot.capacity_owner_id, slot.worker_id, str(superseded_generation)
-            )
-        assert service.workers.has_worker_rollout_slot(slot.capacity_owner_id, slot.worker_id)
         ready = client.post(
             "/worker-repository/add-worker",
             json=current_request.model_dump(mode="json"),
@@ -2960,7 +2954,6 @@ def test_worker_update_fences_previous_runtime_after_activation_and_redis_loss(
             assert (
                 WorkerReleaseRepository(session).update_generation(slot.worker_id, machine_id) == 0
             )
-        assert not service.workers.has_worker_rollout_slot(slot.capacity_owner_id, slot.worker_id)
         changed = request.model_copy(
             update={
                 "worker": request.worker.model_copy(update={"runtime_image": "worker:unverified"})

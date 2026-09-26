@@ -16,71 +16,13 @@ from datetime import datetime, timedelta
 from enum import StrEnum
 
 from pydantic import Field, model_validator
-from shared.container_requests import schedulable_capacity
 from shared.contracts import ContractModel
 from shared.gpu import GpuType, normalize_gpu_type
 
+from compute.fleet_resources import Capacity, ReserveMarket, ReserveOffer
 
-@dataclass(frozen=True, slots=True)
-class Capacity:
-    cpu_millicores: int = 0
-    memory_mib: int = 0
-    gpu_count: int = 0
-
-    def __add__(self, other: Capacity) -> Capacity:
-        return Capacity(
-            self.cpu_millicores + other.cpu_millicores,
-            self.memory_mib + other.memory_mib,
-            self.gpu_count + other.gpu_count,
-        )
-
-    def __sub__(self, other: Capacity) -> Capacity:
-        return Capacity(
-            self.cpu_millicores - other.cpu_millicores,
-            self.memory_mib - other.memory_mib,
-            self.gpu_count - other.gpu_count,
-        )
-
-    def __mul__(self, count: int) -> Capacity:
-        return Capacity(
-            self.cpu_millicores * count, self.memory_mib * count, self.gpu_count * count
-        )
-
-    def covers(self, other: Capacity) -> bool:
-        """Whether this is at least `other` in every dimension."""
-        return (
-            self.cpu_millicores >= other.cpu_millicores
-            and self.memory_mib >= other.memory_mib
-            and self.gpu_count >= other.gpu_count
-        )
-
-    def clamped(self) -> Capacity:
-        return self.upper(Capacity())
-
-    def upper(self, other: Capacity) -> Capacity:
-        return Capacity(
-            max(self.cpu_millicores, other.cpu_millicores),
-            max(self.memory_mib, other.memory_mib),
-            max(self.gpu_count, other.gpu_count),
-        )
-
-    def lower(self, other: Capacity) -> Capacity:
-        return Capacity(
-            min(self.cpu_millicores, other.cpu_millicores),
-            min(self.memory_mib, other.memory_mib),
-            min(self.gpu_count, other.gpu_count),
-        )
-
-    def percent(self, percent: int) -> Capacity:
-        return Capacity(
-            -(-self.cpu_millicores * percent // 100),
-            -(-self.memory_mib * percent // 100),
-            -(-self.gpu_count * percent // 100),
-        )
-
-    @property
-    def empty(self) -> bool:
-        return Capacity().covers(self)
+RESERVE_PLAN_INTERVAL_SECONDS = 60
+RESERVE_EARLY_PLAN_INTERVAL_SECONDS = 20
 
 
 def _total(items: Iterable[Capacity]) -> Capacity:
@@ -117,13 +59,11 @@ class MarketReserve(ContractModel):
 _GIB = 1024
 
 _SPOT_RESERVE = MarketReserve(
-    # Two small machines when quiet, so a start lands on a warm worker.
     warm=HeadroomTarget(
         floor=Capacity(12_000, 24 * _GIB),
         load_percent=25,
         maximum=Capacity(64_000, 256 * _GIB),
     ),
-    # One large machine, so an interrupted machine's work resumes onto a reserve.
     stopped=HeadroomTarget(
         floor=Capacity(28_000, 100 * _GIB),
         load_percent=50,
@@ -131,8 +71,11 @@ _SPOT_RESERVE = MarketReserve(
     ),
 )
 _ON_DEMAND_RESERVE = MarketReserve(
-    # One small and one large stopped machine: a small devbox and a large one
-    # each resume in seconds instead of waiting for a purchase.
+    warm=HeadroomTarget(
+        floor=Capacity(6_000, 12 * _GIB),
+        load_percent=25,
+        maximum=Capacity(64_000, 256 * _GIB),
+    ),
     stopped=HeadroomTarget(
         floor=Capacity(35_000, 112 * _GIB),
         load_percent=50,
@@ -140,39 +83,11 @@ _ON_DEMAND_RESERVE = MarketReserve(
     ),
 )
 _ONE_CARD_RESERVE = MarketReserve(
+    warm=HeadroomTarget(load_percent=25, maximum=Capacity(gpu_count=4)),
     stopped=HeadroomTarget(
         floor=Capacity(gpu_count=1), load_percent=50, maximum=Capacity(gpu_count=4)
-    )
+    ),
 )
-
-
-class MachineRole(StrEnum):
-    """What a reserve buys or prepares: a small machine, a large one, or a GPU host."""
-
-    Small = "small"
-    Large = "large"
-    Gpu = "gpu"
-
-
-@dataclass(frozen=True, slots=True, order=True)
-class ReserveMarket:
-    """A purchase market the fleet keeps headroom in.
-
-    GPU headroom is kept On-Demand. A stopped reserve costs only its disk in
-    either market, and an On-Demand one serves Spot-tolerant work as well.
-    """
-
-    preemptible: bool
-    gpu_type: str = ""
-
-    @property
-    def key(self) -> str:
-        return f"{'spot' if self.preemptible else 'on-demand'}:{self.gpu_type or 'cpu'}"
-
-    @classmethod
-    def parse(cls, key: str) -> ReserveMarket:
-        market, _, gpu = key.partition(":")
-        return cls(preemptible=market == "spot", gpu_type="" if gpu == "cpu" else gpu)
 
 
 class FleetCapacityPolicy(ContractModel):
@@ -182,12 +97,13 @@ class FleetCapacityPolicy(ContractModel):
     max_running_cpu_millicores: int = Field(default=512_000, ge=0)
     """Nominal vCPU the platform CPU fleet may run at once, stopped machines excluded."""
 
-    small_machine_cpu_millicores: int = Field(default=8_000, gt=0)
-    small_machine_memory_mib: int = Field(default=16 * _GIB, gt=0)
-    """Memory of the smallest small machine, which decides when a shortfall needs a large one."""
-
-    large_machine_cpu_millicores: int = Field(default=32_000, gt=0)
-    large_machine_memory_mib_per_cpu: int = Field(default=4 * _GIB, gt=0)
+    resume_seconds: int = Field(default=30, gt=0)
+    provision_seconds: int = Field(default=300, gt=0)
+    cost_horizon_seconds: int = Field(default=3600, gt=0)
+    max_growth_actions: int = Field(default=16, gt=0)
+    maintenance_fraction_percent: int = Field(default=20, ge=1, le=100)
+    """Upper bound on elective overlap; resource and cost admission may allow less."""
+    max_temporary_hourly_cost_micros: int = Field(default=5_000_000, ge=0)
     spot: MarketReserve = _SPOT_RESERVE
     on_demand: MarketReserve = _ON_DEMAND_RESERVE
     gpu: dict[str, MarketReserve] = Field(
@@ -199,13 +115,21 @@ class FleetCapacityPolicy(ContractModel):
     )
     """On-Demand reserves per card. A card left out keeps no GPU headroom."""
 
-    pressure_seconds: int = Field(default=60, ge=1)
+    pressure_seconds: int = Field(default=5, ge=1)
     """How long running headroom stays short before the planner runs early."""
 
     consolidation_percent: int = Field(default=30, ge=0, le=100)
     consolidation_seconds: int = Field(default=600, ge=0)
     consolidation_cooldown_seconds: int = Field(default=900, ge=0)
     consolidation_deadline_seconds: int = Field(default=3600, gt=0)
+
+    @property
+    def warm_forecast_seconds(self) -> int:
+        return self.resume_seconds + RESERVE_PLAN_INTERVAL_SECONDS
+
+    @property
+    def total_forecast_seconds(self) -> int:
+        return self.provision_seconds + RESERVE_PLAN_INTERVAL_SECONDS
 
     def machine_limit(self, *, gpu: bool) -> int:
         return self.max_gpu_instances if gpu else self.max_cpu_instances
@@ -224,19 +148,6 @@ class FleetCapacityPolicy(ContractModel):
             *(ReserveMarket(preemptible=False, gpu_type=card) for card in sorted(self.gpu)),
         )
 
-    def role(self, *, cpu_millicores: int, memory_mib: int, gpu_count: int) -> MachineRole | None:
-        """The role of a machine by its nominal size, or None when it plays none."""
-        if gpu_count:
-            return MachineRole.Gpu
-        if cpu_millicores == self.small_machine_cpu_millicores:
-            return MachineRole.Small
-        if (
-            cpu_millicores == self.large_machine_cpu_millicores
-            and memory_mib * 1000 >= cpu_millicores * self.large_machine_memory_mib_per_cpu
-        ):
-            return MachineRole.Large
-        return None
-
 
 class ReserveMachineState(StrEnum):
     Serving = "serving"
@@ -254,7 +165,6 @@ class ReserveMachineState(StrEnum):
 class ReserveUnit:
     unit_id: str
     market: ReserveMarket
-    role: MachineRole | None
     machine: Capacity
     """Schedulable capacity of one of this unit's machines."""
 
@@ -267,6 +177,8 @@ class ReserveUnit:
     enabled: bool = True
     """Whether its provider may purchase at all. A disabled unit holds no reserves
     and its idle machines drain; its capacity does not count as headroom."""
+    hourly_cost_micros: int | None = None
+    stopped_hourly_cost_micros: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -276,7 +188,7 @@ class ReserveMachine:
 
     unit_id: str
     state: ReserveMachineState
-    load: Capacity = Capacity()
+    load: Capacity = field(default_factory=Capacity)
     containers: int = 0
     pinned: int = 0
     """Live containers that did not accept interruption, so they cannot be moved."""
@@ -287,6 +199,8 @@ class ReserveMachine:
     billing_settled: bool = True
     stopped_resumable: bool = False
     """A stopped reserve a resume would start, rather than one still preparing."""
+    ready: bool = True
+    """Fresh compatible intake, or verified compatible preparation for a stopped host."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -297,6 +211,7 @@ class FleetReserveSnapshot:
     committed_gpu_machines: int
     running_cpu_millicores: int
     """Nominal CPU of the running CPU fleet, the figure the vCPU cap limits."""
+    offers: tuple[ReserveOffer, ...] = ()
 
 
 class GrowthKind(StrEnum):
@@ -308,9 +223,9 @@ class GrowthKind(StrEnum):
 @dataclass(frozen=True, slots=True)
 class ReserveGrowth:
     kind: GrowthKind
-    role: MachineRole
     unit_id: str = ""
-    """The unit to resume a reserve in; a purchase or preparation picks its offer."""
+    offer_key: str = ""
+    count: int = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -322,7 +237,13 @@ class MarketReservePlan:
     warm_free: Capacity
     stopped_target: Capacity
     stopped_capacity: Capacity
-    growth: ReserveGrowth | None = None
+    growth: tuple[ReserveGrowth, ...] = ()
+    warm_pending: Capacity = field(default_factory=Capacity)
+    shortfall: Capacity = field(default_factory=Capacity)
+    stopped_shortfall: Capacity = field(default_factory=Capacity)
+    unmet_shapes: tuple[Capacity, ...] = ()
+    unmet_stopped_shapes: tuple[Capacity, ...] = ()
+    reason: str = ""
     retained: Mapping[str, int] = field(default_factory=dict[str, int])
     """Serving machines each unit keeps from the idle drain."""
 
@@ -357,6 +278,15 @@ class ReserveConditions:
     recovering: frozenset[ReserveMarket] = frozenset()
     consolidating: frozenset[ReserveMarket] = frozenset()
     """Markets consolidating a machine now or cooling down after one."""
+    forecast_warm: Mapping[ReserveMarket, Capacity] = field(
+        default_factory=dict[ReserveMarket, Capacity]
+    )
+    forecast_total: Mapping[ReserveMarket, Capacity] = field(
+        default_factory=dict[ReserveMarket, Capacity]
+    )
+    request_shapes: Mapping[ReserveMarket, tuple[Capacity, ...]] = field(
+        default_factory=dict[ReserveMarket, tuple[Capacity, ...]]
+    )
 
 
 def plan_market_reserve(
@@ -366,9 +296,8 @@ def plan_market_reserve(
 ) -> FleetReservePlan:
     """Decide growth, retention, stopped reserves and consolidation for every market.
 
-    Pure: the same fleet, policy and conditions give the same plan. Each market
-    gets at most one growth action a pass, and a market with waiting work gets
-    none, so a request's own purchase is never behind a reserve's.
+    Ready resources and committed resources are distinct. Pending launches prevent
+    duplicate purchases but cannot justify retiring a serving machine.
     """
     units = {unit.unit_id: unit for unit in snapshot.units}
     markets = sorted(set(policy.markets()) | {unit.market for unit in snapshot.units})
@@ -392,6 +321,7 @@ def plan_market_reserve(
             conditions=conditions,
             budget=budget,
             lightly_used=lightly_used,
+            offers=[offer for offer in snapshot.offers if offer.market == market],
         )
         plans.append(plan)
     return FleetReservePlan(markets=tuple(plans), lightly_used_since=lightly_used)
@@ -428,12 +358,14 @@ def _plan_market(
     conditions: ReserveConditions,
     budget: _GrowthBudget,
     lightly_used: dict[str, datetime],
+    offers: list[ReserveOffer],
 ) -> MarketReservePlan:
     reserve = policy.reserve(market)
     warm = [
         machine
         for machine in machines
-        if machine.state in {ReserveMachineState.Serving, ReserveMachineState.Starting}
+        if machine.state is ReserveMachineState.Serving
+        and machine.ready
         and units[machine.unit_id].enabled
     ]
     working = [machine for machine in machines if machine.state is not ReserveMachineState.Reserve]
@@ -451,12 +383,21 @@ def _plan_market(
         for unit in market_units
         if unit.enabled
     )
-    warm_free = (
-        _total((units[machine.unit_id].machine - machine.load).clamped() for machine in warm)
-        + launching
+    warm_free = _total(
+        (units[machine.unit_id].machine - machine.load).clamped() for machine in warm
     )
-    warm_target = reserve.warm.target(load)
-    stopped_target = reserve.stopped.target(load)
+    warm_pending = launching + _total(
+        units[machine.unit_id].machine
+        for machine in machines
+        if machine.state is ReserveMachineState.Starting and units[machine.unit_id].enabled
+    )
+    warm_target = reserve.warm.target(load).upper(
+        conditions.forecast_warm.get(market, Capacity()).lower(reserve.warm.maximum)
+    )
+    total_target = (reserve.stopped.target(load) + warm_target).upper(
+        conditions.forecast_total.get(market, Capacity())
+    )
+    stopped_target = (total_target - warm_target).clamped().lower(reserve.stopped.maximum)
     if market.preemptible and not market.gpu_type:
         # An interrupted Spot machine's work must fit the reserves that replace it.
         for machine in working:
@@ -465,9 +406,20 @@ def _plan_market(
     deficit = (warm_target - warm_free).clamped()
     may_grow = market not in conditions.demand and market not in conditions.recovering
 
-    growth: ReserveGrowth | None = None
-    if not deficit.empty and may_grow:
-        growth = _warm_growth(policy, market, market_units, machines, quiet=quiet, budget=budget)
+    growth: list[ReserveGrowth] = []
+    pending_deficit = (deficit - warm_pending).clamped()
+    shapes = tuple(
+        shape
+        for shape in conditions.request_shapes.get(market, ())
+        if not any(
+            (units[machine.unit_id].machine - machine.load).covers(shape) for machine in warm
+        )
+        and not any(
+            units[machine.unit_id].machine.covers(shape)
+            for machine in machines
+            if machine.state is ReserveMachineState.Starting
+        )
+    )
 
     retained = _retention(
         market_units,
@@ -476,6 +428,7 @@ def _plan_market(
         surplus=warm_free - warm_target,
         release_largest_first=quiet,
         hold_all=not deficit.empty,
+        shapes=conditions.request_shapes.get(market, ()),
     )
 
     # A unit that cannot grow keeps the reserves it holds and gives up any it
@@ -495,13 +448,83 @@ def _plan_market(
         for unit in market_units
     }
     stopped_capacity = _total(unit.machine * stopped[unit.unit_id] for unit in market_units)
+    if may_grow:
+        for unit in sorted(
+            market_units,
+            key=lambda item: (
+                item.hourly_cost_micros is None,
+                item.hourly_cost_micros or 0,
+                item.unit_id,
+            ),
+        ):
+            available = sum(
+                machine.unit_id == unit.unit_id and machine.stopped_resumable and machine.ready
+                for machine in machines
+            )
+            while (
+                available
+                and unit.growable
+                and (not pending_deficit.empty or shapes)
+                and budget.allows(
+                    unit.nominal_cpu_millicores,
+                    gpu=bool(market.gpu_type),
+                    new_machine=False,
+                    running=True,
+                )
+                and sum(action.count for action in growth) < policy.max_growth_actions
+            ):
+                if pending_deficit.empty and not any(
+                    unit.machine.covers(shape) for shape in shapes
+                ):
+                    break
+                growth.append(ReserveGrowth(GrowthKind.Resume, unit_id=unit.unit_id))
+                budget.spend(
+                    unit.nominal_cpu_millicores,
+                    gpu=bool(market.gpu_type),
+                    new_machine=False,
+                    running=True,
+                )
+                pending_deficit = (pending_deficit - unit.machine).clamped()
+                shapes = tuple(shape for shape in shapes if not unit.machine.covers(shape))
+                available -= 1
+                stopped[unit.unit_id] -= 1
+                stopped_capacity = (stopped_capacity - unit.machine).clamped()
+        purchases, pending_deficit, shapes = _purchase_growth(
+            policy,
+            offers,
+            pending_deficit,
+            shapes,
+            budget=budget,
+            reserve=False,
+            action_limit=policy.max_growth_actions - sum(action.count for action in growth),
+        )
+        growth.extend(purchases)
     stopped_deficit = (stopped_target - stopped_capacity).clamped()
-    if not stopped_deficit.empty:
-        if growth is None and may_grow:
-            growth = _reserve_growth(policy, market, stopped_deficit, budget=budget)
+    stopped_shapes = tuple(
+        shape
+        for shape in conditions.request_shapes.get(market, ())
+        if not stopped_target.empty
+        and not any(stopped[unit.unit_id] and unit.machine.covers(shape) for unit in market_units)
+    )
+    if not stopped_deficit.empty or stopped_shapes:
+        if may_grow:
+            purchases, stopped_deficit, stopped_shapes = _purchase_growth(
+                policy,
+                offers,
+                stopped_deficit,
+                stopped_shapes,
+                budget=budget,
+                reserve=True,
+                action_limit=policy.max_growth_actions - sum(action.count for action in growth),
+            )
+            growth.extend(purchases)
     else:
         stopped = _retire_reserves(
-            market_units, stopped, stopped_capacity=stopped_capacity, target=stopped_target
+            market_units,
+            stopped,
+            stopped_capacity=stopped_capacity,
+            target=stopped_target,
+            shapes=conditions.request_shapes.get(market, ()) if not stopped_target.empty else (),
         )
 
     candidate, consolidate = _consolidation(
@@ -523,7 +546,17 @@ def _plan_market(
         warm_free=warm_free,
         stopped_target=stopped_target,
         stopped_capacity=stopped_capacity,
-        growth=growth,
+        growth=tuple(growth),
+        warm_pending=warm_pending,
+        shortfall=pending_deficit,
+        stopped_shortfall=stopped_deficit,
+        unmet_shapes=shapes,
+        unmet_stopped_shapes=stopped_shapes,
+        reason="waiting for demand acquisition or recovery"
+        if not may_grow
+        else "capacity limit or no approved offer"
+        if not pending_deficit.empty or not stopped_deficit.empty or shapes or stopped_shapes
+        else "",
         retained=retained,
         stopped=stopped,
         consolidation_candidate=candidate,
@@ -531,74 +564,117 @@ def _plan_market(
     )
 
 
-def _warm_growth(
+def _purchase_growth(
     policy: FleetCapacityPolicy,
-    market: ReserveMarket,
-    market_units: list[ReserveUnit],
-    machines: list[ReserveMachine],
+    offers: list[ReserveOffer],
+    deficit: Capacity,
+    shapes: tuple[Capacity, ...],
     *,
-    quiet: bool,
     budget: _GrowthBudget,
-) -> ReserveGrowth | None:
-    gpu = bool(market.gpu_type)
-    resumable = [
-        unit
-        for unit in market_units
-        if unit.growable
-        and unit.stopped
-        and any(
-            machine.unit_id == unit.unit_id and machine.stopped_resumable for machine in machines
-        )
-        and budget.allows(unit.nominal_cpu_millicores, gpu=gpu, new_machine=False, running=True)
+    reserve: bool,
+    action_limit: int,
+) -> tuple[list[ReserveGrowth], Capacity, tuple[Capacity, ...]]:
+    """Compare bounded node combinations by their cost over the holding horizon.
+
+    Coverage is capped at the target before states are deduplicated. Individual
+    request shapes also have to fit one host; aggregate capacity cannot prove it.
+    """
+    if (deficit.empty and not shapes) or action_limit <= 0:
+        return [], deficit, shapes
+    candidates = sorted(
+        (offer for offer in offers if not reserve or offer.supports_reserve),
+        key=lambda offer: (offer.preference_rank, offer.key),
+    )
+    if not candidates:
+        return [], deficit, shapes
+    gpu = bool(candidates[0].market.gpu_type)
+    count_limit = min(action_limit, budget.gpu_machines if gpu else budget.cpu_machines)
+    # cost, supplied, uncovered shapes, nominal running CPU, selected offers
+    states: list[tuple[int, Capacity, tuple[Capacity, ...], int, tuple[int, ...]]] = [
+        (0, Capacity(), shapes, 0, ())
     ]
-    if resumable:
-        # Resuming the smallest reserve keeps a quiet market's warm machines small;
-        # under load the largest adds the most headroom for the same start.
-        unit = min(
-            resumable,
+    best: tuple[int, Capacity, tuple[Capacity, ...], int, tuple[int, ...]] | None = None
+    partial = states[0]
+    for _ in range(max(0, count_limit)):
+        expanded: dict[
+            tuple[Capacity, tuple[Capacity, ...], int],
+            tuple[int, Capacity, tuple[Capacity, ...], int, tuple[int, ...]],
+        ] = {}
+        for cost, supplied, unmet, cpu, selected in states:
+            for index, offer in enumerate(candidates):
+                next_cpu = cpu + (0 if gpu else offer.nominal_cpu_millicores)
+                if next_cpu > budget.running_cpu_millicores and not gpu:
+                    continue
+                covered = (supplied + offer.machine).lower(deficit)
+                remaining = tuple(shape for shape in unmet if not offer.machine.covers(shape))
+                if covered == supplied and remaining == unmet:
+                    continue
+                holding_cost = (
+                    offer.stopped_hourly_cost_micros * policy.cost_horizon_seconds
+                    + offer.hourly_cost_micros * policy.provision_seconds
+                    if reserve
+                    else offer.hourly_cost_micros * policy.cost_horizon_seconds
+                )
+                next_cost = cost + holding_cost
+                if best is not None and next_cost >= best[0]:
+                    continue
+                state = (next_cost, covered, remaining, next_cpu, (*selected, index))
+                if covered.covers(deficit) and not remaining:
+                    best = state
+                    continue
+                key = (covered, remaining, next_cpu)
+                if key not in expanded or next_cost < expanded[key][0]:
+                    expanded[key] = state
+
+        def order(
+            state: tuple[int, Capacity, tuple[Capacity, ...], int, tuple[int, ...]],
+        ) -> tuple[float, int, tuple[int, ...]]:
+            cost, supplied, unmet, _, selected = state
+            coverage = (
+                sum(
+                    have / need
+                    for have, need in (
+                        (supplied.cpu_millicores, deficit.cpu_millicores),
+                        (supplied.memory_mib, deficit.memory_mib),
+                        (supplied.gpu_count, deficit.gpu_count),
+                    )
+                    if need > 0
+                )
+                + len(shapes)
+                - len(unmet)
+            )
+            return cost / max(coverage, 0.001), cost, selected
+
+        states = sorted(expanded.values(), key=order)[:128]
+        if not states:
+            break
+        partial = max(
+            [partial, *states],
             key=lambda item: (
-                (item.machine.cpu_millicores, item.machine.memory_mib)
-                if quiet
-                else (-item.machine.cpu_millicores, -item.machine.memory_mib),
-                item.unit_id,
+                -len(item[2]),
+                item[1].cpu_millicores,
+                item[1].memory_mib,
+                item[1].gpu_count,
+                -item[0],
             ),
         )
-        budget.spend(unit.nominal_cpu_millicores, gpu=gpu, new_machine=False, running=True)
-        return ReserveGrowth(
-            GrowthKind.Resume,
-            unit.role or (MachineRole.Gpu if gpu else MachineRole.Small),
-            unit.unit_id,
+    chosen = best or partial
+    counts: dict[int, int] = {}
+    for index in chosen[4]:
+        counts[index] = counts.get(index, 0) + 1
+    actions: list[ReserveGrowth] = []
+    for index, count in counts.items():
+        offer = candidates[index]
+        for _ in range(count):
+            budget.spend(offer.nominal_cpu_millicores, gpu=gpu, new_machine=True, running=True)
+        actions.append(
+            ReserveGrowth(
+                GrowthKind.Prepare if reserve else GrowthKind.Buy,
+                offer_key=offer.key,
+                count=count,
+            )
         )
-    role = MachineRole.Gpu if gpu else MachineRole.Small if quiet else MachineRole.Large
-    cpu = _role_cpu(policy, role)
-    if not budget.allows(cpu, gpu=gpu, new_machine=True, running=True):
-        return None
-    budget.spend(cpu, gpu=gpu, new_machine=True, running=True)
-    return ReserveGrowth(GrowthKind.Buy, role)
-
-
-def _reserve_growth(
-    policy: FleetCapacityPolicy,
-    market: ReserveMarket,
-    deficit: Capacity,
-    *,
-    budget: _GrowthBudget,
-) -> ReserveGrowth | None:
-    gpu = bool(market.gpu_type)
-    if gpu:
-        role = MachineRole.Gpu
-    else:
-        # A shortfall one small machine closes gets a small one; anything more a
-        # large one, so one preparation covers what several small ones would.
-        small = Capacity(
-            schedulable_capacity(policy.small_machine_cpu_millicores),
-            schedulable_capacity(policy.small_machine_memory_mib),
-        )
-        role = MachineRole.Small if small.covers(deficit) else MachineRole.Large
-    if not budget.allows(0, gpu=gpu, new_machine=True, running=False):
-        return None
-    budget.spend(0, gpu=gpu, new_machine=True, running=False)
-    return ReserveGrowth(GrowthKind.Prepare, role)
+    return actions, (deficit - chosen[1]).clamped(), chosen[2]
 
 
 def _retention(
@@ -609,6 +685,7 @@ def _retention(
     surplus: Capacity,
     release_largest_first: bool,
     hold_all: bool,
+    shapes: tuple[Capacity, ...],
 ) -> dict[str, int]:
     serving = [machine for machine in warm if machine.state is ReserveMachineState.Serving]
     retained = {unit.unit_id: 0 for unit in market_units}
@@ -620,6 +697,7 @@ def _retention(
             idle.append(machine)
     idle.sort(
         key=lambda machine: (
+            -(units[machine.unit_id].hourly_cost_micros or 0),
             -units[machine.unit_id].machine.cpu_millicores
             if release_largest_first
             else units[machine.unit_id].machine.cpu_millicores,
@@ -629,10 +707,24 @@ def _retention(
             machine.key,
         )
     )
+    remaining = {machine.key: machine for machine in serving}
+    feasible_shapes = tuple(
+        shape
+        for shape in shapes
+        if any((units[machine.unit_id].machine - machine.load).covers(shape) for machine in serving)
+    )
     for machine in idle:
         capacity = units[machine.unit_id].machine
-        if (surplus - capacity).covers(Capacity()):
+        if (surplus - capacity).covers(Capacity()) and all(
+            any(
+                other.key != machine.key
+                and (units[other.unit_id].machine - other.load).covers(shape)
+                for other in remaining.values()
+            )
+            for shape in feasible_shapes
+        ):
             surplus = surplus - capacity
+            del remaining[machine.key]
         else:
             retained[machine.unit_id] += 1
     return retained
@@ -644,17 +736,29 @@ def _retire_reserves(
     *,
     stopped_capacity: Capacity,
     target: Capacity,
+    shapes: tuple[Capacity, ...],
 ) -> dict[str, int]:
     for unit in sorted(
         market_units,
         key=lambda item: (
             item.growable,
+            -(item.stopped_hourly_cost_micros or 0),
             -item.machine.cpu_millicores,
             -item.machine.memory_mib,
             item.unit_id,
         ),
     ):
         while stopped[unit.unit_id] and (stopped_capacity - unit.machine).covers(target):
+            if any(
+                unit.machine.covers(shape)
+                and not any(
+                    stopped[other.unit_id] > int(other.unit_id == unit.unit_id)
+                    and other.machine.covers(shape)
+                    for other in market_units
+                )
+                for shape in shapes
+            ):
+                break
             stopped[unit.unit_id] -= 1
             stopped_capacity = stopped_capacity - unit.machine
     return stopped
@@ -695,12 +799,21 @@ def _consolidation(
         if not machine.protected
         and machine.billing_settled
         and (warm_free - units[machine.unit_id].machine).covers(warm_target)
+        and all(
+            any(
+                other.key != machine.key
+                and (units[other.unit_id].machine - other.load - machine.load).covers(shape)
+                for other in serving
+            )
+            for shape in conditions.request_shapes.get(market, ())
+        )
     ]
     if not candidates:
         return "", ""
     candidate = min(
         candidates,
         key=lambda machine: (
+            -(units[machine.unit_id].hourly_cost_micros or 0),
             machine.load.cpu_millicores,
             machine.load.memory_mib,
             machine.key,
@@ -719,29 +832,18 @@ def _lightly_used(load: Capacity, capacity: Capacity, percent: int) -> bool:
     )
 
 
-def _role_cpu(policy: FleetCapacityPolicy, role: MachineRole) -> int:
-    if role is MachineRole.Large:
-        return policy.large_machine_cpu_millicores
-    if role is MachineRole.Small:
-        return policy.small_machine_cpu_millicores
-    return 0
-
-
 __all__ = [
-    "Capacity",
     "FleetCapacityPolicy",
     "FleetReservePlan",
     "FleetReserveSnapshot",
     "GrowthKind",
     "HeadroomTarget",
-    "MachineRole",
     "MarketReserve",
     "MarketReservePlan",
     "ReserveConditions",
     "ReserveGrowth",
     "ReserveMachine",
     "ReserveMachineState",
-    "ReserveMarket",
     "ReserveUnit",
     "plan_market_reserve",
 ]

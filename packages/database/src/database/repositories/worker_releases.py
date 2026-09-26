@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from database.tables.capacity_maintenance import CapacityMaintenanceTable
 from database.tables.compute import (
     ComputeMachineEnrollmentTable,
     ComputeProviderInstanceTable,
@@ -15,7 +16,7 @@ from shared.errors import ConflictError
 from shared.releases import ActiveRelease
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 from shared.timestamps import utc_now
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.orm import Session
 
 
@@ -53,7 +54,10 @@ class WorkerReleaseRepository:
                     ComputeUnitTable.capacity_mode == ComputeCapacityMode.Pooled.value,
                     ComputeUnitTable.phase != "deleted",
                     or_(
-                        ComputeUnitTable.replacement_release_generation > 0,
+                        exists().where(
+                            CapacityMaintenanceTable.pool_id == ComputeUnitTable.id,
+                            CapacityMaintenanceTable.completed_at.is_(None),
+                        ),
                         ComputeUnitTable.observed_machines != ComputeUnitTable.desired_machines,
                         stopped != ComputeUnitTable.stopped_machines,
                         ComputeUnitTable.retiring_stopped_machines > 0,
@@ -80,7 +84,12 @@ class WorkerReleaseRepository:
                 worker.admitted_runtime_image,
                 worker.admitted_agent_sha256,
                 worker.update_generation,
-                unit.replacement_reason,
+                select(CapacityMaintenanceTable.reason)
+                .where(
+                    CapacityMaintenanceTable.source_machine_id == machine.id,
+                    CapacityMaintenanceTable.completed_at.is_(None),
+                )
+                .scalar_subquery(),
                 worker.update_error,
             )
             .select_from(machine)
@@ -122,7 +131,7 @@ class WorkerReleaseRepository:
                 if provider_status == "stopped"
                 else agent or "",
                 update_generation=update_generation or 0,
-                replacement_reason=reason,
+                replacement_reason=reason or "",
                 update_error=error or "",
             )
             for (

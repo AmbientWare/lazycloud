@@ -215,7 +215,7 @@ class SchedulerContainerWorkerRepository(Protocol):
 
 class SchedulerContainerPlacement(Protocol):
     def purchase_candidates(
-        self, request: SchedulerWorkerRequest
+        self, request: SchedulerWorkerRequest, *, cohort: Sequence[SchedulerWorkerRequest] = ()
     ) -> tuple[ComputeCapacityPurchase, ...]: ...
 
 
@@ -951,17 +951,15 @@ class SchedulerContainerRequestService:
         current_time = now or utc_now()
         acquired = 0
         contended: list[str] = []
-        candidate_ids = (
-            list(container_ids)
+        batch = (
+            []
             if container_ids is not None
-            else [
-                candidate.container_id
-                for candidate in self.assignments.capacity_requests_due(
-                    now=current_time, limit=limit
-                )
-            ]
+            else self.assignments.capacity_requests_due(now=current_time, limit=limit)
         )
+        cohort = {candidate.container_id: candidate for candidate in batch}
+        candidate_ids = list(container_ids) if container_ids is not None else list(cohort)
         for container_id in candidate_ids:
+            cohort.pop(container_id, None)
             request: SchedulerWorkerRequest | None = None
             try:
                 with capacity.mutation_lock(f"demand:{container_id}"):
@@ -969,7 +967,9 @@ class SchedulerContainerRequestService:
                     if request is None:
                         continue
                     began = monotonic()
-                    result = self._acquire_capacity_request(request, current_time)
+                    result = self._acquire_capacity_request(
+                        request, current_time, cohort=tuple(cohort.values())
+                    )
                     if result.status is not CapacityAcquisitionStatus.ExistingPending:
                         LOGGER.info(
                             "capacity for container %s: %s in %.3fs, %.3fs after its request%s",
@@ -1023,14 +1023,18 @@ class SchedulerContainerRequestService:
         return CapacityAcquisitionSweep(acquired=acquired, contended=tuple(contended))
 
     def _acquire_capacity_request(
-        self, request: SchedulerWorkerRequest, current_time: datetime
+        self,
+        request: SchedulerWorkerRequest,
+        current_time: datetime,
+        *,
+        cohort: Sequence[SchedulerWorkerRequest] = (),
     ) -> CapacityAcquisitionResult:
         if self.capacity_reservations is None:
             raise RuntimeError("scheduler capacity reservation service was not injected")
         try:
             result = self.capacity_reservations.acquire(
                 request,
-                purchases=partial(self.placement.purchase_candidates, request),
+                purchases=partial(self.placement.purchase_candidates, request, cohort=cohort),
                 now=current_time,
             )
         except NotFoundError:

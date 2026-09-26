@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -496,6 +497,7 @@ class Scheduler:
     last_managed_compute_reconcile_at: datetime | None = field(default=None, init=False)
     last_release_reconcile_at: datetime | None = field(default=None, init=False)
     last_release_generation: int = field(default=0, init=False)
+    last_release_worker_fingerprint: str = field(default="", init=False)
     worker_pool_drain_interval_seconds: float = 30.0
     last_worker_pool_drain_at: datetime | None = field(default=None, init=False)
     custom_domain_reconcile_interval_seconds: float = 60.0
@@ -1690,14 +1692,19 @@ class Scheduler:
             early = compute.observe_reserve_pressure(
                 reserve_free_capacity(workers, now=current_time), now=current_time
             )
-            plan = compute.reconcile_platform_reserves(now=current_time, early=early)
+            plan = compute.reconcile_platform_reserves(
+                now=current_time,
+                early=early,
+                workers=workers,
+                release=DeploymentReleaseService().active(),
+            )
             if self.capacity.consolidation is not None:
                 self.capacity.consolidation.reconcile(plan, now=current_time)
         except Exception:
             LOGGER.exception("platform reserve planning failed")
 
     def _best_effort_reconcile_release(self, *, now: datetime | None) -> None:
-        """Coordinate running updates and reserve refresh once per fleet interval."""
+        """Reconcile on worker state changes and the periodic recovery sweep."""
         if self.services is None:
             return
         try:
@@ -1710,6 +1717,30 @@ class Scheduler:
         if release is None or not controlled:
             return
         current_time = now or utc_now()
+        if self.workloads.containers is None:
+            LOGGER.error("release reconciliation requires worker inventory")
+            return
+        try:
+            workers = self.workloads.containers.workers.list_workers()
+        except Exception:
+            LOGGER.exception("reading release worker inventory failed")
+            return
+        fingerprint = hashlib.sha256(
+            repr(
+                sorted(
+                    (
+                        worker.worker_id,
+                        worker.runtime_image,
+                        worker.agent_binary_sha256,
+                        worker.status.value,
+                        worker.request_intake_status(at=current_time).value,
+                    )
+                    for worker in workers
+                )
+            ).encode()
+        ).hexdigest()
+        changed = fingerprint != self.last_release_worker_fingerprint
+        self.last_release_worker_fingerprint = fingerprint
         activated = (
             self.last_release_generation != 0 and release.generation != self.last_release_generation
         )
@@ -1719,7 +1750,7 @@ class Scheduler:
             or (current_time - self.last_release_reconcile_at).total_seconds()
             >= self.managed_compute_reconcile_interval_seconds
         )
-        if not activated and not due:
+        if not activated and not due and not changed:
             return
         if activated:
             LOGGER.info("release generation %d is active; reconciling runtimes", release.generation)
@@ -1730,19 +1761,23 @@ class Scheduler:
                 raise RuntimeError("release reconciliation requires shared coordination")
             if not try_acquire_token_lock(
                 redis,
-                redis.key("scheduler", "leases", "release-reconciliation", str(release.generation)),
+                redis.key(
+                    "scheduler",
+                    "leases",
+                    "release-reconciliation",
+                    str(release.generation),
+                    fingerprint if changed else "periodic",
+                ),
                 uuid4().hex,
                 ttl_seconds=max(int(self.managed_compute_reconcile_interval_seconds), 1),
             ):
                 return
-            if self.workloads.containers is None:
-                raise RuntimeError("release reconciliation requires worker inventory")
             ComputeReleaseRolloutService(self.runtime_services.compute).reconcile(
                 release,
-                self.workloads.containers.workers.list_workers(),
+                workers,
                 now=current_time,
             )
-            self.runtime_services.compute.refresh_stale_reserve(release.target, now=current_time)
+            self.runtime_services.compute.refresh_stale_reserves(release, now=current_time)
         except Exception:
             LOGGER.exception("scheduler release reconciliation failed")
 

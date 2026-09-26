@@ -39,48 +39,55 @@ replace failed machines autonomously, so observed physical counts may briefly
 exceed the platform's admitted commitments. Customer-owned capacity stays outside
 these totals and serializes changes through its capacity workspace.
 
-Runtime releases reuse the unit's durable replacement pair, identified by the
-release generation instead of a host template. Compute provisions one temporary
-machine when a pooled worker lacks current replacement capacity. Admission requires
-a fresh worker in the same pool with room for the source's allocations. Running
-work drains under its existing preemption policy. An attached machine updates in
-place because its pinned workloads cannot move to another host.
+Runtime releases and reserve refresh use durable `capacity_maintenance` operations.
+Each source and replacement belongs to at most one active operation. Admission
+reserves the source's allocations, temporary machines, running CPU and quoted cost
+under the fleet transaction lock. Failed operations retain their commitments
+until cleanup is observed. Host-template replacement keeps its separate provider
+pair because it replaces the host itself. Attached machines update in place.
 
-The pair protects temporary capacity from consolidation until the source reports
-the target artifacts, fresh request intake, and no unfinished update. Normal idle
-retirement then removes the excess. Release status remains incomplete while that
-capacity awaits retirement. A shared scheduler interval claim bounds rollout and
-stopped-reserve reads across replicas; interruption recovery takes precedence.
+The maintenance planner admits concurrent operations within the fleet's spare
+resources, ready headroom and temporary spending cap. Replacements must accept
+requests on the target release and satisfy the source's placement, runtime,
+storage and allocation constraints. Admission rechecks under the dispatch lease.
+Running work drains under its existing preemption policy. A release remains
+incomplete until its temporary capacity retires. A fleet-wide scheduler claim
+bounds recurring rollout reads across replicas; interruption recovery takes
+precedence.
 
-Platform reserves are headroom, not machine counts. A market is the purchase
-market work accepted, Spot or On-Demand, and for GPUs the card. Each keeps running
-headroom and stopped headroom in CPU, memory and cards: a floor, a share of the
-market's reserved load, and a ceiling. The Spot stopped target also covers the
-busiest Spot machine's load, so an interruption resumes onto reserves. Defaults:
-Spot keeps 12 vCPU and 24 GiB running (two small machines) and 28 vCPU and
-100 GiB stopped (one large); On-Demand keeps nothing running and one small and one
-large stopped; T4, A10G and L4 keep one stopped On-Demand card, larger cards none.
-Headroom is measured in schedulable capacity, what a node gives containers. A
-node's memory is the least its shape's enrolled machines reported, kept once per
-nominal CPU, memory and card count in `compute_node_shapes`, and the offer's
-nominal size until one enrolls.
+Platform reserves are schedulable headroom in CPU, memory and GPU cards for each
+purchase market. Warm nodes serve requests. Compatible stopped or hibernated
+nodes replenish warm headroom, and new purchases replenish reserves. Pending
+launches count toward commitments but cannot justify retiring ready capacity.
 
-`plan_market_reserve` is pure and runs on one scheduler replica a minute, or
-sooner when a market's running headroom stays short for a minute. It reads one
-snapshot statement. Growth resumes a stopped machine in the market before it buys
-one: the smallest while the market's load is within its running floor, the largest
-above it, and a purchase follows the same rule with small and large machines.
-Idle machines beyond the running target are released largest first when quiet.
-Stopped reserves are prepared, one per market per pass, while demand waits for
-none; a large one when the shortfall exceeds a small machine. Reserves above the
-target retire. A market with waiting work or an interruption recovery takes no
-reserve growth, so a request's purchase is never behind a reserve's. A resume
-lowers the unit's stopped count, so refilling a reserve is always the planner's
-decision. Spot-tolerant work may resume an On-Demand reserve only while the
-On-Demand reserves left still meet their floor; otherwise it buys a new machine
-in that unit and the reserve stays stopped, because a retained pool resumes a
-reserve only when its running and stopped counts leave no room to launch. A slot
-being retired is not counted, so it neither delays a launch nor forces a resume.
+The forecast combines pending requests, recent container arrivals and the next
+known invocation of enabled platform schedules. Warm headroom covers the resume
+horizon; warm plus stopped headroom covers the cumulative provision horizon.
+Both include the regular planner interval. The initial activation horizons are
+explicit policy estimates, not measured resume percentiles. Resource floors,
+ceilings and fleet budgets still apply. A demand shape must fit one host;
+aggregate spare resources across smaller hosts do not establish that.
+
+`plan_market_reserve` runs once a minute across all replicas. Sustained pressure
+may bring a pass forward, at most once every twenty seconds. One snapshot query
+reads live fleet allocations, one bounded query aggregates arrivals and backlog,
+and one indexed query reads schedules in the forecast window. The planner compares
+approved node combinations by running or preparation-plus-storage cost. Request
+acquisition separately packs compatible due requests using the same resource and
+offer values. Disk-backed requests retain individual acquisition because storage
+attachments are not represented by the packing model.
+
+Growth resumes compatible reserves before purchasing. Requests and interruption
+recovery take priority over elective preparation. Retention preserves ready
+headroom and hosts that uniquely fit required shapes. Consolidation considers
+movable work, quoted savings, dwell time and cooldown; it cannot move pinned work.
+Node memory uses the least observed memory for its nominal shape, or nominal
+memory until that shape enrolls.
+
+Spot-tolerant work may resume an On-Demand reserve only while the On-Demand
+reserves left meet their floor. Otherwise it buys capacity in that unit.
+A resumed slot leaves the stopped count; replenishing it belongs to the planner.
+Retiring slots hold their budget until provider cleanup confirms their removal.
 
 A unit's `min_machines` is the planner's count of serving machines the idle drain
 keeps, and the drain keeps its busy machines first. Running, stopped, preparing and
@@ -100,8 +107,8 @@ The agent proves its current binary and worker image before initial preparation
 completes, and the provider row records them. A GPU reserve also proves its image
 and driver: its enrollment reports the unit's cards through the driver and passes
 preflight before it stops. A stopped reserve that predates the active release is
-started and prepared again, one machine at a time and only while no platform work
-waits, so a resume never updates itself first. The scheduler looks for such
+started and prepared again within the shared maintenance budget while no platform
+work waits, so a resume never updates itself first. The scheduler looks for such
 reserves within one capacity pass of a release activating, then each minute. A
 refused reserve launch or an interrupted reserve leaves the pool serving. Until
 the failure's cooldown passes, that unit keeps the reserves it holds and buys no

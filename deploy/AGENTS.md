@@ -50,9 +50,10 @@ substitutes, and gives every service an explicit owner and health check.
   file to admit target artifacts and explicitly compatible runtime pairs. Every
   replica serves the activated release; only its matching build authorizes upgrades.
   PostgreSQL retains verified worker identity and unfinished updates across Redis
-  loss. Compute pairs runtime updates with temporary capacity when a managed pool
-  lacks a current worker with room for the source's allocations. The pair protects
-  both machines from elective retirement until the updated source has fresh intake.
+  loss. Durable maintenance operations reserve temporary capacity and cost when a
+  managed pool lacks a current worker with room for the source's allocations.
+  They protect source and replacement from elective retirement until the updated
+  source has fresh intake, and retain commitments until cleanup is observed.
   Managed and joined agents update in place through their supervised service after
   work drains. Joined machines cannot borrow another machine's placement. Host
   replacement is reserved for host lifecycle changes.
