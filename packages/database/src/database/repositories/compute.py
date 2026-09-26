@@ -1104,11 +1104,12 @@ class ComputeUnitRepository:
             )
         return [_compute_unit_record(row) for row in self.session.scalars(statement)]
 
-    def release_rollout_units(self, owner_ids: Collection[str]) -> list[ComputeUnitRecord]:
+    def release_rollout_unit_ids(self, owner_ids: Collection[str]) -> list[str]:
         table = ComputeUnitTable
         statement = (
-            select(table)
+            select(table.id)
             .where(
+                table.visibility == ComputeUnitVisibility.Internal.value,
                 table.capacity_mode == ComputeCapacityMode.Pooled.value,
                 or_(
                     table.capacity_owner_id.in_(owner_ids), table.replacement_release_generation > 0
@@ -1119,7 +1120,7 @@ class ComputeUnitRepository:
             )
             .order_by(table.id)
         )
-        return [_compute_unit_record(row) for row in self.session.scalars(statement)]
+        return list(self.session.scalars(statement))
 
     def claim_reconciliation_batch(
         self,

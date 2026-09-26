@@ -7,7 +7,12 @@ from typing import TYPE_CHECKING
 
 from database.repositories.compute import ComputeProviderInstanceRepository, ComputeUnitRepository
 from database.repositories.worker_releases import WorkerReleaseRepository
-from shared.compute_policy import ComputeCapacityMode, ComputeUnitRecord
+from shared.compute_policy import (
+    ENDED_UNIT_PHASES,
+    ComputeCapacityMode,
+    ComputeUnitRecord,
+    ComputeUnitVisibility,
+)
 from shared.errors import ConflictError
 from shared.releases import ActiveRelease
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
@@ -78,7 +83,7 @@ class ComputeReleaseRolloutService:
         # every scheduler replica from reading the same fleet after it expires.
         with self.compute._required_capacity_owner_mutations().mutation_lock("release-rollout"):
             with self.compute.context.database.session() as session:
-                units = ComputeUnitRepository(session).release_rollout_units(
+                unit_ids = ComputeUnitRepository(session).release_rollout_unit_ids(
                     {
                         worker.capacity_owner_id
                         for worker in workers
@@ -86,14 +91,16 @@ class ComputeReleaseRolloutService:
                         and not release.admits(worker.runtime_image, worker.agent_binary_sha256)
                     }
                 )
-            for unit in units:
+            for unit_id in unit_ids:
                 try:
-                    with self.compute._required_capacity_owner_mutations().mutation_lock(
-                        unit.capacity_owner_id
-                    ):
+                    with self.compute._required_capacity_owner_mutations().mutation_lock(unit_id):
+                        with self.compute.context.database.session() as session:
+                            unit = ComputeUnitRepository(session).get(unit_id)
+                        if unit is None:
+                            continue
                         changed = self._reconcile_unit(unit, release, workers, now=now)
                     if changed:
-                        self.compute.reconcile_unit_capacity(unit.id, now=now)
+                        self.compute.reconcile_unit_capacity(unit_id, now=now)
                 except CapacityReservationLockContendedError:
                     continue
                 except CapacityReservationLeaseLostError:
@@ -101,7 +108,7 @@ class ComputeReleaseRolloutService:
                 except ConflictError as exc:
                     with self.compute.context.database.session() as session:
                         repository = ComputeUnitRepository(session)
-                        current = repository.get(unit.id, for_update=True)
+                        current = repository.get(unit_id, for_update=True)
                         if current is not None and current.replacement_reason != exc.message:
                             repository.upsert(
                                 current.model_copy(
@@ -111,7 +118,7 @@ class ComputeReleaseRolloutService:
                                 )
                             )
                 except Exception:
-                    LOGGER.exception("release rollout could not reconcile pool %s", unit.id)
+                    LOGGER.exception("release rollout could not reconcile pool %s", unit_id)
 
     def _reconcile_unit(
         self,
@@ -121,7 +128,11 @@ class ComputeReleaseRolloutService:
         *,
         now: datetime,
     ) -> bool:
-        if unit.capacity_mode is not ComputeCapacityMode.Pooled:
+        if (
+            unit.capacity_mode is not ComputeCapacityMode.Pooled
+            or unit.visibility is not ComputeUnitVisibility.Internal
+            or unit.phase in ENDED_UNIT_PHASES
+        ):
             return False
         members = [
             worker for worker in workers if worker.capacity_owner_id == unit.capacity_owner_id

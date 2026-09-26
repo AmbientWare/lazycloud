@@ -47,8 +47,8 @@ substitutes, and gives every service an explicit owner and health check.
 - One complete manifest selects platform images, the worker image, agent binary,
   and host catalog. Ship publishes it and records it for Argo. Argo health checks
   precede the PostSync active-release ConfigMap. API and scheduler read its mounted
-  file to admit target artifacts and explicitly compatible runtime pairs. Every replica
-  serves the activated release; only its matching build authorizes upgrades.
+  file to admit target artifacts and explicitly compatible runtime pairs. Every
+  replica serves the activated release; only its matching build authorizes upgrades.
   PostgreSQL retains verified worker identity and unfinished updates across Redis
   loss. Compute pairs runtime updates with temporary capacity when a managed pool
   lacks a current worker with room for the source's allocations. The pair protects

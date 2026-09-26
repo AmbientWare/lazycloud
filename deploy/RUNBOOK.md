@@ -103,18 +103,16 @@ or an explicitly compatible worker-image and agent-digest pair. Previous admissi
 does not establish compatibility. Reconnects still require source-cache activation
 and a fresh request poll before placement.
 
-Managed and joined agents update in place through their supervised service. Existing
-work drains before switching artifacts. PostgreSQL holds the update intent across
-agent restarts and Redis loss, and clears it only after the target worker accepts
-request polls. A managed pool first obtains a current worker with room for the
-source's allocations. Compute resumes a suitable reserve or provisions one
-temporary machine when needed, without increasing the pool's logical target.
-The temporary capacity stays protected until the source updates and accepts work.
-The normal scoped retirement path removes excess capacity afterwards. Platform
-maintenance remains serialized within CPU and GPU fleets and yields to interruption
-recovery. Customer pools retain their connection, quotas and purchase policy.
-Host lifecycle changes still use the replacement controller. Non-preemptible
-workloads can delay an update until they drain.
+Managed and joined agents update in place through their supervised service after
+existing work drains. PostgreSQL retains the update intent across agent restarts
+and Redis loss until the target worker accepts request polls. A managed pool first
+obtains a current worker with room for the source's allocations. Compute resumes
+a suitable reserve or provisions one temporary machine without increasing desired
+capacity. It protects that capacity until the source updates and accepts work,
+then idle retirement removes the excess. Platform maintenance runs one update at
+a time within CPU and GPU fleets and yields to interruption recovery. Customer
+pools retain their connection, quotas and purchase policy. Non-preemptible workloads
+can delay an update until they finish.
 
 `deploy/runtime-compatibility.json` is the reviewed list of exact runtime pairs
 that the published release accepts alongside its target. It is empty by default.
@@ -134,10 +132,10 @@ own stopped reserves. Attached machines update when reachable; a workload pinned
 to one cannot move to another host. A missing supervisor or rejected agent update
 is reported as blocked and does not reopen admission.
 
-Run `lazycloud-admin release status` to inspect fleet convergence. Its `complete`
-field includes running machines, stopped reserves, offline enrolled machines and
-pending update-capacity pairs and excess capacity awaiting retirement. Argo health
-only proves control-plane rollout.
+Run `lazycloud-admin release status` to check the rollout. It reports running and
+offline machines, reserves, and pending capacity. `complete` stays false until
+every machine is current and temporary capacity has retired. Argo health only
+proves control-plane rollout.
 
 Joined agents installed without the supervisor need `install-service` once before
 automatic binary updates can run. Managed node installation already includes it.

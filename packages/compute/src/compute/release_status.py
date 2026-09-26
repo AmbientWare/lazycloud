@@ -65,7 +65,7 @@ class ComputeReleaseStatusService:
             elif observation.provider_status in {"preparing", "stopping"}:
                 phase = ReleaseMachinePhase.PreparingReserve
                 reason = "waiting for verified preparation and provider stop"
-            elif current and accepting and not observation.update_generation:
+            elif current and accepting:
                 phase = ReleaseMachinePhase.Current
                 reason = ""
             elif worker is None:
