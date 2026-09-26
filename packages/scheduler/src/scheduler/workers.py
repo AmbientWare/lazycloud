@@ -41,23 +41,6 @@ class SchedulerWorkerAdminRepository(Protocol):
         worker_id: str = "",
     ) -> bool: ...
 
-    def claim_worker_rollout_slot(
-        self,
-        capacity_owner_id: str,
-        worker_id: str,
-        target_revision: str,
-        *,
-        max_unavailable: int,
-        now: datetime,
-    ) -> bool: ...
-
-    def release_worker_rollout_slot(
-        self,
-        capacity_owner_id: str,
-        worker_id: str,
-        target_revision: str,
-    ) -> bool: ...
-
     def toggle_worker_available(self, worker_id: str) -> SchedulerWorkerRecord: ...
 
     def disable_worker(

@@ -8,6 +8,7 @@ from uuid import uuid4
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.orchestration import pinned_container
 from database.tables.aws_connections import AwsAccountConnectionTable
+from database.tables.capacity_maintenance import CapacityMaintenanceTable
 from database.tables.capacity_recovery import CapacityRecoveryTable
 from database.tables.compute import (
     ComputeCapacityOperationTable,
@@ -215,6 +216,11 @@ class PlatformReserveUnitRow:
     registration_timeout_seconds: int
     replacement_machine_id: str
     billing_minimum_seconds: int | None
+    hourly_cost_micros: int | None = None
+    stopped_hourly_cost_micros: int | None = None
+    maintenance_surge_machines: int = 0
+    maintenance_running_cpu_millicores: int = 0
+    maintenance_reserve_refreshes: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -233,6 +239,9 @@ class PlatformReserveInstanceRow:
     load_cpu_millicores: int
     load_memory_mib: int
     load_gpu_count: int
+    prepared_worker_image: str = ""
+    prepared_agent_sha256: str = ""
+    surge_covered: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -470,8 +479,8 @@ def _compute_unit_record(row: ComputeUnitTable) -> ComputeUnitRecord:
             "observed_machines": row.observed_machines,
             "replacement_machine_id": row.replacement_machine_id,
             "replacement_template_version": row.replacement_template_version,
-            "replacement_release_generation": row.replacement_release_generation,
-            "replacement_reason": row.replacement_reason,
+            "maintenance_surge_machines": row.maintenance_surge_machines,
+            "maintenance_active": row.maintenance_active,
             "generation": row.generation,
             "phase": row.phase,
             "provider_state": ComputeUnitProviderState(
@@ -522,6 +531,19 @@ class ComputeUnitRepository:
         container = ContainerTable
         enrollment = ComputeMachineEnrollmentTable
         recovery = CapacityRecoveryTable
+        maintenance = (
+            select(
+                CapacityMaintenanceTable.pool_id,
+                func.sum(CapacityMaintenanceTable.surge_machines).label("surge"),
+                func.sum(CapacityMaintenanceTable.running_cpu_millicores).label("cpu"),
+                func.count()
+                .filter(CapacityMaintenanceTable.kind == "reserve_refresh")
+                .label("refreshes"),
+            )
+            .where(CapacityMaintenanceTable.completed_at.is_(None))
+            .group_by(CapacityMaintenanceTable.pool_id)
+            .subquery()
+        )
         reserved_memory = (
             container.scheduling_memory_mib * CONTAINER_MEMORY_RESERVATION_PERCENT + 99
         ) / 100
@@ -542,7 +564,7 @@ class ComputeUnitRepository:
             .subquery()
         )
         protected = or_(
-            unit.replacement_release_generation > 0,
+            maintenance.c.pool_id.is_not(None),
             cast(instance.machine_id, String) == unit.replacement_machine_id,
             exists().where(
                 recovery.completed_at.is_(None),
@@ -589,8 +611,26 @@ class ComputeUnitRepository:
                 func.coalesce(load.c.memory, 0),
                 func.coalesce(load.c.gpu, 0),
                 _reported_memory(),
+                cast(unit.offer_cost_terms.op("->>")("compute_hourly_micros"), BigInteger)
+                + cast(unit.offer_cost_terms.op("->>")("root_disk_hourly_micros"), BigInteger)
+                + cast(unit.offer_cost_terms.op("->>")("public_ipv4_hourly_micros"), BigInteger),
+                cast(unit.offer_cost_terms.op("->>")("root_disk_hourly_micros"), BigInteger),
+                case((instance.status == "stopped", instance.prepared_worker_image), else_=""),
+                case((instance.status == "stopped", instance.prepared_agent_sha256), else_=""),
+                func.coalesce(maintenance.c.surge, 0),
+                func.coalesce(maintenance.c.cpu, 0),
+                func.coalesce(maintenance.c.refreshes, 0),
+                or_(
+                    cast(instance.machine_id, String) == unit.replacement_machine_id,
+                    exists().where(
+                        CapacityMaintenanceTable.source_machine_id == instance.machine_id,
+                        CapacityMaintenanceTable.completed_at.is_(None),
+                        CapacityMaintenanceTable.surge_machines > 0,
+                    ),
+                ),
             )
             .select_from(unit)
+            .outerjoin(maintenance, maintenance.c.pool_id == unit.id)
             .outerjoin(ComputeNodeShapeTable, _same_shape(unit))
             .outerjoin(
                 instance,
@@ -615,6 +655,7 @@ class ComputeUnitRepository:
                     unit.stopped_machines > 0,
                     unit.retiring_stopped_machines > 0,
                     unit.min_machines > 0,
+                    maintenance.c.pool_id.is_not(None),
                 ),
             )
             .order_by(unit.id, instance.id)
@@ -647,6 +688,11 @@ class ComputeUnitRepository:
                     registration_timeout_seconds=row[18],
                     replacement_machine_id=row[19],
                     billing_minimum_seconds=row[20],
+                    hourly_cost_micros=row[35],
+                    stopped_hourly_cost_micros=row[36],
+                    maintenance_surge_machines=row[39],
+                    maintenance_running_cpu_millicores=row[40],
+                    maintenance_reserve_refreshes=row[41],
                 )
             if row[21] is None:
                 continue
@@ -666,6 +712,9 @@ class ComputeUnitRepository:
                     load_cpu_millicores=int(row[31]),
                     load_memory_mib=int(row[32]),
                     load_gpu_count=int(row[33]),
+                    prepared_worker_image=row[37] or "",
+                    prepared_agent_sha256=row[38] or "",
+                    surge_covered=bool(row[42]),
                 )
             )
         return PlatformReserveRows(units=tuple(units.values()), instances=tuple(instances))
@@ -712,25 +761,90 @@ class ComputeUnitRepository:
         }
 
     def platform_running_cpu_millicores(self) -> int:
-        """Nominal CPU the platform CPU fleet runs, a replacement's surge included."""
+        """Running commitments, including reserve preparation and unfinished cleanup."""
         unit = ComputeUnitTable
+        instance = ComputeProviderInstanceTable
+        physical = (
+            select(
+                instance.pool_id,
+                func.count().filter(instance.status != "stopped").label("running"),
+                func.count().filter(instance.status == "stopped").label("stopped"),
+            )
+            .where(instance.status.not_in(("deleted", "failed")))
+            .group_by(instance.pool_id)
+            .subquery()
+        )
         surge = case((func.coalesce(unit.replacement_machine_id, "") != "", 1), else_=0)
+        maintenance = (
+            select(
+                CapacityMaintenanceTable.pool_id,
+                func.sum(CapacityMaintenanceTable.running_cpu_millicores).label("cpu"),
+                func.count()
+                .filter(CapacityMaintenanceTable.kind == "reserve_refresh")
+                .label("refreshes"),
+            )
+            .where(CapacityMaintenanceTable.completed_at.is_(None))
+            .group_by(CapacityMaintenanceTable.pool_id)
+            .subquery()
+        )
+        preparing = func.greatest(
+            unit.stopped_machines
+            - func.coalesce(physical.c.stopped, 0)
+            - func.coalesce(maintenance.c.refreshes, 0),
+            0,
+        )
+        committed = (
+            unit.desired_machines + surge + preparing
+        ) * unit.worker_cpu_millicores + func.coalesce(maintenance.c.cpu, 0)
+        running = func.greatest(
+            committed, func.coalesce(physical.c.running, 0) * unit.worker_cpu_millicores
+        )
         return int(
             self.session.scalar(
-                select(
-                    func.coalesce(
-                        func.sum((unit.desired_machines + surge) * unit.worker_cpu_millicores), 0
-                    )
-                ).where(
+                select(func.coalesce(func.sum(running), 0))
+                .outerjoin(physical, physical.c.pool_id == unit.id)
+                .outerjoin(maintenance, maintenance.c.pool_id == unit.id)
+                .where(
                     unit.visibility == ComputeUnitVisibility.Internal.value,
                     unit.platform_fleet.is_(True),
                     unit.worker_gpu_count == 0,
                     unit.phase != ComputeUnitPhase.Deleted.value,
-                    or_(unit.desired_machines > 0, surge > 0),
+                    running > 0,
                 )
             )
             or 0
         )
+
+    def platform_maintenance_fleet(self) -> tuple[list[str], int]:
+        """Live pool identities and fleet size used for maintenance concurrency admission."""
+        unit = ComputeUnitTable
+        rows = (
+            self.session.execute(
+                select(
+                    unit.id,
+                    func.sum(
+                        func.greatest(
+                            unit.desired_machines + unit.stopped_machines, unit.observed_machines
+                        )
+                    ).over(),
+                ).where(
+                    unit.visibility == ComputeUnitVisibility.Internal.value,
+                    unit.platform_fleet.is_(True),
+                    or_(
+                        unit.desired_machines > 0,
+                        unit.stopped_machines > 0,
+                        unit.observed_machines > 0,
+                        exists().where(
+                            CapacityMaintenanceTable.pool_id == unit.id,
+                            CapacityMaintenanceTable.completed_at.is_(None),
+                        ),
+                    ),
+                )
+            )
+            .tuples()
+            .all()
+        )
+        return [identity for identity, _ in rows], int(rows[0][1]) if rows else 0
 
     def platform_stopped_reserves(
         self, *, preemptible: bool, gpu_type: str
@@ -903,6 +1017,22 @@ class ComputeUnitRepository:
         return _compute_unit_record(row)
 
     def delete(self, pool_id: str, *, workspace_id: str) -> None:
+        identity = self.session.scalar(
+            select(ComputeUnitTable.id)
+            .where(ComputeUnitTable.id == pool_id, ComputeUnitTable.workspace_id == workspace_id)
+            .with_for_update()
+        )
+        if identity is None:
+            return
+        if self.session.scalar(
+            select(
+                exists().where(
+                    CapacityMaintenanceTable.pool_id == identity,
+                    CapacityMaintenanceTable.completed_at.is_(None),
+                )
+            )
+        ):
+            raise ConflictError("capacity maintenance must finish before its pool is deleted")
         self.session.execute(
             delete(ComputeUnitTable).where(
                 ComputeUnitTable.id == pool_id,
@@ -1109,10 +1239,16 @@ class ComputeUnitRepository:
         statement = (
             select(table.id)
             .where(
-                table.visibility == ComputeUnitVisibility.Internal.value,
-                table.capacity_mode == ComputeCapacityMode.Pooled.value,
                 or_(
-                    table.capacity_owner_id.in_(owner_ids), table.replacement_release_generation > 0
+                    and_(
+                        table.visibility == ComputeUnitVisibility.Internal.value,
+                        table.capacity_mode == ComputeCapacityMode.Pooled.value,
+                        table.capacity_owner_id.in_(owner_ids),
+                    ),
+                    exists().where(
+                        CapacityMaintenanceTable.pool_id == table.id,
+                        CapacityMaintenanceTable.completed_at.is_(None),
+                    ),
                 ),
                 table.phase.not_in(
                     (ComputeUnitPhase.Deleted.value, ComputeUnitPhase.Deleting.value)
@@ -1256,6 +1392,12 @@ class ComputeUnitRepository:
                 func.count()
                 .filter(
                     ComputeProviderInstanceTable.status == "terminating",
+                    ~exists().where(
+                        CapacityMaintenanceTable.source_machine_id
+                        == ComputeProviderInstanceTable.machine_id,
+                        CapacityMaintenanceTable.completed_at.is_(None),
+                        CapacityMaintenanceTable.surge_machines > 0,
+                    ),
                     or_(
                         ComputeProviderInstanceTable.machine_id.is_(None),
                         cast(ComputeProviderInstanceTable.machine_id, String)
@@ -1269,12 +1411,20 @@ class ComputeUnitRepository:
             .group_by(ComputeProviderInstanceTable.pool_id)
             .subquery()
         )
-        surge = case(
-            (
-                func.coalesce(ComputeUnitTable.replacement_machine_id, "") != "",
-                1,
-            ),
-            else_=0,
+        surge = (
+            case(
+                (
+                    func.coalesce(ComputeUnitTable.replacement_machine_id, "") != "",
+                    1,
+                ),
+                else_=0,
+            )
+            + select(func.coalesce(func.sum(CapacityMaintenanceTable.surge_machines), 0))
+            .where(
+                CapacityMaintenanceTable.pool_id == ComputeUnitTable.id,
+                CapacityMaintenanceTable.completed_at.is_(None),
+            )
+            .scalar_subquery()
         )
         return (
             select(
@@ -1480,10 +1630,6 @@ class ComputeUnitRepository:
         row.supplier_cpu_count = record.supplier_cpu_count
         row.replacement_machine_id = record.replacement_machine_id
         row.replacement_template_version = record.replacement_template_version
-        row.replacement_release_generation = (
-            record.replacement_release_generation if record.replacement_machine_id else 0
-        )
-        row.replacement_reason = record.replacement_reason
         row.scaling_enabled = record.scaling_enabled
         row.priority = record.priority
         row.min_free_cpu_millicores = record.min_free_cpu_millicores

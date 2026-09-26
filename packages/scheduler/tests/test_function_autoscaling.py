@@ -9,6 +9,7 @@ control surface answers for two kinds of workload and silently omits the third.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import Protocol
@@ -65,7 +66,9 @@ class _IdentityPlacement:
     def place(self, request: SchedulerWorkerRequest) -> SchedulerWorkerRequest:
         return request
 
-    def purchase_candidates(self, request: SchedulerWorkerRequest) -> tuple[()]:
+    def purchase_candidates(
+        self, request: SchedulerWorkerRequest, *, cohort: Sequence[SchedulerWorkerRequest] = ()
+    ) -> tuple[()]:
         return ()
 
 

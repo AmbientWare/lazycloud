@@ -1,231 +1,241 @@
-from __future__ import annotations
-
 from datetime import UTC, datetime, timedelta
 
+from compute.capacity_acquisition import plan_request_capacity
 from compute.fleet_policy import (
-    Capacity,
     FleetCapacityPolicy,
-    FleetReservePlan,
     FleetReserveSnapshot,
     GrowthKind,
-    MachineRole,
+    HeadroomTarget,
+    MarketReserve,
     ReserveConditions,
     ReserveMachine,
     ReserveMachineState,
-    ReserveMarket,
     ReserveUnit,
     plan_market_reserve,
 )
-from shared.container_requests import schedulable_capacity
+from compute.fleet_resources import Capacity, ReserveMarket, ReserveOffer
 
 NOW = datetime(2026, 9, 24, 12, tzinfo=UTC)
-SPOT = ReserveMarket(preemptible=True)
-ON_DEMAND = ReserveMarket(preemptible=False)
-POLICY = FleetCapacityPolicy(gpu={})
+MARKET = ReserveMarket(preemptible=False)
+SMALL = ReserveOffer("small", MARKET, Capacity(8_000, 16_384), 8_000, 100_000, 10_000, True)
+LARGE = ReserveOffer("large", MARKET, Capacity(32_000, 65_536), 32_000, 300_000, 20_000, True)
 
 
-def _unit(
-    unit_id: str,
-    *,
-    market: ReserveMarket = SPOT,
-    cpu: int = 8_000,
-    memory: int = 16 * 1024,
-    desired: int = 0,
-    stopped: int = 0,
-    growable: bool = True,
-) -> ReserveUnit:
-    return ReserveUnit(
-        unit_id=unit_id,
-        market=market,
-        role=POLICY.role(cpu_millicores=cpu, memory_mib=memory, gpu_count=0),
-        machine=Capacity(schedulable_capacity(cpu), schedulable_capacity(memory)),
-        nominal_cpu_millicores=cpu,
-        desired=desired,
-        stopped=stopped,
-        growable=growable,
+def _policy(target: Capacity) -> FleetCapacityPolicy:
+    return FleetCapacityPolicy(
+        spot=MarketReserve(),
+        on_demand=MarketReserve(warm=HeadroomTarget(floor=target, maximum=target)),
+        gpu={},
     )
 
 
-def _serving(
-    key: str, unit: str, *, load: Capacity = Capacity(), pinned: int = 0
-) -> ReserveMachine:
-    return ReserveMachine(
-        key=key,
-        unit_id=unit,
-        state=ReserveMachineState.Serving,
-        load=load,
-        containers=0 if load.empty else 1,
-        pinned=pinned,
-    )
-
-
-def _stopped(key: str, unit: str) -> ReserveMachine:
-    return ReserveMachine(
-        key=key, unit_id=unit, state=ReserveMachineState.Reserve, stopped_resumable=True
-    )
-
-
-def _plan(
-    units: list[ReserveUnit],
-    machines: list[ReserveMachine],
-    *,
-    policy: FleetCapacityPolicy = POLICY,
-    lightly_used_since: dict[str, datetime] | None = None,
-    demand: frozenset[ReserveMarket] = frozenset(),
-    recovering: frozenset[ReserveMarket] = frozenset(),
-    consolidating: frozenset[ReserveMarket] = frozenset(),
-) -> FleetReservePlan:
-    snapshot = FleetReserveSnapshot(
-        units=tuple(units),
-        machines=tuple(machines),
+def _snapshot(
+    units: tuple[ReserveUnit, ...] = (),
+    machines: tuple[ReserveMachine, ...] = (),
+) -> FleetReserveSnapshot:
+    return FleetReserveSnapshot(
+        units=units,
+        machines=machines,
         committed_cpu_machines=sum(unit.desired + unit.stopped for unit in units),
         committed_gpu_machines=0,
         running_cpu_millicores=sum(unit.desired * unit.nominal_cpu_millicores for unit in units),
+        offers=(SMALL, LARGE),
     )
-    return plan_market_reserve(
-        policy,
-        snapshot,
-        ReserveConditions(
-            now=NOW,
-            lightly_used_since=lightly_used_since or {},
-            demand=demand,
-            recovering=recovering,
-            consolidating=consolidating,
+
+
+def _unit(offer: ReserveOffer, *, desired: int = 0, stopped: int = 0) -> ReserveUnit:
+    return ReserveUnit(
+        unit_id=offer.key,
+        market=offer.market,
+        machine=offer.machine,
+        nominal_cpu_millicores=offer.nominal_cpu_millicores,
+        desired=desired,
+        stopped=stopped,
+        growable=True,
+        hourly_cost_micros=offer.hourly_cost_micros,
+        stopped_hourly_cost_micros=offer.stopped_hourly_cost_micros,
+    )
+
+
+def test_purchases_choose_lower_total_cost_for_required_capacity() -> None:
+    for target, expected in ((SMALL.machine, SMALL), (SMALL.machine * 4, LARGE)):
+        market = plan_market_reserve(
+            _policy(target), _snapshot(), ReserveConditions(now=NOW)
+        ).market(MARKET)
+        assert market is not None
+        purchases = [action for action in market.growth if action.kind is GrowthKind.Buy]
+        assert len(purchases) == 1
+        assert purchases[0].offer_key == expected.key
+        assert purchases[0].count == 1
+        assert market.shortfall.empty
+
+
+def test_large_request_must_fit_one_host_despite_aggregate_capacity() -> None:
+    machines = tuple(
+        ReserveMachine(str(index), SMALL.key, ReserveMachineState.Serving) for index in range(4)
+    )
+    market = plan_market_reserve(
+        _policy(SMALL.machine),
+        _snapshot((_unit(SMALL, desired=4),), machines),
+        ReserveConditions(now=NOW, request_shapes={MARKET: (Capacity(16_000, 32_768),)}),
+    ).market(MARKET)
+    assert market is not None
+    assert any(action.offer_key == LARGE.key for action in market.growth)
+
+
+def test_only_ready_stopped_capacity_can_replace_a_purchase() -> None:
+    for ready in (True, False):
+        market = plan_market_reserve(
+            _policy(SMALL.machine),
+            _snapshot(
+                (_unit(SMALL, stopped=1),),
+                (
+                    ReserveMachine(
+                        "reserve",
+                        SMALL.key,
+                        ReserveMachineState.Reserve,
+                        stopped_resumable=True,
+                        ready=ready,
+                    ),
+                ),
+            ),
+            ReserveConditions(now=NOW),
+        ).market(MARKET)
+        assert market is not None
+        assert any(action.kind is GrowthKind.Resume for action in market.growth) == ready
+        assert any(action.kind is GrowthKind.Buy for action in market.growth) != ready
+
+
+def test_retirement_preserves_the_only_node_that_fits_recent_requests() -> None:
+    market = plan_market_reserve(
+        _policy(SMALL.machine * 4),
+        _snapshot(
+            (_unit(SMALL, desired=4), _unit(LARGE, desired=1)),
+            (
+                *(
+                    ReserveMachine(str(index), SMALL.key, ReserveMachineState.Serving)
+                    for index in range(4)
+                ),
+                ReserveMachine("large", LARGE.key, ReserveMachineState.Serving),
+            ),
         ),
+        ReserveConditions(now=NOW, request_shapes={MARKET: (LARGE.machine,)}),
+    ).market(MARKET)
+    assert market is not None
+    assert market.retained[LARGE.key] == 1
+
+
+def test_unavailable_request_shape_is_reported_despite_aggregate_headroom() -> None:
+    market = plan_market_reserve(
+        _policy(SMALL.machine),
+        _snapshot(
+            (_unit(SMALL, desired=1),),
+            (ReserveMachine("small", SMALL.key, ReserveMachineState.Serving),),
+        ),
+        ReserveConditions(now=NOW, request_shapes={MARKET: (LARGE.machine * 2,)}),
+    ).market(MARKET)
+    assert market is not None
+    assert market.unmet_shapes == (LARGE.machine * 2,)
+    assert market.reason
+
+
+def test_growth_respects_shared_machine_and_running_cpu_limits() -> None:
+    policy = _policy(LARGE.machine * 4).model_copy(
+        update={"max_cpu_instances": 2, "max_running_cpu_millicores": 16_000}
     )
+    market = plan_market_reserve(policy, _snapshot(), ReserveConditions(now=NOW)).market(MARKET)
+    assert market is not None
+    purchased = {SMALL.key: SMALL, LARGE.key: LARGE}
+    assert sum(action.count for action in market.growth) <= 2
+    assert (
+        sum(
+            purchased[action.offer_key].nominal_cpu_millicores * action.count
+            for action in market.growth
+        )
+        <= 16_000
+    )
+    assert not market.shortfall.empty
 
 
-def test_a_quiet_market_grows_by_small_machines_and_resumes_before_it_buys() -> None:
-    empty = _plan([], [])
-    spot = empty.market(SPOT)
-    assert spot is not None and spot.growth is not None
-    assert (spot.growth.kind, spot.growth.role) == (GrowthKind.Buy, MachineRole.Small)
-
-    with_reserve = _plan(
-        [_unit("small", stopped=1), _unit("large", cpu=32_000, memory=128 * 1024, stopped=1)],
-        [_stopped("s", "small"), _stopped("l", "large")],
-    ).market(SPOT)
-    assert with_reserve is not None and with_reserve.growth is not None
-    assert with_reserve.growth.kind is GrowthKind.Resume
-    assert with_reserve.growth.unit_id == "small"
-
-
-def test_a_loaded_market_grows_by_large_machines() -> None:
-    busy = Capacity(7_000, 14_000)
-    units = [_unit("small", desired=3)]
-    machines = [_serving(f"m{index}", "small", load=busy) for index in range(3)]
-    spot = _plan(units, machines).market(SPOT)
-    assert spot is not None and not spot.quiet and spot.growth is not None
-    assert (spot.growth.kind, spot.growth.role) == (GrowthKind.Buy, MachineRole.Large)
-
-
-def test_waiting_work_and_recovery_keep_reserve_growth_out_of_their_way() -> None:
-    for spot in (
-        _plan([], [], demand=frozenset({SPOT})).market(SPOT),
-        _plan([], [], recovering=frozenset({SPOT})).market(SPOT),
+def test_demand_and_recovery_keep_elective_growth_out_of_their_way() -> None:
+    for conditions in (
+        ReserveConditions(now=NOW, demand=frozenset({MARKET})),
+        ReserveConditions(now=NOW, recovering=frozenset({MARKET})),
     ):
-        assert spot is not None and spot.growth is None
+        market = plan_market_reserve(_policy(SMALL.machine), _snapshot(), conditions).market(MARKET)
+        assert market is not None and not market.growth
 
 
-def test_each_market_takes_one_growth_action_a_pass() -> None:
-    plan = _plan([], [])
-    spot = plan.market(SPOT)
-    assert spot is not None and spot.growth is not None
-    # Spot needs warm headroom and a stopped reserve; the reserve waits a pass.
-    assert spot.growth.kind is GrowthKind.Buy
-    on_demand = plan.market(ON_DEMAND)
-    assert on_demand is not None and on_demand.growth is not None
-    assert (on_demand.growth.kind, on_demand.growth.role) == (GrowthKind.Prepare, MachineRole.Large)
+def test_pending_capacity_does_not_justify_retiring_ready_capacity() -> None:
+    market = plan_market_reserve(
+        _policy(SMALL.machine),
+        _snapshot(
+            (_unit(SMALL, desired=1), _unit(LARGE, desired=1)),
+            (
+                ReserveMachine("ready", SMALL.key, ReserveMachineState.Serving),
+                ReserveMachine("pending", LARGE.key, ReserveMachineState.Starting, ready=False),
+            ),
+        ),
+        ReserveConditions(now=NOW),
+    ).market(MARKET)
+    assert market is not None
+    assert market.retained[SMALL.key] == 1
+    assert market.warm_free == SMALL.machine
+    assert market.warm_pending == LARGE.machine
 
 
-def test_the_fleet_caps_stop_reserve_growth() -> None:
-    capped = POLICY.model_copy(update={"max_cpu_instances": 0})
-    for market in _plan([], [], policy=capped).markets:
-        assert market.growth is None
-    # A stopped reserve does not run, so only the running-vCPU cap's warm purchase stops.
-    no_vcpu = POLICY.model_copy(update={"max_running_cpu_millicores": 4_000})
-    spot = _plan([], [], policy=no_vcpu).market(SPOT)
-    assert spot is not None and spot.growth is not None
-    assert spot.growth.kind is GrowthKind.Prepare
+def test_consolidation_preserves_pinned_work_and_required_headroom() -> None:
+    for pinned, target, expected in (
+        (0, SMALL.machine, "busy"),
+        (1, SMALL.machine, ""),
+        (0, LARGE.machine * 2, ""),
+    ):
+        market = plan_market_reserve(
+            _policy(target),
+            _snapshot(
+                (_unit(LARGE, desired=2),),
+                (
+                    ReserveMachine(
+                        "busy",
+                        LARGE.key,
+                        ReserveMachineState.Serving,
+                        load=Capacity(1_000, 2_048),
+                        containers=1,
+                        pinned=pinned,
+                    ),
+                    ReserveMachine("idle", LARGE.key, ReserveMachineState.Serving),
+                ),
+            ),
+            ReserveConditions(now=NOW, lightly_used_since={"busy": NOW - timedelta(hours=1)}),
+        ).market(MARKET)
+        assert market is not None
+        assert market.consolidate == expected
 
 
-def test_idle_machines_beyond_warm_headroom_are_released_largest_first_when_quiet() -> None:
-    units = [_unit("small", desired=2), _unit("large", cpu=32_000, memory=128 * 1024, desired=1)]
-    machines = [_serving("s1", "small"), _serving("s2", "small"), _serving("l1", "large")]
-    spot = _plan(units, machines).market(SPOT)
-    assert spot is not None and spot.warm_free.covers(spot.warm_target)
-    assert spot.retained == {"small": 2, "large": 0}
-
-
-def test_busy_machines_are_retained_and_a_shortfall_holds_every_idle_machine() -> None:
-    units = [_unit("small", desired=2)]
-    busy = _serving("busy", "small", load=Capacity(6_000, 12_000))
-    spot = _plan(units, [busy, _serving("idle", "small")]).market(SPOT)
-    assert spot is not None
-    assert spot.retained == {"small": 2}
-
-
-def test_stopped_reserves_are_prepared_to_the_target_and_retired_above_it() -> None:
-    large = _unit("large", market=ON_DEMAND, cpu=32_000, memory=128 * 1024, stopped=1)
-    after_large = _plan([large], [_stopped("l", "large")]).market(ON_DEMAND)
-    assert after_large is not None and after_large.growth is not None
-    assert (after_large.growth.kind, after_large.growth.role) == (
-        GrowthKind.Prepare,
-        MachineRole.Small,
+def test_request_purchase_cost_accounts_for_each_container_fitting_a_node() -> None:
+    medium = ReserveOffer("medium", MARKET, Capacity(16_000, 32_768), 16_000, 250_000, 10_000, True)
+    requests = [Capacity(5_000, 10_240)] * 3
+    plan = plan_request_capacity(
+        (SMALL, medium),
+        requests,
+        machine_limit=3,
+        running_cpu_millicores=32_000,
     )
-
-    surplus = _unit("large", market=ON_DEMAND, cpu=32_000, memory=128 * 1024, stopped=3)
-    small = _unit("small", market=ON_DEMAND, stopped=1)
-    kept = _plan([surplus, small], []).market(ON_DEMAND)
-    assert kept is not None and kept.growth is None
-    assert kept.stopped == {"large": 1, "small": 1}
+    assert not plan.remaining
+    assert len(plan.nodes) == 1
+    assert plan.nodes[0].offer_key == medium.key
+    assert set(plan.nodes[0].request_indices) == {0, 1, 2}
 
 
-def test_the_spot_stopped_target_covers_the_busiest_spot_machine() -> None:
-    heavy = Capacity(40_000, 200 * 1024)
-    units = [_unit("big", cpu=64_000, memory=256 * 1024, desired=1)]
-    spot = _plan(units, [_serving("m", "big", load=heavy)]).market(SPOT)
-    assert spot is not None and spot.stopped_target.covers(heavy)
-
-
-def _consolidating_fleet(*, pinned: int = 0) -> tuple[list[ReserveUnit], list[ReserveMachine]]:
-    units = [_unit("large", cpu=32_000, memory=128 * 1024, desired=3)]
-    light = Capacity(2_000, 4_000)
-    return units, [
-        _serving("a", "large", load=Capacity(10_000, 20_000)),
-        _serving("b", "large", load=light, pinned=pinned),
-        _serving("c", "large"),
-    ]
-
-
-def test_consolidation_waits_out_its_window_and_never_picks_pinned_work() -> None:
-    units, machines = _consolidating_fleet()
-    watched = _plan(units, machines).market(SPOT)
-    assert watched is not None
-    assert (watched.consolidation_candidate, watched.consolidate) == ("b", "")
-
-    since = {"b": NOW - timedelta(seconds=POLICY.consolidation_seconds)}
-    ready = _plan(units, machines, lightly_used_since=since).market(SPOT)
-    assert ready is not None and ready.consolidate == "b"
-
-    busy_market = _plan(
-        units, machines, lightly_used_since=since, consolidating=frozenset({SPOT})
-    ).market(SPOT)
-    assert busy_market is not None and busy_market.consolidate == ""
-
-    pinned_units, pinned_machines = _consolidating_fleet(pinned=1)
-    pinned = _plan(pinned_units, pinned_machines, lightly_used_since=since)
-    spot = pinned.market(SPOT)
-    assert spot is not None and spot.consolidation_candidate == ""
-    assert "b" not in pinned.lightly_used_since
-
-
-def test_consolidation_keeps_enough_headroom_for_the_work_it_moves() -> None:
-    units = [_unit("small", desired=2)]
-    machines = [
-        _serving("a", "small", load=Capacity(1_000, 2_000)),
-        _serving("b", "small", load=Capacity(1_000, 2_000)),
-    ]
-    since = {"a": NOW - timedelta(hours=1), "b": NOW - timedelta(hours=1)}
-    spot = _plan(units, machines, lightly_used_since=since).market(SPOT)
-    assert spot is not None and spot.consolidate == ""
+def test_partial_request_purchase_preserves_limits_and_reports_unplaced_work() -> None:
+    request = Capacity(5_000, 10_240)
+    plan = plan_request_capacity(
+        (SMALL,),
+        (request,) * 3,
+        machine_limit=3,
+        running_cpu_millicores=16_000,
+    )
+    assert len(plan.nodes) == 2
+    assert plan.remaining == (request,)
+    placed = [index for node in plan.nodes for index in node.request_indices]
+    assert len(placed) == len(set(placed)) == 2

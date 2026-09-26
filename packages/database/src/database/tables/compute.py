@@ -16,13 +16,17 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     event,
+    exists,
+    func,
+    select,
     text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, column_property, declared_attr, mapped_column
 from sqlalchemy.sql.schema import SchemaItem
 
 from database.tables.base import DatabaseBase, IdTable, json_type, uuid_type
+from database.tables.capacity_maintenance import CapacityMaintenanceTable
 
 _PLATFORM_UNIT_OWNERSHIP = """
 CREATE OR REPLACE FUNCTION require_capacity_namespace()
@@ -65,6 +69,31 @@ $$;
 
 class ComputeUnitTable(IdTable, DatabaseBase):
     __tablename__ = "compute_units"
+
+    @declared_attr
+    def maintenance_surge_machines(cls) -> Mapped[int]:
+        return column_property(
+            select(func.coalesce(func.sum(CapacityMaintenanceTable.surge_machines), 0))
+            .where(
+                CapacityMaintenanceTable.pool_id == cls.id,
+                CapacityMaintenanceTable.completed_at.is_(None),
+                CapacityMaintenanceTable.phase != "retiring",
+            )
+            .correlate_except(CapacityMaintenanceTable)
+            .scalar_subquery()
+        )
+
+    @declared_attr
+    def maintenance_active(cls) -> Mapped[bool]:
+        return column_property(
+            exists()
+            .where(
+                CapacityMaintenanceTable.pool_id == cls.id,
+                CapacityMaintenanceTable.completed_at.is_(None),
+            )
+            .correlate_except(CapacityMaintenanceTable)
+        )
+
     provider_reconcile_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     drain_reconcile_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     __table_args__: tuple[SchemaItem, ...] = (
@@ -102,17 +131,6 @@ class ComputeUnitTable(IdTable, DatabaseBase):
             name="ck_compute_units_machine_capacity",
         ),
         CheckConstraint("generation > 0", name="ck_compute_units_generation"),
-        CheckConstraint(
-            "replacement_release_generation >= 0 AND "
-            "(replacement_release_generation = 0 OR "
-            "(replacement_machine_id <> '' AND replacement_template_version = ''))",
-            name="ck_compute_units_release_replacement",
-        ),
-        Index(
-            "ix_compute_units_release_replacement",
-            "id",
-            postgresql_where=text("replacement_release_generation > 0"),
-        ),
         CheckConstraint("provider_state_revision >= 0", name="ck_compute_units_provider_revision"),
         CheckConstraint(
             "provider_committed_machines >= 0", name="ck_compute_units_provider_commitment"
@@ -234,12 +252,6 @@ class ComputeUnitTable(IdTable, DatabaseBase):
     supplier_cpu_count: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     replacement_machine_id: Mapped[str] = mapped_column(String(160), nullable=False)
     replacement_template_version: Mapped[str] = mapped_column(String(160), nullable=False)
-    replacement_release_generation: Mapped[int] = mapped_column(
-        BigInteger, nullable=False, default=0, server_default="0"
-    )
-    replacement_reason: Mapped[str] = mapped_column(
-        String(512), nullable=False, default="", server_default=""
-    )
 
 
 class ComputeNodeShapeTable(DatabaseBase):

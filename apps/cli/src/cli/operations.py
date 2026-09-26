@@ -230,6 +230,43 @@ def scheduler_tick(ctx: typer.Context) -> None:
     )
 
 
+@scheduler_app.command("startup-latency")
+def scheduler_startup_latency(
+    ctx: typer.Context,
+    workspace_id: Annotated[str, typer.Option("--workspace-id")],
+    window_seconds: Annotated[int, typer.Option("--window-seconds", min=1, max=86400)] = 3600,
+) -> None:
+    """Read bounded startup evidence using deployment database authority."""
+    from observability.startup_latency import StartupLatencyService
+
+    from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
+
+    database = DatabaseClient.from_settings(
+        DatabaseSettings(application_name=DatabaseApplicationName.Admin).direct()
+    )
+    try:
+        report = StartupLatencyService(database).read(
+            workspace_id=workspace_id, window_seconds=window_seconds
+        )
+    finally:
+        database.dispose()
+    emit_result(
+        ctx,
+        payload=report.model_dump(mode="json"),
+        title="Recorded function startup latency",
+        fields={
+            "requested": report.functions.requested,
+            "ready": report.functions.ready,
+            "ready after deadline": report.functions.ready_after_deadline,
+            "overdue without readiness": report.functions.overdue_without_readiness,
+            "request to ready p95 seconds": report.functions.request_to_ready.p95_seconds,
+            "warm execution measurement": report.warm_execution_measurement,
+            "limitations": list(report.limitations),
+        },
+        tone="info",
+    )
+
+
 @scheduler_app.command("dispatch-containers")
 def scheduler_dispatch_containers(
     ctx: typer.Context,

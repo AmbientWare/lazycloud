@@ -490,6 +490,27 @@ replicas, then restore Argo's previous automatic sync settings. Keep PostgreSQL,
 Redis, and worker instances intact. Verify fleet commitments alongside AWS
 inventory before calling the warm and stopped targets healthy.
 
+### Concurrent maintenance upgrade
+
+Revision `0028_capacity_maintenance` moves active runtime replacements into
+durable per-machine operations and drops the old release fields on
+`compute_units`. Old API and scheduler processes cannot use the new schema.
+Revision `0029_fleet_demand` adds the bounded arrival index.
+
+Pause Argo automatic sync and record its current settings before publishing the
+release. Keep the old controllers serving while images build. Once the deployment
+branch selects the complete new manifest, confirm no active workloads or arrange
+a service pause. Stop the old API and scheduler Deployments and any operator job
+using the old compute models. Confirm those pods and their database sessions are
+gone before running a full Argo sync. The migration must finish before new
+controllers start. Keep databases, Redis, tunnel gateways and worker nodes intact.
+
+Verify the schema revision, new controller images, migrated maintenance ownership
+and fleet commitments against provider inventory. Restore the recorded automatic
+sync settings. Do not roll old controller images back after this migration;
+recovery must roll forward. This upgrade does not authorize deleting capacity or
+resetting durable state.
+
 ### Capacity headroom upgrade
 
 Revision `0023_capacity_headroom` drops `compute_units.warm_handoff_from`, lets

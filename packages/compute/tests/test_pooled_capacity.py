@@ -16,11 +16,14 @@ from compute.capacity_errors import (
 )
 from compute.capacity_recovery import record_capacity_risk
 from compute.fleet_policy import (
-    Capacity,
     FleetCapacityPolicy,
+    FleetReserveSnapshot,
     HeadroomTarget,
     MarketReserve,
+    ReserveConditions,
+    plan_market_reserve,
 )
+from compute.fleet_resources import Capacity
 from compute.machine_lifecycle import reserve_awaits_resume, write_machine_lifecycle
 from compute.offers import ComputeOffer, ReservationStatus
 from compute.provider_state import ProviderUnitStateService
@@ -49,6 +52,7 @@ from compute.state import RedisComputeStateRepository
 from compute.supplier_costs import SupplierCostInspectionService
 from database.context import ServiceContext
 from database.repositories.aws_connections import AwsAccountConnectionRepository
+from database.repositories.capacity_maintenance import CapacityMaintenanceRepository
 from database.repositories.capacity_recovery import CapacityRecoveryRepository
 from database.repositories.compute import (
     ComputeCapacityOperationRecord,
@@ -105,6 +109,7 @@ from shared.capacity import (
     CapacityOperationStatus,
     CapacityReleaseRequest,
 )
+from shared.capacity_maintenance import CapacityMaintenancePhase
 from shared.compute_enrollment import (
     AgentCapacityState,
     ComputeCredentialStatus,
@@ -445,10 +450,6 @@ class _SchedulerHooks:
         if machine_id in self.unknown_machines:
             return MachineWorkerAvailability.Unknown
         return MachineWorkerAvailability.Unavailable
-
-    def machine_has_worker_update(self, capacity_owner_id: str, machine_id: str) -> bool:
-        del capacity_owner_id, machine_id
-        return False
 
     def agent_intake_observing_since(self) -> datetime | None:
         return self.intake_observing_since
@@ -2393,7 +2394,9 @@ def test_retiring_machine_cannot_acquire_another_planned_replacement(
 
 @pytest.mark.parametrize("platform_fleet", [True, False])
 def test_release_rollout_preserves_singleton_until_replacement_and_fresh_intake(
-    service_context: ServiceContext, platform_fleet: bool
+    service_context: ServiceContext,
+    platform_fleet: bool,
+    real_redis_actors: RealRedisActors,
 ) -> None:
     _seed_connection(service_context, platform_fleet=platform_fleet)
     provider = _PooledProvider()
@@ -2404,6 +2407,15 @@ def test_release_rollout_preserves_singleton_until_replacement_and_fresh_intake(
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
         scheduler_hooks=hooks,
+        reserve_state=RedisFleetReserveState(real_redis_actors.client()),
+    )
+    assert compute.reserve_state is not None
+    compute.reserve_state.publish(
+        plan_market_reserve(
+            compute.fleet_policy,
+            FleetReserveSnapshot((), (), 0, 0, 0),
+            ReserveConditions(now=datetime.now(UTC)),
+        )
     )
     pool = compute.prepare_pooled_capacity(
         workspace="default",
@@ -2451,7 +2463,7 @@ def test_release_rollout_preserves_singleton_until_replacement_and_fresh_intake(
         ),
     )
     with (
-        pytest.raises(ConflictError, match="replacement capacity"),
+        pytest.raises(ConflictError, match="reserved replacement"),
         compute.worker_release_admission(source, release, [source]),
     ):
         pass
@@ -2460,8 +2472,11 @@ def test_release_rollout_preserves_singleton_until_replacement_and_fresh_intake(
     rollout.reconcile(release, [source], now=now)
     paired = compute.get_internal_unit(pool.workspace_id, pool.id)
     assert paired.desired_machines == 1
-    assert paired.replacement_machine_id == source.machine_id
-    assert paired.replacement_release_generation == 2
+    assert paired.maintenance_surge_machines == 1
+    with service_context.database.session() as session:
+        [operation] = CapacityMaintenanceRepository(session).active_for_pools([pool.id])
+    assert operation.source_machine_id == source.machine_id
+    assert operation.release_generation == 2
     assert paired.observed_machines == 2
     status = ComputeReleaseStatusService(service_context.database).read(release, [source])
     assert not status.complete
@@ -2482,7 +2497,7 @@ def test_release_rollout_preserves_singleton_until_replacement_and_fresh_intake(
         replacement.model_copy(update={"request_poll_expires_at": now - timedelta(seconds=1)}),
     ):
         with (
-            pytest.raises(ConflictError, match="replacement capacity"),
+            pytest.raises(ConflictError, match="reserved replacement"),
             compute.worker_release_admission(source, release, [source, refused]),
         ):
             pass
@@ -2518,7 +2533,15 @@ def test_release_rollout_preserves_singleton_until_replacement_and_fresh_intake(
     draining = source.model_copy(update={"status": SchedulerWorkerStatus.Draining})
     rollout.reconcile(release, [draining, replacement], now=now)
     rollout.reconcile(previous_release, [draining, replacement], now=now)
-    assert compute.get_internal_unit(pool.workspace_id, pool.id).replacement_release_generation == 3
+    with service_context.database.session() as session:
+        [operation] = CapacityMaintenanceRepository(session).active_for_pools([pool.id])
+    assert operation.release_generation == 3
+    replacement = replacement.model_copy(
+        update={
+            "runtime_image": release.target.worker_image,
+            "agent_binary_sha256": source.agent_binary_sha256,
+        }
+    )
     with compute.worker_release_admission(draining, release, [draining, replacement]):
         pass
     with (
@@ -2534,19 +2557,21 @@ def test_release_rollout_preserves_singleton_until_replacement_and_fresh_intake(
     with service_context.database.session() as session:
         assert not WorkerReleaseRepository(session).complete_update(current)
     rollout.reconcile(release, [current, replacement], now=now)
-    assert (
-        compute.get_internal_unit(pool.workspace_id, pool.id).replacement_machine_id == machine_id
-    )
+    assert compute.get_internal_unit(pool.workspace_id, pool.id).maintenance_surge_machines == 1
     current.request_poll_expires_at = now + timedelta(minutes=5)
     with service_context.database.session() as session:
         assert WorkerReleaseRepository(session).complete_update(current)
     rollout.reconcile(release, [current, replacement], now=now)
     settled = compute.get_internal_unit(pool.workspace_id, pool.id)
     assert settled.replacement_machine_id == ""
-    assert settled.replacement_release_generation == 0
+    assert settled.maintenance_surge_machines == 0
     assert settled.desired_machines == 1
     status = ComputeReleaseStatusService(service_context.database).read(release, [current])
-    assert not status.pending_capacity_owners
+    assert pool.id in status.pending_capacity_owners
+    rollout.reconcile(release, [current, replacement], now=now)
+    with service_context.database.session() as session:
+        [retiring] = CapacityMaintenanceRepository(session).active_for_pools([pool.id])
+        assert retiring.phase is CapacityMaintenancePhase.Retiring
     assert next(item for item in status.machines if item.machine_id == machine_id).current
 
 
@@ -4010,7 +4035,7 @@ def _seed_serving_machine(
     hooks.available_machines.add(machine_id)
 
 
-def test_worker_update_holds_fleet_maintenance_until_intake_returns_or_its_machine_stops(
+def test_worker_update_preserves_its_fence_without_blocking_another_pool(
     service_context: ServiceContext,
     real_redis_actors: RealRedisActors,
 ) -> None:
@@ -4111,20 +4136,8 @@ def test_worker_update_holds_fleet_maintenance_until_intake_returns_or_its_machi
         WorkerReleaseRepository(session).begin_update(worker.worker_id, machine_id, release)
     workers.remove_worker(worker.worker_id)
     assert workers.get_worker(worker.worker_id) is None
-    with (
-        pytest.raises(ConflictError, match="worker update"),
-        compute.worker_maintenance_admission(pool.workspace_id, sibling_id, other_machine_id),
-    ):
-        pass
-    with service_context.database.session() as session:
-        instances = ComputeProviderInstanceRepository(session)
-        updating = instances.get_by_machine(machine_id)
-        assert updating is not None
-        instances.upsert(updating.model_copy(update={"status": ReservationStatus.Stopped.value}))
     with compute.worker_maintenance_admission(pool.workspace_id, sibling_id, other_machine_id):
         pass
-    with service_context.database.session() as session:
-        ComputeProviderInstanceRepository(session).upsert(updating)
     updated = worker.model_copy(
         update={"runtime_image": "worker:v2", "agent_binary_sha256": "b" * 64}
     )
@@ -4379,8 +4392,6 @@ def _stopped_reserve(
         scheduler_hooks=_SchedulerHooks(),
         reserve_state=RedisFleetReserveState(real_redis_actors.client()),
         fleet_policy=FleetCapacityPolicy(
-            small_machine_cpu_millicores=provider.offer.cpu_millicores,
-            small_machine_memory_mib=provider.offer.memory_mb,
             spot=MarketReserve(),
             on_demand=MarketReserve(
                 stopped=HeadroomTarget(floor=Capacity(1_000, 1_024), maximum=Capacity(1_000, 1_024))
@@ -4442,14 +4453,38 @@ _RESERVE_RELEASE = ReleaseTarget(
 def test_stopped_reserve_from_an_older_release_is_prepared_again_and_records_the_release(
     service_context: ServiceContext,
     real_redis_actors: RealRedisActors,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     now = datetime.now(UTC)
     compute, provider, leases, unit, machine_id = _stopped_reserve(
         service_context, real_redis_actors, now=now
     )
-    assert compute.refresh_stale_reserve(_RESERVE_RELEASE, now=now) == machine_id
+    release = ActiveRelease(
+        generation=2, manifest_url="https://example.test/release", target=_RESERVE_RELEASE
+    )
+
+    def refuse_refresh(
+        self: _ReserveProvider, request: ProviderUnitRequest, provider_instance_id: str
+    ) -> ProviderUnitSnapshot:
+        raise RuntimeError("provider unavailable")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(_ReserveProvider, "refresh_machine", refuse_refresh)
+        assert compute.refresh_stale_reserves(release, now=now) == []
+    with service_context.database.session() as session:
+        repository = CapacityMaintenanceRepository(session)
+        [failed] = repository.active_for_pools([unit.id])
+        assert failed.phase is CapacityMaintenancePhase.Failed
+        committed = repository.commitments([unit.id])
+    now += timedelta(seconds=unit.registration_timeout_seconds)
+    assert compute.refresh_stale_reserves(release, now=now) == [machine_id]
+    with service_context.database.session() as session:
+        repository = CapacityMaintenanceRepository(session)
+        [retry] = repository.active_for_pools([unit.id])
+        assert retry.id == failed.id
+        assert repository.commitments([unit.id]) == committed
     assert provider.refreshed == [_RESERVE_INSTANCE]
-    assert compute.refresh_stale_reserve(_RESERVE_RELEASE, now=now) is None
+    assert compute.refresh_stale_reserves(release, now=now) == []
 
     with service_context.database.session() as session:
         instances = ComputeProviderInstanceRepository(session)
@@ -4492,6 +4527,7 @@ def test_stopped_reserve_from_an_older_release_is_prepared_again_and_records_the
     assert not ComputeReleaseStatusService(service_context.database).read(release, []).complete
     provider.reserve_status = "stopped"
     compute.reconcile_unit_capacity(unit.id, now=now)
+    ComputeReleaseRolloutService(compute).reconcile(release, [], now=now)
     status = ComputeReleaseStatusService(service_context.database).read(release, [])
     assert status.complete
     assert status.machines[0].phase is ReleaseMachinePhase.Current

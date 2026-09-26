@@ -16,16 +16,16 @@ from shared.compute_enrollment import AgentCapacityState
 from shared.compute_policy import ComputeUnitPhase
 from shared.container_requests import node_memory, schedulable_capacity
 from shared.gpu import normalize_gpu_type
+from shared.releases import ActiveRelease
 
 from compute.fleet_policy import (
-    Capacity,
     FleetCapacityPolicy,
     FleetReserveSnapshot,
     ReserveMachine,
     ReserveMachineState,
-    ReserveMarket,
     ReserveUnit,
 )
+from compute.fleet_resources import Capacity, ReserveMarket
 from compute.offers import ReservationStatus
 
 
@@ -71,16 +71,13 @@ def fleet_reserve_snapshot(
     *,
     purchasable_providers: frozenset[str],
     now: datetime,
+    ready_machine_ids: frozenset[str],
+    release: ActiveRelease | None,
 ) -> FleetReserveSnapshot:
     units = tuple(
         ReserveUnit(
             unit_id=unit.id,
             market=unit_reserve_market(preemptible=unit.preemptible, gpu_type=unit.gpu_type),
-            role=policy.role(
-                cpu_millicores=unit.cpu_millicores,
-                memory_mib=unit.memory_mib,
-                gpu_count=unit.gpu_count,
-            ),
             machine=machine_capacity(
                 unit.cpu_millicores,
                 unit.memory_mib,
@@ -92,6 +89,8 @@ def fleet_reserve_snapshot(
             stopped=unit.stopped,
             growable=_growable(unit, purchasable_providers=purchasable_providers, now=now),
             enabled=unit.provider_ref in purchasable_providers,
+            hourly_cost_micros=unit.hourly_cost_micros,
+            stopped_hourly_cost_micros=unit.stopped_hourly_cost_micros,
         )
         for unit in rows.units
     )
@@ -99,20 +98,32 @@ def fleet_reserve_snapshot(
     machines = tuple(
         machine
         for instance in rows.instances
-        if (machine := _reserve_machine(instance, minimums[instance.unit_id], now=now)) is not None
+        if (
+            machine := _reserve_machine(
+                instance,
+                minimums[instance.unit_id],
+                now=now,
+                ready_machine_ids=ready_machine_ids,
+                release=release,
+            )
+        )
+        is not None
     )
     committed_cpu = 0
     committed_gpu = 0
     running_cpu = 0
     for unit in rows.units:
         instances = [item for item in rows.instances if item.unit_id == unit.id]
-        surge = int(bool(unit.replacement_machine_id))
+        surge = int(bool(unit.replacement_machine_id)) + unit.maintenance_surge_machines
         committed = max(
             unit.desired
             + unit.stopped
             + unit.retiring_stopped
             + surge
-            + sum(item.status == ReservationStatus.Terminating.value for item in instances),
+            + sum(
+                item.status == ReservationStatus.Terminating.value and not item.surge_covered
+                for item in instances
+            ),
             unit.observed,
             len(instances),
             unit.provider_committed,
@@ -121,7 +132,17 @@ def fleet_reserve_snapshot(
             committed_gpu += committed
         else:
             committed_cpu += committed
-            running_cpu += (unit.desired + surge) * unit.cpu_millicores
+            stopped = sum(item.status == ReservationStatus.Stopped.value for item in instances)
+            running_cpu += max(
+                (
+                    unit.desired
+                    + int(bool(unit.replacement_machine_id))
+                    + max(unit.stopped - stopped - unit.maintenance_reserve_refreshes, 0)
+                )
+                * unit.cpu_millicores
+                + unit.maintenance_running_cpu_millicores,
+                (len(instances) - stopped) * unit.cpu_millicores,
+            )
     return FleetReserveSnapshot(
         units=units,
         machines=machines,
@@ -132,7 +153,12 @@ def fleet_reserve_snapshot(
 
 
 def _reserve_machine(
-    instance: PlatformReserveInstanceRow, billing_minimum_seconds: int | None, *, now: datetime
+    instance: PlatformReserveInstanceRow,
+    billing_minimum_seconds: int | None,
+    *,
+    now: datetime,
+    ready_machine_ids: frozenset[str],
+    release: ActiveRelease | None,
 ) -> ReserveMachine | None:
     if instance.missing:
         return None
@@ -171,6 +197,15 @@ def _reserve_machine(
             or now >= started + timedelta(seconds=billing_minimum_seconds)
         ),
         stopped_resumable=status == ReservationStatus.Stopped.value,
+        ready=(
+            release is not None
+            and release.target.accepts(
+                instance.prepared_worker_image,
+                instance.prepared_agent_sha256,
+            )
+            if status == ReservationStatus.Stopped.value
+            else instance.machine_id in ready_machine_ids
+        ),
     )
 
 

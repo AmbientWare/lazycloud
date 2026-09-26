@@ -4,15 +4,19 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import partial
+from itertools import groupby
 from typing import Protocol
 
 from shared.compute_policy import ComputeResourceRequirements, ComputeUnitRecord
+from shared.container_requests import capacity_memory_mib, node_memory, schedulable_capacity
 from shared.contracts import ContractModel
 from shared.errors import UpstreamUnavailableError
 from shared.placement import Placement, ProductRegion, product_region
 
+from compute.capacity_acquisition import plan_request_capacity
 from compute.context import ComputeContext
 from compute.fleet_reserves import ReserveAdmission
+from compute.fleet_resources import Capacity, ReserveMarket, ReserveOffer
 from compute.offers import ComputeOffer, OfferRequest, filter_offers, offer_selection_key
 from compute.providers import ResolvedComputeProvider
 
@@ -55,6 +59,8 @@ class ComputeCapacityPlacementRequest(ContractModel):
     requirements: ComputeResourceRequirements
     preferred_availability_zone: str = ""
     """The zone of a volume the workload's disk left cached, where it attaches without a restore."""
+    cohort: tuple[Capacity, ...] = ()
+    """Other due requests with identical placement and runtime requirements."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,9 +132,62 @@ class ComputeCapacityPlacementService:
             offers.extend((provider, offer, owners[offer.id]) for offer in candidates)
         admission = self.compute.reserve_admission()
         purchases: dict[str, ComputeCapacityPurchase] = {}
-        for provider, offer, owner_id in sorted(
-            offers, key=lambda item: offer_selection_key(item[1], purchase)
+        ordered = sorted(offers, key=lambda item: offer_selection_key(item[1], purchase))
+        packing_order: dict[str, int] = {}
+        workload = Capacity(
+            requirements.cpu_millicores,
+            capacity_memory_mib(requirements.memory_mb),
+            requirements.gpu_count,
+        )
+        batch = (workload, *request.cohort[:99])
+        for _, group in groupby(
+            ordered, key=lambda item: offer_selection_key(item[1], purchase)[0]
         ):
+            candidates = list(group)
+            costed: list[ReserveOffer] = []
+            for _, offer, owner_id in candidates:
+                price = offer.cost_terms.complete_hourly_cost_micros
+                if price is None:
+                    continue
+                reported = reported_memory.get(
+                    (offer.cpu_millicores, offer.memory_mb, offer.gpu_count), 0
+                )
+                costed.append(
+                    ReserveOffer(
+                        key=owner_id,
+                        market=ReserveMarket(offer.preemptible, offer.gpu or ""),
+                        machine=Capacity(
+                            schedulable_capacity(offer.cpu_millicores),
+                            schedulable_capacity(node_memory(offer.memory_mb, reported)),
+                            offer.gpu_count,
+                        ),
+                        nominal_cpu_millicores=offer.cpu_millicores,
+                        hourly_cost_micros=price,
+                        stopped_hourly_cost_micros=0,
+                        supports_reserve=False,
+                    )
+                )
+            packing = plan_request_capacity(
+                costed,
+                batch,
+                machine_limit=len(batch),
+                running_cpu_millicores=max(
+                    (offer.nominal_cpu_millicores for offer in costed), default=0
+                )
+                * len(batch),
+            )
+            packing_order.update(
+                (item.offer_key, index) for index, item in enumerate(packing.purchases)
+            )
+        ordered.sort(
+            key=lambda item: (
+                offer_selection_key(item[1], purchase)[0],
+                item[2] not in packing_order,
+                packing_order.get(item[2], 0),
+                offer_selection_key(item[1], purchase),
+            )
+        )
+        for provider, offer, owner_id in ordered:
             purchases.setdefault(
                 owner_id,
                 ComputeCapacityPurchase(
