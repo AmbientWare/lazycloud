@@ -16,6 +16,7 @@ from shared.capacity_maintenance import (
 from shared.compute_policy import (
     ENDED_UNIT_PHASES,
     ComputeCapacityMode,
+    ComputeUnitPhase,
     ComputeUnitRecord,
     ComputeUnitVisibility,
 )
@@ -124,8 +125,23 @@ class ComputeReleaseRolloutService:
         *,
         now: datetime,
     ) -> bool:
+        if unit.phase is ComputeUnitPhase.Deleting:
+            return False
         with self.compute.context.database.session() as session:
-            active = CapacityMaintenanceRepository(session).active_for_pools([unit.id])
+            repository = CapacityMaintenanceRepository(session)
+            active = repository.active_for_pools([unit.id])
+            if unit.phase is ComputeUnitPhase.Deleted:
+                # Provider reconciliation proves instance and storage absence
+                # before the unit reaches Deleted.
+                for operation in active:
+                    repository.transition(
+                        operation.id,
+                        expected_generation=operation.release_generation,
+                        expected_phase=operation.phase,
+                        phase=CapacityMaintenancePhase.Complete,
+                        now=now,
+                    )
+                return False
         changed = False
         members = {
             worker.machine_id: worker

@@ -4068,7 +4068,6 @@ class ComputeService:
             )
         snapshot = fleet_reserve_snapshot(
             rows,
-            self.fleet_policy,
             purchasable_providers=purchasable,
             now=now,
             ready_machine_ids=frozenset(
@@ -5039,6 +5038,7 @@ class ComputeService:
                 or current.min_free_gpu_count
                 or current.replacement_machine_id
                 or current.replacement_template_version
+                or current.maintenance_active
                 or CapacityRecoveryRepository(session).unit_has_active_recovery(current.id)
                 or ComputeCapacityOperationRepository(session).list_open_for_owner(
                     current.capacity_owner_id

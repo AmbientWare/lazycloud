@@ -67,7 +67,6 @@ def _growable(
 
 def fleet_reserve_snapshot(
     rows: PlatformReserveRows,
-    policy: FleetCapacityPolicy,
     *,
     purchasable_providers: frozenset[str],
     now: datetime,

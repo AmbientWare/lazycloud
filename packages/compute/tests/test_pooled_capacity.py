@@ -2574,6 +2574,40 @@ def test_release_rollout_preserves_singleton_until_replacement_and_fresh_intake(
         assert retiring.phase is CapacityMaintenancePhase.Retiring
     assert next(item for item in status.machines if item.machine_id == machine_id).current
 
+    provider.delete_failure = RuntimeError("provider deletion unavailable")
+    with pytest.raises(UpstreamUnavailableError, match="provider deletion unavailable"):
+        compute.delete_unit(pool.capacity_owner_id, workspace=pool.workspace_id)
+    rollout.reconcile(release, [current, replacement], now=now)
+    with service_context.database.session() as session:
+        assert CapacityMaintenanceRepository(session).get(retiring.id) == retiring
+        commitments = CapacityMaintenanceRepository(session).commitments([pool.id])
+        assert commitments.operations == 1
+        assert commitments.surge_machines == 1
+
+    provider.delete_failure = None
+    provider.lingering_storage.add("i-00000000000000000")
+    rollout.reconcile(release, [], now=now)
+    with service_context.database.session() as session:
+        unit = ComputeUnitRepository(session).get(pool.id)
+        assert unit is not None and unit.phase is ComputeUnitPhase.Deleting
+        assert CapacityMaintenanceRepository(session).commitments([pool.id]) == commitments
+
+    provider.lingering_storage.clear()
+    rollout.reconcile(release, [], now=now)
+    with service_context.database.session() as session:
+        unit = ComputeUnitRepository(session).get(pool.id)
+        assert unit is not None and unit.phase is ComputeUnitPhase.Deleted
+        assert CapacityMaintenanceRepository(session).commitments([pool.id]) == commitments
+
+    rollout.reconcile(release, [], now=now)
+    with service_context.database.session() as session:
+        repository = CapacityMaintenanceRepository(session)
+        completed = repository.get(retiring.id)
+        assert completed is not None and completed.phase is CapacityMaintenancePhase.Complete
+        assert repository.commitments([pool.id]).operations == 0
+        if platform_fleet:
+            assert ComputeUnitRepository(session).platform_capacity_usage(gpu=False) == 0
+
 
 def test_pooled_capacity_does_not_sell_one_pending_unit_twice(
     service_context: ServiceContext,

@@ -1244,14 +1244,14 @@ class ComputeUnitRepository:
                         table.visibility == ComputeUnitVisibility.Internal.value,
                         table.capacity_mode == ComputeCapacityMode.Pooled.value,
                         table.capacity_owner_id.in_(owner_ids),
+                        table.phase.not_in(
+                            (ComputeUnitPhase.Deleted.value, ComputeUnitPhase.Deleting.value)
+                        ),
                     ),
                     exists().where(
                         CapacityMaintenanceTable.pool_id == table.id,
                         CapacityMaintenanceTable.completed_at.is_(None),
                     ),
-                ),
-                table.phase.not_in(
-                    (ComputeUnitPhase.Deleted.value, ComputeUnitPhase.Deleting.value)
                 ),
             )
             .order_by(table.id)
