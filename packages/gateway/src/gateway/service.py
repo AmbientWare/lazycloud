@@ -112,7 +112,7 @@ from scheduler.state import (
     RedisWorkerPoolStateRepository,
     SchedulerRepositoryError,
 )
-from scheduler.worker_rollout import WorkerWorkloadRolloutService, worker_rollout_allowance
+from scheduler.worker_rollout import WorkerWorkloadRolloutService
 from scheduler.workers import (
     SchedulerWorkerAdminRepository,
     SchedulerWorkerAdminService,
@@ -2153,6 +2153,13 @@ class GatewayControlService:
                 WorkerReleaseRepository(session).update_generation(worker_id, state.machine_id)
                 == release.generation
             )
+            if request.update_error:
+                WorkerReleaseRepository(session).record_update_error(
+                    worker_id,
+                    state.machine_id,
+                    generation=request.generation,
+                    reason=request.update_error,
+                )
         return AgentReleaseResponse(
             generation=release.generation,
             agent=release.target.agent,
@@ -2607,63 +2614,55 @@ class GatewayControlService:
             with (
                 self.capacity_reservations.mutation_lock(worker.capacity_owner_id),
                 self.capacity_reservations.dispatch_lock(worker.capacity_owner_id),
-                self.services.compute.worker_maintenance_admission(
-                    worker.workspace_id, worker.capacity_owner_id, worker.machine_id
-                ) as session,
             ):
                 current = self.scheduler_worker_lookup.get_worker(worker.worker_id)
                 if current is None or current.capacity_owner_id != worker.capacity_owner_id:
                     return worker, False
-                max_unavailable = worker_rollout_allowance(
-                    current, self.scheduler_worker_lookup.list_workers(), now=current_time
-                )
-                if not max_unavailable:
-                    return current, False
-                WorkerReleaseRepository(session).begin_update(
-                    current.worker_id, current.machine_id, release
-                )
-                claimed = self.scheduler_worker_lookup.claim_worker_rollout_slot(
-                    current.capacity_owner_id,
-                    current.worker_id,
-                    image_revision,
-                    max_unavailable=max_unavailable,
-                    now=current_time,
-                )
-                if not claimed:
-                    raise ConflictError("worker update allowance is already occupied")
-                if current.status is SchedulerWorkerStatus.Draining:
-                    if (
-                        current.admitted_release_generation == release.generation
-                        and current.agent_binary_sha256 == agent_binary_sha256
-                        and release.admits(current.runtime_image, current.agent_binary_sha256)
-                    ):
-                        return (
-                            self.scheduler_worker_lookup.resume_worker_registration(current),
-                            True,
-                        )
-                    return current, True
-                try:
-                    drained = self.scheduler_maintenance.drain_worker(
-                        WorkerPlannedDrainOperation(
-                            operation_id=(
-                                f"worker-image-{image_revision}-{current.resource_version}"
-                            ),
-                            worker_id=current.worker_id,
-                            capacity_owner_id=current.capacity_owner_id,
-                            machine_id=current.machine_id,
-                            expected_resource_version=current.resource_version,
-                            reason="worker image update",
-                            observed_at=current_time,
-                        )
-                    ).worker
-                except Exception:
-                    self.scheduler_worker_lookup.release_worker_rollout_slot(
+                with self.services.compute.worker_release_admission(
+                    current, release, self.scheduler_worker_lookup.list_workers()
+                ):
+                    claimed = self.scheduler_worker_lookup.claim_worker_rollout_slot(
                         current.capacity_owner_id,
                         current.worker_id,
                         image_revision,
+                        max_unavailable=1,
+                        now=current_time,
                     )
-                    raise
-                return drained, True
+                    if not claimed:
+                        raise ConflictError("worker update allowance is already occupied")
+                    if current.status is SchedulerWorkerStatus.Draining:
+                        if (
+                            current.admitted_release_generation == release.generation
+                            and current.agent_binary_sha256 == agent_binary_sha256
+                            and release.admits(current.runtime_image, current.agent_binary_sha256)
+                        ):
+                            return (
+                                self.scheduler_worker_lookup.resume_worker_registration(current),
+                                True,
+                            )
+                        return current, True
+                    try:
+                        drained = self.scheduler_maintenance.drain_worker(
+                            WorkerPlannedDrainOperation(
+                                operation_id=(
+                                    f"worker-image-{image_revision}-{current.resource_version}"
+                                ),
+                                worker_id=current.worker_id,
+                                capacity_owner_id=current.capacity_owner_id,
+                                machine_id=current.machine_id,
+                                expected_resource_version=current.resource_version,
+                                reason="worker image update",
+                                observed_at=current_time,
+                            )
+                        ).worker
+                    except Exception:
+                        self.scheduler_worker_lookup.release_worker_rollout_slot(
+                            current.capacity_owner_id,
+                            current.worker_id,
+                            image_revision,
+                        )
+                        raise
+                    return drained, True
         except (
             ConflictError,
             CapacityReservationLockContendedError,

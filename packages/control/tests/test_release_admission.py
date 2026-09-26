@@ -4,11 +4,13 @@ from uuid import uuid4
 from control.release_settings import ReleaseSettings
 from control.releases import DeploymentReleaseService
 from shared.placement import Placement
-from shared.releases import ActiveRelease, AgentArtifact, ReleaseTarget
+from shared.releases import ActiveRelease, AgentArtifact, ReleaseTarget, RuntimeArtifacts
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 
 
-def test_activation_preserves_serving_and_fences_upgrade_authority(tmp_path: Path) -> None:
+def test_activation_requires_explicit_compatibility_and_fences_upgrade_authority(
+    tmp_path: Path,
+) -> None:
     path = tmp_path / "active.json"
     url = "https://releases.example.com/new/manifest.json"
     service = DeploymentReleaseService(ReleaseSettings(manifest_url=url, active_file=path))
@@ -43,23 +45,22 @@ def test_activation_preserves_serving_and_fences_upgrade_authority(tmp_path: Pat
     previous = worker.model_copy(
         update={
             "status": SchedulerWorkerStatus.Available,
-            "runtime_image": "older",
+            "runtime_image": "registry.example.com/worker@sha256:" + "c" * 64,
             "admitted_release_generation": 1,
         }
     )
     assert service.worker_registration_generation(previous) == 0
     assert service.worker_registration_generation(worker) == release.generation
+    assert service.admitted_workers([previous]) == []
+    release.target.compatible_runtimes = [
+        RuntimeArtifacts(worker_image=previous.runtime_image, agent_sha256="b" * 64)
+    ]
+    path.write_text(release.model_dump_json())
     assert service.admitted_workers([previous]) == [previous]
+    assert service.worker_registration_generation(previous) == release.generation
+    assert not release.admits(previous.runtime_image, previous.agent_binary_sha256)
     assert (
-        service.admitted_workers(
-            [previous.model_copy(update={"status": SchedulerWorkerStatus.Draining})]
-        )
-        == []
-    )
-    assert (
-        service.admitted_workers(
-            [previous.model_copy(update={"status": SchedulerWorkerStatus.Unavailable})]
-        )
+        service.admitted_workers([previous.model_copy(update={"agent_binary_sha256": "d" * 64})])
         == []
     )
     old_url = "https://releases.example.com/old/manifest.json"

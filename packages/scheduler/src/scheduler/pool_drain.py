@@ -243,6 +243,12 @@ class ManagedComputeWorkerPoolDrainController:
                 placement=self.placement,
                 reason="worker-pool capacity changed during provider observation",
             )
+        if current_unit.replacement_release_generation:
+            return WorkerPoolDrainResult(
+                capacity_owner_id=self.capacity_owner_id,
+                placement=self.placement,
+                reason=current_unit.replacement_reason,
+            )
         operational_desired, _maximum = provider_unit_operational_capacity(current_unit)
         recovery_sources = self.compute.recovery_protected_machines(current_unit.id)
         if observation.snapshot.observed_machines > operational_desired:

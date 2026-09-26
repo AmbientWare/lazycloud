@@ -2734,7 +2734,7 @@ def test_a_joined_machine_cannot_register_itself_into_the_shared_fleet(
 
 
 @pytest.mark.parametrize("supersede_release", [False, True])
-def test_worker_admission_survives_activation_and_registration_after_redis_loss(
+def test_worker_update_fences_previous_runtime_after_activation_and_redis_loss(
     isolated_services: ApiServices,
     monkeypatch: pytest.MonkeyPatch,
     supersede_release: bool,
@@ -2811,7 +2811,7 @@ def test_worker_admission_survives_activation_and_registration_after_redis_loss(
             update={"manifest_url": ReleaseSettings().manifest_url}
         )
         ReleaseSettings().active_file.write_text(following.model_dump_json())
-        assert service._worker_release_admitted(current)
+        assert not service._worker_release_admitted(current)
         service.workers.remove_worker(slot.worker_id)
         with isolated_services.context.database.session() as session:
             enrollment = ComputeMachineEnrollmentRepository(session).by_machine(

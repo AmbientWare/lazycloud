@@ -1,4 +1,3 @@
-from datetime import timedelta
 from uuid import uuid4
 
 from api.server.services import ApiServices
@@ -6,12 +5,10 @@ from database.repositories.billing_ledger import ContainerBillingShapeRepository
 from database.repositories.orchestration import ContainerRepository
 from scheduler.state import RedisSchedulerContainerRepository, RedisSchedulerWorkerRepository
 from scheduler.worker_inventory import WorkerCapacityRecovery
-from scheduler.worker_rollout import worker_rollout_allowance
 from shared.billing_quotes import ContainerShape
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.placement import Placement
 from shared.scheduling import SchedulerContainerStatus, SchedulerWorkerRecord, SchedulerWorkerStatus
-from shared.timestamps import utc_now
 from shared.usage import UsageBillingOwner
 from tests.real_redis import RealRedisActors
 
@@ -74,21 +71,3 @@ def test_worker_recovery_reserves_durable_running_capacity_before_admission(
     assert state is not None and state.status is SchedulerContainerStatus.Running
     assert state.worker_id == worker_id
     assert state.memory_mib == 1024
-
-
-def test_platform_rollout_preserves_request_intake_across_pools() -> None:
-    now = utc_now()
-    current = SchedulerWorkerRecord(
-        worker_id="current",
-        placement=Placement.machine("fleet"),
-        capacity_owner_id=str(uuid4()),
-        billing_owner=UsageBillingOwner.PlatformFleet,
-        status=SchedulerWorkerStatus.Available,
-        request_poll_expires_at=now + timedelta(seconds=30),
-    )
-    other = current.model_copy(update={"worker_id": "other", "capacity_owner_id": str(uuid4())})
-    assert worker_rollout_allowance(current, [current, other], now=now) == 1
-    stale = other.model_copy(update={"request_poll_expires_at": now - timedelta(seconds=1)})
-    assert worker_rollout_allowance(current, [current, stale], now=now) == 0
-    assert worker_rollout_allowance(current, [current], now=now) == 0
-    assert worker_rollout_allowance(stale, [stale], now=now) == 1

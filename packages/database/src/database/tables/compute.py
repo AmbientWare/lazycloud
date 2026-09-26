@@ -102,6 +102,17 @@ class ComputeUnitTable(IdTable, DatabaseBase):
             name="ck_compute_units_machine_capacity",
         ),
         CheckConstraint("generation > 0", name="ck_compute_units_generation"),
+        CheckConstraint(
+            "replacement_release_generation >= 0 AND "
+            "(replacement_release_generation = 0 OR "
+            "(replacement_machine_id <> '' AND replacement_template_version = ''))",
+            name="ck_compute_units_release_replacement",
+        ),
+        Index(
+            "ix_compute_units_release_replacement",
+            "id",
+            postgresql_where=text("replacement_release_generation > 0"),
+        ),
         CheckConstraint("provider_state_revision >= 0", name="ck_compute_units_provider_revision"),
         CheckConstraint(
             "provider_committed_machines >= 0", name="ck_compute_units_provider_commitment"
@@ -223,6 +234,12 @@ class ComputeUnitTable(IdTable, DatabaseBase):
     supplier_cpu_count: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     replacement_machine_id: Mapped[str] = mapped_column(String(160), nullable=False)
     replacement_template_version: Mapped[str] = mapped_column(String(160), nullable=False)
+    replacement_release_generation: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default="0"
+    )
+    replacement_reason: Mapped[str] = mapped_column(
+        String(512), nullable=False, default="", server_default=""
+    )
 
 
 class ComputeNodeShapeTable(DatabaseBase):

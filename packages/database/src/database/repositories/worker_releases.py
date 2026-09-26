@@ -2,18 +2,144 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from database.tables.orchestration import WorkerTable
+from database.tables.compute import (
+    ComputeMachineEnrollmentTable,
+    ComputeProviderInstanceTable,
+    ComputeUnitTable,
+)
+from database.tables.orchestration import MachineTable, WorkerTable
+from shared.compute_enrollment import ComputeMachineEnrollmentStatus
+from shared.compute_fleet import MachineLifecycle
+from shared.compute_policy import ComputeCapacityMode
 from shared.errors import ConflictError
 from shared.releases import ActiveRelease
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 from shared.timestamps import utc_now
-from sqlalchemy import select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
+
+
+@dataclass(frozen=True, slots=True)
+class ReleaseMachineObservation:
+    machine_id: str
+    worker_id: str
+    capacity_owner_id: str
+    lifecycle: MachineLifecycle
+    provider_status: str
+    runtime_image: str
+    agent_sha256: str
+    update_generation: int
+    replacement_reason: str
+    update_error: str
 
 
 @dataclass(slots=True)
 class WorkerReleaseRepository:
     session: Session
+
+    def pending_capacity_owners(self) -> list[str]:
+        stopped = (
+            select(func.count(ComputeProviderInstanceTable.id))
+            .where(
+                ComputeProviderInstanceTable.pool_id == ComputeUnitTable.id,
+                ComputeProviderInstanceTable.status == "stopped",
+                ComputeProviderInstanceTable.missing_since.is_(None),
+            )
+            .scalar_subquery()
+        )
+        return list(
+            self.session.scalars(
+                select(ComputeUnitTable.capacity_owner_id).where(
+                    ComputeUnitTable.capacity_mode == ComputeCapacityMode.Pooled.value,
+                    ComputeUnitTable.phase != "deleted",
+                    or_(
+                        ComputeUnitTable.replacement_release_generation > 0,
+                        ComputeUnitTable.observed_machines != ComputeUnitTable.desired_machines,
+                        stopped != ComputeUnitTable.stopped_machines,
+                        ComputeUnitTable.retiring_stopped_machines > 0,
+                    ),
+                )
+            )
+        )
+
+    def fleet_observations(self) -> list[ReleaseMachineObservation]:
+        machine = MachineTable
+        worker = WorkerTable
+        instance = ComputeProviderInstanceTable
+        enrollment = ComputeMachineEnrollmentTable
+        unit = ComputeUnitTable
+        rows = self.session.execute(
+            select(
+                machine.id,
+                worker.id,
+                unit.capacity_owner_id,
+                machine.lifecycle,
+                instance.status,
+                instance.prepared_worker_image,
+                instance.prepared_agent_sha256,
+                worker.admitted_runtime_image,
+                worker.admitted_agent_sha256,
+                worker.update_generation,
+                unit.replacement_reason,
+                worker.update_error,
+            )
+            .select_from(machine)
+            .outerjoin(worker, worker.machine_id == machine.id)
+            .outerjoin(instance, instance.machine_id == machine.id)
+            .outerjoin(
+                enrollment,
+                and_(
+                    enrollment.machine_id == machine.id,
+                    enrollment.status == ComputeMachineEnrollmentStatus.Active.value,
+                ),
+            )
+            .join(
+                unit,
+                or_(
+                    unit.id == instance.pool_id,
+                    unit.capacity_owner_id == enrollment.capacity_owner_id,
+                ),
+            )
+            .where(
+                machine.lifecycle.not_in(("deleted", "terminating")),
+                or_(machine.lifecycle != "failed", enrollment.id.is_not(None)),
+                unit.phase != "deleted",
+            )
+            .distinct(machine.id)
+            .order_by(machine.id, worker.last_seen_at.desc())
+        ).tuples()
+        return [
+            ReleaseMachineObservation(
+                machine_id=machine_id,
+                worker_id=worker_id or "",
+                capacity_owner_id=owner_id,
+                lifecycle=MachineLifecycle(lifecycle),
+                provider_status=provider_status or "",
+                runtime_image=(prepared_image or "")
+                if provider_status == "stopped"
+                else image or "",
+                agent_sha256=(prepared_agent or "")
+                if provider_status == "stopped"
+                else agent or "",
+                update_generation=update_generation or 0,
+                replacement_reason=reason,
+                update_error=error or "",
+            )
+            for (
+                machine_id,
+                worker_id,
+                owner_id,
+                lifecycle,
+                provider_status,
+                prepared_image,
+                prepared_agent,
+                image,
+                agent,
+                update_generation,
+                reason,
+                error,
+            ) in rows
+        ]
 
     def admit(self, worker: SchedulerWorkerRecord, *, generation: int) -> int:
         row = self._worker(worker.worker_id, worker.machine_id)
@@ -39,6 +165,16 @@ class WorkerReleaseRepository:
         row.update_runtime_image = release.target.worker_image
         row.update_agent_sha256 = release.target.agent.sha256 if release.target.agent else ""
         row.update_started_at = utc_now()
+        row.update_error = ""
+        self.session.flush()
+
+    def record_update_error(
+        self, worker_id: str, machine_id: str, *, generation: int, reason: str
+    ) -> None:
+        row = self._worker(worker_id, machine_id)
+        if row.update_generation != generation:
+            raise ConflictError("agent update error belongs to a different release")
+        row.update_error = reason
         self.session.flush()
 
     def update_generation(self, worker_id: str, machine_id: str) -> int:
@@ -93,6 +229,7 @@ class WorkerReleaseRepository:
         row.update_runtime_image = ""
         row.update_agent_sha256 = ""
         row.update_started_at = None
+        row.update_error = ""
 
     def _worker(self, worker_id: str, machine_id: str) -> WorkerTable:
         row = self.session.scalar(

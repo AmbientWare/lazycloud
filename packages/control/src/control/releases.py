@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 
 from shared.errors import ConflictError
 from shared.releases import ActiveRelease
-from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
+from shared.scheduling import SchedulerWorkerRecord
 
 from control.release_settings import ReleaseSettings
 
@@ -36,16 +36,14 @@ class DeploymentReleaseService:
         return [
             worker
             for worker in workers
-            if release.admits(worker.runtime_image, worker.agent_binary_sha256)
-            or (
-                worker.status is SchedulerWorkerStatus.Available
-                and 0 < worker.admitted_release_generation <= release.generation
-            )
+            if release.target.accepts(worker.runtime_image, worker.agent_binary_sha256)
         ]
 
     def worker_registration_generation(self, worker: SchedulerWorkerRecord) -> int:
         release = self.active()
-        if release is None or not release.admits(worker.runtime_image, worker.agent_binary_sha256):
+        if release is None or not release.target.accepts(
+            worker.runtime_image, worker.agent_binary_sha256
+        ):
             return 0
         return release.generation
 
