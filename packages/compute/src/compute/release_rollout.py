@@ -223,7 +223,7 @@ class ComputeReleaseRolloutService:
                         phase=CapacityMaintenancePhase.Complete,
                         now=now,
                     )
-                else:
+                elif operation.phase is not CapacityMaintenancePhase.Failed:
                     reason = (
                         "waiting for provider instance and storage cleanup"
                         if source.status == "terminating" or source.missing_since is not None
