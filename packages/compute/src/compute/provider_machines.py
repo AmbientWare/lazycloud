@@ -17,6 +17,7 @@ from enum import StrEnum
 from typing import Protocol
 from uuid import uuid4
 
+from database.repositories.capacity_activations import CapacityActivationRepository
 from database.repositories.compute import (
     ComputeCapacityOperationRepository,
     ComputeJoinCredentialRepository,
@@ -425,6 +426,10 @@ class ProviderMachineReconciler:
                     settled_existing.prepared_worker_image if settled_existing else ""
                 ),
                 "hibernates": instance.hibernates,
+                "stop_mode": instance.stop_mode,
+                "sleep_outcome": instance.sleep_outcome,
+                "activation_requested_at": instance.activation_requested_at,
+                "provider_running_at": instance.provider_running_at,
                 # Kept only while the resume it authorized is still finishing.
                 "resume_authorized_at": (
                     settled_existing.resume_authorized_at
@@ -444,7 +449,7 @@ class ProviderMachineReconciler:
                 "last_error": settled_existing.last_error if settled_existing else "",
                 "updated_at": now,
             }
-            repository.upsert(
+            recorded = repository.upsert(
                 ComputeProviderInstanceRecord.model_validate(
                     {
                         **(
@@ -456,6 +461,18 @@ class ProviderMachineReconciler:
                     }
                 )
             )
+            if instance.activation_requested_at is not None and (
+                settled_existing is None
+                or settled_existing.activation_requested_at != instance.activation_requested_at
+                or settled_existing.provider_running_at != instance.provider_running_at
+            ):
+                CapacityActivationRepository(session).observe(
+                    recorded.id,
+                    requested_at=instance.activation_requested_at,
+                    kind=instance.activation_kind,
+                    provider_running_at=instance.provider_running_at,
+                    observed_at=now,
+                )
         for existing in current:
             if existing.instance_id is not None and existing.instance_id in observed:
                 continue

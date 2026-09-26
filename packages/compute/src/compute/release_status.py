@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 
+from database.repositories.capacity_maintenance import CapacityMaintenanceRepository
 from database.repositories.worker_releases import WorkerReleaseRepository
 from shared.compute_fleet import MachineLifecycle
 from shared.releases import (
@@ -7,6 +8,7 @@ from shared.releases import (
     FleetReleaseStatus,
     ReleaseMachinePhase,
     ReleaseMachineStatus,
+    ReleaseMaintenanceStatus,
 )
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 from shared.timestamps import utc_now
@@ -24,6 +26,7 @@ class ComputeReleaseStatusService:
         with self.database.session() as session:
             observations = WorkerReleaseRepository(session).fleet_observations()
             pending_capacity = WorkerReleaseRepository(session).pending_capacity_owners()
+            operations = CapacityMaintenanceRepository(session).progress_for_pools(pending_capacity)
         live = {worker.machine_id: worker for worker in workers}
         machines: list[ReleaseMachineStatus] = []
         now = utc_now()
@@ -102,4 +105,18 @@ class ComputeReleaseStatusService:
             and all(machine.phase is ReleaseMachinePhase.Current for machine in machines),
             machines=machines,
             pending_capacity_owners=pending_capacity,
+            maintenance=[
+                ReleaseMaintenanceStatus(
+                    operation_id=operation.id,
+                    source_machine_id=operation.source_machine_id,
+                    replacement_machine_id=operation.replacement_machine_id,
+                    capacity_owner_id=operation.pool_id,
+                    kind=operation.kind,
+                    phase=operation.phase,
+                    reason=operation.reason,
+                    last_progress_at=operation.updated_at,
+                    stalled=(now - operation.updated_at).total_seconds() > timeout,
+                )
+                for operation, timeout in operations
+            ],
         )

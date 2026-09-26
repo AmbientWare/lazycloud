@@ -1,7 +1,15 @@
 from datetime import datetime, timedelta
 from typing import Literal
 
-from database.repositories.startup_latency import FunctionStartupFacts, StartupLatencyRepository
+from database.repositories.capacity_activations import (
+    CapacityActivationRepository,
+    CapacityActivationSummary,
+)
+from database.repositories.startup_latency import (
+    FunctionExecutionFacts,
+    FunctionStartupFacts,
+    StartupLatencyRepository,
+)
 from shared.contracts import ContractModel
 from shared.errors import InvalidInputError
 from shared.startup import (
@@ -20,11 +28,19 @@ class StartupLatencyReport(ContractModel):
     cold_container_target_seconds: float = COLD_CONTAINER_START_TARGET_SECONDS
     warm_execution_target_seconds: float = WARM_EXECUTION_START_TARGET_SECONDS
     functions: FunctionStartupFacts
-    warm_execution_measurement: Literal["unavailable"] = "unavailable"
+    execution: FunctionExecutionFacts
+    platform_activations: tuple[CapacityActivationSummary, ...]
+    warm_execution_measurement: Literal["server_clock_upper_bound"] = "server_clock_upper_bound"
     limitations: tuple[str, ...] = (
         "Function readiness is the first runner claim poll after initialization.",
         "Container creation is the earliest recorded timestamp; preceding API work is excluded.",
-        "Task and endpoint start timestamps record server claims, not user execution start.",
+        "Execution-entry bounds subtract runner monotonic elapsed time from server receipt; "
+        "transport delay remains included.",
+        "Entry evidence is delivered when the handler returns or raises; "
+        "killed and unfinished calls can lack evidence.",
+        "Warm classification requires readiness before the invocation became claimable; "
+        "retries include retry delay.",
+        "Images with an older SDK may lack decorated-handler entry instrumentation.",
         "Other workload kinds do not persist application readiness timestamps.",
     )
 
@@ -51,6 +67,15 @@ class StartupLatencyService:
                 now=until,
                 deadline_seconds=COLD_CONTAINER_START_TARGET_SECONDS,
             )
+            execution = StartupLatencyRepository(session).execution_entries(
+                workspace_id=workspace_id, since=since, now=until
+            )
+            activations = CapacityActivationRepository(session).summarize(since=since)
         return StartupLatencyReport(
-            workspace_id=workspace_id, since=since, until=until, functions=facts
+            workspace_id=workspace_id,
+            since=since,
+            until=until,
+            functions=facts,
+            execution=execution,
+            platform_activations=activations,
         )

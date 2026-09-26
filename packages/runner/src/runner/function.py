@@ -35,6 +35,7 @@ from shared.env import (
     truthy_env_value,
 )
 from shared.errors import InvalidInputError
+from shared.execution_entry import observe_execution_entry
 from shared.function_display import build_function_result_display
 from shared.function_payloads import (
     FUNCTION_MARKER_MAX_DEPTH,
@@ -53,6 +54,8 @@ from shared.http.functions import (
     FunctionClaimedTask,
     FunctionClaimRequest,
     FunctionClaimResponse,
+    FunctionExecutionEntryRequest,
+    FunctionExecutionEntryResponse,
     FunctionMonitorRequest,
     FunctionMonitorResponse,
     FunctionRetireRequest,
@@ -91,9 +94,7 @@ from runner.runtime import (
 )
 from runner.worker_processes import stop_worker_processes
 
-# How often an idle container asks for work. Short enough that a call arriving
-# at a warm container is served promptly, which is the whole point of holding
-# one open.
+# Retry delay for transport failures and source reloads.
 DEFAULT_FUNCTION_POLL_INTERVAL_SECONDS = 0.1
 _CANCELLED_WORKER_EXIT_CODE = 75
 _FUNCTION_CALL_REFERENCE_ADAPTER = TypeAdapter[FunctionCallPersistentId](FunctionCallPersistentId)
@@ -135,6 +136,7 @@ class ClaimedTask:
     attempt_number: int
     max_attempts: int
     invocation: FunctionInvocation
+    claim_id: str = ""
 
 
 class FunctionInvocation(BaseModel):
@@ -308,6 +310,7 @@ class FunctionRunner:
         """
 
         idle_since = time.monotonic()
+        retirement_retry_at = 0.0
         claim_id = str(uuid4())
         while shutdown is None or not shutdown.is_set():
             if self._retired.is_set():
@@ -316,9 +319,19 @@ class FunctionRunner:
                 time.sleep(self.config.poll_interval_seconds)
                 continue
             task = None
+            claim_failed = False
+            received_claim_id = claim_id
             try:
                 try:
-                    claimed = self.claim(claim_id)
+                    remaining = (
+                        20.0
+                        if self.config.keep_warm_seconds < 0
+                        else max(
+                            0.0, self.config.keep_warm_seconds - (time.monotonic() - idle_since)
+                        )
+                    )
+                    remaining = max(remaining, retirement_retry_at - time.monotonic())
+                    claimed = self.claim(claim_id, wait_seconds=min(20.0, remaining))
                 except Exception as exc:
                     # Keep the claim id: the server may have assigned a task whose
                     # response was lost, and resending the id recovers it. A
@@ -326,6 +339,7 @@ class FunctionRunner:
                     # so say so on the container's own stream.
                     print(f"function claim failed: {exc}", file=sys.stderr, flush=True)
                     claimed = None
+                    claim_failed = True
                 else:
                     claim_id = str(uuid4())
                 if claimed is not None:
@@ -335,15 +349,19 @@ class FunctionRunner:
                         attempt_number=claimed.attempt_number,
                         max_attempts=claimed.max_attempts,
                         invocation=decode_function_invocation(claimed),
+                        claim_id=received_claim_id,
                     )
                     self.run_task(task)
             finally:
                 with self._generation_lock:
                     self._generation_calls -= 1
             if task is None:
-                if self.keep_warm_expired(idle_since) and self.retire_if_idle():
-                    return 0
-                time.sleep(self.config.poll_interval_seconds)
+                if self.keep_warm_expired(idle_since):
+                    if self.retire_if_idle():
+                        return 0
+                    retirement_retry_at = time.monotonic() + 5
+                if claim_failed:
+                    time.sleep(self.config.poll_interval_seconds)
                 continue
             idle_since = time.monotonic()
         return 0
@@ -388,7 +406,7 @@ class FunctionRunner:
             self._retired.set()
         return response.retired
 
-    def claim(self, claim_id: str) -> FunctionClaimedTask | None:
+    def claim(self, claim_id: str, *, wait_seconds: float = 0) -> FunctionClaimedTask | None:
         return FunctionClaimResponse.model_validate(
             self.control.post(
                 "/api/v1/functions/claim",
@@ -396,6 +414,7 @@ class FunctionRunner:
                     stub_id=self.config.stub_id,
                     container_id=self.container_id,
                     claim_id=claim_id,
+                    wait_seconds=wait_seconds,
                 ).model_dump(mode="json"),
             )
         ).task
@@ -455,12 +474,19 @@ class FunctionRunner:
         return self._handler
 
     def execute_with_log_capture(self, task: ClaimedTask) -> Any:
+        entered_at: float | None = None
+
+        def entered() -> None:
+            nonlocal entered_at
+            if entered_at is None:
+                entered_at = time.monotonic()
+
         logs = TaskLogBuffer(
             lambda stream, messages: self.append_task_logs(task.task_id, stream, messages)
         )
         stdout = RunnerTaskLogStream("stdout", logs)
         stderr = RunnerTaskLogStream("stderr", logs)
-        with routed_output(stdout, stderr):
+        with routed_output(stdout, stderr), observe_execution_entry(entered):
             try:
                 return invoke_handler(
                     self.handler(),
@@ -469,6 +495,21 @@ class FunctionRunner:
                     encoding=task.invocation.argument_encoding,
                 )
             finally:
+                if entered_at is not None and task.claim_id:
+                    try:
+                        FunctionExecutionEntryResponse.model_validate(
+                            self.control.post(
+                                "/api/v1/functions/execution-entry",
+                                FunctionExecutionEntryRequest(
+                                    task_id=task.task_id,
+                                    container_id=self.container_id,
+                                    claim_id=task.claim_id,
+                                    elapsed_since_entry_seconds=time.monotonic() - entered_at,
+                                ).model_dump(mode="json"),
+                            )
+                        )
+                    except Exception as exc:
+                        self.report_log_delivery_failure(task.task_id, f"execution entry: {exc}")
                 stdout.close()
                 stderr.close()
                 logs.close()

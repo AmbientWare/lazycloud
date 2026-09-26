@@ -1033,6 +1033,7 @@ class TaskService:
                 "parent_task_id": task.parent_task_id,
                 "status": task.status.value,
                 "attempt_number": task.attempt_number,
+                "claimable_at": task.claimable_at,
                 "max_attempts": task.max_attempts,
                 "error": task.error,
                 "exit_code": task.exit_code,

@@ -6,8 +6,9 @@ behind narrow protocols.
 
 `readiness.py` owns startup preparation and validation. Preparation runs during
 the admission hold and must not call the control plane. Its completion also
-gates the admission-waiting marker. Network and GPU validation run after
-registration. Readiness threads must not keep a stopped worker process alive;
+gates the admission-waiting marker. Local GPU driver preparation overlaps runtime
+and image checks. Network and fresh GPU validation run after registration.
+Readiness threads must not keep a stopped worker process alive;
 local cleanup also runs when registration never succeeded.
 
 Process entrypoints, API and SDK code, app state, and broad composition stay

@@ -167,18 +167,10 @@ class ComputeCapacityPlacementService:
                         supports_reserve=False,
                     )
                 )
-            packing = plan_request_capacity(
-                costed,
-                batch,
-                machine_limit=len(batch),
-                running_cpu_millicores=max(
-                    (offer.nominal_cpu_millicores for offer in costed), default=0
-                )
-                * len(batch),
-            )
-            packing_order.update(
-                (item.offer_key, index) for index, item in enumerate(packing.purchases)
-            )
+            packing = plan_request_capacity(costed, batch)
+            for node in packing.nodes:
+                if 0 in node.request_indices:
+                    packing_order[node.offer_key] = 0
         ordered.sort(
             key=lambda item: (
                 offer_selection_key(item[1], purchase)[0],

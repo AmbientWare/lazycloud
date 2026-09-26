@@ -223,6 +223,23 @@ class ComputeReleaseRolloutService:
                         phase=CapacityMaintenancePhase.Complete,
                         now=now,
                     )
+                else:
+                    reason = (
+                        "waiting for provider instance and storage cleanup"
+                        if source.status == "terminating" or source.missing_since is not None
+                        else "waiting for the prepared reserve to stop"
+                        if source.status == "stopping"
+                        else "waiting for the reserve to boot and prepare the target release"
+                    )
+                    if reason != operation.reason:
+                        repository.transition(
+                            operation.id,
+                            expected_generation=operation.release_generation,
+                            expected_phase=operation.phase,
+                            phase=operation.phase,
+                            reason=reason,
+                            now=now,
+                        )
                 return False
             if operation.phase is CapacityMaintenancePhase.Retiring:
                 records = instances.list_for_pool(unit.id, excluded_statuses=("deleted",))
@@ -239,6 +256,15 @@ class ComputeReleaseRolloutService:
                         expected_generation=operation.release_generation,
                         expected_phase=operation.phase,
                         phase=CapacityMaintenancePhase.Complete,
+                        now=now,
+                    )
+                elif operation.reason != "waiting for provider instance and storage cleanup":
+                    repository.transition(
+                        operation.id,
+                        expected_generation=operation.release_generation,
+                        expected_phase=operation.phase,
+                        phase=operation.phase,
+                        reason="waiting for provider instance and storage cleanup",
                         now=now,
                     )
                 return False

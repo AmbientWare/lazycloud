@@ -21,6 +21,7 @@ from coordination.event_bus import (
 )
 from coordination.redis_client import AsyncRedisClient, RedisClient, redis_text
 from database.context import ServiceContext
+from database.repositories.capacity_activations import CapacityActivationRepository
 from database.repositories.compute import ComputeMachineEnrollmentRepository, ComputeUnitRepository
 from database.repositories.execution import TaskRepository
 from database.repositories.identity import WorkspaceMemberRepository
@@ -39,6 +40,7 @@ from execution.containers.runtime_state import (
 from execution.ssh.service import SshIdentityService
 from execution.task_claims import TaskClaimReleaseService
 from execution.tasks import TaskService
+from foundation.ids import try_uuid
 from foundation.network import worker_network_prefix
 from gateway.unit_state import billing_owner_for_unit
 from identity.auth import AuthorizationDeniedError, AuthService
@@ -668,6 +670,19 @@ class WorkerRepositoryService:
             # failures under repeated tracebacks. Ending the stream lets the
             # worker poll again once its generation is available.
             return
+        if (
+            worker.request_poll_expires_at is None
+            and worker.status is SchedulerWorkerStatus.Available
+            and (machine_id := try_uuid(worker.machine_id)) is not None
+        ):
+            admitted_at = utc_now()
+            # Persist the first admitted poll before publishing its lease, so a
+            # database failure leaves the next poll able to record this activation.
+            await io.database.run_transaction(
+                lambda session: CapacityActivationRepository(session).record_ready(
+                    (machine_id,), at=admitted_at
+                )
+            )
         worker = await self.workers.record_worker_request_poll(io.redis, request.worker_id)
         container_request = await self.workers.wait_for_next_container_request(
             io.redis,
@@ -897,6 +912,7 @@ class WorkerRepositoryService:
         ).model_copy(
             update={
                 "status": SchedulerWorkerStatus.Pending,
+                "request_poll_expires_at": None,
                 "created_at": utc_now(),
                 # The token decides which tenant a worker serves. Taking the
                 # registration's own value would let a worker name any workspace and

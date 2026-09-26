@@ -233,6 +233,7 @@ class AwsPooledCapacityProvider(PooledCapacityProvider):
             preemptible=preemptible,
             cpu_millicores=instance.cpu_millicores,
             memory_mb=instance.memory_mb,
+            supports_hibernation=instance.hibernates,
             storage_mb=root_volume_gib * 1024,
             cost_terms=cost_terms.model_copy(
                 update={

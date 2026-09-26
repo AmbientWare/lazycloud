@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -12,10 +13,12 @@ from database.repositories.compute import (
     PlatformReserveUnitRow,
     StoppedReserveUnitRow,
 )
+from shared.capacity_lifecycle import CapacitySleepMode, CapacitySleepOutcome
 from shared.compute_enrollment import AgentCapacityState
 from shared.compute_policy import ComputeUnitPhase
 from shared.container_requests import node_memory, schedulable_capacity
 from shared.gpu import normalize_gpu_type
+from shared.placement import product_region
 from shared.releases import ActiveRelease
 
 from compute.fleet_policy import (
@@ -25,7 +28,7 @@ from compute.fleet_policy import (
     ReserveMachineState,
     ReserveUnit,
 )
-from compute.fleet_resources import Capacity, ReserveMarket
+from compute.fleet_resources import Capacity, ReserveMarket, ReservePlacement
 from compute.offers import ReservationStatus
 
 
@@ -90,6 +93,13 @@ def fleet_reserve_snapshot(
             enabled=unit.provider_ref in purchasable_providers,
             hourly_cost_micros=unit.hourly_cost_micros,
             stopped_hourly_cost_micros=unit.stopped_hourly_cost_micros,
+            supports_hibernation=unit.supports_hibernation,
+            placement=ReservePlacement(
+                region=(region.value if (region := product_region(unit.region)) else unit.region),
+                zone=unit.availability_zone,
+                architecture=unit.architecture,
+                runtimes=unit.runtimes,
+            ),
         )
         for unit in rows.units
     )
@@ -111,8 +121,11 @@ def fleet_reserve_snapshot(
     committed_cpu = 0
     committed_gpu = 0
     running_cpu = 0
+    instances_by_unit: dict[str, list[PlatformReserveInstanceRow]] = defaultdict(list)
+    for instance in rows.instances:
+        instances_by_unit[instance.unit_id].append(instance)
     for unit in rows.units:
-        instances = [item for item in rows.instances if item.unit_id == unit.id]
+        instances = instances_by_unit[unit.id]
         surge = int(bool(unit.replacement_machine_id)) + unit.maintenance_surge_machines
         committed = max(
             unit.desired
@@ -165,9 +178,17 @@ def _reserve_machine(
     if status in {
         ReservationStatus.Preparing.value,
         ReservationStatus.Stopping.value,
-        ReservationStatus.Stopped.value,
     }:
-        state = ReserveMachineState.Reserve
+        state = ReserveMachineState.Preparing
+    elif status == ReservationStatus.Stopped.value:
+        state = (
+            ReserveMachineState.Hibernated
+            if instance.sleep_outcome is CapacitySleepOutcome.Hibernated
+            else ReserveMachineState.HibernationRequested
+            if instance.sleep_outcome is CapacitySleepOutcome.Unknown
+            and instance.stop_mode is CapacitySleepMode.Hibernate
+            else ReserveMachineState.Stopped
+        )
     elif status in {ReservationStatus.Pending.value, ReservationStatus.Resuming.value}:
         state = ReserveMachineState.Starting
     elif status == ReservationStatus.Active.value:
@@ -195,7 +216,6 @@ def _reserve_machine(
             or billing_minimum_seconds is None
             or now >= started + timedelta(seconds=billing_minimum_seconds)
         ),
-        stopped_resumable=status == ReservationStatus.Stopped.value,
         ready=(
             release is not None
             and release.target.accepts(

@@ -43,7 +43,7 @@ class Workload:
 class InitialCapacity:
     offer_key: str
     count: int
-    stopped: bool = False
+    state: ReserveMachineState = ReserveMachineState.Serving
 
 
 @dataclass(frozen=True)
@@ -95,6 +95,7 @@ class _Node:
     ready_at: float = 0
     load: Capacity = field(default_factory=Capacity)
     allocations: dict[int, float] = field(default_factory=dict)
+    reserve_state: ReserveMachineState = ReserveMachineState.Stopped
 
 
 @dataclass
@@ -144,7 +145,10 @@ def simulate(scenario: Scenario) -> SimulationResult:
             nodes[str(serial)] = _Node(
                 str(serial),
                 offers[initial.offer_key],
-                ReserveMachineState.Reserve if initial.stopped else ReserveMachineState.Serving,
+                initial.state,
+                reserve_state=initial.state
+                if initial.state.reserve
+                else ReserveMachineState.Stopped,
             )
     result.peak_nodes = len(nodes)
     now = 0.0
@@ -164,11 +168,17 @@ def simulate(scenario: Scenario) -> SimulationResult:
                     del nodes[key]
                 elif node.state is ReserveMachineState.Starting:
                     node.state = ReserveMachineState.Serving
+                elif node.state is ReserveMachineState.Preparing:
+                    node.state = node.reserve_state
         while cursor < len(workloads) and workloads[cursor].at <= now:
             workload = workloads[cursor]
             pending[cursor] = workload
             history.setdefault(workload.market, []).append(
-                DemandSample(_EPOCH + timedelta(seconds=workload.at), workload.capacity)
+                DemandSample(
+                    _EPOCH + timedelta(seconds=workload.at),
+                    workload.capacity,
+                    duration_seconds=workload.duration,
+                )
             )
             result.arrivals += 1
             cursor += 1
@@ -223,19 +233,50 @@ def simulate(scenario: Scenario) -> SimulationResult:
                 for workload in pending.values():
                     if workload.market == market:
                         queued += workload.capacity
+                reserves = [
+                    node
+                    for node in nodes.values()
+                    if node.offer.market == market and node.state.stopped
+                ]
+                scheduled = tuple(
+                    DemandSample(
+                        _EPOCH + timedelta(seconds=workload.at),
+                        workload.capacity,
+                        duration_seconds=workload.duration,
+                    )
+                    for workload in workloads
+                    if workload.market == market
+                    and workload.known_at is not None
+                    and workload.known_at <= now < workload.at
+                )
+                refill_seconds = scenario.timings.provision_seconds
+                forecast = forecast_demand(
+                    history[market],
+                    now=timestamp,
+                    resume_seconds=refill_seconds + scenario.timings.planning_seconds,
+                    provision_seconds=scenario.timings.provision_seconds
+                    + scenario.timings.planning_seconds,
+                    pending=queued,
+                    scheduled=scheduled,
+                )
+                ready = Capacity()
+                fast = Capacity()
+                for node in reserves:
+                    ready += node.offer.machine
+                    if node.state is ReserveMachineState.Hibernated:
+                        fast += node.offer.machine
+                if fast.covers(forecast.warm):
+                    refill_seconds = scenario.timings.resume_seconds
+                elif ready.covers(forecast.warm):
+                    refill_seconds = scenario.timings.stopped_boot_seconds
                 forecasts[market] = forecast_demand(
                     history[market],
                     now=timestamp,
-                    resume_seconds=scenario.policy.warm_forecast_seconds,
-                    provision_seconds=scenario.policy.total_forecast_seconds,
+                    resume_seconds=refill_seconds + scenario.timings.planning_seconds,
+                    provision_seconds=max(refill_seconds, scenario.timings.provision_seconds)
+                    + scenario.timings.planning_seconds,
                     pending=queued,
-                    scheduled=(
-                        DemandSample(_EPOCH + timedelta(seconds=workload.at), workload.capacity)
-                        for workload in workloads
-                        if workload.market == market
-                        and workload.known_at is not None
-                        and workload.known_at <= now < workload.at
-                    ),
+                    scheduled=scheduled,
                 )
             plan = plan_market_reserve(
                 scenario.policy,
@@ -270,7 +311,7 @@ def simulate(scenario: Scenario) -> SimulationResult:
                     stopped = [
                         node
                         for node in nodes.values()
-                        if node.offer.key == unit_id and node.state is ReserveMachineState.Reserve
+                        if node.offer.key == unit_id and node.state.reserve
                     ]
                     resumed = sum(
                         action.count
@@ -289,16 +330,16 @@ def simulate(scenario: Scenario) -> SimulationResult:
                             node
                             for node in nodes.values()
                             if node.offer.key == action.unit_id
-                            and node.state is ReserveMachineState.Reserve
+                            and node.state.stopped
                             and node.ready_at <= now
                         ]
                         for node in available[: action.count]:
-                            node.state = ReserveMachineState.Starting
                             node.ready_at = now + (
-                                scenario.timings.stopped_boot_seconds
-                                if node.offer.market.gpu_type
-                                else scenario.timings.resume_seconds
+                                scenario.timings.resume_seconds
+                                if node.state is ReserveMachineState.Hibernated
+                                else scenario.timings.stopped_boot_seconds
                             )
+                            node.state = ReserveMachineState.Starting
                             result.resumes += 1
                     else:
                         for _ in range(action.count):
@@ -307,7 +348,7 @@ def simulate(scenario: Scenario) -> SimulationResult:
                             nodes[str(serial)] = _Node(
                                 str(serial),
                                 offers[action.offer_key],
-                                ReserveMachineState.Reserve
+                                ReserveMachineState.Preparing
                                 if preparing
                                 else ReserveMachineState.Starting,
                                 now
@@ -329,7 +370,7 @@ def simulate(scenario: Scenario) -> SimulationResult:
         following = min(moment for moment in future if moment > now)
         elapsed = following - now
         for node in nodes.values():
-            stopped = node.state is ReserveMachineState.Reserve and node.ready_at <= now
+            stopped = node.state.stopped
             if stopped:
                 result.estimated_stopped_cost += (
                     node.offer.stopped_hourly_cost_micros * elapsed / 3_600_000_000
@@ -399,15 +440,8 @@ def _acquire_pending(
             if (
                 not waiting
                 or node.offer.market != market
-                or node.state is not ReserveMachineState.Reserve
+                or not node.state.stopped
                 or node.ready_at > now
-            ):
-                continue
-            running_cpu = _snapshot(nodes, scenario.offers, now).running_cpu_millicores
-            if (
-                not market.gpu_type
-                and running_cpu + node.offer.nominal_cpu_millicores
-                > scenario.policy.max_running_cpu_millicores
             ):
                 continue
             free = node.offer.machine
@@ -417,30 +451,20 @@ def _acquire_pending(
                     free -= workload.capacity
             if free == node.offer.machine:
                 continue
-            node.state = ReserveMachineState.Starting
             node.ready_at = now + (
-                scenario.timings.stopped_boot_seconds
-                if market.gpu_type
-                else scenario.timings.resume_seconds
+                scenario.timings.resume_seconds
+                if node.state is ReserveMachineState.Hibernated
+                else scenario.timings.stopped_boot_seconds
             )
+            node.state = ReserveMachineState.Starting
             result.resumes += 1
             waiting = [(key, workload) for key, workload in waiting if key not in reservations]
         if not waiting:
             continue
-        snapshot = _snapshot(nodes, scenario.offers, now)
-        machine_limit = (
-            scenario.policy.max_gpu_instances - snapshot.committed_gpu_machines
-            if market.gpu_type
-            else scenario.policy.max_cpu_instances - snapshot.committed_cpu_machines
-        )
         offers = tuple(offer for offer in scenario.offers if offer.market == market)
         plan = plan_request_capacity(
             offers,
             [workload.capacity for _, workload in waiting[:100]],
-            machine_limit=machine_limit,
-            running_cpu_millicores=max(
-                0, scenario.policy.max_running_cpu_millicores - snapshot.running_cpu_millicores
-            ),
         )
         by_key = {offer.key: offer for offer in offers}
         for planned in plan.nodes:
@@ -471,11 +495,13 @@ def _snapshot(
                 market=offer.market,
                 machine=offer.machine,
                 nominal_cpu_millicores=offer.nominal_cpu_millicores,
-                desired=sum(node.state is not ReserveMachineState.Reserve for node in members),
-                stopped=sum(node.state is ReserveMachineState.Reserve for node in members),
+                desired=sum(not node.state.reserve for node in members),
+                stopped=sum(node.state.reserve for node in members),
                 growable=True,
                 hourly_cost_micros=offer.hourly_cost_micros,
                 stopped_hourly_cost_micros=offer.stopped_hourly_cost_micros,
+                placement=offer.placement,
+                supports_hibernation=offer.supports_hibernation,
             )
         )
     return FleetReserveSnapshot(
@@ -488,8 +514,6 @@ def _snapshot(
                 load=node.load,
                 containers=len(node.allocations),
                 pinned=len(node.allocations),
-                stopped_resumable=node.state is ReserveMachineState.Reserve
-                and node.ready_at <= now,
                 ready=node.ready_at <= now,
             )
             for node in nodes.values()
@@ -499,8 +523,7 @@ def _snapshot(
         running_cpu_millicores=sum(
             node.offer.nominal_cpu_millicores
             for node in nodes.values()
-            if not node.offer.market.gpu_type
-            and not (node.state is ReserveMachineState.Reserve and node.ready_at <= now)
+            if not node.offer.market.gpu_type and not node.state.stopped
         ),
         offers=offers,
     )
@@ -528,7 +551,10 @@ def named_scenario(name: str) -> Scenario:
         ReserveOffer("t4", t4, Capacity(6_000, 24_576, 1), 8_000, 550_000, 15_000, True),
         ReserveOffer("l4", l4, Capacity(6_000, 24_576, 1), 8_000, 750_000, 15_000, True),
     )
-    initial = (InitialCapacity("spot:cpu/small", 2), InitialCapacity("spot:cpu/large", 1, True))
+    initial = (
+        InitialCapacity("spot:cpu/small", 2),
+        InitialCapacity("spot:cpu/large", 1, ReserveMachineState.Hibernated),
+    )
     policy = FleetCapacityPolicy()
     if name == "quiet":
         workloads = tuple(
@@ -558,12 +584,6 @@ def named_scenario(name: str) -> Scenario:
         count = int(name.split("-")[1])
         initial = (InitialCapacity("spot:cpu/small", count),)
         workloads = tuple(Workload(0, 600, Capacity(6_000, 12_288), spot) for _ in range(count))
-        policy = policy.model_copy(
-            update={
-                "max_cpu_instances": count + 50,
-                "max_running_cpu_millicores": (count + 50) * 32_000,
-            }
-        )
     else:
         raise ValueError(f"unknown scenario: {name}")
     return Scenario(
@@ -588,9 +608,6 @@ class RolloutScenario:
     failure_cleanup_seconds: float = 120
     retry_seconds: float = 60
     machine_hourly_cost_micros: int = 100_000
-    maximum_hourly_cost_micros: int = 5_000_000
-    maximum_running_cpu_millicores: int = 512_000
-    fraction_percent: int = 20
 
 
 @dataclass
@@ -643,7 +660,6 @@ def simulate_rollout(scenario: RolloutScenario) -> RolloutResult:
     attempted: set[str] = set()
     retry_at: dict[str, float] = {}
     now = 0.0
-    operation_limit = max(1, scenario.machines * scenario.fraction_percent // 100)
     while candidates or active:
         for key, operation in list(active.items()):
             if operation.finishes_at <= now:
@@ -658,14 +674,7 @@ def simulate_rollout(scenario: RolloutScenario) -> RolloutResult:
                         result.completed_during_demand_spike += 1
         spike = scenario.demand_spike and 60 <= now < 300
         required_fraction = 95 if spike else 50
-        committed_cost = len(active) * scenario.machine_hourly_cost_micros
         budget = MaintenanceBudget(
-            available_operations=operation_limit - len(active),
-            available_machines=operation_limit
-            - sum(operation.candidate.surge_machines for operation in active.values()),
-            available_running_cpu_millicores=scenario.maximum_running_cpu_millicores
-            - len(active) * capacity.cpu_millicores,
-            available_hourly_cost_micros=scenario.maximum_hourly_cost_micros - committed_cost,
             ready={market: capacity * (scenario.machines - len(active))},
             required_ready={market: (capacity * scenario.machines).percent(required_fraction)},
             reserved_replacements=frozenset(

@@ -2270,6 +2270,7 @@ class GatewayControlService:
                     active_worker_images=request.active_worker_images,
                     admission_waiting_workers=request.admission_waiting_workers,
                     booted_since_prepared=request.booted_since_reserve_prepared,
+                    resumed_since_prepared=request.resumed_since_reserve_prepared,
                     prepared_stop=request.prepared_stop,
                 )
                 if bootstrap_unit.platform_fleet
