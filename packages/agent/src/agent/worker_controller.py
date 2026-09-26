@@ -585,7 +585,7 @@ class DockerAgentWorkerController:
             [
                 self.docker_binary,
                 "stop",
-                "--timeout",
+                "-t",
                 str(math.ceil(grace_seconds)),
                 *names,
             ]

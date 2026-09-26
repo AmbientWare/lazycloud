@@ -17,6 +17,7 @@ from compute.policy import AwsDefaultCapacityBaseline, WorkspaceComputePolicySer
 from compute.provider_state import ProviderUnitStateService
 from compute.providers import ResolvedBlockVolumes
 from compute.request_placement import ComputeCapacityPlacementService
+from compute.reserve_state import RedisFleetReserveState
 from compute.service import ComputeService
 from compute.state import ComputeAgentTokenState, RedisComputeStateRepository
 from compute.telemetry import AGENT_INTAKE_PRESENCE_ROLE
@@ -829,6 +830,7 @@ class ApiServices(ApiServiceCore):
             scheduler_hooks=scheduler_hooks,
             workspace_changes=workspace_changes,
             capacity_owner_mutations=capacity_reservation_repository,
+            reserve_state=RedisFleetReserveState(redis),
         )
         compute_policies.aws_default_capacity = AwsDefaultCapacityBaseline(compute)
         aws_composition = aws_account_connection_composition_from_settings(
