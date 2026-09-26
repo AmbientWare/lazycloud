@@ -36,6 +36,7 @@ from shared.compute_enrollment import (
     MachineReadinessPhase,
 )
 from shared.compute_policy import (
+    ComputeCapacityMode,
     ComputeUnitPhase,
     ComputeUnitProviderState,
     ComputeUnitRecord,
@@ -469,6 +470,8 @@ def _compute_unit_record(row: ComputeUnitTable) -> ComputeUnitRecord:
             "observed_machines": row.observed_machines,
             "replacement_machine_id": row.replacement_machine_id,
             "replacement_template_version": row.replacement_template_version,
+            "replacement_release_generation": row.replacement_release_generation,
+            "replacement_reason": row.replacement_reason,
             "generation": row.generation,
             "phase": row.phase,
             "provider_state": ComputeUnitProviderState(
@@ -539,6 +542,7 @@ class ComputeUnitRepository:
             .subquery()
         )
         protected = or_(
+            unit.replacement_release_generation > 0,
             cast(instance.machine_id, String) == unit.replacement_machine_id,
             exists().where(
                 recovery.completed_at.is_(None),
@@ -1100,6 +1104,23 @@ class ComputeUnitRepository:
             )
         return [_compute_unit_record(row) for row in self.session.scalars(statement)]
 
+    def release_rollout_units(self, owner_ids: Collection[str]) -> list[ComputeUnitRecord]:
+        table = ComputeUnitTable
+        statement = (
+            select(table)
+            .where(
+                table.capacity_mode == ComputeCapacityMode.Pooled.value,
+                or_(
+                    table.capacity_owner_id.in_(owner_ids), table.replacement_release_generation > 0
+                ),
+                table.phase.not_in(
+                    (ComputeUnitPhase.Deleted.value, ComputeUnitPhase.Deleting.value)
+                ),
+            )
+            .order_by(table.id)
+        )
+        return [_compute_unit_record(row) for row in self.session.scalars(statement)]
+
     def claim_reconciliation_batch(
         self,
         kind: ComputeReconciliationKind,
@@ -1458,6 +1479,10 @@ class ComputeUnitRepository:
         row.supplier_cpu_count = record.supplier_cpu_count
         row.replacement_machine_id = record.replacement_machine_id
         row.replacement_template_version = record.replacement_template_version
+        row.replacement_release_generation = (
+            record.replacement_release_generation if record.replacement_machine_id else 0
+        )
+        row.replacement_reason = record.replacement_reason
         row.scaling_enabled = record.scaling_enabled
         row.priority = record.priority
         row.min_free_cpu_millicores = record.min_free_cpu_millicores
@@ -2022,7 +2047,7 @@ class ComputeProviderInstanceRepository:
         }
 
     def stale_platform_reserves(
-        self, *, agent_sha256: str, worker_image: str
+        self, *, agent_sha256: str, worker_image: str, limit: int
     ) -> list[ComputeReserveInstance]:
         """Stopped platform reserves prepared with anything but this release."""
         table = ComputeProviderInstanceTable
@@ -2041,6 +2066,7 @@ class ComputeProviderInstanceRepository:
                 ComputeUnitTable.platform_fleet.is_(True),
             )
             .order_by(table.created_at.asc(), table.id.asc())
+            .limit(limit)
         ).tuples()
         return [
             ComputeReserveInstance(pool_id=pool_id, instance_id=instance_id, machine_id=machine_id)

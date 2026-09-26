@@ -39,6 +39,19 @@ replace failed machines autonomously, so observed physical counts may briefly
 exceed the platform's admitted commitments. Customer-owned capacity stays outside
 these totals and serializes changes through its capacity workspace.
 
+Runtime releases reuse the unit's durable replacement pair, identified by the
+release generation instead of a host template. Compute provisions one temporary
+machine when a pooled worker lacks current replacement capacity. Admission requires
+a fresh worker in the same pool with room for the source's allocations. Running
+work drains under its existing preemption policy. An attached machine updates in
+place because its pinned workloads cannot move to another host.
+
+The pair protects temporary capacity from consolidation until the source reports
+the target artifacts, fresh request intake, and no unfinished update. Normal idle
+retirement then removes the excess. Release status remains incomplete while that
+capacity awaits retirement. A shared scheduler interval claim bounds rollout and
+stopped-reserve reads across replicas; interruption recovery takes precedence.
+
 Platform reserves are headroom, not machine counts. A market is the purchase
 market work accepted, Spot or On-Demand, and for GPUs the card. Each keeps running
 headroom and stopped headroom in CPU, memory and cards: a floor, a share of the

@@ -16,14 +16,19 @@ from urllib.parse import urlparse
 
 from provider_aws.account_connection import AwsAccountConnectionTemplatePublication
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from shared.releases import AgentArtifact, ReleaseTarget
+from shared.releases import (
+    WORKER_IMAGE_DIGEST_PATTERN,
+    AgentArtifact,
+    ReleaseTarget,
+    RuntimeArtifacts,
+)
 
 SCHEMA_VERSION = 3
 AMI_PATTERN = re.compile(r"^ami-[0-9a-f]{8,17}$")
 VERSION_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 BUCKET_NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
 REGION_PATTERN = re.compile(r"^(us-gov|us|af|ap|ca|cn|eu|il|me|mx|sa)-[a-z0-9-]+-[0-9]+$")
-WORKER_IMAGE_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._:/-]*@sha256:[0-9a-f]{64}$")
+WORKER_IMAGE_PATTERN = re.compile(WORKER_IMAGE_DIGEST_PATTERN)
 AGENT_BINARY_DIRECTORY = "agent-binarys"
 AGENT_AMD64_FILENAME = "lazycloud-agent-linux-amd64.tar.gz"
 
@@ -54,6 +59,9 @@ class AwsReleaseManifest(ReleaseModel):
     agent_artifact_version: str
     agent_artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     container_worker_image: str = Field(pattern=WORKER_IMAGE_PATTERN.pattern)
+    compatible_runtimes: list[RuntimeArtifacts] = Field(
+        default_factory=list, exclude_if=lambda value: not value
+    )
     platform_images: dict[str, str] = Field(min_length=1)
     capacity_cpu_ami_ids: dict[str, str] = Field(default_factory=dict)
     capacity_gpu_ami_ids: dict[str, str] = Field(default_factory=dict)
@@ -83,6 +91,7 @@ class AwsReleaseManifest(ReleaseModel):
             version=self.release_version,
             source_revision=self.source_revision,
             worker_image=self.container_worker_image,
+            compatible_runtimes=self.compatible_runtimes,
             agent=AgentArtifact(
                 url=self.agent_artifact_object.public_url,
                 sha256=self.agent_artifact_sha256,

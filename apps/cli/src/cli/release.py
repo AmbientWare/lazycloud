@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+from compute.release_status import ComputeReleaseStatusService
 from control.release_settings import ReleaseSettings
 from control.releases import DeploymentReleaseService
 from coordination.redis_client import RedisClient
@@ -15,7 +16,9 @@ from provider_clients.release import (
     materialize_agent_artifact,
 )
 from pydantic import JsonValue
-from scheduler.state import RedisSchedulerContainerRepository, RedisSchedulerWorkerRepository
+from scheduler.state import RedisSchedulerWorkerRepository
+
+from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
 
 release_app = typer.Typer(help="Work with the release a deployment runs.")
 
@@ -80,28 +83,20 @@ def release_fetch_agent(
 def release_status(ctx: typer.Context) -> None:
     release = DeploymentReleaseService().state()
     redis = RedisClient.from_settings()
+    database = DatabaseClient.from_settings(
+        DatabaseSettings(application_name=DatabaseApplicationName.Admin)
+    )
     try:
         workers = RedisSchedulerWorkerRepository(redis).list_workers()
-        containers = RedisSchedulerContainerRepository(redis)
-        records: list[JsonValue] = [
-            {
-                "worker_id": worker.worker_id,
-                "machine_id": worker.machine_id,
-                "status": worker.status.value,
-                "current": release.admits(worker.runtime_image, worker.agent_binary_sha256),
-                "containers": [
-                    record.container_id for record in containers.list_by_worker(worker.worker_id)
-                ],
-            }
-            for worker in workers
-        ]
+        status = ComputeReleaseStatusService(database).read(release, workers)
         emit_result(
             ctx,
-            payload={"release": release.model_dump(mode="json"), "workers": records},
+            payload=status.model_dump(mode="json"),
             fields={"version": release.target.version, "generation": release.generation},
         )
     finally:
         redis.close()
+        database.dispose()
 
 
 __all__ = ["release_app"]

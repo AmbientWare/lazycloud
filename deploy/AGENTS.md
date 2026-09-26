@@ -47,12 +47,15 @@ substitutes, and gives every service an explicit owner and health check.
 - One complete manifest selects platform images, the worker image, agent binary,
   and host catalog. Ship publishes it and records it for Argo. Argo health checks
   precede the PostSync active-release ConfigMap. API and scheduler read its mounted
-  file to admit current artifacts and previously verified workers. Every replica
+  file to admit target artifacts and explicitly compatible runtime pairs. Every replica
   serves the activated release; only its matching build authorizes upgrades.
   PostgreSQL retains verified worker identity and unfinished updates across Redis
-  loss. Managed and joined agents update in place through their supervised service
-  after work drains. The maintenance slot remains occupied until the target worker
-  has fresh request intake. Host replacement is reserved for host lifecycle changes.
+  loss. Compute pairs runtime updates with temporary capacity when a managed pool
+  lacks a current worker with room for the source's allocations. The pair protects
+  both machines from elective retirement until the updated source has fresh intake.
+  Managed and joined agents update in place through their supervised service after
+  work drains. Joined machines cannot borrow another machine's placement. Host
+  replacement is reserved for host lifecycle changes.
 - The network image records its executable linux/amd64 manifest digest, not its
   commit tag or attestation index. Ship selects it from the same published
   commit automatically. Its Docker build copies only the installed connection gateway

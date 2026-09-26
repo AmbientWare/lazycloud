@@ -98,17 +98,46 @@ commit images after a partial push, then publishes the complete manifest.
 Argo applies the chart and activates the release after its health checks pass.
 Agents receive the selected worker and agent artifacts through the gateway.
 API replicas keep serving the activated release throughout the sync. Only replicas
-of the activated build authorize upgrades. A reconnect preserves verified release
-admission for the same enrolled worker and artifacts, then requires source-cache
-activation and a fresh request poll before placement.
+of the activated build authorize upgrades. Admission requires the target artifacts
+or an explicitly compatible worker-image and agent-digest pair. Previous admission
+does not establish compatibility. Reconnects still require source-cache activation
+and a fresh request poll before placement.
 
 Managed and joined agents update in place through their supervised service. Existing
 work drains before switching artifacts. PostgreSQL holds the update intent across
 agent restarts and Redis loss, and clears it only after the target worker accepts
-request polls. Platform updates proceed one machine at a time. When no workers have
-usable intake, one unavailable worker can update to restore service. Host lifecycle
-changes still use the replacement controller. Long-running workloads can delay an
-update until they drain.
+request polls. A managed pool first obtains a current worker with room for the
+source's allocations. Compute resumes a suitable reserve or provisions one
+temporary machine when needed, without increasing the pool's logical target.
+The temporary capacity stays protected until the source updates and accepts work.
+The normal scoped retirement path removes excess capacity afterwards. Platform
+maintenance remains serialized within CPU and GPU fleets and yields to interruption
+recovery. Customer pools retain their connection, quotas and purchase policy.
+Host lifecycle changes still use the replacement controller. Non-preemptible
+workloads can delay an update until they drain.
+
+`deploy/runtime-compatibility.json` is the reviewed list of exact runtime pairs
+that the published release accepts alongside its target. It is empty by default.
+Add a pair only after validating that runtime against the new control plane,
+including dispatch, completion and cleanup. Do not infer compatibility from a
+version number. An incompatible worker receives no new containers, function
+invocations or endpoint requests, even when it is the only worker. A release with
+no compatible serving capacity has an admission gap until current capacity is
+ready. Breaking protocols require a bridge release that supports both sides
+before removing the old protocol. The first rollout of these readers must complete
+before publishing a nonempty compatibility list; older readers reject that field.
+
+Platform stopped and hibernated reserves refresh under their admission hold, one
+at a time while demand is clear, and count as current only after the provider
+confirms the stop. Connected customer pools use Auto Scaling groups and do not
+own stopped reserves. Attached machines update when reachable; a workload pinned
+to one cannot move to another host. A missing supervisor or rejected agent update
+is reported as blocked and does not reopen admission.
+
+Run `lazycloud-admin release status` to inspect fleet convergence. Its `complete`
+field includes running machines, stopped reserves, offline enrolled machines and
+pending update-capacity pairs and excess capacity awaiting retirement. Argo health
+only proves control-plane rollout.
 
 Joined agents installed without the supervisor need `install-service` once before
 automatic binary updates can run. Managed node installation already includes it.

@@ -85,8 +85,9 @@ from shared.http.worker_network import WorkerEgressPolicy
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
 from shared.identity import WorkspaceStatus
 from shared.placement import Placement
-from shared.releases import ReleaseTarget
+from shared.releases import ActiveRelease, ReleaseTarget
 from shared.routing import PrivateUnitFallback
+from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 from shared.timestamps import to_utc, utc_now
 from shared.usage import UsageBillingOwner
 
@@ -2151,6 +2152,10 @@ class ComputeService:
                 replacement_template_version=(
                     current.replacement_template_version if current else ""
                 ),
+                replacement_release_generation=(
+                    current.replacement_release_generation if current else 0
+                ),
+                replacement_reason=current.replacement_reason if current else "",
                 scaling_enabled=True,
                 # True by construction rather than by preference: this unit is
                 # built from workspace policy because the workspace needed general
@@ -2578,14 +2583,17 @@ class ComputeService:
         capacity_owner_id: str,
         machine_id: str,
         *,
-        template_version: str,
+        template_version: str = "",
+        release_generation: int = 0,
     ) -> ComputeUnitRecord:
         """Durably pair one retiring machine with one operational surge."""
 
         if not machine_id:
             raise InvalidInputError("replacement machine is required")
-        if not template_version:
-            raise InvalidInputError("planned replacement requires a template version")
+        if bool(template_version) == bool(release_generation):
+            raise InvalidInputError(
+                "planned replacement requires one host template or release generation"
+            )
         with self.context.database.session() as session:
             units = ComputeUnitRepository(session)
             initial = _require_internal_pooled_unit(
@@ -2593,6 +2601,8 @@ class ComputeService:
             )
             if initial.platform_fleet:
                 units.lock_platform_capacity()
+            else:
+                units.lock_capacity_workspace(workspace_id)
             unit = _require_internal_pooled_unit(
                 units.get_by_capacity_owner_id(capacity_owner_id, for_update=True),
                 unit_ref=capacity_owner_id,
@@ -2605,12 +2615,20 @@ class ComputeService:
                 if (
                     unit.replacement_machine_id == machine_id
                     and unit.replacement_template_version == template_version
+                    and unit.replacement_release_generation == release_generation
                 ):
                     return unit
                 raise ConflictError(
                     f"compute pool {unit.name!r} already has a replacement in progress"
                 )
             self._require_maintenance_available(session, unit, machine_id="")
+            provider, _offer = self._resolved_internal_unit_provider(unit)
+            if (
+                provider.pooled is None
+                or provider.policy is None
+                or not provider.policy.can_purchase
+            ):
+                raise ConflictError("provider policy does not permit replacement capacity")
             provider_machine = ComputeProviderInstanceRepository(session).get_by_machine(machine_id)
             if provider_machine is None or provider_machine.pool_id != unit.id:
                 raise NotFoundError(f"provider machine not found in compute unit: {machine_id}")
@@ -2624,18 +2642,25 @@ class ComputeService:
             )
             if available is not None and unit.desired_machines + 1 > available:
                 raise CapacityLimitReachedError("fleet capacity limit prevents a replacement node")
+            if self._running_cpu_exceeded(units, unit, unit.desired_machines + 1):
+                raise CapacityLimitReachedError(
+                    "fleet running vCPU limit prevents a replacement node"
+                )
             return units.upsert(
                 unit.model_copy(
                     update={
                         "replacement_machine_id": machine_id,
                         "stopped_machines": (
                             min(
-                                unit.stopped_machines, max(available - unit.desired_machines - 1, 0)
+                                max(unit.stopped_machines - int(bool(release_generation)), 0),
+                                max(available - unit.desired_machines - 1, 0),
                             )
                             if available is not None
                             else unit.stopped_machines
                         ),
                         "replacement_template_version": template_version,
+                        "replacement_release_generation": release_generation,
+                        "replacement_reason": "waiting for replacement capacity",
                         "generation": unit.generation + 1,
                         "phase": ComputeUnitPhase.Updating,
                         "status": ComputeUnitPhase.Updating.value,
@@ -2669,6 +2694,41 @@ class ComputeService:
         }
 
     @contextmanager
+    def worker_release_admission(
+        self,
+        worker: SchedulerWorkerRecord,
+        release: ActiveRelease,
+        fleet: list[SchedulerWorkerRecord],
+    ) -> Iterator[DatabaseSession]:
+        from compute.release_rollout import release_replacement
+
+        with self.worker_maintenance_admission(
+            worker.workspace_id, worker.capacity_owner_id, worker.machine_id
+        ) as session:
+            unit = ComputeUnitRepository(session).get_by_capacity_owner_id(worker.capacity_owner_id)
+            if unit is None:
+                raise NotFoundError("worker capacity owner is missing")
+            idle_surge = (
+                unit.replacement_release_generation > 0
+                and worker.machine_id != unit.replacement_machine_id
+                and ContainerRepository(session).count_live_for_machine(worker.machine_id) == 0
+            )
+            if (
+                unit.capacity_mode is ComputeCapacityMode.Pooled
+                and worker.status is not SchedulerWorkerStatus.Draining
+                and worker.admitted_release_generation > 0
+                and not idle_surge
+                and release_replacement(worker, fleet, release, now=utc_now()) is None
+            ):
+                raise ConflictError(
+                    "worker update requires replacement capacity on the target release"
+                )
+            WorkerReleaseRepository(session).begin_update(
+                worker.worker_id, worker.machine_id, release
+            )
+            yield session
+
+    @contextmanager
     def worker_maintenance_admission(
         self, workspace_id: str, capacity_owner_id: str, machine_id: str
     ) -> Iterator[DatabaseSession]:
@@ -2684,8 +2744,7 @@ class ComputeService:
             unit = repository.get(unit.id, for_update=True)
             if unit is None or unit.workspace_id != workspace_id:
                 raise NotFoundError(f"compute unit not found: {capacity_owner_id}")
-            if unit.platform_fleet:
-                self._require_maintenance_available(session, unit, machine_id=machine_id)
+            self._require_maintenance_available(session, unit, machine_id=machine_id)
             machine = MachineRepository(session).get(machine_id, workspace_id=workspace_id)
             if machine is None or machine.lifecycle in {
                 MachineLifecycle.Stopping,
@@ -2716,7 +2775,11 @@ class ComputeService:
         recovering = CapacityRecoveryRepository(session).active_source_units()
         if any(item.id in recovering for item in candidates):
             raise ConflictError("capacity interruption recovery takes precedence over maintenance")
-        if any(item.replacement_machine_id for item in candidates):
+        if any(
+            item.replacement_machine_id
+            and not (item.id == unit.id and item.replacement_release_generation and machine_id)
+            for item in candidates
+        ):
             raise ConflictError("capacity maintenance is already in progress")
         if self._worker_update_in_progress(session, candidates, excluding_machine_id=machine_id):
             raise ConflictError("a worker update is already in progress")
@@ -2782,6 +2845,8 @@ class ComputeService:
                     update={
                         "replacement_machine_id": "",
                         "replacement_template_version": "",
+                        "replacement_release_generation": 0,
+                        "replacement_reason": "",
                         "generation": unit.generation + 1,
                     }
                 )
@@ -3925,7 +3990,9 @@ class ComputeService:
         agent_sha256, worker_image = reserve_release_artifacts(release)
         with self.context.database.session() as session:
             candidates = ComputeProviderInstanceRepository(session).stale_platform_reserves(
-                agent_sha256=agent_sha256, worker_image=worker_image
+                agent_sha256=agent_sha256,
+                worker_image=worker_image,
+                limit=_RESERVE_REFRESH_CANDIDATES,
             )
         if not candidates:
             return None
@@ -3937,7 +4004,7 @@ class ComputeService:
                         or ContainerRepository(session).unplaced_platform_demand().any
                     ):
                         return None
-                for candidate in candidates[:_RESERVE_REFRESH_CANDIDATES]:
+                for candidate in candidates:
                     try:
                         refreshed = self._refresh_reserve(candidate, now=now)
                     except CapacityReservationLockContendedError:

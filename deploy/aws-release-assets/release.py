@@ -37,7 +37,8 @@ from provider_clients.release_manifest import (
     ReleaseObject,
     release_public_url,
 )
-from pydantic import BaseModel, ConfigDict, Field, RootModel, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, RootModel, TypeAdapter, ValidationError
+from shared.releases import RuntimeArtifacts
 
 _ANONYMOUS_READ_ATTEMPTS = 5
 _ANONYMOUS_READ_BACKOFF_SECONDS = 4.0
@@ -154,6 +155,9 @@ def main() -> None:
             cpu_ami_ids=_parse_ami_ids(args.cpu_ami_ids, flag="--cpu-ami-ids"),
             gpu_ami_ids=_parse_ami_ids(args.gpu_ami_ids, flag="--gpu-ami-ids"),
             output=args.output,
+            compatible_runtimes=TypeAdapter(list[RuntimeArtifacts]).validate_json(
+                (Path(__file__).resolve().parents[1] / "runtime-compatibility.json").read_bytes()
+            ),
         )
         print(manifest.model_dump_json())
         return
@@ -238,6 +242,7 @@ def stage_release(
     gpu_ami_ids: dict[str, str] | None = None,
     source_revision: str = "",
     reused_from: dict[str, str] | None = None,
+    compatible_runtimes: list[RuntimeArtifacts] | None = None,
 ) -> AwsReleaseManifest:
     if not VERSION_PATTERN.fullmatch(version):
         raise ValueError("release version contains invalid characters")
@@ -313,6 +318,7 @@ def stage_release(
         agent_artifact_version=agent_manifest.version,
         agent_artifact_sha256=agent.sha256,
         container_worker_image=worker_image,
+        compatible_runtimes=compatible_runtimes or [],
         platform_images=platform_images,
         capacity_cpu_ami_ids=normalized_cpu_ami_ids,
         capacity_gpu_ami_ids=normalized_gpu_ami_ids,
