@@ -12,6 +12,8 @@ from shared.function_payloads import FunctionJsonInvocation
 from shared.http.functions import (
     FunctionClaimRequest,
     FunctionClaimResponse,
+    FunctionExecutionEntryRequest,
+    FunctionExecutionEntryResponse,
     FunctionInvokeBody,
     FunctionInvokeResponse,
     FunctionMonitorRequest,
@@ -140,14 +142,25 @@ def function_invoke_stream(
 
 
 @router.post("/claim", response_model=FunctionClaimResponse)
-def function_claim(
+async def function_claim(
     request: FunctionClaimRequest,
     workspace_id: write_workspace,
     service: FunctionApiService = Depends(function_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
 ) -> FunctionClaimResponse:
-    require_function_stub_workspace(control_plane, request.stub_id, workspace_id)
-    return service.function_claim(request)
+    await to_thread.run_sync(
+        require_function_stub_workspace, control_plane, request.stub_id, workspace_id
+    )
+    return await service.function_claim_wait(request, workspace_id=workspace_id)
+
+
+@router.post("/execution-entry", response_model=FunctionExecutionEntryResponse)
+def function_execution_entry(
+    request: FunctionExecutionEntryRequest,
+    workspace_id: write_workspace,
+    service: FunctionApiService = Depends(function_service),
+) -> FunctionExecutionEntryResponse:
+    return service.function_execution_entry(request, workspace_id=workspace_id)
 
 
 @router.post("/set-result", response_model=FunctionSetResultResponse)

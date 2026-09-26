@@ -96,6 +96,7 @@ class FunctionClaimRequest(HttpModel):
     stub_id: str
     container_id: str
     claim_id: str | None = None
+    wait_seconds: float = Field(default=0, ge=0, le=20)
 
 
 class FunctionClaimedTask(HttpModel):
@@ -148,6 +149,17 @@ class FunctionSetResultResponse(HttpModel):
     status: TaskStatus = TaskStatus.Complete
 
 
+class FunctionExecutionEntryRequest(HttpModel):
+    task_id: str
+    container_id: str
+    claim_id: str
+    elapsed_since_entry_seconds: float = Field(ge=0, allow_inf_nan=False)
+
+
+class FunctionExecutionEntryResponse(HttpModel):
+    recorded: bool
+
+
 class FunctionCallGraphNode(HttpModel):
     task_id: str
     container_id: str | None = None
@@ -192,6 +204,8 @@ __all__ = [
     "FunctionClaimRequest",
     "FunctionClaimResponse",
     "FunctionClaimedTask",
+    "FunctionExecutionEntryRequest",
+    "FunctionExecutionEntryResponse",
     "FunctionInvokeBody",
     "FunctionInvokeResponse",
     "FunctionMonitorRequest",

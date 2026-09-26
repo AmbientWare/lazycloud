@@ -109,8 +109,9 @@ and Redis loss until the target worker accepts request polls. A managed pool fir
 obtains a current worker with room for the source's allocations. Compute resumes
 a suitable reserve or provisions one temporary machine without increasing desired
 capacity. It protects that capacity until the source updates and accepts work,
-then idle retirement removes the excess. Platform maintenance runs one update at
-a time within CPU and GPU fleets and yields to interruption recovery. Customer
+then idle retirement removes the excess. Platform maintenance admits concurrent
+updates while preserving ready headroom and exclusive replacement ownership.
+Queued work and interruption recovery take priority. Customer
 pools retain their connection, quotas and purchase policy. Non-preemptible workloads
 can delay an update until they finish.
 
@@ -125,17 +126,18 @@ ready. Breaking protocols require a bridge release that supports both sides
 before removing the old protocol. The first rollout of these readers must complete
 before publishing a nonempty compatibility list; older readers reject that field.
 
-Platform stopped and hibernated reserves refresh under their admission hold, one
-at a time while demand is clear, and count as current only after the provider
-confirms the stop. Connected customer pools use Auto Scaling groups and do not
-own stopped reserves. Attached machines update when reachable; a workload pinned
+Platform stopped and hibernated reserves refresh under their admission hold when
+ready headroom permits and demand is clear. They count as current only after the
+provider confirms the stop. Connected customer pools use Auto Scaling groups and
+do not own stopped reserves. Attached machines update when reachable; a workload pinned
 to one cannot move to another host. A missing supervisor or rejected agent update
 is reported as blocked and does not reopen admission.
 
 Run `lazycloud-admin release status` to check the rollout. It reports running and
-offline machines, reserves, and pending capacity. `complete` stays false until
-every machine is current and temporary capacity has retired. Argo health only
-proves control-plane rollout.
+offline machines, reserves, pending capacity and maintenance progress. Stalled
+operations include their last progress time and waiting reason. `complete` stays
+false until every machine is current and temporary capacity has retired. Argo
+health only proves control-plane rollout.
 
 Joined agents installed without the supervisor need `install-service` once before
 automatic binary updates can run. Managed node installation already includes it.
@@ -471,8 +473,14 @@ a revision fails on
 database by running every revision and compares it to the metadata.
 
 Argo runs `lazycloud-admin database migrate` as an ordered Sync-wave Job, after
-secret projection and before any workload that reads the schema is updated. A failed migration
-stops the sync with the running deployment untouched.
+secret projection and before any workload that reads the schema is updated. A
+failed migration stops the sync with the running deployment untouched.
+
+Revisions `0030_capacity_activations` and `0031_execution_entry` add lifecycle and
+execution timing records through this normal migration job. Existing stop
+outcomes remain unknown until observed; hibernation capability does not establish
+that memory was preserved. Missing execution-entry reports remain visible in the
+startup report's denominator.
 
 A rollback to an image older than the schema is refused rather than migrated
 from, because there is no path to compute from a revision that build does not
@@ -480,8 +488,8 @@ carry. Roll forward, or restore the database.
 
 ### Provider commitment accounting upgrade
 
-Revision `0015_provider_commitments` counts unresolved provider launches against
-the fleet limit and backfills existing retained instance checkpoints. Stop all
+Revision `0015_provider_commitments` retains unresolved provider launches as
+commitments and backfills existing retained instance checkpoints. Stop all
 old API and scheduler replicas before migration so they cannot create launches
 without recording their commitments. Pause Argo automatic sync, preserve its
 current settings, and confirm no active workloads before stopping those replicas.

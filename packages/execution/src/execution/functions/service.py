@@ -21,6 +21,7 @@ from database.repositories.execution import (
 )
 from database.repositories.orchestration import ContainerRepository
 from database.types import DatabaseSession
+from foundation.ids import required_uuid
 from observability.stream_state import AsyncTaskChangeReader
 from pydantic import JsonValue
 from shared.app_identity import FUNCTION_IMAGE
@@ -55,6 +56,8 @@ from shared.http.functions import (
     FunctionClaimedTask,
     FunctionClaimRequest,
     FunctionClaimResponse,
+    FunctionExecutionEntryRequest,
+    FunctionExecutionEntryResponse,
     FunctionInvokeBody,
     FunctionInvokeResponse,
     FunctionMonitorRequest,
@@ -394,6 +397,7 @@ class FunctionControlService:
             marked = TaskRepository(session).mark_claimable(task.id, at=utc_now())
         if marked is not None:
             task = marked
+        self.services.tasks.publish_lifecycle_change(task, WorkspaceChangeType.Updated)
         return self._schedule_function_task(task, placement=placement)
 
     def task_demand_counts(self, stub_ids: Sequence[str]) -> dict[str, int]:
@@ -834,6 +838,7 @@ class FunctionControlService:
                 )
             if released is None:
                 continue
+            self.services.tasks.publish_lifecycle_change(released, WorkspaceChangeType.Updated)
             try:
                 result = self._schedule_function_task(released, eligible_at=current)
             except DomainError:
@@ -1237,14 +1242,48 @@ class FunctionControlService:
             session, task, limit=1_000, cursor=cursor, follow=True
         ), task
 
+    def function_execution_entry(
+        self, request: FunctionExecutionEntryRequest, *, workspace_id: str
+    ) -> FunctionExecutionEntryResponse:
+        now = utc_now()
+        with self.services.context.database.session() as session:
+            recorded = TaskAttemptRepository(session).record_execution_entry(
+                task_id=required_uuid(request.task_id, field="task_id"),
+                workspace_id=workspace_id,
+                container_id=required_uuid(request.container_id, field="container_id"),
+                claim_id=required_uuid(request.claim_id, field="claim_id"),
+                elapsed_since_entry_seconds=request.elapsed_since_entry_seconds,
+                reported_at=now,
+            )
+        return FunctionExecutionEntryResponse(recorded=recorded)
+
+    async def function_claim_wait(
+        self, request: FunctionClaimRequest, *, workspace_id: str
+    ) -> FunctionClaimResponse:
+        if not request.wait_seconds:
+            return await asyncio.to_thread(self.function_claim, request)
+        if self.task_changes is None:
+            raise RuntimeError("function claim notifications are not configured")
+        # Subscribe before reading SQL so a commit between the read and wait
+        # cannot lose its notification. SQL remains the claim authority.
+        async with self.task_changes.follow_claims(
+            workspace_id=workspace_id, stub_id=request.stub_id
+        ) as updates:
+            deadline = time.monotonic() + request.wait_seconds
+            while True:
+                response = await asyncio.to_thread(self.function_claim, request)
+                if response.task is not None:
+                    return response
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return response
+                try:
+                    async with asyncio.timeout(remaining):
+                        await anext(updates)
+                except TimeoutError:
+                    return FunctionClaimResponse()
+
     def function_claim(self, request: FunctionClaimRequest) -> FunctionClaimResponse:
-        """Give a container asking for work one invocation to run, if there is one.
-
-        Empty is the ordinary answer, not a failure: a warm container asks
-        repeatedly while nothing is arriving, and every one of those asks that
-        finds nothing is the pooling working as intended.
-        """
-
         if not self.services.containers.accepting_work(request.container_id):
             return FunctionClaimResponse()
         task = self.services.tasks.claim_and_start(

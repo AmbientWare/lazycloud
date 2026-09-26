@@ -9,6 +9,7 @@ from typing import Any
 
 import cloudpickle
 from shared.callables import InvocationHandler, prepare_callable_arguments
+from shared.execution_entry import record_execution_entry
 from shared.function_payloads import FunctionPayloadEncoding
 
 
@@ -30,6 +31,8 @@ def invoke_handler(
         result = handler.invoke_arguments(args, kwargs, encoding=encoding)
     else:
         args, kwargs = prepare_callable_arguments(handler, args, kwargs, encoding=encoding)
+        if not inspect.iscoroutinefunction(handler):
+            record_execution_entry()
         result = handler(*args, **kwargs)
     if inspect.isawaitable(result):
         return asyncio.run(_await_any(result))
@@ -37,6 +40,7 @@ def invoke_handler(
 
 
 async def _await_any(value: Any) -> Any:
+    record_execution_entry()
     return await value
 
 

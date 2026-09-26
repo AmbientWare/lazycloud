@@ -17,10 +17,15 @@ class DemandSample:
     observed_at: datetime
     capacity: Capacity
     count: int = 1
+    duration_seconds: float | None = None
 
     def __post_init__(self) -> None:
         if self.count < 1:
             raise ValueError("container demand count must be positive")
+        if self.duration_seconds is not None and (
+            not isfinite(self.duration_seconds) or self.duration_seconds <= 0
+        ):
+            raise ValueError("observed duration must be positive and finite")
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +74,7 @@ def forecast_demand(
     largest = Capacity()
     shapes: set[Capacity] = set()
     sample_count = 0
+    observed: list[DemandSample] = []
     for sample in samples:
         if sample.observed_at.utcoffset() is None:
             raise ValueError("demand forecasts require timezone-aware timestamps")
@@ -82,10 +88,12 @@ def forecast_demand(
         if not sample.capacity.empty:
             shapes.add(sample.capacity)
         sample_count += sample.count
+        observed.append(sample)
 
     scheduled_warm = Capacity()
     scheduled_total = Capacity()
     scheduled_largest = Capacity()
+    scheduled_events: list[tuple[float, Capacity]] = []
     for sample in scheduled:
         if sample.observed_at.utcoffset() is None:
             raise ValueError("demand forecasts require timezone-aware timestamps")
@@ -93,21 +101,52 @@ def forecast_demand(
         if not 0 < until_arrival <= provision_seconds:
             continue
         _validate_capacity(sample.capacity)
-        scheduled_total += sample.capacity * sample.count
-        if until_arrival <= resume_seconds:
-            scheduled_warm += sample.capacity * sample.count
+        capacity = sample.capacity * sample.count
+        scheduled_events.append((until_arrival, capacity))
+        if sample.duration_seconds is not None:
+            scheduled_events.append(
+                (until_arrival + sample.duration_seconds, Capacity() - capacity)
+            )
         scheduled_largest = scheduled_largest.upper(sample.capacity)
         if not sample.capacity.empty:
             shapes.add(sample.capacity)
 
+    scheduled_live = Capacity()
+    for moment, delta in sorted(
+        scheduled_events,
+        key=lambda event: (
+            event[0],
+            event[1].cpu_millicores,
+            event[1].memory_mib,
+            event[1].gpu_count,
+        ),
+    ):
+        scheduled_live += delta
+        if moment <= provision_seconds:
+            scheduled_total = scheduled_total.upper(scheduled_live)
+        if moment <= resume_seconds:
+            scheduled_warm = scheduled_warm.upper(scheduled_live)
+
     def horizon(seconds: float) -> Capacity:
-        return (
-            pending
-            + _scale(short_arrivals, seconds / SHORT_WINDOW_SECONDS).upper(
-                _scale(long_arrivals, seconds / HISTORY_SECONDS)
-            )
-            + largest
-        )
+        def occupancy(window: int) -> Capacity:
+            cpu = memory = gpu = 0.0
+            for sample in observed:
+                if sample.observed_at <= now - timedelta(seconds=window):
+                    continue
+                occupied_seconds = (
+                    min(seconds, sample.duration_seconds)
+                    if sample.duration_seconds is not None
+                    else seconds
+                )
+                factor = occupied_seconds * sample.count / window
+                cpu += sample.capacity.cpu_millicores * factor
+                memory += sample.capacity.memory_mib * factor
+                gpu += sample.capacity.gpu_count * factor
+            return Capacity(ceil(cpu), ceil(memory), ceil(gpu))
+
+        short = occupancy(SHORT_WINDOW_SECONDS)
+        long = occupancy(HISTORY_SECONDS)
+        return pending + short.upper(long) + largest
 
     return DemandForecast(
         warm=horizon(resume_seconds) + scheduled_warm,
@@ -126,14 +165,6 @@ def forecast_demand(
 def _validate_capacity(capacity: Capacity) -> None:
     if min(capacity.cpu_millicores, capacity.memory_mib, capacity.gpu_count) < 0:
         raise ValueError("container demand cannot contain negative resources")
-
-
-def _scale(capacity: Capacity, factor: float) -> Capacity:
-    return Capacity(
-        ceil(capacity.cpu_millicores * factor),
-        ceil(capacity.memory_mib * factor),
-        ceil(capacity.gpu_count * factor),
-    )
 
 
 def _request_shapes(shapes: set[Capacity]) -> tuple[Capacity, ...]:

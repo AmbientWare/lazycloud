@@ -28,6 +28,10 @@ class ConflictError(DomainError):
     """Request conflicts with the current state of a resource."""
 
 
+class StaleProviderStateError(ConflictError):
+    """A newer provider checkpoint superseded the inventory being persisted."""
+
+
 class ExpiredCursorError(ConflictError):
     """A realtime cursor predates the history still retained by its stream."""
 
@@ -102,6 +106,7 @@ __all__ = [
     "NotFoundError",
     "ObjectOperationInProgressError",
     "PaymentRequiredError",
+    "StaleProviderStateError",
     "UpstreamTimeoutError",
     "UpstreamUnavailableError",
     "domain_error_code",

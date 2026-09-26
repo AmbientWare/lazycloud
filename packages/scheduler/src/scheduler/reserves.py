@@ -17,8 +17,8 @@ machine.
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
-from contextlib import AbstractContextManager
+from collections.abc import Iterator, Sequence
+from contextlib import AbstractContextManager, ExitStack, contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
@@ -28,7 +28,7 @@ from compute.fleet_reserves import unit_reserve_market
 from compute.fleet_resources import Capacity, ReserveMarket
 from compute.reserve_state import Consolidation, FleetReserveState
 from database.repositories.orchestration import MachineContainer
-from shared.container_requests import StopContainerReason
+from shared.container_requests import StopContainerReason, capacity_memory_mib
 from shared.placement import Placement
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 from shared.timestamps import utc_now
@@ -62,6 +62,10 @@ def reserve_free_capacity(
 
 class ConsolidationCompute(Protocol):
     def provider_machine_unit(self, machine_id: str) -> tuple[str, str] | None: ...
+
+    def internal_unit_machine_drain_reason(
+        self, workspace_id: str, machine_id: str
+    ) -> str | None: ...
 
     def drain_internal_unit_machine(
         self, workspace_id: str, machine_id: str, *, reason: str, now: datetime | None = None
@@ -110,11 +114,25 @@ class FleetConsolidationService:
         if plan is not None:
             for market in plan.markets:
                 if market.consolidate:
-                    self.begin(market.market, market.consolidate, now=current_time)
+                    self.begin(
+                        market.market,
+                        market.consolidate,
+                        destination_machine_ids=market.consolidation_destinations,
+                        warm_target=market.warm_target,
+                        now=current_time,
+                    )
         for market, consolidation in self.state.consolidations().items():
             self.advance(market, consolidation, now=current_time)
 
-    def begin(self, market: ReserveMarket, machine_id: str, *, now: datetime) -> bool:
+    def begin(
+        self,
+        market: ReserveMarket,
+        machine_id: str,
+        *,
+        destination_machine_ids: tuple[str, ...],
+        warm_target: Capacity,
+        now: datetime,
+    ) -> bool:
         """Cordon the machine if everything on it may move and has a host to move to.
 
         The durable rows are read again under the unit's dispatch lock, so work
@@ -122,32 +140,52 @@ class FleetConsolidationService:
         the lock is released.
         """
         owner = self.compute.provider_machine_unit(machine_id)
-        if owner is None:
+        if owner is None or not destination_machine_ids or machine_id in destination_machine_ids:
             return False
         unit_id, workspace_id = owner
-        consolidation = Consolidation(
-            machine_id=machine_id, unit_id=unit_id, workspace_id=workspace_id, started_at=now
-        )
-        if not self.state.begin_consolidation(market, consolidation, ttl_seconds=self._ttl):
+        destination_owners = [
+            self.compute.provider_machine_unit(target) for target in destination_machine_ids
+        ]
+        if any(owner is None for owner in destination_owners):
             return False
+        destination_units = tuple(
+            sorted({owner[0] for owner in destination_owners if owner is not None})
+        )
+        consolidation = Consolidation(
+            machine_id=machine_id,
+            unit_id=unit_id,
+            workspace_id=workspace_id,
+            started_at=now,
+            destination_machine_ids=destination_machine_ids,
+            destination_unit_ids=destination_units,
+            warm_target=warm_target,
+        )
         cordoned = False
+        recorded = False
         try:
-            with self.leases.dispatch_lock(unit_id):
+            with self._dispatch_locks((unit_id, *destination_units)):
                 live = self.containers.live_on_machine(machine_id)
-                refusal = self._refusal(machine_id, live, now=now)
+                refusal = self._refusal(market, consolidation, live, now=now)
+                if not refusal:
+                    if not self.state.begin_consolidation(
+                        market, consolidation, ttl_seconds=self._ttl
+                    ):
+                        return False
+                    recorded = True
                 if not refusal and not self.compute.drain_internal_unit_machine(
                     workspace_id, machine_id, reason=CONSOLIDATION_REASON, now=now
                 ):
                     refusal = "it is already draining"
                 if refusal:
-                    self.state.finish_consolidation(market, cooldown_seconds=0)
+                    if recorded:
+                        self.state.finish_consolidation(market, cooldown_seconds=0)
                     LOGGER.info("not consolidating %s: %s", machine_id, refusal)
                     return False
                 cordoned = True
                 self._drain_workers(machine_id, now=now)
         except Exception:
             # A cordoned machine keeps its consolidation, so its work still moves.
-            if not cordoned:
+            if recorded and not cordoned:
                 self.state.finish_consolidation(market, cooldown_seconds=0)
             raise
         LOGGER.info(
@@ -156,6 +194,27 @@ class FleetConsolidationService:
         return True
 
     def advance(
+        self, market: ReserveMarket, consolidation: Consolidation, *, now: datetime
+    ) -> None:
+        with self._dispatch_locks((consolidation.unit_id, *consolidation.destination_unit_ids)):
+            active = self.state.consolidations().get(market)
+            if (
+                active is None
+                or active.machine_id != consolidation.machine_id
+                or active.started_at != consolidation.started_at
+            ):
+                return
+            if (
+                self.compute.internal_unit_machine_drain_reason(
+                    consolidation.workspace_id, consolidation.machine_id
+                )
+                != CONSOLIDATION_REASON
+            ):
+                self.state.finish_consolidation(market, cooldown_seconds=0)
+                return
+            self._advance_cordoned(market, consolidation, now=now)
+
+    def _advance_cordoned(
         self, market: ReserveMarket, consolidation: Consolidation, *, now: datetime
     ) -> None:
         live = self.containers.live_on_machine(consolidation.machine_id)
@@ -177,6 +236,10 @@ class FleetConsolidationService:
             and (now - consolidation.stopped_at).total_seconds() < self.restop_seconds
         ):
             return
+        refusal = self._refusal(market, consolidation, live, now=now)
+        if refusal:
+            LOGGER.info("consolidation of %s waits: %s", consolidation.machine_id, refusal)
+            return
         # Stopping an already stopping container changes nothing, so a stop that
         # never arrived is sent again rather than waited on.
         for container in _movable(live):
@@ -189,7 +252,21 @@ class FleetConsolidationService:
     def _ttl(self) -> int:
         return self.deadline_seconds * 2
 
-    def _refusal(self, machine_id: str, live: Sequence[MachineContainer], *, now: datetime) -> str:
+    @contextmanager
+    def _dispatch_locks(self, unit_ids: tuple[str, ...]) -> Iterator[None]:
+        with ExitStack() as stack:
+            for unit_id in sorted(set(unit_ids)):
+                stack.enter_context(self.leases.dispatch_lock(unit_id))
+            yield
+
+    def _refusal(
+        self,
+        market: ReserveMarket,
+        consolidation: Consolidation,
+        live: Sequence[MachineContainer],
+        *,
+        now: datetime,
+    ) -> str:
         if not live:
             return "it emptied"
         movable = _movable(live)
@@ -197,10 +274,12 @@ class FleetConsolidationService:
             container.request is None for container in movable
         ):
             return "it holds work that cannot move"
+        workers = self.workers.list_workers()
         hosts = {
             worker.worker_id: worker_capacity(worker, now=now)
-            for worker in self.workers.list_workers()
-            if worker.machine_id != machine_id
+            for worker in workers
+            if worker.machine_id in consolidation.destination_machine_ids
+            and worker.capacity_owner_id in consolidation.destination_unit_ids
             and worker.request_intake_status(at=now) is SchedulerWorkerStatus.Available
         }
         # Largest first, each onto the host placement itself would choose, so
@@ -215,6 +294,23 @@ class FleetConsolidationService:
             key=lambda request: (request.cpu, request.memory_mib, request.gpu_count),
             reverse=True,
         )
+        free = reserve_free_capacity(
+            [
+                worker
+                for worker in workers
+                if worker.machine_id != consolidation.machine_id
+                and worker.request_intake_status(at=now) is SchedulerWorkerStatus.Available
+            ],
+            now=now,
+        ).get(market, Capacity())
+        for request in requests:
+            free -= Capacity(
+                round(request.cpu * 1000),
+                capacity_memory_mib(request.memory_mib),
+                request.gpu_count,
+            )
+        if not free.covers(consolidation.warm_target):
+            return "moving work would consume the required warm headroom"
         for request in requests:
             host = select_worker_for_request(request, hosts.values())
             if host is None:

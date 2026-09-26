@@ -20,10 +20,11 @@ from compute.fleet_policy import (
     FleetReserveSnapshot,
     HeadroomTarget,
     MarketReserve,
+    MarketReservePlan,
     ReserveConditions,
     plan_market_reserve,
 )
-from compute.fleet_resources import Capacity
+from compute.fleet_resources import Capacity, ReserveMarket
 from compute.machine_lifecycle import reserve_awaits_resume, write_machine_lifecycle
 from compute.offers import ComputeOffer, ReservationStatus
 from compute.provider_state import ProviderUnitStateService
@@ -508,95 +509,33 @@ def test_provider_launch_checkpoint_survives_stale_snapshot_and_rejects_stale_wr
     assert checkpoints.load(request) == intent
 
 
-@pytest.mark.parametrize(
-    (
-        "initial_desired",
-        "fleet_limit",
-        "requested_desired",
-        "expected_desired",
-        "expected_max",
-        "expect_capacity_conflict",
-    ),
-    [
-        (0, 20, 15, 15, 16, False),
-        (5, 3, 3, 3, 5, False),
-        (0, 0, 1, 0, 0, True),
-    ],
-)
-def test_internal_pool_scale_enforces_fleet_capacity_across_providers(
+def test_internal_pool_scale_follows_demand_beyond_previous_fleet_ceiling(
     service_context: ServiceContext,
-    initial_desired: int,
-    fleet_limit: int,
-    requested_desired: int,
-    expected_desired: int,
-    expected_max: int,
-    expect_capacity_conflict: bool,
 ) -> None:
     _seed_connection(service_context, platform_fleet=True)
     provider = _PooledProvider()
-    resolver = _Resolver(provider, service_context)
     compute = ComputeService(
         service_context,
-        provider_resolver=resolver,
+        provider_resolver=_Resolver(provider, service_context),
         pool_bootstrap_factory=_bootstrap,
         capacity_owner_mutations=_MutationLeases(),
-        fleet_policy=FleetCapacityPolicy(max_cpu_instances=max(initial_desired, 4)),
     )
     pool = compute.prepare_pooled_capacity(
         workspace="default",
-        requirements=ComputeResourceRequirements(
-            cpu_millicores=1_000,
-            memory_mb=1_024,
-        ),
+        requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
         region="us-east-1",
-        desired_machines=initial_desired,
+        desired_machines=0,
         root_volume_gib=200,
     )
-    compute.reconcile_pooled_capacity()
-    if fleet_limit == 20:
-        with service_context.database.session() as session:
-            sibling_pool_id = str(uuid4())
-            ComputeUnitRepository(session).upsert(
-                pool.model_copy(
-                    update={
-                        "id": sibling_pool_id,
-                        "capacity_owner_id": sibling_pool_id,
-                        "name": "internal-aws-cpu-sibling",
-                        "selector": "internal-aws-cpu-sibling",
-                        "capability_key": f"{pool.capability_key}:sibling",
-                        "provider": "aws",
-                        "provider_ref": "aws:platform",
-                        "provider_connection_id": None,
-                        "desired_machines": 4,
-                        "max_machines": 4,
-                    }
-                )
-            )
-    compute.fleet_policy = FleetCapacityPolicy(max_cpu_instances=fleet_limit)
-
-    if expect_capacity_conflict:
-        with pytest.raises(ConflictError, match="capacity limit"):
-            compute.scale_internal_unit(
-                pool.workspace_id,
-                pool.capacity_owner_id,
-                requested_desired,
-                before_mutation=_allow_scale,
-            )
-    else:
-        scaled = compute.scale_internal_unit(
-            pool.workspace_id,
-            pool.capacity_owner_id,
-            requested_desired,
-            before_mutation=_allow_scale,
-        )
-        assert scaled.desired_machines == expected_desired
-        assert scaled.max_machines == expected_max
-
-    assert provider.desired == expected_desired
+    scaled = compute.scale_internal_unit(
+        pool.workspace_id, pool.capacity_owner_id, 60, before_mutation=_allow_scale
+    )
+    assert scaled.desired_machines == 60
+    assert provider.desired == 60
 
 
-@pytest.mark.parametrize("market_state", ["open", "full", "cooling"])
-def test_purchase_admission_respects_fleet_headroom_and_market_cooldown(
+@pytest.mark.parametrize("market_state", ["open", "cooling"])
+def test_purchase_admission_respects_market_cooldown(
     service_context: ServiceContext,
     real_redis_actors: RealRedisActors,
     market_state: str,
@@ -685,9 +624,7 @@ def test_purchase_admission_respects_fleet_headroom_and_market_cooldown(
             for item in ComputeUnitRepository(session).list_internal(workspace_id=workspace_id)
         ] == [unit.id]
     now = datetime.now(UTC)
-    if market_state == "full":
-        compute.fleet_policy = FleetCapacityPolicy(max_cpu_instances=0)
-    elif market_state == "cooling":
+    if market_state == "cooling":
         candidates[0].prepare()
         with service_context.database.session() as session:
             units_repository = ComputeUnitRepository(session)
@@ -726,11 +663,6 @@ def test_purchase_admission_respects_fleet_headroom_and_market_cooldown(
     acquired = service.acquire(request, purchases=lambda: candidates, now=now)
     with service_context.database.session() as session:
         units = ComputeUnitRepository(session).list_internal(workspace_id=workspace_id)
-    if market_state == "full":
-        assert acquired.status is SchedulerCapacityAcquisitionStatus.AtLimit
-        assert [item.id for item in units] == [unit.id]
-        assert reservations.allocation_for_request(request.container_id) is None
-        return
     assert acquired.status is SchedulerCapacityAcquisitionStatus.Requested
     purchased = next(item for item in units if item.capacity_owner_id == acquired.capacity_owner_id)
     assert purchased.provider_ref == ("aws:unused" if market_state == "cooling" else "aws:cheap")
@@ -740,113 +672,6 @@ def test_purchase_admission_respects_fleet_headroom_and_market_cooldown(
         if market_state == "cooling"
         else {"aws:existing", "aws:cheap"}
     )
-
-
-@pytest.mark.parametrize("persisted_denial", [False, True])
-def test_waiting_capacity_claim_resumes_after_fleet_headroom_reopens(
-    service_context: ServiceContext,
-    real_redis_actors: RealRedisActors,
-    persisted_denial: bool,
-) -> None:
-    _seed_connection(service_context, platform_fleet=True)
-    provider = _PooledProvider()
-    redis = real_redis_actors.client()
-    reservations = RedisCapacityReservationRepository(redis)
-    workers = RedisSchedulerWorkerRepository(redis)
-    compute = ComputeService(
-        service_context,
-        provider_resolver=_Resolver(provider, service_context),
-        pool_bootstrap_factory=_bootstrap,
-        capacity_owner_mutations=reservations,
-        scheduler_hooks=_SchedulerHooks(),
-        fleet_policy=FleetCapacityPolicy(max_cpu_instances=1),
-    )
-    requirements = ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024)
-    pool = compute.prepare_pooled_capacity(
-        workspace="default",
-        requirements=requirements,
-        region="us-east-1",
-        desired_machines=1,
-        root_volume_gib=200,
-    )
-    compute.reconcile_unit_capacity(pool.id)
-    placement = ComputeCapacityPlacementService(service_context, compute)
-    candidates = placement.purchase_candidates(
-        ComputeCapacityPlacementRequest(
-            workspace_id=pool.workspace_id,
-            placement=pool.placement,
-            requirements=requirements,
-        )
-    )
-
-    def controllers() -> tuple[ComputeUnitCapacityController, ...]:
-        return tuple(
-            ComputeUnitCapacityController(item.workspace_id, item, compute, workers, 0)
-            for item in compute.platform_units()
-        )
-
-    service = CapacityReservationService(reservations, controllers)
-    now = datetime.now(UTC)
-    request = SchedulerWorkerRequest(
-        workspace_id=pool.workspace_id,
-        stub_id=str(uuid4()),
-        container_id=str(uuid4()),
-        cpu_millicores=1_000,
-        memory_mib=1_024,
-        placement=pool.placement,
-        timestamp=now,
-    )
-    waiting = service.acquire(request, purchases=lambda: candidates, now=now)
-    assert waiting.status is SchedulerCapacityAcquisitionStatus.AtLimit
-    with service_context.database.session() as session:
-        operations = ComputeCapacityOperationRepository(session)
-        assert operations.get(pool.capacity_owner_id, waiting.operation_id) is None
-        if persisted_denial:
-            operations.upsert(
-                ComputeCapacityOperationRecord(
-                    id=str(uuid4()),
-                    workspace_id=pool.workspace_id,
-                    pool_id=pool.id,
-                    capacity_owner_id=pool.capacity_owner_id,
-                    reservation_id=waiting.reservation_id,
-                    operation_id=waiting.operation_id,
-                    demand_container_id=request.container_id,
-                    desired_unit=waiting.desired_unit,
-                    status=CapacityOperationStatus.AtLimit,
-                    previous_desired_unit=pool.desired_machines,
-                    shape=CapacityAcquisitionShape(
-                        cpu_millicores=pool.worker_cpu_millicores, memory_mib=pool.worker_memory_mib
-                    ),
-                    created_at=now,
-                    updated_at=now,
-                )
-            )
-    if persisted_denial:
-        settled = service.acquire(request, purchases=lambda: candidates, now=now)
-        assert settled.status is SchedulerCapacityAcquisitionStatus.Unsupported
-        request = request.model_copy(update={"retry_count": request.retry_count + 1})
-
-    compute.scale_internal_unit(pool.workspace_id, pool.id, 0, before_mutation=_allow_scale)
-    acquired = service.acquire(request, purchases=lambda: candidates, now=now)
-    assert acquired.status is SchedulerCapacityAcquisitionStatus.Requested
-    assert (acquired.reservation_id == waiting.reservation_id) is not persisted_denial
-    assert provider.desired == 1
-    with service_context.database.session() as session:
-        repository = ComputeCapacityOperationRepository(session)
-        operations = [
-            repository.get(pool.id, operation_id)
-            for operation_id in {waiting.operation_id, acquired.operation_id}
-        ]
-    assert all(operation is not None for operation in operations)
-    assert sum(operation.owns_capacity for operation in operations if operation is not None) == 1
-    if persisted_denial:
-        denied = next(
-            operation
-            for operation in operations
-            if operation is not None and operation.operation_id == waiting.operation_id
-        )
-        assert denied.status is CapacityOperationStatus.Released
-        assert not denied.owns_capacity
 
 
 def test_platform_capacity_reconciles_without_an_aws_connection(
@@ -1031,7 +856,6 @@ def test_two_interrupted_workers_admit_distinct_replacements_once(
         ]
         assert len(operations) == 2
         assert all(operation is not None and operation.owns_capacity for operation in operations)
-        assert ComputeUnitRepository(session).platform_capacity_usage(gpu=False) <= 4
         assert len(CapacityRecoveryRepository(session).protected_sources(source.id)) == 2
     compute = replace(
         compute,
@@ -1074,7 +898,6 @@ def test_two_interrupted_workers_admit_distinct_replacements_once(
     with service_context.database.session() as session:
         rows = session.scalars(select(CapacityRecoveryTable)).all()
         assert sorted(row.attempt for row in rows) == ([1, 2] if reject_first else [1, 1])
-        assert ComputeUnitRepository(session).platform_capacity_usage(gpu=False) <= 4
         assert (
             sum(
                 unit.desired_machines
@@ -2606,7 +2429,7 @@ def test_release_rollout_preserves_singleton_until_replacement_and_fresh_intake(
         assert completed is not None and completed.phase is CapacityMaintenancePhase.Complete
         assert repository.commitments([pool.id]).operations == 0
         if platform_fleet:
-            assert ComputeUnitRepository(session).platform_capacity_usage(gpu=False) == 0
+            assert not ComputeUnitRepository(session).platform_reserve_rows().units
 
 
 def test_pooled_capacity_does_not_sell_one_pending_unit_twice(
@@ -4427,9 +4250,7 @@ def _stopped_reserve(
         reserve_state=RedisFleetReserveState(real_redis_actors.client()),
         fleet_policy=FleetCapacityPolicy(
             spot=MarketReserve(),
-            on_demand=MarketReserve(
-                stopped=HeadroomTarget(floor=Capacity(1_000, 1_024), maximum=Capacity(1_000, 1_024))
-            ),
+            on_demand=MarketReserve(stopped=HeadroomTarget(floor=Capacity(1_000, 1_024))),
             gpu={},
         ),
     )
@@ -4484,10 +4305,84 @@ _RESERVE_RELEASE = ReleaseTarget(
 )
 
 
+def test_reserve_retirement_preserves_ready_floor_across_pools_and_pending_cleanup(
+    service_context: ServiceContext,
+    real_redis_actors: RealRedisActors,
+) -> None:
+    now = datetime.now(UTC)
+    compute, _provider, _leases, first, machine_id = _stopped_reserve(
+        service_context, real_redis_actors, now=now
+    )
+    release = ActiveRelease(
+        generation=2, manifest_url="https://example.test/release", target=_RESERVE_RELEASE
+    )
+    second_id = str(uuid4())
+    assert release.target.agent is not None
+    second = first.model_copy(
+        update={
+            "id": second_id,
+            "capacity_owner_id": second_id,
+            "name": UnitName("second-reserve"),
+            "capability_key": "second-reserve",
+        }
+    )
+    with service_context.database.session() as session:
+        ComputeUnitRepository(session).upsert(second)
+        instances = ComputeProviderInstanceRepository(session)
+        original = instances.get_by_machine(machine_id)
+        assert original is not None
+        prepared = original.model_copy(
+            update={
+                "prepared_worker_image": release.target.worker_image,
+                "prepared_agent_sha256": release.target.agent.sha256,
+            }
+        )
+        instances.upsert(prepared)
+        instances.upsert(
+            prepared.model_copy(
+                update={
+                    "id": str(uuid4()),
+                    "pool_id": second.id,
+                    "instance_id": "i-secondreserve000",
+                    "machine_id": None,
+                }
+            )
+        )
+    plan = MarketReservePlan(
+        market=ReserveMarket(False),
+        load=Capacity(),
+        quiet=True,
+        warm_target=Capacity(),
+        warm_free=Capacity(),
+        stopped_target=Capacity(1_000, 1_024),
+        stopped_capacity=Capacity(2_000, 2_048),
+    )
+    compute._set_stopped_reserves({first.id: 0, second.id: 0}, plan=plan, release=release, now=now)
+    with service_context.database.session() as session:
+        units = ComputeUnitRepository(session)
+        retired = units.get(first.id)
+        retained = units.get(second.id)
+        assert retired is not None and retired.stopped_machines == 0
+        assert retained is not None and retained.stopped_machines == 1
+        instances = ComputeProviderInstanceRepository(session)
+        instances.upsert(prepared)
+        units.upsert(
+            retired.model_copy(
+                update={"retiring_stopped_machines": 1, "phase": ComputeUnitPhase.Ready}
+            )
+        )
+    compute._set_stopped_reserves({second.id: 0}, plan=plan, release=release, now=now)
+    with service_context.database.session() as session:
+        retained = ComputeUnitRepository(session).get(second.id)
+    assert retained is not None and retained.stopped_machines == 1
+
+
+@pytest.mark.parametrize("controller_exit", [False, True])
 def test_stopped_reserve_from_an_older_release_is_prepared_again_and_records_the_release(
     service_context: ServiceContext,
     real_redis_actors: RealRedisActors,
     monkeypatch: pytest.MonkeyPatch,
+    controller_exit: bool,
 ) -> None:
     now = datetime.now(UTC)
     compute, provider, leases, unit, machine_id = _stopped_reserve(
@@ -4500,17 +4395,27 @@ def test_stopped_reserve_from_an_older_release_is_prepared_again_and_records_the
     def refuse_refresh(
         self: _ReserveProvider, request: ProviderUnitRequest, provider_instance_id: str
     ) -> ProviderUnitSnapshot:
+        if controller_exit:
+            raise SystemExit("controller exited after committing refresh intent")
         raise RuntimeError("provider unavailable")
 
     with monkeypatch.context() as patch:
         patch.setattr(_ReserveProvider, "refresh_machine", refuse_refresh)
-        assert compute.refresh_stale_reserves(release, now=now) == []
+        if controller_exit:
+            with pytest.raises(SystemExit):
+                compute.refresh_stale_reserves(release, now=now)
+        else:
+            assert compute.refresh_stale_reserves(release, now=now) == []
     with service_context.database.session() as session:
         repository = CapacityMaintenanceRepository(session)
         [failed] = repository.active_for_pools([unit.id])
-        assert failed.phase is CapacityMaintenancePhase.Failed
+        assert failed.phase is (
+            CapacityMaintenancePhase.Planned if controller_exit else CapacityMaintenancePhase.Failed
+        )
         committed = repository.commitments([unit.id])
-    now += timedelta(seconds=unit.registration_timeout_seconds)
+    if not controller_exit:
+        assert compute.refresh_stale_reserves(release, now=now) == []
+        now += timedelta(seconds=unit.registration_timeout_seconds)
     assert compute.refresh_stale_reserves(release, now=now) == [machine_id]
     with service_context.database.session() as session:
         repository = CapacityMaintenanceRepository(session)

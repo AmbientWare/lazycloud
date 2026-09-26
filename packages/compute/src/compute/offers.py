@@ -67,6 +67,7 @@ class ComputeOffer(ContractModel):
     capacity_mode: ComputeCapacityMode = ComputeCapacityMode.Direct
     capability_key: str = ""
     supports_scale_to_zero: bool = False
+    supports_hibernation: bool = False
     display_name: str = ""
     category: str = ""
     region_display_name: str = ""
@@ -123,6 +124,7 @@ def pooled_cloud_offer(
     storage_mb: int = DEFAULT_POOLED_NODE_STORAGE_MB,
     architecture: str = DEFAULT_POOLED_NODE_ARCHITECTURE,
     runtime: str = DEFAULT_POOLED_NODE_RUNTIME,
+    supports_hibernation: bool = False,
 ) -> ComputeOffer:
     """Describe one node with the platform's common capacity conventions."""
     return ComputeOffer(
@@ -138,6 +140,7 @@ def pooled_cloud_offer(
         storage_mb=storage_mb,
         architecture=architecture,
         runtime=runtime,
+        supports_hibernation=supports_hibernation,
         gpu=gpu,
         gpu_count=gpu_count,
         node_count=1,
@@ -196,7 +199,7 @@ def recorded_unit_offer(
         supplier_cpu_unit=unit.supplier_cpu_unit,
         supplier_cpu_count=unit.supplier_cpu_count,
         capability_key=unit.capability_key,
-        architecture=architecture,
+        architecture=unit.offer_architecture or architecture,
         runtime=unit.worker_runtimes[0],
     )
 
@@ -208,6 +211,7 @@ def record_purchase_terms(unit: ComputeUnitRecord, offer: ComputeOffer) -> Compu
         update={
             "offer_cost_terms": offer.cost_terms,
             "offer_availability_zone": offer.availability_zone,
+            "offer_architecture": offer.architecture,
         }
     )
 

@@ -248,6 +248,9 @@ class ComputeUnitTable(IdTable, DatabaseBase):
     offer_cost_terms: Mapped[dict[str, JsonValue] | None] = mapped_column(json_type, nullable=True)
     offer_storage_mib: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     offer_availability_zone: Mapped[str] = mapped_column(String(64), nullable=False)
+    offer_architecture: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="", server_default=text("''")
+    )
     supplier_cpu_unit: Mapped[str] = mapped_column(String(32), nullable=False)
     supplier_cpu_count: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     replacement_machine_id: Mapped[str] = mapped_column(String(160), nullable=False)
@@ -373,6 +376,14 @@ class ComputeProviderInstanceTable(IdTable, DatabaseBase):
     __tablename__ = "compute_provider_instances"
     __table_args__: tuple[SchemaItem, ...] = (
         CheckConstraint(
+            "stop_mode IS NULL OR stop_mode IN ('stop', 'hibernate')",
+            name="ck_compute_provider_instances_sleep_mode",
+        ),
+        CheckConstraint(
+            "sleep_outcome IN ('unknown', 'stopped', 'hibernated')",
+            name="ck_compute_provider_instances_sleep_outcome",
+        ),
+        CheckConstraint(
             "gpu_count >= 0 AND cpu_millicores >= 0 AND memory_mb >= 0 "
             "AND storage_mib >= 0 AND supplier_cpu_count >= 0 "
             "AND launch_attempt > 0 AND unserved_observations >= 0",
@@ -464,6 +475,12 @@ class ComputeProviderInstanceTable(IdTable, DatabaseBase):
     hibernates: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=text("false")
     )
+    stop_mode: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sleep_outcome: Mapped[str] = mapped_column(
+        Text, nullable=False, default="unknown", server_default=text("'unknown'")
+    )
+    activation_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    provider_running_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     resume_authorized_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

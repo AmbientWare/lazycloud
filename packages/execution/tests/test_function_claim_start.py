@@ -1,21 +1,32 @@
 from __future__ import annotations
 
+import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from threading import Barrier
 from uuid import uuid4
 
+import pytest
 from api.server.services import ApiServices
 from control.service import ControlPlaneService, StubKind
 from database.repositories.container_rollouts import ContainerRolloutRepository
 from database.repositories.execution import TaskAttemptRepository, TaskRepository
 from database.repositories.orchestration import ContainerRepository
+from database.tables.execution import TaskAttemptTable
 from execution.functions.service import FunctionControlService
+from execution.task_claims import TaskClaimReleaseService
+from observability.startup_latency import StartupLatencyService
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.function_payloads import FunctionJsonInvocation
-from shared.http.functions import FunctionClaimRequest, FunctionRetireRequest
+from shared.http.functions import (
+    FunctionClaimRequest,
+    FunctionExecutionEntryRequest,
+    FunctionRetireRequest,
+)
+from shared.http.workspace_changes import WorkspaceChangeType
 from shared.tasks import Task, TaskStatus
 from shared.timestamps import utc_now
+from sqlalchemy import select
 from tests.releases import assign_runtime
 
 
@@ -111,6 +122,122 @@ def test_retried_claim_returns_the_task_it_already_took(
     assert fresh.id != first.id
     with isolated_services.context.database.session() as session:
         assert len(TaskAttemptRepository(session).list_for_task(first.id)) == 1
+    service = FunctionControlService(isolated_services)
+    entry = FunctionExecutionEntryRequest(
+        task_id=first.id,
+        container_id=container.id,
+        claim_id=lost_claim,
+        elapsed_since_entry_seconds=0,
+    )
+    assert not service.function_execution_entry(
+        entry.model_copy(update={"claim_id": str(uuid4())}), workspace_id=stub.workspace_id
+    ).recorded
+    assert not service.function_execution_entry(entry, workspace_id=str(uuid4())).recorded
+    assert service.function_execution_entry(entry, workspace_id=stub.workspace_id).recorded
+    with isolated_services.context.database.session() as session:
+        original = session.scalar(
+            select(TaskAttemptTable.execution_entry_upper_bound_at).where(
+                TaskAttemptTable.task_id == first.id
+            )
+        )
+    assert service.function_execution_entry(entry, workspace_id=stub.workspace_id).recorded
+    with isolated_services.context.database.session() as session:
+        assert (
+            session.scalar(
+                select(TaskAttemptTable.execution_entry_upper_bound_at).where(
+                    TaskAttemptTable.task_id == first.id
+                )
+            )
+            == original
+        )
+    report = StartupLatencyService(isolated_services.context.database).read(
+        workspace_id=stub.workspace_id
+    )
+    assert report.execution.reported_entries == 1
+    assert report.execution.missing_entry_evidence == 1
+    with isolated_services.context.database.session() as session:
+        TaskClaimReleaseService(session).release(first.id, container_id=container.id)
+    resumed = claim(str(uuid4()))
+    assert resumed is not None and resumed.id == first.id
+    assert resumed.attempt_number == first.attempt_number
+    assert not service.function_execution_entry(entry, workspace_id=stub.workspace_id).recorded
+    with isolated_services.context.database.session() as session:
+        assert (
+            session.scalar(
+                select(TaskAttemptTable.execution_entry_upper_bound_at).where(
+                    TaskAttemptTable.task_id == first.id
+                )
+            )
+            is None
+        )
+
+
+@pytest.mark.anyio
+async def test_long_claim_receives_committed_work_and_preserves_retry_identity(
+    async_services: ApiServices,
+) -> None:
+    stub = ControlPlaneService(async_services.context).create_stub(
+        "long-claim", kind=StubKind.Function, handler="main:hello"
+    )
+    container = ContainerRecord(
+        id=str(uuid4()),
+        name="long-claim",
+        image="python",
+        command=[],
+        workspace_id=stub.workspace_id,
+        stub_id=stub.id,
+        status=ContainerStatus.Pending,
+    )
+    with async_services.context.database.session() as session:
+        ContainerRepository(session).upsert(container)
+    assign_runtime(async_services.containers, async_services.scheduler_workers, container.id)
+    with async_services.context.database.session() as session:
+        assigned = ContainerRepository(session).get_across_workspaces(container.id)
+        assert assigned is not None
+        assigned.status = ContainerStatus.Running
+        ContainerRepository(session).upsert(assigned)
+    service = async_services.function_service
+    request = FunctionClaimRequest(
+        stub_id=stub.id,
+        container_id=container.id,
+        claim_id=str(uuid4()),
+        wait_seconds=2,
+    )
+    claimed = asyncio.create_task(
+        service.function_claim_wait(request, workspace_id=stub.workspace_id)
+    )
+    await asyncio.sleep(0.05)
+    task = async_services.tasks.create(
+        "long-claim",
+        workspace_id=stub.workspace_id,
+        stub_id=stub.id,
+        invocation=FunctionJsonInvocation(),
+    )
+    with async_services.context.database.session() as session:
+        runnable = TaskRepository(session).mark_claimable(task.id, at=utc_now())
+    assert runnable is not None
+    async_services.tasks.publish_lifecycle_change(runnable, WorkspaceChangeType.Updated)
+    response = await claimed
+    assert response.task is not None and response.task.task_id == task.id
+    retried = await service.function_claim_wait(request, workspace_id=stub.workspace_id)
+    assert retried.task is not None and retried.task.task_id == task.id
+    recovery = asyncio.create_task(
+        service.function_claim_wait(
+            request.model_copy(update={"claim_id": str(uuid4()), "wait_seconds": 6}),
+            workspace_id=stub.workspace_id,
+        )
+    )
+    await asyncio.sleep(0.05)
+    missed = async_services.tasks.create(
+        "missed-notification",
+        workspace_id=stub.workspace_id,
+        stub_id=stub.id,
+        invocation=FunctionJsonInvocation(),
+    )
+    with async_services.context.database.session() as session:
+        TaskRepository(session).mark_claimable(missed.id, at=utc_now())
+    recovered = await recovery
+    assert recovered.task is not None and recovered.task.task_id == missed.id
 
 
 def test_idle_retirement_fences_claims_without_releasing_physical_capacity(

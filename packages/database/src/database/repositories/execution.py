@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -69,6 +69,7 @@ from sqlalchemy import (
     func,
     or_,
     select,
+    update,
 )
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.orm import Session
@@ -979,6 +980,52 @@ def _is_uuid_text(value: str) -> bool:
 class TaskAttemptRepository:
     session: Session
 
+    def record_execution_entry(
+        self,
+        *,
+        task_id: str,
+        workspace_id: str,
+        container_id: str,
+        claim_id: str,
+        elapsed_since_entry_seconds: float,
+        reported_at: datetime,
+    ) -> bool:
+        row = self.session.execute(
+            select(
+                TaskAttemptTable.id,
+                TaskAttemptTable.started_at,
+                TaskAttemptTable.execution_entry_upper_bound_at,
+            )
+            .where(
+                TaskAttemptTable.task_id == task_id,
+                TaskAttemptTable.workspace_id == workspace_id,
+                TaskAttemptTable.container_id == container_id,
+                TaskAttemptTable.claim_id == claim_id,
+            )
+            .with_for_update()
+        ).one_or_none()
+        if row is None or row.started_at is None:
+            return False
+        # A monotonic duration removes runner wall-clock skew. Transport time
+        # remains in this upper bound, which must never precede the server claim.
+        elapsed = min(
+            elapsed_since_entry_seconds,
+            max(0.0, (reported_at - _utc_datetime(row.started_at)).total_seconds()),
+        )
+        bounded = reported_at - timedelta(seconds=elapsed)
+        if row.execution_entry_upper_bound_at is None or bounded < _utc_datetime(
+            row.execution_entry_upper_bound_at
+        ):
+            self.session.execute(
+                update(TaskAttemptTable)
+                .where(TaskAttemptTable.id == row.id)
+                .values(
+                    execution_entry_upper_bound_at=bounded,
+                    execution_entry_reported_at=reported_at,
+                )
+            )
+        return True
+
     def expired_function_attempts(self, *, now: datetime, limit: int) -> list[TaskAttempt]:
         timeout = func.coalesce(
             StubTable.runtime_timeout_seconds,
@@ -1049,6 +1096,9 @@ class TaskAttemptRepository:
             raise ConflictError("task attempt ownership cannot change")
         write_task_attempt_row(row, attempt)
         if claim_id is not None:
+            if row.claim_id != claim_id:
+                row.execution_entry_upper_bound_at = None
+                row.execution_entry_reported_at = None
             row.claim_id = claim_id
         self.session.flush()
         return task_attempt_from_table(row)

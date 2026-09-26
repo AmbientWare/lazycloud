@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from database.tables.apps import StubTable
+from database.tables.execution import TaskAttemptTable, TaskTable
 from database.tables.orchestration import ContainerTable
 from shared.contracts import ContractModel
 from shared.deployments import StubKind
@@ -28,9 +29,76 @@ class FunctionStartupFacts(ContractModel):
     runtime_to_ready: StartupLatencyDistribution
 
 
+class FunctionExecutionFacts(ContractModel):
+    invocations: int
+    attempts: int
+    reported_entries: int
+    missing_entry_evidence: int
+    failed_without_entry_evidence: int
+    warm_attempts: int
+    warm_reported_entries: int
+    warm_request_to_entry_upper_bound: StartupLatencyDistribution
+
+
 @dataclass(slots=True)
 class StartupLatencyRepository:
     session: Session
+
+    def execution_entries(
+        self, *, workspace_id: str, since: datetime, now: datetime
+    ) -> FunctionExecutionFacts:
+        task, attempt, container = TaskTable, TaskAttemptTable, ContainerTable
+        reported = attempt.execution_entry_reported_at <= now
+        missing = ~func.coalesce(reported, False)
+        warm = container.workload_ready_at <= task.claimable_at
+        seconds = func.extract("epoch", attempt.execution_entry_upper_bound_at - task.claimable_at)
+        observed = and_(reported, warm, seconds >= 0)
+        statement = (
+            select(
+                func.count(func.distinct(task.id)).label("invocations"),
+                func.count(attempt.id).label("attempts"),
+                func.count().filter(reported).label("reported_entries"),
+                func.count().filter(missing).label("missing_entry_evidence"),
+                func.count()
+                .filter(missing, task.status.in_(("failed", "cancelled", "timeout")))
+                .label("failed_without_entry_evidence"),
+                func.count(attempt.id).filter(warm).label("warm_attempts"),
+                func.count().filter(observed).label("warm_reported_entries"),
+                *(
+                    func.percentile_cont(percentile / 100)
+                    .within_group(seconds)
+                    .filter(observed)
+                    .label(f"p{percentile}_seconds")
+                    for percentile in (50, 95, 99)
+                ),
+            )
+            .select_from(task)
+            .join(StubTable, StubTable.id == task.stub_id)
+            .outerjoin(attempt, attempt.task_id == task.id)
+            .outerjoin(container, container.id == attempt.container_id)
+            .where(
+                task.workspace_id == workspace_id,
+                task.created_at >= since,
+                task.created_at < now,
+                StubTable.type == StubKind.Function.value,
+            )
+        )
+        row = self.session.execute(statement).one()
+        return FunctionExecutionFacts(
+            invocations=row.invocations,
+            attempts=row.attempts,
+            reported_entries=row.reported_entries,
+            missing_entry_evidence=row.missing_entry_evidence,
+            failed_without_entry_evidence=row.failed_without_entry_evidence,
+            warm_attempts=row.warm_attempts,
+            warm_reported_entries=row.warm_reported_entries,
+            warm_request_to_entry_upper_bound=StartupLatencyDistribution(
+                observed=row.warm_reported_entries,
+                p50_seconds=row.p50_seconds,
+                p95_seconds=row.p95_seconds,
+                p99_seconds=row.p99_seconds,
+            ),
+        )
 
     def functions(
         self,

@@ -56,6 +56,9 @@ class Consolidation(ContractModel):
     unit_id: str
     workspace_id: str
     started_at: datetime
+    destination_machine_ids: tuple[str, ...] = ()
+    destination_unit_ids: tuple[str, ...] = ()
+    warm_target: Capacity = Field(default_factory=Capacity)
     stopped_at: datetime | None = None
     """When its movable containers were last told to stop; builds are waited out."""
 

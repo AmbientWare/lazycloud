@@ -53,6 +53,41 @@ class AsyncTaskChangeReader:
     planner: EventStreamPlanner = field(default_factory=EventStreamPlanner)
 
     @asynccontextmanager
+    async def follow_claims(
+        self, *, workspace_id: str, stub_id: str
+    ) -> AsyncIterator[AsyncIterator[None]]:
+        stream = self.planner.stub_task_stream_name(workspace_id, stub_id)
+        subscription = await self.tail.subscribe(
+            (stream,), after={stream: None}, label="function-claims"
+        )
+        async with subscription, aclosing(self._claim_updates(subscription)) as updates:
+            yield updates
+
+    async def _claim_updates(
+        self, subscription: RedisStreamTailSubscription
+    ) -> AsyncGenerator[None]:
+        deadline = time.monotonic() + 5
+        async with aclosing(subscription.items(heartbeat_seconds=5)) as items:
+            async for item in items:
+                if item is None or time.monotonic() >= deadline:
+                    deadline = time.monotonic() + 5
+                    yield None
+                    continue
+                stream, entry = item
+                record = _record_from_entry(stream, entry)
+                if record is None:
+                    continue
+                data = record.body.get("data")
+                if (
+                    isinstance(data, dict)
+                    and data.get("status") in ("pending", "retry")
+                    and data.get("claimable_at")
+                    and not data.get("container_id")
+                ):
+                    deadline = time.monotonic() + 5
+                    yield None
+
+    @asynccontextmanager
     async def follow(
         self,
         *,

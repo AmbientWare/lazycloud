@@ -16,6 +16,11 @@ from compute.providers import (
 )
 from pydantic import BaseModel, ConfigDict, Field
 from shared.capacity import CapacityFailureCode
+from shared.capacity_lifecycle import (
+    CapacityActivationKind,
+    CapacitySleepMode,
+    CapacitySleepOutcome,
+)
 from shared.compute_policy import ComputeUnitProviderState
 from shared.timestamps import utc_now
 
@@ -92,6 +97,10 @@ class RetainedSlot(AwsManagedPoolModel):
     storage_volume_ids: tuple[str, ...] = ()
     hibernate: bool = False
     """The compute side asked for this stop to keep the reserve's memory."""
+    stop_mode: CapacitySleepMode | None = None
+    activation_requested_at: datetime | None = None
+    activation_kind: CapacityActivationKind = CapacityActivationKind.Provision
+    provider_running_at: datetime | None = None
     stop_requested_at: datetime | None = None
     """When EC2 last accepted a stop of either kind; kept only while that stop is pending."""
     hibernate_refused_since: datetime | None = None
@@ -314,6 +323,11 @@ class AwsRetainedPool:
                             if device.machine_volume_id
                         )
                         or slot.storage_volume_ids,
+                        "provider_running_at": (
+                            slot.provider_running_at or utc_now()
+                            if instance.state.name == "running"
+                            else slot.provider_running_at
+                        ),
                         # Stop timing belongs to the stop pending now. A slot
                         # resumed or serving again drops it, so an earlier
                         # stop's time never forces a later one.
@@ -359,7 +373,14 @@ class AwsRetainedPool:
         # instead of issuing a new request after the token might have expired.
         first_attempt = slot.launch_started_at is None
         if first_attempt:
-            slot = slot.model_copy(update={"launch_started_at": utc_now()})
+            started_at = utc_now()
+            slot = slot.model_copy(
+                update={
+                    "launch_started_at": started_at,
+                    "activation_requested_at": started_at,
+                    "activation_kind": CapacityActivationKind.Provision,
+                }
+            )
             self._update(slot)
         assert slot.launch_started_at is not None
         if utc_now() - slot.launch_started_at > PROVIDER_OPERATION_DEADLINE:
@@ -431,6 +452,19 @@ class AwsRetainedPool:
 
     def _start(self, slot: RetainedSlot, instance: _Instance) -> None:
         operation = "start retained instance"
+        if slot.activation_requested_at is None:
+            slot = slot.model_copy(
+                update={
+                    "activation_requested_at": utc_now(),
+                    "activation_kind": (
+                        CapacityActivationKind.Resume
+                        if slot.stop_mode is CapacitySleepMode.Hibernate
+                        else CapacityActivationKind.Boot
+                    ),
+                    "provider_running_at": None,
+                }
+            )
+            self._update(slot)
         # EC2 records a requested hibernation the same way whether the guest
         # hibernated or fell back to shutting down, so this names the request.
         LOGGER.info(
@@ -485,7 +519,11 @@ class AwsRetainedPool:
                     PROVIDER_OPERATION_DEADLINE,
                 )
                 if self._request_stop(instance, force=True):
-                    self._update(slot.model_copy(update={"stop_requested_at": now}))
+                    self._update(
+                        slot.model_copy(
+                            update={"stop_requested_at": now, "stop_mode": CapacitySleepMode.Stop}
+                        )
+                    )
             return
         if instance.state.name != "running":
             return
@@ -519,12 +557,20 @@ class AwsRetainedPool:
                 )
             else:
                 LOGGER.info("hibernating reserve %s", instance.id)
-                self._update(slot.model_copy(update={"stop_requested_at": now}))
+                self._update(
+                    slot.model_copy(
+                        update={"stop_requested_at": now, "stop_mode": CapacitySleepMode.Hibernate}
+                    )
+                )
                 return
         else:
             LOGGER.info("stopping reserve %s without hibernating", instance.id)
         if self._request_stop(instance):
-            self._update(slot.model_copy(update={"stop_requested_at": now}))
+            self._update(
+                slot.model_copy(
+                    update={"stop_requested_at": now, "stop_mode": CapacitySleepMode.Stop}
+                )
+            )
 
     def _request_stop(self, instance: _Instance, *, force: bool = False) -> bool:
         """Ask EC2 to stop `instance`; a refusal is logged and left for the next pass."""
@@ -687,7 +733,16 @@ class AwsRetainedPool:
             if serving >= resume_until or not self.request.purchases_enabled:
                 break
             if slot.phase is SlotPhase.Stopped:
-                self._update(slot.model_copy(update={"serving": True, "phase": SlotPhase.Resuming}))
+                self._update(
+                    slot.model_copy(
+                        update={
+                            "serving": True,
+                            "phase": SlotPhase.Resuming,
+                            "activation_requested_at": None,
+                            "provider_running_at": None,
+                        }
+                    )
+                )
                 serving += 1
         reserves = [
             s for s in self.state.slots if not s.serving and s.phase is not SlotPhase.Retiring
@@ -780,6 +835,16 @@ class AwsRetainedPool:
                     ),
                     booted_template_version=slot.host_revision,
                     hibernates=instance.hibernation.configured,
+                    stop_mode=slot.stop_mode,
+                    sleep_outcome=(
+                        CapacitySleepOutcome.Stopped
+                        if instance.state.name == "stopped"
+                        and slot.stop_mode is CapacitySleepMode.Stop
+                        else CapacitySleepOutcome.Unknown
+                    ),
+                    activation_kind=slot.activation_kind,
+                    activation_requested_at=slot.activation_requested_at,
+                    provider_running_at=slot.provider_running_at,
                 )
             )
         return ProviderUnitSnapshot(
@@ -832,7 +897,15 @@ class AwsRetainedPool:
         slot = self._slot(instance_id, inventory)
         if slot.phase is not SlotPhase.Stopped or slot.serving:
             raise ValueError("only a stopped reserve can be prepared again")
-        self._update(slot.model_copy(update={"phase": SlotPhase.Refreshing}))
+        self._update(
+            slot.model_copy(
+                update={
+                    "phase": SlotPhase.Refreshing,
+                    "activation_requested_at": None,
+                    "provider_running_at": None,
+                }
+            )
+        )
         self._actions(inventory)
         return self.describe()
 
