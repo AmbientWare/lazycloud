@@ -15,7 +15,7 @@ from shared.errors import ConflictError
 from shared.releases import ActiveRelease
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 from shared.timestamps import utc_now
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 
@@ -38,6 +38,15 @@ class WorkerReleaseRepository:
     session: Session
 
     def pending_capacity_owners(self) -> list[str]:
+        stopped = (
+            select(func.count(ComputeProviderInstanceTable.id))
+            .where(
+                ComputeProviderInstanceTable.pool_id == ComputeUnitTable.id,
+                ComputeProviderInstanceTable.status == "stopped",
+                ComputeProviderInstanceTable.missing_since.is_(None),
+            )
+            .scalar_subquery()
+        )
         return list(
             self.session.scalars(
                 select(ComputeUnitTable.capacity_owner_id).where(
@@ -45,12 +54,9 @@ class WorkerReleaseRepository:
                     ComputeUnitTable.phase != "deleted",
                     or_(
                         ComputeUnitTable.replacement_release_generation > 0,
-                        ComputeUnitTable.observed_machines
-                        != (
-                            ComputeUnitTable.desired_machines
-                            + ComputeUnitTable.stopped_machines
-                            + ComputeUnitTable.retiring_stopped_machines
-                        ),
+                        ComputeUnitTable.observed_machines != ComputeUnitTable.desired_machines,
+                        stopped != ComputeUnitTable.stopped_machines,
+                        ComputeUnitTable.retiring_stopped_machines > 0,
                     ),
                 )
             )

@@ -4486,6 +4486,15 @@ def test_stopped_reserve_from_an_older_release_is_prepared_again_and_records_the
         "a" * 64,
         "registry.example/worker:new",
     )
+    release = ActiveRelease(
+        generation=2, manifest_url="https://example.test/release", target=_RESERVE_RELEASE
+    )
+    assert not ComputeReleaseStatusService(service_context.database).read(release, []).complete
+    provider.reserve_status = "stopped"
+    compute.reconcile_unit_capacity(unit.id, now=now)
+    status = ComputeReleaseStatusService(service_context.database).read(release, [])
+    assert status.complete
+    assert status.machines[0].phase is ReleaseMachinePhase.Current
 
 
 def test_a_resumed_reserve_registers_no_worker_until_its_stream_authorizes_the_resume(
