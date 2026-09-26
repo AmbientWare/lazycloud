@@ -1,0 +1,77 @@
+aws:
+  region: us-east-1
+cloudflared:
+  apex: lazycloud.dev
+  tunnelId: 641c34fa-65dc-48b5-bf42-f77d7fa57cad
+database:
+  maxConnections: 40
+  poolerMaxConnections: 20
+deploymentRecord:
+  infrastructureSha256: 7ac76db6b8422b5bc8a11452e0ff3e8b18b7e69b20ec089c7ad8b4d21f5fa3e1
+image:
+  artifacts:
+    api: 534742592531.dkr.ecr.us-east-1.amazonaws.com/lazycloud/api@sha256:69ef4b17afcde60f1082b25555c167af7a9eed4da50410398e8aa045670b9fef
+    cache-server: 534742592531.dkr.ecr.us-east-1.amazonaws.com/lazycloud/cache-server@sha256:eac1eaaeb5fd7965017e8745cd159137ecdb8e4114d7fff90fd31fb45db92b7c
+    cli: 534742592531.dkr.ecr.us-east-1.amazonaws.com/lazycloud/cli@sha256:79e1e68185087302f30b67178b47fceae3b18cd6891c10e460cfdd179ae32587
+    connection-gateway: 534742592531.dkr.ecr.us-east-1.amazonaws.com/lazycloud/connection-gateway@sha256:cc780e7e2d07f4a02fa1225b30a058cdfd937590cf98bc2f92b3c4865e6d9ab4
+    database-bootstrap: 534742592531.dkr.ecr.us-east-1.amazonaws.com/lazycloud/database-bootstrap@sha256:6bea5e4803ca5e38497a5d1b05af19ed4d559995789f5b8b4eac823477b72e72
+    scheduler: 534742592531.dkr.ecr.us-east-1.amazonaws.com/lazycloud/scheduler@sha256:e96285404f468101b49efa02df49bfe885a1ae251c377ebf269026d801ade84f
+  registry: 534742592531.dkr.ecr.us-east-1.amazonaws.com
+  repositoryPrefix: lazycloud
+  tag: 799fece0302ff20f58ca78a63bab4f983c89074c
+release:
+  active:
+    generation: 90
+    manifest_url: https://releases.lazycloud.dev/connected-aws/releases/0.1.59/manifest.json
+    target:
+      agent:
+        sha256: 01bde4723e36abb3f71777cd24d20e50792ca2bbb7bb81380d3f4d6ecd90bd44
+        size_bytes: 45450779
+        url: https://releases.lazycloud.dev/connected-aws/agents/0.1.59/01bde4723e36abb3f71777cd24d20e50792ca2bbb7bb81380d3f4d6ecd90bd44/lazycloud-agent-linux-amd64.tar.gz
+      source_revision: 799fece0302ff20f58ca78a63bab4f983c89074c
+      version: 0.1.59
+      worker_image: public.ecr.aws/y7n4m3x7/lazycloud/container-worker@sha256:a96489af559a829c3410dae377e07a11562905ae5feb6f8be6ef5b4c3d73c10b
+runtime:
+  LAZYCLOUD_AWS_CONNECTION_CONTROL_PRINCIPAL_ARN: arn:aws:iam::534742592531:role/lazycloud-prod-control-principal
+  LAZYCLOUD_AWS_STORAGE_ACCESS_BUCKET: lazycloud-prod-storage-access-534742592531
+  LAZYCLOUD_AWS_STORAGE_ACCESS_QUEUE_URL: https://sqs.us-east-1.amazonaws.com/534742592531/lazycloud-prod-storage-access
+  LAZYCLOUD_AWS_WORKSPACE_STORAGE_ROLE_ARN: arn:aws:iam::534742592531:role/lazycloud-prod-workspace-storage
+  LAZYCLOUD_GATEWAY_PUBLIC_HTTP_URL: https://lazycloud.dev
+  LAZYCLOUD_GITHUB_REDIRECT_URI: https://lazycloud.dev/auth/github/callback
+  LAZYCLOUD_OBJECT_STORE_BUCKET: lazycloud-prod-objects-534742592531
+  LAZYCLOUD_OBJECT_STORE_ENDPOINT_URL: https://s3.us-east-1.amazonaws.com
+  LAZYCLOUD_OBJECT_STORE_FORCE_PATH_STYLE: 'true'
+  LAZYCLOUD_OBJECT_STORE_REGION_NAME: us-east-1
+  LAZYCLOUD_OBJECT_STORE_WORKSPACE_BUCKET_PREFIX: lazycloud-prod-workspace
+  LAZYCLOUD_PLATFORM_CAPACITY_AWS: '{"provider_ref": "aws:6da5ed73-66a7-49d0-a05c-17857d5b3ba4",
+    "node_role_arn": "arn:aws:iam::534742592531:role/compute-node-50fd175daf6de7c5bd42",
+    "node_instance_profile_arn": "arn:aws:iam::534742592531:instance-profile/compute-node-50fd175daf6de7c5bd42",
+    "account_id": "534742592531", "role_arn": "arn:aws:iam::534742592531:role/lazycloud-prod-compute-connection",
+    "networks": {"us-east-1": {"vpc_id": "vpc-007d77af02a63830b", "subnet_ids": ["subnet-0fd7781a5ca720b1c",
+    "subnet-0de56bbc3ec7be8e3", "subnet-04f84223cc6a294b9", "subnet-017a3a298fa6e9c66",
+    "subnet-023947f9f9bbd3293", "subnet-080decec556ec6dc1"], "security_group_id":
+    "sg-0028c2c1729b5c7ce"}, "us-east-2": {"vpc_id": "vpc-0a93593960cbf2a37", "subnet_ids":
+    ["subnet-00ca352fd3883fe7d", "subnet-065a29c648d78c386", "subnet-02e385d7e738fcf77"],
+    "security_group_id": "sg-0f785bd6144093e85"}, "us-west-1": {"vpc_id": "vpc-0fb3f9094de9e4831",
+    "subnet_ids": ["subnet-0ced8c4cbb4bf6c96", "subnet-0a90e3fd63025b025"], "security_group_id":
+    "sg-00c1c70ca1f57dbe9"}, "us-west-2": {"vpc_id": "vpc-03ee0d7df59d1fedb", "subnet_ids":
+    ["subnet-03eb8ac5900d5cca4", "subnet-0a6eb19d0cf251743", "subnet-0df7b8e067bcb8bf6",
+    "subnet-065671ab4b659acb7"], "security_group_id": "sg-02f1493f15bb80474"}}, "region":
+    "us-east-1"}'
+  LAZYCLOUD_REDIS_URL: rediss://master.lazycloud-prod-redis.b1nxwv.use1.cache.amazonaws.com:6379/0
+  LAZYCLOUD_RELEASE_MANIFEST_URL: https://releases.lazycloud.dev/connected-aws/releases/0.1.59/manifest.json
+  LAZYCLOUD_STRIPE_ACCOUNT_ID: acct_1U3MzaLpRGtVfZdq
+  LAZYCLOUD_TUNNEL_HOSTNAME: tunnels.lazycloud.dev
+  LAZYCLOUD_WORKLOAD_IMAGE_REGISTRY_REPOSITORY: 534742592531.dkr.ecr.us-east-1.amazonaws.com/lazycloud/workload-images
+  LAZYCLOUD_WORKSPACE_STORAGE_ISSUER: aws
+secrets:
+  documents:
+    operator: lazycloud-prod/operator
+    platform: lazycloud-prod/platform
+  readerRoleArn: arn:aws:iam::534742592531:role/lazycloud-prod-secrets-reader
+serviceAccounts:
+  controlPlane: control-plane
+  scheduler: scheduler
+  secretsReader: secrets-reader
+storage:
+  className: lazycloud-ebs
