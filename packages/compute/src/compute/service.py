@@ -7,9 +7,11 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from enum import StrEnum
+from math import ceil
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from database.repositories.aws_connections import AwsAccountConnectionRepository
+from database.repositories.capacity_maintenance import CapacityMaintenanceRepository
 from database.repositories.capacity_recovery import CapacityRecoveryRepository
 from database.repositories.compute import (
     ComputeCapacityOperationRecord,
@@ -23,6 +25,7 @@ from database.repositories.compute import (
     ComputeUnitRepository,
     PlatformReserveUnitRow,
 )
+from database.repositories.fleet_demand import FleetDemandRepository, FleetDemandRow
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.orchestration import (
     ContainerRepository,
@@ -46,6 +49,11 @@ from shared.capacity import (
     CapacityReleaseRequest,
     capacity_failure_message,
     capacity_owner_for_provider,
+)
+from shared.capacity_maintenance import (
+    CapacityMaintenanceKind,
+    CapacityMaintenancePhase,
+    CapacityMaintenanceRecord,
 )
 from shared.compute_enrollment import (
     AgentCapacityState,
@@ -80,7 +88,7 @@ from shared.errors import (
     NotFoundError,
     UpstreamUnavailableError,
 )
-from shared.gpu import GPU_ANY, gpu_preference_accepts, normalize_gpu_type
+from shared.gpu import GPU_ANY, gpu_preference_accepts
 from shared.http.worker_network import WorkerEgressPolicy
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
 from shared.identity import WorkspaceStatus
@@ -99,17 +107,16 @@ from compute.capacity_errors import (
     ProviderAuthorizationPendingError,
 )
 from compute.context import ComputeContext
+from compute.demand_forecast import HISTORY_SECONDS, DemandSample, forecast_demand
 from compute.fleet_policy import (
-    Capacity,
     FleetCapacityPolicy,
     FleetReservePlan,
     FleetReserveSnapshot,
     GrowthKind,
-    MachineRole,
     MarketReservePlan,
     ReserveConditions,
+    ReserveGrowth,
     ReserveMachineState,
-    ReserveMarket,
     plan_market_reserve,
 )
 from compute.fleet_reserves import (
@@ -119,19 +126,20 @@ from compute.fleet_reserves import (
     reserve_admission,
     unit_reserve_market,
 )
+from compute.fleet_resources import Capacity, ReserveMarket, ReserveOffer
 from compute.machine_lifecycle import (
     PREPARED_RESERVE_STATUSES,
     RETAINED_MACHINE_LIFECYCLES,
     machine_lifecycle_allowed,
     write_machine_lifecycle,
 )
+from compute.maintenance_policy import MaintenanceBudget, MaintenanceCandidate, plan_maintenance
 from compute.offers import (
     ComputeOffer,
     OfferRequest,
     ReservationStatus,
     choose_offer,
     cooling_regions,
-    offer_selection_key,
     record_purchase_terms,
 )
 from compute.provider_machines import (
@@ -165,7 +173,6 @@ from compute.source_cache_storage import SourceCacheStorageLifecycleService
 from compute.telemetry import AGENT_HEARTBEAT_TIMEOUT_SECONDS
 
 LOGGER = logging.getLogger(__name__)
-_RESERVE_REFRESH_CANDIDATES = 4
 _RESERVE_OWNER = str(uuid5(NAMESPACE_URL, "lazycloud:platform-warm-capacity"))
 """The lease a reserve plan and a reserve refresh share, so neither runs beside the other."""
 
@@ -2152,10 +2159,6 @@ class ComputeService:
                 replacement_template_version=(
                     current.replacement_template_version if current else ""
                 ),
-                replacement_release_generation=(
-                    current.replacement_release_generation if current else 0
-                ),
-                replacement_reason=current.replacement_reason if current else "",
                 scaling_enabled=True,
                 # True by construction rather than by preference: this unit is
                 # built from workspace policy because the workspace needed general
@@ -2584,16 +2587,13 @@ class ComputeService:
         machine_id: str,
         *,
         template_version: str = "",
-        release_generation: int = 0,
     ) -> ComputeUnitRecord:
         """Durably pair one retiring machine with one operational surge."""
 
         if not machine_id:
             raise InvalidInputError("replacement machine is required")
-        if bool(template_version) == bool(release_generation):
-            raise InvalidInputError(
-                "planned replacement requires one host template or release generation"
-            )
+        if not template_version:
+            raise InvalidInputError("planned host replacement requires a host template")
         with self.context.database.session() as session:
             units = ComputeUnitRepository(session)
             initial = _require_internal_pooled_unit(
@@ -2615,7 +2615,6 @@ class ComputeService:
                 if (
                     unit.replacement_machine_id == machine_id
                     and unit.replacement_template_version == template_version
-                    and unit.replacement_release_generation == release_generation
                 ):
                     return unit
                 raise ConflictError(
@@ -2652,15 +2651,13 @@ class ComputeService:
                         "replacement_machine_id": machine_id,
                         "stopped_machines": (
                             min(
-                                max(unit.stopped_machines - int(bool(release_generation)), 0),
+                                unit.stopped_machines,
                                 max(available - unit.desired_machines - 1, 0),
                             )
                             if available is not None
                             else unit.stopped_machines
                         ),
                         "replacement_template_version": template_version,
-                        "replacement_release_generation": release_generation,
-                        "replacement_reason": "waiting for replacement capacity",
                         "generation": unit.generation + 1,
                         "phase": ComputeUnitPhase.Updating,
                         "status": ComputeUnitPhase.Updating.value,
@@ -2700,33 +2697,468 @@ class ComputeService:
         release: ActiveRelease,
         fleet: list[SchedulerWorkerRecord],
     ) -> Iterator[DatabaseSession]:
-        from compute.release_rollout import release_replacement
-
         with self.worker_maintenance_admission(
             worker.workspace_id, worker.capacity_owner_id, worker.machine_id
         ) as session:
             unit = ComputeUnitRepository(session).get_by_capacity_owner_id(worker.capacity_owner_id)
             if unit is None:
                 raise NotFoundError("worker capacity owner is missing")
-            idle_surge = (
-                unit.replacement_release_generation > 0
-                and worker.machine_id != unit.replacement_machine_id
-                and ContainerRepository(session).count_live_for_machine(worker.machine_id) == 0
+            reserved_target = next(
+                (
+                    operation
+                    for operation in CapacityMaintenanceRepository(session).active_for_pools(
+                        [unit.id]
+                    )
+                    if operation.replacement_machine_id == worker.machine_id
+                ),
+                None,
             )
-            if (
-                unit.capacity_mode is ComputeCapacityMode.Pooled
-                and worker.status is not SchedulerWorkerStatus.Draining
-                and worker.admitted_release_generation > 0
-                and not idle_surge
-                and release_replacement(worker, fleet, release, now=utc_now()) is None
-            ):
-                raise ConflictError(
-                    "worker update requires replacement capacity on the target release"
-                )
+            if reserved_target is not None:
+                if ContainerRepository(session).count_live_for_machine(worker.machine_id):
+                    raise ConflictError("reserved replacement update requires an idle machine")
+                if reserved_target.release_generation > release.generation:
+                    raise ConflictError("maintenance has observed a newer release")
+                self._require_release_headroom(session, unit, worker, release, fleet)
+            elif worker.admitted_release_generation > 0:
+                operation = self._prepare_worker_release(session, unit, worker, release, fleet)
+                if unit.capacity_mode is ComputeCapacityMode.Pooled:
+                    from compute.release_rollout import release_replacement
+
+                    replacement = release_replacement(
+                        worker,
+                        [
+                            item
+                            for item in fleet
+                            if item.machine_id == operation.replacement_machine_id
+                        ],
+                        release,
+                        now=utc_now(),
+                    )
+                    if replacement is None:
+                        raise ConflictError("worker update is waiting for its reserved replacement")
+                if worker.status is not SchedulerWorkerStatus.Draining or operation.phase not in {
+                    CapacityMaintenancePhase.Draining,
+                    CapacityMaintenancePhase.Verifying,
+                }:
+                    self._require_release_headroom(session, unit, worker, release, fleet)
+                    CapacityMaintenanceRepository(session).transition(
+                        operation.id,
+                        expected_generation=release.generation,
+                        expected_phase=operation.phase,
+                        phase=CapacityMaintenancePhase.Draining,
+                        now=utc_now(),
+                    )
             WorkerReleaseRepository(session).begin_update(
                 worker.worker_id, worker.machine_id, release
             )
             yield session
+
+    def prepare_worker_release(
+        self,
+        worker: SchedulerWorkerRecord,
+        release: ActiveRelease,
+        fleet: list[SchedulerWorkerRecord],
+    ) -> CapacityMaintenanceRecord:
+        with self.worker_maintenance_admission(
+            worker.workspace_id, worker.capacity_owner_id, worker.machine_id
+        ) as session:
+            unit = ComputeUnitRepository(session).get_by_capacity_owner_id(worker.capacity_owner_id)
+            if unit is None:
+                raise NotFoundError("worker capacity owner is missing")
+            return self._prepare_worker_release(session, unit, worker, release, fleet)
+
+    def begin_idle_agent_release(
+        self,
+        session: DatabaseSession,
+        *,
+        capacity_owner_id: str,
+        machine_id: str,
+        worker_id: str,
+        release: ActiveRelease,
+    ) -> None:
+        unit = ComputeUnitRepository(session).get_by_capacity_owner_id(capacity_owner_id)
+        if unit is None or ContainerRepository(session).count_live_for_machine(machine_id):
+            raise ConflictError("agent update requires an idle machine with a capacity owner")
+        active = CapacityMaintenanceRepository(session).active_for_pools([unit.id])
+        existing = next((item for item in active if item.source_machine_id == machine_id), None)
+        if existing is not None and existing.release_generation > release.generation:
+            raise ConflictError("maintenance has observed a newer release")
+        reserved_target = next(
+            (item for item in active if item.replacement_machine_id == machine_id), None
+        )
+        if existing is None and reserved_target is None:
+            unbound = next(
+                (
+                    item
+                    for item in active
+                    if item.kind is CapacityMaintenanceKind.Runtime
+                    and item.surge_machines
+                    and item.replacement_machine_id is None
+                    and item.phase is not CapacityMaintenancePhase.Retiring
+                    and item.release_generation <= release.generation
+                ),
+                None,
+            )
+            if unbound is not None:
+                reserved_target = CapacityMaintenanceRepository(session).transition(
+                    unbound.id,
+                    expected_generation=unbound.release_generation,
+                    expected_phase=unbound.phase,
+                    phase=unbound.phase,
+                    replacement_machine_id=machine_id,
+                    now=utc_now(),
+                )
+        if reserved_target is not None and reserved_target.release_generation > release.generation:
+            raise ConflictError("maintenance has observed a newer release")
+        if existing is not None and existing.release_generation < release.generation:
+            CapacityMaintenanceRepository(session).retarget(
+                existing.id,
+                expected_generation=existing.release_generation,
+                release_generation=release.generation,
+                now=utc_now(),
+            )
+        if existing is None and reserved_target is None:
+            self._start_maintenance(
+                session,
+                unit,
+                machine_id=machine_id,
+                release=release,
+                kind=CapacityMaintenanceKind.Runtime,
+                candidate=MaintenanceCandidate(
+                    machine_id, unit.placement.key, hourly_cost_micros=0
+                ),
+            )
+        WorkerReleaseRepository(session).begin_update(worker_id, machine_id, release)
+
+    def _prepare_worker_release(
+        self,
+        session: DatabaseSession,
+        unit: ComputeUnitRecord,
+        worker: SchedulerWorkerRecord,
+        release: ActiveRelease,
+        fleet: list[SchedulerWorkerRecord],
+    ) -> CapacityMaintenanceRecord:
+        from compute.release_rollout import release_replacement
+
+        repository = CapacityMaintenanceRepository(session)
+        active = repository.active_for_placement(unit.placement)
+        current = next(
+            (item for item in active if item.source_machine_id == worker.machine_id), None
+        )
+        if current is not None:
+            if current.phase is CapacityMaintenancePhase.Retiring:
+                raise ConflictError("maintenance is finishing provider cleanup")
+            if current.release_generation > release.generation:
+                raise ConflictError("maintenance has observed a newer release")
+            if current.release_generation < release.generation:
+                current = repository.retarget(
+                    current.id,
+                    expected_generation=current.release_generation,
+                    release_generation=release.generation,
+                    now=utc_now(),
+                )
+            if current.replacement_machine_id is not None:
+                target = ComputeProviderInstanceRepository(session).get_by_machine(
+                    current.replacement_machine_id
+                )
+                if (target is None or target.status == "deleted") and not any(
+                    item.machine_id == current.replacement_machine_id for item in fleet
+                ):
+                    current = repository.release_deleted_replacement(current, now=utc_now())
+                    active = [current if item.id == current.id else item for item in active]
+            if (
+                current.replacement_machine_id is None
+                and unit.capacity_mode is ComputeCapacityMode.Pooled
+            ):
+                reserved = {
+                    machine_id
+                    for item in active
+                    for machine_id in (item.source_machine_id, item.replacement_machine_id)
+                    if machine_id is not None
+                }
+                replacement = release_replacement(
+                    worker,
+                    [item for item in fleet if item.machine_id not in reserved],
+                    release,
+                    now=utc_now(),
+                )
+                if replacement is not None:
+                    current = repository.transition(
+                        current.id,
+                        expected_generation=release.generation,
+                        expected_phase=current.phase,
+                        phase=current.phase,
+                        replacement_machine_id=replacement.machine_id,
+                        now=utc_now(),
+                    )
+            repository.reserve_allocations(current, worker)
+            return current
+        reserved = {
+            machine_id
+            for item in active
+            for machine_id in (item.source_machine_id, item.replacement_machine_id)
+            if machine_id is not None
+        }
+        replacement = (
+            release_replacement(
+                worker,
+                [item for item in fleet if item.machine_id not in reserved],
+                release,
+                now=utc_now(),
+            )
+            if unit.capacity_mode is ComputeCapacityMode.Pooled
+            else None
+        )
+        surge = int(unit.capacity_mode is ComputeCapacityMode.Pooled and replacement is None)
+        cost = (
+            unit.offer_cost_terms.complete_hourly_cost_micros
+            if surge and unit.offer_cost_terms is not None
+            else None
+            if surge
+            else 0
+        )
+        if surge:
+            provider, _offer = self._resolved_internal_unit_provider(unit)
+            if (
+                provider.pooled is None
+                or provider.policy is None
+                or not provider.policy.can_purchase
+            ):
+                raise ConflictError("provider policy does not permit replacement capacity")
+            instance = ComputeProviderInstanceRepository(session).get_by_machine(worker.machine_id)
+            if (
+                instance is None
+                or instance.pool_id != unit.id
+                or not _provider_machine_can_be_replaced(instance)
+            ):
+                raise ConflictError("source machine cannot receive replacement capacity")
+        operation = self._start_maintenance(
+            session,
+            unit,
+            machine_id=worker.machine_id,
+            release=release,
+            kind=CapacityMaintenanceKind.Runtime,
+            candidate=MaintenanceCandidate(
+                machine_id=worker.machine_id,
+                market=unit_reserve_market(
+                    preemptible=unit.worker_preemptible, gpu_type=unit.worker_gpu_type
+                ).key,
+                surge_machines=surge,
+                running_cpu_millicores=unit.worker_cpu_millicores * surge
+                if not unit.worker_gpu_count
+                else 0,
+                hourly_cost_micros=cost,
+                replacement_machine_id=replacement.machine_id if replacement else None,
+            ),
+        )
+        repository.reserve_allocations(operation, worker)
+        return operation
+
+    def _start_maintenance(
+        self,
+        session: DatabaseSession,
+        unit: ComputeUnitRecord,
+        *,
+        machine_id: str,
+        release: ActiveRelease,
+        kind: CapacityMaintenanceKind,
+        candidate: MaintenanceCandidate,
+    ) -> CapacityMaintenanceRecord:
+        units = ComputeUnitRepository(session)
+        operations = CapacityMaintenanceRepository(session)
+        pool_ids, fleet_size = (
+            units.platform_maintenance_fleet()
+            if unit.platform_fleet
+            else (
+                [unit.id],
+                max(unit.desired_machines + unit.stopped_machines, unit.observed_machines),
+            )
+        )
+        active = operations.active_for_pools(pool_ids)
+        commitments = operations.commitments(pool_ids)
+        temporary_cost, unknown_cost = (
+            self._temporary_capacity_cost(session)
+            if unit.platform_fleet
+            else (commitments.hourly_cost_micros, commitments.unknown_cost_operations > 0)
+        )
+        if unit.platform_fleet:
+            demand = ContainerRepository(session).unplaced_platform_demand()
+            market_waiting = (
+                (GPU_ANY in demand.gpu_types or unit.worker_gpu_type in demand.gpu_types)
+                if unit.worker_gpu_count
+                else demand.preemptible_cpu
+                if unit.worker_preemptible
+                else demand.cpu
+            )
+            if market_waiting:
+                raise ConflictError(
+                    "queued work in this market takes precedence over new maintenance"
+                )
+        ready: dict[str, Capacity] = {}
+        required_ready: dict[str, Capacity] = {}
+        if kind is CapacityMaintenanceKind.ReserveRefresh:
+            rows = units.platform_reserve_rows()
+            shapes = {item.id: item for item in rows.units}
+            reserved_sources = {item.source_machine_id for item in active}
+            for instance in rows.instances:
+                if (
+                    instance.status != "stopped"
+                    or instance.missing
+                    or instance.machine_id in reserved_sources
+                    or not release.target.accepts(
+                        instance.prepared_worker_image, instance.prepared_agent_sha256
+                    )
+                ):
+                    continue
+                shape = shapes[instance.unit_id]
+                key = unit_reserve_market(
+                    preemptible=shape.preemptible, gpu_type=shape.gpu_type
+                ).key
+                ready[key] = ready.get(key, Capacity()) + machine_capacity(
+                    shape.cpu_millicores,
+                    shape.memory_mib,
+                    shape.gpu_count,
+                    reported_memory_mib=shape.reported_memory_mib,
+                )
+            if self.reserve_state is None:
+                raise ConflictError("reserve refresh requires the fleet capacity plan")
+            required_ready = {
+                key: target.stopped_target
+                for key, target in self.reserve_state.published().targets.items()
+            }
+        budget = MaintenanceBudget(
+            available_operations=max(
+                ceil(max(fleet_size, 1) * self.fleet_policy.maintenance_fraction_percent / 100), 1
+            )
+            - len(active),
+            available_machines=(
+                self.fleet_policy.machine_limit(gpu=bool(unit.worker_gpu_count))
+                - units.platform_capacity_usage(gpu=bool(unit.worker_gpu_count))
+                if unit.platform_fleet
+                else max(unit.max_machines, 1)
+            ),
+            available_running_cpu_millicores=(
+                self.fleet_policy.max_running_cpu_millicores
+                - units.platform_running_cpu_millicores()
+                if unit.platform_fleet
+                else max(
+                    unit.worker_cpu_millicores * max(unit.max_machines, 1),
+                    candidate.running_cpu_millicores,
+                )
+            ),
+            available_hourly_cost_micros=self.fleet_policy.max_temporary_hourly_cost_micros
+            - temporary_cost,
+            ready=ready,
+            required_ready=required_ready,
+            reserved_replacements=frozenset(
+                machine
+                for operation in active
+                for machine in (operation.source_machine_id, operation.replacement_machine_id)
+                if machine is not None
+            ),
+            unknown_committed_cost=unknown_cost,
+        )
+        if not plan_maintenance([candidate], budget):
+            raise ConflictError("maintenance is waiting for capacity or temporary cost headroom")
+        now = utc_now()
+        return operations.start(
+            CapacityMaintenanceRecord(
+                id=str(uuid4()),
+                pool_id=unit.id,
+                source_machine_id=machine_id,
+                release_generation=release.generation,
+                kind=kind,
+                surge_machines=candidate.surge_machines,
+                running_cpu_millicores=candidate.running_cpu_millicores,
+                hourly_cost_micros=candidate.hourly_cost_micros,
+                replacement_machine_id=candidate.replacement_machine_id,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+
+    def _temporary_capacity_cost(self, session: DatabaseSession) -> tuple[int, bool]:
+        rows = ComputeUnitRepository(session).platform_reserve_rows()
+        operations = CapacityMaintenanceRepository(session).active_for_pools(
+            [item.id for item in rows.units]
+        )
+        cost = sum(item.hourly_cost_micros or 0 for item in operations)
+        unknown = any(item.hourly_cost_micros is None for item in operations)
+        refreshing = {
+            item.source_machine_id
+            for item in operations
+            if item.kind is CapacityMaintenanceKind.ReserveRefresh
+        }
+        for unit in rows.units:
+            instances = [item for item in rows.instances if item.unit_id == unit.id]
+            stopped = sum(item.status == "stopped" and not item.missing for item in instances)
+            held_refreshes = sum(item.machine_id in refreshing for item in instances)
+            temporary = max(unit.stopped - stopped - held_refreshes, 0) + int(
+                bool(unit.replacement_machine_id)
+            )
+            if temporary:
+                unknown = unknown or unit.hourly_cost_micros is None
+                cost += (unit.hourly_cost_micros or 0) * temporary
+        return cost, unknown
+
+    def _require_release_headroom(
+        self,
+        session: DatabaseSession,
+        unit: ComputeUnitRecord,
+        worker: SchedulerWorkerRecord,
+        release: ActiveRelease,
+        fleet: list[SchedulerWorkerRecord],
+    ) -> None:
+        if not unit.platform_fleet:
+            return
+        market = unit_reserve_market(
+            preemptible=unit.worker_preemptible, gpu_type=unit.worker_gpu_type
+        )
+        target = (
+            self.reserve_state.published().targets.get(market.key) if self.reserve_state else None
+        )
+        if target is None:
+            raise ConflictError("maintenance is waiting for the platform capacity plan")
+        ready = Capacity()
+        for member in fleet:
+            if (
+                member.placement == unit.placement
+                and member.preemptible == unit.worker_preemptible
+                and member.gpu_type == unit.worker_gpu_type
+                and release.target.accepts(member.runtime_image, member.agent_binary_sha256)
+                and member.request_intake_status(at=utc_now()) is SchedulerWorkerStatus.Available
+            ):
+                ready += Capacity(
+                    member.free_cpu_millicores, member.free_memory_mib, member.free_gpu_count
+                )
+        reserved = CapacityMaintenanceRepository(session).reserved_resources(
+            placement=unit.placement,
+            preemptible=unit.worker_preemptible,
+            gpu_type=unit.worker_gpu_type,
+        )
+        ready = (ready - Capacity(*reserved)).clamped()
+        lost = (
+            Capacity(worker.free_cpu_millicores, worker.free_memory_mib, worker.free_gpu_count)
+            if release.target.accepts(worker.runtime_image, worker.agent_binary_sha256)
+            and worker.request_intake_status(at=utc_now()) is SchedulerWorkerStatus.Available
+            else Capacity()
+        )
+        if not plan_maintenance(
+            [
+                MaintenanceCandidate(
+                    worker.machine_id, market.key, unavailable=lost, hourly_cost_micros=0
+                )
+            ],
+            MaintenanceBudget(
+                1,
+                0,
+                0,
+                0,
+                ready={market.key: ready},
+                required_ready={market.key: target.warm_target},
+            ),
+        ):
+            raise ConflictError("worker update would consume required warm capacity")
 
     @contextmanager
     def worker_maintenance_admission(
@@ -2744,7 +3176,11 @@ class ComputeService:
             unit = repository.get(unit.id, for_update=True)
             if unit is None or unit.workspace_id != workspace_id:
                 raise NotFoundError(f"compute unit not found: {capacity_owner_id}")
-            self._require_maintenance_available(session, unit, machine_id=machine_id)
+            if (
+                unit.replacement_machine_id
+                or unit.id in CapacityRecoveryRepository(session).active_source_units()
+            ):
+                raise ConflictError("host replacement or interruption recovery takes precedence")
             machine = MachineRepository(session).get(machine_id, workspace_id=workspace_id)
             if machine is None or machine.lifecycle in {
                 MachineLifecycle.Stopping,
@@ -2775,11 +3211,7 @@ class ComputeService:
         recovering = CapacityRecoveryRepository(session).active_source_units()
         if any(item.id in recovering for item in candidates):
             raise ConflictError("capacity interruption recovery takes precedence over maintenance")
-        if any(
-            item.replacement_machine_id
-            and not (item.id == unit.id and item.replacement_release_generation and machine_id)
-            for item in candidates
-        ):
+        if any(item.replacement_machine_id or item.maintenance_active for item in candidates):
             raise ConflictError("capacity maintenance is already in progress")
         if self._worker_update_in_progress(session, candidates, excluding_machine_id=machine_id):
             raise ConflictError("a worker update is already in progress")
@@ -2791,8 +3223,6 @@ class ComputeService:
         *,
         excluding_machine_id: str = "",
     ) -> bool:
-        if self.scheduler_hooks is None:
-            raise UpstreamUnavailableError("capacity maintenance requires scheduler worker state")
         for candidate in candidates:
             # A machine that is stopping, stopped or terminating cannot finish an
             # update, so an update it still records would hold maintenance for the
@@ -2810,12 +3240,7 @@ class ComputeService:
                 if (
                     record.machine_id is not None
                     and record.machine_id != excluding_machine_id
-                    and (
-                        WorkerReleaseRepository(session).machine_has_update(record.machine_id)
-                        or self.scheduler_hooks.machine_has_worker_update(
-                            candidate.capacity_owner_id, record.machine_id
-                        )
-                    )
+                    and WorkerReleaseRepository(session).machine_has_update(record.machine_id)
                 ):
                     return True
         return False
@@ -2845,8 +3270,6 @@ class ComputeService:
                     update={
                         "replacement_machine_id": "",
                         "replacement_template_version": "",
-                        "replacement_release_generation": 0,
-                        "replacement_reason": "",
                         "generation": unit.generation + 1,
                     }
                 )
@@ -2897,6 +3320,19 @@ class ComputeService:
                 AgentCapacityState.Cordoned,
             }
             and enrollment.capacity_notice_at is not None
+        }
+
+    def maintenance_protected_machines(self, capacity_owner_id: str) -> set[str]:
+        with self.context.database.session() as session:
+            operations = CapacityMaintenanceRepository(session).active_for_pools(
+                [capacity_owner_id]
+            )
+        return {
+            machine
+            for operation in operations
+            if operation.phase is not CapacityMaintenancePhase.Retiring
+            for machine in (operation.source_machine_id, operation.replacement_machine_id)
+            if machine is not None
         }
 
     def recovery_protected_machines(self, capacity_owner_id: str) -> set[str]:
@@ -3548,7 +3984,12 @@ class ComputeService:
             )
 
     def reconcile_platform_reserves(
-        self, *, now: datetime, early: bool = False
+        self,
+        *,
+        now: datetime,
+        early: bool = False,
+        workers: Sequence[SchedulerWorkerRecord] = (),
+        release: ActiveRelease | None = None,
     ) -> FleetReservePlan | None:
         """Plan every market's headroom and apply it, on one replica at a time.
 
@@ -3564,7 +4005,9 @@ class ComputeService:
             with self._required_capacity_owner_mutations().mutation_lock(_RESERVE_OWNER):
                 started = time.monotonic()
                 try:
-                    return self._reconcile_platform_reserves(now=now)
+                    return self._reconcile_platform_reserves(
+                        now=now, workers=workers, release=release
+                    )
                 finally:
                     LOGGER.info("platform reserve planning took %.3fs", time.monotonic() - started)
         except CapacityReservationLockContendedError:
@@ -3597,7 +4040,13 @@ class ComputeService:
             )
         return ready
 
-    def _reconcile_platform_reserves(self, *, now: datetime) -> FleetReservePlan:
+    def _reconcile_platform_reserves(
+        self,
+        *,
+        now: datetime,
+        workers: Sequence[SchedulerWorkerRecord],
+        release: ActiveRelease | None,
+    ) -> FleetReservePlan:
         assert self.provider_resolver is not None and self.reserve_state is not None
         providers = tuple(self.provider_resolver.list_platform_providers())
         purchasable = frozenset(
@@ -3609,23 +4058,77 @@ class ComputeService:
         )
         with self.context.database.session() as session:
             rows = ComputeUnitRepository(session).platform_reserve_rows()
+            demand_rows = FleetDemandRepository(session).recent(
+                since=now - timedelta(seconds=HISTORY_SECONDS),
+                now=now,
+            )
+            demand_rows += FleetDemandRepository(session).scheduled(
+                now=now,
+                until=now + timedelta(seconds=self.fleet_policy.total_forecast_seconds),
+            )
         snapshot = fleet_reserve_snapshot(
-            rows, self.fleet_policy, purchasable_providers=purchasable, now=now
+            rows,
+            purchasable_providers=purchasable,
+            now=now,
+            ready_machine_ids=frozenset(
+                worker.machine_id
+                for worker in workers
+                if release is not None
+                and release.target.accepts(worker.runtime_image, worker.agent_binary_sha256)
+                and worker.request_intake_status(at=now) is SchedulerWorkerStatus.Available
+            ),
+            release=release,
         )
-        plan = self._plan_reserves(snapshot, now=now)
+        conditions = self._reserve_conditions(snapshot, demand_rows, now=now)
+        plan = plan_market_reserve(self.fleet_policy, snapshot, conditions)
+        catalog: dict[str, tuple[ResolvedComputeProvider, ComputeOffer, bool]] = {}
+        if any(
+            market.market not in conditions.demand
+            and (
+                not market.shortfall.empty
+                or bool(market.unmet_shapes or market.unmet_stopped_shapes)
+                or not market.stopped_capacity.covers(market.stopped_target)
+            )
+            for market in plan.markets
+        ):
+            catalog = self._reserve_catalog(providers, now=now)
+            with self.context.database.session() as session:
+                reported_memory = ComputeUnitRepository(session).reported_node_memory()
+            snapshot = replace(
+                snapshot,
+                offers=tuple(
+                    ReserveOffer(
+                        key=key,
+                        market=unit_reserve_market(
+                            preemptible=offer.preemptible, gpu_type=offer.gpu or ""
+                        ),
+                        machine=machine_capacity(
+                            offer.cpu_millicores,
+                            offer.memory_mb,
+                            offer.gpu_count,
+                            reported_memory_mib=reported_memory.get(
+                                (offer.cpu_millicores, offer.memory_mb, offer.gpu_count),
+                                0,
+                            ),
+                        ),
+                        nominal_cpu_millicores=offer.cpu_millicores,
+                        hourly_cost_micros=cost,
+                        stopped_hourly_cost_micros=disk,
+                        supports_reserve=reserve,
+                        preference_rank=(preference,),
+                    )
+                    for preference, (key, (_, offer, reserve)) in enumerate(catalog.items())
+                    if (cost := offer.cost_terms.complete_hourly_cost_micros) is not None
+                    and (disk := offer.cost_terms.root_disk_hourly_micros) is not None
+                ),
+            )
+            plan = plan_market_reserve(self.fleet_policy, snapshot, conditions)
         self.reserve_state.publish(plan)
         units = {unit.id: unit for unit in rows.units}
-        markets = {unit.unit_id: unit.market for unit in snapshot.units}
         for market in plan.markets:
             self._log_market_plan(market)
-            zones = frozenset(
-                instance.availability_zone
-                for instance in rows.instances
-                if markets[instance.unit_id] == market.market
-                and instance.status != ReservationStatus.Terminating.value
-            )
             try:
-                self._apply_market_plan(market, units, providers, zones=zones, now=now)
+                self._apply_market_plan(market, units, catalog, now=now)
             except CapacityReservationLockContendedError:
                 LOGGER.debug("platform reserve for %s deferred: a lease is held", market.market.key)
             except CapacityReservationLeaseLostError:
@@ -3649,15 +4152,49 @@ class ComputeService:
                 LOGGER.exception("releasing failed capacity in %s failed", unit.id)
         return plan
 
-    def _plan_reserves(self, snapshot: FleetReserveSnapshot, *, now: datetime) -> FleetReservePlan:
-        """Plan, then plan again without growth where work is already waiting.
-
-        Waiting work is read only when a plan grows, so a settled fleet costs no
-        second statement.
-        """
+    def _reserve_conditions(
+        self,
+        snapshot: FleetReserveSnapshot,
+        demand: Sequence[FleetDemandRow],
+        *,
+        now: datetime,
+    ) -> ReserveConditions:
         assert self.reserve_state is not None
         markets = {unit.unit_id: unit.market for unit in snapshot.units}
-        conditions = ReserveConditions(
+        samples: dict[ReserveMarket, list[DemandSample]] = {}
+        scheduled: dict[ReserveMarket, list[DemandSample]] = {}
+        pending: dict[ReserveMarket, Capacity] = {}
+        pending_shapes: dict[ReserveMarket, set[Capacity]] = {}
+        for row in demand:
+            card = next((card for card in row.gpu_types if card in self.fleet_policy.gpu), "")
+            if row.gpu_count and not card:
+                if GPU_ANY not in row.gpu_types:
+                    continue
+                card = next(iter(self.fleet_policy.gpu), "")
+                if not card:
+                    continue
+            market = ReserveMarket(
+                preemptible=row.preemptible if not card else False, gpu_type=card
+            )
+            capacity = Capacity(row.cpu_millicores, row.memory_mib, row.gpu_count)
+            (scheduled if row.observed_at > now else samples).setdefault(market, []).append(
+                DemandSample(row.observed_at, capacity, row.count)
+            )
+            if row.pending_count:
+                pending[market] = pending.get(market, Capacity()) + capacity * row.pending_count
+                pending_shapes.setdefault(market, set()).add(capacity)
+        forecasts = {
+            market: forecast_demand(
+                samples.get(market, ()),
+                now=now,
+                resume_seconds=self.fleet_policy.warm_forecast_seconds,
+                provision_seconds=self.fleet_policy.total_forecast_seconds,
+                pending=pending.get(market, Capacity()),
+                scheduled=scheduled.get(market, ()),
+            )
+            for market in samples.keys() | scheduled.keys()
+        }
+        return ReserveConditions(
             now=now,
             lightly_used_since=self.reserve_state.published().lightly_used_since,
             recovering=frozenset(
@@ -3666,37 +4203,23 @@ class ComputeService:
                 if machine.protected and machine.state is ReserveMachineState.Draining
             ),
             consolidating=self.reserve_state.cooling_markets(),
+            demand=frozenset(pending),
+            forecast_warm={market: value.warm for market, value in forecasts.items()},
+            forecast_total={market: value.total for market, value in forecasts.items()},
+            request_shapes={
+                market: tuple(set(value.request_shapes) | pending_shapes.get(market, set()))
+                for market, value in forecasts.items()
+            },
         )
-        plan = plan_market_reserve(self.fleet_policy, snapshot, conditions)
-        if not any(market.growth for market in plan.markets):
-            return plan
-        with self.context.database.session() as session:
-            demand = ContainerRepository(session).unplaced_platform_demand()
-        cards = frozenset(normalize_gpu_type(card) for card in demand.gpu_types)
-        # Every market with waiting work, not only the ones that grew: holding one
-        # back returns budget that another market's growth may then spend.
-        waiting = frozenset(
-            market.market
-            for market in plan.markets
-            if (
-                bool(cards & {market.market.gpu_type, GPU_ANY})
-                if market.market.gpu_type
-                else demand.preemptible_cpu
-                if market.market.preemptible
-                else demand.cpu
-            )
-        )
-        if not waiting:
-            return plan
-        return plan_market_reserve(self.fleet_policy, snapshot, replace(conditions, demand=waiting))
 
     def _log_market_plan(self, plan: MarketReservePlan) -> None:
         # Every replica plans in turn; a line per change rather than per pass.
         growth = (
-            f"{plan.growth.kind.value} {plan.growth.role.value}"
-            f"{f' in {plan.growth.unit_id}' if plan.growth.unit_id else ''}"
-            if plan.growth is not None
-            else "none"
+            ", ".join(
+                f"{action.kind.value} {action.count} in {action.unit_id or action.offer_key}"
+                for action in plan.growth
+            )
+            or "none"
         )
         decision = (
             f"{'quiet' if plan.quiet else 'loaded'}, load {_describe_capacity(plan.load)}, "
@@ -3704,6 +4227,9 @@ class ComputeService:
             f"{_describe_capacity(plan.warm_free)} of {_describe_capacity(plan.warm_target)}, "
             f"stopped {_describe_capacity(plan.stopped_capacity)} of "
             f"{_describe_capacity(plan.stopped_target)}, growth {growth}, "
+            f"unmet shapes {plan.unmet_shapes}, stopped shapes {plan.unmet_stopped_shapes}, "
+            f"stopped shortfall {_describe_capacity(plan.stopped_shortfall)}, "
+            f"reason {plan.reason}, "
             f"consolidating {plan.consolidate or plan.consolidation_candidate or 'none'}"
         )
         if decision != self._reserve_decisions.get(plan.market):
@@ -3714,52 +4240,49 @@ class ComputeService:
         self,
         plan: MarketReservePlan,
         units: Mapping[str, PlatformReserveUnitRow],
-        providers: Sequence[ResolvedComputeProvider],
+        catalog: Mapping[str, tuple[ResolvedComputeProvider, ComputeOffer, bool]],
         *,
-        zones: frozenset[str],
         now: datetime,
     ) -> None:
         for unit_id, retained in plan.retained.items():
             if retained != units[unit_id].retained:
                 self._retain_machines(unit_id, retained)
         for unit_id, stopped in plan.stopped.items():
-            if stopped < units[unit_id].stopped:
-                self._set_stopped_reserves(unit_id, stopped, now=now)
-        growth = plan.growth
-        if growth is None:
-            return
-        if growth.kind is GrowthKind.Resume:
-            current = self.get_internal_unit(units[growth.unit_id].workspace_id, growth.unit_id)
-            LOGGER.info("resuming a %s reserve for %s headroom", growth.role.value, plan.market.key)
-            self.scale_internal_unit(
-                current.workspace_id,
-                current.id,
-                current.desired_machines + 1,
-                before_mutation=_policy_owned_scale,
-                now=now,
+            resuming = sum(
+                action.count
+                for action in plan.growth
+                if action.kind is GrowthKind.Resume and action.unit_id == unit_id
             )
+            if stopped + resuming < units[unit_id].stopped:
+                self._set_stopped_reserves(unit_id, stopped + resuming, now=now)
+        for action in plan.growth:
+            for _ in range(action.count):
+                self._apply_reserve_growth(plan.market, action, units, catalog, now=now)
+
+    def _apply_reserve_growth(
+        self,
+        market: ReserveMarket,
+        action: ReserveGrowth,
+        units: Mapping[str, PlatformReserveUnitRow],
+        catalog: Mapping[str, tuple[ResolvedComputeProvider, ComputeOffer, bool]],
+        *,
+        now: datetime,
+    ) -> None:
+        if action.kind is GrowthKind.Resume:
+            with self._required_capacity_owner_mutations().mutation_lock(action.unit_id):
+                current = self.get_internal_unit(units[action.unit_id].workspace_id, action.unit_id)
+                self.scale_internal_unit(
+                    current.workspace_id,
+                    current.id,
+                    current.desired_machines + 1,
+                    before_mutation=_policy_owned_scale,
+                    now=now,
+                )
             return
-        reserve = growth.kind is GrowthKind.Prepare
-        held = (
-            frozenset(unit.id for unit in units.values() if unit.stopped)
-            if reserve
-            else frozenset[str]()
-        )
-        chosen = self._reserve_offer(
-            plan.market,
-            growth.role,
-            providers,
-            reserve=reserve,
-            preferred=held,
-            occupied_zones=frozenset() if reserve else zones,
-            now=now,
-        )
-        if chosen is None:
-            LOGGER.warning(
-                "no approved %s offer can supply %s headroom", growth.role.value, plan.market.key
-            )
-            return
-        provider, offer = chosen
+        provider, offer, supports_reserve = catalog[action.offer_key]
+        reserve = action.kind is GrowthKind.Prepare
+        if reserve and not supports_reserve:
+            raise ConflictError("selected offer cannot prepare a stopped reserve")
         policy = provider.policy
         assert policy is not None
         owner_id = self.pooled_offer_owner_id(provider, offer)
@@ -3768,7 +4291,7 @@ class ComputeService:
                 provider=provider,
                 offer=offer,
                 requirements=ComputeResourceRequirements(
-                    preemptible=plan.market.preemptible,
+                    preemptible=market.preemptible,
                     gpu=[offer.gpu] if offer.gpu else [],
                     gpu_count=offer.gpu_count,
                 ),
@@ -3777,12 +4300,6 @@ class ComputeService:
                 idle_timeout_seconds=policy.idle_timeout_seconds,
                 baseline=None,
                 now=now,
-            )
-            LOGGER.info(
-                "%s %s for %s headroom",
-                "preparing a stopped reserve on" if reserve else "buying",
-                offer.id,
-                plan.market.key,
             )
             if reserve:
                 self._add_stopped_reserve(unit.id, now=now)
@@ -3795,88 +4312,73 @@ class ComputeService:
                     now=now,
                 )
 
-    def _reserve_offer(
+    def _reserve_catalog(
         self,
-        market: ReserveMarket,
-        role: MachineRole,
         providers: Sequence[ResolvedComputeProvider],
         *,
-        reserve: bool,
-        preferred: frozenset[str],
-        occupied_zones: frozenset[str],
         now: datetime,
-    ) -> tuple[ResolvedComputeProvider, ComputeOffer] | None:
-        """The offer a reserve buys or prepares in: the role's cheapest, in a healthy market.
-
-        Units already holding reserves come first, then regions in the order the
-        provider prefers them with regions refusing launches last, then zones the
-        market does not run in yet, so one zone's interruptions reach less of it.
-        """
-        candidates: list[tuple[ResolvedComputeProvider, ComputeOffer]] = []
+    ) -> dict[str, tuple[ResolvedComputeProvider, ComputeOffer, bool]]:
+        candidates: dict[str, tuple[ResolvedComputeProvider, ComputeOffer, bool]] = {}
         for provider in providers:
             policy = provider.policy
             if provider.pooled is None or policy is None or not policy.can_purchase:
                 continue
-            try:
+            for reserve in (False, True):
                 listing = (
                     provider.pooled.list_reserve_offers(root_volume_gib=policy.root_volume_gib)
                     if reserve
                     else provider.pooled.list_offers(root_volume_gib=policy.root_volume_gib)
                 )
-                candidates.extend(
-                    (provider, offer)
-                    for offer in listing
-                    if offer.provider == provider.ref
-                    and offer.preemptible is market.preemptible
-                    and bool(offer.gpu_count) == bool(market.gpu_type)
-                    and (
-                        not market.gpu_type
-                        or normalize_gpu_type(offer.gpu or "") == market.gpu_type
+                for offer in listing:
+                    if (
+                        offer.provider != provider.ref
+                        or offer.storage_mb < policy.root_volume_gib * 1024
+                        or offer.cost_terms.complete_hourly_cost_micros is None
+                        or self.pooled_offer_rejection(
+                            provider,
+                            offer,
+                            preemptible=offer.preemptible,
+                            now=now,
+                        )
+                        is not None
+                    ):
+                        continue
+                    candidates[f"{provider.ref}:{offer.id}:{int(reserve)}"] = (
+                        provider,
+                        offer,
+                        reserve,
                     )
-                    and self.fleet_policy.role(
-                        cpu_millicores=offer.cpu_millicores,
-                        memory_mib=offer.memory_mb,
-                        gpu_count=offer.gpu_count,
-                    )
-                    is role
-                    and offer.storage_mb >= policy.root_volume_gib * 1024
-                    and offer.cost_terms.complete_hourly_cost_micros is not None
-                    and self.pooled_offer_rejection(
-                        provider, offer, preemptible=market.preemptible, now=now
-                    )
-                    is None
-                )
-            except Exception:
-                LOGGER.exception("platform offer discovery failed for %s", provider.ref)
-        if not candidates:
-            return None
         identities = {
-            (
+            key: (
                 provider.policy.workspace_id,
                 provider.ref,
                 offer.region,
                 offer.capability_key,
                 provider.policy.root_volume_gib,
-            ): (provider, offer)
-            for provider, offer in candidates
+            )
+            for key, (provider, offer, _) in candidates.items()
             if provider.policy is not None
         }
         with self.context.database.session() as session:
-            states = ComputeUnitRepository(session).offer_states(tuple(identities))
-        unavailable = {
-            identity
-            for identity, state in states.items()
-            if state.phase is ComputeUnitPhase.Deleting
-            or self._capacity_rejected_recently(state, now=now)
+            states = ComputeUnitRepository(session).offer_states(tuple(set(identities.values())))
+        eligible = {
+            key: value
+            for key, value in candidates.items()
+            if (state := states.get(identities[key])) is None
             or (
-                state.provider_state.degraded_reason is not None
-                and not self._failed_market_retry_ready(state, now=now)
+                state.phase is not ComputeUnitPhase.Deleting
+                and not self._capacity_rejected_recently(state, now=now)
+                and (
+                    state.provider_state.degraded_reason is None
+                    or self._failed_market_retry_ready(state, now=now)
+                )
             )
         }
+        identity_offers = {identities[key]: offer for key, (_, offer, _) in candidates.items()}
         short_regions = cooling_regions(
             (
                 (
-                    identities[identity][1].market.cloud,
+                    identity_offers[identity].market.cloud,
                     identity[2],
                     state.provider_state.last_capacity_failure_at,
                 )
@@ -3884,24 +4386,42 @@ class ComputeService:
             ),
             now=now,
         )
-        request = OfferRequest(nodes=1, preemptible=market.preemptible)
-
-        def order(identity: tuple[str, str, str, str, int]) -> tuple[object, ...]:
-            provider, offer = identities[identity]
-            policy = provider.policy
-            assert policy is not None
-            state = states.get(identity)
-            return (
-                state is None or state.id not in preferred,
-                (offer.market.cloud, offer.region) in short_regions,
-                policy.region_rank(offer.region),
-                offer.availability_zone in occupied_zones,
-                offer.gpu_count,
-                offer_selection_key(offer, request),
+        healthy_markets = {
+            (offer.preemptible, offer.gpu or "", reserve)
+            for _, offer, reserve in eligible.values()
+            if (offer.market.cloud, offer.region) not in short_regions
+        }
+        eligible = {
+            key: value
+            for key, value in eligible.items()
+            if (value[1].market.cloud, value[1].region) not in short_regions
+            or (value[1].preemptible, value[1].gpu or "", value[2]) not in healthy_markets
+        }
+        zone_counts: dict[tuple[str, str, str], int] = {}
+        seen: set[str] = set()
+        for key, (provider, offer, _) in candidates.items():
+            state = states.get(identities[key])
+            if state is None or state.id in seen:
+                continue
+            seen.add(state.id)
+            zone = (provider.ref, offer.region, offer.availability_zone)
+            zone_counts[zone] = zone_counts.get(zone, 0) + max(
+                state.desired_machines, state.observed_machines
             )
-
-        available = sorted((item for item in identities if item not in unavailable), key=order)
-        return identities[available[0]] if available else None
+        return dict(
+            sorted(
+                eligible.items(),
+                key=lambda item: (
+                    item[1][0].policy.region_rank(item[1][1].region)
+                    if item[1][0].policy is not None
+                    else 0,
+                    zone_counts.get(
+                        (item[1][0].ref, item[1][1].region, item[1][1].availability_zone), 0
+                    ),
+                    item[0],
+                ),
+            )
+        )
 
     def _retain_machines(self, unit_id: str, retained: int) -> None:
         """Keep this many of the unit's serving machines from the idle drain.
@@ -3962,6 +4482,28 @@ class ComputeService:
             gpu = _pool_gpu_capacity(current)
             if units.platform_capacity_usage(gpu=gpu) >= self.fleet_policy.machine_limit(gpu=gpu):
                 raise CapacityLimitReachedError("fleet capacity limit leaves no room for a reserve")
+            if (
+                not gpu
+                and units.platform_running_cpu_millicores() + current.worker_cpu_millicores
+                > self.fleet_policy.max_running_cpu_millicores
+            ):
+                raise CapacityLimitReachedError(
+                    "fleet running vCPU limit prevents reserve preparation"
+                )
+            temporary_cost, unknown_cost = self._temporary_capacity_cost(session)
+            price = (
+                current.offer_cost_terms.complete_hourly_cost_micros
+                if current.offer_cost_terms
+                else None
+            )
+            if (
+                unknown_cost
+                or price is None
+                or temporary_cost + price > self.fleet_policy.max_temporary_hourly_cost_micros
+            ):
+                raise CapacityLimitReachedError(
+                    "temporary running cost budget prevents reserve preparation"
+                )
             units.upsert(
                 current.model_copy(
                     update={
@@ -3976,98 +4518,167 @@ class ComputeService:
             )
         self.reconcile_unit_capacity(unit_id, now=now)
 
-    def refresh_stale_reserve(self, release: ReleaseTarget, *, now: datetime) -> str | None:
-        """Prepare one stopped reserve again when it predates the active release.
-
-        A reserve resumed with an old agent or worker image updates itself before
-        it takes work, which costs a devbox start tens of seconds. Refreshing it
-        while nothing waits keeps that off the resume path. One machine at a time,
-        and only when no reserve is being prepared, so the fleet never loses more
-        than one reserve to the refresh. Returns the machine it started.
-        """
+    def refresh_stale_reserves(self, release: ActiveRelease, *, now: datetime) -> list[str]:
         if self.provider_resolver is None:
-            return None
-        agent_sha256, worker_image = reserve_release_artifacts(release)
+            return []
+        agent_sha256, worker_image = reserve_release_artifacts(release.target)
         with self.context.database.session() as session:
             candidates = ComputeProviderInstanceRepository(session).stale_platform_reserves(
                 agent_sha256=agent_sha256,
                 worker_image=worker_image,
-                limit=_RESERVE_REFRESH_CANDIDATES,
+                limit=self.fleet_policy.max_cpu_instances + self.fleet_policy.max_gpu_instances,
             )
-        if not candidates:
-            return None
+        started: list[str] = []
         try:
             with self._required_capacity_owner_mutations().mutation_lock(_RESERVE_OWNER):
-                with self.context.database.session() as session:
-                    if (
-                        ComputeProviderInstanceRepository(session).platform_reserve_in_preparation()
-                        or ContainerRepository(session).unplaced_platform_demand().any
-                    ):
-                        return None
                 for candidate in candidates:
                     try:
-                        refreshed = self._refresh_reserve(candidate, now=now)
-                    except CapacityReservationLockContendedError:
-                        continue
+                        if self._refresh_reserve(candidate, release, now=now):
+                            started.append(candidate.machine_id)
                     except CapacityReservationLeaseLostError:
                         raise
+                    except (CapacityReservationLockContendedError, ConflictError):
+                        continue
                     except Exception:
                         LOGGER.exception(
-                            "stopped reserve %s (%s) could not be prepared again",
-                            candidate.machine_id,
-                            candidate.instance_id,
+                            "stopped reserve %s could not be refreshed", candidate.machine_id
                         )
-                        continue
-                    if refreshed:
-                        LOGGER.info(
-                            "refreshing stopped reserve %s (%s) for the active release",
-                            candidate.machine_id,
-                            candidate.instance_id,
-                        )
-                        return candidate.machine_id
         except CapacityReservationLockContendedError:
-            return None
-        return None
+            pass
+        return started
 
-    def _refresh_reserve(self, candidate: ComputeReserveInstance, *, now: datetime) -> bool:
-        with self.context.database.session() as session:
-            unit = ComputeUnitRepository(session).get(candidate.pool_id)
-        if (
-            unit is None
-            or unit.phase in ENDED_UNIT_PHASES
-            or unit.provider_state.degraded_reason is not None
-        ):
-            return False
-        with self._required_capacity_owner_mutations().mutation_lock(unit.capacity_owner_id):
-            unit, provider, offer = self._internal_unit_provider(
-                unit.workspace_id, unit.capacity_owner_id
-            )
-            if provider.pooled is None or provider.policy is None:
-                return False
-            if not provider.policy.can_purchase:
-                return False
-            snapshot = provider.pooled.refresh_machine(
-                self._provider_unit_request(unit, offer), candidate.instance_id
-            )
+    def _refresh_reserve(
+        self,
+        candidate: ComputeReserveInstance,
+        release: ActiveRelease,
+        *,
+        now: datetime,
+    ) -> bool:
+        with self._required_capacity_owner_mutations().mutation_lock(candidate.pool_id):
             with self.context.database.session() as session:
-                machine = MachineRepository(session).get(
-                    candidate.machine_id, workspace_id=unit.workspace_id
-                )
-                if machine is not None and machine_lifecycle_allowed(
-                    machine.lifecycle, MachineLifecycle.Resuming
+                units = ComputeUnitRepository(session)
+                units.lock_platform_capacity()
+                unit = units.get(candidate.pool_id, for_update=True)
+                if (
+                    unit is None
+                    or unit.phase in ENDED_UNIT_PHASES
+                    or unit.provider_state.degraded_reason
                 ):
-                    write_machine_lifecycle(
-                        session,
-                        machine,
-                        MachineLifecycle.Resuming,
-                        workspace_changes=self.workspace_changes,
-                        workspace_id=unit.workspace_id,
-                        message="Preparing the stopped reserve for the current release",
+                    return False
+                repository = CapacityMaintenanceRepository(session)
+                existing = next(
+                    (
+                        item
+                        for item in repository.active_for_pools([unit.id])
+                        if item.source_machine_id == candidate.machine_id
+                    ),
+                    None,
+                )
+                if existing is not None and (
+                    existing.kind is not CapacityMaintenanceKind.ReserveRefresh
+                    or existing.release_generation > release.generation
+                    or (
+                        existing.phase is not CapacityMaintenancePhase.Planned
+                        and now
+                        < existing.updated_at + timedelta(seconds=unit.registration_timeout_seconds)
+                    )
+                ):
+                    return False
+                record = ComputeProviderInstanceRepository(session).get_by_machine(
+                    candidate.machine_id
+                )
+                if record is None or record.status != "stopped":
+                    return False
+                provider, offer = self._resolved_internal_unit_provider(unit)
+                if (
+                    provider.pooled is None
+                    or provider.policy is None
+                    or not provider.policy.can_purchase
+                ):
+                    return False
+                shape = (unit.worker_cpu_millicores, unit.worker_memory_mib, unit.worker_gpu_count)
+                lost = (
+                    machine_capacity(
+                        *shape, reported_memory_mib=units.reported_node_memory().get(shape, 0)
+                    )
+                    if release.target.accepts(
+                        record.prepared_worker_image, record.prepared_agent_sha256
+                    )
+                    else Capacity()
+                )
+                if existing is not None and existing.release_generation < release.generation:
+                    existing = repository.retarget(
+                        existing.id,
+                        expected_generation=existing.release_generation,
+                        release_generation=release.generation,
                         now=now,
                     )
-            self.provider_machines._apply_pooled_snapshot(
-                unit, offer, snapshot, provider=provider.pooled, now=now
-            )
+                operation = existing or self._start_maintenance(
+                    session,
+                    unit,
+                    machine_id=candidate.machine_id,
+                    release=release,
+                    kind=CapacityMaintenanceKind.ReserveRefresh,
+                    candidate=MaintenanceCandidate(
+                        candidate.machine_id,
+                        unit_reserve_market(
+                            preemptible=unit.worker_preemptible, gpu_type=unit.worker_gpu_type
+                        ).key,
+                        unavailable=lost,
+                        running_cpu_millicores=unit.worker_cpu_millicores
+                        if not unit.worker_gpu_count
+                        else 0,
+                        hourly_cost_micros=offer.cost_terms.complete_hourly_cost_micros
+                        if offer.cost_terms
+                        else None,
+                    ),
+                )
+            try:
+                snapshot = provider.pooled.refresh_machine(
+                    self._provider_unit_request(unit, offer),
+                    candidate.instance_id,
+                )
+                self.provider_machines._apply_pooled_snapshot(
+                    unit,
+                    offer,
+                    snapshot,
+                    provider=provider.pooled,
+                    now=now,
+                )
+                with self.context.database.session() as session:
+                    CapacityMaintenanceRepository(session).transition(
+                        operation.id,
+                        expected_generation=release.generation,
+                        expected_phase=operation.phase,
+                        phase=CapacityMaintenancePhase.Preparing,
+                        now=now,
+                    )
+                    machine = MachineRepository(session).get(
+                        candidate.machine_id, workspace_id=unit.workspace_id
+                    )
+                    if machine is not None and machine_lifecycle_allowed(
+                        machine.lifecycle, MachineLifecycle.Resuming
+                    ):
+                        write_machine_lifecycle(
+                            session,
+                            machine,
+                            MachineLifecycle.Resuming,
+                            workspace_changes=self.workspace_changes,
+                            workspace_id=unit.workspace_id,
+                            message="Preparing the stopped reserve for the current release",
+                            now=now,
+                        )
+            except Exception as exc:
+                with self.context.database.session() as session:
+                    CapacityMaintenanceRepository(session).transition(
+                        operation.id,
+                        expected_generation=release.generation,
+                        expected_phase=operation.phase,
+                        phase=CapacityMaintenancePhase.Failed,
+                        reason=f"reserve preparation failed: {type(exc).__name__}",
+                        now=now,
+                    )
+                raise
         return True
 
     @staticmethod
@@ -4427,6 +5038,7 @@ class ComputeService:
                 or current.min_free_gpu_count
                 or current.replacement_machine_id
                 or current.replacement_template_version
+                or current.maintenance_active
                 or CapacityRecoveryRepository(session).unit_has_active_recovery(current.id)
                 or ComputeCapacityOperationRepository(session).list_open_for_owner(
                     current.capacity_owner_id

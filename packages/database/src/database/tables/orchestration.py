@@ -244,6 +244,13 @@ class ContainerTable(IdTable, DatabaseBase):
     __table_args__: tuple[SchemaItem, ...] = (
         Index("ix_containers_workspace_created", "workspace_id", "created_at"),
         Index(
+            "ix_containers_platform_arrivals",
+            "scheduling_requested_at",
+            postgresql_where=text(
+                "scheduling_placement = 'platform' AND scheduling_requested_at IS NOT NULL"
+            ),
+        ),
+        Index(
             "ix_containers_capacity_due",
             "capacity_retry_at",
             "id",

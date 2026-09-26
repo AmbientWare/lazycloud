@@ -23,8 +23,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
-from compute.fleet_policy import Capacity, FleetReservePlan, ReserveMarket
+from compute.fleet_policy import FleetReservePlan
 from compute.fleet_reserves import unit_reserve_market
+from compute.fleet_resources import Capacity, ReserveMarket
 from compute.reserve_state import Consolidation, FleetReserveState
 from database.repositories.orchestration import MachineContainer
 from shared.container_requests import StopContainerReason

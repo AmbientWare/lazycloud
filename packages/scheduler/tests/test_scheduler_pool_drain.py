@@ -49,13 +49,6 @@ class _RealRedisActors(Protocol):
 
 @dataclass(slots=True)
 class _Compute:
-    """The two calls the drain makes, recorded.
-
-    The drain reads its pools from hot state and its workers from the worker
-    repository; compute is reached only to size a pool and to release the
-    machine finally chosen. Recording that choice is what these tests assert.
-    """
-
     released: list[tuple[str, str]] = field(default_factory=list)
     cordoned: list[str] = field(default_factory=list)
     scaled: list[int] = field(default_factory=list)
@@ -72,6 +65,9 @@ class _Compute:
 
     def recovery_protected_machines(self, capacity_owner_id: str) -> set[str]:
         return set(self.interrupted_deadlines)
+
+    def maintenance_protected_machines(self, capacity_owner_id: str) -> set[str]:
+        return set()
 
     def _logical_desired(self) -> int:
         if self.desired_machines is not None:

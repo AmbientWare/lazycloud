@@ -5,11 +5,18 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from database.repositories.capacity_maintenance import CapacityMaintenanceRepository
 from database.repositories.compute import ComputeProviderInstanceRepository, ComputeUnitRepository
 from database.repositories.worker_releases import WorkerReleaseRepository
+from shared.capacity_maintenance import (
+    CapacityMaintenanceKind,
+    CapacityMaintenancePhase,
+    CapacityMaintenanceRecord,
+)
 from shared.compute_policy import (
     ENDED_UNIT_PHASES,
     ComputeCapacityMode,
+    ComputeUnitPhase,
     ComputeUnitRecord,
     ComputeUnitVisibility,
 )
@@ -79,8 +86,6 @@ class ComputeReleaseRolloutService:
     def reconcile(
         self, release: ActiveRelease, workers: list[SchedulerWorkerRecord], *, now: datetime
     ) -> None:
-        # The lease prevents concurrent mutations; the interval claim prevents
-        # every scheduler replica from reading the same fleet after it expires.
         with self.compute._required_capacity_owner_mutations().mutation_lock("release-rollout"):
             with self.compute.context.database.session() as session:
                 unit_ids = ComputeUnitRepository(session).release_rollout_unit_ids(
@@ -99,24 +104,16 @@ class ComputeReleaseRolloutService:
                         if unit is None:
                             continue
                         changed = self._reconcile_unit(unit, release, workers, now=now)
-                    if changed:
+                    if (
+                        changed or unit.maintenance_active
+                    ) and unit.capacity_mode is ComputeCapacityMode.Pooled:
                         self.compute.reconcile_unit_capacity(unit_id, now=now)
                 except CapacityReservationLockContendedError:
                     continue
                 except CapacityReservationLeaseLostError:
                     raise
                 except ConflictError as exc:
-                    with self.compute.context.database.session() as session:
-                        repository = ComputeUnitRepository(session)
-                        current = repository.get(unit_id, for_update=True)
-                        if current is not None and current.replacement_reason != exc.message:
-                            repository.upsert(
-                                current.model_copy(
-                                    update={
-                                        "replacement_reason": exc.message[:512],
-                                    }
-                                )
-                            )
+                    LOGGER.info("release rollout deferred for %s: %s", unit_id, exc.message)
                 except Exception:
                     LOGGER.exception("release rollout could not reconcile pool %s", unit_id)
 
@@ -128,98 +125,164 @@ class ComputeReleaseRolloutService:
         *,
         now: datetime,
     ) -> bool:
+        if unit.phase is ComputeUnitPhase.Deleting:
+            return False
+        with self.compute.context.database.session() as session:
+            repository = CapacityMaintenanceRepository(session)
+            active = repository.active_for_pools([unit.id])
+            if unit.phase is ComputeUnitPhase.Deleted:
+                # Provider reconciliation proves instance and storage absence
+                # before the unit reaches Deleted.
+                for operation in active:
+                    repository.transition(
+                        operation.id,
+                        expected_generation=operation.release_generation,
+                        expected_phase=operation.phase,
+                        phase=CapacityMaintenancePhase.Complete,
+                        now=now,
+                    )
+                return False
+        changed = False
+        members = {
+            worker.machine_id: worker
+            for worker in workers
+            if worker.capacity_owner_id == unit.capacity_owner_id
+        }
+        for operation in active:
+            changed = self._advance(unit, operation, release, members, now=now) or changed
         if (
             unit.capacity_mode is not ComputeCapacityMode.Pooled
             or unit.visibility is not ComputeUnitVisibility.Internal
             or unit.phase in ENDED_UNIT_PHASES
         ):
-            return False
-        members = [
-            worker for worker in workers if worker.capacity_owner_id == unit.capacity_owner_id
-        ]
-        if unit.replacement_machine_id:
-            if not unit.replacement_release_generation:
-                return False
-            if unit.replacement_release_generation > release.generation:
-                return False
-            source = next(
-                (worker for worker in members if worker.machine_id == unit.replacement_machine_id),
-                None,
-            )
-            with self.compute.context.database.session() as session:
-                instance = ComputeProviderInstanceRepository(session).get_by_machine(
-                    unit.replacement_machine_id
-                )
-                updating = WorkerReleaseRepository(session).machine_has_update(
-                    unit.replacement_machine_id
-                )
-            gone = instance is None or instance.status in {"deleted", "failed", "terminating"}
-            complete = (
-                source is not None
-                and release.admits(source.runtime_image, source.agent_binary_sha256)
-                and source.request_intake_status(at=now) is SchedulerWorkerStatus.Available
-                and not updating
-            )
-            if gone or complete:
-                self.compute.clear_internal_unit_replacement(
-                    unit.workspace_id, unit.capacity_owner_id, unit.replacement_machine_id
-                )
-                return True
-            reason = (
-                "source agent is offline"
-                if source is None
-                else "draining workloads or updating the source"
-                if updating
-                else "replacement accepts work; source update can start"
-                if release_replacement(source, workers, release, now=now) is not None
-                else "waiting for replacement capacity on the target release"
-            )
-            self._record_progress(unit, release, reason)
-            return False
-        for source in members:
+            return changed
+        active_sources = {operation.source_machine_id for operation in active}
+        for source in members.values():
             if (
                 not source.machine_id
                 or source.admitted_release_generation == 0
-                or source.status is SchedulerWorkerStatus.Draining
                 or release.admits(source.runtime_image, source.agent_binary_sha256)
             ):
                 continue
-            if release_replacement(source, workers, release, now=now) is not None:
-                continue
-            with self.compute.context.database.session() as session:
-                instance = ComputeProviderInstanceRepository(session).get_by_machine(
-                    source.machine_id
-                )
-            if instance is None or instance.status not in {"active", "resuming"}:
-                continue
-            self.compute.begin_internal_unit_replacement(
-                unit.workspace_id,
-                unit.capacity_owner_id,
-                source.machine_id,
-                release_generation=release.generation,
-            )
-            return True
-        return False
+            try:
+                operation = self.compute.prepare_worker_release(source, release, workers)
+                changed = (
+                    source.machine_id not in active_sources and operation.surge_machines > 0
+                ) or changed
+            except ConflictError as exc:
+                LOGGER.debug("worker %s update waits: %s", source.worker_id, exc.message)
+        return changed
 
-    def _record_progress(
-        self, unit: ComputeUnitRecord, release: ActiveRelease, reason: str
-    ) -> None:
+    def _advance(
+        self,
+        unit: ComputeUnitRecord,
+        operation: CapacityMaintenanceRecord,
+        release: ActiveRelease,
+        workers: dict[str, SchedulerWorkerRecord],
+        *,
+        now: datetime,
+    ) -> bool:
+        if operation.release_generation > release.generation:
+            return False
         with self.compute.context.database.session() as session:
-            repository = ComputeUnitRepository(session)
-            current = repository.get(unit.id, for_update=True)
-            if current is None or current.replacement_machine_id != unit.replacement_machine_id:
-                raise ConflictError("release rollout ownership changed")
-            if current.replacement_release_generation > release.generation:
-                return
-            if (
-                current.replacement_reason != reason
-                or current.replacement_release_generation != release.generation
-            ):
-                repository.upsert(
-                    current.model_copy(
-                        update={
-                            "replacement_release_generation": release.generation,
-                            "replacement_reason": reason,
-                        }
+            instances = ComputeProviderInstanceRepository(session)
+            source = instances.get_by_machine(operation.source_machine_id)
+            updating = WorkerReleaseRepository(session).machine_has_update(
+                operation.source_machine_id
+            )
+            repository = CapacityMaintenanceRepository(session)
+            worker = workers.get(operation.source_machine_id)
+            current = (
+                worker is not None
+                and release.admits(worker.runtime_image, worker.agent_binary_sha256)
+                and worker.request_intake_status(at=now) is SchedulerWorkerStatus.Available
+                and not updating
+            )
+            if operation.kind is CapacityMaintenanceKind.ReserveRefresh:
+                if (
+                    source is None
+                    or source.status == "deleted"
+                    or (
+                        source.status == "stopped"
+                        and release.admits(
+                            source.prepared_worker_image, source.prepared_agent_sha256
+                        )
                     )
+                ):
+                    if operation.release_generation < release.generation:
+                        operation = repository.retarget(
+                            operation.id,
+                            expected_generation=operation.release_generation,
+                            release_generation=release.generation,
+                            now=now,
+                        )
+                    repository.transition(
+                        operation.id,
+                        expected_generation=operation.release_generation,
+                        expected_phase=operation.phase,
+                        phase=CapacityMaintenancePhase.Complete,
+                        now=now,
+                    )
+                return False
+            if operation.phase is CapacityMaintenancePhase.Retiring:
+                records = instances.list_for_pool(unit.id, excluded_statuses=("deleted",))
+                physical = sum(record.instance_id is not None for record in records)
+                wanted = (
+                    unit.desired_machines
+                    + unit.stopped_machines
+                    + unit.maintenance_surge_machines
+                    + int(bool(unit.replacement_machine_id))
                 )
+                if physical <= wanted:
+                    repository.transition(
+                        operation.id,
+                        expected_generation=operation.release_generation,
+                        expected_phase=operation.phase,
+                        phase=CapacityMaintenancePhase.Complete,
+                        now=now,
+                    )
+                return False
+            if operation.release_generation < release.generation:
+                operation = repository.retarget(
+                    operation.id,
+                    expected_generation=operation.release_generation,
+                    release_generation=release.generation,
+                    now=now,
+                )
+            gone = unit.capacity_mode is ComputeCapacityMode.Pooled and (
+                source is None or source.status == "deleted"
+            )
+            if current or gone:
+                phase = (
+                    CapacityMaintenancePhase.Retiring
+                    if operation.surge_machines
+                    else CapacityMaintenancePhase.Complete
+                )
+                repository.transition(
+                    operation.id,
+                    expected_generation=operation.release_generation,
+                    expected_phase=operation.phase,
+                    phase=phase,
+                    now=now,
+                )
+                return operation.surge_machines > 0
+            reason = (
+                "source agent is offline"
+                if worker is None
+                else "draining workloads or updating the source"
+                if updating
+                else "waiting for replacement capacity on the target release"
+                if operation.replacement_machine_id is None and operation.surge_machines
+                else "replacement reserved; source update can start"
+            )
+            phase = CapacityMaintenancePhase.Draining if updating else operation.phase
+            if phase != operation.phase or reason != operation.reason:
+                repository.transition(
+                    operation.id,
+                    expected_generation=operation.release_generation,
+                    expected_phase=operation.phase,
+                    phase=phase,
+                    now=now,
+                    reason=reason,
+                )
+        return False
