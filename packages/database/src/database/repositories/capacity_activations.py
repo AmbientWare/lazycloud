@@ -5,7 +5,7 @@ from datetime import datetime
 from database.tables.capacity_activations import CapacityActivationTable
 from database.tables.compute import ComputeProviderInstanceTable, ComputeUnitTable
 from shared.capacity_lifecycle import CapacityActivationKind, CapacitySleepOutcome
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -91,10 +91,18 @@ class CapacityActivationRepository:
             update(table)
             .where(
                 table.instance_record_id.in_(
-                    select(ComputeProviderInstanceTable.id).where(
+                    select(ComputeProviderInstanceTable.id)
+                    .where(
                         ComputeProviderInstanceTable.machine_id.in_(machine_ids),
-                        ComputeProviderInstanceTable.status.in_(("active", "resuming")),
+                        or_(
+                            ComputeProviderInstanceTable.status.in_(("active", "resuming")),
+                            and_(
+                                ComputeProviderInstanceTable.status == "pending",
+                                table.kind == CapacityActivationKind.Provision.value,
+                            ),
+                        ),
                     )
+                    .correlate(table)
                 ),
                 table.ready_at.is_(None),
                 table.prepared_at.is_(None),

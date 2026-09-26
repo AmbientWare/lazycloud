@@ -19,6 +19,54 @@ from shared.timestamps import to_utc, utc_now
 from sqlalchemy import select
 
 
+def test_admitted_provision_records_ready_before_provider_inventory_catches_up(
+    service_context: ServiceContext,
+) -> None:
+    requested_at = utc_now()
+    ready_at = requested_at + timedelta(seconds=20)
+    observed_at = ready_at + timedelta(seconds=10)
+    with service_context.database.session() as session:
+        workspace_id = service_context.default_workspace_id(session)
+        machine = Machine(id=str(uuid4()))
+        MachineRepository(session).upsert(machine, workspace_id=workspace_id)
+        instance = ComputeProviderInstanceRecord(
+            id=str(uuid4()),
+            provider="aws",
+            offer_id="cpu",
+            status="pending",
+            source="pooled",
+            machine_id=machine.id,
+        )
+        instances = ComputeProviderInstanceRepository(session)
+        instances.upsert(instance)
+        repository = CapacityActivationRepository(session)
+        repository.observe(
+            instance.id,
+            requested_at=requested_at,
+            kind=CapacityActivationKind.Provision,
+            provider_running_at=None,
+            observed_at=requested_at,
+        )
+        repository.record_ready([machine.id], at=ready_at)
+        instances.upsert(instance.model_copy(update={"status": "active"}))
+        repository.observe(
+            instance.id,
+            requested_at=requested_at,
+            kind=CapacityActivationKind.Provision,
+            provider_running_at=requested_at + timedelta(seconds=15),
+            observed_at=observed_at,
+        )
+        repository.record_ready([machine.id], at=observed_at)
+        activation = session.scalar(
+            select(CapacityActivationTable).where(
+                CapacityActivationTable.instance_record_id == instance.id
+            )
+        )
+        assert activation is not None and activation.ready_at is not None
+        assert to_utc(activation.ready_at) == ready_at
+        assert activation.failed_at is None
+
+
 def test_activation_cycles_preserve_preparation_failure_and_verified_resume(
     service_context: ServiceContext,
 ) -> None:
