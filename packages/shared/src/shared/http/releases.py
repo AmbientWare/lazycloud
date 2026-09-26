@@ -12,6 +12,7 @@ class AgentReleaseRequest(HttpModel):
     agent_token: str = Field(min_length=1, repr=False)
     generation: int = Field(default=0, ge=0)
     binary_sha256: str = Field(pattern=r"^([0-9a-f]{64})?$")
+    update_error: str = Field(default="", max_length=512, exclude_if=lambda value: not value)
 
 
 class AgentReleaseResponse(HttpModel):

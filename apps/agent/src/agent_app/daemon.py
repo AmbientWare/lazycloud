@@ -1028,6 +1028,14 @@ class AgentDaemonService:
         if release.update_agent and release.agent is not None:
             blocker = updater.update_blocker(release.agent)
             if blocker:
+                self.client.agent_release(
+                    AgentReleaseRequest(
+                        agent_token=state.agent_token,
+                        generation=release.generation,
+                        binary_sha256=updater.binary_sha256(),
+                        update_error=blocker,
+                    )
+                )
                 # The machine stays drained for the update, so serving on is no
                 # option; exiting for good shows it failed until it is joined again.
                 msg = f"cannot update the agent to {release.agent.sha256}: {blocker}"

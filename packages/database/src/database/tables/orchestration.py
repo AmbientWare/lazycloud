@@ -229,6 +229,7 @@ class WorkerTable(IdTable, DatabaseBase):
     update_runtime_image: Mapped[str] = mapped_column(String(1024), server_default="")
     update_agent_sha256: Mapped[str] = mapped_column(String(64), server_default="")
     update_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    update_error: Mapped[str] = mapped_column(String(512), nullable=False, server_default="")
 
     labels: Mapped[dict[str, str]] = mapped_column(json_type, nullable=False)
 

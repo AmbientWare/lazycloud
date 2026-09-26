@@ -37,6 +37,8 @@ from compute.providers import (
     ResolvedProviderPolicy,
 )
 from compute.reclaim import ComputeReclaimPolicy
+from compute.release_rollout import ComputeReleaseRolloutService
+from compute.release_status import ComputeReleaseStatusService
 from compute.request_placement import (
     ComputeCapacityPlacementRequest,
     ComputeCapacityPlacementService,
@@ -129,7 +131,7 @@ from shared.errors import (
 from shared.identity import WorkspaceStatus
 from shared.network_egress import NetworkEgressRouteEvidence
 from shared.placement import Placement
-from shared.releases import ActiveRelease, AgentArtifact, ReleaseTarget
+from shared.releases import ActiveRelease, AgentArtifact, ReleaseMachinePhase, ReleaseTarget
 from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerRequest, SchedulerWorkerStatus
 from shared.source_cache_cleanup import WorkerCacheGenerationState
 from shared.supplier_costs import SupplierCostTerms
@@ -2389,6 +2391,165 @@ def test_retiring_machine_cannot_acquire_another_planned_replacement(
     assert replacement.desired_machines == 2
 
 
+@pytest.mark.parametrize("platform_fleet", [True, False])
+def test_release_rollout_preserves_singleton_until_replacement_and_fresh_intake(
+    service_context: ServiceContext, platform_fleet: bool
+) -> None:
+    _seed_connection(service_context, platform_fleet=platform_fleet)
+    provider = _PooledProvider()
+    hooks = _SchedulerHooks()
+    compute = ComputeService(
+        service_context,
+        provider_resolver=_Resolver(provider, service_context),
+        pool_bootstrap_factory=_bootstrap,
+        capacity_owner_mutations=_MutationLeases(),
+        scheduler_hooks=hooks,
+    )
+    pool = compute.prepare_pooled_capacity(
+        workspace="default",
+        requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
+        region="us-east-1",
+        desired_machines=1,
+        root_volume_gib=200,
+    )
+    compute.reconcile_unit_capacity(pool.id)
+    now = datetime.now(UTC)
+    machine_id = str(uuid4())
+    _seed_serving_machine(
+        service_context,
+        pool,
+        hooks,
+        machine_id=machine_id,
+        instance_id="i-00000000000000000",
+        now=now,
+    )
+    source = SchedulerWorkerRecord(
+        worker_id=agent_machine_worker_id(machine_id),
+        machine_id=machine_id,
+        workspace_id=pool.workspace_id,
+        capacity_owner_id=pool.capacity_owner_id,
+        placement=pool.placement,
+        runtime_image="worker:old",
+        agent_binary_sha256="a" * 64,
+        admitted_release_generation=1,
+        status=SchedulerWorkerStatus.Available,
+        request_poll_expires_at=now + timedelta(minutes=5),
+        availability_zone="use1-az1",
+        total_disk_volumes=2,
+        free_disk_volumes=1,
+        total_cpu_millicores=4_000,
+        free_cpu_millicores=2_000,
+    )
+    release = ActiveRelease(
+        generation=2,
+        manifest_url="https://example.test/release",
+        target=ReleaseTarget(
+            version="2",
+            source_revision="b" * 40,
+            worker_image="worker:next",
+            agent=AgentArtifact(url="https://example.test/agent", sha256="b" * 64, size_bytes=1),
+        ),
+    )
+    with (
+        pytest.raises(ConflictError, match="replacement capacity"),
+        compute.worker_release_admission(source, release, [source]),
+    ):
+        pass
+    rollout = ComputeReleaseRolloutService(compute)
+    rollout.reconcile(release, [source], now=now)
+    rollout.reconcile(release, [source], now=now)
+    paired = compute.get_internal_unit(pool.workspace_id, pool.id)
+    assert paired.desired_machines == 1
+    assert paired.replacement_machine_id == source.machine_id
+    assert paired.replacement_release_generation == 2
+    assert paired.observed_machines == 2
+    status = ComputeReleaseStatusService(service_context.database).read(release, [source])
+    assert not status.complete
+    assert status.pending_capacity_owners == [pool.id]
+    replacement = source.model_copy(
+        update={
+            "worker_id": str(uuid4()),
+            "machine_id": str(uuid4()),
+            "runtime_image": "worker:next",
+            "agent_binary_sha256": "b" * 64,
+            "free_cpu_millicores": 4_000,
+        }
+    )
+    for refused in (
+        replacement.model_copy(update={"capacity_owner_id": str(uuid4())}),
+        replacement.model_copy(update={"availability_zone": "use1-az2"}),
+        replacement.model_copy(update={"free_cpu_millicores": 1_000}),
+        replacement.model_copy(update={"request_poll_expires_at": now - timedelta(seconds=1)}),
+    ):
+        with (
+            pytest.raises(ConflictError, match="replacement capacity"),
+            compute.worker_release_admission(source, release, [source, refused]),
+        ):
+            pass
+    with compute.worker_release_admission(source, release, [source, replacement]):
+        pass
+    with service_context.database.session() as session:
+        WorkerReleaseRepository(session).record_update_error(
+            source.worker_id,
+            source.machine_id,
+            generation=release.generation,
+            reason="the agent service has no update supervisor",
+        )
+    blocked = ComputeReleaseStatusService(service_context.database).read(release, [source])
+    blocked_source = next(item for item in blocked.machines if item.machine_id == machine_id)
+    assert blocked_source.phase is ReleaseMachinePhase.Blocked
+    assert not blocked_source.accepting_work
+    previous_release = release
+    release = release.model_copy(
+        update={
+            "generation": 3,
+            "target": release.target.model_copy(
+                update={
+                    "worker_image": source.runtime_image,
+                    "agent": AgentArtifact(
+                        url="https://example.test/agent",
+                        sha256=source.agent_binary_sha256,
+                        size_bytes=1,
+                    ),
+                }
+            ),
+        }
+    )
+    draining = source.model_copy(update={"status": SchedulerWorkerStatus.Draining})
+    rollout.reconcile(release, [draining, replacement], now=now)
+    rollout.reconcile(previous_release, [draining, replacement], now=now)
+    assert compute.get_internal_unit(pool.workspace_id, pool.id).replacement_release_generation == 3
+    with compute.worker_release_admission(draining, release, [draining, replacement]):
+        pass
+    with (
+        pytest.raises(ConflictError, match="newer release"),
+        compute.worker_release_admission(draining, previous_release, [draining, replacement]),
+    ):
+        pass
+    current = source.model_copy(
+        update={
+            "request_poll_expires_at": None,
+        }
+    )
+    with service_context.database.session() as session:
+        assert not WorkerReleaseRepository(session).complete_update(current)
+    rollout.reconcile(release, [current, replacement], now=now)
+    assert (
+        compute.get_internal_unit(pool.workspace_id, pool.id).replacement_machine_id == machine_id
+    )
+    current.request_poll_expires_at = now + timedelta(minutes=5)
+    with service_context.database.session() as session:
+        assert WorkerReleaseRepository(session).complete_update(current)
+    rollout.reconcile(release, [current, replacement], now=now)
+    settled = compute.get_internal_unit(pool.workspace_id, pool.id)
+    assert settled.replacement_machine_id == ""
+    assert settled.replacement_release_generation == 0
+    assert settled.desired_machines == 1
+    status = ComputeReleaseStatusService(service_context.database).read(release, [current])
+    assert not status.pending_capacity_owners
+    assert next(item for item in status.machines if item.machine_id == machine_id).current
+
+
 def test_pooled_capacity_does_not_sell_one_pending_unit_twice(
     service_context: ServiceContext,
 ) -> None:
@@ -4325,6 +4486,15 @@ def test_stopped_reserve_from_an_older_release_is_prepared_again_and_records_the
         "a" * 64,
         "registry.example/worker:new",
     )
+    release = ActiveRelease(
+        generation=2, manifest_url="https://example.test/release", target=_RESERVE_RELEASE
+    )
+    assert not ComputeReleaseStatusService(service_context.database).read(release, []).complete
+    provider.reserve_status = "stopped"
+    compute.reconcile_unit_capacity(unit.id, now=now)
+    status = ComputeReleaseStatusService(service_context.database).read(release, [])
+    assert status.complete
+    assert status.machines[0].phase is ReleaseMachinePhase.Current
 
 
 def test_a_resumed_reserve_registers_no_worker_until_its_stream_authorizes_the_resume(

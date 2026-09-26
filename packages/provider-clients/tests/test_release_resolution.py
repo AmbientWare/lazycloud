@@ -16,6 +16,7 @@ from provider_clients.release_manifest import (
 from provider_clients.settings import (
     AwsAccountConnectionEnvironmentSettings,
 )
+from shared.releases import RuntimeArtifacts
 
 _BUCKET = "lazycloud-releases"
 _PUBLIC_BASE_URL = "https://releases.example.com"
@@ -46,6 +47,12 @@ def _release_manifest() -> AwsReleaseManifest:
         agent_artifact_version=_VERSION,
         agent_artifact_sha256=_AGENT_SHA256,
         container_worker_image=_WORKER_IMAGE,
+        compatible_runtimes=[
+            RuntimeArtifacts(
+                worker_image="registry.example.com/container-worker@sha256:" + "e" * 64,
+                agent_sha256="f" * 64,
+            )
+        ],
         platform_images={"api": f"registry.example.com/api@sha256:{'c' * 64}"},
         source_revision="d" * 40,
         capacity_cpu_ami_ids=_CPU_AMI_IDS,
@@ -87,8 +94,13 @@ def _release_manifest() -> AwsReleaseManifest:
 
 
 def test_complete_release_resolves_worker_and_host_artifacts_together() -> None:
+    manifest = AwsReleaseManifest.model_validate_json(_release_manifest().model_dump_json())
+    previous = manifest.compatible_runtimes[0]
+    assert manifest.target.accepts(previous.worker_image, previous.agent_sha256)
+    assert not manifest.target.matches(previous.worker_image, previous.agent_sha256)
+    assert not manifest.target.accepts(previous.worker_image, _AGENT_SHA256)
     release = deployment_release(
-        _release_manifest(),
+        manifest,
         agent_binaries=AgentBinaryEnvironmentSettings(binary_dir=Path("/var/lib/lazycloud/agent")),
         aws_connections=AwsAccountConnectionEnvironmentSettings(
             control_principal_arn="arn:aws:iam::123456789012:role/control-plane",
