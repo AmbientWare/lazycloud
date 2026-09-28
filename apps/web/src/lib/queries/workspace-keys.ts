@@ -268,6 +268,11 @@ export const accountQueryKeys = {
    */
   admin: {
     root: () => [...accountRoot, "admin"] as const,
+    fleet: {
+      root: () => [...accountRoot, "admin", "fleet"] as const,
+      summary: () => [...accountRoot, "admin", "fleet", "summary"] as const,
+      nodes: () => [...accountRoot, "admin", "fleet", "nodes"] as const,
+    },
     // Keyed on the narrowing, so each search and filter caches its own pages
     // and changing one starts a fresh walk rather than appending to the last.
     accounts: Object.assign(

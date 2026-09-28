@@ -4,7 +4,6 @@ from datetime import UTC, datetime
 from compute.fleet_policy import (
     FleetCapacityPolicy,
     ReserveConditions,
-    ReserveMachineState,
     plan_market_reserve,
 )
 from compute.fleet_reserves import fleet_reserve_snapshot, machine_capacity, reserve_admission
@@ -19,6 +18,7 @@ from shared.capacity_lifecycle import CapacityImageEvidence, CapacitySleepMode
 from shared.compute_enrollment import AgentCapacityState
 from shared.compute_fleet import MachineLifecycle
 from shared.compute_policy import ComputeUnitPhase
+from shared.fleet_capacity import ReserveMachineState
 
 
 def test_reserve_borrowing_preserves_dynamic_target_and_compatible_inventory() -> None:
@@ -76,6 +76,7 @@ def test_fleet_snapshot_counts_lifecycle_once_and_gates_warm_capacity_on_fresh_i
         billing_minimum_seconds=None,
     )
     serving = PlatformReserveInstanceRow(
+        record_id="serving-record",
         unit_id=unit.id,
         status="active",
         instance_id="i-serving",

@@ -17,6 +17,7 @@ from enum import StrEnum
 
 from pydantic import Field
 from shared.contracts import ContractModel
+from shared.fleet_capacity import ReserveMachineState
 from shared.gpu import GpuType, normalize_gpu_type
 
 from compute.capacity_acquisition import plan_request_capacity
@@ -133,32 +134,6 @@ class FleetCapacityPolicy(ContractModel):
             ReserveMarket(preemptible=False),
             *(ReserveMarket(preemptible=False, gpu_type=card) for card in sorted(self.gpu)),
         )
-
-
-class ReserveMachineState(StrEnum):
-    Serving = "serving"
-    Starting = "starting"
-    """Launched, resuming or joining: capacity that will serve without another purchase."""
-
-    Draining = "draining"
-    """Cordoned or interrupted, so it gives the market no headroom."""
-
-    Preparing = "preparing"
-    Stopping = "stopping"
-    Unavailable = "unavailable"
-    Failed = "failed"
-    Terminating = "terminating"
-    Stopped = "stopped"
-    HibernateUnverified = "hibernate_unverified"
-    ImageSaved = "image_saved"
-
-    @property
-    def stopped(self) -> bool:
-        return self in {self.Stopped, self.HibernateUnverified, self.ImageSaved}
-
-    @property
-    def reserve(self) -> bool:
-        return self in {self.Preparing, self.Stopping} or self.stopped
 
 
 @dataclass(frozen=True, slots=True)
@@ -1356,7 +1331,6 @@ __all__ = [
     "ReserveConditions",
     "ReserveGrowth",
     "ReserveMachine",
-    "ReserveMachineState",
     "ReserveUnit",
     "plan_market_reserve",
 ]

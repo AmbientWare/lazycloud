@@ -100,6 +100,7 @@ from shared.errors import (
     StaleProviderStateError,
     UpstreamUnavailableError,
 )
+from shared.fleet_capacity import ReserveMachineState
 from shared.gpu import GPU_ANY
 from shared.http.worker_network import WorkerEgressPolicy
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
@@ -132,7 +133,6 @@ from compute.fleet_policy import (
     MarketReservePlan,
     ReserveConditions,
     ReserveGrowth,
-    ReserveMachineState,
     plan_market_reserve,
 )
 from compute.fleet_reserves import (

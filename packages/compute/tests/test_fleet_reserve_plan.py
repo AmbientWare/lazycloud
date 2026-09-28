@@ -10,7 +10,6 @@ from compute.fleet_policy import (
     MarketReserve,
     ReserveConditions,
     ReserveMachine,
-    ReserveMachineState,
     ReserveUnit,
     plan_market_reserve,
 )
@@ -22,6 +21,7 @@ from compute.fleet_resources import (
     ReservePlacement,
 )
 from compute.maintenance_policy import MaintenanceBudget, MaintenanceCandidate, plan_maintenance
+from shared.fleet_capacity import ReserveMachineState
 
 NOW = datetime(2026, 9, 24, 12, tzinfo=UTC)
 MARKET = ReserveMarket(preemptible=False)
