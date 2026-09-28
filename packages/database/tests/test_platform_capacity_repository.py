@@ -267,7 +267,11 @@ def test_stopped_capacity_moves_to_serving_and_stops_being_resumable(
             )
         )
         instances = ComputeProviderInstanceRepository(session)
-        for status in ("stopped", "preparing"):
+        for status, image in (
+            ("stopped", "worker:current"),
+            ("preparing", "worker:current"),
+            ("stopped", "worker:old"),
+        ):
             instances.upsert(
                 ComputeProviderInstanceRecord(
                     id=str(uuid4()),
@@ -277,11 +281,20 @@ def test_stopped_capacity_moves_to_serving_and_stops_being_resumable(
                     instance_id=str(uuid4()),
                     status=status,
                     source="pooled",
+                    prepared_worker_image=image,
+                    prepared_agent_sha256="current-agent",
                 )
             )
         sizing = units.sizing_for_owner(unit.id)
         assert sizing is not None and sizing.desired_machines == 0
-        assert {row.id for row in units.stopped_reserve_units() if row.resumable} == {unit.id}
+        reserves = units.stopped_reserve_units(
+            worker_image="worker:current", agent_sha256="current-agent"
+        )
+        assert [(row.id, row.stopped, row.resumable_count) for row in reserves] == [(unit.id, 2, 1)]
+        assert all(
+            row.resumable_count == 0
+            for row in units.stopped_reserve_units(worker_image="", agent_sha256="")
+        )
         resumed = units.update_capacity(
             unit.id,
             expected_generation=unit.generation,
@@ -293,14 +306,27 @@ def test_stopped_capacity_moves_to_serving_and_stops_being_resumable(
         )
         assert resumed is not None
         assert resumed.stopped_machines == 1
+        units.upsert(resumed.model_copy(update={"retiring_stopped_machines": 1}))
+        reserves = units.stopped_reserve_units(
+            worker_image="worker:current", agent_sha256="current-agent"
+        )
+        assert [(row.stopped, row.resumable_count) for row in reserves] == [(2, 0)]
         units.upsert(
             resumed.model_copy(
                 update={
                     "stopped_machines": 0,
-                    "retiring_stopped_machines": 1,
+                    "retiring_stopped_machines": 0,
                 }
+            )
+        )
+        assert all(
+            row.resumable_count == 0
+            for row in units.stopped_reserve_units(
+                worker_image="worker:current", agent_sha256="current-agent"
             )
         )
         for instance in instances.list_for_pool(unit.id):
             instances.upsert(instance.model_copy(update={"status": "deleted"}))
-        assert not any(row.resumable for row in units.stopped_reserve_units())
+        assert not units.stopped_reserve_units(
+            worker_image="worker:current", agent_sha256="current-agent"
+        )

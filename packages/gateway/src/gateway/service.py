@@ -2269,8 +2269,8 @@ class GatewayControlService:
                     prepared_worker_images=request.prepared_worker_images,
                     active_worker_images=request.active_worker_images,
                     admission_waiting_workers=request.admission_waiting_workers,
-                    booted_since_prepared=request.booted_since_reserve_prepared,
-                    resumed_since_prepared=request.resumed_since_reserve_prepared,
+                    boot_id=request.boot_id,
+                    sleep_observation=request.sleep_observation,
                     prepared_stop=request.prepared_stop,
                 )
                 if bootstrap_unit.platform_fleet
@@ -2329,6 +2329,10 @@ class GatewayControlService:
             routes=[self._agent_route_view(route) for route in snapshot.routes],
             slots=[agent_worker_slot_view(slot) for slot in agent_slots],
             stop_preparation_id=reserve_preparation.stop_request_id if reserve_preparation else "",
+            sleep_request=reserve_preparation.sleep_request if reserve_preparation else None,
+            sleep_observation_ack=(
+                reserve_preparation.sleep_observation_ack if reserve_preparation else ""
+            ),
             reserve=_reserve_instruction(reserve_preparation),
             resume_from_stop=bool(
                 reserve_preparation

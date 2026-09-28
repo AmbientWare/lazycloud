@@ -486,6 +486,47 @@ A rollback to an image older than the schema is refused rather than migrated
 from, because there is no path to compute from a revision that build does not
 carry. Roll forward, or restore the database.
 
+### Fleet sleep evidence cutover
+
+Revision `0032_capacity_sleep_attempts` replaces instance-level sleep outcomes
+with durable attempts and activation evidence. It also removes the old agent
+stream fields. This release requires a coordinated cutover; an ordinary rolling
+update can strand agents that cannot speak the new stream contract.
+
+Record and pause Argo automatic sync before publishing the complete release.
+Verify remote access to every managed host and record its service, executable,
+and durable state directory. Customer-owned hosts require their authorized
+upgrade path; a host that cannot upgrade stays unavailable.
+
+Stop new admission, drain existing work, and stop every old API, gateway, and
+scheduler writer before migration. Wake stopped reserves while those writers
+remain stopped. Stop each agent service, then run the canonical installer with
+`--install-only --agent-url <published-archive> --agent-sha256 <manifest-digest>`.
+This installs without enrolling or requiring the old control protocol. Verify
+the executable resolves to the selected digest and its `--help` command works.
+Preserve its state directory and leave the service stopped until the new control
+plane is available. Replacing the executable alone does not replace a hibernated
+process already loaded in memory.
+
+Sync the complete release to migrate and start the new processes. Preserve
+PostgreSQL, Redis, instances, and storage. Clear the superseded publication and
+dispatch candidates through `lazycloud-admin fleet clear-plan` before starting
+the scheduler. Restart the upgraded agent services. Reconcile observations and
+verify a fresh plan and compatible intake before reopening admission. Restore
+the recorded Argo settings. Do not roll an old build back onto revision `0032`.
+
+Legacy stopped capacity starts with unknown evidence. A legacy pending stop
+still observed running returns to preparation under its hold and needs a new
+attempt and guest marker. A stop request or an old console success line does
+not prove a current image exists.
+
+Acceptance must exercise a real retained node through preparation, image saving,
+held refresh, serving resume, and a real function result. Poll its durable attempt,
+provider state, guest evidence, and intake together. An owner-authorized cutover
+can use an existing idle platform node and preserve it afterward. Disposable
+acceptance uses `default-test`, reachable test endpoints, and scoped cleanup of
+only the run's resources. Connected-AWS ASG tests do not prove this lifecycle.
+
 ### Provider commitment accounting upgrade
 
 Revision `0015_provider_commitments` retains unresolved provider launches as

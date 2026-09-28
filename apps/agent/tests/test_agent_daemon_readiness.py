@@ -66,7 +66,6 @@ from shared.placement import Placement
 from shared.usage import UsageBillingOwner
 from worker.network_backend import AgentBridgeCallbackFirewall, AgentBridgeNetworkConfig
 
-from agent import worker_controller
 from gateway import http
 
 
@@ -352,20 +351,12 @@ def _machine_slot(status: AgentWorkerSlotStatus) -> http.AgentWorkerSlot:
 
 
 class _SlotGateway(_Gateway):
-    """Answers each stream with the machine's worker slot and reserve instruction.
-
-    It records whether each stream said the machine booted since its reserve
-    was prepared.
-    """
-
     def __init__(self) -> None:
         super().__init__()
         self.slot = _machine_slot(AgentWorkerSlotStatus.Active)
         self.reserve = AgentReserveInstruction.Prepare
-        self.booted_since_prepared: list[bool] = []
 
     def stream_agent(self, request: StreamAgentRequest) -> StreamAgentResponse:
-        self.booted_since_prepared.append(request.booted_since_reserve_prepared)
         return StreamAgentResponse(
             ok=True,
             credential_id="22222222-2222-4222-8222-222222222222",
@@ -451,7 +442,7 @@ def test_a_reserve_worker_reaches_the_control_plane_only_once_a_stream_adopts_it
     The first stream after the resume keeps that same container if it wants the
     slot active, and stops it otherwise, before the listeners open.
     """
-    monkeypatch.setattr(worker_controller, "BOOT_ID_PATH", tmp_path / "boot_id")
+    monkeypatch.setattr("agent.state.BOOT_ID_PATH", tmp_path / "boot_id")
     (tmp_path / "boot_id").write_text("reserve-boot")
     gateway = _SlotGateway()
     workers = _Workers(tmp_path / "agent")
@@ -498,14 +489,9 @@ def test_a_reserve_worker_reaches_the_control_plane_only_once_a_stream_adopts_it
 def test_a_cold_resumed_reserve_keeps_its_worker_until_its_row_catches_up(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A reserve started again before its row reads resuming keeps the worker it booted.
-
-    Every stream until the resume says the machine booted since its reserve was
-    prepared, so the control plane keeps treating the stale row as a resume and
-    the boot's worker is adopted, not stopped.
-    """
+    """A cold-started reserve stays held until the control plane admits it."""
     boot_id = tmp_path / "boot_id"
-    monkeypatch.setattr(worker_controller, "BOOT_ID_PATH", boot_id)
+    monkeypatch.setattr("agent.state.BOOT_ID_PATH", boot_id)
     boot_id.write_text("prepared-boot")
     gateway = _SlotGateway()
     prepared = _Workers(tmp_path / "agent")
@@ -548,7 +534,6 @@ def test_a_cold_resumed_reserve_keeps_its_worker_until_its_row_catches_up(
         )
         booted = resumed.containers()
         assert set(booted) == {_MACHINE_WORKER}
-        gateway.booted_since_prepared.clear()
         gateway.reserve = AgentReserveInstruction.ResumePending
         for _ in range(2):
             service.run_stream_iteration(state, tunnel=tunnel, before_agent_update=tunnel.close)
@@ -561,6 +546,5 @@ def test_a_cold_resumed_reserve_keeps_its_worker_until_its_row_catches_up(
         tunnel.workers.close()
         service._capacity_shutdown.close()
 
-    assert gateway.booted_since_prepared == [True, True, True]
     assert tunnel.opened_with == booted
     assert resumed.reserve_worker(state.machine_id) is None

@@ -4,6 +4,7 @@ from pydantic import Field, JsonValue, field_validator
 from pydantic.json_schema import SkipJsonSchema
 from shared.bytes_transport import decode_bytes, encode_bytes
 from shared.capacity import CAPACITY_OWNER_ID_PATTERN
+from shared.capacity_lifecycle import CapacitySleepObservation, CapacitySleepRequest
 from shared.compute_enrollment import (
     AgentBootstrapConfig,
     AgentCapacityState,
@@ -169,10 +170,8 @@ class StreamAgentRequest(HttpModel):
     prepared_worker_images: list[str] = Field(default_factory=list)
     admission_waiting_workers: list[str] = Field(default_factory=list)
     """Held workers that are built and wait only for the agent to admit them."""
-    booted_since_reserve_prepared: bool = False
-    """The machine booted after its reserve was prepared, so it was stopped and started."""
-    resumed_since_reserve_prepared: bool = False
-    """The running agent observed the suspended clock gap while holding a reserve."""
+    boot_id: str = ""
+    sleep_observation: CapacitySleepObservation | None = None
     prepared_stop: MachineStopPreparationReceipt | None = None
 
 
@@ -190,6 +189,8 @@ class StreamAgentResponse(HttpModel):
     stop_preparation_id: str = ""
     reserve: AgentReserveInstruction = AgentReserveInstruction.Keep
     resume_from_stop: bool = False
+    sleep_request: CapacitySleepRequest | None = None
+    sleep_observation_ack: str = ""
 
 
 class AgentLogRecord(HttpModel):

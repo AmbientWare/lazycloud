@@ -231,7 +231,12 @@ def connection_role_statements(
             {
                 "Sid": "ManageTaggedRetainedInstances",
                 "Effect": "Allow",
-                "Action": ["ec2:StartInstances", "ec2:StopInstances", "ec2:TerminateInstances"],
+                "Action": [
+                    "ec2:StartInstances",
+                    "ec2:StopInstances",
+                    "ec2:TerminateInstances",
+                    "ec2:GetConsoleOutput",
+                ],
                 "Resource": arns.arn(_INSTANCE),
                 "Condition": _MANAGED_RESOURCE_TAG,
             },

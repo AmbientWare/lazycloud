@@ -60,11 +60,14 @@ Platform reserves are schedulable headroom in CPU, memory and GPU cards for each
 purchase market. Warm nodes serve requests. Compatible stopped or hibernated
 nodes replenish warm headroom, and new purchases replenish reserves. Pending
 launches count toward commitments but cannot justify retiring ready capacity.
-Hibernation capability and stop intent never prove that memory was preserved.
-Unknown stop outcomes use ordinary boot estimates until enough observed resumes,
-including cold fallbacks, establish their timing. Agent suspend evidence records
-the previous activation's observed outcome after resume. Each activation retains
-its request, provider-running, preparation, intake and failure timestamps in
+Each sleep attempt names its instance and boot. Requested mode, provider acceptance,
+observed stop, and kernel image-save evidence are separate facts. A saved image
+does not prove a later restore. Agent observations survive retries and record the
+linked activation's restoration independently of admission, including held refreshes.
+Unknown image evidence uses ordinary boot estimates; measured cohorts include cold
+fallbacks and failures. External activation retains an unknown request time and
+does not enter request-to-ready timing samples. Each activation retains its
+provider-running, preparation, intake and failure timestamps in
 `capacity_activations`; telemetry cannot open admission. CPU quiet floors are small,
 and GPU headroom follows demand instead of retaining an idle card of every model.
 CPU reserve targets prefer hibernation when supported. Accepted hibernation
@@ -90,6 +93,14 @@ approved node combinations by running or preparation-plus-storage cost. Request
 acquisition separately packs compatible due requests using the same resource and
 offer values. Disk-backed requests retain individual acquisition because storage
 attachments are not represented by the packing model.
+
+Redis publishes the complete timestamped decision, its release, observed capacity,
+forecast evidence and each market's application result. Missing or expired plans
+trigger recomputation and cannot authorize discretionary retirement or borrowing
+another market's reserves. Provider sleep evidence is read in one batch per pool;
+unchanged observations do not lock or rewrite completed attempts. Console collection
+belongs to provider reconciliation, with durable due times and bounded retries,
+outside request acquisition.
 
 Growth resumes compatible reserves before purchasing. Requests and interruption
 recovery take priority over elective preparation. Retention preserves ready
@@ -161,12 +172,12 @@ event, and any path not listed leaves it where it is.
 | --- | --- | --- |
 | Agent | serving: listeners open, no reserve record | `reserve` says `prepare`: preparing |
 | | preparing: listeners held, record written with this boot, workers started held, an unheld reserve worker restarted into the hold | `serve`: serving, adopting the worker by the planner's keep rule or stopping it; `keep`: stays; `stop_preparation_id`: workers stopped for a used host's stop |
-| | booted from a record: worker started held before the first stream, `booted_since_reserve_prepared` sent on every stream | `resume_pending` or `keep`: stays, record untouched; otherwise as preparing |
+| | booted from a record: worker started held before the first stream; reports `boot_id` and the persisted `sleep_observation` until acknowledged | `resume_pending` or `keep`: stays held; otherwise as preparing |
 | | slept: one connection reset, tunnel redialed, timers rearmed | the next stream, as the state before |
 | Stream answer | not ok, retryable or final | the agent changes nothing |
 | | ok with `reserve` `keep`, the default: a release not yet activated, or a used host's stop | an agent holding a worker keeps holding it |
 | | ok with `prepare`, and a warm slot Active or a plain one Draining | compute's row is `preparing`, `stopping` or `stopped` |
-| | ok with `resume_pending` | the row reads `stopping` or `stopped` while the agent reports a boot since preparation |
+| | ok with `resume_pending` | the row reads `stopping` or `stopped` while the linked activation records a new boot or memory restoration |
 | | ok with `serve` | the machine is no prepared reserve; with `resume_from_stop`, sent only by the stream that authorizes the resume, the row reads `resuming` |
 | Compute row | `preparing` -> `stopping` -> `stopped` -> `resuming` -> `active` | preparation completes once the worker is ready (warm: release running and waiting; plain: no worker); the pass observes the stop; the pass starts the instance; the capacity pass, once the stream has authorized the resume, so that answer waits on no provider call |
 | Lifecycle | `stopping`, `stopped`, `resuming` -> `joining` -> `ready` | the stream's resume authorization, or an active row seen by the pass or the agent's joining report; then the heartbeat |
