@@ -36,6 +36,7 @@ from shared.aws_connections import (
     AwsAccountConnection,
     AwsAccountConnectionPhase,
 )
+from shared.capacity_lifecycle import CapacitySleepRequest
 from shared.compute_policy import (
     ComputeCapacityMode,
     ComputeResourceRequirements,
@@ -89,9 +90,12 @@ class _PooledProvider:
         return ()
 
     def complete_machine_preparation(
-        self, request: ProviderUnitRequest, provider_instance_id: str, *, hibernate: bool
+        self,
+        request: ProviderUnitRequest,
+        provider_instance_id: str,
+        *,
+        sleep_request: CapacitySleepRequest | None,
     ) -> ProviderUnitSnapshot:
-        del hibernate
         raise AssertionError("explicit pool scaling must not prepare stopped capacity")
 
     def refresh_machine(
@@ -100,7 +104,11 @@ class _PooledProvider:
         raise AssertionError("explicit pool scaling must not stop an individual machine")
 
     def stop_machine(
-        self, request: ProviderUnitRequest, provider_instance_id: str
+        self,
+        request: ProviderUnitRequest,
+        provider_instance_id: str,
+        *,
+        sleep_request: CapacitySleepRequest,
     ) -> ProviderUnitSnapshot:
         raise AssertionError("explicit pool scaling must not stop an individual machine")
 

@@ -6,12 +6,12 @@ from compute.fleet_policy import (
     FleetCapacityPolicy,
     FleetReserveSnapshot,
     ReserveMachine,
-    ReserveMachineState,
     ReserveUnit,
 )
 from compute.fleet_resources import Capacity, ReserveMarket, ReservePlacement
 from database.repositories.capacity_activations import CapacityActivationSummary
 from shared.capacity_lifecycle import CapacityActivationKind, CapacityRestoreOutcome
+from shared.fleet_capacity import ReserveMachineState
 
 MARKET = ReserveMarket(False)
 NOW = datetime(2026, 9, 28, tzinfo=UTC)

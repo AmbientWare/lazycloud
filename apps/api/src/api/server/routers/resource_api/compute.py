@@ -9,6 +9,7 @@ from api.server.routers.resource_api import (
     compute_policy,
     compute_units,
     compute_workers,
+    fleet,
 )
 
 router = APIRouter()
@@ -18,5 +19,6 @@ router.include_router(compute_units.router)
 router.include_router(compute_policy.router)
 router.include_router(compute_machines.router)
 router.include_router(compute_workers.router)
+router.include_router(fleet.router)
 
 __all__ = ["router"]

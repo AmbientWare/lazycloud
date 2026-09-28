@@ -6,6 +6,7 @@ from datetime import datetime
 
 from database.repositories.capacity_activations import CapacityActivationSummary
 from shared.capacity_lifecycle import CapacityActivationKind, CapacityRestoreOutcome
+from shared.fleet_capacity import ReserveMachineState
 from shared.placement import product_region
 
 from compute.demand_forecast import DemandForecast, DemandSample, ForecastTiming, forecast_demand
@@ -13,7 +14,6 @@ from compute.fleet_policy import (
     RESERVE_PLAN_INTERVAL_SECONDS,
     FleetCapacityPolicy,
     FleetReserveSnapshot,
-    ReserveMachineState,
     ReserveUnit,
 )
 from compute.fleet_resources import Capacity, ReserveMarket, ReservePlacement
