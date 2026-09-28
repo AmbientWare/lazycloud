@@ -1,7 +1,7 @@
-from enum import StrEnum
+from shared.enums import StringEnum
 
 
-class ReserveMachineState(StrEnum):
+class ReserveMachineState(StringEnum):
     Serving = "serving"
     Starting = "starting"
     Draining = "draining"

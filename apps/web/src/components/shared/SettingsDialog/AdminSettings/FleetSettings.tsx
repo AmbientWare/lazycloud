@@ -211,7 +211,7 @@ function CapacityTable({ markets }: { markets: FleetMarket[] }) {
                     size="sm"
                     className="-ml-2 whitespace-nowrap"
                     aria-expanded={open}
-                      aria-controls={open ? `fleet-market-${key}` : undefined}
+                    aria-controls={open ? `fleet-market-${key}` : undefined}
                     onClick={() => setExpanded(open ? null : key)}
                   >
                     <ChevronRight
