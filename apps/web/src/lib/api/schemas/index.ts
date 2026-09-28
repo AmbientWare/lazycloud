@@ -9,6 +9,7 @@ export * from "./deployment_plans";
 export * from "./events";
 export * from "./errors";
 export * from "./functions";
+export * from "./fleet";
 export * from "./json";
 export * from "./observability";
 export * from "./pods";

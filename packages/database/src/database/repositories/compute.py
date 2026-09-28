@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from database.repositories.capacity_activations import CapacityActivationRepository
 from database.repositories.identity import WorkspaceRepository
@@ -239,6 +239,7 @@ class PlatformReserveUnitRow:
 
 @dataclass(frozen=True, slots=True)
 class PlatformReserveInstanceRow:
+    record_id: str
     unit_id: str
     status: str
     instance_id: str | None
@@ -262,6 +263,7 @@ class PlatformReserveInstanceRow:
     sleep_accepted_mode: CapacitySleepMode | None = None
     machine_lifecycle: MachineLifecycle | None = None
     cleanup_complete: bool = False
+    instance_type: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -540,7 +542,9 @@ def _compute_unit_record(row: ComputeUnitTable) -> ComputeUnitRecord:
 class ComputeUnitRepository:
     session: Session
 
-    def platform_reserve_rows(self) -> PlatformReserveRows:
+    def platform_reserve_rows(
+        self, *, after_instance_id: UUID | None = None, limit: int | None = None
+    ) -> PlatformReserveRows:
         """Every platform unit holding capacity, its live machines, and their load.
 
         One statement, because the reserve planner reads it every minute. Terminal
@@ -595,7 +599,7 @@ class ComputeUnitRepository:
                 ),
             ),
         )
-        rows = self.session.execute(
+        statement = (
             select(
                 unit.id,
                 unit.workspace_id,
@@ -662,6 +666,8 @@ class ComputeUnitRepository:
                 unit.provider,
                 func.max(instance.instance_type).over(partition_by=unit.id),
                 instance.provider_storage_destroyed_at.is_not(None),
+                instance.id,
+                instance.instance_type,
             )
             .select_from(unit)
             .outerjoin(maintenance, maintenance.c.pool_id == unit.id)
@@ -705,7 +711,19 @@ class ComputeUnitRepository:
                 ),
             )
             .order_by(unit.id, instance.id)
-        ).tuples()
+        )
+        if limit is not None:
+            statement = (
+                statement.where(
+                    instance.provider_storage_destroyed_at.is_(None), instance.id.is_not(None)
+                )
+                .order_by(None)
+                .order_by(instance.id)
+                .limit(limit)
+            )
+        if after_instance_id is not None:
+            statement = statement.where(instance.id > after_instance_id)
+        rows = self.session.execute(statement).tuples()
         units: dict[str, PlatformReserveUnitRow] = {}
         instances: list[PlatformReserveInstanceRow] = []
         for row in rows:
@@ -751,6 +769,8 @@ class ComputeUnitRepository:
                 continue
             instances.append(
                 PlatformReserveInstanceRow(
+                    record_id=str(row[56]),
+                    instance_type=row[57] or "",
                     unit_id=unit_id,
                     status=row[21],
                     instance_id=row[22],

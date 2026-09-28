@@ -10,6 +10,7 @@ from math import ceil
 from pathlib import Path
 
 from pydantic import TypeAdapter
+from shared.fleet_capacity import ReserveMachineState
 from shared.startup import COLD_CONTAINER_START_TARGET_SECONDS
 
 from compute.activation_timing import reserve_forecast
@@ -22,7 +23,6 @@ from compute.fleet_policy import (
     GrowthKind,
     ReserveConditions,
     ReserveMachine,
-    ReserveMachineState,
     ReserveUnit,
     plan_market_reserve,
 )

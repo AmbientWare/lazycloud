@@ -18,6 +18,7 @@ from shared.compute_enrollment import AgentCapacityState
 from shared.compute_fleet import MachineLifecycle
 from shared.compute_policy import ComputeUnitPhase
 from shared.container_requests import node_memory, schedulable_capacity
+from shared.fleet_capacity import ReserveMachineState
 from shared.gpu import normalize_gpu_type
 from shared.placement import product_region
 from shared.releases import ActiveRelease
@@ -25,7 +26,6 @@ from shared.releases import ActiveRelease
 from compute.fleet_policy import (
     FleetReserveSnapshot,
     ReserveMachine,
-    ReserveMachineState,
     ReserveUnit,
 )
 from compute.fleet_resources import Capacity, ReserveMarket, ReservePlacement
@@ -111,7 +111,7 @@ def fleet_reserve_snapshot(
         machine
         for instance in rows.instances
         if (
-            machine := _reserve_machine(
+            machine := reserve_machine(
                 instance,
                 minimums[instance.unit_id],
                 now=now,
@@ -168,7 +168,7 @@ def fleet_reserve_snapshot(
     )
 
 
-def _reserve_machine(
+def reserve_machine(
     instance: PlatformReserveInstanceRow,
     billing_minimum_seconds: int | None,
     *,

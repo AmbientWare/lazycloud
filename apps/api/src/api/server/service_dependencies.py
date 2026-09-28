@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Annotated
 
 from compute.aws_connections import AwsAccountConnectionDirectory, AwsAccountConnectionService
+from compute.fleet_status import FleetStatusService
 from compute.policy import WorkspaceComputePolicyService
 from control.service import ControlPlaneService
 from execution.artifacts.service import ArtifactStorageService
@@ -44,6 +45,14 @@ def endpoint_service(
     services: Annotated[ApiServices, Depends(api_services)],
 ) -> EndpointApiService:
     return services.endpoint_service
+
+
+def fleet_status_service(
+    services: Annotated[ApiServices, Depends(api_services)],
+) -> FleetStatusService:
+    if services.compute.reserve_state is None:
+        raise UpstreamUnavailableError("Fleet scheduler state is not configured")
+    return FleetStatusService(services.context.database, services.compute.reserve_state)
 
 
 def control_plane_service(
