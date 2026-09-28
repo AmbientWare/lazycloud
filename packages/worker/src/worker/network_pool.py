@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import secrets
 import threading
 from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -10,6 +11,12 @@ from pathlib import Path
 from foundation.process import run_process
 
 from worker.execution import container_veth_names
+
+
+def _random_mac_address() -> str:
+    address = bytearray(secrets.token_bytes(6))
+    address[0] = (address[0] & 0xFC) | 0x02
+    return address.hex(":")
 
 
 @dataclass(slots=True)
@@ -94,7 +101,23 @@ class PreparedNetworkPool:
         try:
             for argv in (
                 [self.ip_binary, "netns", "add", name],
-                [self.ip_binary, "link", "add", host, "type", "veth", "peer", "name", peer],
+                # Set both addresses at creation so udev cannot derive reused
+                # MACs from slot names while earlier containers still use them.
+                [
+                    self.ip_binary,
+                    "link",
+                    "add",
+                    host,
+                    "address",
+                    _random_mac_address(),
+                    "type",
+                    "veth",
+                    "peer",
+                    "name",
+                    peer,
+                    "address",
+                    _random_mac_address(),
+                ],
                 [self.ip_binary, "link", "set", host, "master", self.bridge_name],
                 [self.ip_binary, "link", "set", peer, "netns", name],
             ):
