@@ -212,6 +212,21 @@ def test_external_activation_preserves_unknown_request_time_and_survives_retries
             outcome=CapacityRestoreOutcome.ColdBoot,
             at=wake + timedelta(seconds=7),
         )
+        next_sleep = sleeps.begin(
+            instance.id,
+            attempt_id=str(uuid4()),
+            boot_id=str(uuid4()),
+            requested_mode=CapacitySleepMode.Hibernate,
+            requested_at=wake + timedelta(seconds=8),
+            observed_at=wake + timedelta(seconds=8),
+        )
+        activations.observe_external(
+            instance.id,
+            observed_at=wake,
+            kind=CapacityActivationKind.Boot,
+            provider_running_at=wake,
+            sleep_attempt_id=next_sleep.id,
+        )
         activation = session.scalars(
             select(CapacityActivationTable).where(
                 CapacityActivationTable.instance_record_id == instance.id
@@ -219,3 +234,6 @@ def test_external_activation_preserves_unknown_request_time_and_survives_retries
         ).one()
         assert activation.requested_at is None
         assert activation.authorized_at is None and activation.ready_at is None
+        assert activation.sleep_attempt_id == sleep.id and activation.failed_at is None
+        assert activation.restore_outcome == CapacityRestoreOutcome.ColdBoot.value
+        assert not sleeps.was_activated(next_sleep.id)

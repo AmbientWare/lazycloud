@@ -508,12 +508,17 @@ Preserve its state directory and leave the service stopped until the new control
 plane is available. Replacing the executable alone does not replace a hibernated
 process already loaded in memory.
 
-Sync the complete release to migrate and start the new processes. Preserve
-PostgreSQL, Redis, instances, and storage. Clear the superseded publication and
-dispatch candidates through `lazycloud-admin fleet clear-plan` before starting
-the scheduler. Restart the upgraded agent services. Reconcile observations and
-verify a fresh plan and compatible intake before reopening admission. Restore
-the recorded Argo settings. Do not roll an old build back onto revision `0032`.
+While the old writers remain stopped, run `lazycloud-admin fleet clear-plan`
+from the new release's CLI image with the deployment's configuration. This
+clears the superseded publication and dispatch candidates before Argo starts
+the scheduler. Sync the complete release to migrate and start the new processes,
+then restart the upgraded agents. Preserve PostgreSQL, Redis, instances, and
+storage. Verify a fresh plan and compatible intake before accepting work.
+Startup can add temporary capacity while the agents reconnect; inspect the
+resulting fleet before restoring the recorded Argo settings. The chart requires
+at least two scheduler and ingress replicas, so zero-replica Helm overrides are
+not a supported way to stage this cutover. Do not roll an old build back onto
+revision `0032`.
 
 Legacy stopped capacity starts with unknown evidence. A legacy pending stop
 still observed running returns to preparation under its hold and needs a new
