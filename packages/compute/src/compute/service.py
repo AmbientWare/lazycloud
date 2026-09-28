@@ -4301,8 +4301,6 @@ class ComputeService:
             ),
             consolidating=self.reserve_state.cooling_markets(),
             demand=frozenset(pending),
-            forecast_warm={market: value.warm for market, value in forecasts.items()},
-            forecast_total={market: value.total for market, value in forecasts.items()},
             forecasts=forecasts,
             request_shapes={
                 market: tuple(set(value.request_shapes) | pending_shapes.get(market, set()))

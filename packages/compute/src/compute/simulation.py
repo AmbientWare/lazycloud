@@ -298,10 +298,6 @@ def simulate(scenario: Scenario) -> SimulationResult:
                     lightly_used_since=lightly_used,
                     forecasts=forecasts,
                     demand=frozenset(workload.market for workload in pending.values()),
-                    forecast_warm={market: forecast.warm for market, forecast in forecasts.items()},
-                    forecast_total={
-                        market: forecast.total for market, forecast in forecasts.items()
-                    },
                     request_shapes={
                         market: forecast.request_shapes for market, forecast in forecasts.items()
                     },

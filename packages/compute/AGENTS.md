@@ -172,12 +172,12 @@ event, and any path not listed leaves it where it is.
 | --- | --- | --- |
 | Agent | serving: listeners open, no reserve record | `reserve` says `prepare`: preparing |
 | | preparing: listeners held, record written with this boot, workers started held, an unheld reserve worker restarted into the hold | `serve`: serving, adopting the worker by the planner's keep rule or stopping it; `keep`: stays; `stop_preparation_id`: workers stopped for a used host's stop |
-| | booted from a record: worker started held before the first stream, `booted_since_reserve_prepared` sent on every stream | `resume_pending` or `keep`: stays, record untouched; otherwise as preparing |
+| | booted from a record: worker started held before the first stream; reports `boot_id` and the persisted `sleep_observation` until acknowledged | `resume_pending` or `keep`: stays held; otherwise as preparing |
 | | slept: one connection reset, tunnel redialed, timers rearmed | the next stream, as the state before |
 | Stream answer | not ok, retryable or final | the agent changes nothing |
 | | ok with `reserve` `keep`, the default: a release not yet activated, or a used host's stop | an agent holding a worker keeps holding it |
 | | ok with `prepare`, and a warm slot Active or a plain one Draining | compute's row is `preparing`, `stopping` or `stopped` |
-| | ok with `resume_pending` | the row reads `stopping` or `stopped` while the agent reports a boot since preparation |
+| | ok with `resume_pending` | the row reads `stopping` or `stopped` while the linked activation records a new boot or memory restoration |
 | | ok with `serve` | the machine is no prepared reserve; with `resume_from_stop`, sent only by the stream that authorizes the resume, the row reads `resuming` |
 | Compute row | `preparing` -> `stopping` -> `stopped` -> `resuming` -> `active` | preparation completes once the worker is ready (warm: release running and waiting; plain: no worker); the pass observes the stop; the pass starts the instance; the capacity pass, once the stream has authorized the resume, so that answer waits on no provider call |
 | Lifecycle | `stopping`, `stopped`, `resuming` -> `joining` -> `ready` | the stream's resume authorization, or an active row seen by the pass or the agent's joining report; then the heartbeat |

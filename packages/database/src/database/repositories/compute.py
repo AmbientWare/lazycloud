@@ -921,7 +921,10 @@ class ComputeUnitRepository:
                         _reported_memory(),
                         unit.worker_gpu_count,
                         stopped.c.stopped,
-                        stopped.c.resumable,
+                        func.least(
+                            unit.stopped_machines,
+                            func.greatest(stopped.c.resumable - unit.retiring_stopped_machines, 0),
+                        ),
                     )
                     .join(stopped, stopped.c.pool_id == unit.id)
                     .outerjoin(ComputeNodeShapeTable, _same_shape(unit))

@@ -306,12 +306,23 @@ def test_stopped_capacity_moves_to_serving_and_stops_being_resumable(
         )
         assert resumed is not None
         assert resumed.stopped_machines == 1
+        units.upsert(resumed.model_copy(update={"retiring_stopped_machines": 1}))
+        reserves = units.stopped_reserve_units(
+            worker_image="worker:current", agent_sha256="current-agent"
+        )
+        assert [(row.stopped, row.resumable_count) for row in reserves] == [(2, 0)]
         units.upsert(
             resumed.model_copy(
                 update={
                     "stopped_machines": 0,
-                    "retiring_stopped_machines": 1,
+                    "retiring_stopped_machines": 0,
                 }
+            )
+        )
+        assert all(
+            row.resumable_count == 0
+            for row in units.stopped_reserve_units(
+                worker_image="worker:current", agent_sha256="current-agent"
             )
         )
         for instance in instances.list_for_pool(unit.id):

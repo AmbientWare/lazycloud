@@ -315,12 +315,6 @@ class ReserveConditions:
     recovering: frozenset[ReserveMarket] = frozenset()
     consolidating: frozenset[ReserveMarket] = frozenset()
     """Markets consolidating a machine now or cooling down after one."""
-    forecast_warm: Mapping[ReserveMarket, Capacity] = field(
-        default_factory=dict[ReserveMarket, Capacity]
-    )
-    forecast_total: Mapping[ReserveMarket, Capacity] = field(
-        default_factory=dict[ReserveMarket, Capacity]
-    )
     request_shapes: Mapping[ReserveMarket, tuple[Capacity, ...]] = field(
         default_factory=dict[ReserveMarket, tuple[Capacity, ...]]
     )
@@ -408,9 +402,10 @@ def _plan_market(
         for machine in machines
         if machine.state is ReserveMachineState.Starting and units[machine.unit_id].enabled
     )
-    warm_target = reserve.warm.target(load).upper(conditions.forecast_warm.get(market, Capacity()))
+    forecast = conditions.forecasts.get(market)
+    warm_target = reserve.warm.target(load).upper(forecast.warm if forecast else Capacity())
     total_target = (reserve.stopped.target(load) + warm_target).upper(
-        conditions.forecast_total.get(market, Capacity())
+        forecast.total if forecast else Capacity()
     )
     stopped_target = (total_target - warm_target).clamped()
     if market.preemptible and not market.gpu_type:
@@ -828,7 +823,7 @@ def _plan_market(
             for state in sorted({machine.state for machine in machines})
         },
         serving_capacity=_total(units[machine.unit_id].machine for machine in warm),
-        forecast=conditions.forecasts.get(market),
+        forecast=forecast,
         request_shapes=conditions.request_shapes.get(market, ()),
         placement_demands=placement_demands,
     )
