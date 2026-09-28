@@ -131,7 +131,10 @@ class CapacityActivationRepository:
         existing = self.session.scalar(
             select(table.id).where(
                 table.instance_record_id == instance_record_id,
-                table.sleep_attempt_id == sleep_attempt_id,
+                or_(
+                    table.sleep_attempt_id == sleep_attempt_id,
+                    table.observed_at == observed_at,
+                ),
                 table.requested_at.is_(None),
             )
         )
