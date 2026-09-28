@@ -2,52 +2,53 @@
 
 Redis holds only what a restart may lose: whose turn it is to plan, how long a
 market has been short, which machines have been lightly used since when, the
-last plan's targets, and the one consolidation each market may run. Every
+last committed plan, and the one consolidation each market may run. Every
 decision these inform is re-read from PostgreSQL before it changes anything.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
+from math import ceil
 from typing import Protocol
 
 from coordination.redis_client import RedisClient
 from coordination.redis_serialization import dump_model_json, load_model_json, redis_text
-from pydantic import Field
+from pydantic import AwareDatetime, Field
 from shared.contracts import ContractModel
+from shared.releases import ReleaseTarget
 
 from compute.fleet_policy import (
     RESERVE_EARLY_PLAN_INTERVAL_SECONDS,
     RESERVE_PLAN_INTERVAL_SECONDS,
     FleetReservePlan,
+    MarketReservePlan,
 )
 from compute.fleet_resources import Capacity, ReserveMarket
 
 _PUBLISHED_SECONDS = 5 * 60
 
 
-class MarketTargets(ContractModel):
-    warm_target: Capacity
-    stopped_target: Capacity
-
-
 class PublishedReservePlan(ContractModel):
-    """What the last plan left for the passes that run between plans."""
+    """The committed planner decision, valid only until its observation expires."""
 
-    targets: dict[str, MarketTargets] = Field(default_factory=dict)
-    lightly_used_since: dict[str, datetime] = Field(default_factory=dict)
+    generated_at: AwareDatetime
+    expires_at: AwareDatetime
+    markets: dict[str, MarketReservePlan]
+    lightly_used_since: dict[str, datetime]
+    release: ReleaseTarget | None
 
     @classmethod
-    def of(cls, plan: FleetReservePlan) -> PublishedReservePlan:
+    def of(
+        cls, plan: FleetReservePlan, *, generated_at: datetime, release: ReleaseTarget | None
+    ) -> PublishedReservePlan:
         return cls(
-            targets={
-                market.market.key: MarketTargets(
-                    warm_target=market.warm_target, stopped_target=market.stopped_target
-                )
-                for market in plan.markets
-            },
+            generated_at=generated_at,
+            expires_at=generated_at + timedelta(seconds=_PUBLISHED_SECONDS),
+            markets={market.market.key: market for market in plan.markets},
             lightly_used_since=dict(plan.lightly_used_since),
+            release=release,
         )
 
 
@@ -70,9 +71,13 @@ class FleetReserveState(Protocol):
         self, market: ReserveMarket, *, under_pressure: bool, now: datetime, sustained_seconds: int
     ) -> bool: ...
 
-    def published(self) -> PublishedReservePlan: ...
+    def published(self) -> PublishedReservePlan | None: ...
 
-    def publish(self, plan: FleetReservePlan) -> None: ...
+    def publish(
+        self, plan: FleetReservePlan, *, generated_at: datetime, release: ReleaseTarget | None
+    ) -> None: ...
+
+    def clear_publication(self) -> None: ...
 
     def consolidation_candidates(self) -> frozenset[str]: ...
 
@@ -120,22 +125,29 @@ class RedisFleetReserveState:
         value = self.redis.get(key)
         return value is not None and now.timestamp() - float(redis_text(value)) >= sustained_seconds
 
-    def published(self) -> PublishedReservePlan:
+    def published(self) -> PublishedReservePlan | None:
         raw = self.redis.get(self._key("published"))
-        return (
-            load_model_json(PublishedReservePlan, raw)
-            if raw is not None
-            else PublishedReservePlan()
-        )
+        if raw is None:
+            return None
+        plan = load_model_json(PublishedReservePlan, raw)
+        return plan if plan.generated_at <= datetime.now(UTC) < plan.expires_at else None
 
-    def publish(self, plan: FleetReservePlan) -> None:
-        self.redis.set(
+    def publish(
+        self, plan: FleetReservePlan, *, generated_at: datetime, release: ReleaseTarget | None
+    ) -> None:
+        publication = PublishedReservePlan.of(plan, generated_at=generated_at, release=release)
+        now = datetime.now(UTC)
+        if not publication.generated_at <= now < publication.expires_at:
+            return
+        ttl_seconds = ceil((publication.expires_at - now).total_seconds())
+        pipeline = self.redis.pipeline(transaction=True)
+        pipeline.set(
             self._key("published"),
-            dump_model_json(PublishedReservePlan.of(plan)),
-            ex=_PUBLISHED_SECONDS,
+            dump_model_json(publication),
+            ex=ttl_seconds,
         )
         # Kept apart from the plan: dispatch reads it on every batch.
-        self.redis.set(
+        pipeline.set(
             self._key("candidates"),
             ",".join(
                 sorted(
@@ -144,8 +156,12 @@ class RedisFleetReserveState:
                     if market.consolidation_candidate
                 )
             ),
-            ex=_PUBLISHED_SECONDS,
+            ex=ttl_seconds,
         )
+        pipeline.execute()
+
+    def clear_publication(self) -> None:
+        self.redis.delete(self._key("published"), self._key("candidates"))
 
     def consolidation_candidates(self) -> frozenset[str]:
         raw = self.redis.get(self._key("candidates"))
@@ -204,7 +220,6 @@ class RedisFleetReserveState:
 __all__ = [
     "Consolidation",
     "FleetReserveState",
-    "MarketTargets",
     "PublishedReservePlan",
     "RedisFleetReserveState",
 ]

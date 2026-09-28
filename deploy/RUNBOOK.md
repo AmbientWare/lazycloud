@@ -486,6 +486,52 @@ A rollback to an image older than the schema is refused rather than migrated
 from, because there is no path to compute from a revision that build does not
 carry. Roll forward, or restore the database.
 
+### Fleet sleep evidence cutover
+
+Revision `0032_capacity_sleep_attempts` replaces instance-level sleep outcomes
+with durable attempts and activation evidence. It also removes the old agent
+stream fields. This release requires a coordinated cutover; an ordinary rolling
+update can strand agents that cannot speak the new stream contract.
+
+Before migration, stage matching API, gateway, scheduler, agent, and worker
+artifacts in one complete release. Verify the supervised installer or managed
+recovery path can install that exact agent without depending on a successful
+old-protocol stream. Wake stopped and hibernated reserves under their admission
+hold and upgrade them through that path. Keep upgraded agents held until the
+new control plane is available. A hibernated agent still contains the old
+process, even when its disk holds a newer executable. Customer-owned hosts
+require their authorized upgrade path; a host that cannot upgrade stays
+unavailable.
+
+Record and pause Argo automatic sync. Stop new admission, drain existing work,
+and stop every old API, gateway, and scheduler writer before running the
+migration. Preserve PostgreSQL, Redis, instances, and storage. Start only the
+matching new processes afterward. Run `lazycloud-admin fleet clear-plan` against
+the deployment's Redis to clear the superseded publication and dispatch
+candidates. Reconcile provider and agent observations, and reopen admission
+after a fresh plan and compatible worker intake are verified. Restore the
+recorded Argo settings. Do not roll an old build back onto revision `0032`.
+
+Legacy stopped capacity starts with unknown evidence. A legacy pending stop
+still observed running returns to preparation under its hold and needs a new
+attempt and guest marker. A stop request or an old console success line does
+not prove a current image exists.
+
+Keep the release unmerged until one real retained-node lifecycle and this
+cutover preflight pass. Use `default-test` for disposable acceptance. Prepare
+the canonical local services with local databases and test credentials, a
+complete candidate release, an AWS-reachable HTTPS API and artifact/storage
+endpoints, and transparent gateway TLS on port 443. Localhost endpoints and
+the connected-AWS ASG scenarios cannot establish retained-node acceptance.
+
+Use one supported small CPU node. Exercise preparation, image saving, a held
+refresh, serving resume, a real function result, and scoped cleanup through
+the production owners. Poll the durable attempt, provider state, guest
+evidence, and intake together. Per-unit reconciliation can exercise this
+lifecycle without running fleet-wide baseline provisioning. Delete only the
+run's named resources and verify its instance, persistent request, and storage
+are gone. Missing infrastructure or artifacts remain an acceptance gap.
+
 ### Provider commitment accounting upgrade
 
 Revision `0015_provider_commitments` retains unresolved provider launches as

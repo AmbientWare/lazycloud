@@ -21,6 +21,7 @@ from compute.providers import (
 )
 from pydantic import Field
 from shared.aws_connections import AwsAccountNetwork
+from shared.capacity_lifecycle import CapacitySleepRequest
 from shared.compute_policy import (
     ComputeUnitProviderState,
     ComputeUnitRecord,
@@ -193,17 +194,27 @@ class AwsPooledCapacityProvider(PooledCapacityProvider):
         return ()
 
     def complete_machine_preparation(
-        self, request: ProviderUnitRequest, provider_instance_id: str, *, hibernate: bool
+        self,
+        request: ProviderUnitRequest,
+        provider_instance_id: str,
+        *,
+        sleep_request: CapacitySleepRequest | None,
     ) -> ProviderUnitSnapshot:
         raise ValueError("Auto Scaling groups do not own stopped reserves")
 
     def refresh_machine(
-        self, request: ProviderUnitRequest, provider_instance_id: str
+        self,
+        request: ProviderUnitRequest,
+        provider_instance_id: str,
     ) -> ProviderUnitSnapshot:
         raise ValueError("Auto Scaling groups do not own stopped reserves")
 
     def stop_machine(
-        self, request: ProviderUnitRequest, provider_instance_id: str
+        self,
+        request: ProviderUnitRequest,
+        provider_instance_id: str,
+        *,
+        sleep_request: CapacitySleepRequest,
     ) -> ProviderUnitSnapshot:
         raise ValueError("Auto Scaling groups do not own stopped reserves")
 

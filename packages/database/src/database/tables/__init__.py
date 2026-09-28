@@ -39,6 +39,7 @@ from database.tables.billing_webhook_events import BillingWebhookEventTable
 from database.tables.capacity_activations import CapacityActivationTable
 from database.tables.capacity_maintenance import CapacityMaintenanceTable
 from database.tables.capacity_recovery import CapacityRecoveryTable
+from database.tables.capacity_sleep_attempts import CapacitySleepAttemptTable
 from database.tables.compute import (
     ComputeCapacityOperationTable,
     ComputeJoinCredentialTable,
@@ -135,6 +136,7 @@ __all__ = [
     "CapacityActivationTable",
     "CapacityMaintenanceTable",
     "CapacityRecoveryTable",
+    "CapacitySleepAttemptTable",
     "CheckpointTable",
     "ComputeCapacityOperationTable",
     "ComputeJoinCredentialTable",

@@ -20,6 +20,7 @@ from shared.contracts import ContractModel
 from shared.gpu import GpuType, normalize_gpu_type
 
 from compute.capacity_acquisition import plan_request_capacity
+from compute.demand_forecast import DemandForecast
 from compute.fleet_resources import (
     Capacity,
     ReserveDemand,
@@ -143,17 +144,21 @@ class ReserveMachineState(StrEnum):
     """Cordoned or interrupted, so it gives the market no headroom."""
 
     Preparing = "preparing"
+    Stopping = "stopping"
+    Unavailable = "unavailable"
+    Failed = "failed"
+    Terminating = "terminating"
     Stopped = "stopped"
-    HibernationRequested = "hibernation_requested"
-    Hibernated = "hibernated"
+    HibernateUnverified = "hibernate_unverified"
+    ImageSaved = "image_saved"
 
     @property
     def stopped(self) -> bool:
-        return self in {self.Stopped, self.HibernationRequested, self.Hibernated}
+        return self in {self.Stopped, self.HibernateUnverified, self.ImageSaved}
 
     @property
     def reserve(self) -> bool:
-        return self is self.Preparing or self.stopped
+        return self in {self.Preparing, self.Stopping} or self.stopped
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,6 +181,9 @@ class ReserveUnit:
     stopped_hourly_cost_micros: int | None = None
     placement: ReservePlacement = field(default_factory=ReservePlacement)
     supports_hibernation: bool = False
+    provider: str = ""
+    provider_region: str = ""
+    instance_type: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -224,6 +232,20 @@ class ReserveGrowth:
 
 
 @dataclass(frozen=True, slots=True)
+class ObservedCapacity:
+    machines: int
+    capacity: Capacity
+    allocated: Capacity
+
+
+class MarketPlanApplication(StrEnum):
+    Planned = "planned"
+    Applied = "applied"
+    Deferred = "deferred"
+    Failed = "failed"
+
+
+@dataclass(frozen=True, slots=True)
 class MarketReservePlan:
     market: ReserveMarket
     load: Capacity
@@ -234,10 +256,10 @@ class MarketReservePlan:
     stopped_capacity: Capacity
     stopped_ready: Capacity = field(default_factory=Capacity)
     stopped_pending: Capacity = field(default_factory=Capacity)
-    hibernated_capacity: Capacity = field(default_factory=Capacity)
-    hibernation_requested_capacity: Capacity = field(default_factory=Capacity)
-    hibernated_target: Capacity = field(default_factory=Capacity)
-    hibernated_shortfall: Capacity = field(default_factory=Capacity)
+    image_saved_capacity: Capacity = field(default_factory=Capacity)
+    hibernation_unverified_capacity: Capacity = field(default_factory=Capacity)
+    hibernation_target: Capacity = field(default_factory=Capacity)
+    hibernation_shortfall: Capacity = field(default_factory=Capacity)
     growth: tuple[ReserveGrowth, ...] = ()
     warm_pending: Capacity = field(default_factory=Capacity)
     shortfall: Capacity = field(default_factory=Capacity)
@@ -260,6 +282,16 @@ class MarketReservePlan:
     rightsize_source: str = ""
     rightsize_offer_key: str = ""
     unmet_placements: tuple[ReserveDemand, ...] = ()
+    observed: Mapping[ReserveMachineState, ObservedCapacity] = field(
+        default_factory=dict[ReserveMachineState, ObservedCapacity]
+    )
+    serving_capacity: Capacity = field(default_factory=Capacity)
+    forecast: DemandForecast | None = None
+    request_shapes: tuple[Capacity, ...] = ()
+    placement_demands: tuple[ReserveDemand, ...] = ()
+    application: MarketPlanApplication = MarketPlanApplication.Planned
+    application_reason: str = ""
+    applied_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -295,8 +327,11 @@ class ReserveConditions:
     placement_demands: Mapping[ReserveMarket, tuple[ReserveDemand, ...]] = field(
         default_factory=dict[ReserveMarket, tuple[ReserveDemand, ...]]
     )
-    hibernated_target: Mapping[ReserveMarket, Capacity] = field(
+    hibernation_target: Mapping[ReserveMarket, Capacity] = field(
         default_factory=dict[ReserveMarket, Capacity]
+    )
+    forecasts: Mapping[ReserveMarket, DemandForecast] = field(
+        default_factory=dict[ReserveMarket, DemandForecast]
     )
 
 
@@ -351,7 +386,7 @@ def _plan_market(
         and units[machine.unit_id].enabled
     ]
     working = [machine for machine in machines if not machine.state.reserve]
-    load = _total(machine.load for machine in working)
+    load = _total(machine.load for machine in machines)
     launching = _total(
         unit.machine
         * max(
@@ -396,10 +431,10 @@ def _plan_market(
             for shape in conditions.request_shapes.get(market, ())
         )
     )
-    hibernated_target = conditions.hibernated_target.get(
+    hibernation_target = conditions.hibernation_target.get(
         market, stopped_target if hibernation_supported else Capacity()
     )
-    stopped_target = stopped_target.upper(hibernated_target)
+    stopped_target = stopped_target.upper(hibernation_target)
     quiet = reserve.warm.floor.covers(load)
     deficit = (warm_target - warm_free).clamped()
     may_grow = market not in conditions.demand and market not in conditions.recovering
@@ -600,7 +635,7 @@ def _plan_market(
     else:
         planned = ()
     unmet_placements, _ = _uncovered_placements(placement_demands, machines, units, planned)
-    hibernated_capacity = _total(
+    image_saved_capacity = _total(
         unit.machine
         * max(
             0,
@@ -608,7 +643,7 @@ def _plan_market(
                 stopped[unit.unit_id],
                 sum(
                     machine.unit_id == unit.unit_id
-                    and machine.state is ReserveMachineState.Hibernated
+                    and machine.state is ReserveMachineState.ImageSaved
                     and machine.ready
                     for machine in machines
                 )
@@ -621,7 +656,7 @@ def _plan_market(
     hibernated_committed = _total(
         unit.machine * hibernation_committed[unit.unit_id] for unit in market_units
     )
-    hibernated_deficit = (hibernated_target - hibernated_committed).clamped()
+    hibernated_deficit = (hibernation_target - hibernated_committed).clamped()
     if may_grow and not hibernated_deficit.empty:
         purchases, hibernated_deficit, _ = _purchase_growth(
             policy,
@@ -671,7 +706,7 @@ def _plan_market(
             machines=machines,
             stopped_capacity=stopped_capacity,
             target=stopped_target,
-            hibernated_target=hibernated_target.upper(hibernated_capacity.lower(stopped_target)),
+            hibernation_target=hibernation_target.upper(image_saved_capacity.lower(stopped_target)),
             shapes=conditions.request_shapes.get(market, ()) if not stopped_target.empty else (),
         )
 
@@ -691,7 +726,7 @@ def _plan_market(
         )
         for unit in market_units
     )
-    hibernated_capacity = _total(
+    image_saved_capacity = _total(
         unit.machine
         * max(
             0,
@@ -699,7 +734,7 @@ def _plan_market(
                 stopped[unit.unit_id],
                 sum(
                     machine.unit_id == unit.unit_id
-                    and machine.state is ReserveMachineState.Hibernated
+                    and machine.state is ReserveMachineState.ImageSaved
                     and machine.ready
                     for machine in machines
                 )
@@ -738,8 +773,8 @@ def _plan_market(
         stopped_capacity=stopped_capacity,
         stopped_ready=stopped_ready,
         stopped_pending=(stopped_capacity - stopped_ready).clamped(),
-        hibernated_capacity=hibernated_capacity,
-        hibernation_requested_capacity=_total(
+        image_saved_capacity=image_saved_capacity,
+        hibernation_unverified_capacity=_total(
             unit.machine
             * max(
                 0,
@@ -747,7 +782,7 @@ def _plan_market(
                     stopped[unit.unit_id],
                     sum(
                         machine.unit_id == unit.unit_id
-                        and machine.state is ReserveMachineState.HibernationRequested
+                        and machine.state is ReserveMachineState.HibernateUnverified
                         and machine.ready
                         for machine in machines
                     )
@@ -756,8 +791,8 @@ def _plan_market(
             )
             for unit in market_units
         ),
-        hibernated_target=hibernated_target,
-        hibernated_shortfall=hibernated_deficit,
+        hibernation_target=hibernation_target,
+        hibernation_shortfall=hibernated_deficit,
         growth=tuple(growth),
         warm_pending=warm_pending,
         shortfall=pending_deficit,
@@ -782,6 +817,20 @@ def _plan_market(
         rightsize_source=rightsize_source,
         rightsize_offer_key=rightsize_offer_key,
         unmet_placements=unmet_placements,
+        observed={
+            state: ObservedCapacity(
+                machines=sum(machine.state is state for machine in machines),
+                capacity=_total(
+                    units[machine.unit_id].machine for machine in machines if machine.state is state
+                ),
+                allocated=_total(machine.load for machine in machines if machine.state is state),
+            )
+            for state in sorted({machine.state for machine in machines})
+        },
+        serving_capacity=_total(units[machine.unit_id].machine for machine in warm),
+        forecast=conditions.forecasts.get(market),
+        request_shapes=conditions.request_shapes.get(market, ()),
+        placement_demands=placement_demands,
     )
 
 
@@ -1092,7 +1141,7 @@ def _retire_reserves(
     machines: list[ReserveMachine],
     stopped_capacity: Capacity,
     target: Capacity,
-    hibernated_target: Capacity,
+    hibernation_target: Capacity,
     shapes: tuple[Capacity, ...],
 ) -> dict[str, int]:
     ready = {
@@ -1119,7 +1168,7 @@ def _retire_reserves(
                 sum(
                     machine.unit_id == unit.unit_id
                     and machine.ready
-                    and machine.state is ReserveMachineState.Hibernated
+                    and machine.state is ReserveMachineState.ImageSaved
                     for machine in machines
                 )
                 - max(unit.stopped - stopped[unit.unit_id], 0),
@@ -1128,10 +1177,10 @@ def _retire_reserves(
         for unit in market_units
     }
     fast = _total(unit.machine * hibernated[unit.unit_id] for unit in market_units)
-    required_fast = fast.lower(hibernated_target)
+    required_fast = fast.lower(hibernation_target)
     committed = _hibernation_commitments(market_units, machines, stopped)
     future_fast = _total(unit.machine * committed[unit.unit_id] for unit in market_units)
-    required_future_fast = future_fast.lower(hibernated_target)
+    required_future_fast = future_fast.lower(hibernation_target)
     protected = {
         unit.unit_id: sum(
             machine.unit_id == unit.unit_id and machine.state.reserve and machine.protected
@@ -1201,7 +1250,7 @@ def _hibernation_commitments(
         # that slot until useful demand consumes it instead of retrying with new hosts.
         committed = sum(
             machine.state
-            in {ReserveMachineState.Hibernated, ReserveMachineState.HibernationRequested}
+            in {ReserveMachineState.ImageSaved, ReserveMachineState.HibernateUnverified}
             or unit.supports_hibernation
             for machine in observed
         )

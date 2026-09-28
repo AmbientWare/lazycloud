@@ -51,7 +51,8 @@ from agent.service_manager import (
     machine_fingerprint,
     plan_agent_preflight,
 )
-from agent.state import AgentStateStore, model_payload
+from agent.sleep_evidence import AgentSleepEvidence, AgentSleepMarkerError
+from agent.state import AgentStateStore, model_payload, read_boot_id
 from agent.storage_cleanup import (
     finish_stop_preparation,
     prepare_machine_storage_for_stop,
@@ -483,7 +484,6 @@ class AgentDaemonService:
     """Whether the worker listeners are held for a reserve. Only a stream that says
     serve releases them; one that says keep leaves them held."""
     _suspend: SuspendWatch = field(default_factory=SuspendWatch)
-    _resumed_since_prepared: bool = False
     _wakeup: Wakeup | None = field(default=None, init=False)
     """Open only while `run` runs; its pipe, timerfd and watch thread close with it."""
 
@@ -743,7 +743,6 @@ class AgentDaemonService:
         slept = self._suspend.slept()
         if not slept:
             return False
-        self._resumed_since_prepared = self._holding
         LOGGER.info(
             "machine slept for %.1fs; redialing the tunnel at boot+%.2fs",
             slept,
@@ -896,6 +895,8 @@ class AgentDaemonService:
         if current_iterations == 1:
             self.worker_controller.wait_for_boot_image(IMAGE_REPORT_WAIT_SECONDS)
         self._reported_worker_images = self.worker_controller.prepared_worker_images()
+        sleep_evidence = AgentSleepEvidence(self.state_store.state_dir)
+        sleep_observation = sleep_evidence.observation()
         with timings.step("stream"):
             stream = self.client.stream_agent(
                 StreamAgentRequest(
@@ -911,10 +912,8 @@ class AgentDaemonService:
                     admission_waiting_workers=self.worker_controller.waiting_for_admission(
                         active_slots
                     ),
-                    booted_since_reserve_prepared=(
-                        self.worker_controller.reserve_prepared_in_earlier_boot()
-                    ),
-                    resumed_since_reserve_prepared=self._resumed_since_prepared,
+                    boot_id=read_boot_id(),
+                    sleep_observation=sleep_observation,
                     prepared_stop=read_stop_preparation(self.state_store.state_dir),
                 )
             )
@@ -924,8 +923,17 @@ class AgentDaemonService:
                 raise AgentStreamRetryableError(msg)
             raise RuntimeError(msg)
         state = _agent_state_from_stream_response(state, stream)
+        sleep_evidence.acknowledge(stream.sleep_observation_ack, sleep_observation)
+        if stream.sleep_request is not None:
+            try:
+                sleep_evidence.prepare(stream.sleep_request)
+            except AgentSleepMarkerError:
+                LOGGER.error(
+                    "sleep attempt %s cannot establish its kernel marker",
+                    stream.sleep_request.attempt_id,
+                    exc_info=True,
+                )
         if stream.resume_from_stop and state.capacity_notice_at is None:
-            self._resumed_since_prepared = False
             finish_stop_preparation(self.state_store.state_dir)
             state = state.model_copy(update={"capacity_state": AgentCapacityState.Available})
         self.state_store.save(state)

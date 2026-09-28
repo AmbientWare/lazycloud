@@ -11,6 +11,7 @@ from database.repositories.orchestration import pinned_container
 from database.tables.aws_connections import AwsAccountConnectionTable
 from database.tables.capacity_maintenance import CapacityMaintenanceTable
 from database.tables.capacity_recovery import CapacityRecoveryTable
+from database.tables.capacity_sleep_attempts import CapacitySleepAttemptTable
 from database.tables.compute import (
     ComputeCapacityOperationTable,
     ComputeJoinCredentialTable,
@@ -30,7 +31,7 @@ from shared.capacity import (
     CapacityOperationStatus,
     CapacityOwnerKind,
 )
-from shared.capacity_lifecycle import CapacitySleepMode, CapacitySleepOutcome
+from shared.capacity_lifecycle import CapacityImageEvidence, CapacitySleepMode
 from shared.compute_enrollment import (
     AgentCapacityState,
     ComputeCredentialStatus,
@@ -38,6 +39,7 @@ from shared.compute_enrollment import (
     ComputePreflightCheck,
     MachineReadinessPhase,
 )
+from shared.compute_fleet import MachineLifecycle
 from shared.compute_policy import (
     ComputeCapacityMode,
     ComputeUnitPhase,
@@ -173,8 +175,7 @@ class ComputeProviderInstanceRecord(ContractModel):
     prepared_worker_image: str = ""
     hibernates: bool = False
     """Hibernation capability, independent of the requested stop or its outcome."""
-    stop_mode: CapacitySleepMode | None = None
-    sleep_outcome: CapacitySleepOutcome = CapacitySleepOutcome.Unknown
+    current_sleep_attempt_id: str | None = None
     activation_requested_at: datetime | None = None
     provider_running_at: datetime | None = None
     resume_authorized_at: datetime | None = None
@@ -232,6 +233,8 @@ class PlatformReserveUnitRow:
     architecture: str = ""
     runtimes: tuple[str, ...] = ()
     supports_hibernation: bool = False
+    provider: str = ""
+    instance_type: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -253,8 +256,12 @@ class PlatformReserveInstanceRow:
     prepared_worker_image: str = ""
     prepared_agent_sha256: str = ""
     surge_covered: bool = False
-    stop_mode: CapacitySleepMode | None = None
-    sleep_outcome: CapacitySleepOutcome = CapacitySleepOutcome.Unknown
+    sleep_requested_mode: CapacitySleepMode | None = None
+    image_evidence: CapacityImageEvidence = CapacityImageEvidence.Unknown
+    sleep_attempt_id: str | None = None
+    sleep_accepted_mode: CapacitySleepMode | None = None
+    machine_lifecycle: MachineLifecycle | None = None
+    cleanup_complete: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -267,7 +274,7 @@ class StoppedReserveUnitRow:
     reported_memory_mib: int
     gpu_count: int
     stopped: int
-    resumable: bool
+    resumable_count: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -642,20 +649,32 @@ class ComputeUnitRepository:
                         CapacityMaintenanceTable.surge_machines > 0,
                     ),
                 ),
-                instance.stop_mode,
-                instance.sleep_outcome,
+                CapacitySleepAttemptTable.requested_mode,
+                CapacitySleepAttemptTable.image_evidence,
                 unit.region,
                 unit.offer_availability_zone,
                 func.coalesce(func.nullif(unit.offer_architecture, ""), instance.architecture),
                 unit.worker_runtimes,
                 func.bool_or(instance.hibernates).over(partition_by=unit.id),
+                instance.current_sleep_attempt_id,
+                CapacitySleepAttemptTable.accepted_mode,
+                MachineTable.lifecycle,
+                unit.provider,
+                func.max(instance.instance_type).over(partition_by=unit.id),
+                instance.provider_storage_destroyed_at.is_not(None),
             )
             .select_from(unit)
             .outerjoin(maintenance, maintenance.c.pool_id == unit.id)
             .outerjoin(ComputeNodeShapeTable, _same_shape(unit))
             .outerjoin(
                 instance,
-                and_(instance.pool_id == unit.id, instance.status.not_in(("deleted", "failed"))),
+                and_(
+                    instance.pool_id == unit.id,
+                    or_(
+                        instance.status.not_in(("deleted", "failed")),
+                        instance.provider_storage_destroyed_at.is_(None),
+                    ),
+                ),
             )
             .outerjoin(
                 enrollment,
@@ -665,11 +684,16 @@ class ComputeUnitRepository:
                     enrollment.status == ComputeMachineEnrollmentStatus.Active.value,
                 ),
             )
+            .outerjoin(
+                CapacitySleepAttemptTable,
+                CapacitySleepAttemptTable.id == instance.current_sleep_attempt_id,
+            )
+            .outerjoin(MachineTable, MachineTable.id == instance.machine_id)
             .outerjoin(load, load.c.machine_id == cast(instance.machine_id, String))
             .where(
                 unit.visibility == ComputeUnitVisibility.Internal.value,
                 unit.platform_fleet.is_(True),
-                unit.phase != ComputeUnitPhase.Deleted.value,
+                or_(unit.phase != ComputeUnitPhase.Deleted.value, instance.id.is_not(None)),
                 or_(
                     instance.id.is_not(None),
                     unit.desired_machines > 0,
@@ -720,6 +744,8 @@ class ComputeUnitRepository:
                     architecture=row[47] or "",
                     runtimes=tuple(row[48]),
                     supports_hibernation=bool(row[49]),
+                    provider=row[53] or "",
+                    instance_type=row[54] or "",
                 )
             if row[21] is None:
                 continue
@@ -742,8 +768,16 @@ class ComputeUnitRepository:
                     prepared_worker_image=row[37] or "",
                     prepared_agent_sha256=row[38] or "",
                     surge_covered=bool(row[42]),
-                    stop_mode=CapacitySleepMode(row[43]) if row[43] is not None else None,
-                    sleep_outcome=CapacitySleepOutcome(row[44]),
+                    sleep_requested_mode=CapacitySleepMode(row[43])
+                    if row[43] is not None
+                    else None,
+                    image_evidence=CapacityImageEvidence(row[44])
+                    if row[44] is not None
+                    else CapacityImageEvidence.Unknown,
+                    sleep_attempt_id=str(row[50]) if row[50] is not None else None,
+                    sleep_accepted_mode=CapacitySleepMode(row[51]) if row[51] is not None else None,
+                    machine_lifecycle=MachineLifecycle(row[52]) if row[52] is not None else None,
+                    cleanup_complete=bool(row[55]),
                 )
             )
         return PlatformReserveRows(units=tuple(units.values()), instances=tuple(instances))
@@ -840,13 +874,29 @@ class ComputeUnitRepository:
             ).tuples()
         ]
 
-    def stopped_reserve_units(self) -> list[StoppedReserveUnitRow]:
-        """Platform units holding stopped reserves, and whether one can resume now."""
+    def stopped_reserve_units(
+        self, *, worker_image: str, agent_sha256: str
+    ) -> list[StoppedReserveUnitRow]:
+        """Actual stopped inventory and the subset prepared for the required release."""
         unit = ComputeUnitTable
-        resumable = exists().where(
-            ComputeProviderInstanceTable.pool_id == unit.id,
-            ComputeProviderInstanceTable.status == "stopped",
-            ComputeProviderInstanceTable.missing_since.is_(None),
+        instance = ComputeProviderInstanceTable
+        stopped = (
+            select(
+                instance.pool_id.label("pool_id"),
+                func.count().label("stopped"),
+                func.count()
+                .filter(
+                    and_(
+                        literal(bool(worker_image and agent_sha256)),
+                        instance.prepared_worker_image == worker_image,
+                        instance.prepared_agent_sha256 == agent_sha256,
+                    )
+                )
+                .label("resumable"),
+            )
+            .where(instance.status == "stopped", instance.missing_since.is_(None))
+            .group_by(instance.pool_id)
+            .subquery()
         )
         return [
             StoppedReserveUnitRow(
@@ -858,7 +908,7 @@ class ComputeUnitRepository:
                 reported_memory_mib=reported,
                 gpu_count=gpu,
                 stopped=stopped,
-                resumable=bool(ready),
+                resumable_count=ready,
             )
             for unit_id, preemptible, gpu_type, cpu, memory, reported, gpu, stopped, ready in (
                 self.session.execute(
@@ -870,9 +920,10 @@ class ComputeUnitRepository:
                         unit.worker_memory_mib,
                         _reported_memory(),
                         unit.worker_gpu_count,
-                        unit.stopped_machines,
-                        resumable,
+                        stopped.c.stopped,
+                        stopped.c.resumable,
                     )
+                    .join(stopped, stopped.c.pool_id == unit.id)
                     .outerjoin(ComputeNodeShapeTable, _same_shape(unit))
                     .where(
                         unit.platform_fleet.is_(True),
@@ -880,7 +931,6 @@ class ComputeUnitRepository:
                         unit.phase.not_in(
                             (ComputeUnitPhase.Deleting.value, ComputeUnitPhase.Deleted.value)
                         ),
-                        or_(unit.stopped_machines > 0, resumable),
                     )
                 ).tuples()
             )
@@ -1828,8 +1878,7 @@ def _provider_instance_record(row: ComputeProviderInstanceTable) -> ComputeProvi
             "prepared_agent_sha256": row.prepared_agent_sha256,
             "prepared_worker_image": row.prepared_worker_image,
             "hibernates": row.hibernates,
-            "stop_mode": row.stop_mode,
-            "sleep_outcome": row.sleep_outcome,
+            "current_sleep_attempt_id": row.current_sleep_attempt_id,
             "activation_requested_at": to_utc_or_none(row.activation_requested_at),
             "provider_running_at": to_utc_or_none(row.provider_running_at),
             "resume_authorized_at": to_utc_or_none(row.resume_authorized_at),
@@ -1862,6 +1911,8 @@ class ComputeProviderInstanceRepository:
             self.session.add(row)
         elif row.pool_id != record.pool_id or row.provider != record.provider:
             raise ConflictError("provider instance owner cannot change")
+        if row.instance_id is not None and row.instance_id != record.instance_id:
+            row.current_sleep_attempt_id = None
         row.provider = record.provider
         row.offer_id = record.offer_id
         row.status = record.status
@@ -1896,8 +1947,6 @@ class ComputeProviderInstanceRepository:
         row.prepared_agent_sha256 = record.prepared_agent_sha256
         row.prepared_worker_image = record.prepared_worker_image
         row.hibernates = record.hibernates
-        row.stop_mode = record.stop_mode.value if record.stop_mode is not None else None
-        row.sleep_outcome = record.sleep_outcome.value
         row.activation_requested_at = record.activation_requested_at
         row.provider_running_at = record.provider_running_at
         row.resume_authorized_at = record.resume_authorized_at
@@ -1942,9 +1991,7 @@ class ComputeProviderInstanceRepository:
             statement = statement.with_for_update()
         return [_provider_instance_record(row) for row in self.session.scalars(statement)]
 
-    def authorize_resume(
-        self, record_id: str, *, outcome: CapacitySleepOutcome = CapacitySleepOutcome.Unknown
-    ) -> None:
+    def authorize_resume(self, record_id: str) -> None:
         """Mark a resuming reserve's resume as authorized, for the capacity pass to finish."""
         now = utc_now()
         authorized = self.session.scalar(
@@ -1958,7 +2005,7 @@ class ComputeProviderInstanceRepository:
             .returning(ComputeProviderInstanceTable.id)
         )
         if authorized is not None:
-            CapacityActivationRepository(self.session).authorize(record_id, at=now, outcome=outcome)
+            CapacityActivationRepository(self.session).authorize(record_id, at=now)
 
     def list_for_reconciliation(
         self,
@@ -2188,12 +2235,15 @@ class ComputeProviderInstanceRepository:
         ).one_or_none()
         return None if row is None else (row[0], row[1])
 
-    def get_by_machine(self, machine_id: str) -> ComputeProviderInstanceRecord | None:
-        row = self.session.scalars(
-            select(ComputeProviderInstanceTable).where(
-                ComputeProviderInstanceTable.machine_id == machine_id
-            )
-        ).one_or_none()
+    def get_by_machine(
+        self, machine_id: str, *, for_update: bool = False
+    ) -> ComputeProviderInstanceRecord | None:
+        statement = select(ComputeProviderInstanceTable).where(
+            ComputeProviderInstanceTable.machine_id == machine_id
+        )
+        if for_update:
+            statement = statement.with_for_update().execution_options(populate_existing=True)
+        row = self.session.scalars(statement).one_or_none()
         return _provider_instance_record(row) if row is not None else None
 
 

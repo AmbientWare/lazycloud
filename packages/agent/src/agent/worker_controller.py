@@ -39,7 +39,7 @@ from agent.operations import (
     plan_worker_container,
     sanitize_worker_name,
 )
-from agent.state import model_payload, write_json_atomic
+from agent.state import model_payload, read_boot_id, write_json_atomic
 from agent.updates import AgentUpdater
 
 LOGGER = logging.getLogger(__name__)
@@ -47,7 +47,6 @@ WORKER_IMAGE_CHECK_WAIT_SECONDS = 3.0
 AGENT_ACTIVE_SLOTS_FILE = "active-worker-slots.json"
 AGENT_LAST_PREPARED_IMAGE_FILE = "last-prepared-worker-image.json"
 AGENT_RESERVE_WORKER_FILE = "reserve-worker.json"
-BOOT_ID_PATH = Path("/proc/sys/kernel/random/boot_id")
 BOOT_IMAGE_LOOKUP_SECONDS = 3.0
 DOCKER_WAIT_SECONDS = 60.0
 DOCKER_PING_SECONDS = 0.5
@@ -379,7 +378,7 @@ class DockerAgentWorkerController:
 
     def record_reserve_worker(self, slot: AgentWorkerSlot) -> None:
         record = AgentReserveWorker(
-            boot_id=_boot_id(),
+            boot_id=read_boot_id(),
             agent_binary_sha256=AgentUpdater.running(self.state_dir).binary_sha256(),
             slot=slot,
         )
@@ -412,10 +411,6 @@ class DockerAgentWorkerController:
         self._reserve_worker = record
         return record
 
-    def reserve_prepared_in_earlier_boot(self) -> bool:
-        """A changed boot ID proves the reserve restarted even if its provider row lags."""
-        return self._reserve_worker is not None and self._reserve_worker.boot_id != _boot_id()
-
     def start_reserve_worker(
         self, record: AgentReserveWorker, bootstrap: AgentBootstrap
     ) -> AgentWorkerSlot | None:
@@ -424,7 +419,7 @@ class DockerAgentWorkerController:
         if self._running_slot(slot) is not None:
             return slot
         if (
-            record.boot_id == _boot_id()
+            record.boot_id == read_boot_id()
             or record.agent_binary_sha256 != AgentUpdater.running(self.state_dir).binary_sha256()
         ):
             return None
@@ -806,14 +801,6 @@ class DockerAgentWorkerController:
             model_payload(slot) for slot in sorted(slots, key=lambda item: item.worker_id)
         ]
         write_json_atomic(self.active_slots_path, payload, permissions=0o600)
-
-
-def _boot_id() -> str:
-    """This boot's identity, or empty where the kernel does not publish one."""
-    try:
-        return BOOT_ID_PATH.read_text(encoding="utf-8").strip()
-    except OSError:
-        return ""
 
 
 def _write_worker_configuration_atomic(

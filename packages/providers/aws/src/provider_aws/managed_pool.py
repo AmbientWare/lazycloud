@@ -307,6 +307,7 @@ class AwsManagedPoolEc2Client(AwsSpotPriceClient, AwsNetworkEvidenceClient, Prot
     def stop_instances(
         self, *, InstanceIds: list[str], Hibernate: bool = False, Force: bool = False
     ) -> Mapping[str, object]: ...
+    def get_console_output(self, *, InstanceId: str, Latest: bool) -> Mapping[str, object]: ...
     def cancel_spot_instance_requests(
         self, *, SpotInstanceRequestIds: list[str]
     ) -> Mapping[str, object]: ...
@@ -504,6 +505,7 @@ def _is_ec2_client(value: object) -> TypeGuard[AwsManagedPoolEc2Client]:
             "run_instances",
             "start_instances",
             "stop_instances",
+            "get_console_output",
             "cancel_spot_instance_requests",
             "describe_spot_instance_requests",
             "modify_launch_template",

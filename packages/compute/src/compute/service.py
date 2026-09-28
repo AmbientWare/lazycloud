@@ -17,6 +17,7 @@ from database.repositories.capacity_activations import (
 )
 from database.repositories.capacity_maintenance import CapacityMaintenanceRepository
 from database.repositories.capacity_recovery import CapacityRecoveryRepository
+from database.repositories.capacity_sleep_attempts import CapacitySleepAttemptRepository
 from database.repositories.compute import (
     ComputeCapacityOperationRecord,
     ComputeCapacityOperationRepository,
@@ -55,9 +56,10 @@ from shared.capacity import (
     capacity_owner_for_provider,
 )
 from shared.capacity_lifecycle import (
-    CapacityActivationKind,
+    CapacityImageEvidence,
     CapacitySleepMode,
-    CapacitySleepOutcome,
+    CapacitySleepObservation,
+    CapacitySleepRequest,
 )
 from shared.capacity_maintenance import (
     CapacityMaintenanceKind,
@@ -109,6 +111,7 @@ from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 from shared.timestamps import to_utc, utc_now
 from shared.usage import UsageBillingOwner
 
+from compute.activation_timing import reserve_forecast
 from compute.aws_connections import AwsAccountPoolDrain
 from compute.capacity_errors import (
     CapacityReservationConflictError,
@@ -117,13 +120,15 @@ from compute.capacity_errors import (
     ProviderAuthorizationPendingError,
 )
 from compute.context import ComputeContext
-from compute.demand_forecast import HISTORY_SECONDS, DemandForecast, DemandSample, forecast_demand
+from compute.demand_forecast import HISTORY_SECONDS, DemandForecast, DemandSample
+from compute.fleet_operations import request_machine_stop
 from compute.fleet_policy import (
     RESERVE_PLAN_INTERVAL_SECONDS,
     FleetCapacityPolicy,
     FleetReservePlan,
     FleetReserveSnapshot,
     GrowthKind,
+    MarketPlanApplication,
     MarketReservePlan,
     ReserveConditions,
     ReserveGrowth,
@@ -187,6 +192,7 @@ from compute.purchase_policy import assess_fleet_purchase
 from compute.reclaim import ComputeReclaimPolicy
 from compute.reserve_state import FleetReserveState
 from compute.scheduled_forecast import backlog_container_demand, scheduled_container_demand
+from compute.sleep_lifecycle import observe_sleep, prepare_sleep
 from compute.source_cache_storage import SourceCacheStorageLifecycleService
 from compute.telemetry import AGENT_HEARTBEAT_TIMEOUT_SECONDS
 
@@ -235,6 +241,8 @@ class ReservePreparationPhase(StrEnum):
 class ReserveAgentPreparation:
     phase: ReservePreparationPhase = ReservePreparationPhase.Serving
     stop_request_id: str = ""
+    sleep_request: CapacitySleepRequest | None = None
+    sleep_observation_ack: str = ""
 
 
 @dataclass(slots=True)
@@ -822,10 +830,7 @@ class ComputeService:
                 if (
                     resumed
                     and preemptible
-                    and locked_pool.id
-                    in reserve_admission(
-                        pools.stopped_reserve_units(), self.fleet_policy
-                    ).withheld_from_preemptible
+                    and locked_pool.id in self._reserve_admission(session).withheld_from_preemptible
                 ):
                     resumed = 0
                 committed = desired_unit + locked_pool.stopped_machines - resumed
@@ -1538,8 +1543,26 @@ class ComputeService:
 
     def reserve_admission(self) -> ReserveAdmission:
         with self.context.database.session() as session:
-            rows = ComputeUnitRepository(session).stopped_reserve_units()
-        return reserve_admission(rows, self.fleet_policy)
+            return self._reserve_admission(session)
+
+    def _reserve_admission(self, session: DatabaseSession) -> ReserveAdmission:
+        publication = self.reserve_state.published() if self.reserve_state is not None else None
+        release = publication.release if publication is not None else None
+        rows = ComputeUnitRepository(session).stopped_reserve_units(
+            worker_image=release.worker_image if release else "",
+            agent_sha256=release.agent.sha256 if release and release.agent else "",
+        )
+        return reserve_admission(
+            rows,
+            targets=(
+                {
+                    ReserveMarket.parse(key): market.stopped_target
+                    for key, market in publication.markets.items()
+                }
+                if publication is not None and release is not None
+                else None
+            ),
+        )
 
     def reported_node_memory(self) -> dict[tuple[int, int, int], int]:
         with self.context.database.session() as session:
@@ -2844,9 +2867,11 @@ class ComputeService:
                 )
             if self.reserve_state is None:
                 raise ConflictError("reserve refresh requires the fleet capacity plan")
+            publication = self.reserve_state.published()
+            if publication is None:
+                raise ConflictError("reserve refresh is waiting for a current fleet capacity plan")
             required_ready = {
-                key: target.stopped_target
-                for key, target in self.reserve_state.published().targets.items()
+                key: target.stopped_target for key, target in publication.markets.items()
             }
         budget = MaintenanceBudget(
             ready=ready,
@@ -2892,9 +2917,8 @@ class ComputeService:
         market = unit_reserve_market(
             preemptible=unit.worker_preemptible, gpu_type=unit.worker_gpu_type
         )
-        target = (
-            self.reserve_state.published().targets.get(market.key) if self.reserve_state else None
-        )
+        publication = self.reserve_state.published() if self.reserve_state else None
+        target = publication.markets.get(market.key) if publication else None
         if target is None:
             raise ConflictError("maintenance is waiting for the platform capacity plan")
         ready = Capacity()
@@ -3200,21 +3224,81 @@ class ComputeService:
         prepared_worker_images: Sequence[str],
         active_worker_images: Mapping[str, str],
         admission_waiting_workers: Collection[str],
-        booted_since_prepared: bool,
+        boot_id: str,
+        sleep_observation: CapacitySleepObservation | None,
         prepared_stop: MachineStopPreparationReceipt | None,
-        resumed_since_prepared: bool = False,
+    ) -> ReserveAgentPreparation:
+        with self.context.database.session() as session:
+            record = ComputeProviderInstanceRepository(session).get_by_machine(machine_id)
+        if record is None or record.pool_id is None or record.instance_id is None:
+            return ReserveAgentPreparation()
+        if (
+            record.status not in PREPARED_RESERVE_STATUSES
+            and record.status != ReservationStatus.Resuming.value
+            and sleep_observation is None
+        ):
+            return ReserveAgentPreparation()
+        with ExitStack() as stack:
+            if record.status in PREPARED_RESERVE_STATUSES:
+                stack.enter_context(
+                    self._required_capacity_owner_mutations().mutation_lock(record.pool_id)
+                )
+            return self._prepare_reserved_machine(
+                record=record,
+                workspace_id=workspace_id,
+                machine_id=machine_id,
+                credential_id=credential_id,
+                credential_generation=credential_generation,
+                release=release,
+                agent_binary_sha256=agent_binary_sha256,
+                prepared_worker_images=prepared_worker_images,
+                active_worker_images=active_worker_images,
+                admission_waiting_workers=admission_waiting_workers,
+                boot_id=boot_id,
+                sleep_observation=sleep_observation,
+                prepared_stop=prepared_stop,
+            )
+
+    def _prepare_reserved_machine(
+        self,
+        *,
+        record: ComputeProviderInstanceRecord,
+        workspace_id: str,
+        machine_id: str,
+        credential_id: str,
+        credential_generation: int,
+        release: ReleaseTarget,
+        agent_binary_sha256: str,
+        prepared_worker_images: Sequence[str],
+        active_worker_images: Mapping[str, str],
+        admission_waiting_workers: Collection[str],
+        boot_id: str,
+        sleep_observation: CapacitySleepObservation | None,
+        prepared_stop: MachineStopPreparationReceipt | None,
     ) -> ReserveAgentPreparation:
         """Authenticate preparation evidence and keep retained hosts out of intake."""
         release_agent, release_image = reserve_release_artifacts(release)
         agent_current = not release_agent or agent_binary_sha256 == release_agent
         worker_prepared = release_image in prepared_worker_images
         with self.context.database.session() as session:
-            record = ComputeProviderInstanceRepository(session).get_by_machine(machine_id)
-            if record is None or record.pool_id is None or record.instance_id is None:
+            current = ComputeProviderInstanceRepository(session).get_by_machine(
+                machine_id, for_update=True
+            )
+            if (
+                current is None
+                or current.id != record.id
+                or (
+                    record.status not in PREPARED_RESERVE_STATUSES
+                    and current.status in PREPARED_RESERVE_STATUSES
+                )
+            ):
+                raise UpstreamUnavailableError("reserve state changed during preparation; retry")
+            record = current
+            if record.pool_id is None or record.instance_id is None:
                 return ReserveAgentPreparation()
             preparing = record.status in PREPARED_RESERVE_STATUSES
             resuming = record.status == ReservationStatus.Resuming.value
-            if not preparing and not resuming:
+            if not preparing and not resuming and sleep_observation is None:
                 return ReserveAgentPreparation()
             enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
                 workspace_id, machine_id, for_update=True
@@ -3230,10 +3314,15 @@ class ComputeService:
             machine = MachineRepository(session).get(machine_id, workspace_id=workspace_id)
             if unit is None or machine is None:
                 raise ConflictError("reserve preparation lost its capacity owner")
+            observed = observe_sleep(
+                session, record.id, sleep_observation, boot_id=boot_id, now=utc_now()
+            )
+            if not preparing and not resuming:
+                return ReserveAgentPreparation(sleep_observation_ack=observed.acknowledgment)
             if resuming and record.resume_authorized_at is not None:
                 # An earlier stream authorized the resume; the machine serves, and
                 # only that stream tells the agent it resumed.
-                return ReserveAgentPreparation()
+                return ReserveAgentPreparation(sleep_observation_ack=observed.acknowledgment)
             # Returning a used machine requires tenant-storage cleanup. Refreshing
             # a stopped reserve follows preparation even if it served in the past.
             stop_request_id = (
@@ -3246,7 +3335,7 @@ class ComputeService:
             stopping_used_machine = bool(stop_request_id)
             # A new boot can precede the provider row's transition to resuming.
             lagging_resume = (
-                (booted_since_prepared or resumed_since_prepared)
+                observed.activated
                 and not stopping_used_machine
                 and record.status
                 in {
@@ -3268,7 +3357,9 @@ class ComputeService:
                 )
             else:
                 phase = ReservePreparationPhase.Serving
-            instruction = ReserveAgentPreparation(phase, stop_request_id)
+            instruction = ReserveAgentPreparation(
+                phase, stop_request_id, sleep_observation_ack=observed.acknowledgment
+            )
             # A hibernating reserve stops with its worker on the release, built and
             # waiting at its first call; any other stops with none.
             machine_worker = agent_machine_worker_id(machine_id)
@@ -3308,6 +3399,29 @@ class ComputeService:
             ):
                 return instruction
             if preparing:
+                if stopping_used_machine and record.status == ReservationStatus.Stopping.value:
+                    attempts = CapacitySleepAttemptRepository(session)
+                    attempt = attempts.get_current(record.id)
+                    if (
+                        attempt is not None
+                        and attempt.accepted_at is not None
+                        and attempt.superseded_at is None
+                        and not attempts.was_activated(attempt.id)
+                    ):
+                        return instruction
+                if not boot_id:
+                    raise ConflictError("reserve preparation requires the machine boot identity")
+                sleep_request, marker_ready = prepare_sleep(
+                    session,
+                    record.id,
+                    boot_id=boot_id,
+                    mode=CapacitySleepMode.Hibernate if hibernate else CapacitySleepMode.Stop,
+                    now=utc_now(),
+                )
+                instruction = replace(instruction, sleep_request=sleep_request)
+                if not marker_ready:
+                    return instruction
+            if preparing:
                 # A stopped machine can never complete an update it began. Resuming
                 # registers a new worker, which must match the active release before
                 # it takes requests whether or not an update is recorded.
@@ -3336,24 +3450,20 @@ class ComputeService:
                 # waiting on the provider; the capacity pass finishes the row it marks.
                 ComputeProviderInstanceRepository(session).authorize_resume(
                     record.id,
-                    outcome=(
-                        CapacitySleepOutcome.Stopped
-                        if booted_since_prepared
-                        else CapacitySleepOutcome.Hibernated
-                        if resumed_since_prepared
-                        else CapacitySleepOutcome.Unknown
-                    ),
                 )
         if resuming:
-            return ReserveAgentPreparation(ReservePreparationPhase.ResumeAuthorized)
+            return ReserveAgentPreparation(
+                ReservePreparationPhase.ResumeAuthorized,
+                sleep_observation_ack=observed.acknowledgment,
+            )
         try:
-            self._finish_reserved_machine_preparation(
+            self._finish_reserved_machine_preparation_under_lease(
                 workspace_id=workspace_id,
                 machine_id=machine_id,
                 capacity_owner_id=unit.capacity_owner_id,
                 instance_id=record.instance_id,
                 prepared_stop=prepared_stop if stopping_used_machine else None,
-                hibernate=hibernate,
+                sleep_request=instruction.sleep_request,
                 prepared_release=(
                     (
                         release_agent if agent_current else "",
@@ -3369,7 +3479,7 @@ class ComputeService:
             LOGGER.info("reserve preparation for %s deferred: %s", machine_id, contended)
         return instruction
 
-    def _finish_reserved_machine_preparation(
+    def _finish_reserved_machine_preparation_under_lease(
         self,
         *,
         workspace_id: str,
@@ -3378,68 +3488,85 @@ class ComputeService:
         instance_id: str,
         prepared_stop: MachineStopPreparationReceipt | None,
         prepared_release: tuple[str, str] | None,
-        hibernate: bool,
+        sleep_request: CapacitySleepRequest | None,
     ) -> None:
-        with self._required_capacity_owner_mutations().mutation_lock(capacity_owner_id):
-            current, provider, offer = self._internal_unit_provider(workspace_id, capacity_owner_id)
-            if provider.pooled is None or current.phase in ENDED_UNIT_PHASES:
-                raise ConflictError("reserve preparation owner is no longer active")
-            if prepared_stop is not None:
-                if self.scheduler_hooks is None:
-                    raise UpstreamUnavailableError(
-                        "stopping retained capacity requires scheduler worker state"
-                    )
-                with self._required_capacity_owner_mutations().dispatch_lock(capacity_owner_id):
-                    with self.context.database.session() as session:
-                        latest = MachineRepository(session).get(
-                            machine_id, workspace_id=workspace_id
-                        )
-                        if (
-                            latest is None
-                            or latest.lifecycle is not MachineLifecycle.Stopping
-                            or latest.lifecycle_at.isoformat() != prepared_stop.request_id
-                            or ContainerRepository(session).count_live_for_machine(machine_id)
-                        ):
-                            raise ConflictError("stop preparation was superseded")
-                    self.source_cache_lifecycle.acknowledge_machine_cleanup(
-                        machine_id=machine_id,
-                        worker_id=agent_machine_worker_id(machine_id),
-                        generation_id=prepared_stop.cache_generation_id,
-                        session_fence=prepared_stop.cache_session_fence,
-                        observed_at=utc_now(),
-                    )
-                    self.scheduler_hooks.disable_machine(
-                        machine_id, "machine returning to stopped reserve"
-                    )
-                    snapshot = provider.pooled.stop_machine(
-                        self._provider_unit_request(current, offer), instance_id
-                    )
-                    self.provider_machines._apply_pooled_snapshot(
-                        current, offer, snapshot, provider=provider.pooled
-                    )
-            else:
-                # Applied in the stream that finished the preparation, so the row
-                # reads stopping or active without waiting for a capacity pass.
-                snapshot = provider.pooled.complete_machine_preparation(
-                    self._provider_unit_request(current, offer), instance_id, hibernate=hibernate
+        current, provider, offer = self._internal_unit_provider(workspace_id, capacity_owner_id)
+        if provider.pooled is None or current.phase in ENDED_UNIT_PHASES:
+            raise ConflictError("reserve preparation owner is no longer active")
+        if sleep_request is not None:
+            with self.context.database.session() as session:
+                record = ComputeProviderInstanceRepository(session).get_by_machine(machine_id)
+                attempt = (
+                    CapacitySleepAttemptRepository(session).get_current(record.id)
+                    if record is not None and record.instance_id == instance_id
+                    else None
+                )
+                if (
+                    attempt is None
+                    or attempt.id != sleep_request.attempt_id
+                    or attempt.boot_id != sleep_request.boot_id
+                    or attempt.requested_mode is not sleep_request.mode
+                    or attempt.marker_observed_at is None
+                ):
+                    raise UpstreamUnavailableError("sleep preparation was superseded; retry")
+        if prepared_stop is not None:
+            if sleep_request is None:
+                raise ConflictError("stopping a machine requires a prepared sleep attempt")
+            if self.scheduler_hooks is None:
+                raise UpstreamUnavailableError(
+                    "stopping retained capacity requires scheduler worker state"
+                )
+            with self._required_capacity_owner_mutations().dispatch_lock(capacity_owner_id):
+                with self.context.database.session() as session:
+                    latest = MachineRepository(session).get(machine_id, workspace_id=workspace_id)
+                    if (
+                        latest is None
+                        or latest.lifecycle is not MachineLifecycle.Stopping
+                        or latest.lifecycle_at.isoformat() != prepared_stop.request_id
+                        or ContainerRepository(session).count_live_for_machine(machine_id)
+                    ):
+                        raise ConflictError("stop preparation was superseded")
+                self.source_cache_lifecycle.acknowledge_machine_cleanup(
+                    machine_id=machine_id,
+                    worker_id=agent_machine_worker_id(machine_id),
+                    generation_id=prepared_stop.cache_generation_id,
+                    session_fence=prepared_stop.cache_session_fence,
+                    observed_at=utc_now(),
+                )
+                self.scheduler_hooks.disable_machine(
+                    machine_id, "machine returning to stopped reserve"
+                )
+                snapshot = provider.pooled.stop_machine(
+                    self._provider_unit_request(current, offer),
+                    instance_id,
+                    sleep_request=sleep_request,
                 )
                 self.provider_machines._apply_pooled_snapshot(
                     current, offer, snapshot, provider=provider.pooled
                 )
-            if prepared_release is not None:
-                agent_sha256, worker_image = prepared_release
-                with self.context.database.session() as session:
-                    ComputeProviderInstanceRepository(session).record_prepared_release(
-                        machine_id=machine_id,
-                        instance_id=instance_id,
-                        agent_sha256=agent_sha256,
-                        worker_image=worker_image,
-                    )
-                    record = ComputeProviderInstanceRepository(session).get_by_machine(machine_id)
-                    if record is not None:
-                        CapacityActivationRepository(session).record_prepared(
-                            record.id, at=utc_now()
-                        )
+        else:
+            # Applied in the stream that finished the preparation, so the row
+            # reads stopping or active without waiting for a capacity pass.
+            snapshot = provider.pooled.complete_machine_preparation(
+                self._provider_unit_request(current, offer),
+                instance_id,
+                sleep_request=sleep_request,
+            )
+            self.provider_machines._apply_pooled_snapshot(
+                current, offer, snapshot, provider=provider.pooled
+            )
+        if prepared_release is not None:
+            agent_sha256, worker_image = prepared_release
+            with self.context.database.session() as session:
+                ComputeProviderInstanceRepository(session).record_prepared_release(
+                    machine_id=machine_id,
+                    instance_id=instance_id,
+                    agent_sha256=agent_sha256,
+                    worker_image=worker_image,
+                )
+                record = ComputeProviderInstanceRepository(session).get_by_machine(machine_id)
+                if record is not None:
+                    CapacityActivationRepository(session).record_prepared(record.id, at=utc_now())
 
     def release_internal_unit_machine(
         self,
@@ -3453,10 +3580,11 @@ class ComputeService:
         market = unit_reserve_market(
             preemptible=unit.worker_preemptible, gpu_type=unit.worker_gpu_type
         )
+        publication = self.reserve_state.published() if self.reserve_state else None
         stopped_target = (
             targets.stopped_target
-            if self.reserve_state is not None
-            and (targets := self.reserve_state.published().targets.get(market.key)) is not None
+            if publication is not None
+            and (targets := publication.markets.get(market.key)) is not None
             else None
         )
         can_retain = (
@@ -3503,6 +3631,16 @@ class ComputeService:
                 workspace_id, machine_id, for_update=True
             )
             machine = MachineRepository(session).get(machine_id, workspace_id=workspace_id)
+            if (
+                unit.platform_fleet
+                and publication is None
+                and not record.terminating_reason
+                and current.replacement_machine_id != machine_id
+                and (enrollment is None or enrollment.capacity_notice_at is None)
+            ):
+                raise ConflictError(
+                    "machine retirement is waiting for a current fleet capacity plan"
+                )
             running = sum(
                 item.status
                 in {
@@ -3560,32 +3698,19 @@ class ComputeService:
                 and machine is not None
                 and machine.lifecycle is MachineLifecycle.Draining
             ):
-                if ContainerRepository(session).count_live_for_machine(machine_id):
-                    raise ConflictError("machine must finish its workloads before stopping")
                 if running <= desired:
                     raise ConflictError("machine is still required by the running capacity target")
-                current = units.upsert(
-                    current.model_copy(
-                        update={
-                            "desired_machines": desired,
-                            "stopped_machines": retained,
-                            "max_machines": max(current.max_machines, desired + retained),
-                            "generation": current.generation + 1,
-                        }
-                    )
-                )
-                instances.upsert(
-                    record.model_copy(update={"status": ReservationStatus.Stopping.value})
-                )
-                write_machine_lifecycle(
+                return request_machine_stop(
                     session,
-                    machine,
-                    MachineLifecycle.Stopping,
+                    unit=current,
+                    record=record,
+                    machine=machine,
+                    enrollment=enrollment,
+                    desired=desired,
+                    stopped=retained,
                     workspace_changes=self.workspace_changes,
-                    workspace_id=workspace_id,
-                    message="Waiting for tenant storage cleanup before stopping",
+                    now=utc_now(),
                 )
-                return current
             if record.terminating_reason != "idle_pool_scale_down":
                 replacement = current.replacement_machine_id == machine_id
                 live = sum(
@@ -3821,7 +3946,10 @@ class ComputeService:
         """
         if self.reserve_state is None:
             return False
-        targets = self.reserve_state.published().targets
+        publication = self.reserve_state.published()
+        if publication is None:
+            return True
+        targets = publication.markets
         ready = False
         for key, target in targets.items():
             market = ReserveMarket.parse(key)
@@ -3915,7 +4043,7 @@ class ComputeService:
             market.market not in conditions.demand
             and (
                 not market.shortfall.empty
-                or not market.hibernated_shortfall.empty
+                or not market.hibernation_shortfall.empty
                 or bool(market.unmet_shapes or market.unmet_stopped_shapes)
                 or not market.stopped_capacity.covers(market.stopped_target)
                 or bool(market.unmet_placements)
@@ -3970,19 +4098,43 @@ class ComputeService:
                 ),
             )
             plan = plan_market_reserve(self.fleet_policy, snapshot, conditions)
-        self.reserve_state.publish(plan)
         units = {unit.id: unit for unit in rows.units}
+        applied: list[MarketReservePlan] = []
         for market in plan.markets:
             self._log_market_plan(market)
             try:
                 self._apply_market_plan(market, units, catalog, release=release, now=now)
+                applied.append(
+                    replace(market, application=MarketPlanApplication.Applied, applied_at=utc_now())
+                )
             except CapacityReservationLockContendedError:
+                applied.append(
+                    replace(
+                        market,
+                        application=MarketPlanApplication.Deferred,
+                        application_reason="capacity owner lease is held",
+                    )
+                )
                 LOGGER.debug("platform reserve for %s deferred: a lease is held", market.market.key)
             except CapacityReservationLeaseLostError:
                 raise
             except (CapacityLimitReachedError, ConflictError, UpstreamUnavailableError) as exc:
+                applied.append(
+                    replace(
+                        market,
+                        application=MarketPlanApplication.Deferred,
+                        application_reason=exc.code,
+                    )
+                )
                 LOGGER.warning("platform reserve for %s not applied: %s", market.market.key, exc)
             except Exception:
+                applied.append(
+                    replace(
+                        market,
+                        application=MarketPlanApplication.Failed,
+                        application_reason="capacity application failed",
+                    )
+                )
                 LOGGER.exception("platform reserve for %s failed", market.market.key)
         for unit in rows.units:
             if unit.phase is not ComputeUnitPhase.Degraded or not unit.desired:
@@ -3997,6 +4149,10 @@ class ComputeService:
                 continue
             except Exception:
                 LOGGER.exception("releasing failed capacity in %s failed", unit.id)
+        plan = replace(plan, markets=tuple(applied))
+        self.reserve_state.publish(
+            plan, generated_at=now, release=release.target if release else None
+        )
         return plan
 
     def _reserve_conditions(
@@ -4016,73 +4172,6 @@ class ComputeService:
         placement_rows: dict[
             tuple[ReserveMarket, ReservePlacement, Capacity], list[FleetDemandRow]
         ] = {}
-        units = {unit.unit_id: unit for unit in snapshot.units}
-
-        def horizons(
-            market: ReserveMarket, placement: ReservePlacement, required: Capacity | None = None
-        ) -> tuple[float, float]:
-            def estimate(
-                kind: CapacityActivationKind,
-                fallback: int,
-                *,
-                verified_hibernation: bool = False,
-            ) -> float:
-                failed = any(
-                    row.failed
-                    for row in activations
-                    if row.gpu_type == market.gpu_type and row.kind is kind
-                )
-                observed = [
-                    row.p95_ready_seconds
-                    if row.ready >= 20 and not failed
-                    else max(row.p95_ready_seconds, fallback)
-                    for row in activations
-                    if row.gpu_type == market.gpu_type
-                    and row.kind is kind
-                    and (
-                        not verified_hibernation
-                        or row.sleep_outcome is CapacitySleepOutcome.Hibernated
-                    )
-                    and row.p95_ready_seconds is not None
-                ]
-                return max(observed, default=float(fallback)) + RESERVE_PLAN_INTERVAL_SECONDS
-
-            provision = estimate(
-                CapacityActivationKind.Provision, self.fleet_policy.provision_seconds
-            )
-            ready = [
-                machine
-                for machine in snapshot.machines
-                if machine.ready
-                and not machine.protected
-                and units[machine.unit_id].growable
-                and machine.state.stopped
-                and units[machine.unit_id].market == market
-                and placement.accepts(units[machine.unit_id].placement)
-            ]
-            available = Capacity()
-            fast = Capacity()
-            requested = Capacity()
-            for machine in ready:
-                available += units[machine.unit_id].machine
-                if machine.state is ReserveMachineState.Hibernated:
-                    fast += units[machine.unit_id].machine
-                if machine.state is ReserveMachineState.HibernationRequested:
-                    requested += units[machine.unit_id].machine
-            if required is None or not available.covers(required):
-                return provision, provision
-            warm = (
-                estimate(
-                    CapacityActivationKind.Resume,
-                    self.fleet_policy.resume_seconds,
-                    verified_hibernation=True,
-                )
-                if fast.covers(required)
-                else estimate(CapacityActivationKind.Resume, self.fleet_policy.stopped_boot_seconds)
-                if (fast + requested).covers(required)
-                else estimate(CapacityActivationKind.Boot, self.fleet_policy.stopped_boot_seconds)
-            )
-            return warm, max(warm, provision)
 
         def forecast(
             market: ReserveMarket,
@@ -4091,25 +4180,17 @@ class ComputeService:
             waiting: Capacity,
             placement: ReservePlacement = ReservePlacement(),
         ) -> DemandForecast:
-            provision = horizons(market, placement)[1]
-            full = forecast_demand(
-                history,
+            return reserve_forecast(
+                self.fleet_policy,
+                snapshot,
+                activations,
+                market=market,
+                history=history,
                 now=now,
-                resume_seconds=provision,
-                provision_seconds=provision,
                 pending=waiting,
                 scheduled=future,
-            )
-            warm, total = horizons(market, placement, full.warm)
-            if warm == provision and total == provision:
-                return full
-            return forecast_demand(
-                history,
-                now=now,
-                resume_seconds=warm,
-                provision_seconds=total,
-                pending=waiting,
-                scheduled=future,
+                placement=placement,
+                pending_shapes=tuple(pending_shapes.get(market, ())),
             )
 
         for row in demand:
@@ -4209,9 +4290,10 @@ class ComputeService:
                 placement_demands.setdefault(market, []).append(
                     ReserveDemand(capacity, placement, count)
                 )
+        publication = self.reserve_state.published()
         return ReserveConditions(
             now=now,
-            lightly_used_since=self.reserve_state.published().lightly_used_since,
+            lightly_used_since=publication.lightly_used_since if publication is not None else {},
             recovering=frozenset(
                 markets[machine.unit_id]
                 for machine in snapshot.machines
@@ -4221,6 +4303,7 @@ class ComputeService:
             demand=frozenset(pending),
             forecast_warm={market: value.warm for market, value in forecasts.items()},
             forecast_total={market: value.total for market, value in forecasts.items()},
+            forecasts=forecasts,
             request_shapes={
                 market: tuple(set(value.request_shapes) | pending_shapes.get(market, set()))
                 for market, value in forecasts.items()
@@ -4246,8 +4329,8 @@ class ComputeService:
             f"reserve ready {_describe_capacity(plan.stopped_ready)} of "
             f"{_describe_capacity(plan.stopped_target)}, "
             f"preparing {_describe_capacity(plan.stopped_pending)}, "
-            f"verified hibernated {_describe_capacity(plan.hibernated_capacity)}, "
-            f"hibernation requested {_describe_capacity(plan.hibernation_requested_capacity)}, "
+            f"image saved {_describe_capacity(plan.image_saved_capacity)}, "
+            f"hibernation unverified {_describe_capacity(plan.hibernation_unverified_capacity)}, "
             f"growth {growth}, "
             f"unmet shapes {plan.unmet_shapes}, stopped shapes {plan.unmet_stopped_shapes}, "
             f"stopped shortfall {_describe_capacity(plan.stopped_shortfall)}, "
@@ -4535,9 +4618,9 @@ class ComputeService:
                     ):
                         continue
                     ready_counts[instance.unit_id] = ready_counts.get(instance.unit_id, 0) + 1
-                    if instance.sleep_outcome is CapacitySleepOutcome.Hibernated or (
-                        instance.sleep_outcome is CapacitySleepOutcome.Unknown
-                        and instance.stop_mode is CapacitySleepMode.Hibernate
+                    if instance.image_evidence is CapacityImageEvidence.Saved or (
+                        instance.image_evidence is CapacityImageEvidence.Unknown
+                        and instance.sleep_accepted_mode is CapacitySleepMode.Hibernate
                     ):
                         fast_counts[instance.unit_id] = fast_counts.get(instance.unit_id, 0) + 1
                 for unit_id, count in ready_counts.items():
@@ -4557,7 +4640,7 @@ class ComputeService:
                     available += capacity * ready_counts[unit_id]
                     fast += capacity * fast_counts[unit_id]
                 required = available.lower(plan.stopped_target)
-                required_fast = fast.lower(plan.hibernated_target)
+                required_fast = fast.lower(plan.hibernation_target)
                 for unit_id, stopped in targets.items():
                     current = units.get(unit_id, for_update=True)
                     if (
@@ -5020,7 +5103,7 @@ class ComputeService:
                 # Spot machine, must not stop the rest of the pass.
                 try:
                     snapshot = pooled.complete_machine_preparation(
-                        self._provider_unit_request(current, offer), instance_id, hibernate=False
+                        self._provider_unit_request(current, offer), instance_id, sleep_request=None
                     )
                 except Exception:
                     LOGGER.warning(

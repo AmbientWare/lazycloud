@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from math import ceil, isfinite
 
+from shared.capacity_lifecycle import CapacityActivationKind
+
 from compute.fleet_resources import Capacity
 
 SHORT_WINDOW_SECONDS = 60
@@ -29,6 +31,15 @@ class DemandSample:
 
 
 @dataclass(frozen=True, slots=True)
+class ForecastTiming:
+    kind: CapacityActivationKind
+    ready_samples: int
+    failed_samples: int
+    cold_boot_samples: int
+    fallback_used: bool
+
+
+@dataclass(frozen=True, slots=True)
 class DemandForecast:
     warm: Capacity
     total: Capacity
@@ -40,6 +51,9 @@ class DemandForecast:
     burst: Capacity
     scheduled_warm: Capacity
     scheduled_total: Capacity
+    warm_horizon_seconds: float
+    total_horizon_seconds: float
+    timing: ForecastTiming | None = None
 
 
 def forecast_demand(
@@ -159,6 +173,8 @@ def forecast_demand(
         burst=largest,
         scheduled_warm=scheduled_warm,
         scheduled_total=scheduled_total,
+        warm_horizon_seconds=resume_seconds,
+        total_horizon_seconds=provision_seconds,
     )
 
 

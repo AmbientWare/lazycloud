@@ -60,11 +60,14 @@ Platform reserves are schedulable headroom in CPU, memory and GPU cards for each
 purchase market. Warm nodes serve requests. Compatible stopped or hibernated
 nodes replenish warm headroom, and new purchases replenish reserves. Pending
 launches count toward commitments but cannot justify retiring ready capacity.
-Hibernation capability and stop intent never prove that memory was preserved.
-Unknown stop outcomes use ordinary boot estimates until enough observed resumes,
-including cold fallbacks, establish their timing. Agent suspend evidence records
-the previous activation's observed outcome after resume. Each activation retains
-its request, provider-running, preparation, intake and failure timestamps in
+Each sleep attempt names its instance and boot. Requested mode, provider acceptance,
+observed stop, and kernel image-save evidence are separate facts. A saved image
+does not prove a later restore. Agent observations survive retries and record the
+linked activation's restoration independently of admission, including held refreshes.
+Unknown image evidence uses ordinary boot estimates; measured cohorts include cold
+fallbacks and failures. External activation retains an unknown request time and
+does not enter request-to-ready timing samples. Each activation retains its
+provider-running, preparation, intake and failure timestamps in
 `capacity_activations`; telemetry cannot open admission. CPU quiet floors are small,
 and GPU headroom follows demand instead of retaining an idle card of every model.
 CPU reserve targets prefer hibernation when supported. Accepted hibernation
@@ -90,6 +93,14 @@ approved node combinations by running or preparation-plus-storage cost. Request
 acquisition separately packs compatible due requests using the same resource and
 offer values. Disk-backed requests retain individual acquisition because storage
 attachments are not represented by the packing model.
+
+Redis publishes the complete timestamped decision, its release, observed capacity,
+forecast evidence and each market's application result. Missing or expired plans
+trigger recomputation and cannot authorize discretionary retirement or borrowing
+another market's reserves. Provider sleep evidence is read in one batch per pool;
+unchanged observations do not lock or rewrite completed attempts. Console collection
+belongs to provider reconciliation, with durable due times and bounded retries,
+outside request acquisition.
 
 Growth resumes compatible reserves before purchasing. Requests and interruption
 recovery take priority over elective preparation. Retention preserves ready
