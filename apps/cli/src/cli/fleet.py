@@ -1,4 +1,4 @@
-"""Deployment-scoped capacity teardown and supplier cost inspection."""
+"""Deployment-scoped capacity operations and supplier cost inspection."""
 
 from __future__ import annotations
 
@@ -6,8 +6,11 @@ import time
 from typing import Annotated
 
 import typer
+from compute.fleet_operations import FleetOperations
+from compute.reserve_state import RedisFleetReserveState
 from compute.service import ComputeService
 from compute.supplier_costs import SupplierCostInspectionService
+from coordination.redis_client import RedisClient, RedisSettings
 from lazycloud._terminal.streams import console
 from lazycloud.cli.components.results import emit_result
 from shared.compute_policy import ComputeUnitRecord
@@ -17,7 +20,104 @@ from shared.errors import DomainError
 from cli.platform_compute import platform_compute
 from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
 
-fleet_app = typer.Typer(help="Inspect and remove this deployment's platform capacity.")
+fleet_app = typer.Typer(
+    help="Inspect, stop, resume and remove this deployment's platform capacity."
+)
+
+
+@fleet_app.command("clear-plan")
+def fleet_clear_plan(ctx: typer.Context) -> None:
+    """Clear the published fleet decision so the scheduler recomputes it."""
+    redis = RedisClient.from_settings(RedisSettings())
+    try:
+        RedisFleetReserveState(redis).clear_publication()
+    finally:
+        redis.close()
+    emit_result(
+        ctx,
+        payload={"cleared": True},
+        title="Fleet plan cleared",
+        fields={"next step": "The scheduler will publish a fresh plan."},
+        tone="info",
+    )
+
+
+@fleet_app.command("stop-machine")
+def fleet_stop_machine(
+    ctx: typer.Context,
+    machine_id: str,
+    unit_id: Annotated[str, typer.Option("--unit-id", help="Machine's platform unit ID.")],
+    confirm_stopped: Annotated[
+        bool,
+        typer.Option(
+            "--confirm-stopped", help="Confirm workload admission and schedulers are stopped."
+        ),
+    ] = False,
+) -> None:
+    """Request a plain stop after the idle machine completes tenant cleanup."""
+    if not confirm_stopped:
+        raise typer.BadParameter(
+            "Stop workload admission and schedulers, then pass --confirm-stopped"
+        )
+    with platform_compute() as compute:
+        unit = FleetOperations(compute).stop_machine(unit_id=unit_id, machine_id=machine_id)
+    emit_result(
+        ctx,
+        payload={
+            "unit_id": unit.id,
+            "machine_id": machine_id,
+            "desired_machines": unit.desired_machines,
+            "stopped_target": unit.stopped_machines,
+        },
+        title="Machine stop requested",
+        fields={
+            "unit": unit.id,
+            "machine": machine_id,
+            "completion": "Keep the control plane and gateway running until the machine stops.",
+        },
+        tone="info",
+    )
+
+
+@fleet_app.command("resume")
+def fleet_resume(
+    ctx: typer.Context,
+    unit_id: str,
+    desired: Annotated[
+        int, typer.Option("--desired", min=1, help="Total running capacity after resume.")
+    ],
+    confirm_stopped: Annotated[
+        bool,
+        typer.Option(
+            "--confirm-stopped", help="Confirm workload admission and schedulers are stopped."
+        ),
+    ] = False,
+) -> None:
+    """Restore a running target after checking this unit's stopped inventory.
+
+    Normal capacity recovery can replace machines lost after this check.
+    """
+    if not confirm_stopped:
+        raise typer.BadParameter(
+            "Stop workload admission and schedulers, then pass --confirm-stopped"
+        )
+    with platform_compute() as compute:
+        unit = FleetOperations(compute).resume_unit(unit_id=unit_id, desired=desired)
+    emit_result(
+        ctx,
+        payload={
+            "unit_id": unit.id,
+            "desired_machines": unit.desired_machines,
+            "stopped_target": unit.stopped_machines,
+        },
+        title="Fleet resume requested",
+        fields={
+            "unit": unit.id,
+            "desired running": unit.desired_machines,
+            "completion": "Verify worker intake before restoring workload admission.",
+        },
+        tone="info",
+    )
 
 
 @fleet_app.command("costs")

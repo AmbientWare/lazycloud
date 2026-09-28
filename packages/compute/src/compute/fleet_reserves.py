@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -13,8 +13,9 @@ from database.repositories.compute import (
     PlatformReserveUnitRow,
     StoppedReserveUnitRow,
 )
-from shared.capacity_lifecycle import CapacitySleepMode, CapacitySleepOutcome
+from shared.capacity_lifecycle import CapacityImageEvidence, CapacitySleepMode
 from shared.compute_enrollment import AgentCapacityState
+from shared.compute_fleet import MachineLifecycle
 from shared.compute_policy import ComputeUnitPhase
 from shared.container_requests import node_memory, schedulable_capacity
 from shared.gpu import normalize_gpu_type
@@ -22,7 +23,6 @@ from shared.placement import product_region
 from shared.releases import ActiveRelease
 
 from compute.fleet_policy import (
-    FleetCapacityPolicy,
     FleetReserveSnapshot,
     ReserveMachine,
     ReserveMachineState,
@@ -94,6 +94,9 @@ def fleet_reserve_snapshot(
             hourly_cost_micros=unit.hourly_cost_micros,
             stopped_hourly_cost_micros=unit.stopped_hourly_cost_micros,
             supports_hibernation=unit.supports_hibernation,
+            provider=unit.provider,
+            provider_region=unit.region,
+            instance_type=unit.instance_type,
             placement=ReservePlacement(
                 region=(region.value if (region := product_region(unit.region)) else unit.region),
                 zone=unit.availability_zone,
@@ -123,7 +126,8 @@ def fleet_reserve_snapshot(
     running_cpu = 0
     instances_by_unit: dict[str, list[PlatformReserveInstanceRow]] = defaultdict(list)
     for instance in rows.instances:
-        instances_by_unit[instance.unit_id].append(instance)
+        if not instance.cleanup_complete:
+            instances_by_unit[instance.unit_id].append(instance)
     for unit in rows.units:
         instances = instances_by_unit[unit.id]
         surge = int(bool(unit.replacement_machine_id)) + unit.maintenance_surge_machines
@@ -172,32 +176,66 @@ def _reserve_machine(
     ready_machine_ids: frozenset[str],
     release: ActiveRelease | None,
 ) -> ReserveMachine | None:
-    if instance.missing:
+    if instance.cleanup_complete:
         return None
     status = instance.status
-    if status in {
-        ReservationStatus.Preparing.value,
-        ReservationStatus.Stopping.value,
-    }:
+    lifecycle = instance.machine_lifecycle
+    if (
+        instance.missing
+        or status in {ReservationStatus.Terminating.value, ReservationStatus.Deleted.value}
+        or lifecycle
+        in {
+            MachineLifecycle.Terminating,
+            MachineLifecycle.Deleted,
+        }
+    ):
+        state = ReserveMachineState.Terminating
+    elif status == ReservationStatus.Failed.value or lifecycle is MachineLifecycle.Failed:
+        state = ReserveMachineState.Failed
+    elif status == ReservationStatus.Stopping.value or lifecycle is MachineLifecycle.Stopping:
+        state = ReserveMachineState.Stopping
+    elif status == ReservationStatus.Preparing.value:
         state = ReserveMachineState.Preparing
     elif status == ReservationStatus.Stopped.value:
+        mode = instance.sleep_accepted_mode or instance.sleep_requested_mode
         state = (
-            ReserveMachineState.Hibernated
-            if instance.sleep_outcome is CapacitySleepOutcome.Hibernated
-            else ReserveMachineState.HibernationRequested
-            if instance.sleep_outcome is CapacitySleepOutcome.Unknown
-            and instance.stop_mode is CapacitySleepMode.Hibernate
+            ReserveMachineState.ImageSaved
+            if instance.sleep_attempt_id
+            and mode is CapacitySleepMode.Hibernate
+            and instance.image_evidence is CapacityImageEvidence.Saved
+            else ReserveMachineState.HibernateUnverified
+            if mode is CapacitySleepMode.Hibernate
+            and instance.image_evidence is not CapacityImageEvidence.Failed
             else ReserveMachineState.Stopped
         )
     elif status in {ReservationStatus.Pending.value, ReservationStatus.Resuming.value}:
         state = ReserveMachineState.Starting
     elif status == ReservationStatus.Active.value:
-        if instance.machine_id is None or instance.capacity_state is None:
+        if (
+            lifecycle
+            in {
+                MachineLifecycle.Requested,
+                MachineLifecycle.Provisioning,
+                MachineLifecycle.Booting,
+                MachineLifecycle.Joining,
+                MachineLifecycle.Resuming,
+            }
+            or instance.machine_id is None
+        ):
             state = ReserveMachineState.Starting
-        elif instance.capacity_state is AgentCapacityState.Available:
+        elif lifecycle is MachineLifecycle.Draining or instance.capacity_state in {
+            AgentCapacityState.Draining,
+            AgentCapacityState.Preempting,
+        }:
+            state = ReserveMachineState.Draining
+        elif (
+            lifecycle is MachineLifecycle.Ready
+            and instance.capacity_state is AgentCapacityState.Available
+            and instance.machine_id in ready_machine_ids
+        ):
             state = ReserveMachineState.Serving
         else:
-            state = ReserveMachineState.Draining
+            state = ReserveMachineState.Unavailable
     else:
         return None
     started = instance.billing_started_at
@@ -233,7 +271,7 @@ class ReserveAdmission:
     """Which stopped reserves demand may resume.
 
     Spot-tolerant work may resume an On-Demand reserve only while the On-Demand
-    reserves left behind still meet their floor, so a burst of Spot work cannot
+    reserves left behind still meet their published target, so a burst of Spot work cannot
     take the reserve a devbox resumes onto.
     """
 
@@ -242,25 +280,29 @@ class ReserveAdmission:
 
 
 def reserve_admission(
-    rows: Iterable[StoppedReserveUnitRow], policy: FleetCapacityPolicy
+    rows: Iterable[StoppedReserveUnitRow],
+    *,
+    targets: Mapping[ReserveMarket, Capacity] | None,
 ) -> ReserveAdmission:
     units = list(rows)
     held: dict[ReserveMarket, Capacity] = {}
     for unit in units:
+        if not unit.resumable_count:
+            continue
         market = unit_reserve_market(preemptible=unit.preemptible, gpu_type=unit.gpu_type)
         machine = _reserve_capacity(unit)
-        held[market] = held.get(market, Capacity()) + machine * unit.stopped
+        held[market] = held.get(market, Capacity()) + machine * unit.resumable_count
     withheld: set[str] = set()
     for unit in units:
         market = unit_reserve_market(preemptible=unit.preemptible, gpu_type=unit.gpu_type)
         if market.preemptible:
             continue
         machine = _reserve_capacity(unit)
-        floor = policy.reserve(market).stopped.floor
-        if not (held[market] - machine).covers(floor):
+        target = targets.get(market) if targets is not None else None
+        if target is None or not (held.get(market, Capacity()) - machine).covers(target):
             withheld.add(unit.id)
     return ReserveAdmission(
-        prepared=frozenset(unit.id for unit in units if unit.resumable),
+        prepared=frozenset(unit.id for unit in units if unit.resumable_count),
         withheld_from_preemptible=frozenset(withheld),
     )
 

@@ -12,8 +12,10 @@ from pydantic import ConfigDict, Field, field_validator, model_validator
 from shared.capacity import CapacityFailureCode
 from shared.capacity_lifecycle import (
     CapacityActivationKind,
+    CapacityImageEvidence,
     CapacitySleepMode,
-    CapacitySleepOutcome,
+    CapacitySleepReason,
+    CapacitySleepRequest,
 )
 from shared.compute_policy import (
     ComputeCapacityMode,
@@ -138,10 +140,18 @@ class ProviderUnitInstance(ContractModel):
     booted_template_version: str = ""
     hibernates: bool = False
     """Launched able to hibernate; the provider decides it per instance type at launch."""
-    stop_mode: CapacitySleepMode | None = None
-    sleep_outcome: CapacitySleepOutcome = CapacitySleepOutcome.Unknown
+    sleep_attempt_id: str | None = None
+    activation_sleep_attempt_id: str | None = None
+    sleep_accepted_mode: CapacitySleepMode | None = None
+    sleep_accepted_at: datetime | None = None
+    sleep_stopped_at: datetime | None = None
+    sleep_recovery_observed_at: datetime | None = None
+    image_evidence: CapacityImageEvidence = CapacityImageEvidence.Unknown
+    image_evidence_at: datetime | None = None
+    sleep_evidence_reason: CapacitySleepReason | None = None
     activation_kind: CapacityActivationKind = CapacityActivationKind.Provision
     activation_requested_at: datetime | None = None
+    activation_observed_at: datetime | None = None
     provider_running_at: datetime | None = None
     billing_started_at: datetime | None = None
     billing_minimum_seconds: int | None = Field(default=None, ge=0)
@@ -263,12 +273,15 @@ class PooledCapacityProvider(Protocol):
         ...
 
     def complete_machine_preparation(
-        self, request: ProviderUnitRequest, provider_instance_id: str, *, hibernate: bool
+        self,
+        request: ProviderUnitRequest,
+        provider_instance_id: str,
+        *,
+        sleep_request: CapacitySleepRequest | None,
     ) -> ProviderUnitSnapshot:
         """Stop a prepared reserve, or start serving a resumed one.
 
-        `hibernate` stops the reserve with its memory, which compute asks for only
-        once the worker runs the release and waits at its first call.
+        A sleep request names the prepared stop. None completes serving admission.
         """
         ...
 
@@ -279,7 +292,11 @@ class PooledCapacityProvider(Protocol):
         ...
 
     def stop_machine(
-        self, request: ProviderUnitRequest, provider_instance_id: str
+        self,
+        request: ProviderUnitRequest,
+        provider_instance_id: str,
+        *,
+        sleep_request: CapacitySleepRequest,
     ) -> ProviderUnitSnapshot:
         """Return one drained, cleaned instance to the stopped reserve."""
         ...

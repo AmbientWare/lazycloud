@@ -30,7 +30,7 @@ _TFD_TIMER_CANCEL_ON_SET = 2
 _FAR_FUTURE_SECONDS = 10 * 365 * 24 * 3600
 
 
-def _sleep_offset() -> float:
+def sleep_offset() -> float:
     return seconds_since_boot() - time.monotonic()
 
 
@@ -38,11 +38,11 @@ def _sleep_offset() -> float:
 class SuspendWatch:
     """Reports each sleep once, with how long it lasted."""
 
-    _offset: float = field(default_factory=_sleep_offset, init=False)
+    _offset: float = field(default_factory=sleep_offset, init=False)
 
     def slept(self) -> float:
         """Seconds slept since the last call, or 0 when the machine stayed awake."""
-        offset = _sleep_offset()
+        offset = sleep_offset()
         slept, self._offset = offset - self._offset, offset
         return slept if slept > SLEEP_THRESHOLD_SECONDS else 0.0
 

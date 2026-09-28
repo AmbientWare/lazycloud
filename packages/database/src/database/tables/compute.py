@@ -10,6 +10,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
@@ -375,13 +376,11 @@ FOR EACH ROW EXECUTE FUNCTION enforce_compute_capacity_ownership();
 class ComputeProviderInstanceTable(IdTable, DatabaseBase):
     __tablename__ = "compute_provider_instances"
     __table_args__: tuple[SchemaItem, ...] = (
-        CheckConstraint(
-            "stop_mode IS NULL OR stop_mode IN ('stop', 'hibernate')",
-            name="ck_compute_provider_instances_sleep_mode",
-        ),
-        CheckConstraint(
-            "sleep_outcome IN ('unknown', 'stopped', 'hibernated')",
-            name="ck_compute_provider_instances_sleep_outcome",
+        ForeignKeyConstraint(
+            ["id", "current_sleep_attempt_id"],
+            ["capacity_sleep_attempts.instance_record_id", "capacity_sleep_attempts.id"],
+            name="fk_provider_instance_current_sleep",
+            use_alter=True,
         ),
         CheckConstraint(
             "gpu_count >= 0 AND cpu_millicores >= 0 AND memory_mb >= 0 "
@@ -396,12 +395,13 @@ class ComputeProviderInstanceTable(IdTable, DatabaseBase):
             "pool_id",
             postgresql_where=text("status = 'stopped' AND missing_since IS NULL"),
         ),
-        # The reserve planner reads every live instance each minute; terminal
-        # history stays out of the index it reads through.
+        # Terminal instances remain due work until storage cleanup is confirmed.
         Index(
             "ix_compute_provider_instances_live",
             "pool_id",
-            postgresql_where=text("status NOT IN ('deleted', 'failed')"),
+            postgresql_where=text(
+                "status NOT IN ('deleted', 'failed') OR provider_storage_destroyed_at IS NULL"
+            ),
         ),
         Index("ix_compute_provider_instances_renewal", "billing_renewal_at"),
         Index(
@@ -475,10 +475,7 @@ class ComputeProviderInstanceTable(IdTable, DatabaseBase):
     hibernates: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=text("false")
     )
-    stop_mode: Mapped[str | None] = mapped_column(Text, nullable=True)
-    sleep_outcome: Mapped[str] = mapped_column(
-        Text, nullable=False, default="unknown", server_default=text("'unknown'")
-    )
+    current_sleep_attempt_id: Mapped[str | None] = mapped_column(uuid_type)
     activation_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     provider_running_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     resume_authorized_at: Mapped[datetime | None] = mapped_column(

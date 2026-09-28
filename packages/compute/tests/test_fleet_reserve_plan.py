@@ -304,23 +304,23 @@ def test_stopped_reserve_cannot_displace_verified_hibernated_coverage() -> None:
         _snapshot(
             (_unit(SMALL, stopped=1), _unit(stopped, stopped=1)),
             (
-                ReserveMachine("hibernated", SMALL.key, ReserveMachineState.Hibernated),
+                ReserveMachine("hibernated", SMALL.key, ReserveMachineState.ImageSaved),
                 ReserveMachine("stopped", stopped.key, ReserveMachineState.Stopped),
             ),
         ),
-        ReserveConditions(now=NOW, hibernated_target={MARKET: SMALL.machine}),
+        ReserveConditions(now=NOW, hibernation_target={MARKET: SMALL.machine}),
     ).market(MARKET)
     assert market is not None
     assert market.stopped[SMALL.key] == 1
     assert market.stopped[stopped.key] == 0
-    assert market.hibernated_capacity == SMALL.machine
-    assert market.hibernated_shortfall.empty
+    assert market.image_saved_capacity == SMALL.machine
+    assert market.hibernation_shortfall.empty
 
 
 def test_requested_hibernation_is_usable_without_claiming_verified_sleep() -> None:
     snapshot = _snapshot(
         (_unit(SMALL, stopped=1),),
-        (ReserveMachine("requested", SMALL.key, ReserveMachineState.HibernationRequested),),
+        (ReserveMachine("requested", SMALL.key, ReserveMachineState.HibernateUnverified),),
     )
     policy = FleetCapacityPolicy(
         spot=MarketReserve(),
@@ -330,15 +330,15 @@ def test_requested_hibernation_is_usable_without_claiming_verified_sleep() -> No
     retained = plan_market_reserve(policy, snapshot, ReserveConditions(now=NOW)).market(MARKET)
     assert retained is not None
     assert retained.stopped_ready == SMALL.machine
-    assert retained.hibernation_requested_capacity == SMALL.machine
-    assert retained.hibernated_capacity.empty
+    assert retained.hibernation_unverified_capacity == SMALL.machine
+    assert retained.image_saved_capacity.empty
     assert retained.stopped_pending.empty
     activated = plan_market_reserve(
         _policy(SMALL.machine), snapshot, ReserveConditions(now=NOW)
     ).market(MARKET)
     assert activated is not None
     assert activated.growth[0].kind is GrowthKind.Resume
-    assert activated.hibernation_requested_capacity.empty
+    assert activated.hibernation_unverified_capacity.empty
 
 
 def test_hibernation_target_prepares_once_and_waits_for_usable_replacement() -> None:
@@ -352,7 +352,7 @@ def test_hibernation_target_prepares_once_and_waits_for_usable_replacement() -> 
     initial = replace(_snapshot((_unit(SMALL, stopped=1),), (old,)), offers=(fast,))
     plan = plan_market_reserve(policy, initial, ReserveConditions(now=NOW)).market(MARKET)
     assert plan is not None
-    assert plan.hibernated_target == SMALL.machine
+    assert plan.hibernation_target == SMALL.machine
     assert plan.stopped[SMALL.key] == 1
     assert plan.growth[0].kind is GrowthKind.Prepare
     assert plan.growth[0].offer_key == fast.key
@@ -371,15 +371,15 @@ def test_hibernation_target_prepares_once_and_waits_for_usable_replacement() -> 
         assert not plan.growth
         assert plan.stopped == {SMALL.key: 1, fast.key: 1}
 
-    requested = ReserveMachine("replacement", fast.key, ReserveMachineState.HibernationRequested)
+    requested = ReserveMachine("replacement", fast.key, ReserveMachineState.HibernateUnverified)
     plan = plan_market_reserve(
         policy, replace(committed, machines=(old, requested)), ReserveConditions(now=NOW)
     ).market(MARKET)
     assert plan is not None
     assert not plan.growth
     assert plan.stopped == {SMALL.key: 0, fast.key: 1}
-    assert plan.hibernation_requested_capacity == SMALL.machine
-    assert plan.hibernated_capacity.empty
+    assert plan.hibernation_unverified_capacity == SMALL.machine
+    assert plan.image_saved_capacity.empty
 
     fallback = replace(
         committed,
@@ -390,8 +390,8 @@ def test_hibernation_target_prepares_once_and_waits_for_usable_replacement() -> 
     assert plan is not None
     assert not plan.growth
     assert plan.stopped_ready == SMALL.machine
-    assert plan.hibernation_requested_capacity.empty
-    assert plan.hibernated_capacity.empty
+    assert plan.hibernation_unverified_capacity.empty
+    assert plan.image_saved_capacity.empty
 
 
 def test_consolidation_keeps_its_destination_pool() -> None:

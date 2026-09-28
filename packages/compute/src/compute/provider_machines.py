@@ -15,9 +15,10 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Protocol
-from uuid import uuid4
+from uuid import UUID, uuid4, uuid5
 
 from database.repositories.capacity_activations import CapacityActivationRepository
+from database.repositories.capacity_sleep_attempts import CapacitySleepAttemptRepository
 from database.repositories.compute import (
     ComputeCapacityOperationRepository,
     ComputeJoinCredentialRepository,
@@ -35,6 +36,11 @@ from database.types import DatabaseSession
 from observability.workspace_changes import WorkspaceChangePublisher
 from pydantic import JsonValue
 from shared.capacity import CapacityOperationStatus, CapacityOwnerKind, capacity_failure_message
+from shared.capacity_lifecycle import (
+    CapacityActivationKind,
+    CapacityImageEvidence,
+    CapacitySleepReason,
+)
 from shared.compute_enrollment import (
     ComputeCredentialStatus,
     ComputeMachineEnrollmentStatus,
@@ -289,6 +295,10 @@ class ProviderMachineReconciler:
         by_instance_id = {
             item.instance_id: item for item in current if item.instance_id is not None
         }
+        sleeps = CapacitySleepAttemptRepository(session)
+        current_sleeps = sleeps.get_current_many(
+            [item.id for item in current if item.current_sleep_attempt_id is not None]
+        )
         for instance_id, instance in observed.items():
             existing = by_instance_id.get(instance_id)
             # A provider may reuse an instance identity after a reclaimed
@@ -426,8 +436,6 @@ class ProviderMachineReconciler:
                     settled_existing.prepared_worker_image if settled_existing else ""
                 ),
                 "hibernates": instance.hibernates,
-                "stop_mode": instance.stop_mode,
-                "sleep_outcome": instance.sleep_outcome,
                 "activation_requested_at": instance.activation_requested_at,
                 "provider_running_at": instance.provider_running_at,
                 # Kept only while the resume it authorized is still finishing.
@@ -461,7 +469,102 @@ class ProviderMachineReconciler:
                     }
                 )
             )
-            if instance.activation_requested_at is not None and (
+            previous_sleep = current_sleeps.get(recorded.id)
+            if (
+                previous_sleep is not None
+                and previous_sleep.superseded_at is None
+                and instance.sleep_recovery_observed_at is not None
+                and instance.sleep_recovery_observed_at >= previous_sleep.observed_at
+            ):
+                sleeps.supersede_untracked_stop(
+                    previous_sleep.id, at=instance.sleep_recovery_observed_at
+                )
+            if (
+                instance.sleep_attempt_id is None
+                and instance.sleep_evidence_reason is CapacitySleepReason.ExternalChange
+                and instance.image_evidence_at is not None
+                and (
+                    previous_sleep is None
+                    or previous_sleep.observed_at < instance.image_evidence_at
+                    or (
+                        previous_sleep.provider_stopped_at is None
+                        and instance.sleep_stopped_at is not None
+                    )
+                )
+            ):
+                external = sleeps.observe_external_stop(
+                    recorded.id,
+                    attempt_id=str(
+                        uuid5(UUID(recorded.id), instance.image_evidence_at.isoformat())
+                    ),
+                    at=instance.image_evidence_at,
+                )
+                if instance.sleep_stopped_at is not None:
+                    sleeps.record_stopped(external.id, at=instance.sleep_stopped_at)
+                sleeps.record_evidence(
+                    external.id,
+                    evidence=CapacityImageEvidence.Unavailable,
+                    reason=CapacitySleepReason.ExternalChange,
+                    at=instance.image_evidence_at,
+                )
+                recorded = recorded.model_copy(update={"current_sleep_attempt_id": external.id})
+            if previous_sleep is not None and instance.sleep_attempt_id == previous_sleep.id:
+                if (
+                    instance.sleep_accepted_mode is not None
+                    and instance.sleep_accepted_at is not None
+                    and (
+                        previous_sleep.accepted_at is None
+                        or instance.sleep_accepted_at > previous_sleep.accepted_at
+                    )
+                ):
+                    sleeps.accept(
+                        previous_sleep.id,
+                        mode=instance.sleep_accepted_mode,
+                        at=instance.sleep_accepted_at,
+                        reason=instance.sleep_evidence_reason,
+                    )
+                if (
+                    instance.sleep_stopped_at is not None
+                    and previous_sleep.provider_stopped_at is None
+                ):
+                    sleeps.record_stopped(previous_sleep.id, at=instance.sleep_stopped_at)
+                if (
+                    instance.image_evidence_at is not None
+                    and instance.sleep_evidence_reason is not None
+                    and previous_sleep.image_evidence is CapacityImageEvidence.Unknown
+                    and (
+                        previous_sleep.evidence_at is None
+                        or instance.image_evidence_at > previous_sleep.evidence_at
+                    )
+                ):
+                    sleeps.record_evidence(
+                        previous_sleep.id,
+                        evidence=instance.image_evidence,
+                        reason=instance.sleep_evidence_reason,
+                        at=instance.image_evidence_at,
+                    )
+            if (
+                instance.activation_requested_at is None
+                and instance.activation_observed_at is not None
+                and (
+                    settled_existing is None
+                    or settled_existing.status != provider_status
+                    or settled_existing.provider_running_at != instance.provider_running_at
+                )
+            ):
+                sleep_attempt_id = (
+                    instance.activation_sleep_attempt_id or recorded.current_sleep_attempt_id
+                )
+                if sleep_attempt_id is None:
+                    raise ConflictError("external activation has no observed sleep attempt")
+                CapacityActivationRepository(session).observe_external(
+                    recorded.id,
+                    observed_at=instance.activation_observed_at,
+                    kind=instance.activation_kind,
+                    provider_running_at=instance.provider_running_at,
+                    sleep_attempt_id=sleep_attempt_id,
+                )
+            elif instance.activation_requested_at is not None and (
                 settled_existing is None
                 or settled_existing.activation_requested_at != instance.activation_requested_at
                 or settled_existing.provider_running_at != instance.provider_running_at
@@ -472,6 +575,11 @@ class ProviderMachineReconciler:
                     kind=instance.activation_kind,
                     provider_running_at=instance.provider_running_at,
                     observed_at=now,
+                    sleep_attempt_id=(
+                        instance.activation_sleep_attempt_id or recorded.current_sleep_attempt_id
+                        if instance.activation_kind is not CapacityActivationKind.Provision
+                        else None
+                    ),
                 )
         for existing in current:
             if existing.instance_id is not None and existing.instance_id in observed:

@@ -9,6 +9,7 @@ from compute.providers import (
     ProviderUnitSnapshot,
     ProviderUnitStateCheckpoints,
 )
+from shared.capacity_lifecycle import CapacitySleepRequest
 
 from .instance_catalog import aws_instance_catalog_entry
 from .managed_pool import AWS_MAX_ROOT_VOLUME_GIB, AwsManagedPoolSpec
@@ -94,7 +95,7 @@ class AwsPlatformCapacityProvider(AwsPooledCapacityProvider):
 
     def ensure_unit(self, request: ProviderUnitRequest) -> ProviderUnitSnapshot:
         if self._retained(request):
-            return self._pool(request).ensure()
+            return self._pool(request).reconcile()
         return super(AwsPlatformCapacityProvider, self).ensure_unit(request)
 
     def describe_unit(self, request: ProviderUnitRequest) -> ProviderUnitSnapshot:
@@ -116,14 +117,18 @@ class AwsPlatformCapacityProvider(AwsPooledCapacityProvider):
         )
 
     def complete_machine_preparation(
-        self, request: ProviderUnitRequest, provider_instance_id: str, *, hibernate: bool
+        self,
+        request: ProviderUnitRequest,
+        provider_instance_id: str,
+        *,
+        sleep_request: CapacitySleepRequest | None,
     ) -> ProviderUnitSnapshot:
         if self._retained(request):
             return self._pool(request).complete_preparation(
-                provider_instance_id, hibernate=hibernate
+                provider_instance_id, sleep_request=sleep_request
             )
         return super(AwsPlatformCapacityProvider, self).complete_machine_preparation(
-            request, provider_instance_id, hibernate=hibernate
+            request, provider_instance_id, sleep_request=sleep_request
         )
 
     def refresh_machine(
@@ -136,11 +141,17 @@ class AwsPlatformCapacityProvider(AwsPooledCapacityProvider):
         )
 
     def stop_machine(
-        self, request: ProviderUnitRequest, provider_instance_id: str
+        self,
+        request: ProviderUnitRequest,
+        provider_instance_id: str,
+        *,
+        sleep_request: CapacitySleepRequest,
     ) -> ProviderUnitSnapshot:
         if self._retained(request):
-            return self._pool(request).stop(provider_instance_id)
-        return super(AwsPlatformCapacityProvider, self).stop_machine(request, provider_instance_id)
+            return self._pool(request).stop(provider_instance_id, sleep_request=sleep_request)
+        return super(AwsPlatformCapacityProvider, self).stop_machine(
+            request, provider_instance_id, sleep_request=sleep_request
+        )
 
     def release_machine(
         self, request: ProviderUnitRequest, provider_instance_id: str

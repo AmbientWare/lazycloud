@@ -8,7 +8,7 @@ from typing import TypedDict
 from uuid import uuid4
 
 import pytest
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, EndpointConnectionError
 from compute.offers import ComputeOffer, OfferRequest, choose_offer
 from compute.provider_state import ProviderUnitStateService
 from compute.providers import (
@@ -43,6 +43,12 @@ from provider_aws.supplier_prices import AwsRegionalPrices
 from pydantic import SecretStr, TypeAdapter, ValidationError
 from shared.aws_connections import AwsAccountNetwork
 from shared.capacity import CapacityFailureCode, CapacityOwnerKind, CapacityOwnerSource
+from shared.capacity_lifecycle import (
+    CapacityImageEvidence,
+    CapacitySleepMode,
+    CapacitySleepReason,
+    CapacitySleepRequest,
+)
 from shared.compute_policy import (
     ComputeCapacityMode,
     ComputeUnitProviderState,
@@ -102,6 +108,9 @@ def test_scaling_failure_distinguishes_quota_from_capacity(
 
 
 class _Ec2:
+    def get_console_output(self, *, InstanceId: str, Latest: bool) -> Mapping[str, object]:
+        return {"InstanceId": InstanceId}
+
     def run_instances(self, **kwargs: object) -> Mapping[str, object]:
         raise AssertionError("ASG lifecycle must not directly launch instances")
 
@@ -1370,47 +1379,111 @@ def test_managed_pool_maps_malformed_aws_inventory_to_typed_error() -> None:
 
 
 class _StoppingEc2(_RetainedEc2):
-    """Records each stop request, refusing hibernation with `refusal` when given."""
-
     def __init__(self, *, refusal: str) -> None:
         super().__init__()
         self.refusal = refusal
-        self.stops: list[str] = []
 
     def stop_instances(
         self, *, InstanceIds: list[str], Hibernate: bool = False, Force: bool = False
     ) -> Mapping[str, object]:
-        if Hibernate and self.refusal:
+        if Force and self.refusal == "ForceTransportFailed":
+            raise EndpointConnectionError(endpoint_url="https://ec2.us-east-1.amazonaws.com")
+        if Hibernate and self.refusal and self.refusal != "ForceTransportFailed":
             raise ClientError({"Error": {"Code": self.refusal, "Message": "no"}}, "StopInstances")
-        self.stops.append("force" if Force else "hibernate" if Hibernate else "stop")
         for instance_id in InstanceIds:
             self.instances[instance_id]["State"] = {"Name": "stopping"}
         return {}
 
 
+@pytest.mark.parametrize("used_host", [False, True])
+def test_legacy_pending_stop_requires_a_new_preparation_attempt(
+    retained_pool: tuple[AwsRetainedPool, _RetainedEc2],
+    used_host: bool,
+) -> None:
+    pool, _ = retained_pool
+    ec2 = _StoppingEc2(refusal="")
+    now = utc_now()
+    slot = RetainedSlot(
+        token=uuid4().hex,
+        created_at=now - timedelta(hours=1),
+        launch_template_id="lt-retained",
+        launch_template_version=1,
+        host_revision="host",
+        subnet_id=_SUBNET_IDS[0],
+        serving=False,
+        phase=SlotPhase.Stopping,
+        instance_id="i-00000000000000001",
+    )
+    ec2.instances[slot.instance_id] = {
+        "InstanceId": slot.instance_id,
+        "ClientToken": slot.token,
+        "State": {"Name": "running"},
+        "LaunchTime": now - timedelta(hours=1),
+        "HibernationOptions": {"Configured": True},
+        "Tags": [
+            {"Key": AWS_MANAGED_POOL_TAG, "Value": AWS_MANAGED_POOL_TAG_VALUE},
+            {"Key": "cloud-pool:key", "Value": pool.spec.resource_key},
+            {"Key": "cloud-pool:workspace", "Value": pool.spec.workspace_id},
+        ],
+    }
+    request = pool.request.model_copy(update={"purchases_enabled": False})
+    clients = AwsManagedPoolClients(ec2=ec2, autoscaling=_AutoScaling())
+    _save_slot(pool, request, slot)
+    owner = AwsRetainedPool(request, pool.spec, clients, pool.checkpoints)
+    [held] = owner.reconcile().instances
+    assert held.status is ProviderMachineStatus.Preparing
+    assert held.sleep_attempt_id is None
+    assert held.sleep_recovery_observed_at is not None
+    assert held.activation_observed_at is None
+    owner = AwsRetainedPool(request, pool.spec, clients, pool.checkpoints)
+    [reobserved] = owner.reconcile().instances
+    assert reobserved.sleep_recovery_observed_at == held.sleep_recovery_observed_at
+    assert ec2.instances[slot.instance_id]["State"] == {"Name": "running"}
+    with pytest.raises(ValueError, match="requires a sleep attempt"):
+        owner.complete_preparation(slot.instance_id, sleep_request=None)
+    sleep = CapacitySleepRequest(
+        attempt_id=str(uuid4()),
+        boot_id=str(uuid4()),
+        mode=CapacitySleepMode.Stop if used_host else CapacitySleepMode.Hibernate,
+        requested_at=utc_now(),
+    )
+    stale_sleep = sleep.model_copy(update={"requested_at": now})
+    with pytest.raises(ValueError, match="predates the observed stop recovery"):
+        owner.complete_preparation(slot.instance_id, sleep_request=stale_sleep)
+    result = (
+        owner.stop(slot.instance_id, sleep_request=sleep)
+        if used_host
+        else owner.complete_preparation(slot.instance_id, sleep_request=sleep)
+    )
+    [stopping] = result.instances
+    assert stopping.sleep_attempt_id == sleep.attempt_id
+    assert stopping.sleep_accepted_mode is sleep.mode
+    assert stopping.sleep_recovery_observed_at is None
+    assert ec2.instances[slot.instance_id]["State"] == {"Name": "stopping"}
+
+
 @pytest.mark.parametrize(
-    ("hibernate", "refusal", "first_pass", "after_deadline"),
+    ("hibernate", "refusal", "accepted", "final_reason"),
     [
-        (True, "", ["hibernate"], ["hibernate", "force"]),
-        (True, "UnsupportedHibernationConfiguration", ["stop"], ["stop", "force"]),
-        (True, "UnsupportedOperation", [], ["stop"]),
-        (False, "", ["stop"], ["stop", "force"]),
+        (True, "", CapacitySleepMode.Hibernate, CapacitySleepReason.ForcedStop),
+        (
+            True,
+            "UnsupportedHibernationConfiguration",
+            CapacitySleepMode.Stop,
+            CapacitySleepReason.ForcedStop,
+        ),
+        (True, "UnsupportedOperation", None, CapacitySleepReason.ProviderRejected),
+        (False, "", CapacitySleepMode.Stop, CapacitySleepReason.ForcedStop),
+        (True, "ForceTransportFailed", CapacitySleepMode.Hibernate, CapacitySleepReason.ForcedStop),
     ],
 )
-def test_a_reserve_hibernates_only_when_asked_and_always_reaches_a_stop(
+def test_stop_retries_preserve_the_attempt_and_report_only_accepted_outcomes(
     retained_pool: tuple[AwsRetainedPool, _RetainedEc2],
     hibernate: bool,
     refusal: str,
-    first_pass: list[str],
-    after_deadline: list[str],
+    accepted: CapacitySleepMode | None,
+    final_reason: CapacitySleepReason,
 ) -> None:
-    """A reserve hibernates only when compute asked, and it never stays stopping.
-
-    An instance launched without hibernation stops plainly at once. Any other
-    refusal, such as a guest not ready to hibernate, is retried until the
-    operation deadline and then stops plainly. A stop of either kind still
-    pending past that deadline, counted from its own request, is forced.
-    """
     pool, _ = retained_pool
     ec2 = _StoppingEc2(refusal=refusal)
     now = utc_now()
@@ -1424,7 +1497,12 @@ def test_a_reserve_hibernates_only_when_asked_and_always_reaches_a_stop(
         serving=False,
         phase=SlotPhase.Stopping,
         instance_id="i-00000000000000001",
-        hibernate=hibernate,
+        sleep_request=CapacitySleepRequest(
+            attempt_id=str(uuid4()),
+            boot_id=str(uuid4()),
+            mode=CapacitySleepMode.Hibernate if hibernate else CapacitySleepMode.Stop,
+            requested_at=now,
+        ),
     )
     ec2.instances = {
         "i-00000000000000001": {
@@ -1444,19 +1522,127 @@ def test_a_reserve_hibernates_only_when_asked_and_always_reaches_a_stop(
     clients = AwsManagedPoolClients(ec2=ec2, autoscaling=_AutoScaling())
     _save_slot(pool, request, slot)
     AwsRetainedPool(request, pool.spec, clients, pool.checkpoints).ensure()
-    assert ec2.stops == first_pass
     [stopping] = RetainedPoolState.model_validate(pool.checkpoints.load(request).attributes).slots
+    assert stopping.sleep_accepted_mode is accepted
+    assert stopping.sleep_request == slot.sleep_request
+    assert stopping.sleep_stopped_at is None
     overdue = now - timedelta(minutes=11)
     _save_slot(
         pool,
         request,
         stopping.model_copy(
             update={
-                "stop_requested_at": stopping.stop_requested_at and overdue,
+                "sleep_accepted_at": stopping.sleep_accepted_at and overdue,
                 "hibernate_refused_since": stopping.hibernate_refused_since and overdue,
             }
         ),
     )
     AwsRetainedPool(request, pool.spec, clients, pool.checkpoints).ensure()
 
-    assert ec2.stops == after_deadline
+    [finished] = RetainedPoolState.model_validate(pool.checkpoints.load(request).attributes).slots
+    assert finished.sleep_request == slot.sleep_request
+    force_ambiguous = refusal == "ForceTransportFailed"
+    assert finished.sleep_accepted_mode is (
+        CapacitySleepMode.Hibernate if force_ambiguous else CapacitySleepMode.Stop
+    )
+    assert finished.sleep_evidence_reason is final_reason
+    assert finished.image_evidence is (
+        CapacityImageEvidence.Unknown if force_ambiguous else CapacityImageEvidence.Unavailable
+    )
+    assert finished.sleep_stopped_at is None
+
+
+@pytest.mark.parametrize("image_saved", [True, False])
+def test_stopped_provider_evidence_is_bounded_and_survives_restart(
+    retained_pool: tuple[AwsRetainedPool, _RetainedEc2],
+    monkeypatch: pytest.MonkeyPatch,
+    image_saved: bool,
+) -> None:
+    pool, _ = retained_pool
+    now = utc_now()
+    sleep = CapacitySleepRequest(
+        attempt_id=str(uuid4()),
+        boot_id=str(uuid4()),
+        mode=CapacitySleepMode.Hibernate,
+        requested_at=now - timedelta(minutes=1),
+    )
+
+    class _ConsoleEc2(_RetainedEc2):
+        def get_console_output(self, *, InstanceId: str, Latest: bool) -> Mapping[str, object]:
+            return {
+                "InstanceId": InstanceId,
+                "Timestamp": now,
+                "Output": (
+                    f"lazycloud-sleep attempt={sleep.attempt_id} boot={sleep.boot_id}\n"
+                    "PM: hibernation: hibernation entry\n"
+                    "PM: hibernation: Compressing and saving image data (123 pages)...\n"
+                    "PM: hibernation: Image saving done\n"
+                )
+                if image_saved
+                else "PM: hibernation: Image saving done\n",
+            }
+
+    ec2 = _ConsoleEc2()
+    slot = RetainedSlot(
+        token=uuid4().hex,
+        created_at=now - timedelta(hours=1),
+        launch_template_id="lt-retained",
+        launch_template_version=1,
+        host_revision="host",
+        subnet_id=_SUBNET_IDS[0],
+        serving=False,
+        phase=SlotPhase.Stopping,
+        instance_id="i-00000000000000001",
+        sleep_request=sleep,
+        sleep_accepted_mode=CapacitySleepMode.Hibernate,
+        sleep_accepted_at=sleep.requested_at,
+    )
+    ec2.instances[slot.instance_id] = {
+        "InstanceId": slot.instance_id,
+        "ClientToken": slot.token,
+        "State": {"Name": "stopping"},
+        "Tags": [
+            {"Key": AWS_MANAGED_POOL_TAG, "Value": AWS_MANAGED_POOL_TAG_VALUE},
+            {"Key": "cloud-pool:key", "Value": pool.spec.resource_key},
+            {"Key": "cloud-pool:workspace", "Value": pool.spec.workspace_id},
+        ],
+    }
+    request = pool.request.model_copy(update={"purchases_enabled": False})
+    clients = AwsManagedPoolClients(ec2=ec2, autoscaling=_AutoScaling())
+    _save_slot(pool, request, slot)
+    owner = AwsRetainedPool(request, pool.spec, clients, pool.checkpoints)
+    [stopping] = owner.reconcile().instances
+    assert stopping.image_evidence is CapacityImageEvidence.Unknown
+    assert stopping.sleep_stopped_at is None
+    ec2.instances[slot.instance_id]["State"] = {"Name": "stopped"}
+    [stopped] = owner.reconcile().instances
+    assert stopped.image_evidence is (
+        CapacityImageEvidence.Saved if image_saved else CapacityImageEvidence.Unknown
+    )
+    assert stopped.sleep_stopped_at is not None
+    assert stopped.sleep_accepted_at == sleep.requested_at
+    restarted = AwsRetainedPool(request, pool.spec, clients, pool.checkpoints)
+    [preserved] = restarted.reconcile().instances
+    assert preserved == stopped
+    assert restarted.state.slots[0].evidence_checks == 1
+    if not image_saved:
+        monkeypatch.setattr(
+            "provider_aws.retained_pool.utc_now", lambda: now + timedelta(minutes=11)
+        )
+        [expired] = restarted.reconcile().instances
+        assert expired.image_evidence is CapacityImageEvidence.Unavailable
+        assert expired.sleep_evidence_reason is CapacitySleepReason.EvidenceExpired
+        assert restarted.state.slots[0].evidence_checks == 1
+    ec2.instances[slot.instance_id]["State"] = {"Name": "pending"}
+    [external] = restarted.reconcile().instances
+    assert external.status is ProviderMachineStatus.Preparing
+    assert external.activation_requested_at is None
+    assert external.activation_observed_at is not None
+    assert external.activation_sleep_attempt_id == sleep.attempt_id
+    ec2.instances[slot.instance_id]["State"] = {"Name": "running"}
+    after_wake = AwsRetainedPool(request, pool.spec, clients, pool.checkpoints)
+    [held] = after_wake.reconcile().instances
+    assert held.activation_observed_at == external.activation_observed_at
+    assert held.activation_requested_at is None
+    assert held.status is ProviderMachineStatus.Preparing
+    assert after_wake.state.slots[0].serving is False

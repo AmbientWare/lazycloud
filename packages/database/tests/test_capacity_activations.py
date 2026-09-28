@@ -3,6 +3,7 @@ from uuid import uuid4
 
 from database.context import ServiceContext
 from database.repositories.capacity_activations import CapacityActivationRepository
+from database.repositories.capacity_sleep_attempts import CapacitySleepAttemptRepository
 from database.repositories.compute import (
     ComputeProviderInstanceRecord,
     ComputeProviderInstanceRepository,
@@ -11,7 +12,11 @@ from database.repositories.compute import (
 from database.repositories.orchestration import MachineRepository
 from database.tables.capacity_activations import CapacityActivationTable
 from identity.platform import PlatformNamespaceService
-from shared.capacity_lifecycle import CapacityActivationKind, CapacitySleepOutcome
+from shared.capacity_lifecycle import (
+    CapacityActivationKind,
+    CapacityRestoreOutcome,
+    CapacitySleepMode,
+)
 from shared.compute_fleet import Machine
 from shared.compute_policy import ComputeUnitRecord, UnitName
 from shared.placement import Placement
@@ -104,6 +109,14 @@ def test_activation_cycles_preserve_preparation_failure_and_verified_resume(
             observed_at=now,
         )
         repository.record_prepared(instance.id, at=now + timedelta(seconds=40))
+        sleep = CapacitySleepAttemptRepository(session).begin(
+            instance.id,
+            attempt_id=str(uuid4()),
+            boot_id=str(uuid4()),
+            requested_mode=CapacitySleepMode.Hibernate,
+            requested_at=now + timedelta(seconds=45),
+            observed_at=now + timedelta(seconds=45),
+        )
         resumed_at = now + timedelta(hours=1)
         repository.observe(
             instance.id,
@@ -111,13 +124,16 @@ def test_activation_cycles_preserve_preparation_failure_and_verified_resume(
             kind=CapacityActivationKind.Resume,
             provider_running_at=None,
             observed_at=resumed_at,
+            sleep_attempt_id=sleep.id,
         )
         authorized_at = resumed_at + timedelta(seconds=7)
-        repository.authorize(
+        repository.record_restore(
             instance.id,
+            sleep_attempt_id=sleep.id,
             at=authorized_at,
-            outcome=CapacitySleepOutcome.Hibernated,
+            outcome=CapacityRestoreOutcome.MemoryRestored,
         )
+        repository.authorize(instance.id, at=authorized_at)
         repository.record_ready([machine.id], at=authorized_at)
         repository.record_failed(instance.id, at=authorized_at + timedelta(seconds=1))
         repository.observe(
@@ -144,7 +160,7 @@ def test_activation_cycles_preserve_preparation_failure_and_verified_resume(
         ).all()
         assert len(rows) == 3
         assert rows[0].prepared_at is not None and rows[0].failed_at is None
-        assert rows[1].sleep_outcome == CapacitySleepOutcome.Hibernated.value
+        assert rows[1].restore_outcome == CapacityRestoreOutcome.MemoryRestored.value
         assert rows[1].ready_at is not None and to_utc(rows[1].ready_at) == authorized_at
         assert rows[1].failed_at is None
         assert rows[2].failed_at is not None and rows[2].ready_at is None

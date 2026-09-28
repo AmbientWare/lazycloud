@@ -19,6 +19,7 @@ from agent.operations import (
 )
 
 AGENT_STATE_FILE = "agent-state.json"
+BOOT_ID_PATH = Path("/proc/sys/kernel/random/boot_id")
 _JSON_VALUE_ADAPTER: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
 _JSON_OBJECT_ADAPTER: TypeAdapter[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue])
 
@@ -88,9 +89,30 @@ def model_payload(model: ContractModel) -> dict[str, JsonValue]:
     return _JSON_OBJECT_ADAPTER.validate_json(model.model_dump_json())
 
 
-def write_json_atomic(path: Path, payload: JsonValue, *, permissions: int) -> None:
+def write_json_atomic(
+    path: Path, payload: JsonValue, *, permissions: int, durable: bool = False
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_name(f".{path.name}.tmp-{os.getpid()}")
-    tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-    tmp_path.chmod(permissions)
+    with tmp_path.open("w", encoding="utf-8") as stream:
+        os.fchmod(stream.fileno(), permissions)
+        stream.write(json.dumps(payload, indent=2, sort_keys=True))
+        if durable:
+            stream.flush()
+            os.fsync(stream.fileno())
     os.replace(tmp_path, path)
+    if not durable:
+        return
+    descriptor = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def read_boot_id() -> str:
+    """Empty on hosts whose kernel does not publish a boot identity."""
+    try:
+        return BOOT_ID_PATH.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        return ""

@@ -15,6 +15,7 @@ from compute.capacity_errors import (
     CapacityReservationLockContendedError,
 )
 from compute.capacity_recovery import record_capacity_risk
+from compute.fleet_operations import FleetOperations
 from compute.fleet_policy import (
     FleetCapacityPolicy,
     FleetReserveSnapshot,
@@ -53,8 +54,10 @@ from compute.state import RedisComputeStateRepository
 from compute.supplier_costs import SupplierCostInspectionService
 from database.context import ServiceContext
 from database.repositories.aws_connections import AwsAccountConnectionRepository
+from database.repositories.capacity_activations import CapacityActivationRepository
 from database.repositories.capacity_maintenance import CapacityMaintenanceRepository
 from database.repositories.capacity_recovery import CapacityRecoveryRepository
+from database.repositories.capacity_sleep_attempts import CapacitySleepAttemptRepository
 from database.repositories.compute import (
     ComputeCapacityOperationRecord,
     ComputeCapacityOperationRepository,
@@ -110,6 +113,12 @@ from shared.capacity import (
     CapacityOperationStatus,
     CapacityReleaseRequest,
 )
+from shared.capacity_lifecycle import (
+    CapacityActivationKind,
+    CapacitySleepMode,
+    CapacitySleepObservation,
+    CapacitySleepRequest,
+)
 from shared.capacity_maintenance import CapacityMaintenancePhase
 from shared.compute_enrollment import (
     AgentCapacityState,
@@ -117,6 +126,7 @@ from shared.compute_enrollment import (
     ComputeMachineEnrollmentStatus,
     MachineBootstrapFailureReason,
     MachineReadinessPhase,
+    MachineStopPreparationReceipt,
     agent_machine_worker_id,
 )
 from shared.compute_fleet import Machine, MachineLifecycle, ResourceStatus, Worker
@@ -156,9 +166,12 @@ class _PooledProvider:
         return self.reserve_offers
 
     def complete_machine_preparation(
-        self, request: ProviderUnitRequest, provider_instance_id: str, *, hibernate: bool
+        self,
+        request: ProviderUnitRequest,
+        provider_instance_id: str,
+        *,
+        sleep_request: CapacitySleepRequest | None,
     ) -> ProviderUnitSnapshot:
-        del hibernate
         raise AssertionError("test provider has no stopped capacity")
 
     def refresh_machine(
@@ -167,7 +180,11 @@ class _PooledProvider:
         raise AssertionError("test provider has no stopped capacity")
 
     def stop_machine(
-        self, request: ProviderUnitRequest, provider_instance_id: str
+        self,
+        request: ProviderUnitRequest,
+        provider_instance_id: str,
+        *,
+        sleep_request: CapacitySleepRequest,
     ) -> ProviderUnitSnapshot:
         raise AssertionError("test provider has no stopped capacity")
 
@@ -2238,7 +2255,9 @@ def test_release_rollout_preserves_singleton_until_replacement_and_fresh_intake(
             compute.fleet_policy,
             FleetReserveSnapshot((), (), 0, 0, 0),
             ReserveConditions(now=datetime.now(UTC)),
-        )
+        ),
+        generated_at=datetime.now(UTC),
+        release=None,
     )
     pool = compute.prepare_pooled_capacity(
         workspace="default",
@@ -4178,9 +4197,12 @@ class _ReserveProvider(_PooledProvider):
         return self._snapshot(request)
 
     def complete_machine_preparation(
-        self, request: ProviderUnitRequest, provider_instance_id: str, *, hibernate: bool
+        self,
+        request: ProviderUnitRequest,
+        provider_instance_id: str,
+        *,
+        sleep_request: CapacitySleepRequest | None,
     ) -> ProviderUnitSnapshot:
-        del hibernate
         if self.reclaimed:
             raise ValueError("instance is not owned by this retained pool")
         self.prepared.append(provider_instance_id)
@@ -4303,6 +4325,125 @@ _RESERVE_RELEASE = ReleaseTarget(
     worker_image="registry.example/worker:new",
     agent=AgentArtifact(url="https://example.test/agent", sha256="a" * 64, size_bytes=1),
 )
+
+
+@pytest.mark.parametrize("resumed", [False, True])
+def test_operator_stop_preserves_machine_and_storage_and_cannot_resume_pending_stop(
+    service_context: ServiceContext,
+    real_redis_actors: RealRedisActors,
+    resumed: bool,
+) -> None:
+    now = datetime.now(UTC)
+    compute, provider, _leases, unit, machine_id = _stopped_reserve(
+        service_context, real_redis_actors, now=now
+    )
+    _reserve_enrollment(service_context, unit, machine_id, now=now)
+    provider.reserve_status = "active"
+    with service_context.database.session() as session:
+        unit = ComputeUnitRepository(session).upsert(
+            unit.model_copy(
+                update={
+                    "desired_machines": 1,
+                    "min_machines": 1,
+                    "initial_machines": 1,
+                    "stopped_machines": 0,
+                }
+            )
+        )
+        instances = ComputeProviderInstanceRepository(session)
+        before = instances.get_by_machine(machine_id)
+        assert before is not None
+        attempts = CapacitySleepAttemptRepository(session)
+        prior_sleep = attempts.begin(
+            before.id,
+            attempt_id=str(uuid4()),
+            boot_id=str(uuid4()) if resumed else "",
+            requested_mode=CapacitySleepMode.Hibernate,
+            requested_at=now - timedelta(minutes=2) if resumed else None,
+            observed_at=now - timedelta(minutes=2),
+        )
+        attempts.accept(
+            prior_sleep.id, mode=CapacitySleepMode.Hibernate, at=now - timedelta(minutes=2)
+        )
+        if resumed:
+            CapacityActivationRepository(session).observe(
+                before.id,
+                requested_at=now - timedelta(minutes=1),
+                kind=CapacityActivationKind.Resume,
+                provider_running_at=now,
+                observed_at=now,
+                sleep_attempt_id=prior_sleep.id,
+            )
+        instances.upsert(before.model_copy(update={"status": "active", "first_served_at": now}))
+        machines = MachineRepository(session)
+        machine = machines.get(machine_id, workspace_id=unit.workspace_id)
+        assert machine is not None
+        machines.upsert(
+            machine.model_copy(update={"lifecycle": MachineLifecycle.Ready}),
+            workspace_id=unit.workspace_id,
+        )
+
+    operations = FleetOperations(compute)
+    stopped = operations.stop_machine(unit_id=unit.id, machine_id=machine_id)
+    repeated = operations.stop_machine(unit_id=unit.id, machine_id=machine_id)
+    assert repeated.generation == stopped.generation
+    assert repeated.desired_machines == repeated.min_machines == 0
+    assert repeated.stopped_machines == 1
+    if not resumed:
+        compute.provider_machines._apply_pooled_snapshot(
+            stopped,
+            provider.offer,
+            ProviderUnitSnapshot(
+                phase=ProviderCapacityPhase.Ready,
+                desired_machines=0,
+                stopped_machines=1,
+                max_machines=stopped.max_machines,
+                observed_machines=0,
+                instances=[
+                    ProviderUnitInstance(
+                        provider_instance_id=_RESERVE_INSTANCE,
+                        status="preparing",
+                        storage_volume_ids=before.storage_volume_ids,
+                        sleep_recovery_observed_at=now,
+                    )
+                ],
+            ),
+            provider=provider,
+        )
+    with service_context.database.session() as session:
+        after = ComputeProviderInstanceRepository(session).get_by_machine(machine_id)
+        machine = MachineRepository(session).get(machine_id, workspace_id=unit.workspace_id)
+        enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
+            unit.workspace_id, machine_id
+        )
+    assert after is not None and after.id == before.id and after.instance_id == before.instance_id
+    assert after.storage_volume_ids == before.storage_volume_ids
+    assert after.status == "stopping" and after.provider_storage_destroyed_at is None
+    assert machine is not None and machine.lifecycle is MachineLifecycle.Stopping
+    assert enrollment is not None and enrollment.capacity_state is AgentCapacityState.Draining
+    preparation = compute.prepare_reserved_machine(
+        workspace_id=unit.workspace_id,
+        machine_id=machine_id,
+        credential_id=enrollment.id,
+        credential_generation=enrollment.credential_generation,
+        release=_RESERVE_RELEASE,
+        agent_binary_sha256="a" * 64,
+        prepared_worker_images=[_RESERVE_RELEASE.worker_image],
+        active_worker_images={},
+        admission_waiting_workers=[],
+        boot_id=prior_sleep.boot_id or str(uuid4()),
+        sleep_observation=None,
+        prepared_stop=MachineStopPreparationReceipt(request_id=machine.lifecycle_at.isoformat()),
+    )
+    assert preparation.phase is ReservePreparationPhase.StoppingUsed
+    assert preparation.sleep_request is not None
+    assert preparation.sleep_request.attempt_id != prior_sleep.id
+    assert preparation.sleep_request.mode is CapacitySleepMode.Stop
+    with pytest.raises(ConflictError, match="exceeds existing stopped capacity"):
+        operations.resume_unit(unit_id=unit.id, desired=1)
+    unchanged = compute.get_internal_unit(unit.workspace_id, unit.id)
+    assert unchanged.generation == stopped.generation
+    assert unchanged.desired_machines == 0 and unchanged.stopped_machines == 1
 
 
 def test_reserve_retirement_preserves_ready_floor_across_pools_and_pending_cleanup(
@@ -4432,6 +4573,9 @@ def test_stopped_reserve_from_an_older_release_is_prepared_again_and_records_the
         instances.upsert(refreshing.model_copy(update={"first_served_at": now}))
     enrollment = _reserve_enrollment(service_context, unit, machine_id, now=now)
 
+    observation: CapacitySleepObservation | None = None
+    boot_id = str(uuid4())
+
     def prepare() -> ReserveAgentPreparation:
         return compute.prepare_reserved_machine(
             workspace_id=unit.workspace_id,
@@ -4443,14 +4587,23 @@ def test_stopped_reserve_from_an_older_release_is_prepared_again_and_records_the
             prepared_worker_images=[_RESERVE_RELEASE.worker_image],
             active_worker_images={},
             admission_waiting_workers=[],
-            booted_since_prepared=False,
+            boot_id=boot_id,
+            sleep_observation=observation,
             prepared_stop=None,
         )
 
     leases.contended.add(unit.capacity_owner_id)
-    assert prepare().phase is ReservePreparationPhase.PreparingCold
+    with pytest.raises(CapacityReservationLockContendedError):
+        prepare()
     assert provider.prepared == []
     leases.contended.clear()
+    preparing = prepare()
+    assert preparing.phase is ReservePreparationPhase.PreparingCold
+    assert preparing.sleep_request is not None
+    assert provider.prepared == []
+    observation = CapacitySleepObservation(
+        attempt_id=preparing.sleep_request.attempt_id, boot_id=boot_id
+    )
     assert prepare().phase is ReservePreparationPhase.PreparingCold
     assert provider.prepared == [_RESERVE_INSTANCE]
     with service_context.database.session() as session:
@@ -4533,7 +4686,8 @@ def test_a_resumed_reserve_registers_no_worker_until_its_stream_authorizes_the_r
                 agent_machine_worker_id(machine_id): _RESERVE_RELEASE.worker_image
             },
             admission_waiting_workers=[agent_machine_worker_id(machine_id)],
-            booted_since_prepared=True,
+            boot_id=str(uuid4()),
+            sleep_observation=None,
             prepared_stop=None,
         )
 
