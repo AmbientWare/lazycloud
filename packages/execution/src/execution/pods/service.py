@@ -22,6 +22,7 @@ from database.repositories.orchestration import AutoscalingTargetRepository, Con
 from database.types import DatabaseSession
 from observability.workspace_changes import AsyncWorkloadChangeReader, SyncWorkloadChangeReader
 from shared.app_identity import POD_IMAGE
+from shared.async_utils import complete_before_cancelling
 from shared.autoscaler_state import AutoscalerTargetKind
 from shared.autoscaling import PodStubType
 from shared.checkpoints import CheckpointRecord, CheckpointStatus
@@ -185,6 +186,12 @@ def wake_pod(
 
 
 @dataclass(slots=True)
+class _SandboxResultWait:
+    task: asyncio.Task[PodSandboxResultResponse]
+    readers: int = 0
+
+
+@dataclass(slots=True)
 class PodControlService:
     services: ExecutionServices
     redis: RedisClient
@@ -204,6 +211,9 @@ class PodControlService:
     container_connect_timeout_seconds: float = DEFAULT_POD_CONNECTION_TIMEOUT_SECONDS
     pod_proxy_start_timeout_seconds: float = DEFAULT_POD_PROXY_TIMEOUT_SECONDS
     control_plane: ControlPlaneService = field(init=False)
+    _result_waits: dict[tuple[str, str, float], _SandboxResultWait] = field(
+        default_factory=dict, init=False, repr=False
+    )
 
     def __post_init__(self) -> None:
         self.control_plane = ControlPlaneService(self.services.context)
@@ -583,9 +593,28 @@ class PodControlService:
         ready, reason = await asyncio.to_thread(self._container_client_readiness, container)
         if ready is None:
             raise UpstreamUnavailableError(reason)
-        return await self.async_sandbox_results.sandbox_result(
-            ready.worker_address, container.id, process_id, wait_seconds
-        )
+        key = (container.id, process_id, wait_seconds)
+        waiting = self._result_waits.get(key)
+        if waiting is None:
+            waiting = _SandboxResultWait(
+                asyncio.create_task(
+                    self.async_sandbox_results.sandbox_result(
+                        ready.worker_address, container.id, process_id, wait_seconds
+                    )
+                )
+            )
+            self._result_waits[key] = waiting
+        waiting.readers += 1
+        try:
+            return await asyncio.shield(waiting.task)
+        finally:
+            waiting.readers -= 1
+            if waiting.readers == 0:
+                del self._result_waits[key]
+                waiting.task.cancel()
+                await complete_before_cancelling(
+                    asyncio.gather(waiting.task, return_exceptions=True)
+                )
 
     def sandbox_status(self, container_id: str, pid: int) -> PodSandboxStatusResponse:
         if pid == 0:
