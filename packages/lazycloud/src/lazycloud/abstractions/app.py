@@ -7,7 +7,7 @@ from contextvars import copy_context
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, ParamSpec, Protocol, TypeVar, overload
+from typing import TYPE_CHECKING, Any, ParamSpec, Protocol, TypeVar, overload
 
 from pydantic import JsonValue
 from shared.app_slug import validate_app_slug
@@ -29,12 +29,6 @@ from shared.deployment_records import (
 from shared.deployments import DeploymentKind, PodRole
 from shared.disks import DiskMount, parse_disk_size_bytes
 from shared.gpu import GpuInput
-from shared.http.deployment_plans import (
-    DeploymentPlanRequest,
-    DeploymentPlanResponse,
-    DeploymentPruneResponse,
-    WorkloadIdentity,
-)
 from shared.http.errors import HttpApiError, HttpResponseDecodeError, HttpTransportError
 from shared.http.gateway import DeployStubResponse
 from shared.serialization import to_json_value
@@ -64,10 +58,14 @@ from lazycloud.abstractions.sandbox import Sandbox, SandboxOptions
 from lazycloud.abstractions.volume import VolumeExport, volume_mounts
 from lazycloud.agent_harness import AgentHarness, agent_install_commands
 from lazycloud.control import resolve_control_client_config
-from lazycloud.control_clients import resource_control_client
 from lazycloud.json_contracts import resource_payload
-from lazycloud.session.app_deployment import AppDeploymentSession, AppDeploymentTarget
-from lazycloud.session.preparation import MAX_DEPLOYMENT_PREPARATIONS, DeploymentPreparation
+
+if TYPE_CHECKING:
+    from shared.http.deployment_plans import (
+        DeploymentPlanRequest,
+        DeploymentPlanResponse,
+        DeploymentPruneResponse,
+    )
 
 
 class AppOperationError(RuntimeError):
@@ -129,6 +127,8 @@ class App:
     def deployment_manifest(
         self, *, prune: bool = False, resource: str | None = None, name: str | None = None
     ) -> DeploymentPlanRequest:
+        from shared.http.deployment_plans import DeploymentPlanRequest, WorkloadIdentity
+
         if prune and (resource is not None or name is not None):
             raise AppOperationError("pruning requires the complete app without a name override")
         selected = (
@@ -146,6 +146,8 @@ class App:
         )
 
     def plan(self, *, prune: bool = False, workspace: str | None = None) -> DeploymentPlanResponse:
+        from lazycloud.control_clients import resource_control_client
+
         config = resolve_control_client_config(workspace=workspace)
         try:
             return resource_control_client(config).plan_deployment(
@@ -1032,6 +1034,9 @@ class App:
             external_url: External URL to attach to endpoint-style deployments.
             source_root: Local source directory shared by the selected resources.
         """
+        from lazycloud.control_clients import resource_control_client
+        from lazycloud.session.app_deployment import AppDeploymentSession, AppDeploymentTarget
+
         if prune and resource is not None:
             raise AppOperationError("pruning requires the complete app without a resource selector")
         deployable = (
@@ -1071,6 +1076,8 @@ class App:
         external_url: str | None,
         source_root: str | Path | None,
     ) -> tuple[DeployStubResponse, ...]:
+        from lazycloud.session.preparation import MAX_DEPLOYMENT_PREPARATIONS, DeploymentPreparation
+
         with (
             DeploymentPreparation() as preparation,
             ThreadPoolExecutor(

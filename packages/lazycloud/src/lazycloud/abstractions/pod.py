@@ -4,7 +4,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Protocol, TypedDict
+from typing import TYPE_CHECKING, Any, Protocol, TypedDict
 
 from shared.deployment_records import (
     DEFAULT_DISK,
@@ -18,35 +18,32 @@ from shared.deployment_records import (
 from shared.deployments import DeploymentKind, PodRole
 from shared.disks import DiskMount
 from shared.gpu import GpuInput, gpu_preference
-from shared.http.compute import ContainerResponse
-from shared.http.deployments import DeploymentResponse
 from shared.http.gateway import (
     AttachToContainerResponse,
     DeployStubResponse,
 )
 from shared.http.pods import CreatePodRequest, CreatePodResponse
-from shared.http.workspace_sync import WorkspaceSyncBatch, WorkspaceSyncResponse
 from shared.placement import ProductRegion
 
 from lazycloud.abstractions.disk import disk_mounts
 from lazycloud.abstractions.image import Image
 from lazycloud.abstractions.metadata import MachineInput, build_resource_metadata
-from lazycloud.abstractions.serve import ContainerWorkspaceSyncer
-from lazycloud.abstractions.shell import Shell, ShellSession
 from lazycloud.abstractions.volume import volume_mounts
 from lazycloud.control import ControlClientConfigMixin, resolve_control_client_config
-from lazycloud.control_clients import (
-    gateway_control_client,
-    pod_control_client,
-    resource_control_client,
-)
 from lazycloud.session.deployment import (
     DeploymentClient,
     DeploymentControlClient,
     DeploymentResourceClient,
 )
-from lazycloud.session.preparation import DeploymentPreparation
 from lazycloud.terminal import Terminal
+
+if TYPE_CHECKING:
+    from shared.http.compute import ContainerResponse
+    from shared.http.deployments import DeploymentResponse
+    from shared.http.workspace_sync import WorkspaceSyncBatch, WorkspaceSyncResponse
+
+    from lazycloud.abstractions.shell import ShellSession
+    from lazycloud.session.preparation import DeploymentPreparation
 
 
 class PodClient(Protocol):
@@ -143,6 +140,8 @@ class Container:
 
     @property
     def control_client(self) -> ContainerAttachClient:
+        from lazycloud.control_clients import gateway_control_client
+
         if self.client is None:
             config = resolve_control_client_config(
                 endpoint=self.endpoint,
@@ -159,6 +158,8 @@ class Container:
         sync_dir: str | None = None,
         hide_logs: bool = False,
     ) -> AttachToContainerResponse:
+        from lazycloud.abstractions.serve import ContainerWorkspaceSyncer
+
         selected_container_id = container_id or self.container_id
         syncer = (
             ContainerWorkspaceSyncer(
@@ -282,6 +283,8 @@ class Pod(ControlClientConfigMixin):
 
     @property
     def control_client(self) -> PodClient:
+        from lazycloud.control_clients import pod_control_client
+
         if self.client is None:
             config = resolve_control_client_config(
                 endpoint=self.endpoint,
@@ -293,6 +296,8 @@ class Pod(ControlClientConfigMixin):
 
     @property
     def lifecycle_client(self) -> PodContainerClient:
+        from lazycloud.control_clients import resource_control_client
+
         if self.container_client is None:
             self.container_client = resource_control_client(self._config())
         return self.container_client
@@ -406,6 +411,8 @@ class Pod(ControlClientConfigMixin):
         container_id: str | None = None,
         sync_dir: str | None = None,
     ) -> ShellSession:
+        from lazycloud.abstractions.shell import Shell
+
         shell = Shell(
             workspace=workspace or self.workspace,
             endpoint=self.endpoint,

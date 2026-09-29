@@ -123,7 +123,7 @@ def test_agent_routes_use_service_owned_join_and_agent_tokens(
     rejected_stream_body = _response_object(rejected_stream)
     assert rejected_stream_body["ok"] is False
     assert rejected_stream_body["err_msg"] == "agent token is no longer current"
-    assert rejected_stream_body["routes"] == []
+    assert rejected_stream_body["route_revision"] == 0
     assert rejected_stream_body["slots"] == []
     assert rejected_telemetry.status_code == 200
     assert _response_object(rejected_telemetry) == {

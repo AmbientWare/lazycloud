@@ -60,12 +60,15 @@ class SchedulerWorkerAdminRepository(Protocol):
 
 
 class SchedulerWorkerContainerRepository(Protocol):
+    def get_container_state(self, container_id: str) -> SchedulerContainerState | None: ...
+
     def list_by_worker(self, worker_id: str) -> list[SchedulerContainerState]: ...
 
     def update_backend_route(
         self,
-        route: AgentBackendRoute,
-    ) -> AgentBackendRoute | None: ...
+        previous: AgentBackendRoute,
+        updated: AgentBackendRoute,
+    ) -> bool: ...
 
 
 class SchedulerWorkerContainerStopper(Protocol):

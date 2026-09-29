@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from functools import update_wrapper
 from pathlib import Path
 from typing import (
+    TYPE_CHECKING,
     Any,
     Generic,
     ParamSpec,
@@ -62,14 +63,6 @@ from lazycloud.abstractions.metadata import (
     lifecycle_hooks,
     retry_policy_config,
 )
-from lazycloud.abstractions.serve import (
-    ServeGatewayClient,
-    ServePreviewSession,
-    ServeResourceClient,
-    resolve_serve_url,
-    write_serve_preview,
-)
-from lazycloud.abstractions.shell import Shell, ShellSession
 from lazycloud.abstractions.volume import VolumeExport, volume_mounts
 from lazycloud.client_contracts import (
     asgi_client_contract,
@@ -77,16 +70,18 @@ from lazycloud.client_contracts import (
     schema_from_contract_parameters,
     schema_from_contract_return,
 )
-from lazycloud.clients.endpoint.control import EndpointControlClient
-from lazycloud.clients.gateway.control import GatewayControlClient
-from lazycloud.clients.resource.control import ResourceControlClient
 from lazycloud.control import ControlClientConfig, resolve_control_client_config
 from lazycloud.env import is_local
 from lazycloud.json_contracts import parse_json_value
 from lazycloud.references import dotted_reference
 from lazycloud.session.deployment import DeploymentClient, DeploymentControlClient
-from lazycloud.session.preparation import DeploymentPreparation
 from lazycloud.terminal import Terminal
+
+if TYPE_CHECKING:
+    from lazycloud.abstractions.serve import ServeGatewayClient, ServeResourceClient
+    from lazycloud.abstractions.shell import ShellSession
+    from lazycloud.session.preparation import DeploymentPreparation
+
 
 P = ParamSpec("P")
 R = TypeVar("R")
@@ -1102,6 +1097,8 @@ def _resolve_endpoint_invocation_target(
     config: ControlClientConfig,
     options: InvocationOptions,
 ) -> InvocationTarget:
+    from lazycloud.clients.resource.control import ResourceControlClient
+
     preview_client = owner.resource_client or ResourceControlClient.from_endpoint(
         config.endpoint,
         token=config.token,
@@ -1212,6 +1209,15 @@ def _serve_endpoint(
     sync_dir: str | None,
     label: str,
 ) -> StartEndpointServeResponse:
+    from lazycloud.abstractions.serve import (
+        ServePreviewSession,
+        resolve_serve_url,
+        write_serve_preview,
+    )
+    from lazycloud.clients.endpoint.control import EndpointControlClient
+    from lazycloud.clients.gateway.control import GatewayControlClient
+    from lazycloud.clients.resource.control import ResourceControlClient
+
     terminal = owner.terminal or Terminal()
     owner.terminal = terminal
     source_root = sync_dir or None
@@ -1290,6 +1296,8 @@ def _shell_endpoint(
     sync_dir: str | None,
     label: str,
 ) -> ShellSession:
+    from lazycloud.abstractions.shell import Shell
+
     shell = Shell(
         workspace=workspace,
         endpoint=owner.endpoint,

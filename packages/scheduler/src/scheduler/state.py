@@ -14,6 +14,8 @@ from math import ceil
 from secrets import token_urlsafe
 from threading import Event, Thread
 
+from compute.state import ComputeStateKeys
+from coordination.agent_connections import RedisAgentConnectionDirectory
 from coordination.redis_client import AsyncRedisClient, RedisClient, RedisWireScalar
 from coordination.token_lock import (
     TokenLockReleaseStatus,
@@ -91,6 +93,39 @@ DEFAULT_CONCURRENCY_COUNTER_POLL_SECONDS = 0.1
 DEFAULT_CONCURRENCY_COUNTER_REPAIR_INTERVAL_SECONDS = 5.0
 DEFAULT_CONCURRENCY_RESERVATION_IN_FLIGHT_TTL_SECONDS = 120.0
 DEFAULT_CONTAINER_REQUEST_CLAIM_LEASE_SECONDS = 60.0
+
+_UPDATE_BACKEND_ROUTE = """
+if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
+local previous = cjson.decode(ARGV[1])
+local updated = cjson.decode(ARGV[2])
+local function matches(route)
+    return type(route) == 'table' and route.route_id == previous.route_id
+        and route.local_target == previous.local_target
+end
+local writes = {}
+for i = 3, 5 do
+    local raw = redis.call('GET', KEYS[i])
+    if raw then
+        local record = cjson.decode(raw)
+        local changed = false
+        if i == 5 then
+            for j, route in ipairs(record.routes) do
+                if matches(route) then
+                    record.routes[j] = updated
+                    changed = true
+                end
+            end
+        elseif matches(record.route) then
+            record.route = updated
+            changed = true
+        end
+        if changed then writes[i] = cjson.encode(record) end
+    end
+end
+for i, value in pairs(writes) do redis.call('SET', KEYS[i], value) end
+redis.call('SET', KEYS[1], ARGV[2])
+return redis.call('INCR', KEYS[2])
+"""
 
 _QUEUE_INDEX_SCRIPT = """
 local function refresh_account(base, account)
@@ -3044,36 +3079,29 @@ class RedisSchedulerContainerRepository:
             return None
         return redis_serialization.load_model_json(SchedulerContainerAddress, raw)
 
-    def update_backend_route(self, route: AgentBackendRoute) -> AgentBackendRoute | None:
-        route_record = _route_for_container(route, container_id=route.container_id)
-        if route_record is None:
-            return None
-        route = route_record
-        changed = False
-
-        address = self.get_container_address(route.container_id)
-        if address is not None and _same_route(address.route, route):
-            self.set_container_address(route.container_id, address.address, route=route)
-            changed = True
-
-        worker_address = self.get_worker_address(route.container_id)
-        if worker_address is not None and _same_route(worker_address.route, route):
-            self.set_worker_address(route.container_id, worker_address.address, route=route)
-            changed = True
-
-        address_map = self.get_container_address_map(route.container_id)
-        updated_routes = [
-            route if _same_route(existing, route) else existing for existing in address_map.routes
-        ]
-        if updated_routes != address_map.routes:
-            self.set_container_address_map(
-                route.container_id,
-                address_map.address_map,
-                routes=updated_routes,
-            )
-            changed = True
-
-        return route if changed else None
+    def update_backend_route(self, previous: AgentBackendRoute, updated: AgentBackendRoute) -> bool:
+        compute_keys = ComputeStateKeys(self.redis)
+        revision = self.redis.eval_int(
+            _UPDATE_BACKEND_ROUTE,
+            5,
+            compute_keys.agent_route(
+                previous.workspace_id,
+                previous.capacity_owner_id,
+                previous.machine_id,
+                previous.route_id,
+            ),
+            compute_keys.agent_route_revision(
+                previous.workspace_id, previous.capacity_owner_id, previous.machine_id
+            ),
+            self.keys.container_address(previous.container_id),
+            self.keys.worker_address(previous.container_id),
+            self.keys.container_address_map(previous.container_id),
+            redis_serialization.dump_model_json(previous),
+            redis_serialization.dump_model_json(updated),
+        )
+        if revision:
+            RedisAgentConnectionDirectory(self.redis).notify_route_changed(updated, revision)
+        return bool(revision)
 
     def list_by_stub(self, stub_id: str) -> list[SchedulerContainerState]:
         index_key = self.keys.container_stub_index(stub_id)
@@ -4216,15 +4244,6 @@ def _route_for_container(
     if route.container_id == container_id:
         return route
     return route.model_copy(update={"container_id": route.container_id or container_id})
-
-
-def _same_route(
-    left: AgentBackendRoute | None,
-    right: AgentBackendRoute | None,
-) -> bool:
-    if left is None or right is None:
-        return False
-    return left.route_id == right.route_id
 
 
 def capacity_owner_key_segment(capacity_owner_id: str) -> str:

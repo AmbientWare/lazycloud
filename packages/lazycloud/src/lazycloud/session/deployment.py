@@ -9,14 +9,13 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import RLock
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from pydantic import JsonValue
 from shared.deployment_records import DeploymentSpec, VolumeMount
 from shared.deployments import DeploymentKind
 from shared.errors import ObjectOperationInProgressError, domain_error_code
 from shared.function_payloads import FunctionCloudpickleInvocation
-from shared.http.deployments import DeploymentListResponse, DeploymentResponse
 from shared.http.errors import HttpApiError
 from shared.http.functions import (
     FunctionInvokeBody,
@@ -40,7 +39,6 @@ from shared.http.gateway import (
     StubVolume,
 )
 from shared.http.objects import HeadObjectRequest, HeadObjectResponse, PutObjectResponse
-from shared.http_transport import HttpChannel
 from shared.image_building.authoring import ImageSpec
 
 from lazycloud.abstractions.image import (
@@ -49,30 +47,20 @@ from lazycloud.abstractions.image import (
     ImageBuildOperation,
     ImageContextUploadResult,
 )
-from lazycloud.clients.gateway.control import GatewayControlClient
-from lazycloud.clients.image.control import ImageControlClient
 from lazycloud.control import ControlClientConfig, ControlClientConfigMixin, workspace_path
-from lazycloud.control_clients import (
-    control_http_channel,
-    resource_control_client,
-)
 from lazycloud.function_results import FunctionResultDecodeError, decode_function_result
 from lazycloud.json_contracts import validate_json_object
 from lazycloud.references import HandlerReferenceError, source_root_handler_reference
-from lazycloud.session.preparation import DeploymentPreparation
 from lazycloud.session.task import Task, TaskClient, TaskSubscription
-from lazycloud.session.uploads import (
-    object_upload_timeout_seconds,
-    stream_object_bytes,
-    stream_object_file,
-)
-from lazycloud.source_sync import (
-    SOURCE_PACKAGE_BUCKET,
-    SOURCE_PACKAGE_CONTENT_TYPE,
-    SourcePackageArchive,
-)
 from lazycloud.terminal import ProgressCallback, Terminal, TerminalStep
 from lazycloud.values import cloudpickle_bytes
+
+if TYPE_CHECKING:
+    from shared.http.deployments import DeploymentListResponse, DeploymentResponse
+    from shared.http_transport import HttpChannel
+
+    from lazycloud.session.preparation import DeploymentPreparation
+    from lazycloud.source_sync import SourcePackageArchive
 
 
 class DeploymentControlClient(Protocol):
@@ -250,6 +238,8 @@ class DeploymentClient(ControlClientConfigMixin):
 
     @property
     def control_client(self) -> DeploymentControlClient:
+        from lazycloud.clients.gateway.control import GatewayControlClient
+
         if self.client is None:
             self.client = GatewayControlClient(
                 channel=self._http_channel(), workspace=self._config().workspace
@@ -258,6 +248,8 @@ class DeploymentClient(ControlClientConfigMixin):
 
     @property
     def resources(self) -> DeploymentResourceClient:
+        from lazycloud.control_clients import resource_control_client
+
         if self.resource_client is None:
             self.resource_client = resource_control_client(self._config())
         return self.resource_client
@@ -301,6 +293,8 @@ class DeploymentClient(ControlClientConfigMixin):
         sync_source: bool | None = None,
         source_root: str | Path | None = None,
     ) -> GetOrCreateStubResponse:
+        from lazycloud.session.preparation import DeploymentPreparation
+
         selected_workspace = workspace or self._config().workspace
         selected_root = source_root or self.source_root
         archive_prefix: tuple[str, ...] = ()
@@ -599,6 +593,8 @@ class DeploymentClient(ControlClientConfigMixin):
         )
 
     def _resource_client_for_workspace(self, workspace: str) -> DeploymentResourceClient:
+        from lazycloud.control_clients import resource_control_client
+
         if workspace == self._config().workspace:
             return self.resources
         config = self._config()
@@ -612,6 +608,8 @@ class DeploymentClient(ControlClientConfigMixin):
         )
 
     def _http_channel(self) -> HttpChannel:
+        from lazycloud.control_clients import control_http_channel
+
         with self._client_lock:
             if self._channel is None:
                 self._channel = control_http_channel(self._config())
@@ -658,6 +656,8 @@ class DeploymentClient(ControlClientConfigMixin):
         return self.terminal.step(name, summary)
 
     def _image_client(self) -> ImageBuildClient:
+        from lazycloud.clients.image.control import ImageControlClient
+
         if self.image_client is None:
             config = self._config()
             self.image_client = ImageControlClient(
@@ -742,6 +742,8 @@ class _DefaultObjectUploadClient:
         one holds the write the others wait and look again, up to the time one
         upload is allowed, and then reuse the stored package.
         """
+        from lazycloud.session.uploads import object_upload_timeout_seconds, stream_object_file
+        from lazycloud.source_sync import SOURCE_PACKAGE_BUCKET, SOURCE_PACKAGE_CONTENT_TYPE
 
         timeout_seconds = object_upload_timeout_seconds(self.config.timeout_seconds)
         deadline = time.monotonic() + timeout_seconds
@@ -798,6 +800,8 @@ class _DefaultObjectUploadClient:
         metadata: dict[str, str] | None = None,
         progress: ProgressCallback | None = None,
     ) -> PutObjectResponse:
+        from lazycloud.session.uploads import object_upload_timeout_seconds, stream_object_bytes
+
         object_hash = hashlib.sha256(data).hexdigest()
         upload_timeout_seconds = object_upload_timeout_seconds(self.config.timeout_seconds)
         if not overwrite:

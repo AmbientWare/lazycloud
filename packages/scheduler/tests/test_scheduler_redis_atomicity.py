@@ -7,6 +7,7 @@ from threading import Barrier
 from typing import Never
 
 import pytest
+from compute.state import RedisComputeStateRepository
 from coordination.redis_client import AsyncRedisClient, RedisClient
 from redis.exceptions import ResponseError
 from scheduler.state import (
@@ -21,9 +22,64 @@ from scheduler.state import (
     WorkerRequestCancellation,
 )
 from shared.placement import Placement, ProductRegion
+from shared.routing import AgentBackendRoute, BackendRouteState
 from shared.scheduling import SchedulerContainerState, SchedulerContainerStatus
 from tests.real_redis import RealRedisActors
 from tests.redis_fakes import FakeRedis
+
+
+def test_route_readiness_commits_projections_and_fences_replacement_and_deletion(
+    real_redis_actors: RealRedisActors,
+) -> None:
+    redis = real_redis_actors.client()
+    compute = RedisComputeStateRepository(redis)
+    containers = RedisSchedulerContainerRepository(redis)
+    opening = AgentBackendRoute(
+        route_id="route",
+        workspace_id="workspace",
+        capacity_owner_id="11111111-1111-4111-8111-111111111111",
+        machine_id="machine",
+        container_id="container",
+        local_target="127.0.0.1:8001",
+    )
+    compute.save_agent_route_state(opening)
+    containers.set_container_address("container", "route://route", route=opening)
+    containers.set_worker_address("container", "route://route", route=opening)
+    containers.set_container_address_map("container", {8001: "route://route"}, routes=[opening])
+    ready = opening.model_copy(update={"state": BackendRouteState.Ready})
+    assert containers.update_backend_route(opening, ready)
+    address = containers.get_container_address("container")
+    worker_address = containers.get_worker_address("container")
+    assert address is not None and address.route == ready
+    assert worker_address is not None and worker_address.route == ready
+    assert containers.get_container_address_map("container").routes == [ready]
+    assert (
+        compute.get_agent_route_state(
+            opening.workspace_id, opening.capacity_owner_id, opening.machine_id, opening.route_id
+        )
+        == ready
+    )
+
+    replacement = opening.model_copy(update={"local_target": "127.0.0.2:8001"})
+    containers.set_container_address("container", "route://route", route=replacement)
+    assert containers.update_backend_route(ready, ready)
+    address = containers.get_container_address("container")
+    assert address is not None and address.route == replacement
+    compute.save_agent_route_state(replacement)
+    assert not containers.update_backend_route(ready, ready)
+    assert compute.delete_agent_route_state(
+        workspace_id=opening.workspace_id,
+        capacity_owner_id=opening.capacity_owner_id,
+        machine_id=opening.machine_id,
+        route_id=opening.route_id,
+    )
+    assert not containers.update_backend_route(replacement, ready)
+    assert (
+        compute.get_agent_route_state(
+            opening.workspace_id, opening.capacity_owner_id, opening.machine_id, opening.route_id
+        )
+        is None
+    )
 
 
 class _FailingEvalRedis(FakeRedis):

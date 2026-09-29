@@ -4,20 +4,13 @@ import hashlib
 import mimetypes
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from shared.events import Event
-from shared.http.deployments import DeploymentResponse
-from shared.http.observability import EventHistoryRequest, EventQueryResponse
-from shared.http.tasks import TaskDetailResponse, TaskSummaryResponse
-from shared.http_transport import HttpChannel
 from shared.tasks import TaskStatus
 from typing_extensions import Self
 
-from lazycloud.clients.compute.control import ComputeClient, ComputeControlChannel
-from lazycloud.clients.observability.control import ObservabilityClient
-from lazycloud.config import ClientProfile, get_profile
 from lazycloud.control import ControlClientConfig, resolve_control_client_config
-from lazycloud.control_clients import control_http_channel, observability_control_client
 from lazycloud.session.deployment import (
     Deployment,
     DeploymentClient,
@@ -33,12 +26,17 @@ from lazycloud.session.task import (
     TaskControlClient,
     TaskSubscription,
 )
-from lazycloud.session.uploads import (
-    object_upload_timeout_seconds,
-    stream_object_bytes,
-    stream_object_file,
-)
 from lazycloud.terminal import ProgressCallback
+
+if TYPE_CHECKING:
+    from shared.http.deployments import DeploymentResponse
+    from shared.http.observability import EventHistoryRequest, EventQueryResponse
+    from shared.http.tasks import TaskDetailResponse, TaskSummaryResponse
+    from shared.http_transport import HttpChannel
+
+    from lazycloud.clients.compute.control import ComputeClient, ComputeControlChannel
+    from lazycloud.clients.observability.control import ObservabilityClient
+    from lazycloud.config import ClientProfile
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,6 +100,8 @@ class Client:
 
     @property
     def active_profile(self) -> ClientProfile:
+        from lazycloud.config import get_profile
+
         return self.profile or get_profile()
 
     def deployments(
@@ -172,6 +172,8 @@ class Client:
 
     @property
     def compute(self) -> ComputeClient:
+        from lazycloud.clients.compute.control import ComputeClient
+
         config = self._config()
         if self.compute_control_client is not None:
             return ComputeClient(
@@ -196,6 +198,8 @@ class Client:
         metadata: dict[str, str] | None = None,
         progress: ProgressCallback | None = None,
     ) -> UploadedObject:
+        from lazycloud.session.uploads import object_upload_timeout_seconds, stream_object_bytes
+
         object_hash = hashlib.sha256(data).hexdigest()
         config = self._config()
         upload_timeout_seconds = object_upload_timeout_seconds(self.timeout_seconds)
@@ -231,6 +235,8 @@ class Client:
         metadata: dict[str, str] | None = None,
         progress: ProgressCallback | None = None,
     ) -> UploadedObject:
+        from lazycloud.session.uploads import object_upload_timeout_seconds, stream_object_file
+
         source = Path(path).expanduser().resolve()
         if not source.is_file():
             raise FileNotFoundError(source)
@@ -269,6 +275,8 @@ class Client:
 
     @property
     def observability(self) -> ObservabilityClient:
+        from lazycloud.control_clients import observability_control_client
+
         if self.observability_client is None:
             self.observability_client = observability_control_client(self._config())
         return self.observability_client
@@ -279,6 +287,8 @@ class Client:
         limit: int | None = None,
         workspace: str | None = None,
     ) -> list[Event]:
+        from shared.http.observability import EventHistoryRequest
+
         response = self.event_history(
             EventHistoryRequest(
                 workspace_id=workspace or self._config().workspace,
@@ -307,6 +317,8 @@ class Client:
         )
 
     def _http_channel(self) -> HttpChannel:
+        from lazycloud.control_clients import control_http_channel
+
         return control_http_channel(self._config())
 
 

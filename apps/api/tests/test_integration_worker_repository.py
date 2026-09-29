@@ -2652,6 +2652,7 @@ def test_agent_route_status_update_reconciles_scheduler_backend_route(
         UpdateAgentRouteStatusRequest(
             agent_token=agent_token,
             route_id=route.route_id,
+            local_target=route.local_target,
             state=BackendRouteState.Ready,
         )
     )
