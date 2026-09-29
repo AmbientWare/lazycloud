@@ -50,6 +50,7 @@ from shared.http.pods import (
     PodSandboxListUrlsResponse,
     PodSandboxReplaceInFilesRequest,
     PodSandboxReplaceInFilesResponse,
+    PodSandboxResultResponse,
     PodSandboxSnapshotMemoryRequest,
     PodSandboxSnapshotMemoryResponse,
     PodSandboxStatFileResponse,
@@ -99,6 +100,10 @@ class SandboxPodClient(Protocol):
     ) -> PodSandboxExecResponse: ...
 
     def sandbox_status(self, container_id: str, pid: int) -> PodSandboxStatusResponse: ...
+
+    def sandbox_result(
+        self, container_id: str, process_id: str, wait_seconds: float = 5.0
+    ) -> PodSandboxResultResponse: ...
 
     def sandbox_stdout(self, container_id: str, pid: int) -> PodSandboxStdoutResponse: ...
 
@@ -260,6 +265,10 @@ class SandboxProcessError(RuntimeError):
     pass
 
 
+class SandboxProcessTimeoutError(SandboxProcessError):
+    pass
+
+
 class SandboxFileSystemError(RuntimeError):
     def __init__(
         self,
@@ -325,10 +334,14 @@ class SandboxNetworkPolicy:
 
 @dataclass(frozen=True, slots=True)
 class SandboxProcessResponse:
+    """Captured output prefixes; truncation flags report output omitted by storage limits."""
+
     pid: int
     exit_code: int
     stdout: str
     stderr: str
+    stdout_truncated: bool = False
+    stderr_truncated: bool = False
 
     @property
     def result(self) -> str:
@@ -404,6 +417,7 @@ class SandboxProcess:
     container_id: str
     pid: int
     client: SandboxPodClient
+    process_id: str
     cwd: str = "/workspace"
     args: list[str] = field(default_factory=list)
     env: dict[str, str] = field(default_factory=dict)
@@ -412,30 +426,64 @@ class SandboxProcess:
     _stdout_stream: SandboxProcessStream | None = field(default=None, init=False, repr=False)
     _stderr_stream: SandboxProcessStream | None = field(default=None, init=False, repr=False)
     _logs_stream: _SandboxCombinedStream | None = field(default=None, init=False, repr=False)
+    _result: PodSandboxResultResponse | None = field(default=None, init=False, repr=False)
 
     def wait(self, timeout: float | None = None) -> int:
         deadline = None if timeout is None else time.monotonic() + timeout
-        self.exit_code, self._status = call_with_transient_retry(self.status, deadline=deadline)
-        while self.exit_code < 0:
-            if deadline is not None and time.monotonic() >= deadline:
-                msg = f"process {self.pid} did not exit within {timeout} seconds"
-                raise SandboxProcessError(msg)
-            time.sleep(SANDBOX_WAIT_POLL_INTERVAL_SECONDS)
-            self.exit_code, self._status = call_with_transient_retry(
-                self.status,
-                deadline=deadline,
+        while True:
+            response = self._poll_result(deadline, timeout)
+            if not response.running:
+                return response.exit_code
+
+    def _poll_result(
+        self, deadline: float | None, timeout: float | None
+    ) -> PodSandboxResultResponse:
+        def read() -> PodSandboxResultResponse:
+            wait_seconds = (
+                5.0 if deadline is None else max(0.0, min(5.0, deadline - time.monotonic()))
             )
-        return self.exit_code
+            return self._read_result(wait_seconds)
+
+        try:
+            response = call_with_transient_retry(read, deadline=deadline)
+        except HttpApiError as exc:
+            raise SandboxProcessError(str(exc)) from exc
+        if response.running and deadline is not None and time.monotonic() >= deadline:
+            msg = f"process {self.pid} did not exit within {timeout} seconds"
+            raise SandboxProcessTimeoutError(msg)
+        return response
+
+    def result(self, timeout: float | None = None) -> SandboxProcessResponse:
+        self.wait(timeout)
+        response = self._read_result(0)
+        return SandboxProcessResponse(
+            pid=self.pid,
+            exit_code=response.exit_code,
+            stdout=response.stdout,
+            stderr=response.stderr,
+            stdout_truncated=response.stdout_truncated,
+            stderr_truncated=response.stderr_truncated,
+        )
+
+    def _read_result(self, wait_seconds: float) -> PodSandboxResultResponse:
+        if self._result is not None:
+            return self._result
+        response = self.client.sandbox_result(self.container_id, self.process_id, wait_seconds)
+        if not response.running:
+            self._result = response
+            self.exit_code = response.exit_code
+            self._status = "exited"
+        return response
 
     def kill(self) -> None:
         self.client.sandbox_kill(
             self.container_id,
-            PodSandboxKillRequest(pid=self.pid),
+            PodSandboxKillRequest(pid=self.pid, process_id=self.process_id),
         )
 
     def status(self) -> tuple[int, str]:
-        response = self.client.sandbox_status(self.container_id, self.pid)
-        return response.exit_code, response.status
+        response = self._read_result(0)
+        return response.exit_code, "running" if response.running else "exited"
 
     @property
     def stdout(self) -> SandboxProcessStream:
@@ -456,10 +504,10 @@ class SandboxProcess:
         return self._logs_stream
 
     def _stdout(self) -> str:
-        return self.client.sandbox_stdout(self.container_id, self.pid).stdout
+        return self._read_result(0).stdout
 
     def _stderr(self) -> str:
-        return self.client.sandbox_stderr(self.container_id, self.pid).stderr
+        return self._read_result(0).stderr
 
     @property
     def aio(self) -> AsyncSandboxProcess:
@@ -471,7 +519,15 @@ class AsyncSandboxProcess:
     process: SandboxProcess
 
     async def wait(self, timeout: float | None = None) -> int:
-        return await to_thread(self.process.wait, timeout)
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while True:
+            response = await to_thread(self.process._poll_result, deadline, timeout)
+            if not response.running:
+                return response.exit_code
+
+    async def result(self, timeout: float | None = None) -> SandboxProcessResponse:
+        await self.wait(timeout)
+        return self.process.result(0)
 
     async def kill(self) -> None:
         await to_thread(self.process.kill)
@@ -504,17 +560,11 @@ class SandboxProcessManager:
     ) -> SandboxProcessResponse:
         process = self._exec_command(command, cwd=cwd, env=env)
         try:
-            exit_code = process.wait(timeout_seconds)
-        except SandboxProcessError:
+            return process.result(timeout_seconds)
+        except SandboxProcessTimeoutError:
             process.kill()
             process.wait(timeout=SANDBOX_CONTROL_TIMEOUT_SECONDS)
             raise
-        return SandboxProcessResponse(
-            pid=process.pid,
-            exit_code=exit_code,
-            stdout=process.stdout.read(),
-            stderr=process.stderr.read(),
-        )
 
     def run_code(
         self,
@@ -527,13 +577,7 @@ class SandboxProcessManager:
         process = self.exec("python3", "-c", code, cwd=cwd, env=env)
         if not blocking:
             return process
-        exit_code = process.wait()
-        return SandboxProcessResponse(
-            pid=process.pid,
-            exit_code=exit_code,
-            stdout=process.stdout.read(),
-            stderr=process.stderr.read(),
-        )
+        return process.result()
 
     def exec(
         self,
@@ -552,6 +596,7 @@ class SandboxProcessManager:
             item.pid: SandboxProcess(
                 container_id=self.container_id,
                 pid=item.pid,
+                process_id=item.process_id,
                 client=self.client,
                 args=item.command.split(),
             )
@@ -580,6 +625,7 @@ class SandboxProcessManager:
         return SandboxProcess(
             container_id=self.container_id,
             pid=response.pid,
+            process_id=response.process_id,
             client=self.client,
             cwd=cwd,
             args=args,
@@ -603,13 +649,13 @@ class AsyncSandboxProcessManager:
         cwd: str = "/workspace",
         env: dict[str, str] | None = None,
     ) -> SandboxProcessResponse:
-        return await to_thread(
-            self.process.run,
-            command,
-            timeout_seconds=timeout_seconds,
-            cwd=cwd,
-            env=env,
-        )
+        process = await to_thread(self.process._exec_command, command, cwd=cwd, env=env)
+        try:
+            return await process.aio.result(timeout_seconds)
+        except SandboxProcessTimeoutError:
+            await process.aio.kill()
+            await process.aio.wait(SANDBOX_CONTROL_TIMEOUT_SECONDS)
+            raise
 
     async def run_code(
         self,
@@ -619,13 +665,10 @@ class AsyncSandboxProcessManager:
         cwd: str = "/workspace",
         env: dict[str, str] | None = None,
     ) -> SandboxProcessResponse | SandboxProcess:
-        return await to_thread(
-            self.process.run_code,
-            code,
-            blocking=blocking,
-            cwd=cwd,
-            env=env,
-        )
+        process = await self.exec("python3", "-c", code, cwd=cwd, env=env)
+        if not blocking:
+            return process
+        return await process.aio.result()
 
     async def exec(
         self,
@@ -2080,6 +2123,7 @@ __all__ = [
     "SandboxProcessManager",
     "SandboxProcessResponse",
     "SandboxProcessStream",
+    "SandboxProcessTimeoutError",
     "SandboxRow",
     "SandboxStatsResponse",
     "SandboxTimeline",

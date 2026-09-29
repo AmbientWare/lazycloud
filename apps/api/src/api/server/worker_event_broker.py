@@ -68,7 +68,6 @@ class WorkerEventBroker:
         init=False,
         repr=False,
     )
-    _lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
 
     async def start(self) -> None:
         if self._reader is not None:
@@ -99,8 +98,7 @@ class WorkerEventBroker:
         self._subscription = None
         if subscription is not None:
             await subscription.close()
-        async with self._lock:
-            self._subscribers.clear()
+        self._subscribers.clear()
 
     async def stream_event_ids(
         self,
@@ -112,14 +110,13 @@ class WorkerEventBroker:
         if self._reader is None:
             raise RuntimeError("worker event broker is not running")
         subscriber = _WorkerEventSubscriber(asyncio.Queue(maxsize=self.queue_size))
-        async with self._lock:
-            if self._reader_failure is not None:
-                if isinstance(self._reader_failure, REDIS_UNAVAILABLE_ERRORS):
-                    return
-                raise WorkerEventBrokerUnavailable("worker event broker reader failed") from (
-                    self._reader_failure
-                )
-            self._subscribers.setdefault(worker_id, set()).add(subscriber)
+        if self._reader_failure is not None:
+            if isinstance(self._reader_failure, REDIS_UNAVAILABLE_ERRORS):
+                return
+            raise WorkerEventBrokerUnavailable("worker event broker reader failed") from (
+                self._reader_failure
+            )
+        self._subscribers.setdefault(worker_id, set()).add(subscriber)
         emitted = 0
         heartbeat_seconds = max(heartbeat_interval_seconds, 0.1)
         try:
@@ -144,12 +141,11 @@ class WorkerEventBroker:
                 yield event_id
                 emitted += 1
         finally:
-            async with self._lock:
-                subscribers = self._subscribers.get(worker_id)
-                if subscribers is not None:
-                    subscribers.discard(subscriber)
-                    if not subscribers:
-                        del self._subscribers[worker_id]
+            subscribers = self._subscribers.get(worker_id)
+            if subscribers is not None:
+                subscribers.discard(subscriber)
+                if not subscribers:
+                    del self._subscribers[worker_id]
 
     async def event(self, event_id: str) -> EventBusEvent | None:
         raw = await self.redis.get(self.redis.key(event_key(event_id)))
@@ -169,12 +165,12 @@ class WorkerEventBroker:
                         event_id = redis_text(message.data)
                         event = await self.event(event_id)
                         if event is not None:
-                            await self._dispatch(event_id, event)
+                            self._dispatch(event_id, event)
                 except REDIS_UNAVAILABLE_ERRORS as exc:
                     if self._reader_failure is None:
                         LOGGER.warning("Worker event subscription lost Redis; reconnecting")
                     self._reader_failure = exc
-                    await self._terminate_subscribers()
+                    self._terminate_subscribers()
                     await asyncio.sleep(1)
                     continue
                 if self._reader_failure is not None:
@@ -184,30 +180,28 @@ class WorkerEventBroker:
             raise
         except BaseException as exc:
             self._reader_failure = exc
-            await self._terminate_subscribers()
+            self._terminate_subscribers()
             raise
 
-    async def _terminate_subscribers(self) -> None:
-        async with self._lock:
-            for worker_subscribers in self._subscribers.values():
-                for subscriber in worker_subscribers:
-                    while not subscriber.queue.empty():
-                        subscriber.queue.get_nowait()
-                    subscriber.queue.put_nowait(None)
+    def _terminate_subscribers(self) -> None:
+        for worker_subscribers in self._subscribers.values():
+            for subscriber in worker_subscribers:
+                while not subscriber.queue.empty():
+                    subscriber.queue.get_nowait()
+                subscriber.queue.put_nowait(None)
 
-    async def _dispatch(self, event_id: str, event: EventBusEvent) -> None:
+    def _dispatch(self, event_id: str, event: EventBusEvent) -> None:
         target = worker_event_target(event)
         if target is None:
             return
-        async with self._lock:
-            if target:
-                subscribers = tuple(self._subscribers.get(target, ()))
-            else:
-                subscribers = tuple(
-                    subscriber
-                    for worker_subscribers in self._subscribers.values()
-                    for subscriber in worker_subscribers
-                )
+        if target:
+            subscribers = tuple(self._subscribers.get(target, ()))
+        else:
+            subscribers = tuple(
+                subscriber
+                for worker_subscribers in self._subscribers.values()
+                for subscriber in worker_subscribers
+            )
         for subscriber in subscribers:
             try:
                 subscriber.queue.put_nowait(event_id)

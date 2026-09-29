@@ -30,7 +30,8 @@ def test_invoking_against_a_machine_that_is_gone_refuses_and_queues_nothing(
     before = _row_counts(isolated_services, stub.workspace_id)
     with pytest.raises(InvalidInputError, match="'rack-9'"):
         FunctionControlService(isolated_services).function_invoke(
-            FunctionInvokeBody(stub_id=stub.id, invocation=FunctionJsonInvocation(args=[1]))
+            FunctionInvokeBody(stub_id=stub.id, invocation=FunctionJsonInvocation(args=[1])),
+            stub=stub,
         )
     assert _row_counts(isolated_services, stub.workspace_id) == before
 

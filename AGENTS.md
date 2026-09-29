@@ -79,6 +79,10 @@ Answer condensed. This is a must-follow rule, not a preference.
 
 ## Database cost
 
+- Validate every lock added or retained in changed code against a concrete
+  concurrency invariant. Remove it when constraints or the existing transaction
+  already protect that invariant. Use the narrowest scope and lock mode that
+  preserves correctness, and measure contention under concurrent requests.
 - Filter and aggregate in SQL. An ID or name lookup must not load a collection.
   Read only the columns needed; do not fetch JSON histories to count or select
   current resources.

@@ -209,7 +209,9 @@ def test_pod_api_schedules_container_and_routes_exec_and_files_to_worker(
         scheduler_containers = _FakeSchedulerContainers()
         transport = _RecordingTransport()
         transport.responses = {
-            ContainerServiceMethod.ContainerSandboxExec: ContainerSandboxExecResponse(pid=42),
+            ContainerServiceMethod.ContainerSandboxExec: ContainerSandboxExecResponse(
+                pid=42, process_id="command-42"
+            ),
             ContainerServiceMethod.ContainerSandboxStatus: ContainerSandboxStatusResponse(
                 status="complete",
                 exit_code=0,
@@ -628,7 +630,9 @@ async def test_sandbox_exec_waits_for_worker_address_before_dial(
             ],
         },
         responses={
-            ContainerServiceMethod.ContainerSandboxExec: ContainerSandboxExecResponse(pid=42),
+            ContainerServiceMethod.ContainerSandboxExec: ContainerSandboxExecResponse(
+                pid=42, process_id="command-42"
+            ),
         },
     )
     service = PodControlService(
@@ -645,14 +649,14 @@ async def test_sandbox_exec_waits_for_worker_address_before_dial(
 
     response = await asyncio.to_thread(
         service.sandbox_exec,
-        container.id,
+        container,
         PodSandboxExecRequest(
             command="echo ready",
             cwd="/workspace",
         ),
     )
 
-    assert response == PodSandboxExecResponse(pid=42)
+    assert response == PodSandboxExecResponse(pid=42, process_id="command-42")
     assert async_services.containers.get(container.id).status is ContainerStatus.Running
 
 

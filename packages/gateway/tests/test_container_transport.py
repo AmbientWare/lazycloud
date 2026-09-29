@@ -5,6 +5,7 @@ import pytest
 from api.server.services import ApiServices
 from gateway.container_transport import HttpContainerServiceTransport
 from networking.dialer import BackendRouteConnection, BackendRouteDialer
+from networking.sync_http import BackendHttpConnectionPool
 from shared.agent_connections import AgentConnectionRecord
 from shared.errors import UpstreamTimeoutError, UpstreamUnavailableError
 from shared.http.agent_identity import AgentTunnelIdentity
@@ -44,7 +45,7 @@ def test_unresponsive_container_closes_connection_and_reports_timeout(
     monkeypatch.setattr(BackendRouteDialer, "dial_backend_route", dial)
     transport = HttpContainerServiceTransport(
         plan_container_client_connection_options("", backend_route_id="container-route"),
-        isolated_services.backend_route_dialer,
+        BackendHttpConnectionPool(isolated_services.backend_route_dialer),
     )
     try:
         with pytest.raises(UpstreamTimeoutError):
@@ -73,7 +74,7 @@ def test_unresponsive_container_closes_connection_and_reports_timeout(
 def test_missing_container_route_is_an_upstream_failure(isolated_services: ApiServices) -> None:
     transport = HttpContainerServiceTransport(
         plan_container_client_connection_options("", backend_route_id="missing-route"),
-        isolated_services.backend_route_dialer,
+        BackendHttpConnectionPool(isolated_services.backend_route_dialer),
     )
     with pytest.raises(UpstreamUnavailableError):
         transport.unary(

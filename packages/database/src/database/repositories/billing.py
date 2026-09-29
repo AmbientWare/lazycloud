@@ -24,6 +24,22 @@ from sqlalchemy.orm import Session
 class BillingAccountRepository:
     session: Session
 
+    def workspace_retention_terms(self, workspace_id: str) -> tuple[BillingPlanId | None, bool]:
+        row = self.session.execute(
+            select(
+                BillingAccountTable.plan,
+                BillingAccountTable.complimentary_since.is_not(None),
+            )
+            .join(WorkspaceMemberTable, WorkspaceMemberTable.user_id == BillingAccountTable.user_id)
+            .where(
+                WorkspaceMemberTable.workspace_id == workspace_id,
+                WorkspaceMemberTable.role == WorkspaceRole.Owner.value,
+            )
+        ).first()
+        if row is None:
+            return None, False
+        return BillingPlanId(row[0]) if row[0] else None, bool(row[1])
+
     def get_by_user(self, user_id: str, *, for_update: bool = False) -> BillingAccount | None:
         """The account for a payer, who is who the provider invoices.
 
@@ -42,15 +58,6 @@ class BillingAccountRepository:
         if for_update:
             statement = statement.with_for_update().execution_options(populate_existing=True)
         row = self.session.scalars(statement).first()
-        return _account(row) if row is not None else None
-
-    def get_for_shared_admission(self, user_id: str) -> BillingAccount | None:
-        row = self.session.scalars(
-            select(BillingAccountTable)
-            .where(BillingAccountTable.user_id == user_id)
-            .with_for_update(read=True)
-            .execution_options(populate_existing=True)
-        ).first()
         return _account(row) if row is not None else None
 
     def lock_for_registration(self, user_id: str) -> BillingAccount:

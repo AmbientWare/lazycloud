@@ -2148,6 +2148,40 @@ def test_worker_exit_retains_pooled_startup_failure_when_detail_arrives_after_ex
     )
 
 
+def test_worker_exit_after_startup_cancellation_does_not_record_startup_failure(
+    isolated_services: ApiServices,
+) -> None:
+    with isolated_services.context.database.session() as session:
+        workspace_id = isolated_services.context.default_workspace_id(session)
+        container = ContainerRepository(session).create(
+            ContainerRecord(
+                id=str(uuid4()),
+                name="cancelled-startup",
+                image=FUNCTION_IMAGE,
+                command=[],
+                workspace_id=workspace_id,
+                runtime_worker_id="worker-1",
+                status=ContainerStatus.Stopped,
+                termination_reason=StopContainerReason.Scheduler,
+                finished_at=utc_now(),
+            )
+        )
+    isolated_services.worker_repository_service.set_container_exit_code(
+        SetContainerExitCodeRequest(
+            container_id=container.id,
+            exit_code=1,
+            exited_at=utc_now(),
+            failed_phase=ContainerExecutionPhase.LoadImage,
+            failure_detail="image archive download assignment is not active",
+        ),
+        principal=WorkerRepositoryPrincipal(worker_id="worker-1"),
+    )
+    saved = isolated_services.containers.get(container.id)
+    assert saved.status is ContainerStatus.Stopped
+    assert saved.termination_reason is StopContainerReason.Scheduler
+    assert saved.startup_error == ""
+
+
 def test_worker_repository_exit_preserves_function_retry_state(
     isolated_services: ApiServices,
 ) -> None:

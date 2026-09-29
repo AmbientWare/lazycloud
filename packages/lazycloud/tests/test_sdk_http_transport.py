@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 from lazycloud.cli.main import build_public_cli
 from lazycloud.clients.gateway.control import GatewayControlClient
+from lazycloud.control import control_workspace_scope
 from lazycloud.http_transport import request_raw
 from lazycloud.session import Client
 from lazycloud.session.deployment import DeploymentClient
@@ -33,6 +34,63 @@ from shared.http.gateway import GetOrCreateStubRequest
 from shared.http_transport import HttpChannel
 from tests.http_server import running_http_server
 from typer.testing import CliRunner
+
+from lazycloud import App
+
+
+def test_endpoint_reuses_control_connection_without_reusing_auth_or_workspace() -> None:
+    peers: dict[str, set[tuple[str, int]]] = {}
+
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, format: str, *args: str | int | float) -> None:
+            pass
+
+        def do_POST(self) -> None:
+            payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            parsed = urllib.parse.urlsplit(self.path)
+            response: dict[str, str]
+            if parsed.path == "/gateway/deployments/resolve-target":
+                workspace = urllib.parse.parse_qs(parsed.query)["workspace"][0]
+                assert payload["workspace"] == workspace
+                assert (
+                    self.headers["Authorization"] == f"Bearer {workspace.removeprefix('tenant-')}"
+                )
+                peers.setdefault(workspace, set()).add(self.client_address)
+                response = {
+                    "kind": "endpoint",
+                    "stub_id": workspace,
+                    "url": f"http://127.0.0.1:{server.server_port}/{workspace}",
+                }
+            else:
+                response = {
+                    "workspace": parsed.path.strip("/"),
+                    "auth": self.headers["Authorization"],
+                }
+            encoded = json.dumps(response).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(encoded)))
+            self.end_headers()
+            self.wfile.write(encoded)
+
+    @App("test").endpoint()
+    def endpoint() -> None:
+        pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    endpoint.endpoint = f"http://127.0.0.1:{server.server_port}"
+    with running_http_server(server):
+        for workspace, token in (("tenant-a", "a"), ("tenant-b", "b")):
+            endpoint.token = token
+            with control_workspace_scope(workspace):
+                for _ in range(2):
+                    assert endpoint.target("deployed").request().json() == {
+                        "workspace": workspace,
+                        "auth": f"Bearer {token}",
+                    }
+    assert all(len(addresses) == 1 for addresses in peers.values())
 
 
 class _TransportServer(ThreadingHTTPServer):

@@ -160,7 +160,7 @@ def test_wallet_debits_without_a_subscription_and_never_rebills_expired_debt(
             )
             assert credits.balance(user_id=user_id, at=now) == -2
             subscription = CreditGrant("renewal", CreditKind.Subscription, 3, now, expires)
-            credits.issue(user_id=user_id, grant=subscription)
+            subscription_lot_id = credits.issue(user_id=user_id, grant=subscription)
             assert credits.balance(user_id=user_id, at=now) == 1
         with database.session() as session:
             credits = BillingCreditRepository(session)
@@ -175,6 +175,14 @@ def test_wallet_debits_without_a_subscription_and_never_rebills_expired_debt(
                 effective_at=expires,
             )
             assert credits.balance(user_id=user_id, at=expires) == 4
+            credits.adjust(
+                user_id=user_id,
+                credit_lot_id=subscription_lot_id,
+                source_id="expired-credit-revoked",
+                amount_nanos=-10,
+                effective_at=expires,
+            )
+            assert credits.committed_balance(user_id=user_id, at=expires) == -5
     finally:
         database.dispose()
 
@@ -276,7 +284,7 @@ def test_historical_provider_usage_is_not_debited_but_new_late_usage_is(
             frozen = BillingLedgerRepository(session).price_record(historical)
             assert isinstance(frozen, FrozenSpan)
             assert frozen.cost_nanos == 5
-            assert BillingCreditRepository(session).balance(user_id=user_id, at=now) == 10
+            assert BillingCreditRepository(session).committed_balance(user_id=user_id, at=now) == 10
             assert session.get(BillingCreditSettlementTable, historical.id) is None
 
             late = historical.model_copy(
@@ -286,7 +294,7 @@ def test_historical_provider_usage_is_not_debited_but_new_late_usage_is(
             priced = BillingLedgerRepository(session).price_record(late)
             assert isinstance(priced, PricedSpan)
             assert priced.cost_nanos == 3
-            assert BillingCreditRepository(session).balance(user_id=user_id, at=now) == 7
+            assert BillingCreditRepository(session).committed_balance(user_id=user_id, at=now) == 7
             settlement = session.get(BillingCreditSettlementTable, late.id)
             assert settlement is not None
             assert settlement.credited_nanos == 3

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from database.mappers.observability import (
     usage_record_from_table,
@@ -10,6 +11,7 @@ from database.mappers.observability import (
     write_usage_row,
 )
 from database.repositories.identity import WorkspaceRepository
+from database.repositories.workspace_writes import workspace_fenced_insert
 from database.tables.observability import (
     UsageRecordTable,
     WorkerEventTable,
@@ -108,8 +110,92 @@ class UsageRepository:
     session: Session
 
     def append(self, record: UsageRecord) -> UsageRecord:
-        WorkspaceRepository(self.session).lock_active_owner(record.workspace_id)
-        return self._save(record)
+        return self.append_many([record])[0]
+
+    def append_many(self, records: Sequence[UsageRecord]) -> list[UsageRecord]:
+        if not records:
+            return []
+        unique: dict[UUID, UsageRecord] = {}
+        for record in records:
+            identity = UUID(record.id)
+            previous = unique.get(identity)
+            if previous is not None and UUID(previous.workspace_id) != UUID(record.workspace_id):
+                raise ConflictError("usage ownership cannot change")
+            unique[identity] = UsageRecord.model_validate(dict(record))
+        owners = sorted({str(UUID(record.workspace_id)) for record in unique.values()})
+        rows: list[UsageRecordTable] = []
+        for record in unique.values():
+            row = UsageRecordTable(id=record.id)
+            write_usage_row(row, record)
+            rows.append(row)
+        values: list[dict[str, JsonValue | datetime]] = [
+            {
+                "id": row.id,
+                "workspace_id": row.workspace_id,
+                "resource_type": row.resource_type,
+                "resource_id": row.resource_id,
+                "metric": row.metric,
+                "quantity": row.quantity,
+                "unit": row.unit,
+                "labels": dict(row.labels),
+                "metadata_json": row.metadata_json,
+                "metering_started_at": row.metering_started_at,
+                "metering_ended_at": row.metering_ended_at,
+                "app_id": row.app_id,
+                "stub_id": row.stub_id,
+                "deployment_id": row.deployment_id,
+                "gpu": row.gpu,
+                "task_id": row.task_id,
+                "worker_id": row.worker_id,
+                "container_id": row.container_id,
+                "created_at": row.created_at,
+            }
+            for row in rows
+        ]
+        statement = workspace_fenced_insert(
+            UsageRecordTable,
+            values,
+            workspace_ids=owners,
+        )
+        saved = list(
+            self.session.scalars(
+                statement.on_conflict_do_update(
+                    index_elements=[UsageRecordTable.id],
+                    set_={
+                        name: statement.excluded[name]
+                        for name in (
+                            "resource_type",
+                            "resource_id",
+                            "metric",
+                            "quantity",
+                            "unit",
+                            "labels",
+                            "metadata",
+                            "metering_started_at",
+                            "metering_ended_at",
+                            "app_id",
+                            "stub_id",
+                            "deployment_id",
+                            "gpu",
+                            "task_id",
+                            "worker_id",
+                            "container_id",
+                            "created_at",
+                        )
+                    }
+                    | {"updated_at": func.now()},
+                    where=UsageRecordTable.workspace_id == statement.excluded.workspace_id,
+                )
+                .returning(UsageRecordTable)
+                .execution_options(populate_existing=True)
+            )
+        )
+        if len(saved) != len(unique):
+            for owner in owners:
+                WorkspaceRepository(self.session).lock_active_owner(owner)
+            raise ConflictError("usage ownership cannot change")
+        by_id = {UUID(str(row.id)): usage_record_from_table(row) for row in saved}
+        return [by_id[UUID(record.id)] for record in records]
 
     def append_storage(self, record: UsageRecord) -> UsageRecord:
         if record.metric not in (

@@ -4,6 +4,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from threading import Event, Thread
 
+from shared.http.pods import PodSandboxResultResponse
 from worker.container_service.models import (
     SandboxDockerDaemonStatus,
     SandboxFilesystemOutput,
@@ -62,6 +63,9 @@ class ProcessManager:
         _ = pid
         return None
 
+    async def result(self, process_id: str, wait_seconds: float) -> PodSandboxResultResponse:
+        raise AssertionError(f"unexpected result request: {process_id}")
+
     def stdout(self, pid: int) -> str:
         _ = pid
         return ""
@@ -70,7 +74,7 @@ class ProcessManager:
         _ = pid
         return ""
 
-    def kill(self, pid: int) -> None:
+    def kill(self, pid: int, process_id: str = "") -> None:
         _ = pid
 
     def list_processes(self) -> list[WorkerSandboxProcess]:

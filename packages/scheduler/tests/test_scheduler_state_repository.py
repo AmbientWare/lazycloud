@@ -488,13 +488,16 @@ def test_cron_failure_retries_same_run_then_persists_terminal_failure(
     # A cron container is started for the stub like any other, so it takes its
     # run by claiming it rather than being addressed by it.
     assert initial.stub_id is not None
+    assert initial.workspace_id is not None
+    workspace_id = initial.workspace_id
     assert (
         functions.function_claim(
             FunctionClaimRequest(
                 stub_id=initial.stub_id,
                 claim_id=str(uuid4()),
                 container_id=container_scheduler.requests[0].container_id,
-            )
+            ),
+            workspace_id=initial.workspace_id,
         ).task
         is not None
     )
@@ -510,10 +513,11 @@ def test_cron_failure_retries_same_run_then_persists_terminal_failure(
         return functions.finish_function_task(
             first.id,
             TaskStatus.Failed,
+            workspace_id=workspace_id,
             container_id=first.container_id or "",
             error="RuntimeError: first attempt",
             exit_code=1,
-        )
+        ).task
 
     with ThreadPoolExecutor(max_workers=16) as executor:
         finishes = list(executor.map(finish_first_attempt, range(32)))
@@ -550,6 +554,7 @@ def test_cron_failure_retries_same_run_then_persists_terminal_failure(
 
     retry_task = isolated_services.tasks.get(task_id)
     assert retry_task.stub_id is not None
+    assert retry_task.workspace_id is not None
     assign_runtime(
         isolated_services.containers,
         isolated_services.scheduler_workers,
@@ -561,7 +566,8 @@ def test_cron_failure_retries_same_run_then_persists_terminal_failure(
                 stub_id=retry_task.stub_id,
                 claim_id=str(uuid4()),
                 container_id=container_scheduler.requests[1].container_id,
-            )
+            ),
+            workspace_id=retry_task.workspace_id,
         ).task
         is not None
     )
@@ -585,9 +591,10 @@ def test_cron_failure_retries_same_run_then_persists_terminal_failure(
     failed = functions.finish_function_task(
         second.id,
         TaskStatus.Failed,
+        workspace_id=workspace_id,
         error="RuntimeError: final attempt",
         exit_code=1,
-    )
+    ).task
 
     assert failed.id == task_id
     assert failed.status is TaskStatus.Failed
@@ -636,13 +643,16 @@ def test_stopped_cron_deployment_cancels_due_retry_and_never_revives_it(
     # A cron container is started for the stub like any other, so it takes its
     # run by claiming it rather than being addressed by it.
     assert initial.stub_id is not None
+    assert initial.workspace_id is not None
+    workspace_id = initial.workspace_id
     assert (
         functions.function_claim(
             FunctionClaimRequest(
                 stub_id=initial.stub_id,
                 claim_id=str(uuid4()),
                 container_id=container_scheduler.requests[0].container_id,
-            )
+            ),
+            workspace_id=initial.workspace_id,
         ).task
         is not None
     )
@@ -654,9 +664,10 @@ def test_stopped_cron_deployment_cancels_due_retry_and_never_revives_it(
     retry = functions.finish_function_task(
         task_id,
         TaskStatus.Failed,
+        workspace_id=workspace_id,
         error="RuntimeError: retry later",
         exit_code=1,
-    )
+    ).task
     assert retry.status is TaskStatus.Retry
     assert retry.next_retry_at is not None
     assert len(container_scheduler.requests) == 1

@@ -527,9 +527,10 @@ class GatewayControlService:
             if stub is not None and stub.kind is StubKind.Function:
                 if request.claim_id is None:
                     raise InvalidInputError("function completion requires a claim ID")
-                task = self.function_tasks.finish_function_task(
+                outcome = self.function_tasks.finish_function_task(
                     request.task_id,
                     request.task_status,
+                    workspace_id=workspace_id,
                     container_id=request.container_id,
                     result=result,
                     error=error,
@@ -538,6 +539,9 @@ class GatewayControlService:
                     claim_id=request.claim_id,
                     execution_entry=request.execution_entry,
                 )
+                task = outcome.task
+                claim_acknowledged = outcome.claim_acknowledged
+                record_completion = outcome.state_changed
             else:
                 task = self.services.tasks.finish(
                     request.task_id,
@@ -545,17 +549,21 @@ class GatewayControlService:
                     result=result,
                     error=error,
                 )
-            self._record_task_lifecycle(
-                task,
-                "complete",
-                container_id=request.container_id,
-                duration_seconds=request.task_duration,
-                result_present=bool(request.result_base64),
-                keep_warm_seconds=request.keep_warm_seconds,
-            )
+                claim_acknowledged = False
+                record_completion = True
+            if record_completion:
+                self._record_task_lifecycle(
+                    task,
+                    "complete",
+                    container_id=request.container_id,
+                    duration_seconds=request.task_duration,
+                    result_present=bool(request.result_base64),
+                    keep_warm_seconds=request.keep_warm_seconds,
+                )
         except (KeyError, ValueError) as exc:
             raise _domain_error(exc) from exc
         return EndTaskResponse(
+            claim_acknowledged=claim_acknowledged,
             task_status=request.task_status,
             final_status=task.status,
             retry_scheduled=task.status is TaskStatus.Retry,

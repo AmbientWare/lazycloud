@@ -20,7 +20,6 @@ from database.tables.billing_ledger import (
     BillingLedgerSegmentTable,
     ContainerBillingShapeTable,
 )
-from database.tables.billing_outbox import BillingMeterOutboxTable
 from database.tables.observability import UsageRecordTable
 from shared.billing_quotes import (
     BILLED_METRICS,
@@ -340,7 +339,9 @@ class BillingLedgerRepository:
                 gap_ended_at=ended_at,
                 reason=UnpricedReason.NoAccountOwner,
             )
-        BillingAccountRepository(self.session).get_by_user(owner.user_id, for_update=True)
+        account = BillingAccountRepository(self.session).get_by_user(owner.user_id, for_update=True)
+        if account is None:
+            raise ConflictError("priced usage has no billing account for credit settlement")
         recorded = self._insert_segments(
             record=record,
             priced=priced,
@@ -351,7 +352,7 @@ class BillingLedgerRepository:
             segments=tuple(segment for _, pricing in priced for segment in pricing.segments)
         )
         if recorded.count == 0:
-            self._settle_local_credit(usage_record_id=record.id, owner_user_id=owner.user_id)
+            BillingCreditRepository(self.session).settle(account=account, usage_record_id=record.id)
             return FrozenSpan(
                 dimension=billed.dimension,
                 cost_nanos=self._frozen_cost_nanos(record.id),
@@ -362,33 +363,19 @@ class BillingLedgerRepository:
             at=started_at,
             cost_nanos=recorded.cost_nanos,
         )
-        self._settle_local_credit(usage_record_id=record.id, owner_user_id=owner.user_id)
+        BillingCreditRepository(self.session).settle(account=account, usage_record_id=record.id)
         return whole
 
     def settle_pending_credits(self, *, owner_user_id: str) -> None:
-        for record_id in BillingCreditRepository(self.session).pending_records(
-            user_id=owner_user_id
-        ):
-            self._settle_local_credit(usage_record_id=record_id, owner_user_id=owner_user_id)
-
-    def _settle_local_credit(self, *, usage_record_id: str, owner_user_id: str) -> None:
-        if (
-            self.session.scalar(
-                select(BillingMeterOutboxTable.id).where(
-                    BillingMeterOutboxTable.usage_record_id == usage_record_id,
-                )
-            )
-            is not None
-        ):
+        credits = BillingCreditRepository(self.session)
+        record_ids = credits.pending_records(user_id=owner_user_id)
+        if not record_ids:
             return
         account = BillingAccountRepository(self.session).get_by_user(owner_user_id, for_update=True)
         if account is None:
             raise ConflictError("priced usage has no billing account for credit settlement")
-        BillingCreditRepository(self.session).settle(
-            user_id=owner_user_id,
-            usage_record_id=usage_record_id,
-            waived=account.complimentary_since is not None,
-        )
+        for record_id in record_ids:
+            credits.settle(account=account, usage_record_id=record_id)
 
     def _shape(self, record: UsageRecord) -> ContainerShape | None:
         if record.resource_type != _CONTAINER_SUBJECT or not _is_uuid(record.resource_id):

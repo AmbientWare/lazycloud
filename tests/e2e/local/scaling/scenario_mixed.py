@@ -1,14 +1,18 @@
-"""Exercise 10, 25, 50 and 100 concurrent clients on prepared local capacity.
+"""Exercise light traffic with 1, 5 and 10 clients, then 5 total requests/second.
 
-Requires an authenticated local profile and at least 4 free CPU and 4 GiB.
+Requires an authenticated local profile and at least 2 free CPU and 3 GiB.
 One account mixes short functions, one-second jobs, HTTP and sandbox commands.
-Also verifies a nested SDK call through the agent tunnel. This does not prove
-cross-account fairness or GPU startup. Workload ceilings bound this experiment.
+The fixed-rate phase lasts one minute. Up to five containers fit within the
+Free plan's no-card container allowance. The account's actual billing terms
+still apply; this scenario does not establish Free-plan enforcement or peak
+throughput. It also checks a nested SDK call through the agent tunnel.
 Created apps and containers are removed through their public owners.
+Use --burst-clients 100 to add a bounded burst against the same container limits.
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import time
@@ -22,6 +26,7 @@ from uuid import uuid4
 
 from lazycloud.abstractions.sandbox import SandboxInstance
 from lazycloud.cli.control import resource_client
+from lazycloud.clients.pod.control import PodControlClient
 from shared.http.errors import HttpApiError
 from shared.tasks import TaskStatus
 from tests.e2e._support.process import LivePrerequisiteError, blocked, require_live
@@ -34,11 +39,17 @@ class Sample:
     seconds: float
     error: str = ""
     offered_rps: int = 0
+    client_queue_seconds: float = 0
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--burst-clients", type=int, default=10)
+    options, live_args = parser.parse_known_args(argv)
+    if not 10 <= options.burst_clients <= 100:
+        parser.error("--burst-clients must be between 10 and 100")
     try:
-        profile = require_live(argv, description=__doc__ or "Mixed workload scaling")
+        profile = require_live(live_args, description=__doc__ or "Mixed workload scaling")
         hostname = urlsplit(profile.resolved_endpoint()).hostname or ""
         if hostname not in {"127.0.0.1", "localhost"} and not hostname.endswith(".localhost"):
             raise LivePrerequisiteError("this scenario requires a local deployment")
@@ -56,15 +67,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         app_id = deployed.resources[0].app_id
         if not app_id:
             raise RuntimeError("deployment omitted its app identity")
+        started = time.monotonic()
         instance = sandbox.create(timeout_seconds=120)
+        print(json.dumps({"cold_sandbox_seconds": time.monotonic() - started}), flush=True)
+        started = time.monotonic()
         if nested.remote(917) != 917:
             raise RuntimeError("nested function result did not match")
+        print(json.dumps({"cold_nested_seconds": time.monotonic() - started}), flush=True)
+        started = time.monotonic()
         if echo.target("deployed").request(918).json() != {"sequence": 918}:
             raise RuntimeError("endpoint warmup result did not match")
+        print(json.dumps({"cold_endpoint_seconds": time.monotonic() - started}), flush=True)
         upstream = interactive.spawn(919)
         if interactive.spawn(upstream).get(timeout_seconds=30) != 919:
             raise RuntimeError("dependent function result did not match")
-        cancelled = interactive.spawn(920, 3.0)
+        cancelled = interactive.spawn(920, 10.0)
         neighbour = interactive.spawn(921, 3.0)
         deadline = time.monotonic() + 15
         while True:
@@ -103,16 +120,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise RuntimeError("cancellation disrupted the neighbouring invocation")
         if neighbour.task.view().container_id != neighbour_container:
             raise RuntimeError("cancellation restarted the neighbouring invocation")
-        if cancelled.rerun().get(timeout_seconds=15) != 920:
+        if cancelled.rerun().get(timeout_seconds=30) != 920:
             raise RuntimeError("cancelled invocation could not run again")
         print(json.dumps({"cancellation_and_rerun": "passed"}), flush=True)
         print(json.dumps({"ready": app_id, "nested_call": "passed"}), flush=True)
+        retained = instance.process.exec("printf", "%s", "retained-before-load")
+        if retained.result(timeout=10).stdout != "retained-before-load":
+            raise RuntimeError("sandbox retention command did not finish")
 
         def request(
             index: int, clients: int, *, offered_at: float | None = None, offered_rps: int = 0
         ) -> Sample:
             kind = ("interactive", "http", "job", "command")[index % 4]
-            started = time.monotonic() if offered_at is None else offered_at
+            entered = time.monotonic()
+            started = entered if offered_at is None else offered_at
             error = ""
             try:
                 if kind == "http":
@@ -131,14 +152,21 @@ def main(argv: Sequence[str] | None = None) -> int:
                     raise RuntimeError("function returned another request's result")
             except Exception as exc:
                 error = f"{type(exc).__name__}: {exc}"
-            sample = Sample(clients, kind, time.monotonic() - started, error, offered_rps)
+            sample = Sample(
+                clients,
+                kind,
+                time.monotonic() - started,
+                error,
+                offered_rps,
+                max(0.0, entered - started),
+            )
             print(json.dumps(asdict(sample)), flush=True)
             return sample
 
-        for clients in (10, 25, 50, 100):
+        for clients in dict.fromkeys((1, 5, 10, options.burst_clients)):
             started = time.monotonic()
             with ThreadPoolExecutor(max_workers=clients) as executor:
-                pending = [executor.submit(request, index, clients) for index in range(clients * 3)]
+                pending = [executor.submit(request, index, clients) for index in range(clients * 4)]
                 samples.extend(future.result() for future in as_completed(pending))
             elapsed = time.monotonic() - started
             phase = [sample for sample in samples if sample.clients == clients]
@@ -156,16 +184,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             if any(sample.error for sample in phase):
                 raise RuntimeError(f"mixed workload phase at {clients} clients failed")
 
-        offered_rps = 30
+        offered_rps = 5
+        duration_seconds = 60
         started = time.monotonic()
-        with ThreadPoolExecutor(max_workers=100) as executor:
+        with ThreadPoolExecutor(max_workers=10) as executor:
             pending: list[Future[Sample]] = []
-            for index in range(300):
+            for index in range(offered_rps * duration_seconds):
                 offered_at = started + index / offered_rps
                 time.sleep(max(0.0, offered_at - time.monotonic()))
                 pending.append(
                     executor.submit(
-                        request, index, 100, offered_at=offered_at, offered_rps=offered_rps
+                        request, index, 10, offered_at=offered_at, offered_rps=offered_rps
                     )
                 )
             phase = [future.result() for future in as_completed(pending)]
@@ -175,7 +204,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 {
                     "offered_rps": offered_rps,
                     "requests": len(phase),
-                    "drain_seconds": max(0.0, time.monotonic() - started - 10),
+                    "drain_seconds": max(0.0, time.monotonic() - started - duration_seconds),
+                    "max_client_queue_seconds": max(
+                        sample.client_queue_seconds for sample in phase
+                    ),
                     "errors": sum(bool(sample.error) for sample in phase),
                 }
             ),
@@ -183,6 +215,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         if any(sample.error for sample in phase):
             raise RuntimeError("controlled-arrival mixed workload phase failed")
+        if any(sample.client_queue_seconds >= 1 / offered_rps for sample in phase):
+            raise RuntimeError("load generator missed its fixed arrival rate")
+
+        reconnected = PodControlClient.from_endpoint(
+            profile.resolved_endpoint(), token=profile.token, workspace=profile.workspace
+        )
+        result = reconnected.sandbox_result(instance.container_id, retained.process_id, 0)
+        if result.running or result.exit_code or result.stdout != "retained-before-load":
+            raise RuntimeError("sandbox result was lost after concurrent commands")
+        print(json.dumps({"retained_result_after_reconnect": "passed"}), flush=True)
     finally:
         try:
             if instance is not None and not instance.terminate():

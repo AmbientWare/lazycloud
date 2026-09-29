@@ -21,6 +21,9 @@ class _RecordingHandler:
     unary_requests: list[ContainerSandboxUploadFileRequest] = field(default_factory=list)
     stream_requests: list[ContainerStreamLogsRequest] = field(default_factory=list)
 
+    async def sandbox_result(self, request: ContainerServicePayload) -> ContainerServicePayload:
+        raise AssertionError("unexpected process result request")
+
     def unary(
         self,
         method: ContainerServiceMethod,

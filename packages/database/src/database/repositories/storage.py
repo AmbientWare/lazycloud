@@ -972,7 +972,7 @@ class VolumeRepository:
                 VolumeTable.name.in_(names),
             )
             .order_by(VolumeTable.id)
-            .with_for_update()
+            .with_for_update(read=True)
         )
         locked_ids: set[str] = set()
         for row in rows:

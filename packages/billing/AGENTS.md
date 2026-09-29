@@ -71,10 +71,11 @@ metering, and `database` owns rates, ledger entries and durable payment records.
 - Admission reads local rows. Require a live subscription, acceptable payment
   standing, positive credit and remaining monthly usage budget. A saved card does
   not bypass these checks. No credit reservations or worker funding permits.
-- Warm workload admission shares the account read lock. Debt reconciliation
-  releases that lock by rolling back its savepoint, then rechecks under the
-  exclusive account lock. Never upgrade concurrent shared locks. New container
-  reservations hold the exclusive lock through the capacity check and write.
+- Warm workload admission reads committed credit and debt in one SQL snapshot,
+  without locking the account or reconciling allocations. Requests already in
+  flight may finish admission while a usage settlement commits. The next read
+  observes that settlement. New container reservations hold the exclusive account
+  lock through the capacity check and write.
 - The usage monitor stops compute through the normal stop path when credit or
   budget runs out. Interval and shutdown overage remains charged to the balance.
 - Gate new CLI and dashboard transfers at existing authenticated endpoints.

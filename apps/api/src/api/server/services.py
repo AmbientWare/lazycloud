@@ -46,6 +46,7 @@ from coordination.process_presence import RedisProcessPresence
 from coordination.redis_client import RedisClient
 from coordination.wake_signal import RedisWakeSignal
 from database.context import ServiceContext
+from database.records.apps import StubRecord
 from execution.artifacts.service import ArtifactStorageService
 from execution.collections.redis import RedisMapService, RedisSimpleQueueService
 from execution.containers.preemption import PreemptedContainerService
@@ -73,7 +74,10 @@ from execution.tasks import TaskService
 from execution.volumes.control import VolumeControlService
 from execution.volumes.records import VolumeService
 from gateway.container_readiness import AsyncRedisContainerReadiness
-from gateway.container_transport import HttpContainerServiceTransportFactory
+from gateway.container_transport import (
+    AsyncSandboxResultHttpClient,
+    HttpContainerServiceTransportFactory,
+)
 from gateway.containers import GatewayContainerService
 from gateway.deployments import GatewayDeploymentService
 from gateway.machine_lifecycle import MachineLifecycleService
@@ -121,7 +125,11 @@ from observability.settings import (
     VolumeMeteringSettings,
     WorkspaceChangeStreamSettings,
 )
-from observability.stream_state import AsyncTaskChangeReader, RedisEventStreamRepository
+from observability.stream_state import (
+    AsyncRedisEventStreamRepository,
+    AsyncTaskChangeReader,
+    RedisEventStreamRepository,
+)
 from observability.usage import UsageService, WorkerEventService
 from observability.workspace_changes import (
     AsyncWorkloadChangeReader,
@@ -327,7 +335,17 @@ class FunctionApiService(Protocol):
 
     def start_function_serve(self, request: FunctionServeRequest) -> FunctionServeResponse: ...
 
-    def function_invoke(self, request: FunctionInvokeBody) -> FunctionInvokeResponse: ...
+    def function_invoke(
+        self, request: FunctionInvokeBody, *, stub: StubRecord
+    ) -> FunctionInvokeResponse: ...
+
+    async def function_invoke_async(
+        self,
+        request: FunctionInvokeBody,
+        *,
+        workspace_id: str,
+        stub: StubRecord | None = None,
+    ) -> FunctionInvokeResponse: ...
 
     def function_invoke_stream(
         self,
@@ -339,7 +357,7 @@ class FunctionApiService(Protocol):
 
     def task_demand_counts(self, stub_ids: Sequence[str]) -> dict[str, int]: ...
 
-    def start_function_containers(self, stub_id: str, *, count: int) -> Iterator[str]: ...
+    def start_function_containers(self, stub_id: str, *, desired_count: int) -> Iterator[str]: ...
 
     def containers_holding_work(self, container_ids: Sequence[str]) -> set[str]: ...
 
@@ -351,7 +369,9 @@ class FunctionApiService(Protocol):
         limit: int = 100,
     ) -> int: ...
 
-    def function_claim(self, request: FunctionClaimRequest) -> FunctionClaimResponse: ...
+    def function_claim(
+        self, request: FunctionClaimRequest, *, workspace_id: str
+    ) -> FunctionClaimResponse: ...
 
     async def function_claim_wait(
         self, request: FunctionClaimRequest, *, workspace_id: str
@@ -364,9 +384,13 @@ class FunctionApiService(Protocol):
         workspace_id: str,
     ) -> FunctionRetireResponse: ...
 
-    def function_set_result(self, request: FunctionSetResultBody) -> FunctionSetResultResponse: ...
+    def function_set_result(
+        self, request: FunctionSetResultBody, *, workspace_id: str
+    ) -> FunctionSetResultResponse: ...
 
-    def function_monitor(self, request: FunctionMonitorRequest) -> FunctionMonitorResponse: ...
+    def function_monitor(
+        self, request: FunctionMonitorRequest, *, workspace_id: str
+    ) -> FunctionMonitorResponse: ...
 
 
 class EndpointApiService(Protocol):
@@ -380,21 +404,29 @@ class EndpointApiService(Protocol):
     async def forward_endpoint_request(
         self,
         request: EndpointForwardRequest,
+        *,
+        stub: StubRecord,
     ) -> EndpointForwardResponse: ...
 
     async def forward_endpoint_health(
         self,
         request: EndpointForwardRequest,
+        *,
+        stub: StubRecord,
     ) -> EndpointForwardResponse: ...
 
     async def prepare_asgi_websocket(
         self,
         request: EndpointForwardRequest,
+        *,
+        stub: StubRecord,
     ) -> EndpointIngressDispatchSession: ...
 
     async def prepare_asgi_http(
         self,
         request: EndpointForwardRequest,
+        *,
+        stub: StubRecord,
     ) -> EndpointIngressDispatchSession: ...
 
     async def heartbeat_asgi_websocket(self, task_id: str) -> None: ...
@@ -814,6 +846,7 @@ def create_workload_core(
         context,
         events,
         log_streams=stream_events,
+        async_log_streams=AsyncRedisEventStreamRepository(async_io.redis) if async_io else None,
         progress=TaskProgressService(context, container_repository, worker_repository),
         workspace_changes=workspace_changes,
         async_database=async_database,
@@ -1428,6 +1461,7 @@ def create_api_core(
 class ApiTransport:
     route_resolver: SchedulerBackendRouteResolver
     route_dialer: BackendRouteDialer
+    container_transport: HttpContainerServiceTransportFactory
     container_clients: SchedulerContainerClientFactory
     proxy_client: PodProxySocketClient
     async_database: AsyncDatabaseClient | None
@@ -1441,6 +1475,7 @@ class ApiTransport:
             await self.async_container_readiness.close()
         if self.async_http is not None:
             await self.async_http.close()
+        self.container_transport.close()
 
 
 def compose_api_transport(core: ApiServiceCore) -> ApiTransport:
@@ -1478,6 +1513,7 @@ def compose_api_transport(core: ApiServiceCore) -> ApiTransport:
     return ApiTransport(
         route_resolver=route_resolver,
         route_dialer=route_dialer,
+        container_transport=transport_factory,
         container_clients=container_clients,
         proxy_client=proxy_client,
         async_database=async_database,
@@ -1935,6 +1971,13 @@ def _pod_control_service(
         async_scheduler_containers=async_scheduler_containers,
         async_pod_proxy_http_client=(
             AsyncPodProxyHttpClient(async_http) if async_http is not None else None
+        ),
+        async_sandbox_results=(
+            AsyncSandboxResultHttpClient(
+                async_http, core.container_service_settings.token.get_secret_value()
+            )
+            if async_http is not None
+            else None
         ),
         pod_proxy_socket_client=proxy_client,
         pod_proxy_connections=(

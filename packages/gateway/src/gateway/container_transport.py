@@ -2,21 +2,30 @@ from __future__ import annotations
 
 import http.client
 import json
-import socket
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from networking.async_http import (
+    AsyncBackendHttpClient,
+    AsyncBackendHttpError,
+    AsyncBackendTimeoutError,
+)
 from networking.dialer import (
     BackendRouteDialer,
 )
+from networking.sync_http import BackendHttpConnectionPool
 from pydantic import JsonValue, TypeAdapter
 from shared.contracts import ContractModel
 from shared.errors import UpstreamTimeoutError, UpstreamUnavailableError
+from shared.http.pods import PodSandboxResultResponse
 from shared.http.workspace_sync import WORKSPACE_SYNC_CONTENT_TYPE, WorkspaceSyncBatch
+from shared.scheduling import SchedulerContainerAddress
 from worker.container_client.control import ContainerServiceTransport
 from worker.container_client.models import (
     ContainerClientConnectionOptions,
+    ContainerSandboxResultRequest,
+    ContainerSandboxResultResponse,
     ContainerServiceMethod,
     ContainerServiceWireValue,
 )
@@ -34,8 +43,66 @@ _JSON_VALUE: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
 
 
 @dataclass(slots=True)
+class AsyncSandboxResultHttpClient:
+    http: AsyncBackendHttpClient
+    token: str = field(repr=False)
+
+    async def sandbox_result(
+        self,
+        address: SchedulerContainerAddress,
+        container_id: str,
+        process_id: str,
+        wait_seconds: float,
+    ) -> PodSandboxResultResponse:
+        if address.route is None:
+            raise UpstreamUnavailableError("Container control requires an authorized backend route")
+        request = ContainerSandboxResultRequest(
+            container_id=container_id, process_id=process_id, wait_seconds=wait_seconds
+        )
+        try:
+            response = await self.http.open_stream(
+                address=address.address,
+                route_id=address.route.route_id,
+                method="POST",
+                path=f"{_CONTAINER_SERVICE_HTTP_PREFIX}/{ContainerServiceMethod.ContainerSandboxResult.value}",
+                headers={
+                    "content-type": "application/json",
+                    **({"authorization": f"Bearer {self.token}"} if self.token else {}),
+                },
+                body=request.model_dump_json().encode(),
+                timeout_seconds=wait_seconds + 3,
+                resource=f"container {container_id} process result",
+            )
+            try:
+                body = await response.read()
+                if response.status_code >= 400:
+                    raise UpstreamUnavailableError(
+                        f"Container result returned HTTP {response.status_code}"
+                    )
+            finally:
+                await response.close()
+        except AsyncBackendTimeoutError as exc:
+            raise UpstreamTimeoutError("Container service exceeded its request deadline") from exc
+        except AsyncBackendHttpError as exc:
+            raise UpstreamUnavailableError("Container service connection failed") from exc
+        result = ContainerSandboxResultResponse.model_validate_json(body)
+        if not result.ok:
+            raise UpstreamUnavailableError(result.error_msg or "sandbox result unavailable")
+        if result.result is None or result.result.process_id != process_id:
+            raise UpstreamUnavailableError("sandbox supervisor returned no matching process result")
+        return result.result
+
+
+@dataclass(slots=True)
 class HttpContainerServiceTransportFactory:
     route_dialer: BackendRouteDialer
+    connections: BackendHttpConnectionPool = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.connections = BackendHttpConnectionPool(self.route_dialer)
+
+    def close(self) -> None:
+        self.connections.close()
 
     def create_transport(
         self,
@@ -43,14 +110,14 @@ class HttpContainerServiceTransportFactory:
     ) -> ContainerServiceTransport:
         return HttpContainerServiceTransport(
             options,
-            route_dialer=self.route_dialer,
+            connections=self.connections,
         )
 
 
 @dataclass(slots=True)
 class HttpContainerServiceTransport:
     options: ContainerClientConnectionOptions
-    route_dialer: BackendRouteDialer
+    connections: BackendHttpConnectionPool
 
     def unary(
         self,
@@ -145,37 +212,26 @@ class HttpContainerServiceTransport:
     @contextmanager
     def _connection(self, timeout_seconds: float | None) -> Iterator[http.client.HTTPConnection]:
         timeout = (
-            self.route_dialer.config.timeout_seconds if timeout_seconds is None else timeout_seconds
+            self.connections.route_dialer.config.timeout_seconds
+            if timeout_seconds is None
+            else timeout_seconds
         )
         if not self.options.backend_route_id:
             raise UpstreamUnavailableError("Container control requires an authorized backend route")
         try:
-            backend_socket = self.route_dialer.dial_backend_route(
+            with self.connections.connection(
                 self.options.backend_route_id,
-                timeout_seconds=timeout,
-            ).socket
-            connection = _ExistingSocketHttpConnection(backend_socket, timeout=timeout)
-            try:
+                timeout,
+            ) as connection:
                 yield connection
-            finally:
-                connection.close()
         except TimeoutError as exc:
             raise UpstreamTimeoutError("Container service exceeded its request deadline") from exc
         except (OSError, http.client.HTTPException) as exc:
             raise UpstreamUnavailableError("Container service connection failed") from exc
 
 
-class _ExistingSocketHttpConnection(http.client.HTTPConnection):
-    def __init__(self, backend_socket: socket.socket, *, timeout: float) -> None:
-        super().__init__("backend.route", timeout=timeout)
-        self._socket = backend_socket
-
-    def connect(self) -> None:
-        self.sock = self._socket
-        self.sock.settimeout(self.timeout)
-
-
 __all__ = [
+    "AsyncSandboxResultHttpClient",
     "HttpContainerServiceTransport",
     "HttpContainerServiceTransportFactory",
 ]

@@ -187,10 +187,12 @@ class ContainerServiceClient:
             ContainerSandboxStderrResponse,
         )
 
-    def sandbox_kill(self, container_id: str, pid: int) -> ContainerSandboxKillResponse:
+    def sandbox_kill(
+        self, container_id: str, pid: int, process_id: str = ""
+    ) -> ContainerSandboxKillResponse:
         return self._unary(
             ContainerServiceMethod.ContainerSandboxKill,
-            ContainerSandboxKillRequest(container_id=container_id, pid=pid),
+            ContainerSandboxKillRequest(container_id=container_id, pid=pid, process_id=process_id),
             ContainerSandboxKillResponse,
         )
 

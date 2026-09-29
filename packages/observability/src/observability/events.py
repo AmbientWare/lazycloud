@@ -112,6 +112,12 @@ class EventService:
             workspace_id=workspace_id,
         )
 
+    @staticmethod
+    def emit_many_in_session(
+        session: DatabaseSession, events: Sequence[tuple[Event, str | None]]
+    ) -> list[Event]:
+        return EventRepository(session).append_many(events)
+
     def list(
         self,
         *,

@@ -258,8 +258,12 @@ def test_worker_update_preempts_only_eligible_inflight_work_after_grace(
                         claimable_at=NOW,
                     )
                 )
-                assert TaskRepository(session).claim_for_stub(
-                    stub.id, container_id=container.id, limit=1
+                assert (
+                    TaskRepository(session)
+                    .claim_for_stub(
+                        stub.id, workspace_id=workspace.id, container_id=container.id, limit=1
+                    )
+                    .tasks
                 )
                 workloads.append(container)
         service = WorkerWorkloadRolloutService(database, containers, stopper, workers)
@@ -342,8 +346,12 @@ def test_interruption_drains_workload_admission_until_provider_deadline(
                     claimable_at=NOW,
                 )
             )
-            [claimed] = TaskRepository(session).claim_for_stub(
-                function.stub_id, container_id=function.id, limit=1
+            [claimed] = (
+                TaskRepository(session)
+                .claim_for_stub(
+                    function.stub_id, workspace_id=workspace.id, container_id=function.id, limit=1
+                )
+                .tasks
             )
             assert claimed.id == task.id
 

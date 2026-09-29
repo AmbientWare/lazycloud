@@ -148,6 +148,7 @@ class FunctionSetResultBody(HttpModel):
 
 
 class FunctionSetResultResponse(HttpModel):
+    claim_acknowledged: bool
     stored: bool = True
     status: TaskStatus = TaskStatus.Complete
 

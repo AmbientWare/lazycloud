@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
-from collections.abc import Mapping
-from dataclasses import dataclass
+from collections import deque
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
@@ -14,6 +16,8 @@ from database.repositories.observability import (
 )
 from database.types import DatabaseSession
 from pydantic import JsonValue
+from shared.async_utils import complete_before_cancelling
+from shared.billing_quotes import BILLED_METRICS
 from shared.contracts import ContractModel
 from shared.errors import InvalidInputError
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
@@ -82,6 +86,9 @@ class UsageService:
     workspace_changes: WorkspaceChangePublisher | None = None
     async_database: AsyncDatabaseClient | None = None
     async_workspace_changes: AsyncWorkspaceChangeService | None = None
+    _append_batches: dict[tuple[str, str], _UsageAppendBatch] = field(
+        default_factory=dict, init=False
+    )
 
     def record(
         self,
@@ -170,7 +177,7 @@ class UsageService:
                 metadata=metadata,
             )
         )
-        await self._publish_change_async(record)
+        await self.publish_change_async(record)
         return record
 
     def append(self, record: UsageRecord) -> UsageRecord:
@@ -180,19 +187,45 @@ class UsageService:
         return saved
 
     def append_in_session(self, session: DatabaseSession, record: UsageRecord) -> UsageRecord:
-        saved = UsageRepository(session).append(record)
-        MeteredUsagePricer(session).price(saved)
+        return self.append_batch_in_session(session, [record])[0]
+
+    def append_batch_in_session(
+        self, session: DatabaseSession, records: Sequence[UsageRecord]
+    ) -> list[UsageRecord]:
+        saved = UsageRepository(session).append_many(records)
+        pricer = MeteredUsagePricer(session)
+        for record in saved:
+            pricer.price(record)
         return saved
 
     async def append_async(self, record: UsageRecord) -> UsageRecord:
+        record = record.model_copy(
+            update={"id": str(UUID(record.id)), "workspace_id": str(UUID(record.workspace_id))}
+        )
+        # Pricing locks a container's placement before its account. Keep one
+        # placement per transaction so a later record cannot reverse that order.
+        key = (
+            record.workspace_id,
+            record.resource_id
+            if record.metric in BILLED_METRICS and record.resource_type == "container"
+            else "",
+        )
+        batch = self._append_batches.get(key)
+        if batch is None:
+            batch = _UsageAppendBatch(self, key)
+            self._append_batches[key] = batch
+        return await batch.submit(record)
+
+    async def _append_batch(self, records: Sequence[UsageRecord]) -> list[UsageRecord]:
         database = self.async_database
         if database is None:
             raise RuntimeError("asynchronous usage database is not configured")
 
         saved = await database.run_transaction(
-            lambda session: self.append_in_session(session, record)
+            lambda session: self.append_batch_in_session(session, records)
         )
-        await self._publish_change_async(saved)
+        for record in saved:
+            await self.publish_change_async(record)
         return saved
 
     def list(
@@ -279,24 +312,54 @@ class UsageService:
         app_id: str = "",
         deployment_id: str = "",
     ) -> UsageRecord:
-        labels = _task_count_labels(
-            resource_id=resource_id,
-            task_id=task_id,
-            kind=kind,
-            app_id=app_id,
-            deployment_id=deployment_id,
-        )
-        return self._record_in_session(
+        return self.record_task_counts_in_session(
             session,
-            id=usage_record_id(UsageMetric.TaskCount.value, workspace_id, task_id),
             workspace_id=workspace_id,
             resource_type=resource_type,
             resource_id=resource_id,
-            metric=UsageMetric.TaskCount,
-            quantity=1,
-            unit=UsageUnit.Count,
-            labels=labels,
+            task_ids=[task_id],
+            kind=kind,
+            app_id=app_id,
+            deployment_id=deployment_id,
+        )[0]
+
+    def record_task_counts_in_session(
+        self,
+        session: DatabaseSession,
+        *,
+        workspace_id: str,
+        resource_type: str,
+        resource_id: str,
+        task_ids: Sequence[str],
+        kind: str,
+        app_id: str = "",
+        deployment_id: str = "",
+    ) -> list[UsageRecord]:
+        records = UsageRepository(session).append_many(
+            [
+                UsageRecord(
+                    id=usage_record_id(UsageMetric.TaskCount.value, workspace_id, task_id),
+                    workspace_id=workspace_id,
+                    resource_type=resource_type,
+                    resource_id=resource_id,
+                    metric=UsageMetric.TaskCount,
+                    quantity=1,
+                    unit=UsageUnit.Count,
+                    labels=_task_count_labels(
+                        resource_id=resource_id,
+                        task_id=task_id,
+                        kind=kind,
+                        app_id=app_id,
+                        deployment_id=deployment_id,
+                    ),
+                )
+                for task_id in task_ids
+            ]
         )
+        pricer = MeteredUsagePricer(session)
+        for record in records:
+            pricer.price(record)
+        return records
 
     async def record_task_count_async(
         self,
@@ -343,7 +406,7 @@ class UsageService:
             container_id=identity.container_id,
         )
 
-    async def _publish_change_async(self, record: UsageRecord) -> None:
+    async def publish_change_async(self, record: UsageRecord) -> None:
         identity = _usage_change_identity(record)
         if self.async_workspace_changes is None or identity is None:
             return
@@ -358,6 +421,47 @@ class UsageService:
             task_id=identity.task_id,
             container_id=identity.container_id,
         )
+
+
+@dataclass(slots=True)
+class _UsageAppendBatch:
+    service: UsageService
+    key: tuple[str, str]
+    pending: deque[tuple[UsageRecord, asyncio.Future[UsageRecord]]] = field(default_factory=deque)
+    runner: asyncio.Task[None] | None = None
+
+    async def submit(self, record: UsageRecord) -> UsageRecord:
+        result = asyncio.get_running_loop().create_future()
+        self.pending.append((record, result))
+        if self.runner is None:
+            self.runner = asyncio.create_task(self._run())
+        return await complete_before_cancelling(result)
+
+    async def _run(self) -> None:
+        try:
+            while self.pending:
+                if len(self.pending) < 64:
+                    await asyncio.sleep(0.002)
+                batch: list[tuple[UsageRecord, asyncio.Future[UsageRecord]]] = []
+                identities: set[str] = set()
+                while self.pending and len(batch) < 64:
+                    record, _ = self.pending[0]
+                    # Price the first version before a replay can overwrite its
+                    # usage row; the ledger must retain the first frozen cost.
+                    if record.id in identities:
+                        break
+                    identities.add(record.id)
+                    batch.append(self.pending.popleft())
+                try:
+                    saved = await self.service._append_batch([record for record, _ in batch])
+                except Exception as exc:
+                    for _, result in batch:
+                        result.set_exception(exc)
+                else:
+                    for (_, result), record in zip(batch, saved, strict=True):
+                        result.set_result(record)
+        finally:
+            del self.service._append_batches[self.key]
 
 
 @dataclass(frozen=True, slots=True)

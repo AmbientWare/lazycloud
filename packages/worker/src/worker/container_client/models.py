@@ -5,6 +5,7 @@ from enum import StrEnum
 
 from pydantic import Field
 from shared.contracts import ContractModel
+from shared.http.pods import PodSandboxResultResponse
 
 CONTAINER_CLIENT_SANDBOX_EXEC_TIMEOUT_SECONDS = 15.0
 CONTAINER_CLIENT_SANDBOX_STATUS_TIMEOUT_SECONDS = 5.0
@@ -30,6 +31,7 @@ class ContainerServiceMethod(StrEnum):
     ContainerStatus = "ContainerStatus"
     ContainerExec = "ContainerExec"
     ContainerSandboxExec = "ContainerSandboxExec"
+    ContainerSandboxResult = "ContainerSandboxResult"
     ContainerSandboxListExposedPorts = "ContainerSandboxListExposedPorts"
     ContainerSandboxListProcesses = "ContainerSandboxListProcesses"
     ContainerSandboxStatus = "ContainerSandboxStatus"
@@ -118,6 +120,19 @@ class ContainerSandboxExecResponse(ContractModel):
     ok: bool = True
     error_msg: str = ""
     pid: int = 0
+    process_id: str = ""
+
+
+class ContainerSandboxResultRequest(ContractModel):
+    container_id: str
+    process_id: str
+    wait_seconds: float = Field(default=5.0, ge=0, le=5)
+
+
+class ContainerSandboxResultResponse(ContractModel):
+    ok: bool = True
+    error_msg: str = ""
+    result: PodSandboxResultResponse | None = None
 
 
 class ContainerSandboxStatusRequest(ContractModel):
@@ -144,6 +159,7 @@ class ContainerSandboxListExposedPortsResponse(ContractModel):
 
 class ContainerSandboxProcessInfo(ContractModel):
     pid: int
+    process_id: str
     command: str = ""
 
 
@@ -182,6 +198,7 @@ class ContainerSandboxStderrResponse(ContractModel):
 class ContainerSandboxKillRequest(ContractModel):
     container_id: str
     pid: int
+    process_id: str = ""
 
 
 class ContainerSandboxKillResponse(ContractModel):

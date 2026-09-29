@@ -75,6 +75,7 @@ class SandboxDockerDaemonStatus(StrEnum):
 class SandboxProcessEvent(ContractModel):
     event_type: SandboxProcessEventType
     pid: int = 0
+    process_id: str = ""
     seq: int = 0
     stream: SandboxLogStream = SandboxLogStream.Stdout
     data: bytes = b""
@@ -84,6 +85,7 @@ class SandboxProcessEvent(ContractModel):
 
 class WorkerSandboxProcess(ContractModel):
     pid: int
+    process_id: str
     command: str
     cwd: str = ""
     env: list[str] = Field(default_factory=list)

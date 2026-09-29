@@ -3,25 +3,106 @@ from __future__ import annotations
 from datetime import timedelta
 from uuid import uuid4
 
+import pytest
 from database.context import ServiceContext
+from database.repositories.identity import WorkspaceRepository
 from database.repositories.observability import (
     UsageRepository,
     WorkerEventRepository,
 )
 from database.repositories.orchestration import WorkerRepository
 from database.tables.execution import EventTable
-from database.tables.observability import WorkerEventTable
+from database.tables.observability import UsageRecordTable, WorkerEventTable
 from observability.events import EventService
-from observability.usage import WorkerEventService
+from observability.usage import UsageService, WorkerEventService
 from shared.compute_fleet import Worker
+from shared.errors import ConflictError
 from shared.timestamps import utc_now
-from shared.usage import UsageGroupKey, UsageMetric, UsageUnit
+from shared.usage import UsageGroupKey, UsageMetric, UsageRecord, UsageUnit, usage_record_id
 from shared.usage_query import UsageQuery
 from shared.worker_events import (
     WORKER_POOL_SIZER_DECISION_ACTION,
     WorkerEventRecord,
 )
-from sqlalchemy import update
+from sqlalchemy import func, select, update
+
+
+def test_task_count_batch_replay_preserves_one_record_per_task(
+    service_context: ServiceContext,
+) -> None:
+    task_ids = [str(uuid4()), str(uuid4())]
+    with service_context.database.session() as session:
+        workspace_id = service_context.default_workspace_id(session)
+        service = UsageService(service_context)
+        first = service.record_task_counts_in_session(
+            session,
+            workspace_id=workspace_id,
+            resource_type="endpoint",
+            resource_id="stub",
+            task_ids=task_ids,
+            kind="endpoint",
+            app_id="app",
+            deployment_id="deployment",
+        )
+        replay = service.record_task_counts_in_session(
+            session,
+            workspace_id=workspace_id,
+            resource_type="endpoint",
+            resource_id="stub",
+            task_ids=[*task_ids, task_ids[0]],
+            kind="endpoint",
+            app_id="app",
+            deployment_id="deployment",
+        )
+        assert [record.id for record in first] == [
+            usage_record_id(UsageMetric.TaskCount.value, workspace_id, task_id)
+            for task_id in task_ids
+        ]
+        assert [record.id for record in replay] == [first[0].id, first[1].id, first[0].id]
+        assert all(record.quantity == 1 and record.unit is UsageUnit.Count for record in replay)
+        assert replay[0].labels == {
+            "kind": "endpoint",
+            "stub_id": "stub",
+            "task_id": task_ids[0],
+            "app_id": "app",
+            "deployment_id": "deployment",
+        }
+        assert (
+            session.scalar(
+                select(func.count()).where(UsageRecordTable.id.in_([record.id for record in first]))
+            )
+            == 2
+        )
+
+
+def test_usage_batch_cannot_move_an_existing_record_to_another_workspace(
+    service_context: ServiceContext,
+) -> None:
+    with service_context.database.session() as session:
+        owner = service_context.default_workspace_id(session)
+        other = WorkspaceRepository(session).create(name="usage-other-owner")
+        record = UsageRecord(
+            id=str(uuid4()),
+            workspace_id=owner,
+            resource_type="function",
+            resource_id="stub",
+            metric=UsageMetric.TaskCount,
+            quantity=1,
+            unit=UsageUnit.Count,
+        )
+        UsageRepository(session).append(record)
+    with (
+        pytest.raises(ConflictError, match="usage ownership cannot change"),
+        service_context.database.session() as session,
+    ):
+        UsageRepository(session).append_many([record.model_copy(update={"workspace_id": other.id})])
+    with service_context.database.session() as session:
+        assert (
+            session.scalar(
+                select(UsageRecordTable.workspace_id).where(UsageRecordTable.id == record.id)
+            )
+            == owner
+        )
 
 
 def test_event_prune_uses_short_telemetry_and_long_audit_retention(

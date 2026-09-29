@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 from datetime import timedelta
+from threading import Event
 from uuid import uuid4
 
 import pytest
@@ -16,6 +18,7 @@ from database.repositories.execution import TaskRepository
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.orchestration import ContainerRepository
 from execution.functions.service import FunctionControlService
+from execution.task_progress import TaskProgressService
 from observability.stream_state import AsyncTaskChangeReader
 from shared.capacity import CapacityAcquisitionShape, CapacityFailureCode, CapacityOperationStatus
 from shared.compute_policy import ComputeUnitRecord, UnitName
@@ -25,7 +28,7 @@ from shared.http.functions import FunctionInvokeResponse
 from shared.http.task_progress import TaskPendingProgress, TaskPendingReason
 from shared.placement import Placement
 from shared.scheduling import SchedulerContainerState
-from shared.tasks import TaskStatus
+from shared.tasks import Task, TaskProgressSnapshot, TaskStatus
 from shared.timestamps import utc_now
 
 
@@ -168,6 +171,53 @@ async def test_invocation_stream_updates_pending_reason_and_clears_on_completion
     finally:
         await stream.aclose()
     assert async_services.require_async_io().realtime.status().sources == 0
+
+
+@pytest.mark.anyio
+async def test_completion_does_not_wait_for_pending_progress(
+    async_services: ApiServices, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    task = async_services.tasks.create("slow-progress", invocation=FunctionJsonInvocation())
+    entered = Event()
+    release = Event()
+    original = TaskProgressService.read
+
+    def delayed(
+        owner: TaskProgressService, tasks: Sequence[Task | TaskProgressSnapshot]
+    ) -> dict[str, TaskPendingProgress | None]:
+        entered.set()
+        if not release.wait(timeout=10):
+            raise TimeoutError("progress test did not release its reader")
+        return original(owner, tasks)
+
+    monkeypatch.setattr(TaskProgressService, "read", delayed)
+    functions = FunctionControlService(
+        async_services,
+        async_database=async_services.require_async_io().database,
+        task_changes=AsyncTaskChangeReader(async_services.require_async_io().realtime),
+    )
+
+    async def consume() -> list[FunctionInvokeResponse]:
+        return [
+            item
+            async for item in functions.function_invoke_stream(
+                FunctionInvokeResponse(task_id=task.id)
+            )
+        ]
+
+    stream = asyncio.create_task(consume())
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        async_services.tasks.transition(
+            task, TaskStatus.Complete, function_result=FunctionJsonResult(value=7), exit_code=0
+        )
+        responses = await asyncio.wait_for(stream, timeout=0.5)
+        assert responses[-1].done
+        assert responses[-1].result == FunctionJsonResult(value=7)
+    finally:
+        release.set()
+        stream.cancel()
+        await asyncio.gather(stream, return_exceptions=True)
 
 
 @pytest.mark.anyio

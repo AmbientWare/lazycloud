@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Protocol
 
-from control.service import ControlPlaneService, StubKind
+from control.service import ControlPlaneService, StubKind, StubRecord
 from database.repositories.execution import TaskDependencyRepository
 from shared.errors import InvalidInputError, NotFoundError, UpstreamUnavailableError
 from shared.http.functions import (
@@ -19,7 +19,9 @@ from execution.services import ExecutionServices
 
 
 class FunctionInvoker(Protocol):
-    def function_invoke(self, request: FunctionInvokeBody) -> FunctionInvokeResponse: ...
+    def function_invoke(
+        self, request: FunctionInvokeBody, *, stub: StubRecord
+    ) -> FunctionInvokeResponse: ...
 
 
 @dataclass(slots=True)
@@ -50,18 +52,18 @@ class TaskRerunService:
         except NotFoundError as exc:
             raise NotFoundError(str(exc)) from exc
         if stub.kind is StubKind.Function:
-            return self._rerun_function_task(stub.id, source)
+            return self._rerun_function_task(stub, source)
         msg = f"tasks of kind {stub.kind.value} cannot be re-run"
         raise InvalidInputError(msg)
 
-    def _rerun_function_task(self, stub_id: str, source: Task) -> Task:
+    def _rerun_function_task(self, stub: StubRecord, source: Task) -> Task:
         if source.invocation is None:
             raise InvalidInputError("function task has no durable invocation to re-run")
         with self.services.context.database.session() as session:
             dependencies = TaskDependencyRepository(session).list_for_task(source.id)
         response = self.function_invoker.function_invoke(
             FunctionInvokeBody(
-                stub_id=stub_id,
+                stub_id=stub.id,
                 headless=True,
                 invocation=source.invocation,
                 dependencies=[
@@ -72,7 +74,8 @@ class TaskRerunService:
                     )
                     for dependency in dependencies
                 ],
-            )
+            ),
+            stub=stub,
         )
         if not response.task_id:
             raise UpstreamUnavailableError(response.output or "failed to re-run task")

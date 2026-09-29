@@ -2445,18 +2445,12 @@ class WorkerRepositoryService:
             raise AuthorizationDeniedError(
                 f"a worker may only record container usage, not {record.resource_type!r}"
             )
-        self._authorize_worker_container(
+        container = self._authorize_worker_container(
             record.resource_id,
             worker_id=worker_id,
             operation="usage",
             workspace_id=record.workspace_id,
         )
-        container = self._container_across_workspaces(record.resource_id, operation="usage")
-        if container is None:
-            # Still assigned in scheduler state but no durable row to bound it
-            # against. Accepted rather than dropped: usage that was measured is
-            # what this path exists to keep.
-            return record
         return self._metered_within_lifetime(
             record, container, worker_id=worker_id, measurement_complete=measurement_complete
         )
@@ -3035,7 +3029,11 @@ class WorkerRepositoryService:
                 container.preemption_settled_at,
                 container.startup_error,
             )
-            if exit_code != 0 and failed_phase is not None:
+            if (
+                exit_code != 0
+                and failed_phase is not None
+                and container.status is not ContainerStatus.Stopped
+            ):
                 container.startup_error = _container_exit_error(
                     container.id,
                     exit_code,

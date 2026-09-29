@@ -8,11 +8,45 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"syscall"
 	"testing"
 	"time"
 )
+
+func TestSlowStartReaderDoesNotBlockWorkloadReaping(t *testing.T) {
+	s := &supervisor{
+		workload:       exec.Command("sh", "-c", "exit 0"),
+		workloadExit:   make(chan int, 1),
+		directChildren: make(map[int]struct{}),
+	}
+	server, client := net.Pipe()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer server.Close()
+		s.handleStartWorkload(json.NewEncoder(server))
+	}()
+	defer func() {
+		client.Close()
+		<-done
+	}()
+	select {
+	case code := <-s.workloadExit:
+		if code != 0 {
+			t.Fatalf("workload exited with %d", code)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("stalled start response blocked workload reaping")
+	}
+	s.mu.RLock()
+	remaining := len(s.directChildren)
+	s.mu.RUnlock()
+	if remaining != 0 {
+		t.Fatalf("workload left %d unreaped direct children", remaining)
+	}
+}
 
 func TestDrainClosesAcceptedConnectionsBeforeControlEOF(t *testing.T) {
 	token, tokenPath := testControlToken(t)
@@ -90,7 +124,10 @@ func TestControlRequestRejectsWrongToken(t *testing.T) {
 }
 
 func TestStreamAckEvictsPersistedChunks(t *testing.T) {
+	s := &supervisor{}
+	s.bufferBytes.Store(2)
 	state := &processState{
+		budget:       &s.bufferBytes,
 		pid:          12,
 		running:      false,
 		exitCode:     0,
@@ -101,7 +138,6 @@ func TestStreamAckEvictsPersistedChunks(t *testing.T) {
 	}
 	input := bytes.NewBufferString(`{"version":1,"op":"ack","pid":12,"ack_seq":1,"ok":true}` + "\n")
 	var output bytes.Buffer
-	s := &supervisor{}
 	s.streamProcess(json.NewDecoder(input), json.NewEncoder(&output), state, 0)
 
 	if len(state.logs) != 0 || state.pendingBytes != 0 || state.ackSeq != 1 {
@@ -197,24 +233,147 @@ func openControl(t *testing.T, tokenPath string, command request) (net.Conn, *js
 	return client, json.NewDecoder(bufio.NewReader(client))
 }
 
-func TestExitedProcessRetentionIsBounded(t *testing.T) {
-	s := &supervisor{processes: make(map[int]*processState)}
-	for pid := 1; pid <= maxRetainedExitedProcess+5; pid++ {
-		s.processes[pid] = &processState{
-			pid:        pid,
-			running:    false,
-			finishedAt: time.Unix(int64(pid), 0),
-			changed:    make(chan struct{}),
+func TestCommandResultSurvivesNewCommandsAndPIDReuseUntilExpiry(t *testing.T) {
+	s := &supervisor{processes: make(map[int]*processState), directChildren: make(map[int]struct{})}
+	var first response
+	for index := 0; index < 80; index++ {
+		server, client := net.Pipe()
+		go func() {
+			defer server.Close()
+			s.handleExec(json.NewDecoder(server), json.NewEncoder(server), request{Argv: []string{"sh", "-c", "printf output; printf error >&2; exit 7"}})
+		}()
+		decoder, encoder := json.NewDecoder(client), json.NewEncoder(client)
+		for {
+			var event response
+			if err := decoder.Decode(&event); err != nil {
+				t.Fatal(err)
+			}
+			if event.Type == "started" && index == 0 {
+				first = event
+			}
+			if event.Type == "chunk" {
+				if err := encoder.Encode(request{Version: protocolVersion, Op: "ack", PID: event.PID, AckSeq: event.Seq, OK: true}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if event.Type == "exited" {
+				break
+			}
+			if event.Type == "error" {
+				t.Fatal(event.Error)
+			}
 		}
+		client.Close()
 	}
+	s.mu.Lock()
+	s.processes[first.PID] = &processState{id: "reused", pid: first.PID, running: true}
+	s.mu.Unlock()
+	var output bytes.Buffer
+	s.handleResult(json.NewEncoder(&output), request{ProcessID: first.ProcessID, WaitSeconds: 5})
+	var result response
+	if err := json.Unmarshal(output.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Type != "result" || result.ExitCode != 7 || result.Stdout != "output" || result.Stderr != "error" || result.ExpiresAt == nil {
+		t.Fatalf("lost retained result: %#v", result)
+	}
+	state := s.results[first.ProcessID]
+	state.mu.Lock()
+	state.finishedAt = time.Now().Add(-processResultRetention)
+	state.mu.Unlock()
 	s.pruneExitedProcesses()
-	if len(s.processes) != maxRetainedExitedProcess {
-		t.Fatalf("retained %d exited processes", len(s.processes))
+	output.Reset()
+	s.handleResult(json.NewEncoder(&output), request{ProcessID: first.ProcessID})
+	if err := json.Unmarshal(output.Bytes(), &result); err != nil {
+		t.Fatal(err)
 	}
-	for pid := 1; pid <= 5; pid++ {
-		if _, ok := s.processes[pid]; ok {
-			t.Fatalf("old process %d was retained", pid)
-		}
+	if result.Type != "error" || result.Error != "process result expired or not found" {
+		t.Fatalf("expiry not explicit: %#v", result)
+	}
+	if s.processes[first.PID].id != "reused" {
+		t.Fatal("expiry removed a reused PID")
+	}
+}
+
+func TestResultTruncationPreservesPrefixAndBudget(t *testing.T) {
+	s := &supervisor{processes: make(map[int]*processState), directChildren: make(map[int]struct{})}
+	var output bytes.Buffer
+	s.handleExec(json.NewDecoder(bytes.NewReader(nil)), json.NewEncoder(&output), request{Argv: []string{"sh", "-c", "printf prefix; head -c 300000 /dev/zero"}})
+	var started response
+	if err := json.NewDecoder(&output).Decode(&started); err != nil {
+		t.Fatal(err)
+	}
+	output.Reset()
+	s.handleResult(json.NewEncoder(&output), request{ProcessID: started.ProcessID, WaitSeconds: 5})
+	var result response
+	if err := json.Unmarshal(output.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Running || !result.StdoutTruncated || len(result.Stdout) != maxRetainedOutputBytes || result.Stdout[:6] != "prefix" {
+		t.Fatalf("incorrect output retention: running=%v truncated=%v bytes=%d", result.Running, result.StdoutTruncated, len(result.Stdout))
+	}
+	state := s.results[started.ProcessID]
+	state.mu.Lock()
+	state.finishedAt = time.Now().Add(-processResultRetention)
+	state.mu.Unlock()
+	s.pruneExitedProcesses()
+	if retained := s.bufferBytes.Load(); retained != 0 {
+		t.Fatalf("expired result retained %d bytes", retained)
+	}
+}
+
+func TestSlowLogReaderDoesNotLoseRetainedResult(t *testing.T) {
+	s := &supervisor{processes: make(map[int]*processState), directChildren: make(map[int]struct{})}
+	server, client := net.Pipe()
+	defer client.Close()
+	done := make(chan struct{})
+	go func() {
+		defer server.Close()
+		defer close(done)
+		s.handleExec(json.NewDecoder(server), json.NewEncoder(server), request{Argv: []string{"sh", "-c", "printf retained"}})
+	}()
+	decoder := json.NewDecoder(client)
+	var started, chunk response
+	if err := decoder.Decode(&started); err != nil {
+		t.Fatal(err)
+	}
+	if err := decoder.Decode(&chunk); err != nil {
+		t.Fatal(err)
+	}
+	if chunk.Type != "chunk" {
+		t.Fatalf("expected output, got %#v", chunk)
+	}
+	var output bytes.Buffer
+	s.handleResult(json.NewEncoder(&output), request{ProcessID: started.ProcessID, WaitSeconds: 5})
+	var result response
+	if err := json.Unmarshal(output.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Running || result.Stdout != "retained" {
+		t.Fatalf("result blocked on log reader: %#v", result)
+	}
+	state := s.results[started.ProcessID]
+	state.mu.Lock()
+	state.finishedAt = time.Now().Add(-processResultRetention)
+	state.mu.Unlock()
+	s.pruneExitedProcesses()
+	if s.results[started.ProcessID] != state {
+		t.Fatal("expired result removed during active log retrieval")
+	}
+	if err := json.NewEncoder(client).Encode(request{Version: protocolVersion, Op: "ack", PID: chunk.PID, AckSeq: chunk.Seq, OK: true}); err != nil {
+		t.Fatal(err)
+	}
+	var exited response
+	if err := decoder.Decode(&exited); err != nil {
+		t.Fatal(err)
+	}
+	if exited.Type != "exited" {
+		t.Fatalf("stream did not finish: %#v", exited)
+	}
+	<-done
+	s.pruneExitedProcesses()
+	if s.bufferBytes.Load() != 0 {
+		t.Fatal("expired slow-reader output was not released")
 	}
 }
 

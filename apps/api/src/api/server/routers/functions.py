@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
+from functools import partial
 from typing import Annotated
 
 from anyio import CancelScope, to_thread
@@ -31,7 +32,7 @@ from api.server.deployed_stubs import (
     resolve_deployed_stub_id,
 )
 from api.server.http import request_query_params
-from api.server.ownership import require_function_stub_workspace, require_task_workspace
+from api.server.ownership import require_function_stub_workspace
 from api.server.public_transfers import attribute_public_transfer
 from api.server.service_dependencies import control_plane_service, function_service
 from api.server.services import ApiServiceCore, FunctionApiService
@@ -100,15 +101,13 @@ type HttpFunctionInvocation = Annotated[FunctionJsonInvocation, Depends(_http_in
 
 
 @router.post("/invoke", response_model=FunctionInvokeResponse)
-def function_invoke(
+async def function_invoke(
     request: FunctionInvokeBody,
     connection: Request,
     workspace_id: write_workspace,
     service: FunctionApiService = Depends(function_service),
-    control_plane: ControlPlaneService = Depends(control_plane_service),
 ) -> FunctionInvokeResponse:
-    require_function_stub_workspace(control_plane, request.stub_id, workspace_id)
-    result = service.function_invoke(request)
+    result = await service.function_invoke_async(request, workspace_id=workspace_id)
     attribute_public_transfer(
         connection,
         workspace_id=workspace_id,
@@ -120,16 +119,14 @@ def function_invoke(
 
 
 @router.post("/invoke/stream", response_class=StreamingResponse)
-def function_invoke_stream(
+async def function_invoke_stream(
     request: FunctionInvokeBody,
     connection: Request,
     workspace_id: write_workspace,
     service: FunctionApiService = Depends(function_service),
-    control_plane: ControlPlaneService = Depends(control_plane_service),
 ) -> StreamingResponse:
-    require_function_stub_workspace(control_plane, request.stub_id, workspace_id)
     # Run admission before streaming starts so refusals retain their HTTP status.
-    initial = service.function_invoke(request)
+    initial = await service.function_invoke_async(request, workspace_id=workspace_id)
     attribute_public_transfer(
         connection,
         workspace_id=workspace_id,
@@ -145,11 +142,7 @@ async def function_claim(
     request: FunctionClaimRequest,
     workspace_id: write_workspace,
     service: FunctionApiService = Depends(function_service),
-    control_plane: ControlPlaneService = Depends(control_plane_service),
 ) -> FunctionClaimResponse:
-    await to_thread.run_sync(
-        require_function_stub_workspace, control_plane, request.stub_id, workspace_id
-    )
     return await service.function_claim_wait(request, workspace_id=workspace_id)
 
 
@@ -157,11 +150,9 @@ async def function_claim(
 def function_set_result(
     request: FunctionSetResultBody,
     workspace_id: write_workspace,
-    services: ApiServiceCore = Depends(current_services),
     service: FunctionApiService = Depends(function_service),
 ) -> FunctionSetResultResponse:
-    require_task_workspace(services, request.task_id, workspace_id)
-    return service.function_set_result(request)
+    return service.function_set_result(request, workspace_id=workspace_id)
 
 
 @runtime_router.post("/monitor", response_model=FunctionMonitorResponse)
@@ -169,13 +160,9 @@ def function_monitor(
     request: FunctionMonitorRequest,
     connection: Request,
     workspace_id: read_workspace,
-    services: ApiServiceCore = Depends(current_services),
-    control_plane: ControlPlaneService = Depends(control_plane_service),
     service: FunctionApiService = Depends(function_service),
 ) -> FunctionMonitorResponse:
-    require_function_stub_workspace(control_plane, request.stub_id, workspace_id)
-    require_task_workspace(services, request.task_id, workspace_id)
-    result = service.function_monitor(request)
+    result = service.function_monitor(request, workspace_id=workspace_id)
     attribute_public_transfer(
         connection,
         workspace_id=workspace_id,
@@ -187,7 +174,7 @@ def function_monitor(
 
 
 @router.post("/id/{stub_id}", response_model=FunctionInvokeResponse)
-def deployed_function_invoke_by_id(
+async def deployed_function_invoke_by_id(
     stub_id: str,
     connection: Request,
     invocation: HttpFunctionInvocation,
@@ -196,20 +183,23 @@ def deployed_function_invoke_by_id(
     control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServiceCore = Depends(current_services),
 ) -> FunctionInvokeResponse:
-    stub = resolve_deployed_stub_id(
-        control_plane,
-        services,
-        stub_id,
-        StubKind.Function,
-        public=False,
-        resource_name="function",
-        workspace=workspace_id,
+    stub = await to_thread.run_sync(
+        partial(
+            resolve_deployed_stub_id,
+            control_plane,
+            services,
+            stub_id,
+            StubKind.Function,
+            public=False,
+            resource_name="function",
+            workspace=workspace_id,
+        )
     )
-    return _invoke_deployed_function(stub, invocation, service, connection)
+    return await _invoke_deployed_function(stub, invocation, service, connection)
 
 
 @router.post("/public/{stub_id}", response_model=FunctionInvokeResponse)
-def deployed_public_function_invoke_by_id(
+async def deployed_public_function_invoke_by_id(
     stub_id: str,
     connection: Request,
     invocation: HttpFunctionInvocation,
@@ -217,19 +207,22 @@ def deployed_public_function_invoke_by_id(
     control_plane: ControlPlaneService = Depends(control_plane_service),
     services: ApiServiceCore = Depends(current_services),
 ) -> FunctionInvokeResponse:
-    stub = resolve_deployed_stub_id(
-        control_plane,
-        services,
-        stub_id,
-        StubKind.Function,
-        public=True,
-        resource_name="function",
+    stub = await to_thread.run_sync(
+        partial(
+            resolve_deployed_stub_id,
+            control_plane,
+            services,
+            stub_id,
+            StubKind.Function,
+            public=True,
+            resource_name="function",
+        )
     )
-    return _invoke_deployed_function(stub, invocation, service, connection)
+    return await _invoke_deployed_function(stub, invocation, service, connection)
 
 
 @router.post("/{deployment_name}/latest", response_model=FunctionInvokeResponse)
-def deployed_function_invoke_by_latest_path(
+async def deployed_function_invoke_by_latest_path(
     deployment_name: str,
     connection: Request,
     invocation: HttpFunctionInvocation,
@@ -237,19 +230,22 @@ def deployed_function_invoke_by_latest_path(
     service: FunctionApiService = Depends(function_service),
     services: ApiServiceCore = Depends(current_services),
 ) -> FunctionInvokeResponse:
-    stub = resolve_deployed_stub(
-        services,
-        deployment_name,
-        StubKind.Function,
-        version=None,
-        workspace=workspace_id,
-        resource_name="function",
+    stub = await to_thread.run_sync(
+        partial(
+            resolve_deployed_stub,
+            services,
+            deployment_name,
+            StubKind.Function,
+            version=None,
+            workspace=workspace_id,
+            resource_name="function",
+        )
     )
-    return _invoke_deployed_function(stub, invocation, service, connection)
+    return await _invoke_deployed_function(stub, invocation, service, connection)
 
 
 @router.post("/{deployment_name}/v{version}", response_model=FunctionInvokeResponse)
-def deployed_function_invoke_by_version(
+async def deployed_function_invoke_by_version(
     deployment_name: str,
     version: int,
     connection: Request,
@@ -258,28 +254,33 @@ def deployed_function_invoke_by_version(
     service: FunctionApiService = Depends(function_service),
     services: ApiServiceCore = Depends(current_services),
 ) -> FunctionInvokeResponse:
-    stub = resolve_deployed_stub(
-        services,
-        deployment_name,
-        StubKind.Function,
-        version=version,
-        workspace=workspace_id,
-        resource_name="function",
+    stub = await to_thread.run_sync(
+        partial(
+            resolve_deployed_stub,
+            services,
+            deployment_name,
+            StubKind.Function,
+            version=version,
+            workspace=workspace_id,
+            resource_name="function",
+        )
     )
-    return _invoke_deployed_function(stub, invocation, service, connection)
+    return await _invoke_deployed_function(stub, invocation, service, connection)
 
 
-def _invoke_deployed_function(
+async def _invoke_deployed_function(
     stub: StubRecord,
     invocation: FunctionJsonInvocation,
     service: FunctionApiService,
     connection: Request,
 ) -> FunctionInvokeResponse:
-    result = service.function_invoke(
+    result = await service.function_invoke_async(
         FunctionInvokeBody(
             stub_id=stub.id,
             invocation=invocation,
-        )
+        ),
+        stub=stub,
+        workspace_id=stub.workspace_id,
     )
     attribute_public_transfer(
         connection,

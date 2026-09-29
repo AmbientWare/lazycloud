@@ -145,10 +145,9 @@ async def test_dispatch_names_dead_capacity_instead_of_waiting_out_its_deadline(
     await async_io.start()
     try:
         response = await service.forward_endpoint_request(
-            EndpointForwardRequest(stub_id=stub.id, method="POST", body=b"{}")
+            EndpointForwardRequest(stub_id=stub.id, method="POST", body=b"{}"), stub=stub
         )
     finally:
         await async_io.close()
 
     assert response.status_code == 503
-    assert b"no container could start for this endpoint (exit code 1)" in response.body

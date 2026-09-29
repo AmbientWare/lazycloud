@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import os
 import pickle
+import random
 import signal
 import socket
 import sys
@@ -14,7 +15,7 @@ from dataclasses import dataclass, field
 from multiprocessing import Pipe, Process
 from multiprocessing.connection import wait
 from types import FrameType
-from typing import Any, Protocol, TextIO
+from typing import Any, NoReturn, Protocol, TextIO
 from uuid import uuid4
 
 import cloudpickle
@@ -50,7 +51,7 @@ from shared.function_payloads import (
     FunctionPayloadEncoding,
     FunctionResultPayload,
 )
-from shared.http.errors import HttpApiError, HttpTransportError
+from shared.http.errors import HttpApiError, HttpResponseDecodeError, HttpTransportError
 from shared.http.execution_entry import ExecutionEntryEvidence
 from shared.http.functions import (
     FUNCTION_CALL_REF_MARKER,
@@ -98,6 +99,7 @@ from runner.worker_processes import stop_worker_processes
 # Retry delay for transport failures and source reloads.
 DEFAULT_FUNCTION_POLL_INTERVAL_SECONDS = 0.1
 _CANCELLED_WORKER_EXIT_CODE = 75
+_RESULT_PUBLICATION_BUDGET_SECONDS = 60.0
 _FUNCTION_CALL_REFERENCE_ADAPTER = TypeAdapter[FunctionCallPersistentId](FunctionCallPersistentId)
 
 
@@ -170,6 +172,8 @@ class FunctionControlChannel(Protocol):
         self,
         path: str,
         payload: dict[str, JsonValue] | None = None,
+        *,
+        timeout_seconds: float | None = None,
     ) -> JsonValue: ...
 
 
@@ -474,7 +478,7 @@ class FunctionRunner:
         finally:
             with self._active_lock:
                 self._active_task = None
-            self._report_worker_state(FunctionWorkerState.Ready)
+        self._report_worker_state(FunctionWorkerState.Ready)
 
     def _run_claimed_task(self, task: ClaimedTask) -> None:
         started = time.perf_counter()
@@ -483,22 +487,6 @@ class FunctionRunner:
             self.run_task_hooks(task, LifecycleHookName.Running, TaskStatus.Running)
             result = self.execute_with_log_capture(task, timing)
             serialized = _serialize_function_result(result, task.invocation)
-            self.set_result(task, serialized, execution_entry=timing.evidence())
-            duration = time.perf_counter() - started
-            self.run_task_hooks(
-                task,
-                LifecycleHookName.Success,
-                TaskStatus.Complete,
-                duration_seconds=duration,
-                result_available=True,
-            )
-            self.run_task_hooks(
-                task,
-                LifecycleHookName.Finish,
-                TaskStatus.Complete,
-                duration_seconds=duration,
-                result_available=True,
-            )
         except BaseException as exc:
             duration = time.perf_counter() - started
             formatted = (
@@ -520,6 +508,44 @@ class FunctionRunner:
                 execution_entry=timing.evidence(),
             )
             self.run_final_failure_hooks(task, exc, response, duration_seconds=duration)
+            return
+
+        # A lost completion response must never turn successful user code into
+        # a failed attempt. Only publication is safe to retry under this claim.
+        try:
+            response = self.set_result(task, serialized, execution_entry=timing.evidence())
+            completed = response.status is TaskStatus.Complete and response.claim_acknowledged
+        except (HttpApiError, HttpTransportError, HttpResponseDecodeError, ValidationError) as exc:
+            detail = (
+                f"HTTP {exc.status_code}" if isinstance(exc, HttpApiError) else type(exc).__name__
+            )
+            print(
+                f"task {task.task_id}: result publication failed ({detail}); "
+                "completion is unconfirmed",
+                file=self.container_streams[1],
+                flush=True,
+            )
+            settlement = self.settle_unpublished_result(task, timing, started=started)
+            completed = (
+                settlement.final_status is TaskStatus.Complete and settlement.claim_acknowledged
+            )
+        if not completed:
+            return
+        duration = time.perf_counter() - started
+        self.run_task_hooks(
+            task,
+            LifecycleHookName.Success,
+            TaskStatus.Complete,
+            duration_seconds=duration,
+            result_available=True,
+        )
+        self.run_task_hooks(
+            task,
+            LifecycleHookName.Finish,
+            TaskStatus.Complete,
+            duration_seconds=duration,
+            result_available=True,
+        )
 
     def handler(self) -> Any:
         if self._handler is None:
@@ -564,19 +590,98 @@ class FunctionRunner:
         result: FunctionResultPayload,
         *,
         execution_entry: ExecutionEntryEvidence | None = None,
-    ) -> None:
-        FunctionSetResultResponse.model_validate(
-            self.control.post(
-                "/api/v1/functions/set-result",
-                FunctionSetResultBody(
-                    task_id=task.task_id,
-                    container_id=self.container_id,
-                    result=result,
-                    claim_id=task.claim_id,
-                    execution_entry=execution_entry,
-                ).model_dump(mode="json"),
-            )
+    ) -> FunctionSetResultResponse:
+        started = time.monotonic()
+        deadline = started + _RESULT_PUBLICATION_BUDGET_SECONDS
+        request = FunctionSetResultBody(
+            task_id=task.task_id,
+            container_id=self.container_id,
+            result=result,
+            claim_id=task.claim_id,
         )
+        attempt = 0
+        while True:
+            if execution_entry is not None:
+                request.execution_entry = ExecutionEntryEvidence(
+                    elapsed_since_entry_seconds=(
+                        execution_entry.elapsed_since_entry_seconds + time.monotonic() - started
+                    )
+                )
+            try:
+                return FunctionSetResultResponse.model_validate(
+                    self.control.post(
+                        "/api/v1/functions/set-result",
+                        request.model_dump(mode="json"),
+                        timeout_seconds=min(5.0, max(deadline - time.monotonic(), 0.001)),
+                    )
+                )
+            except (HttpApiError, HttpTransportError) as exc:
+                if isinstance(exc, HttpApiError) and not (
+                    exc.status_code in (408, 429) or 500 <= exc.status_code < 600
+                ):
+                    raise
+                remaining = deadline - time.monotonic()
+                delay = random.uniform(0.5, 1.0) * min(0.25 * 2**attempt, 4.0)
+                if attempt == 11 or remaining <= delay:
+                    raise
+                time.sleep(delay)
+                attempt += 1
+
+    def settle_unpublished_result(
+        self, task: ClaimedTask, timing: ExecutionTiming, *, started: float
+    ) -> EndTaskResponse:
+        # Keep ownership until the server acknowledges settlement. Releasing a
+        # live claim locally strands calls whose execution timeout is disabled.
+        while True:
+            try:
+                response = EndTaskResponse.model_validate(
+                    self.control.post(
+                        "/gateway/tasks/end",
+                        EndTaskRequest(
+                            task_id=task.task_id,
+                            task_duration=time.perf_counter() - started,
+                            task_status=TaskStatus.Failed,
+                            container_id=self.container_id,
+                            container_hostname=self.container_hostname,
+                            claim_id=task.claim_id,
+                            execution_entry=timing.evidence(),
+                            retryable=False,
+                            error=(
+                                "function completed, but result publication could not be confirmed"
+                            ),
+                        ).model_dump(mode="json"),
+                        timeout_seconds=5.0,
+                    )
+                )
+                if response.final_status is None:
+                    self.hold_unsettled_task(task, "settlement response omitted final status")
+                return response
+            except (HttpApiError, HttpTransportError) as exc:
+                if isinstance(exc, HttpApiError) and not (
+                    exc.status_code in (408, 429) or 500 <= exc.status_code < 600
+                ):
+                    self.hold_unsettled_task(
+                        task, f"settlement rejected with HTTP {exc.status_code}"
+                    )
+                print(
+                    f"task {task.task_id}: terminal settlement unavailable; retaining active claim",
+                    file=self.container_streams[1],
+                    flush=True,
+                )
+                if self._monitor_shutdown.wait(random.uniform(5.0, 10.0)):
+                    raise InterruptedError("function runner closed during task settlement") from exc
+            except (HttpResponseDecodeError, ValidationError):
+                self.hold_unsettled_task(task, "invalid terminal settlement response")
+
+    def hold_unsettled_task(self, task: ClaimedTask, reason: str) -> NoReturn:
+        while True:
+            print(
+                f"task {task.task_id}: {reason}; active claim retained, operator action required",
+                file=self.container_streams[1],
+                flush=True,
+            )
+            if self._monitor_shutdown.wait(60.0):
+                raise InterruptedError("function runner closed with unsettled task")
 
     def append_task_logs(self, task_id: str, stream: str, messages: str | list[str]) -> None:
         post_task_logs(self.control, task_id, stream, messages)
@@ -696,6 +801,8 @@ class FunctionRunner:
         *,
         duration_seconds: float,
     ) -> None:
+        if response is not None and not response.claim_acknowledged:
+            return
         end_status = response.final_status if response is not None else None
         final_status = end_status or TaskStatus.Failed
         retry_scheduled = response.retry_scheduled if response is not None else False
@@ -739,6 +846,12 @@ class FunctionRunner:
         attempt_number: int = 0,
         max_attempts: int = 1,
     ) -> None:
+        def log(stream: str, message: str) -> None:
+            try:
+                self.append_task_logs(task.task_id, stream, message)
+            except (HttpApiError, HttpTransportError, HttpResponseDecodeError):
+                self.report_log_delivery_failure(task.task_id, "lifecycle hook output")
+
         context = LifecycleTaskContext(
             hook=hook,
             task_id=task.task_id,
@@ -764,7 +877,7 @@ class FunctionRunner:
             self.config.lifecycle_hooks,
             hook,
             context,
-            log=lambda stream, message: self.append_task_logs(task.task_id, stream, message),
+            log=log,
         )
 
 

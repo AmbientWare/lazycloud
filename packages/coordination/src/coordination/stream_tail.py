@@ -69,9 +69,9 @@ class _Source:
 class RedisStreamTailBroker:
     """One blocking multi-key XREAD per process, fanned out to bounded subscriber queues.
 
-    A subscriber registers against a per-stream barrier under the same lock that
-    advances the stream cursor during dispatch, so it receives exactly the entries
-    after its barrier live and reads anything older straight from Redis.
+    Registration and cursor changes do not yield on their owning event loop.
+    A subscriber receives entries after its barrier live and reads anything
+    older straight from Redis.
     """
 
     redis: AsyncRedisClient
@@ -79,7 +79,6 @@ class RedisStreamTailBroker:
     page_count: int = 1_000
     queue_size: int = 1_024
     _sources: dict[str, _Source] = field(default_factory=dict, init=False, repr=False)
-    _lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
     _wake: asyncio.Event = field(default_factory=asyncio.Event, init=False, repr=False)
     _reader: asyncio.Task[None] | None = field(default=None, init=False, repr=False)
     _degraded: bool = field(default=False, init=False, repr=False)
@@ -100,14 +99,13 @@ class RedisStreamTailBroker:
             reader.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await reader
-        async with self._lock:
-            subscribers = {
-                subscriber for source in self._sources.values() for subscriber in source.subscribers
-            }
-            for subscriber in subscribers:
-                subscriber.terminate()
-            self._sources.clear()
-            self._subscriber_counts.clear()
+        subscribers = {
+            subscriber for source in self._sources.values() for subscriber in source.subscribers
+        }
+        for subscriber in subscribers:
+            subscriber.terminate()
+        self._sources.clear()
+        self._subscriber_counts.clear()
 
     def status(self) -> RedisStreamTailStatus:
         reader = self._reader
@@ -138,9 +136,8 @@ class RedisStreamTailBroker:
         if not names:
             raise ValueError("a stream tail subscription needs at least one stream")
         keys = {stream: self.redis.key(stream) for stream in names}
-        # Tails are read outside the lock. An entry appended between this read
-        # and registration sits after the barrier, so it arrives live rather
-        # than by replay; nothing is skipped.
+        # An entry appended between the tail read and registration sits after
+        # the barrier, so it arrives live rather than by replay.
         tails = dict(
             zip(
                 names,
@@ -151,19 +148,20 @@ class RedisStreamTailBroker:
         subscriber = _Subscriber(label, asyncio.Queue(maxsize=self.queue_size))
         positions: dict[str, str] = {}
         barriers: dict[str, str] = {}
-        async with self._lock:
-            for stream in names:
-                key = keys[stream]
-                source = self._sources.get(key)
-                if source is None:
-                    source = _Source(stream=stream, key=key, cursor=tails[stream])
-                    self._sources[key] = source
-                    self._wake.set()
-                source.subscribers.add(subscriber)
-                barriers[stream] = source.cursor
-                start = after.get(stream)
-                positions[stream] = source.cursor if start is None else start
-            self._subscriber_counts[label] = self._subscriber_counts.get(label, 0) + 1
+        if self._reader is None or self._reader.done():
+            raise RuntimeError("stream tail broker is not running")
+        for stream in names:
+            key = keys[stream]
+            source = self._sources.get(key)
+            if source is None:
+                source = _Source(stream=stream, key=key, cursor=tails[stream])
+                self._sources[key] = source
+                self._wake.set()
+            source.subscribers.add(subscriber)
+            barriers[stream] = source.cursor
+            start = after.get(stream)
+            positions[stream] = source.cursor if start is None else start
+        self._subscriber_counts[label] = self._subscriber_counts.get(label, 0) + 1
         return RedisStreamTailSubscription(
             self,
             subscriber=subscriber,
@@ -178,19 +176,16 @@ class RedisStreamTailBroker:
             return _EMPTY_STREAM_ID
         return redis_text(entries[0][0])
 
-    async def _resync(self, subscriber: _Subscriber, keys: Mapping[str, str]) -> dict[str, str]:
-        async with self._lock:
-            while not subscriber.queue.empty():
-                subscriber.queue.get_nowait()
-            subscriber.overflowed = False
-            self._overflow_counts[subscriber.label] = (
-                self._overflow_counts.get(subscriber.label, 0) + 1
-            )
-            return {
-                stream: self._sources[key].cursor
-                for stream, key in keys.items()
-                if key in self._sources
-            }
+    def _resync(self, subscriber: _Subscriber, keys: Mapping[str, str]) -> dict[str, str]:
+        while not subscriber.queue.empty():
+            subscriber.queue.get_nowait()
+        subscriber.overflowed = False
+        self._overflow_counts[subscriber.label] = self._overflow_counts.get(subscriber.label, 0) + 1
+        return {
+            stream: self._sources[key].cursor
+            for stream, key in keys.items()
+            if key in self._sources
+        }
 
     async def _replay(
         self,
@@ -214,25 +209,23 @@ class RedisStreamTailBroker:
                 position = entry_id
                 yield (stream, entry)
 
-    async def _detach(self, subscriber: _Subscriber, keys: Mapping[str, str]) -> None:
-        async with self._lock:
-            for key in keys.values():
-                source = self._sources.get(key)
-                if source is None:
-                    continue
-                source.subscribers.discard(subscriber)
-                if not source.subscribers:
-                    del self._sources[key]
-            if not subscriber.closed:
-                self._subscriber_counts[subscriber.label] -= 1
+    def _detach(self, subscriber: _Subscriber, keys: Mapping[str, str]) -> None:
+        for key in keys.values():
+            source = self._sources.get(key)
+            if source is None:
+                continue
+            source.subscribers.discard(subscriber)
+            if not source.subscribers:
+                del self._sources[key]
+        if not subscriber.closed:
+            self._subscriber_counts[subscriber.label] -= 1
 
     async def _read_forever(self) -> None:
         try:
             backoff = _INITIAL_BACKOFF_SECONDS
             while True:
-                async with self._lock:
-                    offsets = {key: source.cursor for key, source in self._sources.items()}
-                    self._wake.clear()
+                offsets = {key: source.cursor for key, source in self._sources.items()}
+                self._wake.clear()
                 if not offsets:
                     await self._wake.wait()
                     continue
@@ -248,38 +241,34 @@ class RedisStreamTailBroker:
                     continue
                 backoff = _INITIAL_BACKOFF_SECONDS
                 self._degraded = False
-                async with self._lock:
-                    for raw_key, entries in pages:
-                        source = self._sources.get(redis_text(raw_key))
-                        if source is None:
+                for raw_key, entries in pages:
+                    source = self._sources.get(redis_text(raw_key))
+                    if source is None:
+                        continue
+                    cursor = _entry_order(source.cursor)
+                    for entry in entries:
+                        entry_id = redis_text(entry[0])
+                        order = _entry_order(entry_id)
+                        # A read issued before this source was recreated can
+                        # carry entries its new barrier already covers.
+                        if order <= cursor:
                             continue
-                        cursor = _entry_order(source.cursor)
-                        for entry in entries:
-                            entry_id = redis_text(entry[0])
-                            order = _entry_order(entry_id)
-                            # A read issued before this source was recreated can
-                            # carry entries its new barrier already covers.
-                            if order <= cursor:
-                                continue
-                            cursor = order
-                            source.cursor = entry_id
-                            for subscriber in source.subscribers:
-                                subscriber.offer((source.stream, entry))
+                        cursor = order
+                        source.cursor = entry_id
+                        for subscriber in source.subscribers:
+                            subscriber.offer((source.stream, entry))
 
         except asyncio.CancelledError:
             raise
         except BaseException as exc:
             # A reader that dies must not leave subscribers on heartbeats forever.
             self._last_failure = type(exc).__name__
-            async with self._lock:
-                subscribers = {
-                    subscriber
-                    for source in self._sources.values()
-                    for subscriber in source.subscribers
-                }
-                for subscriber in subscribers:
-                    subscriber.terminate()
-                self._sources.clear()
+            subscribers = {
+                subscriber for source in self._sources.values() for subscriber in source.subscribers
+            }
+            for subscriber in subscribers:
+                subscriber.terminate()
+            self._sources.clear()
             raise
 
     async def _read_pages(self, offsets: Mapping[str, str]) -> list[RedisStreamRead]:
@@ -328,7 +317,7 @@ class RedisStreamTailSubscription:
         timeout = max(heartbeat_seconds, 0.05)
         while True:
             if self._barriers is None and subscriber.overflowed:
-                self._barriers = await self._broker._resync(subscriber, self._keys)
+                self._barriers = self._broker._resync(subscriber, self._keys)
             if self._barriers is not None:
                 barriers = self._barriers
                 self._barriers = None
@@ -357,7 +346,7 @@ class RedisStreamTailSubscription:
         if self._detached:
             return
         self._detached = True
-        await self._broker._detach(self._subscriber, self._keys)
+        self._broker._detach(self._subscriber, self._keys)
 
     async def __aenter__(self) -> RedisStreamTailSubscription:
         return self

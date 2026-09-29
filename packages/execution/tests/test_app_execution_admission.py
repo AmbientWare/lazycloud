@@ -37,7 +37,8 @@ def test_paused_app_rejects_every_execution_producer_without_container_orphans(
                 FunctionInvokeBody(
                     stub_id=stub.id,
                     invocation=FunctionJsonInvocation(args=[1]),
-                )
+                ),
+                stub=stub,
             )
     else:
         with pytest.raises(ConflictError, match="is not active"):
