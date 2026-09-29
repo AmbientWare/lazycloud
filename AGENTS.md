@@ -301,6 +301,14 @@ provider strategy, or top-level architecture choice is genuinely unresolved.
 Develop each feature on its own branch, open a pull request, and merge it only
 after its checks pass.
 
+Always prioritize shipping related work together. Keep the task's implementation,
+cleanup, and discovered fixes in one pull request whenever possible. Finish the
+full scope, review, and checks before starting Ship, then deploy once. If related
+pull requests already exist, merge them before that deployment. Do not split
+shipments for convenience or intermediate production measurements. Separate
+shipments require explicit owner direction; each repeats the release delay and
+agent work.
+
 Default to one task at a time. Parallel work is the exception you justify, not
 the mode you assume: it requires genuinely disjoint owners and files, and the
 manager still reviews returned work and runs integrated acceptance. Delegating
