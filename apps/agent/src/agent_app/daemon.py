@@ -44,6 +44,7 @@ from agent.operations import (
     resolve_agent_capacity,
     worker_slot_kept,
 )
+from agent.routes import AgentRoutes, AgentRouteSnapshot, AgentTunnelRoute
 from agent.service_manager import (
     DEFAULT_AGENT_STATE_DIR,
     AgentPreflightProbeSet,
@@ -59,7 +60,7 @@ from agent.storage_cleanup import (
     read_stop_preparation,
 )
 from agent.suspend import SuspendWatch, Wakeup
-from agent.tunnel import AgentTunnelRoute, AgentTunnelService
+from agent.tunnel import AgentTunnelService
 from agent.updates import AgentUpdateBlockedError, AgentUpdater
 from agent.worker_controller import (
     DOCKER_WAIT_SECONDS,
@@ -243,7 +244,6 @@ class AgentDaemonRunResult(ContractModel):
     placement: str = ""
     machine_id: str = ""
     stream_iterations: int = 0
-    route_count: int = 0
     desired_worker_count: int = 0
     slot_action_count: int = 0
     telemetry_sent: bool = False
@@ -983,22 +983,7 @@ class AgentDaemonService:
                 timings=timings,
             )
         )
-        with timings.step("routes"):
-            ready_routes = tunnel.reconcile_routes(
-                [
-                    AgentTunnelRoute(route.route_id, route.local_target, route.state)
-                    for route in stream.routes
-                ]
-            )
-        for route_id in ready_routes:
-            self.client.update_agent_route_status(
-                UpdateAgentRouteStatusRequest(
-                    agent_token=state.agent_token,
-                    route_id=route_id,
-                    state=BackendRouteState.Ready,
-                )
-            )
-        route_count = len(stream.routes)
+        tunnel.observe_route_revision(stream.route_revision)
         with timings.step("telemetry"):
             telemetry_sent = self._send_telemetry(
                 state,
@@ -1061,7 +1046,6 @@ class AgentDaemonService:
             placement=state.placement.key,
             machine_id=state.machine_id,
             stream_iterations=current_iterations,
-            route_count=route_count,
             desired_worker_count=len(desired_slots),
             slot_action_count=len(applied),
             telemetry_sent=telemetry_sent,
@@ -1525,9 +1509,29 @@ class AgentDaemonService:
             subnet=network.bridge_subnet,
             ipv6_subnet=network.bridge_ipv6_subnet,
         )
-        registered = self.client.list_agent_routes(
-            ListAgentRoutesRequest(agent_token=state.agent_token)
-        )
+
+        def load_routes() -> AgentRouteSnapshot:
+            registered = self.client.list_agent_routes(
+                ListAgentRoutesRequest(agent_token=state.agent_token)
+            )
+            return AgentRouteSnapshot(
+                registered.revision,
+                [
+                    AgentTunnelRoute(route.route_id, route.local_target, route.state)
+                    for route in registered.routes
+                ],
+            )
+
+        def report_ready(route: AgentTunnelRoute) -> None:
+            self.client.update_agent_route_status(
+                UpdateAgentRouteStatusRequest(
+                    agent_token=state.agent_token,
+                    route_id=route.route_id,
+                    local_target=route.local_target,
+                    state=BackendRouteState.Ready,
+                )
+            )
+
         tunnel = AgentTunnelService(
             state_dir=self.state_store.state_dir,
             identity=AgentTunnelIdentity(
@@ -1537,6 +1541,7 @@ class AgentDaemonService:
             ),
             issue_certificate=self.client.issue_agent_certificate,
             agent_token=state.agent_token,
+            routes=AgentRoutes(load_routes, report_ready),
             callback_firewall=AgentBridgeCallbackFirewall(
                 config=bridge,
                 owner_id=state.machine_id,
@@ -1544,10 +1549,6 @@ class AgentDaemonService:
         )
         tunnel.start(
             callback_hosts={bridge.gateway},
-            routes=[
-                AgentTunnelRoute(route.route_id, route.local_target, route.state)
-                for route in registered.routes
-            ],
             listen=not hold_worker_control,
         )
         return tunnel

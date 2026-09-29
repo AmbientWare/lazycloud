@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 
+from coordination.agent_connections import RedisAgentConnectionDirectory
 from coordination.redis_client import AsyncRedisClient, RedisClient
 from coordination.redis_serialization import (
     dump_model_json,
@@ -27,6 +28,13 @@ from shared.usage import UsageBillingOwner
 
 DEFAULT_COMPUTE_JOIN_TOKEN_TTL_SECONDS = 60
 DEFAULT_COMPUTE_AGENT_TOKEN_TTL_SECONDS = 86_400
+
+_DELETE_AGENT_ROUTE = """
+local previous = redis.call('GET', KEYS[1])
+redis.call('DEL', KEYS[1])
+redis.call('SREM', KEYS[2], ARGV[1])
+return {previous or '', redis.call('INCR', KEYS[3])}
+"""
 
 
 class ComputeUnitStatus(StrEnum):
@@ -591,24 +599,27 @@ class RedisComputeStateRepository:
         return deleted
 
     def save_agent_route_state(self, state: AgentBackendRoute) -> AgentBackendRoute:
-        self.redis.set(
+        revision = self.redis.eval_int(
+            "redis.call('SET', KEYS[1], ARGV[1]); "
+            "redis.call('SADD', KEYS[2], ARGV[2]); "
+            "return redis.call('INCR', KEYS[3])",
+            3,
             self.keys.agent_route(
                 state.workspace_id,
                 state.capacity_owner_id,
                 state.machine_id,
                 state.route_id,
             ),
-            dump_model_json(state),
-        )
-        self.redis.set_add(
             self.keys.agent_route_index(
                 state.workspace_id, state.capacity_owner_id, state.machine_id
             ),
+            self.keys.agent_route_revision(
+                state.workspace_id, state.capacity_owner_id, state.machine_id
+            ),
+            dump_model_json(state),
             state.route_id,
         )
-        self.bump_agent_route_revision(
-            state.workspace_id, state.capacity_owner_id, state.machine_id
-        )
+        RedisAgentConnectionDirectory(self.redis).notify_route_changed(state, revision)
         return state
 
     def get_agent_route_state(
@@ -638,18 +649,14 @@ class RedisComputeStateRepository:
                 )
             )
         )
-        states = [
-            state
+        keys = [
+            self.keys.agent_route(workspace_id, capacity_owner_id, machine_id, route_id)
             for route_id in route_ids
-            if (
-                state := self.get_agent_route_state(
-                    workspace_id,
-                    capacity_owner_id,
-                    machine_id,
-                    route_id,
-                )
-            )
-            is not None
+        ]
+        states = [
+            load_model_json(AgentBackendRoute, raw)
+            for raw in self.redis.mget(keys)
+            if raw is not None
         ]
         states.sort(key=lambda item: item.route_id)
         return states
@@ -668,28 +675,28 @@ class RedisComputeStateRepository:
         machine_id: str,
         route_id: str,
     ) -> bool:
-        # Keyword-only because the owner and the pool are both plain strings, and
-        # positionally they are adjacent and interchangeable. A caller passing the
-        # pool here deleted a key that never existed, silently, for every route.
-        deleted = bool(
-            self.redis.delete(
-                self.keys.agent_route(workspace_id, capacity_owner_id, machine_id, route_id)
+        raw, revision = self.redis.eval_scalars(
+            _DELETE_AGENT_ROUTE,
+            3,
+            self.keys.agent_route(workspace_id, capacity_owner_id, machine_id, route_id),
+            self.keys.agent_route_index(workspace_id, capacity_owner_id, machine_id),
+            self.keys.agent_route_revision(workspace_id, capacity_owner_id, machine_id),
+            route_id,
+        )
+        if raw:
+            previous = load_model_json(AgentBackendRoute, raw)
+            RedisAgentConnectionDirectory(self.redis).notify_route_changed(
+                previous, int(revision), deleted=True
             )
-        )
-        self.redis.set_remove(
-            self.keys.agent_route_index(workspace_id, capacity_owner_id, machine_id), route_id
-        )
-        self.bump_agent_route_revision(workspace_id, capacity_owner_id, machine_id)
-        return deleted
+        return bool(raw)
 
-    def bump_agent_route_revision(
-        self,
-        workspace_id: str,
-        capacity_owner_id: str,
-        machine_id: str,
+    def agent_route_revision(
+        self, workspace_id: str, capacity_owner_id: str, machine_id: str
     ) -> int:
-        key = self.keys.agent_route_revision(workspace_id, capacity_owner_id, machine_id)
-        return self.redis.increment(key)
+        value = self.redis.get(
+            self.keys.agent_route_revision(workspace_id, capacity_owner_id, machine_id)
+        )
+        return int(redis_text(value)) if value is not None else 0
 
     def save_agent_worker_slot_state(
         self,
@@ -820,21 +827,12 @@ class AsyncRedisComputeStateRepository:
         machine_id: str,
         route_id: str,
     ) -> bool:
-        deleted = bool(
-            await self.redis.delete(
-                self.keys.agent_route(
-                    workspace_id,
-                    capacity_owner_id,
-                    machine_id,
-                    route_id,
-                )
-            )
-        )
-        await self.redis.set_remove(
+        raw, _revision = await self.redis.eval_scalars(
+            _DELETE_AGENT_ROUTE,
+            3,
+            self.keys.agent_route(workspace_id, capacity_owner_id, machine_id, route_id),
             self.keys.agent_route_index(workspace_id, capacity_owner_id, machine_id),
+            self.keys.agent_route_revision(workspace_id, capacity_owner_id, machine_id),
             route_id,
         )
-        await self.redis.increment(
-            self.keys.agent_route_revision(workspace_id, capacity_owner_id, machine_id)
-        )
-        return deleted
+        return bool(raw)

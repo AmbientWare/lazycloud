@@ -13,6 +13,7 @@ from shared.http.agent_tunnel import (
     TUNNEL_MAX_ROUTE_STREAMS,
     TUNNEL_MAX_STREAMS,
     TUNNEL_OPEN_TIMEOUT_SECONDS,
+    AgentRouteUpdate,
     TunnelAttachRequest,
     TunnelCommand,
     TunnelCommandKind,
@@ -46,6 +47,7 @@ class AgentTunnelClient:
     credentials: TunnelCredentials
     expires_at: datetime
     resolve_route: Callable[[str], tuple[str, int] | None]
+    routes_changed: Callable[[AgentRouteUpdate | None], None]
     streams: set[asyncio.Task[None]] = field(default_factory=set, repr=False)
     route_streams: set[asyncio.Task[None]] = field(default_factory=set, repr=False)
     connection_id: str = field(default="", init=False)
@@ -181,6 +183,12 @@ class AgentTunnelClient:
                 if command.kind is TunnelCommandKind.Drain:
                     return
                 if command.kind is TunnelCommandKind.Heartbeat:
+                    continue
+                if (
+                    command.kind is TunnelCommandKind.RoutesChanged
+                    and command.connection_id == self.connection_id
+                ):
+                    self.routes_changed(command.route_update)
                     continue
                 if (
                     command.kind is not TunnelCommandKind.Open

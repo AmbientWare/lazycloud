@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from functools import update_wrapper
 from pathlib import Path
 from typing import (
+    TYPE_CHECKING,
     Any,
     Generic,
     ParamSpec,
@@ -70,12 +71,6 @@ from lazycloud.abstractions.metadata import (
     lifecycle_hooks,
     retry_policy_config,
 )
-from lazycloud.abstractions.serve import (
-    ServePreviewSession,
-    read_serve_preview,
-    write_serve_preview,
-)
-from lazycloud.abstractions.shell import Shell, ShellSession
 from lazycloud.abstractions.volume import VolumeExport, volume_mounts
 from lazycloud.aio import to_thread
 from lazycloud.client_contracts import (
@@ -83,17 +78,19 @@ from lazycloud.client_contracts import (
     schema_from_contract_parameters,
     schema_from_contract_return,
 )
-from lazycloud.clients.function.control import FunctionControlClient
-from lazycloud.clients.gateway.control import GatewayControlClient
-from lazycloud.clients.resource.control import ResourceControlClient
 from lazycloud.control import ControlClientConfig, resolve_control_client_config, workspace_path
 from lazycloud.env import called_on_import, is_local
 from lazycloud.progress import PendingProgressReporter
 from lazycloud.references import dotted_reference
 from lazycloud.session.deployment import DeploymentClient, DeploymentControlClient
-from lazycloud.session.preparation import DeploymentPreparation
 from lazycloud.session.task import FunctionCall, TaskClient, TaskOperationError
 from lazycloud.terminal import Terminal, TerminalStep
+
+if TYPE_CHECKING:
+    from lazycloud.abstractions.shell import ShellSession
+    from lazycloud.clients.function.control import FunctionControlClient
+    from lazycloud.session.preparation import DeploymentPreparation
+
 
 P = ParamSpec("P")
 R = TypeVar("R")
@@ -396,6 +393,11 @@ class Function(Generic[P, R]):
         workspace: str | None = None,
         sync_dir: str | None = None,
     ) -> FunctionServeResponse:
+        from lazycloud.abstractions.serve import ServePreviewSession, write_serve_preview
+        from lazycloud.clients.function.control import FunctionControlClient
+        from lazycloud.clients.gateway.control import GatewayControlClient
+        from lazycloud.clients.resource.control import ResourceControlClient
+
         sync_dir = sync_dir or "."
         self.env[HOT_RELOAD_ENV] = "true"
         self.keep_warm = 0
@@ -464,6 +466,8 @@ class Function(Generic[P, R]):
         container_id: str | None = None,
         sync_dir: str | None = None,
     ) -> ShellSession:
+        from lazycloud.abstractions.shell import Shell
+
         shell = Shell(
             workspace=workspace,
             endpoint=self.endpoint,
@@ -587,6 +591,9 @@ class Function(Generic[P, R]):
         if self.stub_id:
             return
         if is_local():
+            from lazycloud.abstractions.serve import read_serve_preview
+            from lazycloud.clients.resource.control import ResourceControlClient
+
             config = self._config()
             preview = read_serve_preview(
                 kind=DeploymentKind.Function,
@@ -987,6 +994,8 @@ def _normalized_task_policy(
 
 
 def _default_function_client(config: ControlClientConfig) -> FunctionControlClient:
+    from lazycloud.clients.function.control import FunctionControlClient
+
     return FunctionControlClient.from_endpoint(
         config.endpoint,
         token=config.token,

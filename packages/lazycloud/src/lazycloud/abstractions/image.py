@@ -11,7 +11,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import TracebackType
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from pydantic import JsonValue, TypeAdapter
 from shared.app_identity import IMAGE_BUILD_CONTEXT_BUCKET
@@ -46,13 +46,11 @@ from shared.image_building.credentials import (
 from shared.image_building.python import normalize_python_version
 from typing_extensions import Self
 
-from lazycloud.abstractions.image_project import (
-    ImageProject,
-    load_conda_environment,
-    load_python_project,
-    project_context_files,
-)
 from lazycloud.terminal import ProgressCallback, Terminal, TerminalStep
+
+if TYPE_CHECKING:
+    from lazycloud.abstractions.image_project import ImageProject
+
 
 _DOCKER_APT_DISTRIBUTION = (
     "set -eu; . /etc/os-release; "
@@ -229,6 +227,8 @@ class Image:
         base_image_creds: ImageCredentialInput = None,
         architecture: LinuxArchitecture | str = LinuxArchitecture.Amd64,
     ) -> Self:
+        from lazycloud.abstractions.image_project import load_python_project
+
         return cls._from_project(
             load_python_project(
                 path,
@@ -254,6 +254,8 @@ class Image:
         base_image_creds: ImageCredentialInput = None,
         architecture: LinuxArchitecture | str = LinuxArchitecture.Amd64,
     ) -> Self:
+        from lazycloud.abstractions.image_project import load_python_project
+
         return cls._from_project(
             load_python_project(
                 path,
@@ -279,6 +281,8 @@ class Image:
         base_image_creds: ImageCredentialInput = None,
         architecture: LinuxArchitecture | str = LinuxArchitecture.Amd64,
     ) -> Self:
+        from lazycloud.abstractions.image_project import load_python_project
+
         return cls._from_project(
             load_python_project(
                 path,
@@ -302,6 +306,8 @@ class Image:
         base_image_creds: ImageCredentialInput = None,
         architecture: LinuxArchitecture | str = LinuxArchitecture.Amd64,
     ) -> Self:
+        from lazycloud.abstractions.image_project import load_conda_environment
+
         return cls._from_project(
             load_conda_environment(path, python_version=python_version),
             base_image=base_image,
@@ -318,6 +324,8 @@ class Image:
         base_image_creds: ImageCredentialInput,
         architecture: LinuxArchitecture | str,
     ) -> Self:
+        from lazycloud.abstractions.image_project import project_context_files
+
         image = cls(
             python_version=project.python_version,
             base_image=base_image,
@@ -547,6 +555,8 @@ class Image:
         )
 
     def _context_archive(self) -> ImageBuildContext:
+        from lazycloud.abstractions.image_project import project_context_files
+
         context = Path(self.context_path or ".").expanduser().resolve()
         if any(step.kind in PROJECT_BUILD_STEP_KINDS for step in self.build_steps):
             files = project_context_files(context, self.include_files_patterns)

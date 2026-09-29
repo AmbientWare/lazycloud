@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, TypeAlias
+from typing import TYPE_CHECKING, Literal, TypeAlias
 
 from shared.deployments import DeploymentKind
 
-from lazycloud.abstractions.serve import PreviewContainerClient, read_serve_preview
 from lazycloud.control import ControlClientConfig
 from lazycloud.env import is_local
 from lazycloud.session.deployment import DeploymentClient, DeploymentControlClient
+
+if TYPE_CHECKING:
+    from lazycloud.abstractions.serve import PreviewContainerClient
+
 
 INVOCATION_TARGET_AUTO = "auto"
 INVOCATION_TARGET_SERVED = "served"
@@ -70,6 +73,8 @@ def resolve_invocation_target(
         and selected_target in {INVOCATION_TARGET_AUTO, INVOCATION_TARGET_SERVED}
         and is_local()
     ):
+        from lazycloud.abstractions.serve import read_serve_preview
+
         preview = read_serve_preview(
             kind=kind,
             name=name,

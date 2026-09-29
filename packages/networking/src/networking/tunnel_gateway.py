@@ -13,6 +13,7 @@ import grpc
 import grpc.aio
 from compute.tunnel_authority import AgentTunnelAuthority
 from coordination.agent_connections import RedisAgentConnectionDirectory
+from coordination.redis_client import RedisSubscription, redis_text
 from cryptography import x509
 from identity.tunnel_certificates import (
     agent_identity_from_verified_certificate,
@@ -71,6 +72,7 @@ class _AgentSession:
     record: AgentConnectionRecord
     connect_task: asyncio.Task[None]
     commands: asyncio.Queue[TunnelCommand] = field(default_factory=lambda: asyncio.Queue(128))
+    routes_changed: asyncio.Event = field(default_factory=asyncio.Event)
     pending: dict[str, _PendingStream] = field(default_factory=dict)
     streams: set[asyncio.Task[None]] = field(default_factory=set)
     connected: bool = True
@@ -159,15 +161,29 @@ class AgentTunnelGateway:
                 if command.kind is TunnelCommandKind.Drain:
                     return
 
+        async def notify_routes() -> None:
+            while session.connected:
+                await session.routes_changed.wait()
+                session.routes_changed.clear()
+                await session.commands.put(
+                    TunnelCommand(
+                        kind=TunnelCommandKind.RoutesChanged,
+                        connection_id=record.connection_id,
+                    )
+                )
+
         receiving = asyncio.create_task(receive())
         sending = asyncio.create_task(send())
+        notifying = asyncio.create_task(notify_routes())
         try:
             await stream.send_message(
                 TunnelCommand(kind=TunnelCommandKind.Connected, connection_id=record.connection_id)
                 .model_dump_json()
                 .encode()
             )
-            done, _ = await asyncio.wait((receiving, sending), return_when=asyncio.FIRST_COMPLETED)
+            done, _ = await asyncio.wait(
+                (receiving, sending, notifying), return_when=asyncio.FIRST_COMPLETED
+            )
             for task in done:
                 task.result()
         except asyncio.CancelledError:
@@ -178,7 +194,8 @@ class AgentTunnelGateway:
             session.connected = False
             receiving.cancel()
             sending.cancel()
-            await asyncio.gather(receiving, sending, return_exceptions=True)
+            notifying.cancel()
+            await asyncio.gather(receiving, sending, notifying, return_exceptions=True)
             await self._release(record)
 
     async def attach(
@@ -311,6 +328,46 @@ class AgentTunnelGateway:
         for session in tuple(self._sessions.values()):
             if session.connected:
                 self._request_drain(session)
+
+    async def start_route_notifications(self) -> asyncio.Task[None]:
+        subscription = await asyncio.to_thread(
+            self.directory.subscribe_route_changes, self.gateway_id
+        )
+        return asyncio.create_task(self._watch_route_changes(subscription))
+
+    async def _watch_route_changes(self, subscription: RedisSubscription) -> None:
+        try:
+            while self.accepting:
+                read = asyncio.create_task(asyncio.to_thread(subscription.get_message, timeout=1.0))
+                try:
+                    message = await asyncio.shield(read)
+                except asyncio.CancelledError:
+                    await asyncio.gather(read, return_exceptions=True)
+                    raise
+                except RedisError:
+                    LOGGER.warning("Agent route subscription reconnecting", exc_info=True)
+                    await asyncio.sleep(0.2)
+                    continue
+                if message is None:
+                    continue
+                if redis_text(message.type) == "subscribe":
+                    for session in self._sessions.values():
+                        if session.connected:
+                            session.routes_changed.set()
+                    continue
+                if redis_text(message.type) != "message":
+                    continue
+                command = TunnelCommand.model_validate_json(redis_text(message.data))
+                if command.kind is not TunnelCommandKind.RoutesChanged:
+                    raise ValueError("Agent route subscription received an invalid command")
+                session = self._sessions.get(command.connection_id)
+                if session is not None and session.connected:
+                    try:
+                        session.commands.put_nowait(command)
+                    except asyncio.QueueFull:
+                        session.routes_changed.set()
+        finally:
+            await asyncio.to_thread(subscription.close)
 
     async def close(self) -> None:
         await self.drain()

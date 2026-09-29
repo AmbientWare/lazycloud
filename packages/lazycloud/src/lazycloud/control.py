@@ -16,8 +16,6 @@ from shared.env import (
 )
 from typing_extensions import Self
 
-from lazycloud.config import get_profile
-
 _CONTROL_WORKSPACE: ContextVar[str | None] = ContextVar(
     "lazycloud_control_workspace",
     default=None,
@@ -85,6 +83,8 @@ def resolve_control_client_config(
     workspace: str | None = None,
     timeout_seconds: float = 10.0,
 ) -> ControlClientConfig:
+    from lazycloud.config import get_profile
+
     gateway_endpoint = os.environ.get(GATEWAY_HTTP_URL_ENV, "").strip()
     # Resolution order: explicit argument (CLI flag) > in-container gateway env >
     # LAZYCLOUD_ENDPOINT env / stored profile (merged by get_profile) > packaged

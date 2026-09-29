@@ -123,6 +123,7 @@ class ConnectionGatewayProcess:
             cleanup.push_async_callback(server.stop, _DRAIN_SECONDS)
             cleanup.push_async_callback(gateway.drain)
             cleanup.callback(self._stop_serving)
+            background.append(await gateway.start_route_notifications())
             await server.start()
             LOGGER.info(
                 "Connection gateway listening address=%s gateway_id=%s",

@@ -25,10 +25,10 @@ from compute.agent_control import (
     hash_machine_fingerprint,
     plan_agent_heartbeat_touch,
     plan_agent_join,
-    plan_agent_stream_snapshot,
     plan_agent_worker_slot,
     plan_agent_worker_token,
     plan_route_status_update,
+    validate_current_agent_state,
 )
 from compute.capacity_errors import (
     CapacityReservationLeaseLostError,
@@ -96,6 +96,7 @@ from identity.signatures import sign_payload
 from observability.events import EventService
 from observability.metrics import MetricsService
 from observability.usage import UsageService
+from observability.workspace_changes import WorkspaceChangePublisher
 from pydantic import JsonValue
 from scheduler.preemption import (
     SchedulerWorkerMaintenance,
@@ -172,11 +173,12 @@ from shared.http.objects import (
     PutObjectResponse,
 )
 from shared.http.releases import AgentReleaseRequest, AgentReleaseResponse
+from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
 from shared.identity import AuthScope, TokenKind, TokenStatus
 from shared.objects import ObjectRecord
 from shared.placement import Placement, PlacementKind
 from shared.releases import ActiveRelease
-from shared.routing import AgentBackendRoute
+from shared.routing import AgentBackendRoute, BackendRouteState
 from shared.scheduling import (
     SchedulerContainerStatus,
     SchedulerWorkerRecord,
@@ -230,6 +232,9 @@ from gateway.views import (
 
 
 class GatewayServices(Protocol):
+    @property
+    def workspace_changes(self) -> WorkspaceChangePublisher: ...
+
     @property
     def context(self) -> ServiceContext: ...
 
@@ -1766,6 +1771,9 @@ class GatewayControlService:
     ) -> ListAgentRoutesResponse:
         try:
             state = self._require_agent_state(request.agent_token)
+            revision = self.compute_states.agent_route_revision(
+                state.workspace_id, state.capacity_owner_id, state.machine_id
+            )
             routes = self.compute_states.list_agent_route_states(
                 state.workspace_id,
                 state.capacity_owner_id,
@@ -1774,6 +1782,7 @@ class GatewayControlService:
         except (KeyError, ValueError) as exc:
             raise _domain_error(exc) from exc
         return ListAgentRoutesResponse(
+            revision=revision,
             routes=[self._agent_route_view(route) for route in routes],
         )
 
@@ -1789,6 +1798,11 @@ class GatewayControlService:
                 state.machine_id,
                 request.route_id,
             )
+            if route is not None and (
+                route.local_target != request.local_target
+                or route.state is BackendRouteState.Closing
+            ):
+                return UpdateAgentRouteStatusResponse(route_id=request.route_id)
             plan = plan_route_status_update(
                 state,
                 route if route is not None else None,
@@ -1800,14 +1814,26 @@ class GatewayControlService:
                 ),
             )
             if plan.already_gone:
-                # Nothing to save, and nothing wrong. The route the agent named
-                # no longer exists, which is the state this update was asking
-                # for; raising here bricked the agent on an ordinary race.
                 return UpdateAgentRouteStatusResponse(route_id=request.route_id)
             if not plan.accepted or plan.updated is None:
                 raise InvalidInputError(plan.err_msg or "agent route status update rejected")
-            self.compute_states.save_agent_route_state(plan.updated)
-            self.scheduler_container_lookup.update_backend_route(plan.updated)
+            if plan.previous is None or not self.scheduler_container_lookup.update_backend_route(
+                plan.previous, plan.updated
+            ):
+                return UpdateAgentRouteStatusResponse(route_id=request.route_id)
+            if plan.previous.state is not plan.updated.state:
+                container = self.scheduler_container_lookup.get_container_state(
+                    plan.updated.container_id
+                )
+                if container is not None:
+                    self.services.workspace_changes.emit_change(
+                        workspace_id=container.workspace_id,
+                        topic=WorkspaceChangeTopic.Containers,
+                        change=WorkspaceChangeType.Updated,
+                        resource_id=container.container_id,
+                        stub_id=container.stub_id,
+                        container_id=container.container_id,
+                    )
             if plan.should_emit_event:
                 event_data: dict[str, JsonValue] = dict(plan.event_attrs)
                 self.services.events.emit(
@@ -1890,27 +1916,22 @@ class GatewayControlService:
                 if provided is not None
                 else None
             )
-            routes = []
+            route_revision = 0
             slots = []
             if provided is not None:
-                routes = [
-                    route
-                    for route in self.compute_states.list_agent_route_states(
-                        provided.workspace_id,
-                        provided.capacity_owner_id,
-                        provided.machine_id,
-                    )
-                ]
+                route_revision = self.compute_states.agent_route_revision(
+                    provided.workspace_id, provided.capacity_owner_id, provided.machine_id
+                )
                 slots = self.compute_states.list_agent_worker_slot_states(
                     provided.workspace_id,
                     provided.capacity_owner_id,
                     provided.machine_id,
                 )
-            snapshot = plan_agent_stream_snapshot(provided, current, routes, slots)
-            current_state = snapshot.current.state
-            if not snapshot.current.accepted or current_state is None:
+            current_plan = validate_current_agent_state(provided, current)
+            current_state = current_plan.state
+            if not current_plan.accepted or current_state is None:
                 return StreamAgentResponse(
-                    ok=False, err_msg=snapshot.current.err_msg, generation=release.generation
+                    ok=False, err_msg=current_plan.err_msg, generation=release.generation
                 )
             try:
                 self._require_active_tunnel(current_state)
@@ -1932,15 +1953,15 @@ class GatewayControlService:
                 )
             if not releases.controls(release):
                 return StreamAgentResponse(
-                    ok=bool(snapshot.slots),
-                    retryable=not snapshot.slots,
-                    err_msg="" if snapshot.slots else "worker release activation is pending",
+                    ok=bool(slots),
+                    retryable=not slots,
+                    err_msg="" if slots else "worker release activation is pending",
                     generation=release.generation,
                     credential_id=response_state.credential_id,
                     credential_generation=response_state.credential_generation,
                     capacity_state=response_state.capacity_state,
-                    routes=[self._agent_route_view(route) for route in snapshot.routes],
-                    slots=[agent_worker_slot_view(slot) for slot in snapshot.slots],
+                    route_revision=route_revision,
+                    slots=[agent_worker_slot_view(slot) for slot in slots],
                 )
             bootstrap_unit = self.unit_state_coordinator.unit_by_capacity_owner(
                 response_state.capacity_owner_id,
@@ -2018,7 +2039,7 @@ class GatewayControlService:
             credential_generation=response_state.credential_generation,
             capacity_state=response_state.capacity_state,
             bootstrap=bootstrap,
-            routes=[self._agent_route_view(route) for route in snapshot.routes],
+            route_revision=route_revision,
             slots=[agent_worker_slot_view(slot) for slot in agent_slots],
             stop_preparation_id=reserve_preparation.stop_request_id if reserve_preparation else "",
             sleep_request=reserve_preparation.sleep_request if reserve_preparation else None,

@@ -120,12 +120,14 @@ class ListAgentRoutesRequest(HttpModel):
 
 
 class ListAgentRoutesResponse(HttpModel):
+    revision: int = 0
     routes: list[AgentRoute] = Field(default_factory=list)
 
 
 class UpdateAgentRouteStatusRequest(HttpModel):
     agent_token: str
     route_id: str
+    local_target: str
     state: BackendRouteState | None = None
     error: str = ""
     attrs: dict[str, str] = Field(default_factory=dict)
@@ -184,7 +186,7 @@ class StreamAgentResponse(HttpModel):
     credential_generation: int = Field(default=1, ge=1)
     capacity_state: AgentCapacityState = AgentCapacityState.Available
     bootstrap: AgentBootstrapConfig | None = None
-    routes: list[AgentRoute] = Field(default_factory=list)
+    route_revision: int = 0
     slots: list[AgentWorkerSlot] = Field(default_factory=list)
     stop_preparation_id: str = ""
     reserve: AgentReserveInstruction = AgentReserveInstruction.Keep

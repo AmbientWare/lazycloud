@@ -6,21 +6,12 @@ import time
 from collections.abc import Iterator, Mapping
 from contextvars import copy_context
 from dataclasses import dataclass, field
-from typing import Any, Generic, Protocol, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Generic, Protocol, TypeVar, cast
 
 import shared.tasks
 from pydantic import JsonValue
 from shared.function_payloads import FunctionResultPayload
 from shared.http.errors import HttpApiError, HttpResponseDecodeError
-from shared.http.observability import LogQueryRequest, LogQueryResponse, LogRecord
-from shared.http.tasks import (
-    TaskDetailResponse,
-    TaskPageResponse,
-    TaskResponse,
-    TaskStopResponse,
-    TaskSummaryResponse,
-)
-from shared.http_transport import HttpChannel
 from shared.tasks import TaskStatus, is_terminal_task_status
 from shared.transport_retry import (
     TRANSIENT_TRANSPORT_ERRORS,
@@ -29,13 +20,7 @@ from shared.transport_retry import (
     is_transient_transport_error,
 )
 
-from lazycloud.clients.observability.control import ObservabilityClient
 from lazycloud.control import ControlClientConfigMixin, workspace_path
-from lazycloud.control_clients import (
-    control_http_channel,
-    observability_control_client,
-    resource_control_client,
-)
 from lazycloud.function_results import (
     FunctionResultDecodeError,
     decode_function_result,
@@ -43,6 +28,20 @@ from lazycloud.function_results import (
 from lazycloud.json_contracts import parse_json_value, validate_json_object
 from lazycloud.progress import PendingProgressReporter, TaskPendingProgress
 from lazycloud.terminal import Terminal
+
+if TYPE_CHECKING:
+    from shared.http.observability import LogQueryRequest, LogQueryResponse, LogRecord
+    from shared.http.tasks import (
+        TaskDetailResponse,
+        TaskPageResponse,
+        TaskResponse,
+        TaskStopResponse,
+        TaskSummaryResponse,
+    )
+    from shared.http_transport import HttpChannel
+
+    from lazycloud.clients.observability.control import ObservabilityClient
+
 
 R = TypeVar("R")
 
@@ -432,12 +431,16 @@ class TaskClient(ControlClientConfigMixin):
 
     @property
     def control_client(self) -> TaskControlClient:
+        from lazycloud.control_clients import resource_control_client
+
         if self.client is None:
             self.client = resource_control_client(self._config())
         return self.client
 
     @property
     def observability(self) -> ObservabilityClient:
+        from lazycloud.control_clients import observability_control_client
+
         if self.observability_client is None:
             self.observability_client = observability_control_client(self._config())
         return self.observability_client
@@ -476,6 +479,8 @@ class TaskClient(ControlClientConfigMixin):
         limit: int = 100,
         cursor: str | None = None,
     ) -> list[LogRecord]:
+        from shared.http.observability import LogQueryRequest
+
         response = self.log_query(
             LogQueryRequest(
                 workspace_id=workspace or self._config().workspace,
@@ -525,6 +530,8 @@ class TaskClient(ControlClientConfigMixin):
         return TaskSubscription(task_id=task_id, events=tuple(_parse_task_events(raw)))
 
     def rerun(self, task_id: str) -> Task:
+        from shared.http.tasks import TaskResponse
+
         raw = self._http_channel().post(
             workspace_path(f"/api/v1/tasks/{task_id}/rerun", self._config().workspace)
         )
@@ -535,6 +542,8 @@ class TaskClient(ControlClientConfigMixin):
         return self.handle(rerun_task.id)
 
     def _http_channel(self) -> HttpChannel:
+        from lazycloud.control_clients import control_http_channel
+
         return control_http_channel(self._config())
 
 
@@ -591,6 +600,8 @@ def _parse_task_events(raw: object) -> list[TaskLifecycleEvent]:
 
 
 def _task_event_from_data(event: str, data: Mapping[str, JsonValue]) -> TaskLifecycleEvent:
+    from shared.http.tasks import TaskResponse
+
     task = None
     if event == "status":
         try:

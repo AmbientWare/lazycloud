@@ -12,6 +12,7 @@ import traceback
 from contextlib import suppress
 from dataclasses import dataclass, field
 from multiprocessing import Pipe, Process
+from multiprocessing.connection import wait
 from types import FrameType
 from typing import Any, Protocol, TextIO
 from uuid import uuid4
@@ -20,6 +21,7 @@ import cloudpickle
 from foundation.handler_loading import evict_user_code_modules, load_callable
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 from shared.deployments import DeploymentKind
+from shared.enums import StringEnum
 from shared.env import (
     APP_ID_ENV,
     CHECKPOINT_ENABLED_ENV,
@@ -77,7 +79,7 @@ from shared.serialization import to_json_value
 from shared.task_context import task_context
 from shared.tasks import TaskStatus
 
-from runner.checkpoints import wait_for_checkpoint
+from runner.checkpoints import restored_container_identity, wait_for_checkpoint
 from runner.hooks import lifecycle_hooks_from_env, run_lifecycle_hooks
 from runner.invocation import cloudpickle_bytes, invoke_handler
 from runner.reload import SourceChangeWatcher, hot_reload_enabled, hot_reload_root
@@ -171,12 +173,28 @@ class FunctionControlChannel(Protocol):
     ) -> JsonValue: ...
 
 
+class FunctionWorkerState(StringEnum):
+    Starting = "starting"
+    Ready = "ready"
+    Busy = "busy"
+    Cancelled = "cancelled"
+
+
+class FunctionWorkerEvent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    state: FunctionWorkerState
+    task_id: str = ""
+
+
 class FunctionWorkerChannel(Protocol):
     def send_bytes(self, buf: bytes) -> None: ...
 
     def recv_bytes(self) -> bytes: ...
 
     def poll(self, timeout: float = 0.0) -> bool: ...
+
+    def fileno(self) -> int: ...
 
     def close(self) -> None: ...
 
@@ -185,7 +203,8 @@ class FunctionWorkerChannel(Protocol):
 class FunctionRunner:
     config: FunctionRunnerConfig
     channel: FunctionControlChannel | None = None
-    cancellation_channel: FunctionWorkerChannel | None = None
+    worker_channel: FunctionWorkerChannel | None = None
+    _worker_channel_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
     _handler: Any = field(default=None, init=False)
     _startup_hooks_ran: bool = field(default=False, init=False)
     # Identity lives here rather than on the config because restoring from a
@@ -206,8 +225,11 @@ class FunctionRunner:
     _reload_failed: bool = field(default=False, init=False)
 
     def __post_init__(self) -> None:
-        self.container_id = self.config.container_id
-        self.container_hostname = self.config.container_hostname
+        restored = restored_container_identity(enabled=self.config.checkpoint_enabled)
+        self.container_id = restored.container_id if restored else self.config.container_id
+        self.container_hostname = (
+            restored.container_hostname if restored else self.config.container_hostname
+        )
 
     @property
     def control(self) -> FunctionControlChannel:
@@ -236,7 +258,8 @@ class FunctionRunner:
             self.close()
             return 1
         try:
-            if self.cancellation_channel is not None:
+            self._report_worker_state(FunctionWorkerState.Ready)
+            if self.worker_channel is not None:
                 self._monitor = threading.Thread(target=self._monitor_cancellation, daemon=True)
                 self._monitor.start()
             return self.serve()
@@ -292,10 +315,16 @@ class FunctionRunner:
                     with self._active_lock:
                         if self._active_task is not task:
                             continue
-                        if self.cancellation_channel is None:
+                        if self.worker_channel is None:
                             raise RuntimeError("function worker cancellation channel is closed")
-                        self.cancellation_channel.send_bytes(task.task_id.encode())
+                        self._report_worker_state(FunctionWorkerState.Cancelled, task.task_id)
                         os._exit(_CANCELLED_WORKER_EXIT_CODE)
+
+    def _report_worker_state(self, state: FunctionWorkerState, task_id: str = "") -> None:
+        if self.worker_channel is not None:
+            event = FunctionWorkerEvent(state=state, task_id=task_id)
+            with self._worker_channel_lock:
+                self.worker_channel.send_bytes(event.model_dump_json().encode())
 
     def install_output_routing(self) -> None:
         """Take over this process's streams once, before anything writes.
@@ -436,14 +465,16 @@ class FunctionRunner:
 
     def run_task(self, task: ClaimedTask) -> None:
         with self._active_lock:
-            if self.cancellation_channel is not None:
+            if self.worker_channel is not None:
                 self._active_task = task
         try:
+            self._report_worker_state(FunctionWorkerState.Busy, task.task_id)
             with task_context(task.task_id, task.root_task_id):
                 self._run_claimed_task(task)
         finally:
             with self._active_lock:
                 self._active_task = None
+            self._report_worker_state(FunctionWorkerState.Ready)
 
     def _run_claimed_task(self, task: ClaimedTask) -> None:
         started = time.perf_counter()
@@ -905,15 +936,23 @@ def _keep_warm_seconds(value: str | None) -> int:
 
 
 @dataclass(slots=True)
+class FunctionWorker:
+    process: Process
+    channel: FunctionWorkerChannel
+    state: FunctionWorkerState = FunctionWorkerState.Starting
+    cancelled_task_id: str = ""
+    channel_closed: bool = False
+
+
+@dataclass(slots=True)
 class FunctionProcessManager:
-    """Keep one process per slot and replace only a cancelled invocation's slot."""
+    """Grow isolated slots on demand and retain them for subsequent calls."""
 
     config: FunctionRunnerConfig
     workers: int
     poll_interval_seconds: float = DEFAULT_FUNCTION_POLL_INTERVAL_SECONDS
     shutdown: threading.Event = field(default_factory=threading.Event)
-    processes: list[Process] = field(default_factory=list, init=False)
-    cancellation_channels: list[FunctionWorkerChannel] = field(default_factory=list, init=False)
+    slots: list[FunctionWorker] = field(default_factory=list, init=False)
 
     def run(self) -> int:
         previous_handlers = {
@@ -921,27 +960,32 @@ class FunctionProcessManager:
             for handled_signal in (signal.SIGINT, signal.SIGTERM)
         }
         try:
-            for index in range(self.workers):
-                self.processes.append(self._start_worker(index))
-            while not self.shutdown.wait(self.poll_interval_seconds):
-                for index, process in enumerate(self.processes):
+            self.slots.append(self._start_worker(0))
+            while not self.shutdown.is_set():
+                channels = [slot.channel.fileno() for slot in self.slots if not slot.channel_closed]
+                readable = wait(channels, timeout=self.poll_interval_seconds)
+                for slot in self.slots:
+                    if not slot.channel_closed and slot.channel.fileno() in readable:
+                        self._read_events(slot)
+                for index, slot in enumerate(self.slots):
+                    process = slot.process
                     if process.exitcode != _CANCELLED_WORKER_EXIT_CODE:
                         continue
-                    channel = self.cancellation_channels[index]
-                    if not channel.poll():
-                        continue
-                    task_id = channel.recv_bytes().decode()
+                    self._read_events(slot)
+                    if not slot.cancelled_task_id:
+                        raise RuntimeError("cancelled function worker did not identify its task")
                     process.join()
                     self._kill_process_group(process)
-                    channel.close()
+                    slot.channel.close()
                     print(
-                        f"cancelled function task {task_id}; replacing its worker slot",
+                        f"cancelled function task {slot.cancelled_task_id}; "
+                        "replacing its worker slot",
                         file=sys.stderr,
                         flush=True,
                     )
-                    self.processes[index] = self._start_worker(index)
+                    self.slots[index] = self._start_worker(index)
                     process.close()
-                codes = [process.exitcode for process in self.processes]
+                codes = [slot.process.exitcode for slot in self.slots]
                 failed = next((code for code in codes if code not in (None, 0)), None)
                 if failed is not None:
                     print(
@@ -952,6 +996,11 @@ class FunctionProcessManager:
                     return 1
                 if all(code is not None for code in codes):
                     return 0
+                if len(self.slots) < self.workers and all(
+                    slot.state is FunctionWorkerState.Busy and slot.process.exitcode is None
+                    for slot in self.slots
+                ):
+                    self.slots.append(self._start_worker(len(self.slots)))
         finally:
             self.stop()
             for handled_signal, previous_handler in previous_handlers.items():
@@ -959,12 +1008,23 @@ class FunctionProcessManager:
         return 0
 
     def stop(self) -> None:
-        stop_worker_processes(self.shutdown, self.processes)
-        for process in self.processes:
-            self._kill_process_group(process)
-            process.close()
-        for channel in self.cancellation_channels:
-            channel.close()
+        stop_worker_processes(self.shutdown, [slot.process for slot in self.slots])
+        for slot in self.slots:
+            self._kill_process_group(slot.process)
+            slot.process.close()
+            slot.channel.close()
+
+    @staticmethod
+    def _read_events(slot: FunctionWorker) -> None:
+        while not slot.channel_closed and slot.channel.poll():
+            try:
+                event = FunctionWorkerEvent.model_validate_json(slot.channel.recv_bytes())
+            except EOFError:
+                slot.channel_closed = True
+                return
+            slot.state = event.state
+            if event.state is FunctionWorkerState.Cancelled:
+                slot.cancelled_task_id = event.task_id
 
     @staticmethod
     def _kill_process_group(process: Process) -> None:
@@ -973,7 +1033,7 @@ class FunctionProcessManager:
         with suppress(ProcessLookupError):
             os.killpg(process.pid, signal.SIGKILL)
 
-    def _start_worker(self, index: int) -> Process:
+    def _start_worker(self, index: int) -> FunctionWorker:
         receive, send = Pipe(duplex=False)
         process = Process(
             target=_run_function_worker,
@@ -982,11 +1042,7 @@ class FunctionProcessManager:
         )
         process.start()
         send.close()
-        if index < len(self.cancellation_channels):
-            self.cancellation_channels[index] = receive
-        else:
-            self.cancellation_channels.append(receive)
-        return process
+        return FunctionWorker(process=process, channel=receive)
 
     def _request_shutdown(self, signum: int, frame: FrameType | None) -> None:
         del signum, frame
@@ -1001,7 +1057,7 @@ def _run_function_worker(
     signal.signal(signal.SIGINT, signal.SIG_DFL)
     signal.signal(signal.SIGTERM, signal.SIG_DFL)
     try:
-        raise SystemExit(FunctionRunner(config, cancellation_channel=send).run())
+        raise SystemExit(FunctionRunner(config, worker_channel=send).run())
     finally:
         send.close()
 

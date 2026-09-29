@@ -51,9 +51,6 @@ from compute.state import (
 )
 
 DEFAULT_PRIVATE_JOIN_TTL_SECONDS = 30 * 60
-AGENT_STREAM_REFRESH_SECONDS = 30.0
-AGENT_STREAM_HEARTBEAT_SECONDS = 10.0
-AGENT_STREAM_EVENT_COALESCE_SECONDS = 0.025
 
 
 class JoinTokenDecision(StrEnum):
@@ -189,12 +186,6 @@ class AgentImageConfig(ContractModel):
     local_cache_enabled: bool = True
 
 
-class AgentStreamTimingPlan(ContractModel):
-    refresh_seconds: float = AGENT_STREAM_REFRESH_SECONDS
-    heartbeat_seconds: float = AGENT_STREAM_HEARTBEAT_SECONDS
-    event_coalesce_seconds: float = AGENT_STREAM_EVENT_COALESCE_SECONDS
-
-
 class AgentCurrentStatePlan(ContractModel):
     decision: AgentStreamDecision
     accepted: bool
@@ -227,13 +218,6 @@ class AgentRouteStatusPlan(ContractModel):
     should_save: bool = False
     should_emit_event: bool = False
     event_attrs: dict[str, str] = Field(default_factory=dict)
-
-
-class AgentStreamSnapshotPlan(ContractModel):
-    current: AgentCurrentStatePlan
-    routes: list[AgentBackendRoute] = Field(default_factory=list)
-    slots: list[ComputeAgentWorkerSlotState] = Field(default_factory=list)
-    timing: AgentStreamTimingPlan | None = None
 
 
 class WorkerTokenRecord(ContractModel):
@@ -849,10 +833,6 @@ def build_agent_bootstrap_config(
     )
 
 
-def agent_stream_timing() -> AgentStreamTimingPlan:
-    return AgentStreamTimingPlan()
-
-
 def validate_current_agent_state(
     provided: ComputeAgentTokenState | None,
     current: ComputeAgentTokenState | None,
@@ -904,27 +884,6 @@ def plan_agent_heartbeat_touch(
     )
 
 
-def plan_agent_stream_snapshot(
-    provided: ComputeAgentTokenState | None,
-    current: ComputeAgentTokenState | None,
-    routes: list[AgentBackendRoute],
-    slots: list[ComputeAgentWorkerSlotState],
-) -> AgentStreamSnapshotPlan:
-    state_plan = validate_current_agent_state(provided, current)
-    if not state_plan.accepted or state_plan.state is None:
-        return AgentStreamSnapshotPlan(current=state_plan)
-    return AgentStreamSnapshotPlan(
-        current=state_plan,
-        routes=agent_routes_for_stream(routes),
-        slots=slots,
-        timing=agent_stream_timing(),
-    )
-
-
-def agent_routes_for_stream(routes: list[AgentBackendRoute]) -> list[AgentBackendRoute]:
-    return [route for route in routes if route.state is not BackendRouteState.Closing]
-
-
 def plan_route_status_update(
     agent_state: ComputeAgentTokenState,
     route: AgentBackendRoute | None,
@@ -933,11 +892,7 @@ def plan_route_status_update(
     now: datetime | None = None,
 ) -> AgentRouteStatusPlan:
     if route is None:
-        # A container exits, its route is deleted, and the agent reports on it a
-        # moment later from the route set it was streamed. Refusing that made a
-        # normal race fatal: the agent raised, exited, and every restart replayed
-        # the same report. Ownership is not checked because there is no route to
-        # check it against, and nothing is read or written in reply.
+        # Cleanup can race a pending readiness report.
         return AgentRouteStatusPlan(accepted=True, already_gone=True)
     if (
         route.workspace_id != agent_state.workspace_id
