@@ -85,12 +85,18 @@ class BillingCreditRepository:
         self._pay_debt(user_id=user_id, at=utc_now())
         return row.id
 
+    def settled_balance(self, *, user_id: str, at: datetime) -> int | None:
+        """Read under the caller's shared account lock; None requires reconciliation."""
+        balances = self._lot_balances(user_id=user_id, at=at)
+        if self._outstanding(user_id=user_id) or any(amount < 0 for _, amount in balances):
+            return None
+        return sum(amount for _, amount in balances)
+
     def balance(self, *, user_id: str, at: datetime) -> int:
         self._lock(user_id)
-        balances = self._lot_balances(user_id=user_id, at=at)
-        outstanding = self._outstanding(user_id=user_id)
-        if not outstanding and all(amount >= 0 for _, amount in balances):
-            return sum(amount for _, amount in balances)
+        settled = self.settled_balance(user_id=user_id, at=at)
+        if settled is not None:
+            return settled
         self._pay_debt(user_id=user_id, at=at)
         return sum(amount for _, amount in self._lot_balances(user_id=user_id, at=at)) - sum(
             row.payable_nanos or 0 for row in self._outstanding(user_id=user_id)
@@ -282,6 +288,7 @@ class BillingCreditRepository:
                     BillingCreditSettlementTable.created_at,
                     BillingCreditSettlementTable.usage_record_id,
                 )
+                .execution_options(populate_existing=True)
             ).all()
         )
 
