@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Event
@@ -15,8 +14,9 @@ from agent.operations import (
     AgentWorkerSlot,
     WorkerExecutor,
 )
+from agent.routes import AgentRoutes, AgentRouteSnapshot
 from agent.state import AgentStateStore
-from agent.tunnel import AgentTunnelRoute, AgentTunnelService
+from agent.tunnel import AgentTunnelService
 from agent.worker_controller import DockerAgentWorkerController, WorkerObservation
 from agent_app.daemon import (
     AgentDaemonOptions,
@@ -237,6 +237,7 @@ def test_stale_release_cannot_apply_worker_instructions(tmp_path: Path) -> None:
             credential_generation=state.credential_generation,
         ),
         agent_token=state.agent_token,
+        routes=AgentRoutes(lambda: AgentRouteSnapshot(0, []), lambda route: None),
         issue_certificate=service.client.issue_agent_certificate,
         callback_firewall=AgentBridgeCallbackFirewall(
             config=AgentBridgeNetworkConfig(), owner_id=state.machine_id
@@ -424,9 +425,8 @@ class _Tunnel(AgentTunnelService):
     def hold_listeners(self) -> None:
         self.opened_with = None
 
-    def reconcile_routes(self, routes: Sequence[AgentTunnelRoute]) -> set[str]:
-        del routes
-        return set()
+    def observe_route_revision(self, revision: int) -> None:
+        del revision
 
 
 @pytest.mark.parametrize(
@@ -453,6 +453,7 @@ def test_a_reserve_worker_reaches_the_control_plane_only_once_a_stream_adopts_it
     assert state is not None
     tunnel = _Tunnel(
         state_dir=tmp_path,
+        routes=AgentRoutes(lambda: AgentRouteSnapshot(0, []), lambda route: None),
         identity=AgentTunnelIdentity(
             workspace_id=state.workspace_id,
             enrollment_id=state.credential_id,
@@ -502,6 +503,7 @@ def test_a_cold_resumed_reserve_keeps_its_worker_until_its_row_catches_up(
     assert state is not None
     tunnel = _Tunnel(
         state_dir=tmp_path,
+        routes=AgentRoutes(lambda: AgentRouteSnapshot(0, []), lambda route: None),
         identity=AgentTunnelIdentity(
             workspace_id=state.workspace_id,
             enrollment_id=state.credential_id,

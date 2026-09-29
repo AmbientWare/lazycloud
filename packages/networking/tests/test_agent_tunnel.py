@@ -237,11 +237,14 @@ def test_real_agent_tunnel_preserves_half_close_and_revokes_open_streams(
         server = gateway.server(gateway_credentials, listen_address=f"127.0.0.1:{gateway_port}")
         await server.start()
         local_routes = {route.route_id: ("127.0.0.1", backend_port)}
+        routes_changed = asyncio.Event()
+        watching_routes = await gateway.start_route_notifications()
         agent = AgentTunnelClient(
             f"localhost:{gateway_port}",
             agent_credentials,
             agent_certificate.expires_at,
             local_routes.get,
+            lambda update: routes_changed.set(),
         )
         client = TunnelRouteClient(directory, control_credentials, "localhost")
         containers = RedisSchedulerContainerRepository(redis)
@@ -275,6 +278,7 @@ def test_real_agent_tunnel_preserves_half_close_and_revokes_open_streams(
                 agent_credentials,
                 agent_certificate.expires_at,
                 agent.resolve_route,
+                lambda update: None,
             )
             try:
                 await disconnected.start()
@@ -291,6 +295,16 @@ def test_real_agent_tunnel_preserves_half_close_and_revokes_open_streams(
                 await asyncio.sleep(0.05)
             assert record is None
             await agent.start()
+            await asyncio.to_thread(directory.notify_route_changed, route, 1)
+            for _ in range(30):
+                print(
+                    f"route notification={routes_changed.is_set()} "
+                    f"watcher_done={watching_routes.done()}"
+                )
+                if routes_changed.is_set():
+                    break
+                await asyncio.sleep(0.01)
+            assert routes_changed.is_set()
             request = TunnelRouteRequest(
                 workspace_id=workspace, enrollment_id=enrollment.id, route_id=route.route_id
             )
@@ -385,6 +399,7 @@ def test_real_agent_tunnel_preserves_half_close_and_revokes_open_streams(
                     agent_credentials,
                     agent_certificate.expires_at,
                     local_routes.get,
+                    lambda update: None,
                     streams=saturated_agent.streams,
                     route_streams=saturated_agent.route_streams,
                 )
@@ -471,6 +486,7 @@ def test_real_agent_tunnel_preserves_half_close_and_revokes_open_streams(
                     agent_credentials,
                     agent_certificate.expires_at,
                     agent.resolve_route,
+                    lambda update: None,
                 )
                 await replacement.start()
                 assert await (await get()).read() == b"6"
@@ -527,6 +543,7 @@ def test_real_agent_tunnel_preserves_half_close_and_revokes_open_streams(
                 expiring_credentials,
                 expiring_agent.expires_at,
                 agent.resolve_route,
+                lambda update: None,
             )
             await expiring.start()
             async with asyncio.timeout(5):
@@ -539,6 +556,7 @@ def test_real_agent_tunnel_preserves_half_close_and_revokes_open_streams(
                 agent_credentials,
                 agent_certificate.expires_at,
                 agent.resolve_route,
+                lambda update: None,
             )
             await renewed.start()
             async with asyncio.timeout(5):
@@ -603,6 +621,8 @@ def test_real_agent_tunnel_preserves_half_close_and_revokes_open_streams(
             finally:
                 connection.close()
         finally:
+            watching_routes.cancel()
+            await asyncio.gather(watching_routes, return_exceptions=True)
             await http.close()
             if listener is not None:
                 listener.close()

@@ -78,7 +78,6 @@ from lazycloud.abstractions.metadata import MachineInput, build_resource_metadat
 from lazycloud.abstractions.volume import VolumeExport, volume_mounts
 from lazycloud.aio import to_thread
 from lazycloud.control import ControlClientConfigMixin
-from lazycloud.control_clients import pod_control_client
 from lazycloud.json_contracts import validate_json_object
 from lazycloud.session.deployment import DeploymentClient, DeploymentControlClient
 
@@ -1652,6 +1651,8 @@ class Sandbox(ControlClientConfigMixin):
 
     @property
     def control_client(self) -> SandboxPodClient:
+        from lazycloud.control_clients import pod_control_client
+
         if self.client is None:
             self.client = pod_control_client(self._config())
         return self.client

@@ -519,6 +519,22 @@ sandbox command, and cancellation before reopening admission and schedules.
 Restore the recorded Argo settings after those checks pass. Roll forward if a
 check fails; the old build cannot write the new scheduling schema or queue.
 
+### Agent route readiness cutover
+
+The route notification protocol and agent route contracts change together. Stop
+new workload admission and drain existing work before replacing the API,
+connection gateway, and agent processes. Pause Argo automatic sync while the
+complete release builds. Record every managed host, its service and state
+directory, including stopped and hibernated reserves.
+
+Use the install-only procedure below to update every retained host to the
+published agent archive while its service is stopped. Wake reserves first so an
+old in-memory process cannot survive the cutover. Preserve enrollment, instance,
+storage, PostgreSQL and Redis state. Start the new control plane and then the
+upgraded agents. This protocol change requires no schema migration or plan
+reset. Verify compatible worker intake and the endpoint, function, sandbox and
+cancellation workflows before restoring admission and Argo automatic sync.
+
 ### Fleet sleep evidence cutover
 
 Revision `0032_capacity_sleep_attempts` replaces instance-level sleep outcomes

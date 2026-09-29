@@ -3,13 +3,16 @@ from __future__ import annotations
 import builtins
 from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from shared.disks import DISK_ROOT_MOUNT_PATH, DiskMount, parse_disk_size_bytes
 from shared.http.disks import DiskResponse
 from shared.http.errors import HttpApiError
 
-from lazycloud.clients.disk.control import DiskControlClient
 from lazycloud.control import resolve_control_client_config
+
+if TYPE_CHECKING:
+    from lazycloud.clients.disk.control import DiskControlClient
 
 
 class DiskOperationError(RuntimeError):
@@ -65,6 +68,8 @@ def disk_mounts(disks: Iterable[Disk | DiskMount]) -> list[DiskMount]:
 
 
 def _disk_client(workspace: str | None) -> DiskControlClient:
+    from lazycloud.clients.disk.control import DiskControlClient
+
     config = resolve_control_client_config(workspace=workspace)
     return DiskControlClient.from_endpoint(
         config.endpoint,

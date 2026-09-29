@@ -18,6 +18,15 @@ class RestoredContainerIdentity:
     container_hostname: str
 
 
+def restored_container_identity(*, enabled: bool) -> RestoredContainerIdentity | None:
+    if not enabled or not CHECKPOINT_COMPLETE_FILE.is_file():
+        return None
+    return RestoredContainerIdentity(
+        container_id=CHECKPOINT_CONTAINER_ID_FILE.read_text(encoding="utf-8").strip(),
+        container_hostname=CHECKPOINT_CONTAINER_HOSTNAME_FILE.read_text(encoding="utf-8").strip(),
+    )
+
+
 def wait_for_checkpoint(
     *,
     enabled: bool,
@@ -35,7 +44,4 @@ def wait_for_checkpoint(
     CHECKPOINT_READY_FILE.touch(exist_ok=True)
     while not CHECKPOINT_COMPLETE_FILE.is_file():
         time.sleep(poll_interval_seconds)
-    return RestoredContainerIdentity(
-        container_id=CHECKPOINT_CONTAINER_ID_FILE.read_text(encoding="utf-8").strip(),
-        container_hostname=CHECKPOINT_CONTAINER_HOSTNAME_FILE.read_text(encoding="utf-8").strip(),
-    )
+    return restored_container_identity(enabled=True)

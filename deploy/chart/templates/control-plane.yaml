@@ -87,6 +87,11 @@ spec:
         - name: {{ $api.name }}
           image: {{ include "lazycloud.image" (list . "api") }}
           command: [{{ $api.command | quote }}, "--host", "0.0.0.0", "--port", "9000"]
+          lifecycle:
+            preStop:
+              # Keep serving while terminating endpoints leave Service routing.
+              sleep:
+                seconds: 7
           ports:
             - name: http
               containerPort: 9000

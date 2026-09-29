@@ -5,12 +5,11 @@ import ipaddress
 import logging
 import socket
 import threading
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from concurrent.futures import Future
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
-from urllib.parse import urlsplit
 
 import grpc
 from networking.tunnel_agent import AgentTunnelClient, AgentTunnelRevokedError
@@ -23,8 +22,9 @@ from shared.http.agent_identity import (
     AgentTunnelIdentity,
 )
 from shared.http.errors import HttpApiError, HttpTransportError
-from shared.routing import BackendRouteState
 from shared.timestamps import utc_now
+
+from agent.routes import AgentRoutes
 
 LOGGER = logging.getLogger(__name__)
 IP_FREEBIND = 15
@@ -40,13 +40,6 @@ class AgentTunnelFirewall(Protocol):
     def close(self) -> None: ...
 
 
-@dataclass(frozen=True, slots=True)
-class AgentTunnelRoute:
-    route_id: str
-    local_target: str
-    state: BackendRouteState
-
-
 @dataclass(slots=True)
 class AgentTunnelService:
     state_dir: Path
@@ -54,16 +47,17 @@ class AgentTunnelService:
     issue_certificate: Callable[[AgentCertificateRequest], AgentCertificateResponse]
     callback_firewall: AgentTunnelFirewall
     agent_token: str = field(repr=False)
+    routes: AgentRoutes
     _loop: asyncio.AbstractEventLoop = field(default_factory=asyncio.new_event_loop, init=False)
     _thread: threading.Thread | None = field(default=None, init=False)
     _runner: asyncio.Task[None] | None = field(default=None, init=False)
+    _route_runner: asyncio.Task[None] | None = field(default=None, init=False)
     _ready: Future[None] = field(default_factory=Future, init=False)
     _session: AgentTunnelClient | None = field(default=None, init=False)
     _retiring: set[asyncio.Task[None]] = field(default_factory=set, init=False)
     _streams: set[asyncio.Task[None]] = field(default_factory=set, init=False)
     _route_streams: set[asyncio.Task[None]] = field(default_factory=set, init=False)
     _servers: dict[str, asyncio.Server] = field(default_factory=dict, init=False)
-    _routes: dict[str, tuple[str, int]] = field(default_factory=dict, init=False)
     _failure: BaseException | None = field(default=None, init=False)
     _closed: bool = field(default=False, init=False)
     _firewall_active: bool = field(default=False, init=False)
@@ -92,7 +86,6 @@ class AgentTunnelService:
         self,
         *,
         callback_hosts: set[str],
-        routes: Sequence[AgentTunnelRoute],
         listen: bool = True,
     ) -> None:
         """Connect, then open the worker control listeners unless `listen` is false.
@@ -110,7 +103,7 @@ class AgentTunnelService:
             self.callback_firewall.ensure()
             self._thread = threading.Thread(
                 target=self._run,
-                args=(set(callback_hosts) if listen else None, tuple(routes)),
+                args=(set(callback_hosts) if listen else None,),
                 name="agent-tunnel",
                 daemon=True,
             )
@@ -137,9 +130,8 @@ class AgentTunnelService:
         self.check()
         asyncio.run_coroutine_threadsafe(self._reconcile_listeners(None), self._loop).result()
 
-    def reconcile_routes(self, routes: Sequence[AgentTunnelRoute]) -> set[str]:
-        self.check()
-        return asyncio.run_coroutine_threadsafe(self._reconcile_routes(routes), self._loop).result()
+    def observe_route_revision(self, revision: int) -> None:
+        self._loop.call_soon_threadsafe(self.routes.observe_revision, revision)
 
     def close(self) -> None:
         if self._closed:
@@ -157,9 +149,11 @@ class AgentTunnelService:
                 self.callback_firewall.close()
                 self._firewall_active = False
 
-    def _run(self, callback_hosts: set[str] | None, routes: Sequence[AgentTunnelRoute]) -> None:
+    def _run(self, callback_hosts: set[str] | None) -> None:
         asyncio.set_event_loop(self._loop)
-        self._runner = self._loop.create_task(self._maintain(callback_hosts, routes))
+        self._route_runner = self._loop.create_task(self.routes.run())
+        self._route_runner.add_done_callback(self._finished)
+        self._runner = self._loop.create_task(self._maintain(callback_hosts))
         self._runner.add_done_callback(self._finished)
         try:
             self._loop.run_forever()
@@ -169,10 +163,10 @@ class AgentTunnelService:
             self._loop.close()
 
     def _finished(self, task: asyncio.Task[None]) -> None:
-        if not task.cancelled():
-            self._failure = task.exception()
-            if self._failure is not None and not self._ready.done():
-                self._ready.set_exception(self._failure)
+        if not task.cancelled() and (error := task.exception()) is not None:
+            self._failure = error
+            if not self._ready.done():
+                self._ready.set_exception(error)
 
     async def _certificate(self, credentials: TunnelCredentials) -> AgentCertificateResponse:
         request = AgentCertificateRequest(
@@ -196,15 +190,12 @@ class AgentTunnelService:
         )
         return certificate
 
-    async def _maintain(
-        self, callback_hosts: set[str] | None, routes: Sequence[AgentTunnelRoute]
-    ) -> None:
+    async def _maintain(self, callback_hosts: set[str] | None) -> None:
         credentials = TunnelCredentials(
             key_path=self.state_dir / "tunnel" / "agent.key",
             bundle_path=self.state_dir / "tunnel" / "certificate.json",
         )
         certificate = await self._certificate(credentials)
-        await self._reconcile_routes(routes)
         retry_delay = RECONNECT_FIRST_DELAY_SECONDS
         session: AgentTunnelClient | None = None
         try:
@@ -217,7 +208,8 @@ class AgentTunnelService:
                         certificate.tunnel_address,
                         credentials,
                         certificate.expires_at,
-                        self._routes.get,
+                        self.routes.targets.get,
+                        self.routes.accept_update,
                         streams=self._streams,
                         route_streams=self._route_streams,
                     )
@@ -225,6 +217,7 @@ class AgentTunnelService:
                     self._session = session
                     self._redial.clear()
                     self._connected.set()
+                    self.routes.accept_update(None)
                     if not self._ready.done():
                         if callback_hosts is not None:
                             await self._reconcile_listeners(callback_hosts)
@@ -343,38 +336,6 @@ class AgentTunnelService:
             server.close()
             await server.wait_closed()
 
-    async def _reconcile_routes(self, routes: Sequence[AgentTunnelRoute]) -> set[str]:
-        registered: dict[str, tuple[str, int]] = {}
-        newly_ready: set[str] = set()
-        for route in routes:
-            if not route.route_id or not route.local_target:
-                continue
-            target = urlsplit(f"//{route.local_target}")
-            if (
-                target.username is not None
-                or target.password is not None
-                or target.path
-                or target.query
-                or target.fragment
-                or not target.hostname
-                or target.port is None
-            ):
-                raise ValueError("Agent route requires a registered host and port")
-            registered[route.route_id] = (target.hostname, target.port)
-            if route.state is BackendRouteState.Ready:
-                continue
-            try:
-                async with asyncio.timeout(0.25):
-                    _, writer = await asyncio.open_connection(target.hostname, target.port)
-                    writer.close()
-                    await writer.wait_closed()
-            except OSError:
-                continue
-            newly_ready.add(route.route_id)
-        self._routes.clear()
-        self._routes.update(registered)
-        return newly_ready
-
     async def _close_sessions(self) -> None:
         if self._session is not None:
             await self._session.close()
@@ -389,6 +350,9 @@ class AgentTunnelService:
         if self._runner is not None:
             self._runner.cancel()
             await asyncio.gather(self._runner, return_exceptions=True)
+        if self._route_runner is not None:
+            self._route_runner.cancel()
+            await asyncio.gather(self._route_runner, return_exceptions=True)
         await self._close_sessions()
         await asyncio.gather(*(server.wait_closed() for server in self._servers.values()))
         self._servers.clear()

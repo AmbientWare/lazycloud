@@ -7,6 +7,7 @@ from pydantic import Field, field_validator
 
 from shared.enums import StringEnum
 from shared.http.base import HttpModel
+from shared.routing import AgentBackendRoute
 
 TUNNEL_CHUNK_BYTES = 64 * 1024
 TUNNEL_HEARTBEAT_SECONDS = 2.0
@@ -21,6 +22,13 @@ class TunnelCommandKind(StringEnum):
     Heartbeat = "heartbeat"
     Open = "open"
     Drain = "drain"
+    RoutesChanged = "routes_changed"
+
+
+class AgentRouteUpdate(HttpModel):
+    revision: int = Field(ge=1)
+    route_id: str = Field(min_length=1)
+    route: AgentBackendRoute | None
 
 
 class TunnelCommand(HttpModel):
@@ -28,6 +36,7 @@ class TunnelCommand(HttpModel):
     connection_id: str = ""
     stream_id: str = ""
     route_id: str = ""
+    route_update: AgentRouteUpdate | None = None
 
 
 class TunnelOpenFailure(StringEnum):

@@ -1,15 +1,21 @@
 from __future__ import annotations
 
-from shared.http_transport import HttpChannel
+from typing import TYPE_CHECKING
 
-from lazycloud.clients.gateway.control import GatewayControlClient
-from lazycloud.clients.observability.control import ObservabilityControlClient
-from lazycloud.clients.pod.control import PodControlClient
-from lazycloud.clients.resource.control import ResourceControlClient
 from lazycloud.control import ControlClientConfig
+
+if TYPE_CHECKING:
+    from shared.http_transport import HttpChannel
+
+    from lazycloud.clients.gateway.control import GatewayControlClient
+    from lazycloud.clients.observability.control import ObservabilityControlClient
+    from lazycloud.clients.pod.control import PodControlClient
+    from lazycloud.clients.resource.control import ResourceControlClient
 
 
 def control_http_channel(config: ControlClientConfig) -> HttpChannel:
+    from shared.http_transport import HttpChannel
+
     return HttpChannel(
         endpoint=config.endpoint,
         token=config.token,
@@ -18,6 +24,8 @@ def control_http_channel(config: ControlClientConfig) -> HttpChannel:
 
 
 def gateway_control_client(config: ControlClientConfig) -> GatewayControlClient:
+    from lazycloud.clients.gateway.control import GatewayControlClient
+
     return GatewayControlClient.from_endpoint(
         config.endpoint,
         token=config.token,
@@ -27,6 +35,8 @@ def gateway_control_client(config: ControlClientConfig) -> GatewayControlClient:
 
 
 def resource_control_client(config: ControlClientConfig) -> ResourceControlClient:
+    from lazycloud.clients.resource.control import ResourceControlClient
+
     return ResourceControlClient.from_endpoint(
         config.endpoint,
         token=config.token,
@@ -36,6 +46,8 @@ def resource_control_client(config: ControlClientConfig) -> ResourceControlClien
 
 
 def observability_control_client(config: ControlClientConfig) -> ObservabilityControlClient:
+    from lazycloud.clients.observability.control import ObservabilityControlClient
+
     return ObservabilityControlClient.from_endpoint(
         config.endpoint,
         token=config.token,
@@ -45,6 +57,8 @@ def observability_control_client(config: ControlClientConfig) -> ObservabilityCo
 
 
 def pod_control_client(config: ControlClientConfig) -> PodControlClient:
+    from lazycloud.clients.pod.control import PodControlClient
+
     return PodControlClient.from_endpoint(
         config.endpoint,
         token=config.token,

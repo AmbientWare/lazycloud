@@ -14,6 +14,11 @@ routes tunneled worker and container SDK requests to the same owners.
 Runtime replicas own agent route, disconnect and provider reconciliation.
 Management and execution replicas do not start these recurring scans.
 
+API pods keep serving for 7 seconds after termination starts so Service routing
+can remove their endpoints before Uvicorn closes its listeners. Uvicorn then
+allows existing requests 120 seconds to finish. The 150-second pod grace period
+includes that delay and leaves 23 seconds for service cleanup.
+
 The gateway router binds only to loopback and starts before the gateway. Kubernetes
 keeps this sidecar running while the gateway drains. Each router requests 50m CPU
 and 32Mi memory, with a 256Mi memory limit and no CPU limit.

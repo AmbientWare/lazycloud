@@ -5,9 +5,11 @@ from math import floor
 from uuid import UUID
 
 from shared.agent_connections import AgentConnectionRecord
+from shared.http.agent_tunnel import AgentRouteUpdate, TunnelCommand, TunnelCommandKind
+from shared.routing import AgentBackendRoute
 
-from coordination.redis_client import RedisClient
-from coordination.redis_serialization import dump_model_json, load_model_json
+from coordination.redis_client import RedisClient, RedisSubscription
+from coordination.redis_serialization import dump_model_json, load_model_json, redis_text
 
 AGENT_CONNECTION_LEASE_TTL_SECONDS = 6
 
@@ -91,6 +93,39 @@ class RedisAgentConnectionDirectory:
         return bool(
             self.redis.eval_int(_RELEASE, 1, self._record_key(record), dump_model_json(record))
         )
+
+    def notify_route_changed(
+        self, route: AgentBackendRoute, revision: int, *, deleted: bool = False
+    ) -> None:
+        if not route.enrollment_id:
+            return
+        record = self.get(route.workspace_id, route.enrollment_id)
+        if record is not None:
+            command = TunnelCommand(
+                kind=TunnelCommandKind.RoutesChanged,
+                connection_id=record.connection_id,
+                route_update=AgentRouteUpdate(
+                    revision=revision,
+                    route_id=route.route_id,
+                    route=None if deleted else route,
+                ),
+            )
+            self.redis.publish(self._route_channel(record.gateway_id), command.model_dump_json())
+
+    def subscribe_route_changes(self, gateway_id: str) -> RedisSubscription:
+        subscription = self.redis.pubsub()
+        try:
+            subscription.subscribe(self._route_channel(gateway_id))
+            message = subscription.get_message(timeout=5.0)
+            if message is None or redis_text(message.type) != "subscribe":
+                raise ConnectionError("Agent route subscription was not acknowledged")
+            return subscription
+        except BaseException:
+            subscription.close()
+            raise
+
+    def _route_channel(self, gateway_id: str) -> str:
+        return self.redis.key("agent-route-changes", str(UUID(gateway_id)))
 
     def _record_key(self, record: AgentConnectionRecord) -> str:
         return self._key(record.identity.workspace_id, record.identity.enrollment_id)

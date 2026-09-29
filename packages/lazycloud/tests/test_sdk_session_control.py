@@ -196,7 +196,7 @@ def test_task_subscription_rejects_invalid_response(
             _ = path
             return []
 
-    monkeypatch.setattr("lazycloud.control_clients.HttpChannel", InvalidSubscriptionChannel)
+    monkeypatch.setattr("shared.http_transport.HttpChannel", InvalidSubscriptionChannel)
 
     client = TaskClient(workspace="team", endpoint=EXAMPLE_URL, token="token")
     with pytest.raises(HttpResponseDecodeError, match="invalid response"):

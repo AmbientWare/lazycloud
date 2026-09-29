@@ -154,6 +154,7 @@ async def enrolled_tunnel_route(
         agent_credentials,
         certificate.expires_at,
         lambda route_id: (backend_host, int(backend_port)) if route_id == route.route_id else None,
+        lambda update: None,
     )
     try:
         await server.start()
