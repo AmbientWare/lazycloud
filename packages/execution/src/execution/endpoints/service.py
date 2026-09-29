@@ -5,10 +5,12 @@ import json
 import logging
 import socket
 import time
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import datetime, timedelta
+from uuid import uuid4
 
+from anyio import CancelScope
 from control.service import ControlPlaneService, StubKind, StubRecord
 from database.records.endpoint_dispatch import (
     EndpointDispatchStateRecord,
@@ -16,9 +18,11 @@ from database.records.endpoint_dispatch import (
 from database.repositories.apps import StubRepository
 from database.repositories.container_rollouts import ContainerRolloutRepository
 from database.repositories.endpoint_dispatch import EndpointDispatchRepository
+from database.repositories.execution import TaskRepository
 from database.repositories.orchestration import ContainerRepository
 from database.types import DatabaseSession
 from networking.async_http import AsyncBackendTimeoutError
+from observability.events import EventService
 from observability.workspace_changes import AsyncWorkloadChangeReader
 from pydantic import JsonValue
 from shared.app_identity import ENDPOINT_IMAGE
@@ -50,7 +54,7 @@ from shared.errors import (
     UpstreamTimeoutError,
     UpstreamUnavailableError,
 )
-from shared.events import EventLevel
+from shared.events import Event, EventLevel
 from shared.http.endpoint_forwarding import HeaderMap, error_response
 from shared.http.endpoints import (
     EndpointForwardRequest,
@@ -63,11 +67,14 @@ from shared.http.workspace_changes import WorkspaceChangeType
 from shared.tasks import Task, TaskStatus
 from shared.timestamps import utc_now
 from shared.urls import endpoint_route_path
+from shared.usage import UsageRecord
 
 from database import AsyncDatabaseClient
 from execution.checkpoints import latest_available_checkpoint
 from execution.containers.planning import ContainerSchedulingOptions
 from execution.containers.service import PendingContainerReservation
+from execution.endpoints.batching import EndpointBatch, complete_before_cancelling
+from execution.endpoints.capacity import EndpointCapacity, EndpointCapacitySnapshot
 from execution.endpoints.config import EndpointStubConfig
 from execution.endpoints.dispatch import (
     DEFAULT_ENDPOINT_CONTAINER_CONCURRENCY,
@@ -87,6 +94,7 @@ from execution.mounts import (
 )
 from execution.placement import workload_placement
 from execution.services import ExecutionServices
+from execution.tasks import TaskFinishOutcome
 
 ENDPOINT_DISPATCH_POLL_INTERVAL_SECONDS = 0.05
 ENDPOINT_HEALTH_PROBE_TIMEOUT_SECONDS = 10.0
@@ -125,18 +133,30 @@ class EndpointDispatchAdmission:
     task: Task
     record: EndpointDispatchRecord
     settings: EndpointDispatchSettings
+    usage: UsageRecord
+
+
+@dataclass(frozen=True, slots=True)
+class _AdmissionRequest:
+    stub: StubRecord
+    request: EndpointForwardRequest
+    args: list[JsonValue] | None
+    kwargs: dict[str, JsonValue] | None
+    retry: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _ClaimRequest:
+    task: Task
+    container_id: str
+    concurrency: int
 
 
 @dataclass(slots=True)
 class _CapacityWait:
-    """One request's wait for a container, carried across every target it tries.
-
-    A warmup is asked for once per request, not once per stale target, so the
-    flag lives here rather than in the loop that selects targets.
-    """
+    """One request's deadline, carried across every target it tries."""
 
     deadline: float
-    warmup_attempted: bool = False
 
     def remaining(self) -> float:
         return self.deadline - time.monotonic()
@@ -152,6 +172,15 @@ class EndpointControlService:
     async_dispatcher: AsyncEndpointRequestDispatcher | None = None
     workload_changes: AsyncWorkloadChangeReader | None = None
     control_plane: ControlPlaneService = field(init=False)
+    _capacity: dict[tuple[str, str | None], EndpointCapacity] = field(
+        default_factory=dict, init=False
+    )
+    _admissions: dict[str, EndpointBatch[_AdmissionRequest, EndpointDispatchAdmission | None]] = (
+        field(default_factory=dict, init=False)
+    )
+    _claims: dict[str, EndpointBatch[_ClaimRequest, tuple[EndpointDispatchRecord, Task] | None]] = (
+        field(default_factory=dict, init=False)
+    )
 
     def __post_init__(self) -> None:
         self.control_plane = ControlPlaneService(self.services.context)
@@ -334,14 +363,10 @@ class EndpointControlService:
     async def forward_endpoint_request(
         self,
         request: EndpointForwardRequest,
+        *,
+        stub: StubRecord,
     ) -> EndpointForwardResponse:
         try:
-            stub = await self._async_database().run_transaction(
-                lambda session: self.control_plane.get_stub_in_session(
-                    session,
-                    request.stub_id,
-                )
-            )
             if stub.kind is StubKind.Endpoint:
                 return await self._forward_function_endpoint(stub, request)
             if stub.kind is StubKind.Asgi:
@@ -356,34 +381,15 @@ class EndpointControlService:
     async def forward_endpoint_health(
         self,
         request: EndpointForwardRequest,
+        *,
+        stub: StubRecord,
     ) -> EndpointForwardResponse:
-        """Answer a health probe without opening an invocation.
+        """Probe current capacity without creating or billing an invocation.
 
-        Every other path here creates a task and meters it, which is right for a
-        request the workload runs and wrong for one asking whether it could. An
-        uptime check left pointing at this path would otherwise accrue task rows
-        and billable usage for work nobody asked for. Admission control still
-        applies: the request reaches the workload either way, and the public URL
-        that carries it needs no token.
-
-        No ready container is reported as unavailable rather than waited out: the
-        caller asked for the current answer, and a probe that blocks until
-        capacity arrives has stopped being a probe.
-
-        The forward here is itself the probe, so selection deliberately skips the
-        readiness filter: running it would send every container the same
-        `GET /health` this request is about to send one of them, and an external
-        uptime check polls far slower than the verdict is cached, so that second
-        request is never the free one.
+        Forwarding performs the health check, so selection skips a duplicate probe.
         """
 
         try:
-            stub = await self._async_database().run_transaction(
-                lambda session: self.control_plane.get_stub_in_session(
-                    session,
-                    request.stub_id,
-                )
-            )
             if stub.kind is not StubKind.Asgi:
                 return error_response(404, f"stub is not an ASGI endpoint: {stub.id}")
             config = EndpointStubConfig.model_validate(stub.config, from_attributes=True)
@@ -419,24 +425,26 @@ class EndpointControlService:
     async def prepare_asgi_http(
         self,
         request: EndpointForwardRequest,
+        *,
+        stub: StubRecord,
     ) -> EndpointIngressDispatchSession:
-        return await self._prepare_asgi_ingress(request, websocket=False)
+        return await self._prepare_asgi_ingress(stub, request, websocket=False)
 
     async def prepare_asgi_websocket(
         self,
         request: EndpointForwardRequest,
+        *,
+        stub: StubRecord,
     ) -> EndpointIngressDispatchSession:
-        return await self._prepare_asgi_ingress(request, websocket=True)
+        return await self._prepare_asgi_ingress(stub, request, websocket=True)
 
     async def _prepare_asgi_ingress(
         self,
+        stub: StubRecord,
         request: EndpointForwardRequest,
         *,
         websocket: bool,
     ) -> EndpointIngressDispatchSession:
-        stub = await self._async_database().run_transaction(
-            lambda session: self.control_plane.get_stub_in_session(session, request.stub_id)
-        )
         if stub.kind is not StubKind.Asgi:
             msg = f"stub is not an ASGI endpoint: {stub.id}"
             raise EndpointDispatchUnavailable(msg)
@@ -459,11 +467,10 @@ class EndpointControlService:
         task = admission.task
         settings = admission.settings
         repository = AsyncEndpointDispatchStateRepository(self._async_database())
-        await self._record_endpoint_request_usage(stub, task)
         forwarded = request.model_copy(
             update={"headers": _headers_with_task_id(request.headers, task.id)}
         )
-        await self._emit_dispatch_lifecycle(stub, admission.record)
+        self._observe_dispatch_lifecycle(admission.record)
 
         wait = _CapacityWait(deadline=time.monotonic() + settings.wait_timeout_seconds)
         try:
@@ -478,7 +485,13 @@ class EndpointControlService:
             )
             self._observe_dispatch_latencies(stub, record)
         except Exception as exc:
-            await self._record_dispatch_failure(repository, stub, task, exc)
+            await self._record_dispatch_failure(task, exc)
+            raise
+        except asyncio.CancelledError:
+            with CancelScope(shield=True):
+                await self._finish_dispatch(
+                    task, TaskStatus.Cancelled, error="request disconnected"
+                )
             raise
 
         return EndpointIngressDispatchSession(
@@ -493,13 +506,7 @@ class EndpointControlService:
     async def heartbeat_asgi_websocket(self, task_id: str) -> None:
         task = await self.services.tasks.get_async(task_id)
         record = await AsyncEndpointDispatchStateRepository(self._async_database()).heartbeat(task)
-        try:
-            stub = await self._async_database().run_transaction(
-                lambda session: self.control_plane.get_stub_in_session(session, record.stub_id)
-            )
-        except NotFoundError:
-            return
-        await self._emit_dispatch_lifecycle(stub, record, emit_event=False)
+        self._observe_dispatch_lifecycle(record)
 
     async def open_asgi_websocket_socket(
         self,
@@ -571,20 +578,6 @@ class EndpointControlService:
             task = await self.services.tasks.get_async(task_id)
         except NotFoundError:
             return
-        try:
-            record = await AsyncEndpointDispatchStateRepository(self._async_database()).transition(
-                task,
-                EndpointDispatchStatus.Timeout
-                if timed_out
-                else _websocket_terminal_status(cancelled=cancelled, error=error),
-                error=error,
-            )
-            stub = await self._async_database().run_transaction(
-                lambda session: self.control_plane.get_stub_in_session(session, record.stub_id)
-            )
-        except NotFoundError:
-            return
-        await self._emit_dispatch_lifecycle(stub, record)
         task_status = TaskStatus.Complete
         if cancelled:
             task_status = TaskStatus.Cancelled
@@ -592,7 +585,7 @@ class EndpointControlService:
             task_status = TaskStatus.Timeout
         elif error:
             task_status = TaskStatus.Failed
-        await self.services.tasks.transition_async(
+        await self._finish_dispatch(
             task,
             task_status,
             result=result,
@@ -632,8 +625,7 @@ class EndpointControlService:
         stub = admission.stub
         task = admission.task
         settings = admission.settings
-        await self._record_endpoint_request_usage(stub, task)
-        await self._emit_dispatch_lifecycle(stub, admission.record)
+        self._observe_dispatch_lifecycle(admission.record)
         forwarded = request.model_copy(
             update={
                 "body": _endpoint_payload_body(payload.args or [], payload.kwargs),
@@ -647,8 +639,10 @@ class EndpointControlService:
         )
         while True:
             response = await self._dispatch_task(stub, task, forwarded, settings)
+            if _forward_response_succeeded(response):
+                return response
             task = await self.services.tasks.get_async(task.id)
-            if _forward_response_succeeded(response) or task.status is not TaskStatus.Retry:
+            if task.status is not TaskStatus.Retry:
                 return response
             retry_at = task.next_retry_at
             if retry_at is not None:
@@ -678,8 +672,7 @@ class EndpointControlService:
         stub = admission.stub
         task = admission.task
         settings = admission.settings
-        await self._record_endpoint_request_usage(stub, task)
-        await self._emit_dispatch_lifecycle(stub, admission.record)
+        self._observe_dispatch_lifecycle(admission.record)
         forwarded = request.model_copy(
             update={"headers": _headers_with_task_id(request.headers, task.id)}
         )
@@ -694,31 +687,55 @@ class EndpointControlService:
         task_kwargs: dict[str, JsonValue] | None = None,
         retry: bool = False,
     ) -> EndpointDispatchAdmission | None:
-        admission = await self._async_database().run_transaction(
-            lambda session: self._admit_dispatch_task_in_session(
-                session,
-                stub,
-                request,
-                task_args=task_args,
-                task_kwargs=task_kwargs,
-                retry=retry,
-            )
-        )
-        if admission is not None:
-            await asyncio.to_thread(self.services.execution_demand.notify)
-            await self.services.tasks.publish_created_async(admission.task)
-        return admission
+        batch = self._admissions.get(stub.id)
+        if batch is None:
 
-    def _admit_dispatch_task_in_session(
+            def remove_batch() -> None:
+                del self._admissions[stub.id]
+
+            batch = EndpointBatch(
+                self._execute_admissions,
+                self._abandon_admission,
+                remove_batch,
+            )
+            self._admissions[stub.id] = batch
+        admission = None
+        try:
+            admission = await batch.submit(
+                _AdmissionRequest(stub, request, task_args, task_kwargs, retry)
+            )
+            if admission is not None:
+                await self.services.tasks.publish_created_async(admission.task)
+                await asyncio.to_thread(self.services.usage.publish_change, admission.usage)
+            return admission
+        except asyncio.CancelledError:
+            if admission is not None:
+                with CancelScope(shield=True):
+                    await self._abandon_admission(admission)
+            raise
+
+    async def _abandon_admission(self, admission: EndpointDispatchAdmission | None) -> None:
+        if admission is not None:
+            await self._finish_dispatch(
+                admission.task, TaskStatus.Cancelled, error="request disconnected"
+            )
+
+    async def _execute_admissions(
+        self, requests: Sequence[_AdmissionRequest]
+    ) -> list[EndpointDispatchAdmission | None]:
+        admissions = await self._async_database().run_transaction(
+            lambda session: self._admit_batch_in_session(session, requests)
+        )
+        if any(admission is not None for admission in admissions):
+            await asyncio.to_thread(self.services.execution_demand.notify)
+        return admissions
+
+    def _admit_batch_in_session(
         self,
         session: DatabaseSession,
-        stub: StubRecord,
-        request: EndpointForwardRequest,
-        *,
-        task_args: list[JsonValue] | None,
-        task_kwargs: dict[str, JsonValue] | None,
-        retry: bool,
-    ) -> EndpointDispatchAdmission | None:
+        requests: Sequence[_AdmissionRequest],
+    ) -> list[EndpointDispatchAdmission | None]:
+        stub = requests[0].stub
         locked_stub = StubRepository(session).get_for_update(
             stub.id,
             workspace_id=stub.workspace_id,
@@ -729,45 +746,79 @@ class EndpointControlService:
         settings = _dispatch_settings(config)
         now = utc_now()
         dispatches = EndpointDispatchRepository(session)
-        if dispatches.active_count(locked_stub.id, at=now) >= settings.max_pending_requests:
-            return None
-        task = self.services.tasks.create_in_transaction(
+        available = max(
+            settings.max_pending_requests - dispatches.active_count(locked_stub.id, at=now), 0
+        )
+        accepted = requests[:available]
+        if not accepted:
+            return [None for _ in requests]
+        drafts: list[Task] = []
+        for item in accepted:
+            task_id = str(uuid4())
+            policy = config.effective_retry_policy if item.retry else None
+            drafts.append(
+                Task(
+                    id=task_id,
+                    root_task_id=task_id,
+                    name=f"{locked_stub.kind.value}-{locked_stub.name}",
+                    workspace_id=locked_stub.workspace_id,
+                    app_id=locked_stub.app_id,
+                    stub_id=locked_stub.id,
+                    deployment_id=locked_stub.deployment_id,
+                    handler=locked_stub.handler,
+                    args=item.args or [],
+                    kwargs=item.kwargs or {},
+                    retry_policy=policy,
+                    max_attempts=policy.max_attempts if policy else 1,
+                )
+            )
+        tasks = self.services.tasks.create_batch_in_transaction(session, drafts)
+        records = [
+            _dispatch_record(record)
+            for record in dispatches.create_many(
+                [
+                    _dispatch_state(
+                        EndpointDispatchRecord(
+                            task_id=task.id,
+                            stub_id=locked_stub.id,
+                            workspace_id=locked_stub.workspace_id,
+                            method=item.request.method,
+                            path=item.request.path,
+                            wait_timeout_seconds=settings.wait_timeout_seconds,
+                            max_pending_requests=settings.max_pending_requests,
+                            max_inflight_per_container=settings.max_inflight_per_container,
+                            heartbeat_at=now,
+                            expires_at=now
+                            + timedelta(seconds=max(settings.wait_timeout_seconds, 1.0)),
+                        )
+                    )
+                    for item, task in zip(accepted, tasks, strict=True)
+                ]
+            )
+        ]
+        self.services.events.emit_many_in_session(
+            session, [_dispatch_event(record) for record in records]
+        )
+        usage = self.services.usage.record_task_counts_in_session(
             session,
-            f"{locked_stub.kind.value}-{locked_stub.name}",
             workspace_id=locked_stub.workspace_id,
-            app_id=locked_stub.app_id,
-            stub_id=locked_stub.id,
-            deployment_id=locked_stub.deployment_id,
-            handler=locked_stub.handler,
-            args=task_args,
-            kwargs=task_kwargs,
-            retry_policy=config.effective_retry_policy if retry else None,
+            resource_type="endpoint",
+            resource_id=locked_stub.id,
+            task_ids=[task.id for task in tasks],
+            kind=locked_stub.kind.value,
+            app_id=locked_stub.app_id or "",
+            deployment_id=locked_stub.deployment_id or "",
         )
-        record = EndpointDispatchRecord(
-            task_id=task.id,
-            stub_id=locked_stub.id,
-            workspace_id=locked_stub.workspace_id,
-            method=request.method,
-            path=request.path,
-            wait_timeout_seconds=settings.wait_timeout_seconds,
-            max_pending_requests=settings.max_pending_requests,
-            max_inflight_per_container=settings.max_inflight_per_container,
-            heartbeat_at=now,
-            expires_at=now + timedelta(seconds=max(settings.wait_timeout_seconds, 1.0)),
-        )
-        persisted = _dispatch_record(dispatches.create(_dispatch_state(record)))
         self.services.execution_demand.activate_in_transaction(
             session,
             stub_id=locked_stub.id,
             workspace_id=locked_stub.workspace_id,
             kind=AutoscalerTargetKind.Endpoint,
         )
-        return EndpointDispatchAdmission(
-            stub=locked_stub,
-            task=task,
-            record=persisted,
-            settings=settings,
-        )
+        return [
+            EndpointDispatchAdmission(locked_stub, task, record, settings, metered)
+            for task, record, metered in zip(tasks, records, usage, strict=True)
+        ] + [None for _ in requests[len(accepted) :]]
 
     def _record_request_rejected(self, stub: StubRecord) -> None:
         self.services.metrics.increment(
@@ -798,17 +849,21 @@ class EndpointControlService:
                 max_inflight_per_container=settings.max_inflight_per_container,
             )
         except Exception as exc:
-            status_code = await self._record_dispatch_failure(repository, stub, task, exc)
+            status_code = await self._record_dispatch_failure(task, exc)
             response = error_response(status_code, _dispatch_error_message(exc))
             _add_task_headers(response.headers, task.id)
             return response
+        except asyncio.CancelledError:
+            with CancelScope(shield=True):
+                await self._finish_dispatch(
+                    task, TaskStatus.Cancelled, error="request disconnected"
+                )
+            raise
 
         _add_task_headers(response.headers, task.id)
         forward_error = _forward_response_error(response)
         if _forward_response_succeeded(response):
-            record = await repository.transition(task, EndpointDispatchStatus.Complete)
-            await self._emit_dispatch_lifecycle(stub, record)
-            await self.services.tasks.transition_async(
+            await self._finish_dispatch(
                 task,
                 TaskStatus.Complete,
                 result=_task_result(response),
@@ -816,24 +871,69 @@ class EndpointControlService:
                 exit_code=0,
             )
         else:
-            outcome = await self.services.tasks.finish_with_retry_async(
-                task.id,
+            await self._finish_dispatch(
+                task,
                 TaskStatus.Failed,
                 result=_task_result(response),
                 error=forward_error,
                 exit_code=1,
+                retry_allowed=True,
             )
-            record = (
-                await repository.requeue(outcome.task)
-                if outcome.retry_decision.should_retry
-                else await repository.transition(
-                    task,
-                    EndpointDispatchStatus.Failed,
-                    error=forward_error,
-                )
-            )
-            await self._emit_dispatch_lifecycle(stub, record)
         return response
+
+    async def _finish_dispatch(
+        self,
+        task: Task,
+        status: TaskStatus,
+        *,
+        result: JsonValue = None,
+        error: str | None = None,
+        exit_code: int | None = None,
+        retry_allowed: bool = False,
+    ) -> TaskFinishOutcome:
+        def finish(session: DatabaseSession) -> tuple[EndpointDispatchRecord, TaskFinishOutcome]:
+            outcome = self.services.tasks.finish_in_transaction(
+                session,
+                task.id,
+                status,
+                result=result,
+                error=error,
+                exit_code=exit_code,
+                retry_allowed=retry_allowed,
+            )
+            if outcome.task.status is TaskStatus.Retry:
+                if outcome.state_changed:
+                    record = _requeue_dispatch_in_session(session, outcome.task)
+                else:
+                    state = EndpointDispatchRepository(session).get(task.id)
+                    if state is None:
+                        raise NotFoundError(
+                            f"endpoint dispatch state is missing for task {task.id}"
+                        )
+                    record = _dispatch_record(state)
+            else:
+                dispatch_status = {
+                    TaskStatus.Complete: EndpointDispatchStatus.Complete,
+                    TaskStatus.Cancelled: EndpointDispatchStatus.Cancelled,
+                    TaskStatus.Timeout: EndpointDispatchStatus.Timeout,
+                    TaskStatus.Expired: EndpointDispatchStatus.Timeout,
+                    TaskStatus.Failed: EndpointDispatchStatus.Failed,
+                }[outcome.task.status]
+                record = _transition_dispatch_in_session(
+                    session,
+                    outcome.task,
+                    dispatch_status,
+                    container_id=None,
+                    error=outcome.task.error,
+                )
+            return record, outcome
+
+        record, outcome = await complete_before_cancelling(
+            self._async_database().run_transaction(finish)
+        )
+        self._observe_dispatch_lifecycle(record)
+        await self.services.tasks.publish_finished_async(outcome)
+        return outcome
 
     async def _wait_for_dispatch(
         self,
@@ -900,88 +1000,176 @@ class EndpointControlService:
     ) -> tuple[EndpointDispatchTarget, EndpointDispatchRecord]:
         if self.workload_changes is None:
             raise RuntimeError("endpoint workload notifications are not configured")
-        try:
-            async with (
-                self.workload_changes.follow(
-                    workspace_id=stub.workspace_id, stub_id=stub.id
-                ) as updates,
-                asyncio.timeout(max(wait.remaining(), 0.0)),
-            ):
-                return await self._claim_target_on_changes(
-                    dispatcher,
-                    repository,
-                    stub,
-                    task,
-                    wait,
-                    updates,
+        if container_id is not None:
+            await self._require_container_target(stub, container_id)
+        await repository.transition(task, EndpointDispatchStatus.WaitingCapacity)
+        key = (stub.id, container_id)
+        capacity = self._capacity.get(key)
+        if capacity is None:
+            warmup_attempted = False
+
+            async def discover(task_ids: Sequence[str]) -> EndpointCapacitySnapshot:
+                nonlocal warmup_attempted
+
+                def read(
+                    session: DatabaseSession,
+                ) -> tuple[dict[str, int], set[str], frozenset[str]]:
+                    dispatches = EndpointDispatchRepository(session)
+                    return (
+                        dispatches.inflight_counts(stub.id, at=utc_now()),
+                        ContainerRolloutRepository(session).closed_for_stub(stub.id),
+                        dispatches.cancelled_tasks(task_ids),
+                    )
+
+                loads, closed, cancelled = await self._async_database().run_transaction(read)
+
+                async def admit(container_ids: Sequence[str]) -> set[str]:
+                    return await asyncio.to_thread(
+                        self.services.containers.accepting_containers, container_ids
+                    )
+
+                targets = await dispatcher.ready_targets(
+                    stub.id,
+                    container_loads=loads,
                     max_inflight_per_container=max_inflight_per_container,
+                    excluded_container_ids=closed,
+                    admit=admit,
                     container_id=container_id,
                 )
+                if not targets:
+                    if warmup_attempted:
+                        await self._raise_if_capacity_is_dead(stub, since=task.created_at)
+                    elif container_id is None:
+                        await self._request_capacity(stub, task)
+                        warmup_attempted = True
+                        await self._raise_if_capacity_is_dead(stub, since=task.created_at)
+                return EndpointCapacitySnapshot(targets, loads, cancelled)
+
+            capacity = EndpointCapacity(
+                stub.workspace_id,
+                stub.id,
+                max_inflight_per_container,
+                self.workload_changes,
+                discover,
+            )
+            self._capacity[key] = capacity
+        try:
+            async with asyncio.timeout(max(wait.remaining(), 0.0)):
+                while True:
+                    async with capacity.reserve(task.id) as target:
+                        if target is None:
+                            raise EndpointDispatchCancelled("endpoint request cancelled")
+                        claimed = await self._claim_dispatch(
+                            task,
+                            container_id=target.container_id,
+                            max_inflight_per_container=max_inflight_per_container,
+                        )
+                        if claimed is not None:
+                            record, assigned = claimed
+                            self._observe_dispatch_lifecycle(record)
+                            await self.services.tasks.publish_lifecycle_change_async(
+                                assigned, WorkspaceChangeType.Updated
+                            )
+                            return target, record
         except TimeoutError as exc:
             raise EndpointDispatchTimedOut("Timed out waiting for a backend container") from exc
+        finally:
+            if not capacity.waiters and self._capacity.get(key) is capacity:
+                del self._capacity[key]
 
-    async def _claim_target_on_changes(
+    async def _claim_dispatch(
+        self, task: Task, *, container_id: str, max_inflight_per_container: int
+    ) -> tuple[EndpointDispatchRecord, Task] | None:
+        batch = self._claims.get(container_id)
+        if batch is None:
+
+            def remove_batch() -> None:
+                del self._claims[container_id]
+
+            batch = EndpointBatch(
+                self._execute_claims,
+                self._abandon_claim,
+                remove_batch,
+            )
+            self._claims[container_id] = batch
+        return await batch.submit(_ClaimRequest(task, container_id, max_inflight_per_container))
+
+    async def _abandon_claim(self, claim: tuple[EndpointDispatchRecord, Task] | None) -> None:
+        if claim is not None:
+            await self._finish_dispatch(
+                claim[1], TaskStatus.Cancelled, error="request disconnected"
+            )
+
+    async def _execute_claims(
         self,
-        dispatcher: AsyncEndpointRequestDispatcher,
-        repository: AsyncEndpointDispatchStateRepository,
-        stub: StubRecord,
-        task: Task,
-        wait: _CapacityWait,
-        updates: AsyncIterator[None],
-        *,
-        max_inflight_per_container: int,
-        container_id: str | None,
-    ) -> tuple[EndpointDispatchTarget, EndpointDispatchRecord]:
-        outdated_containers: set[str] = set()
-        while True:
-            await self._raise_if_cancelled(task.id)
-            if container_id is not None:
-                await self._require_container_target(stub, container_id)
-            if wait.warmup_attempted:
-                await self._raise_if_capacity_is_dead(dispatcher, stub)
-            if wait.remaining() <= 0:
-                raise EndpointDispatchTimedOut("Timed out waiting for a backend container")
-
-            record = await repository.transition(task, EndpointDispatchStatus.WaitingCapacity)
-            await self._emit_dispatch_lifecycle(stub, record, emit_event=False)
-            loads = await repository.inflight_counts(stub.id)
-            target = await dispatcher.select_target(
-                stub.id,
-                container_loads=loads,
-                max_inflight_per_container=max_inflight_per_container,
-                excluded_container_ids=(await repository.closed_containers(stub.id))
-                | outdated_containers,
-                container_id=container_id,
-            )
-            if target is None:
-                if container_id is not None:
-                    await anext(updates)
-                    continue
-                if not wait.warmup_attempted:
-                    await self._request_capacity(stub, task)
-                    wait.warmup_attempted = True
-                    continue
-                await anext(updates)
-                continue
-
-            if not await asyncio.to_thread(
-                self.services.containers.accepting_work, target.container_id
+        requests: Sequence[_ClaimRequest],
+    ) -> list[tuple[EndpointDispatchRecord, Task] | Exception | None]:
+        def claim(
+            session: DatabaseSession,
+        ) -> list[tuple[EndpointDispatchRecord, Task] | Exception | None]:
+            container_id = requests[0].container_id
+            stub_id = requests[0].task.stub_id or ""
+            if not ContainerRolloutRepository(session).accepting_work(
+                container_id, stub_id=stub_id
             ):
-                outdated_containers.add(target.container_id)
-                continue
-            record = await repository.claim(
-                task,
-                container_id=target.container_id,
-                max_inflight_per_container=max_inflight_per_container,
+                return [None for _ in requests]
+            dispatches = EndpointDispatchRepository(session)
+            available = max(
+                min(item.concurrency for item in requests)
+                - dispatches.inflight_count(container_id, at=utc_now()),
+                0,
             )
-            if record is None:
-                await anext(updates)
-                continue
-            await self._emit_dispatch_lifecycle(stub, record)
-            # Bind the task to the container that will serve it, so its record
-            # carries the same attribution every other workload kind has.
-            await self.services.tasks.assign_async(task, container_id=target.container_id)
-            return target, record
+            current_tasks = TaskRepository(session).get_many_for_update(
+                [item.task.id for item in requests]
+            )
+            results: list[tuple[EndpointDispatchRecord, Task] | Exception | None] = [
+                None for _ in requests
+            ]
+            selected: list[tuple[int, Task]] = []
+            for index, item in enumerate(requests):
+                current = current_tasks.get(item.task.id)
+                if current is None:
+                    results[index] = NotFoundError(f"task not found: {item.task.id}")
+                elif current.status in {
+                    TaskStatus.Cancelled,
+                    TaskStatus.Complete,
+                    TaskStatus.Failed,
+                    TaskStatus.Timeout,
+                    TaskStatus.Expired,
+                }:
+                    results[index] = EndpointDispatchCancelled(
+                        "endpoint request is already finished"
+                    )
+                elif current.stub_id != stub_id:
+                    results[index] = EndpointDispatchUnavailable(
+                        "endpoint container belongs to another workload"
+                    )
+                elif len(selected) < available:
+                    selected.append((index, current))
+            if not selected:
+                return results
+            assigned = self.services.tasks.assign_locked_batch_in_transaction(
+                session, [(task, container_id) for _, task in selected]
+            )
+            states = dispatches.get_many_for_update([task.id for task in assigned])
+            records: list[EndpointDispatchRecord] = []
+            for task in assigned:
+                state = states.get(task.id)
+                if state is None:
+                    raise NotFoundError(f"endpoint dispatch state is missing for task {task.id}")
+                record = _dispatch_record(state)
+                record.attempts += 1
+                record.transition(EndpointDispatchStatus.Inflight, container_id=container_id)
+                records.append(record)
+            dispatches.update_many([_dispatch_state(record) for record in records])
+            EventService.emit_many_in_session(
+                session, [_dispatch_event(record) for record in records]
+            )
+            for (index, _), task, record in zip(selected, assigned, records, strict=True):
+                results[index] = (record, task)
+            return results
+
+        return await self._async_database().run_transaction(claim)
 
     async def _require_container_target(self, stub: StubRecord, container_id: str) -> None:
         container = await self._async_database().run_transaction(
@@ -1040,18 +1228,11 @@ class EndpointControlService:
                 "endpoint_dispatch_inflight_seconds", time.monotonic() - started, labels=labels
             )
 
-    async def _raise_if_cancelled(self, task_id: str) -> None:
-        try:
-            task = await self.services.tasks.get_async(task_id)
-        except NotFoundError:
-            return
-        if task.status is TaskStatus.Cancelled:
-            raise EndpointDispatchCancelled("endpoint request cancelled")
-
     async def _raise_if_capacity_is_dead(
         self,
-        dispatcher: AsyncEndpointRequestDispatcher,
         stub: StubRecord,
+        *,
+        since: datetime,
     ) -> None:
         """Stop waiting when every container that could serve this stub has died.
 
@@ -1060,39 +1241,17 @@ class EndpointControlService:
         that fails on import and takes every replacement down with it.
         """
 
-        containers = await self._async_database().run_transaction(
-            lambda session: ContainerRepository(session).list(
-                workspace_id=stub.workspace_id,
-                statuses=(
-                    ContainerStatus.Pending.value,
-                    ContainerStatus.Running.value,
-                    ContainerStatus.Failed.value,
-                ),
-                stub_ids=(stub.id,),
+        live, failure = await self._async_database().run_transaction(
+            lambda session: (
+                ContainerRepository(session).newest_live_for_stub(stub.id),
+                ContainerRepository(session).recent_startup_failure(stub.id, since=since),
             )
         )
-        if not containers or any(item.status is not ContainerStatus.Failed for item in containers):
+        if live is not None or failure is None:
             return
-        # The listing is newest first, so the most recent failure is the one to name.
-        latest = containers[0]
-        # A container the fleet could not place has no logs to read and an exit code
-        # this service invented; the scheduler holds the only real account of why.
-        reason = next(
-            (
-                state.failure_reason
-                for state in await dispatcher.container_states(stub.id)
-                if state.container_id == latest.id and state.failure_reason
-            ),
-            "",
-        )
-        if reason:
-            raise EndpointDispatchUnavailable(
-                f"no container could start for this endpoint: {reason}"
-            )
-        detail = f" (exit code {latest.exit_code})" if latest.exit_code is not None else ""
         raise EndpointDispatchUnavailable(
-            f"no container could start for this endpoint{detail}; "
-            f"check the container logs for {latest.id}"
+            f"no container could start for this endpoint: {failure.reason}; "
+            f"check the container logs for {failure.container_id}"
         )
 
     async def _request_capacity(self, stub: StubRecord, task: Task) -> None:
@@ -1118,18 +1277,14 @@ class EndpointControlService:
 
     async def _record_dispatch_failure(
         self,
-        repository: AsyncEndpointDispatchStateRepository,
-        stub: StubRecord,
         task: Task,
         exc: Exception,
     ) -> int:
         """Settle both records for a dispatch that raised; returns the HTTP status."""
-        dispatch_status, task_status, status_code = _dispatch_failure(exc)
+        _, task_status, status_code = _dispatch_failure(exc)
         message = _dispatch_error_message(exc)
         LOGGER.error("Endpoint task %s failed: %s", task.id, type(exc).__name__)
-        record = await repository.transition(task, dispatch_status, error=message)
-        await self._emit_dispatch_lifecycle(stub, record)
-        await self.services.tasks.transition_async(
+        await self._finish_dispatch(
             task,
             task_status,
             error=message,
@@ -1137,44 +1292,19 @@ class EndpointControlService:
         )
         return status_code
 
-    async def _emit_dispatch_lifecycle(
+    def _observe_dispatch_lifecycle(
         self,
-        stub: StubRecord,
         record: EndpointDispatchRecord,
-        *,
-        emit_event: bool = True,
     ) -> None:
         labels = {
-            "stub_id": stub.id,
-            "kind": stub.kind.value,
+            "stub_id": record.stub_id,
             "status": record.status.value,
         }
         self.services.metrics.increment("endpoint_dispatch_lifecycle_total", labels=labels)
         self.services.metrics.set_gauge(
             "endpoint_dispatch_active_requests",
             0 if record.status in TERMINAL_ENDPOINT_DISPATCH_STATUSES else 1,
-            labels={"stub_id": stub.id, "kind": stub.kind.value, "task_id": record.task_id},
-        )
-        if not emit_event:
-            return
-        level = (
-            EventLevel.Error
-            if record.status in {EndpointDispatchStatus.Failed, EndpointDispatchStatus.Timeout}
-            else EventLevel.Info
-        )
-        await self.services.events.emit_async(
-            f"endpoint.dispatch.{record.status.value}",
-            level=level,
-            resource_type="task",
-            resource_id=record.task_id,
-            message=f"endpoint request {record.status.value}",
-            data={
-                "stub_id": record.stub_id,
-                "container_id": record.container_id,
-                "attempts": record.attempts,
-                "error": record.error,
-            },
-            workspace_id=record.workspace_id,
+            labels={"stub_id": record.stub_id, "task_id": record.task_id},
         )
 
     async def _emit_warmup_result(
@@ -1207,21 +1337,6 @@ class EndpointControlService:
             message="endpoint warmup failed",
             data={"stub_id": stub.id, "error": error},
             workspace_id=stub.workspace_id,
-        )
-
-    async def _record_endpoint_request_usage(
-        self,
-        stub: StubRecord,
-        task: Task,
-    ) -> None:
-        await self.services.usage.record_task_count_async(
-            workspace_id=stub.workspace_id,
-            resource_type="endpoint",
-            resource_id=stub.id,
-            task_id=task.id,
-            kind=stub.kind.value,
-            app_id=stub.app_id or "",
-            deployment_id=stub.deployment_id or "",
         )
 
     def _async_database(self) -> AsyncDatabaseClient:
@@ -1295,35 +1410,6 @@ class EndpointDispatchSettings:
 class AsyncEndpointDispatchStateRepository:
     database: AsyncDatabaseClient
 
-    async def closed_containers(self, stub_id: str) -> set[str]:
-        return await self.database.run_transaction(
-            lambda session: ContainerRolloutRepository(session).closed_for_stub(stub_id)
-        )
-
-    async def claim(
-        self, task: Task, *, container_id: str, max_inflight_per_container: int
-    ) -> EndpointDispatchRecord | None:
-        def claim_in_session(session: DatabaseSession) -> EndpointDispatchRecord | None:
-            if not ContainerRolloutRepository(session).accepting_work(
-                container_id, stub_id=task.stub_id or ""
-            ):
-                return None
-            # accepting_work holds the container row lock until this transaction commits.
-            loads = EndpointDispatchRepository(session).inflight_counts(
-                task.stub_id or "", at=utc_now()
-            )
-            if loads.get(container_id, 0) >= max_inflight_per_container:
-                return None
-            return _transition_dispatch_in_session(
-                session,
-                task,
-                EndpointDispatchStatus.Inflight,
-                container_id=container_id,
-                error=None,
-            )
-
-        return await self.database.run_transaction(claim_in_session)
-
     async def transition(
         self,
         task: Task,
@@ -1347,11 +1433,6 @@ class AsyncEndpointDispatchStateRepository:
             lambda session: _heartbeat_dispatch_in_session(session, task)
         )
 
-    async def requeue(self, task: Task) -> EndpointDispatchRecord:
-        return await self.database.run_transaction(
-            lambda session: _requeue_dispatch_in_session(session, task)
-        )
-
     async def active_count(
         self,
         stub_id: str,
@@ -1363,14 +1444,6 @@ class AsyncEndpointDispatchStateRepository:
                 stub_id,
                 at=utc_now(),
                 exclude_task_id=exclude_task_id,
-            )
-        )
-
-    async def inflight_counts(self, stub_id: str) -> dict[str, int]:
-        return await self.database.run_transaction(
-            lambda session: EndpointDispatchRepository(session).inflight_counts(
-                stub_id,
-                at=utc_now(),
             )
         )
 
@@ -1391,7 +1464,10 @@ def _transition_dispatch_in_session(
     if status is EndpointDispatchStatus.Inflight:
         record.attempts += 1
     record.transition(status, container_id=container_id, error=error)
-    return _dispatch_record(repository.update(_dispatch_state(record)))
+    persisted = _dispatch_record(repository.update(_dispatch_state(record)))
+    if status is not EndpointDispatchStatus.WaitingCapacity:
+        _record_dispatch_event(session, persisted)
+    return persisted
 
 
 def _requeue_dispatch_in_session(
@@ -1403,7 +1479,32 @@ def _requeue_dispatch_in_session(
     if state is None:
         raise NotFoundError(f"endpoint dispatch state is missing for task {task.id}")
     record = _dispatch_record(state).requeue()
-    return _dispatch_record(repository.update(_dispatch_state(record)))
+    persisted = _dispatch_record(repository.update(_dispatch_state(record)))
+    _record_dispatch_event(session, persisted)
+    return persisted
+
+
+def _record_dispatch_event(session: DatabaseSession, record: EndpointDispatchRecord) -> None:
+    EventService.emit_many_in_session(session, [_dispatch_event(record)])
+
+
+def _dispatch_event(record: EndpointDispatchRecord) -> tuple[Event, str | None]:
+    return Event(
+        id=str(uuid4()),
+        action=f"endpoint.dispatch.{record.status.value}",
+        level=EventLevel.Error
+        if record.status in {EndpointDispatchStatus.Failed, EndpointDispatchStatus.Timeout}
+        else EventLevel.Info,
+        resource_type="task",
+        resource_id=record.task_id,
+        message=f"endpoint request {record.status.value}",
+        data={
+            "stub_id": record.stub_id,
+            "container_id": record.container_id,
+            "attempts": record.attempts,
+            "error": record.error,
+        },
+    ), record.workspace_id
 
 
 def _heartbeat_dispatch_in_session(
@@ -1476,18 +1577,6 @@ class EndpointWebSocketDispatchRejected(RuntimeError):
         super().__init__(message)
         self.status_code = status_code
         self.task_id = task_id
-
-
-def _websocket_terminal_status(
-    *,
-    cancelled: bool,
-    error: str | None,
-) -> EndpointDispatchStatus:
-    if cancelled:
-        return EndpointDispatchStatus.Cancelled
-    if error:
-        return EndpointDispatchStatus.Failed
-    return EndpointDispatchStatus.Complete
 
 
 def _dispatch_settings(config: EndpointStubConfig) -> EndpointDispatchSettings:

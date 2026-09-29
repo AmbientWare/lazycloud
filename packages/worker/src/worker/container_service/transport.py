@@ -22,6 +22,7 @@ from worker.container_client.models import (
     ContainerSandboxListFilesRequest,
     ContainerSandboxListProcessesRequest,
     ContainerSandboxReplaceInFilesRequest,
+    ContainerSandboxResultRequest,
     ContainerSandboxStatFileRequest,
     ContainerSandboxStatusRequest,
     ContainerSandboxStderrRequest,
@@ -56,6 +57,8 @@ class WorkerContainerServiceTransport:
                 return self.service.container_exec(_request(request, ContainerExecRequest))
             case ContainerServiceMethod.ContainerSandboxExec:
                 return self.service.sandbox_exec(_request(request, ContainerSandboxExecRequest))
+            case ContainerServiceMethod.ContainerSandboxResult:
+                return self.service.sandbox_result(_request(request, ContainerSandboxResultRequest))
             case ContainerServiceMethod.ContainerSandboxListExposedPorts:
                 return self.service.sandbox_list_exposed_ports(
                     _request(request, ContainerSandboxListExposedPortsRequest)

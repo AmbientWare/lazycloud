@@ -47,6 +47,7 @@ class EndTaskRequest(HttpModel):
 
 
 class EndTaskResponse(HttpModel):
+    claim_acknowledged: bool
     task_status: TaskStatus | None = None
     final_status: TaskStatus | None = None
     retry_scheduled: bool = False

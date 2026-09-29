@@ -1398,8 +1398,6 @@ class ComputeService:
 
         with self.context.database.session() as session:
             repository = ComputeUnitRepository(session)
-            if pool.platform_fleet:
-                repository.lock_platform_capacity()
             current = repository.get(pool.id, for_update=True)
             if current is None:
                 return ""
@@ -4559,7 +4557,6 @@ class ComputeService:
             self.context.database.session() as session,
         ):
             units = ComputeUnitRepository(session)
-            units.lock_platform_capacity()
             current = units.get(unit_id, for_update=True)
             if current is None or current.phase in ENDED_UNIT_PHASES:
                 return

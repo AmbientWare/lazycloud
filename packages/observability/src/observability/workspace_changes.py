@@ -23,6 +23,7 @@ from shared.http.workspace_changes import (
     WorkspaceChangeTopic,
     WorkspaceChangeType,
 )
+from shared.workload_keys import workload_readiness_stream_name
 
 logger = logging.getLogger(__name__)
 
@@ -122,8 +123,9 @@ class AsyncWorkloadChangeReader:
         self, *, workspace_id: str, stub_id: str
     ) -> AsyncIterator[AsyncIterator[None]]:
         stream = workspace_change_stream_name(workspace_id)
+        readiness = workload_readiness_stream_name(stub_id)
         subscription = await self.tail.subscribe(
-            (stream,), after={stream: None}, label="workload-readiness"
+            (stream, readiness), after={stream: None, readiness: None}, label="workload-readiness"
         )
         changed = asyncio.Event()
         async with subscription:
@@ -147,7 +149,10 @@ class AsyncWorkloadChangeReader:
                 async for item in items:
                     if item is None:
                         continue
-                    _, entry = item
+                    stream, entry = item
+                    if stream == workload_readiness_stream_name(stub_id):
+                        changed.set()
+                        continue
                     event = workspace_change_record(entry).event
                     if event.stub_id == stub_id and event.topic in {
                         WorkspaceChangeTopic.Containers,
@@ -161,7 +166,7 @@ class AsyncWorkloadChangeReader:
     async def _updates(
         self, changed: asyncio.Event, listener: asyncio.Task[None]
     ) -> AsyncGenerator[None]:
-        # A runtime can bind its port without publishing another lifecycle event.
+        # Recover missed lifecycle events and probe workloads that have not bound a port yet.
         recovery_seconds = 0.5
         next_discovery = 0.0
         while True:

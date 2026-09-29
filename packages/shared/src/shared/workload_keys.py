@@ -20,3 +20,7 @@ def container_readiness_key(container_id: str, *, port: int, path: str = "") -> 
 
     probe = f"{port}" if not path else f"{port}:{path}"
     return f"container:readiness:{container_id}:{probe}"
+
+
+def workload_readiness_stream_name(stub_id: str) -> str:
+    return f"workload:{stub_id}:readiness"

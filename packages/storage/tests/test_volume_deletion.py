@@ -1,12 +1,47 @@
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
+from threading import Event
 
 import pytest
 from api.server.services import ApiServices
 from database.repositories.storage import VolumeRepository
+from psycopg.errors import LockNotAvailable
 from shared.errors import ConflictError
 from shared.http.volumes import DeleteVolumeRequest, GetOrCreateVolumeRequest
 from shared.timestamps import utc_now
+from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
 from storage.volume_filesystem import VolumeFilesystem, VolumeNamespace
+
+
+def test_mount_admissions_share_volume_fence_and_block_deletion(
+    isolated_services: ApiServices,
+) -> None:
+    services = isolated_services
+    control = services.volume_service
+    volume = control.get_or_create_volume(GetOrCreateVolumeRequest(name="mount-fence")).volume
+    assert volume is not None
+
+    def reserve_mount() -> None:
+        with services.database.session() as session:
+            VolumeRepository(session).lock_mounts({volume.name}, workspace_id=volume.workspace_id)
+
+    with ThreadPoolExecutor(max_workers=1) as executor, services.database.session() as session:
+        VolumeRepository(session).lock_mounts({volume.name}, workspace_id=volume.workspace_id)
+        executor.submit(reserve_mount).result(timeout=3)
+        with (
+            pytest.raises(OperationalError) as rejected,
+            services.database.session() as deleting,
+        ):
+            deleting.execute(text("SET LOCAL lock_timeout = '100ms'"))
+            control.deletion.request_in_session(
+                deleting, volume.name, workspace_id=volume.workspace_id
+            )
+        assert isinstance(rejected.value.orig, LockNotAvailable)
+    with services.database.session() as session:
+        control.deletion.request_in_session(session, volume.name, workspace_id=volume.workspace_id)
+    with pytest.raises(ConflictError, match="deleting"):
+        reserve_mount()
 
 
 def test_failed_deletion_stops_billing_and_retries_without_losing_ownership(
@@ -53,4 +88,45 @@ def test_failed_deletion_stops_billing_and_retries_without_losing_ownership(
     assert (
         control.filesystem.occupancy_bytes(VolumeNamespace(volume.workspace_id, replacement.id))
         == 4
+    )
+
+
+def test_slow_storage_cleanup_does_not_lock_volume_or_delete_its_replacement(
+    isolated_services: ApiServices,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    control = isolated_services.volume_service
+    volume = control.get_or_create_volume(GetOrCreateVolumeRequest(name="overlap")).volume
+    assert volume is not None
+    control.copy_path("overlap/data", b"old")
+    with isolated_services.database.session() as session:
+        control.deletion.request_in_session(session, volume.name, workspace_id=volume.workspace_id)
+    entered, release = Event(), Event()
+    original = type(control.filesystem).delete_volume
+
+    def stalled(filesystem: VolumeFilesystem, namespace: VolumeNamespace) -> None:
+        entered.set()
+        assert release.wait(5)
+        original(filesystem, namespace)
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        try:
+            with monkeypatch.context() as patch:
+                patch.setattr(type(control.filesystem), "delete_volume", stalled)
+                first = executor.submit(
+                    control.deletion.finish, volume.name, workspace_id=volume.workspace_id
+                )
+                assert entered.wait(5)
+            assert control.deletion.finish(volume.name, workspace_id=volume.workspace_id)
+            replacement = control.get_or_create_volume(
+                GetOrCreateVolumeRequest(name=volume.name)
+            ).volume
+            assert replacement is not None and replacement.id != volume.id
+            control.copy_path("overlap/keep", b"new")
+        finally:
+            release.set()
+        assert first.result(timeout=5)
+    assert (
+        control.filesystem.occupancy_bytes(VolumeNamespace(volume.workspace_id, replacement.id))
+        == 3
     )

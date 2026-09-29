@@ -54,7 +54,9 @@ class RecordingFunctionService:
     def cancel_task(self, task_id: str) -> Task:
         raise AssertionError(f"unexpected cancel_task call: {task_id}")
 
-    def function_invoke(self, request: FunctionInvokeBody) -> FunctionInvokeResponse:
+    def function_invoke(
+        self, request: FunctionInvokeBody, *, stub: StubRecord
+    ) -> FunctionInvokeResponse:
         self.requests.append(request)
         return FunctionInvokeResponse.from_result(task_id=f"fn-{len(self.requests)}")
 
@@ -71,10 +73,14 @@ class RecordingFunctionService:
     def function_set_result(
         self,
         request: FunctionSetResultBody,
+        *,
+        workspace_id: str,
     ) -> FunctionSetResultResponse:
         raise AssertionError(f"unexpected function_set_result call: {request}")
 
-    def function_monitor(self, request: FunctionMonitorRequest) -> FunctionMonitorResponse:
+    def function_monitor(
+        self, request: FunctionMonitorRequest, *, workspace_id: str
+    ) -> FunctionMonitorResponse:
         raise AssertionError(f"unexpected function_monitor call: {request}")
 
     # The rest of the protocol, refusing rather than answering. These routes
@@ -84,8 +90,10 @@ class RecordingFunctionService:
     def task_demand_counts(self, stub_ids: Sequence[str]) -> dict[str, int]:
         raise AssertionError(f"unexpected task_demand_counts call: {stub_ids}")
 
-    def start_function_containers(self, stub_id: str, *, count: int) -> Iterator[str]:
-        raise AssertionError(f"unexpected start_function_containers call: {stub_id}, count={count}")
+    def start_function_containers(self, stub_id: str, *, desired_count: int) -> Iterator[str]:
+        raise AssertionError(
+            f"unexpected start_function_containers call: {stub_id}, {desired_count}"
+        )
 
     def start_function_serve(self, request: FunctionServeRequest) -> FunctionServeResponse:
         raise AssertionError(f"unexpected start_function_serve call: {request}")
@@ -104,7 +112,9 @@ class RecordingFunctionService:
             f"unexpected fail_unclaimed_tasks call: {stub_id}, {error}, limit={limit}"
         )
 
-    def function_claim(self, request: FunctionClaimRequest) -> FunctionClaimResponse:
+    def function_claim(
+        self, request: FunctionClaimRequest, *, workspace_id: str
+    ) -> FunctionClaimResponse:
         raise AssertionError(f"unexpected function_claim call: {request}")
 
     async def function_claim_wait(
@@ -129,7 +139,12 @@ class RecordingEndpointService:
     async def forward_endpoint_request(
         self,
         request: EndpointForwardRequest,
+        *,
+        stub: StubRecord,
     ) -> EndpointForwardResponse:
+        return self._forward_response(request)
+
+    def _forward_response(self, request: EndpointForwardRequest) -> EndpointForwardResponse:
         self.forward_requests.append(request)
         body = json.dumps(
             {
@@ -154,6 +169,8 @@ class RecordingEndpointService:
     async def forward_endpoint_health(
         self,
         request: EndpointForwardRequest,
+        *,
+        stub: StubRecord,
     ) -> EndpointForwardResponse:
         # These routes forward invocations, never probes. Answering one would
         # let a route that started asking for readiness pass without saying so.
@@ -175,12 +192,16 @@ class RecordingEndpointService:
     async def prepare_asgi_websocket(
         self,
         request: EndpointForwardRequest,
+        *,
+        stub: StubRecord,
     ) -> EndpointIngressDispatchSession:
         raise AssertionError(f"unexpected prepare_asgi_websocket call: {request}")
 
     async def prepare_asgi_http(
         self,
         request: EndpointForwardRequest,
+        *,
+        stub: StubRecord,
     ) -> EndpointIngressDispatchSession:
         return EndpointIngressDispatchSession(
             task_id=f"asgi-{len(self.forward_requests) + 1}",
@@ -197,7 +218,7 @@ class RecordingEndpointService:
         request: EndpointForwardRequest,
     ) -> AsyncEndpointResponseStream:
         _ = session
-        return StaticEndpointResponseStream(await self.forward_endpoint_request(request))
+        return StaticEndpointResponseStream(self._forward_response(request))
 
     async def finish_asgi_http(
         self,

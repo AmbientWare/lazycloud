@@ -34,7 +34,8 @@ admission owns plan concurrency and billing limits.
 `FleetCapacityPolicy` owns each market's useful headroom. Fleet sizing has no
 spending budget, node ceiling or running vCPU ceiling. Growth and planned
 replacement share a PostgreSQL transaction lock before reading commitments or
-changing a unit.
+changing a unit. Updating one unit's retained floor or recording its deletion
+intent uses its row lock and lifecycle leases without the fleet-wide lock.
 Terminating nodes consume headroom until their absence is observed. Providers can
 replace failed machines autonomously, so observed physical counts may briefly
 exceed the platform's admitted commitments. Customer-owned capacity stays outside

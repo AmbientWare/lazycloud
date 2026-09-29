@@ -4,6 +4,7 @@ from collections.abc import Sequence
 from typing import Protocol, TypeVar
 
 from shared.containers import ContainerRecord
+from shared.http.pods import PodSandboxResultResponse
 from shared.scheduling import (
     SchedulerContainerAddress,
     SchedulerContainerAddressMap,
@@ -51,6 +52,8 @@ class ContainerFileSearchMatch(Protocol):
 
 class ContainerSandboxProcessInfo(Protocol):
     @property
+    def process_id(self) -> str: ...
+    @property
     def pid(self) -> int: ...
     @property
     def command(self) -> str: ...
@@ -65,7 +68,14 @@ class ContainerExecResponse(ContainerOperationResponse, Protocol):
 
 class ContainerSandboxExecResponse(ContainerOperationResponse, Protocol):
     @property
+    def process_id(self) -> str: ...
+    @property
     def pid(self) -> int: ...
+
+
+class ContainerSandboxResultResponse(ContainerOperationResponse, Protocol):
+    @property
+    def result(self) -> PodSandboxResultResponse | None: ...
 
 
 class ContainerStatusResponse(ContainerOperationResponse, Protocol):
@@ -146,12 +156,17 @@ class PodContainerControlClient(Protocol):
         cwd: str = ".",
         timeout_seconds: float = ...,
     ) -> ContainerSandboxExecResponse: ...
+    def sandbox_result(
+        self, container_id: str, process_id: str, wait_seconds: float
+    ) -> ContainerSandboxResultResponse: ...
     def sandbox_status(
         self, container_id: str, pid: int, *, timeout_seconds: float = ...
     ) -> ContainerStatusResponse: ...
     def sandbox_stdout(self, container_id: str, pid: int) -> ContainerStdoutResponse: ...
     def sandbox_stderr(self, container_id: str, pid: int) -> ContainerStderrResponse: ...
-    def sandbox_kill(self, container_id: str, pid: int) -> ContainerOperationResponse: ...
+    def sandbox_kill(
+        self, container_id: str, pid: int, process_id: str = ""
+    ) -> ContainerOperationResponse: ...
     def sandbox_upload_file(
         self, container_id: str, container_path: str, data: bytes, *, mode: int = 0o644
     ) -> ContainerOperationResponse: ...

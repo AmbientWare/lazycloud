@@ -12,7 +12,7 @@ from compute.projection import PrivateUnitState
 from compute.state import RedisComputeStateRepository
 from coordination.redis_client import RedisClient
 from coordination.wake_signal import WakeSignalWaiter
-from database.records.apps import AppRecord
+from database.records.apps import AppRecord, StubRecord
 from database.repositories.execution import (
     CronJobRunCursor,
 )
@@ -387,7 +387,9 @@ class ScheduledFunctionControl(Protocol):
         limit: int = 100,
     ) -> list[Task]: ...
 
-    def function_invoke(self, request: FunctionInvokeBody) -> FunctionInvokeResponse: ...
+    def function_invoke(
+        self, request: FunctionInvokeBody, *, stub: StubRecord
+    ) -> FunctionInvokeResponse: ...
 
 
 class SchedulerPreemptionRecovery(Protocol):

@@ -600,9 +600,26 @@ class ContainerService:
             return self.get_in_session(session, container_id)
 
     def accepting_work(self, container_id: str) -> bool:
-        container = self.get(container_id)
-        worker = self.workers.get_worker(container.runtime_worker_id or "")
-        return worker is not None and bool(DeploymentReleaseService().admitted_workers([worker]))
+        return container_id in self.accepting_containers((container_id,))
+
+    def accepting_containers(self, container_ids: Sequence[str]) -> set[str]:
+        if not container_ids:
+            return set()
+        with self.context.database.session() as session:
+            workers_by_container = ContainerRepository(session).runtime_workers(container_ids)
+        workers = [
+            worker
+            for worker_id in set(workers_by_container.values())
+            if (worker := self.workers.get_worker(worker_id)) is not None
+        ]
+        admitted = {
+            worker.worker_id for worker in DeploymentReleaseService().admitted_workers(workers)
+        }
+        return {
+            container_id
+            for container_id, worker_id in workers_by_container.items()
+            if worker_id in admitted
+        }
 
     def get_in_session(
         self,
@@ -758,6 +775,7 @@ class ContainerService:
         *,
         reason: StopContainerReason | None = None,
         only_if_pending: bool = False,
+        only_if_unassigned: bool = False,
         force: bool = False,
         only_if_expired_at: datetime | None = None,
     ) -> ContainerRecord:
@@ -787,6 +805,8 @@ class ContainerService:
             if current is None:
                 raise NotFoundError(f"container not found: {container_id}")
             if only_if_pending and current.status is not ContainerStatus.Pending:
+                return current
+            if only_if_unassigned and current.runtime_worker_id:
                 return current
             if only_if_expired_at is not None and (
                 current.expires_at is None or current.expires_at > only_if_expired_at

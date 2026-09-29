@@ -165,6 +165,7 @@ class SchedulerContainerService(Protocol):
         *,
         reason: StopContainerReason = StopContainerReason.User,
         only_if_pending: bool = False,
+        only_if_unassigned: bool = False,
     ) -> ContainerRecord: ...
 
 

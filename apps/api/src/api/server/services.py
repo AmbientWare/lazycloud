@@ -38,7 +38,7 @@ from control.deployment_resources import DeploymentResourceService
 from control.deployments import CronJobService, DeploymentService
 from control.placement import PlacementResolver
 from control.readers import DatabaseAppReader, DatabaseDeploymentReader
-from control.service import ControlPlaneService, WorkspaceBucketClient
+from control.service import ControlPlaneService, StubRecord, WorkspaceBucketClient
 from control.tcp_ingress import TcpIngressSettings
 from coordination.agent_connections import RedisAgentConnectionDirectory
 from coordination.event_bus import RedisEventBus
@@ -327,7 +327,9 @@ class FunctionApiService(Protocol):
 
     def start_function_serve(self, request: FunctionServeRequest) -> FunctionServeResponse: ...
 
-    def function_invoke(self, request: FunctionInvokeBody) -> FunctionInvokeResponse: ...
+    def function_invoke(
+        self, request: FunctionInvokeBody, *, stub: StubRecord
+    ) -> FunctionInvokeResponse: ...
 
     def function_invoke_stream(
         self,
@@ -339,7 +341,7 @@ class FunctionApiService(Protocol):
 
     def task_demand_counts(self, stub_ids: Sequence[str]) -> dict[str, int]: ...
 
-    def start_function_containers(self, stub_id: str, *, count: int) -> Iterator[str]: ...
+    def start_function_containers(self, stub_id: str, *, desired_count: int) -> Iterator[str]: ...
 
     def containers_holding_work(self, container_ids: Sequence[str]) -> set[str]: ...
 
@@ -351,7 +353,9 @@ class FunctionApiService(Protocol):
         limit: int = 100,
     ) -> int: ...
 
-    def function_claim(self, request: FunctionClaimRequest) -> FunctionClaimResponse: ...
+    def function_claim(
+        self, request: FunctionClaimRequest, *, workspace_id: str
+    ) -> FunctionClaimResponse: ...
 
     async def function_claim_wait(
         self, request: FunctionClaimRequest, *, workspace_id: str
@@ -364,9 +368,13 @@ class FunctionApiService(Protocol):
         workspace_id: str,
     ) -> FunctionRetireResponse: ...
 
-    def function_set_result(self, request: FunctionSetResultBody) -> FunctionSetResultResponse: ...
+    def function_set_result(
+        self, request: FunctionSetResultBody, *, workspace_id: str
+    ) -> FunctionSetResultResponse: ...
 
-    def function_monitor(self, request: FunctionMonitorRequest) -> FunctionMonitorResponse: ...
+    def function_monitor(
+        self, request: FunctionMonitorRequest, *, workspace_id: str
+    ) -> FunctionMonitorResponse: ...
 
 
 class EndpointApiService(Protocol):
@@ -380,21 +388,29 @@ class EndpointApiService(Protocol):
     async def forward_endpoint_request(
         self,
         request: EndpointForwardRequest,
+        *,
+        stub: StubRecord,
     ) -> EndpointForwardResponse: ...
 
     async def forward_endpoint_health(
         self,
         request: EndpointForwardRequest,
+        *,
+        stub: StubRecord,
     ) -> EndpointForwardResponse: ...
 
     async def prepare_asgi_websocket(
         self,
         request: EndpointForwardRequest,
+        *,
+        stub: StubRecord,
     ) -> EndpointIngressDispatchSession: ...
 
     async def prepare_asgi_http(
         self,
         request: EndpointForwardRequest,
+        *,
+        stub: StubRecord,
     ) -> EndpointIngressDispatchSession: ...
 
     async def heartbeat_asgi_websocket(self, task_id: str) -> None: ...

@@ -17,17 +17,174 @@ from execution.functions.service import FunctionControlService
 from execution.task_claims import TaskClaimReleaseService
 from observability.startup_latency import StartupLatencyService
 from shared.containers import ContainerRecord, ContainerStatus
-from shared.function_payloads import FunctionJsonInvocation
+from shared.errors import ConflictError, NotFoundError
+from shared.function_payloads import FunctionJsonInvocation, FunctionJsonResult
 from shared.http.execution_entry import ExecutionEntryEvidence
 from shared.http.functions import (
     FunctionClaimRequest,
+    FunctionMonitorRequest,
     FunctionRetireRequest,
+    FunctionSetResultBody,
 )
 from shared.http.workspace_changes import WorkspaceChangeType
 from shared.tasks import Task, TaskStatus
 from shared.timestamps import utc_now
 from sqlalchemy import select
 from tests.releases import assign_runtime
+
+
+def test_runtime_function_scope_and_claim_fences(isolated_services: ApiServices) -> None:
+    services = isolated_services
+    control = ControlPlaneService(services.context)
+    stub = control.create_stub("scoped-runtime", kind=StubKind.Function, handler="main:hello")
+    other_stub = control.create_stub("other-runtime", kind=StubKind.Function, handler="main:hello")
+    endpoint = control.create_stub("endpoint-runtime", kind=StubKind.Endpoint, handler="main:hello")
+    container = ContainerRecord(
+        id=str(uuid4()),
+        name="scoped-runtime",
+        image="python",
+        command=[],
+        workspace_id=stub.workspace_id,
+        stub_id=stub.id,
+        status=ContainerStatus.Running,
+    )
+    with services.context.database.session() as session:
+        ContainerRepository(session).upsert(container)
+    task = services.tasks.create(
+        "scoped-runtime",
+        workspace_id=stub.workspace_id,
+        stub_id=stub.id,
+        invocation=FunctionJsonInvocation(),
+        claimable_at=utc_now(),
+    )
+    functions = FunctionControlService(services)
+    claim = FunctionClaimRequest(stub_id=stub.id, container_id=container.id, claim_id=str(uuid4()))
+    foreign_workspace = str(uuid4())
+    with pytest.raises(NotFoundError):
+        functions.function_claim(claim, workspace_id=foreign_workspace)
+    with pytest.raises(NotFoundError):
+        functions.function_claim(
+            claim.model_copy(update={"stub_id": endpoint.id}), workspace_id=stub.workspace_id
+        )
+    accepted = functions.function_claim(claim, workspace_id=stub.workspace_id)
+    assert accepted.task is not None and accepted.task.task_id == task.id
+    # A replay cannot cross stubs even when it knows the original claim ID.
+    assert (
+        functions.function_claim(
+            claim.model_copy(update={"stub_id": other_stub.id}), workspace_id=stub.workspace_id
+        ).task
+        is None
+    )
+    monitor = FunctionMonitorRequest(task_id=task.id, stub_id=stub.id, container_id=container.id)
+    with pytest.raises(NotFoundError):
+        functions.function_monitor(monitor, workspace_id=foreign_workspace)
+    with pytest.raises(NotFoundError):
+        functions.function_monitor(
+            monitor.model_copy(update={"stub_id": other_stub.id}), workspace_id=stub.workspace_id
+        )
+    assert not functions.function_monitor(monitor, workspace_id=stub.workspace_id).complete
+    assert functions.function_monitor(
+        monitor.model_copy(update={"container_id": str(uuid4())}), workspace_id=stub.workspace_id
+    ).complete
+    result = FunctionSetResultBody(
+        task_id=task.id,
+        container_id=container.id,
+        claim_id=claim.claim_id,
+        result=FunctionJsonResult(value="done"),
+    )
+    with pytest.raises(NotFoundError):
+        functions.function_set_result(result, workspace_id=foreign_workspace)
+    stale = functions.function_set_result(
+        result.model_copy(update={"claim_id": str(uuid4())}), workspace_id=stub.workspace_id
+    )
+    assert not stale.stored and not stale.claim_acknowledged
+    assert services.tasks.get(task.id).status is TaskStatus.Running
+    accepted = functions.function_set_result(result, workspace_id=stub.workspace_id)
+    assert accepted.stored and accepted.claim_acknowledged
+    replay = functions.function_set_result(result, workspace_id=stub.workspace_id)
+    assert not replay.stored and replay.claim_acknowledged
+    stale_terminal = functions.function_set_result(
+        result.model_copy(update={"claim_id": str(uuid4())}), workspace_id=stub.workspace_id
+    )
+    assert stale_terminal.status is TaskStatus.Complete
+    assert not stale_terminal.stored and not stale_terminal.claim_acknowledged
+    with pytest.raises(NotFoundError):
+        functions.finish_function_task(
+            task.id,
+            TaskStatus.Failed,
+            workspace_id=foreign_workspace,
+            container_id=container.id,
+            claim_id=claim.claim_id,
+        )
+    assert services.tasks.get(task.id).status is TaskStatus.Complete
+
+
+def test_batch_assignment_preserves_attempts_and_rolls_back_terminal_conflicts(
+    isolated_services: ApiServices,
+) -> None:
+    services = isolated_services
+    stub = ControlPlaneService(services.context).create_stub(
+        "batch-assignment", kind=StubKind.Function, handler="main:hello"
+    )
+    containers = [
+        ContainerRecord(
+            id=str(uuid4()),
+            name=f"batch-{index}",
+            image="python",
+            command=[],
+            workspace_id=stub.workspace_id,
+            stub_id=stub.id,
+            status=ContainerStatus.Running,
+        )
+        for index in range(2)
+    ]
+    with services.context.database.session() as session:
+        for container in containers:
+            ContainerRepository(session).upsert(container)
+        tasks = services.tasks.create_batch_in_transaction(
+            session,
+            [
+                Task(
+                    id=str(uuid4()),
+                    name=f"batch-{index}",
+                    workspace_id=stub.workspace_id,
+                    stub_id=stub.id,
+                    invocation=FunctionJsonInvocation(),
+                )
+                for index in range(3)
+            ],
+        )
+    first, second, cancelled = tasks
+    services.tasks.assign(first, container_id=containers[0].id)
+    services.tasks.transition(cancelled, TaskStatus.Cancelled)
+    original_attempt = services.tasks.attempts(first.id)[0]
+
+    with pytest.raises(ConflictError), services.context.database.session() as session:
+        current = TaskRepository(session).get_many_for_update([task.id for task in tasks])
+        assert ContainerRolloutRepository(session).accepting_work(containers[1].id, stub_id=stub.id)
+        services.tasks.assign_locked_batch_in_transaction(
+            session, [(current[task.id], containers[1].id) for task in tasks]
+        )
+    assert services.tasks.get(first.id).container_id == containers[0].id
+    assert services.tasks.get(second.id).status is TaskStatus.Pending
+    assert services.tasks.attempts(second.id) == []
+
+    with services.context.database.session() as session:
+        current = TaskRepository(session).get_many_for_update([first.id, second.id])
+        assert ContainerRolloutRepository(session).accepting_work(containers[1].id, stub_id=stub.id)
+        services.tasks.assign_locked_batch_in_transaction(
+            session, [(current[task.id], containers[1].id) for task in (first, second)]
+        )
+    reassigned = services.tasks.get(first.id)
+    [first_attempt] = services.tasks.attempts(first.id)
+    [second_attempt] = services.tasks.attempts(second.id)
+    assert (
+        reassigned.attempt_number == first_attempt.attempt_number == original_attempt.attempt_number
+    )
+    assert first_attempt.id == original_attempt.id
+    assert reassigned.container_id == first_attempt.container_id == containers[1].id
+    assert second_attempt.status is TaskStatus.Running
+    assert second_attempt.container_id == containers[1].id
 
 
 def test_claim_commits_one_running_attempt_before_returning_work(
@@ -62,7 +219,9 @@ def test_claim_commits_one_running_attempt_before_returning_work(
 
     def claim(container: ContainerRecord) -> Task | None:
         barrier.wait(timeout=5)
-        return isolated_services.tasks.claim_and_start(stub.id, container_id=container.id)
+        return isolated_services.tasks.claim_and_start(
+            stub.id, workspace_id=stub.workspace_id, container_id=container.id
+        ).task
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         claims = list(executor.map(claim, containers))
@@ -111,8 +270,8 @@ def test_retried_claim_returns_the_task_it_already_took(
 
     def claim(claim_id: str) -> Task | None:
         return isolated_services.tasks.claim_and_start(
-            stub.id, container_id=container.id, claim_id=claim_id
-        )
+            stub.id, workspace_id=stub.workspace_id, container_id=container.id, claim_id=claim_id
+        ).task
 
     first = claim(lost_claim)
     retried = claim(lost_claim)
@@ -138,6 +297,7 @@ def test_retried_claim_returns_the_task_it_already_took(
         claim_id=lost_claim,
     )
     assert not stale.state_changed
+    assert not stale.claim_acknowledged
     assert stale.task.status is TaskStatus.Running
     with isolated_services.context.database.session() as session:
         assert (
@@ -156,6 +316,7 @@ def test_retried_claim_returns_the_task_it_already_took(
         claim_id=resumed_claim,
     )
     assert finished.state_changed
+    assert finished.claim_acknowledged
     with isolated_services.context.database.session() as session:
         original = session.scalar(
             select(TaskAttemptTable.execution_entry_upper_bound_at).where(
@@ -171,6 +332,14 @@ def test_retried_claim_returns_the_task_it_already_took(
         claim_id=resumed_claim,
     )
     assert not repeated.state_changed
+    assert repeated.claim_acknowledged
+    stale_terminal = isolated_services.tasks.finish_with_retry(
+        first.id, TaskStatus.Complete, container_id=container.id, claim_id=lost_claim
+    )
+    assert stale_terminal.task.status is TaskStatus.Complete
+    assert not stale_terminal.state_changed and not stale_terminal.claim_acknowledged
+    system_replay = isolated_services.tasks.finish_with_retry(first.id, TaskStatus.Complete)
+    assert not system_replay.claim_acknowledged
     with isolated_services.context.database.session() as session:
         assert (
             session.scalar(
@@ -301,7 +470,7 @@ def test_idle_retirement_fences_claims_without_releasing_physical_capacity(
         TaskRepository(session).mark_claimable(task.id, at=utc_now())
     retirement = FunctionRetireRequest(stub_id=stub.id, container_id=container.id)
     assert not service.function_retire(retirement, workspace_id=stub.workspace_id).retired
-    claimed = service.function_claim(request)
+    claimed = service.function_claim(request, workspace_id=stub.workspace_id)
     assert claimed.task is not None and claimed.task.task_id == task.id
     assert not service.function_retire(retirement, workspace_id=stub.workspace_id).retired
 
@@ -331,7 +500,7 @@ def test_idle_retirement_fences_claims_without_releasing_physical_capacity(
             )
         )
     assert service.function_retire(retirement, workspace_id=stub.workspace_id).retired
-    assert service.function_claim(request).task is None
+    assert service.function_claim(request, workspace_id=stub.workspace_id).task is None
     with isolated_services.context.database.session() as session:
         queued = TaskRepository(session).get_across_workspaces(waiting.id)
         assert queued is not None and queued.container_id is None

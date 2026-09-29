@@ -36,10 +36,6 @@ from sqlalchemy.orm import Session
 from billing.preferences import BillingPreferencesService
 
 
-class _CreditReconciliationRequired(Exception):
-    pass
-
-
 @dataclass(frozen=True, slots=True)
 class DatabaseBillingAdmission:
     """Check account credit and plan entitlements before starting billed work."""
@@ -50,25 +46,21 @@ class DatabaseBillingAdmission:
         *,
         workspace_id: str,
     ) -> None:
-        resolved = self._billable_account(session, workspace_id=workspace_id)
+        resolved = self._billable_account(session, workspace_id=workspace_id, lock_account=False)
         if resolved is None:
             raise PaymentRequiredError("billed work requires a workspace billing owner")
-        self._assert_funds(session, user_id=resolved[0])
+        self._assert_funds(session, user_id=resolved[0], lock_account=False)
 
-    def _assert_funds(
-        self, session: Session, *, user_id: str, shared_account: bool = False
-    ) -> None:
+    def _assert_funds(self, session: Session, *, user_id: str, lock_account: bool = True) -> None:
         account = BillingAccountRepository(session).get_by_user(user_id)
         if account is not None and account.complimentary_since is not None:
             return
         credits = BillingCreditRepository(session)
         balance = (
-            credits.settled_balance(user_id=user_id, at=utc_now())
-            if shared_account
-            else credits.balance(user_id=user_id, at=utc_now())
+            credits.balance(user_id=user_id, at=utc_now())
+            if lock_account
+            else credits.committed_balance(user_id=user_id, at=utc_now())
         )
-        if balance is None:
-            raise _CreditReconciliationRequired
         if balance <= 0:
             raise PaymentRequiredError("add credit before starting more billed work")
         preferences = BillingPreferencesService(session)
@@ -127,28 +119,15 @@ class DatabaseBillingAdmission:
         region: ProductRegion | None = None,
         availability_zone: str = "",
     ) -> None:
-        try:
-            with session.begin_nested():
-                self._eligible_workload(
-                    session,
-                    workspace_id=workspace_id,
-                    gpu=gpu,
-                    gpu_count=gpu_count,
-                    region=region,
-                    availability_zone=availability_zone,
-                    shared_account=True,
-                )
-                return
-        except _CreditReconciliationRequired:
-            # Savepoint rollback releases SHARE before UPDATE; simultaneous upgrades deadlock.
-            self._eligible_workload(
-                session,
-                workspace_id=workspace_id,
-                gpu=gpu,
-                gpu_count=gpu_count,
-                region=region,
-                availability_zone=availability_zone,
-            )
+        self._eligible_workload(
+            session,
+            workspace_id=workspace_id,
+            gpu=gpu,
+            gpu_count=gpu_count,
+            region=region,
+            availability_zone=availability_zone,
+            lock_account=False,
+        )
 
     def _eligible_workload(
         self,
@@ -159,10 +138,10 @@ class DatabaseBillingAdmission:
         gpu_count: int,
         region: ProductRegion | None,
         availability_zone: str,
-        shared_account: bool = False,
+        lock_account: bool = True,
     ) -> tuple[str, AccountTerms, list[str]]:
         resolved = self._billable_account(
-            session, workspace_id=workspace_id, shared_account=shared_account
+            session, workspace_id=workspace_id, lock_account=lock_account
         )
         if (
             (region is not None or availability_zone)
@@ -175,7 +154,7 @@ class DatabaseBillingAdmission:
         if resolved is None:
             raise PaymentRequiredError("billed work requires a workspace billing owner")
         owner_user_id, terms = resolved
-        self._assert_funds(session, user_id=owner_user_id, shared_account=shared_account)
+        self._assert_funds(session, user_id=owner_user_id, lock_account=lock_account)
         models = _admitted_gpu_models(gpu, terms.entitlements) if gpu_count or gpu else []
         return owner_user_id, terms, models
 
@@ -334,18 +313,15 @@ class DatabaseBillingAdmission:
             )
 
     def _billable_account(
-        self, session: Session, *, workspace_id: str, shared_account: bool = False
+        self, session: Session, *, workspace_id: str, lock_account: bool = True
     ) -> tuple[str, AccountTerms] | None:
-        """Resolve the workspace payer and entitlements under the account lock."""
+        """Resolve the payer, fencing account changes when reserving capacity."""
 
         owner = WorkspaceMemberRepository(session).owner(workspace_id)
         if owner is None:
             return None
-        accounts = BillingAccountRepository(session)
-        account = (
-            accounts.get_for_shared_admission(owner.user_id)
-            if shared_account
-            else accounts.get_by_user(owner.user_id, for_update=True)
+        account = BillingAccountRepository(session).get_by_user(
+            owner.user_id, for_update=lock_account
         )
         if account is not None and account.complimentary_since is not None:
             return owner.user_id, complimentary_terms()

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from execution.pods.service import PodControlService
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from shared.http.pods import (
     CreatePodRequest,
     CreatePodResponse,
@@ -10,6 +10,7 @@ from shared.http.pods import (
     PodSandboxKillRequest,
     PodSandboxKillResponse,
     PodSandboxListProcessesResponse,
+    PodSandboxResultResponse,
     PodSandboxStatusResponse,
     PodSandboxStderrResponse,
     PodSandboxStdoutResponse,
@@ -33,12 +34,23 @@ def create_pod(
 
 @router.post("/{container_id}/exec", response_model=PodSandboxExecResponse)
 def sandbox_exec(
-    container_id: str,
     request: PodSandboxExecRequest,
-    _auth: write_container,
+    container: write_container,
     service: PodControlService = Depends(pod_service),
 ) -> PodSandboxExecResponse:
-    return service.sandbox_exec(container_id, request)
+    return service.sandbox_exec(container, request)
+
+
+@router.get(
+    "/{container_id}/processes/{process_id}/result", response_model=PodSandboxResultResponse
+)
+def sandbox_result(
+    process_id: str,
+    container: read_container,
+    wait_seconds: float = Query(default=5.0, ge=0, le=5),
+    service: PodControlService = Depends(pod_service),
+) -> PodSandboxResultResponse:
+    return service.sandbox_result(container, process_id, wait_seconds)
 
 
 @router.get("/{container_id}/status", response_model=PodSandboxStatusResponse)

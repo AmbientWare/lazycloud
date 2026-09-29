@@ -436,9 +436,9 @@ def test_postgresql_released_claim_returns_to_exactly_one_other_container(
     try:
         with database.session() as session:
             first = TaskRepository(session).claim_for_stub(
-                stub_id, container_id=container_ids[0], limit=1
+                stub_id, workspace_id=workspace_id, container_id=container_ids[0], limit=1
             )
-        assert [task.id for task in first] == [task_id]
+        assert [task.id for task in first.tasks] == [task_id]
 
         # Settled twice, as two independent recovery paths would.
         for _ in range(2):
@@ -452,11 +452,14 @@ def test_postgresql_released_claim_returns_to_exactly_one_other_container(
                 start.wait(timeout=10)
                 return [
                     task.id
-                    for task in TaskRepository(session).claim_for_stub(
+                    for task in TaskRepository(session)
+                    .claim_for_stub(
                         stub_id,
+                        workspace_id=workspace_id,
                         container_id=container_ids[container_index + 1],
                         limit=1,
                     )
+                    .tasks
                 ]
 
         with ThreadPoolExecutor(max_workers=contenders - 1) as pool:
@@ -537,7 +540,12 @@ def test_postgresql_completed_task_is_not_dragged_back_by_a_late_release(
             settled = tasks.get_across_workspaces(task_id)
             assert settled is not None
             assert settled.status is TaskStatus.Complete
-            assert tasks.claim_for_stub(stub_id, container_id=str(uuid4()), limit=1) == []
+            assert (
+                tasks.claim_for_stub(
+                    stub_id, workspace_id=workspace_id, container_id=str(uuid4()), limit=1
+                ).tasks
+                == []
+            )
     finally:
         _remove_test_workspace(database, workspace_id)
         database.dispose()
@@ -621,11 +629,14 @@ def test_postgresql_claimable_task_is_taken_by_exactly_one_container(
             start.wait(timeout=10)
             return [
                 task.id
-                for task in TaskRepository(session).claim_for_stub(
+                for task in TaskRepository(session)
+                .claim_for_stub(
                     stub_id,
+                    workspace_id=workspace_id,
                     container_id=container_ids[container_index],
                     limit=4,
                 )
+                .tasks
             ]
 
     try:

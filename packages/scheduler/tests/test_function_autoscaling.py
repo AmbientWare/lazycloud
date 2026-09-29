@@ -29,6 +29,7 @@ from scheduler.autoscaling import (
     CONTAINER_DELIVERY_DEADLINE_SECONDS,
     CONTAINER_START_DEADLINE_SECONDS,
     AutoscalingDriver,
+    AutoscalingSignal,
     FunctionAutoscaler,
 )
 from scheduler.containers import (
@@ -214,13 +215,64 @@ def test_claimed_backlog_keeps_the_containers_started_for_it(
         ContainerRepository(session).upsert(
             ready.model_copy(update={"status": ContainerStatus.Running})
         )
-    assert services.tasks.claim_and_start(stub.id, container_id=ready.id) is not None
+    assert (
+        services.tasks.claim_and_start(
+            stub.id, workspace_id=stub.workspace_id, container_id=ready.id
+        ).task
+        is not None
+    )
 
     [result] = autoscaler.reconcile()
 
     assert result.signal_value == 3
     assert result.desired_containers == 3
     assert [action.action for action in result.actions] == []
+
+
+def test_function_scale_down_preserves_assigned_startup_until_inactive(
+    isolated_services: ApiServices,
+) -> None:
+    scheduler = _Scheduler()
+    services = replace(
+        isolated_services,
+        containers=replace(isolated_services.containers, scheduler=scheduler),
+    )
+    redis = RedisClient(FakeRedis(), key_prefix="test")
+    stub = _create_function_stub(services, max_containers=3)
+    _enqueue_invocations(services, stub, count=2)
+    _function_autoscaler(services, redis).reconcile()
+    pending = _pending_containers(services, stub)
+    assert len(pending) == 2
+    assigned = pending[0].model_copy(update={"runtime_worker_id": "worker-1"})
+    with services.context.database.session() as session:
+        ContainerRepository(session).upsert(assigned)
+    current_stub = next(
+        item for item in services.scheduler_workloads.list_autoscaling_stubs() if item.id == stub.id
+    )
+    autoscaler = FunctionAutoscaler(services, functions=FunctionControlService(services))
+    # Assignment landed after the scheduler's snapshot. Stop checks its current owner.
+    actions = autoscaler.scale_down(
+        current_stub,
+        pending,
+        2,
+        scheduler_statuses={},
+        active_instance=True,
+        signal=AutoscalingSignal(value=0),
+        now=utc_now(),
+    )
+    assert [action.container_id for action in actions] == [pending[1].id]
+    assert services.containers.get(assigned.id).status is ContainerStatus.Pending
+    actions = autoscaler.scale_down(
+        current_stub,
+        [assigned],
+        1,
+        scheduler_statuses={},
+        active_instance=False,
+        signal=AutoscalingSignal(value=0),
+        now=utc_now(),
+    )
+    assert [action.container_id for action in actions] == [assigned.id]
+    assert services.containers.get(assigned.id).status is ContainerStatus.Stopped
 
 
 @pytest.mark.parametrize("delivery", ["missing", "queued", "inflight"])
@@ -427,7 +479,8 @@ def test_function_startup_breaker_fails_queued_tasks_with_the_startup_error(
         FunctionInvokeBody(
             stub_id=stub.id,
             invocation=FunctionJsonInvocation(args=[1]),
-        )
+        ),
+        stub=stub,
     )
     now = utc_now()
     startup_error = (
@@ -513,7 +566,8 @@ def _enqueue_invocations(runtime: ApiServices, stub: StubRecord, *, count: int) 
             FunctionInvokeBody(
                 stub_id=stub.id,
                 invocation=FunctionJsonInvocation(args=[value]),
-            )
+            ),
+            stub=stub,
         )
 
 

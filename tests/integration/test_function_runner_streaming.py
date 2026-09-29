@@ -26,6 +26,7 @@ from shared.function_payloads import (
     FunctionCloudpickleResult,
     FunctionPayloadEncoding,
 )
+from shared.http.errors import HttpApiError
 from shared.http.functions import (
     FunctionClaimRequest,
     FunctionInvokeBody,
@@ -164,10 +165,62 @@ async def test_function_log_delivery_failure_reports_lost_lines_and_preserves_re
     )
 
 
+@pytest.mark.anyio
+@pytest.mark.parametrize("committed", [False, True])
+async def test_unbounded_function_settles_unconfirmed_publication_without_retry(
+    async_services: ApiServices,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    committed: bool,
+) -> None:
+    calls = tmp_path / "calls"
+    handler_ref = _write_handler_module(
+        tmp_path,
+        "from pathlib import Path\n"
+        "def result_value():\n"
+        f"    with Path({str(calls)!r}).open('a') as output: output.write('called\\n')\n"
+        "    return 42\n",
+        "result_value",
+    )
+    stub = ControlPlaneService(async_services.context).create_stub(
+        "unbounded-function",
+        kind=StubKind.Function,
+        handler=handler_ref,
+        config={"runtime": {"image_id": "image-fn", "timeout_seconds": 0, "retries": 2}},
+    )
+    post = _FunctionRunnerServiceChannel.post
+
+    def fail_publication(
+        channel: _FunctionRunnerServiceChannel,
+        path: str,
+        payload: dict[str, JsonValue] | None = None,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> JsonValue:
+        if path == "/api/v1/functions/set-result":
+            if committed:
+                post(channel, path, payload, timeout_seconds=timeout_seconds)
+            raise HttpApiError("completion response rejected", status_code=422)
+        return post(channel, path, payload, timeout_seconds=timeout_seconds)
+
+    monkeypatch.setattr(_FunctionRunnerServiceChannel, "post", fail_publication)
+    responses = await _invoke_and_run(async_services, handler_ref, stub=stub)
+    task = async_services.tasks.get(_final_response(responses).task_id)
+    assert task.status is (TaskStatus.Complete if committed else TaskStatus.Failed)
+    assert task.attempt_number == 1
+    assert task.next_retry_at is None
+    assert task.max_attempts == 3
+    assert calls.read_text().splitlines() == ["called"]
+    if committed:
+        assert isinstance(task.function_result, FunctionCloudpickleResult)
+        assert task.function_result.bytes_value() == cloudpickle_bytes(42)
+
+
 async def _invoke_and_run(
     runtime: ApiServices,
     handler_ref: str,
     *args: int,
+    stub: StubRecord | None = None,
 ) -> list[FunctionInvokeResponse]:
     scheduler = _Scheduler()
     runtime.containers.scheduler = scheduler
@@ -177,7 +230,7 @@ async def _invoke_and_run(
         task_changes=AsyncTaskChangeReader(runtime.require_async_io().realtime),
     )
     gateway_service = runtime.gateway_service
-    stub = _create_function_stub(runtime, handler_ref)
+    stub = stub or _create_function_stub(runtime, handler_ref)
     invocation = FunctionCloudpickleInvocation.from_bytes(
         cloudpickle_bytes({"args": args, "kwargs": {}})
     )
@@ -185,7 +238,8 @@ async def _invoke_and_run(
         FunctionInvokeBody(
             stub_id=stub.id,
             invocation=invocation,
-        )
+        ),
+        stub=stub,
     )
     responses = [initial]
     assert initial.task_id
@@ -250,6 +304,8 @@ class _FunctionRunnerServiceChannel:
         self,
         path: str,
         payload: dict[str, JsonValue] | None = None,
+        *,
+        timeout_seconds: float | None = None,
     ) -> JsonValue:
         if payload is None:
             raise AssertionError(f"missing payload for path: {path}")
@@ -266,8 +322,12 @@ class _FunctionRunnerServiceChannel:
             )
             return _JSON_OBJECT_ADAPTER.validate_json(response.model_dump_json())
         if path == "/api/v1/functions/claim":
+            claim = FunctionClaimRequest.model_validate(payload)
             response = self.function_service.function_claim(
-                FunctionClaimRequest.model_validate(payload)
+                claim,
+                workspace_id=self.function_service.control_plane.get_stub(
+                    claim.stub_id
+                ).workspace_id,
             )
             return _JSON_OBJECT_ADAPTER.validate_json(response.model_dump_json())
         if path == "/gateway/functions/retire":
@@ -279,7 +339,8 @@ class _FunctionRunnerServiceChannel:
             return _JSON_OBJECT_ADAPTER.validate_json(response.model_dump_json())
         if path == "/api/v1/functions/set-result":
             response = self.function_service.function_set_result(
-                FunctionSetResultBody.model_validate(payload)
+                FunctionSetResultBody.model_validate(payload),
+                workspace_id=self._task_workspace_id(payload),
             )
             return _JSON_OBJECT_ADAPTER.validate_json(response.model_dump_json())
         raise AssertionError(f"unexpected path: {path}")

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import base64
 import binascii
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
@@ -279,24 +279,54 @@ class UsageService:
         app_id: str = "",
         deployment_id: str = "",
     ) -> UsageRecord:
-        labels = _task_count_labels(
-            resource_id=resource_id,
-            task_id=task_id,
-            kind=kind,
-            app_id=app_id,
-            deployment_id=deployment_id,
-        )
-        return self._record_in_session(
+        return self.record_task_counts_in_session(
             session,
-            id=usage_record_id(UsageMetric.TaskCount.value, workspace_id, task_id),
             workspace_id=workspace_id,
             resource_type=resource_type,
             resource_id=resource_id,
-            metric=UsageMetric.TaskCount,
-            quantity=1,
-            unit=UsageUnit.Count,
-            labels=labels,
+            task_ids=[task_id],
+            kind=kind,
+            app_id=app_id,
+            deployment_id=deployment_id,
+        )[0]
+
+    def record_task_counts_in_session(
+        self,
+        session: DatabaseSession,
+        *,
+        workspace_id: str,
+        resource_type: str,
+        resource_id: str,
+        task_ids: Sequence[str],
+        kind: str,
+        app_id: str = "",
+        deployment_id: str = "",
+    ) -> list[UsageRecord]:
+        records = UsageRepository(session).append_many(
+            [
+                UsageRecord(
+                    id=usage_record_id(UsageMetric.TaskCount.value, workspace_id, task_id),
+                    workspace_id=workspace_id,
+                    resource_type=resource_type,
+                    resource_id=resource_id,
+                    metric=UsageMetric.TaskCount,
+                    quantity=1,
+                    unit=UsageUnit.Count,
+                    labels=_task_count_labels(
+                        resource_id=resource_id,
+                        task_id=task_id,
+                        kind=kind,
+                        app_id=app_id,
+                        deployment_id=deployment_id,
+                    ),
+                )
+                for task_id in task_ids
+            ]
         )
+        pricer = MeteredUsagePricer(session)
+        for record in records:
+            pricer.price(record)
+        return records
 
     async def record_task_count_async(
         self,

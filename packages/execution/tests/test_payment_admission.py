@@ -54,7 +54,8 @@ def test_invoking_a_function_past_due_refuses_and_queues_nothing(
             FunctionInvokeBody(
                 stub_id=stub.id,
                 invocation=FunctionJsonInvocation(args=[1]),
-            )
+            ),
+            stub=stub,
         )
     assert _row_counts(isolated_services, stub.workspace_id) == before
 
@@ -75,7 +76,8 @@ def test_free_function_pinned_placement_refuses_before_creating_work(
     before = _row_counts(isolated_services, stub.workspace_id)
     with pytest.raises(PaymentRequiredError, match="selection requires the Team plan"):
         FunctionControlService(isolated_services).function_invoke(
-            FunctionInvokeBody(stub_id=stub.id, invocation=FunctionJsonInvocation(args=[]))
+            FunctionInvokeBody(stub_id=stub.id, invocation=FunctionJsonInvocation(args=[])),
+            stub=stub,
         )
     assert _row_counts(isolated_services, stub.workspace_id) == before
 
@@ -112,14 +114,15 @@ def test_capacity_limit_allows_warm_invocation_but_refuses_cold_without_a_task(
     functions = FunctionControlService(isolated_services)
     before = _row_counts(isolated_services, warm.workspace_id)
     invoked = functions.function_invoke(
-        FunctionInvokeBody(stub_id=warm.id, invocation=FunctionJsonInvocation(args=[]))
+        FunctionInvokeBody(stub_id=warm.id, invocation=FunctionJsonInvocation(args=[])), stub=warm
     )
     assert invoked.task_id
     after_warm = _row_counts(isolated_services, warm.workspace_id)
     assert after_warm == (before[0] + 1, before[1])
     with pytest.raises(CapacityLimitReachedError):
         functions.function_invoke(
-            FunctionInvokeBody(stub_id=cold.id, invocation=FunctionJsonInvocation(args=[]))
+            FunctionInvokeBody(stub_id=cold.id, invocation=FunctionJsonInvocation(args=[])),
+            stub=cold,
         )
     assert _row_counts(isolated_services, warm.workspace_id) == after_warm
 

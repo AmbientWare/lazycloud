@@ -59,8 +59,12 @@ def test_rollout_admission_preserves_claimed_work_and_bounds_replacement_capacit
             rollouts.prepare(old, serving_floor=1, now=now)
             assert rollouts.accepting_work(old.id, stub_id=stub.id)
             assert ContainerRepository(session).count_live_for_stub(stub.id) == 0
-            [claimed] = TaskRepository(session).claim_for_stub(
-                stub.id, container_id=old.id, limit=1
+            [claimed] = (
+                TaskRepository(session)
+                .claim_for_stub(
+                    stub.id, workspace_id=stub.workspace_id, container_id=old.id, limit=1
+                )
+                .tasks
             )
             assert claimed.id == task.id
             assert rollouts.ready_container_ids([old.id]) == {old.id}
@@ -81,12 +85,18 @@ def test_rollout_admission_preserves_claimed_work_and_bounds_replacement_capacit
                     claimable_at=now,
                 )
             )
-            assert (
-                TaskRepository(session).claim_for_stub(stub.id, container_id=old.id, limit=1) == []
+            refused = TaskRepository(session).claim_for_stub(
+                stub.id, workspace_id=stub.workspace_id, container_id=old.id, limit=1
             )
+            assert refused.tasks == []
+            assert not refused.queue_checked
             assert TaskRepository(session).containers_with_inflight_work([old.id]) == {old.id}
-            [next_task] = TaskRepository(session).claim_for_stub(
-                stub.id, container_id=replacement.id, limit=1
+            [next_task] = (
+                TaskRepository(session)
+                .claim_for_stub(
+                    stub.id, workspace_id=stub.workspace_id, container_id=replacement.id, limit=1
+                )
+                .tasks
             )
             assert next_task.id != claimed.id
             assert rollouts.closed_for_stub(stub.id) == {old.id}

@@ -148,10 +148,11 @@ be, and a handler that is not idempotent would run it twice. Skipping busy
 containers means the count stays above the floor while work is in flight, which
 is the honest answer. Those containers are doing the thing they exist for.
 
-Where there is an idle window, running containers retire themselves. Excess
-pending containers still need scale-down because their idle window has not
-started. Stop them only if they remain pending under the container lock, so a
-concurrent startup keeps its warm window.
+Where there is an idle window, running containers retire themselves. Assigned
+startups finish preparation and then use that window. Scale-down removes excess
+unassigned pending containers, checking both state and assignment under the
+container lock. Inactive workloads stop assigned pending containers immediately;
+startup recovery still removes assigned containers whose preparation has stalled.
 
 The floor is held per stub and every deployed version keeps its own, so a
 redeploy releases the floor the version before it held. An author asking for two

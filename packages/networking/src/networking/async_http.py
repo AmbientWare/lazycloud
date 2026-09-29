@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import socket
 from collections.abc import AsyncIterable, AsyncIterator, Mapping
 from contextlib import suppress
@@ -207,6 +208,21 @@ class AsyncBackendHttpClient:
             *(connection.writer.wait_closed() for connection in connections),
             return_exceptions=True,
         )
+
+    async def readiness_revision(self, route_id: str, address: str) -> str | None:
+        if not route_id:
+            return hashlib.sha256(address.encode()).hexdigest()
+        route = await asyncio.to_thread(self.route_dialer.resolver.get_backend_route, route_id)
+        if route is None or route.state is not BackendRouteState.Ready:
+            return None
+        agent = await asyncio.to_thread(
+            self.route_dialer.tunnel.directory.get, route.workspace_id, route.enrollment_id
+        )
+        if agent is None:
+            return None
+        return hashlib.sha256(
+            f"{route.model_dump_json()}:{agent.connection_id}:{address}".encode()
+        ).hexdigest()
 
     async def _acquire(
         self,

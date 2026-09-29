@@ -31,7 +31,7 @@ from api.server.deployed_stubs import (
     resolve_deployed_stub_id,
 )
 from api.server.http import request_query_params
-from api.server.ownership import require_function_stub_workspace, require_task_workspace
+from api.server.ownership import require_function_stub_workspace
 from api.server.public_transfers import attribute_public_transfer
 from api.server.service_dependencies import control_plane_service, function_service
 from api.server.services import ApiServiceCore, FunctionApiService
@@ -107,8 +107,8 @@ def function_invoke(
     service: FunctionApiService = Depends(function_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
 ) -> FunctionInvokeResponse:
-    require_function_stub_workspace(control_plane, request.stub_id, workspace_id)
-    result = service.function_invoke(request)
+    stub = require_function_stub_workspace(control_plane, request.stub_id, workspace_id)
+    result = service.function_invoke(request, stub=stub)
     attribute_public_transfer(
         connection,
         workspace_id=workspace_id,
@@ -127,9 +127,9 @@ def function_invoke_stream(
     service: FunctionApiService = Depends(function_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
 ) -> StreamingResponse:
-    require_function_stub_workspace(control_plane, request.stub_id, workspace_id)
+    stub = require_function_stub_workspace(control_plane, request.stub_id, workspace_id)
     # Run admission before streaming starts so refusals retain their HTTP status.
-    initial = service.function_invoke(request)
+    initial = service.function_invoke(request, stub=stub)
     attribute_public_transfer(
         connection,
         workspace_id=workspace_id,
@@ -145,11 +145,7 @@ async def function_claim(
     request: FunctionClaimRequest,
     workspace_id: write_workspace,
     service: FunctionApiService = Depends(function_service),
-    control_plane: ControlPlaneService = Depends(control_plane_service),
 ) -> FunctionClaimResponse:
-    await to_thread.run_sync(
-        require_function_stub_workspace, control_plane, request.stub_id, workspace_id
-    )
     return await service.function_claim_wait(request, workspace_id=workspace_id)
 
 
@@ -157,11 +153,9 @@ async def function_claim(
 def function_set_result(
     request: FunctionSetResultBody,
     workspace_id: write_workspace,
-    services: ApiServiceCore = Depends(current_services),
     service: FunctionApiService = Depends(function_service),
 ) -> FunctionSetResultResponse:
-    require_task_workspace(services, request.task_id, workspace_id)
-    return service.function_set_result(request)
+    return service.function_set_result(request, workspace_id=workspace_id)
 
 
 @runtime_router.post("/monitor", response_model=FunctionMonitorResponse)
@@ -169,13 +163,9 @@ def function_monitor(
     request: FunctionMonitorRequest,
     connection: Request,
     workspace_id: read_workspace,
-    services: ApiServiceCore = Depends(current_services),
-    control_plane: ControlPlaneService = Depends(control_plane_service),
     service: FunctionApiService = Depends(function_service),
 ) -> FunctionMonitorResponse:
-    require_function_stub_workspace(control_plane, request.stub_id, workspace_id)
-    require_task_workspace(services, request.task_id, workspace_id)
-    result = service.function_monitor(request)
+    result = service.function_monitor(request, workspace_id=workspace_id)
     attribute_public_transfer(
         connection,
         workspace_id=workspace_id,
@@ -279,7 +269,8 @@ def _invoke_deployed_function(
         FunctionInvokeBody(
             stub_id=stub.id,
             invocation=invocation,
-        )
+        ),
+        stub=stub,
     )
     attribute_public_transfer(
         connection,

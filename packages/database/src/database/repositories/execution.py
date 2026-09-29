@@ -13,12 +13,11 @@ from database.mappers.execution import (
     log_entry_from_table,
     pod_url_record_from_table,
     task_attempt_from_table,
+    task_attempt_row_values,
     task_dependency_from_table,
     task_from_table,
-    write_event_row,
+    task_row_values,
     write_log_row,
-    write_task_attempt_row,
-    write_task_row,
 )
 from database.records.execution import PodUrlRecord
 from database.repositories.container_rollouts import ContainerRolloutRepository
@@ -36,7 +35,7 @@ from database.tables.execution import (
 )
 from database.tables.identity import WorkspaceMemberTable
 from database.tables.orchestration import ContainerTable
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, JsonValue, field_validator
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.cron import CronJobRun
 from shared.deployment_records import DEFAULT_FUNCTION_TIMEOUT_SECONDS
@@ -47,6 +46,7 @@ from shared.logs import LogEntry
 from shared.realtime.streams import LogStreamQuery
 from shared.tasks import (
     IN_FLIGHT_TASK_STATUSES,
+    TERMINAL_TASK_STATUSES,
     Task,
     TaskAttempt,
     TaskDependency,
@@ -73,6 +73,18 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.orm import Session
+
+
+@dataclass(frozen=True, slots=True)
+class TaskClaimBatch:
+    tasks: list[Task]
+    queue_checked: bool
+
+
+@dataclass(frozen=True, slots=True)
+class FunctionTaskState:
+    status: TaskStatus
+    container_id: str | None
 
 
 class TaskDurationSample(BaseModel):
@@ -183,18 +195,50 @@ class TaskRepository:
         owner_id = workspace_id or task.workspace_id
         if task.workspace_id is not None and owner_id != task.workspace_id:
             raise ConflictError("task ownership cannot change")
-        if owner_id is not None:
-            WorkspaceRepository(self.session).lock_active_owner(owner_id)
         task = Task.model_validate(dict(task) | {"workspace_id": owner_id})
-        row = self.session.get(TaskTable, task.id)
-        if row is None:
-            row = TaskTable(id=task.id)
-            self.session.add(row)
-        elif row.workspace_id != owner_id:
+        return self.upsert_many([task])[0]
+
+    def upsert_many(self, tasks: Sequence[Task]) -> list[Task]:
+        if not tasks:
+            return []
+        if len({task.id for task in tasks}) != len(tasks):
+            raise ConflictError("a task can appear only once in a write batch")
+        for owner in sorted({task.workspace_id for task in tasks if task.workspace_id is not None}):
+            WorkspaceRepository(self.session).lock_active_owner(owner)
+        values = [task_row_values(task) for task in tasks]
+        insert = postgresql_insert(TaskTable).values(values)
+        persisted = set(
+            self.session.scalars(
+                insert.on_conflict_do_update(
+                    index_elements=[TaskTable.id],
+                    set_={
+                        name: insert.excluded[name]
+                        for name in values[0]
+                        if name not in {"id", "workspace_id"}
+                    },
+                    where=TaskTable.workspace_id.is_not_distinct_from(insert.excluded.workspace_id),
+                ).returning(TaskTable.id)
+            )
+        )
+        if len(persisted) != len(tasks):
             raise ConflictError("task ownership cannot change")
-        write_task_row(row, task)
-        self.session.flush()
-        return task_from_table(row)
+        for task in tasks:
+            row = self.session.identity_map.get((TaskTable, (task.id,), None))
+            if row is not None:
+                self.session.expire(row)
+        return [task_from_table(TaskTable(**value)) for value in values]
+
+    def get_many_for_update(self, task_ids: Sequence[str]) -> dict[str, Task]:
+        if not task_ids:
+            return {}
+        rows = self.session.scalars(
+            select(TaskTable)
+            .where(TaskTable.id.in_(task_ids))
+            .order_by(TaskTable.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        return {str(row.id): task_from_table(row) for row in rows}
 
     def get(self, task_id: str, *, workspace_id: str) -> Task | None:
         if not _is_uuid_text(task_id):
@@ -259,6 +303,46 @@ class TaskRepository:
         row = self.session.scalars(statement).first()
         return task_from_table(row) if row is not None else None
 
+    def get_function_for_update(self, task_id: str, *, workspace_id: str) -> Task | None:
+        if not _is_uuid_text(task_id):
+            return None
+        row = self.session.scalar(
+            select(TaskTable)
+            .join(StubTable, StubTable.id == TaskTable.stub_id)
+            .where(
+                TaskTable.id == task_id,
+                TaskTable.workspace_id == workspace_id,
+                StubTable.workspace_id == workspace_id,
+                StubTable.type == StubKind.Function.value,
+            )
+            .with_for_update(of=TaskTable)
+        )
+        return task_from_table(row) if row is not None else None
+
+    def function_state(
+        self, task_id: str, *, workspace_id: str, stub_id: str
+    ) -> FunctionTaskState | None:
+        if not _is_uuid_text(task_id) or not _is_uuid_text(stub_id):
+            return None
+        row = self.session.execute(
+            select(TaskTable.status, TaskTable.container_id)
+            .join(StubTable, StubTable.id == TaskTable.stub_id)
+            .where(
+                TaskTable.id == task_id,
+                TaskTable.workspace_id == workspace_id,
+                TaskTable.stub_id == stub_id,
+                StubTable.workspace_id == workspace_id,
+                StubTable.type == StubKind.Function.value,
+            )
+        ).one_or_none()
+        return (
+            FunctionTaskState(
+                TaskStatus(row.status), str(row.container_id) if row.container_id else None
+            )
+            if row is not None
+            else None
+        )
+
     def mark_claimable(self, task_id: str, *, at: datetime) -> Task | None:
         """Record that this task's inputs have resolved, once.
 
@@ -282,10 +366,11 @@ class TaskRepository:
         self,
         stub_id: str,
         *,
+        workspace_id: str,
         container_id: str,
         limit: int,
         claim_id: str | None = None,
-    ) -> list[Task]:
+    ) -> TaskClaimBatch:
         """Take up to `limit` runnable tasks for this stub, binding them to a container.
 
         `SKIP LOCKED` is what makes two containers asking at once safe: the loser
@@ -304,7 +389,7 @@ class TaskRepository:
         """
 
         if limit <= 0:
-            return []
+            return TaskClaimBatch([], queue_checked=False)
         rollouts = ContainerRolloutRepository(self.session)
         admitting = rollouts.accepting_work(container_id, stub_id=stub_id)
         if claim_id is not None:
@@ -314,6 +399,8 @@ class TaskRepository:
                 .where(
                     TaskAttemptTable.container_id == container_id,
                     TaskAttemptTable.claim_id == claim_id,
+                    TaskTable.stub_id == stub_id,
+                    TaskTable.workspace_id == workspace_id,
                 )
             ).one_or_none()
             if prior is not None:
@@ -324,14 +411,20 @@ class TaskRepository:
                     and row.status == TaskStatus.Running.value
                     and row.container_id == container_id
                 )
-                return [task_from_table(row)] if resumable else []
+                return TaskClaimBatch(
+                    [task_from_table(row)] if resumable else [], queue_checked=False
+                )
         if not admitting:
-            return []
+            return TaskClaimBatch([], queue_checked=False)
         rollouts.record_workload_ready(container_id, now=datetime.now(UTC))
         rows = (
             self.session.scalars(
                 select(TaskTable)
-                .where(TaskTable.stub_id == stub_id, _unclaimed_task())
+                .where(
+                    TaskTable.stub_id == stub_id,
+                    TaskTable.workspace_id == workspace_id,
+                    _unclaimed_task(),
+                )
                 .order_by(TaskTable.claimable_at, TaskTable.id)
                 .with_for_update(skip_locked=True)
                 .limit(limit)
@@ -346,7 +439,7 @@ class TaskRepository:
             row.container_id = container_id
             claimed.append(task_from_table(row))
         self.session.flush()
-        return claimed
+        return TaskClaimBatch(claimed, queue_checked=True)
 
     def release_claim(self, task_id: str, *, container_id: str | None) -> Task | None:
         """Give a claimed task back, so some container can take it again.
@@ -982,6 +1075,34 @@ def _is_uuid_text(value: str) -> bool:
 class TaskAttemptRepository:
     session: Session
 
+    def has_completed_claim(
+        self,
+        *,
+        task_id: str,
+        workspace_id: str,
+        container_id: str,
+        claim_id: str,
+        attempt_number: int,
+    ) -> bool:
+        return bool(
+            self.session.scalar(
+                select(
+                    select(TaskAttemptTable.id)
+                    .where(
+                        TaskAttemptTable.task_id == task_id,
+                        TaskAttemptTable.workspace_id == workspace_id,
+                        TaskAttemptTable.container_id == container_id,
+                        TaskAttemptTable.claim_id == claim_id,
+                        TaskAttemptTable.attempt_number == attempt_number,
+                        TaskAttemptTable.status.in_(
+                            [status.value for status in TERMINAL_TASK_STATUSES]
+                        ),
+                    )
+                    .exists()
+                )
+            )
+        )
+
     def accept_claim_completion(
         self,
         *,
@@ -1085,30 +1206,70 @@ class TaskAttemptRepository:
         """System-authority write; ownership comes from the attempt record."""
         if attempt.workspace_id is not None:
             WorkspaceRepository(self.session).lock_active_owner(attempt.workspace_id)
-        row = TaskAttemptTable(id=attempt.id, claim_id=claim_id)
-        write_task_attempt_row(row, attempt)
-        self.session.add(row)
-        self.session.flush()
-        return task_attempt_from_table(row)
+        values = task_attempt_row_values(attempt)
+        self.session.execute(
+            postgresql_insert(TaskAttemptTable).values({**values, "claim_id": claim_id})
+        )
+        return task_attempt_from_table(TaskAttemptTable(**values))
 
     def upsert(self, attempt: TaskAttempt, *, claim_id: str | None = None) -> TaskAttempt:
         """System-authority write keyed by attempt id; ownership comes from the record."""
-        if attempt.workspace_id is not None:
-            WorkspaceRepository(self.session).lock_active_owner(attempt.workspace_id)
-        row = self.session.get(TaskAttemptTable, attempt.id)
-        if row is None:
-            row = TaskAttemptTable(id=attempt.id)
-            self.session.add(row)
-        elif row.workspace_id != attempt.workspace_id or row.task_id != attempt.task_id:
+        return self.upsert_many([(attempt, claim_id)])[0]
+
+    def upsert_many(self, attempts: Sequence[tuple[TaskAttempt, str | None]]) -> list[TaskAttempt]:
+        if not attempts:
+            return []
+        if len({attempt.id for attempt, _ in attempts}) != len(attempts):
+            raise ConflictError("an attempt can appear only once in a write batch")
+        for owner in sorted(
+            {attempt.workspace_id for attempt, _ in attempts if attempt.workspace_id is not None}
+        ):
+            WorkspaceRepository(self.session).lock_active_owner(owner)
+        values: list[dict[str, JsonValue | datetime]] = [
+            {**task_attempt_row_values(attempt), "claim_id": claim_id}
+            for attempt, claim_id in attempts
+        ]
+        insert = postgresql_insert(TaskAttemptTable).values(values)
+        new_claim = and_(
+            insert.excluded.claim_id.is_not(None),
+            TaskAttemptTable.claim_id.is_distinct_from(insert.excluded.claim_id),
+        )
+        persisted = set(
+            self.session.scalars(
+                insert.on_conflict_do_update(
+                    index_elements=[TaskAttemptTable.id],
+                    set_={
+                        **{
+                            name: insert.excluded[name]
+                            for name in values[0]
+                            if name not in {"id", "workspace_id", "task_id", "claim_id"}
+                        },
+                        "claim_id": func.coalesce(
+                            insert.excluded.claim_id, TaskAttemptTable.claim_id
+                        ),
+                        "execution_entry_upper_bound_at": case(
+                            (new_claim, None), else_=TaskAttemptTable.execution_entry_upper_bound_at
+                        ),
+                        "execution_entry_reported_at": case(
+                            (new_claim, None), else_=TaskAttemptTable.execution_entry_reported_at
+                        ),
+                    },
+                    where=and_(
+                        TaskAttemptTable.workspace_id.is_not_distinct_from(
+                            insert.excluded.workspace_id
+                        ),
+                        TaskAttemptTable.task_id == insert.excluded.task_id,
+                    ),
+                ).returning(TaskAttemptTable.id)
+            )
+        )
+        if len(persisted) != len(attempts):
             raise ConflictError("task attempt ownership cannot change")
-        write_task_attempt_row(row, attempt)
-        if claim_id is not None:
-            if row.claim_id != claim_id:
-                row.execution_entry_upper_bound_at = None
-                row.execution_entry_reported_at = None
-            row.claim_id = claim_id
-        self.session.flush()
-        return task_attempt_from_table(row)
+        for attempt, _ in attempts:
+            row = self.session.identity_map.get((TaskAttemptTable, (attempt.id,), None))
+            if row is not None:
+                self.session.expire(row)
+        return [task_attempt_from_table(TaskAttemptTable(**value)) for value in values]
 
     def list_for_task(self, task_id: str) -> list[TaskAttempt]:
         statement = (
@@ -1138,14 +1299,25 @@ class TaskAttemptRepository:
         return str(row.task_id) if row is not None else ""
 
     def latest_for_task(self, task_id: str) -> TaskAttempt | None:
+        return self.latest_for_tasks([task_id]).get(task_id)
+
+    def latest_for_tasks(self, task_ids: Sequence[str]) -> dict[str, TaskAttempt]:
+        if not task_ids:
+            return {}
         statement = (
             select(TaskAttemptTable)
-            .where(TaskAttemptTable.task_id == task_id)
-            .order_by(TaskAttemptTable.attempt_number.desc(), TaskAttemptTable.created_at.desc())
-            .limit(1)
+            .where(TaskAttemptTable.task_id.in_(task_ids))
+            .distinct(TaskAttemptTable.task_id)
+            .order_by(
+                TaskAttemptTable.task_id,
+                TaskAttemptTable.attempt_number.desc(),
+                TaskAttemptTable.created_at.desc(),
+            )
         )
-        row = self.session.scalars(statement).first()
-        return task_attempt_from_table(row) if row is not None else None
+        return {
+            str(row.task_id): task_attempt_from_table(row)
+            for row in self.session.scalars(statement)
+        }
 
     def latest_finished_for_tasks(self, task_ids: Sequence[str]) -> dict[str, datetime]:
         if not task_ids:
@@ -1434,17 +1606,59 @@ class EventRepository:
 
     def append(self, event: Event, *, workspace_id: str | None = None) -> Event:
         """System-authority write; cluster-level events carry no workspace."""
-        if workspace_id is not None:
-            WorkspaceRepository(self.session).lock_active_owner(workspace_id)
-        row = self.session.get(EventTable, event.id)
-        if row is None:
-            row = EventTable(id=event.id, workspace_id=workspace_id)
-            self.session.add(row)
-        elif row.workspace_id != workspace_id:
+        return self.append_many([(event, workspace_id)])[0]
+
+    def append_many(self, events: Sequence[tuple[Event, str | None]]) -> list[Event]:
+        if not events:
+            return []
+        if len({event.id for event, _ in events}) != len(events):
+            raise ConflictError("an event can appear only once in a write batch")
+        for owner in sorted({owner for _, owner in events if owner is not None}):
+            WorkspaceRepository(self.session).lock_active_owner(owner)
+        values: list[dict[str, JsonValue | datetime]] = []
+        for event, owner in events:
+            data = dict(event.data)
+            container = data.get("container_id")
+            container_id = container if isinstance(container, str) else None
+            if container_id is not None:
+                del data["container_id"]
+            values.append(
+                {
+                    "id": event.id,
+                    "workspace_id": owner,
+                    "action": event.action,
+                    "level": event.level.value,
+                    "resource_type": event.resource_type,
+                    "resource_id": event.resource_id,
+                    "message": event.message,
+                    "data": data,
+                    "container_id": container_id,
+                    "created_at": event.created_at,
+                }
+            )
+        insert = postgresql_insert(EventTable).values(values)
+        persisted = set(
+            self.session.scalars(
+                insert.on_conflict_do_update(
+                    index_elements=[EventTable.id],
+                    set_={
+                        name: insert.excluded[name]
+                        for name in values[0]
+                        if name not in {"id", "workspace_id"}
+                    },
+                    where=EventTable.workspace_id.is_not_distinct_from(
+                        insert.excluded.workspace_id
+                    ),
+                ).returning(EventTable.id)
+            )
+        )
+        if len(persisted) != len(events):
             raise ConflictError("event ownership cannot change")
-        write_event_row(row, event)
-        self.session.flush()
-        return event_from_table(row)
+        for event, _ in events:
+            row = self.session.identity_map.get((EventTable, (event.id,), None))
+            if row is not None:
+                self.session.expire(row)
+        return [event for event, _ in events]
 
     def list(
         self,

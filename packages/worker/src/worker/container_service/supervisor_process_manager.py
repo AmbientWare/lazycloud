@@ -8,11 +8,13 @@ import time
 from collections.abc import Iterable
 from contextlib import suppress
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import BinaryIO, Literal
 
 from pydantic import Field
 from shared.contracts import ContractModel
+from shared.http.pods import PodSandboxResultResponse
 
 from worker.container_service.models import (
     SandboxFilesystemOutput,
@@ -46,6 +48,8 @@ class SupervisorRequest(ContractModel):
     cwd: str = ""
     env: list[str] = Field(default_factory=list)
     pid: int = 0
+    process_id: str = ""
+    wait_seconds: float = 0
     signal: int = 0
     ack_seq: int = 0
     ok: bool = False
@@ -55,6 +59,7 @@ class SupervisorRequest(ContractModel):
 
 class SupervisorProcess(ContractModel):
     pid: int
+    process_id: str
     command: str
     cwd: str = ""
     running: bool = True
@@ -74,6 +79,10 @@ class SupervisorResponse(ContractModel):
     processes: list[SupervisorProcess] = Field(default_factory=list)
     stdout: str = ""
     stderr: str = ""
+    process_id: str = ""
+    stdout_truncated: bool = False
+    stderr_truncated: bool = False
+    expires_at: datetime | None = None
 
 
 @dataclass(slots=True)
@@ -130,6 +139,7 @@ class SupervisorSandboxProcessManager:
     )
     _transport: _SupervisorTransport | None = field(default=None, init=False)
     _pid: int = field(default=0, init=False)
+    _process_id: str = field(default="", init=False)
     _ack_seq: int = field(default=0, init=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False)
 
@@ -157,15 +167,21 @@ class SupervisorSandboxProcessManager:
                 transport.send(
                     request
                     if self._pid == 0
-                    else SupervisorRequest(op="watch", pid=self._pid, ack_seq=self._ack_seq)
+                    else SupervisorRequest(
+                        op="watch", process_id=self._process_id, ack_seq=self._ack_seq
+                    )
                 )
                 while response := transport.receive():
                     self._validate(response)
                     if response.type == "started":
+                        if not response.process_id:
+                            raise SandboxSupervisorError("supervisor did not identify the command")
                         self._pid = response.pid
+                        self._process_id = response.process_id
                         yield SandboxProcessEvent(
                             event_type=SandboxProcessEventType.Started,
                             pid=response.pid,
+                            process_id=response.process_id,
                         )
                     elif response.type == "chunk":
                         yield SandboxProcessEvent(
@@ -239,20 +255,40 @@ class SupervisorSandboxProcessManager:
         response = self._request(SupervisorRequest(op="status", pid=pid))
         return None if response.running else response.exit_code
 
+    def result(self, process_id: str, wait_seconds: float) -> PodSandboxResultResponse:
+        response = self._request(
+            SupervisorRequest(op="result", process_id=process_id, wait_seconds=wait_seconds),
+            timeout_seconds=wait_seconds + 2,
+        )
+        if response.type != "result" or response.process_id != process_id:
+            raise SandboxSupervisorError("supervisor returned a different command result")
+        return PodSandboxResultResponse(
+            process_id=response.process_id,
+            pid=response.pid,
+            running=response.running,
+            exit_code=response.exit_code,
+            stdout=response.stdout,
+            stderr=response.stderr,
+            stdout_truncated=response.stdout_truncated,
+            stderr_truncated=response.stderr_truncated,
+            expires_at=response.expires_at,
+        )
+
     def stdout(self, pid: int) -> str:
         return self._request(SupervisorRequest(op="stdout", pid=pid)).stdout
 
     def stderr(self, pid: int) -> str:
         return self._request(SupervisorRequest(op="stderr", pid=pid)).stderr
 
-    def kill(self, pid: int) -> None:
-        self._request(SupervisorRequest(op="kill", pid=pid, signal=15))
+    def kill(self, pid: int, process_id: str = "") -> None:
+        self._request(SupervisorRequest(op="kill", pid=pid, process_id=process_id, signal=15))
 
     def list_processes(self) -> list[WorkerSandboxProcess]:
         response = self._request(SupervisorRequest(op="list"))
         return [
             WorkerSandboxProcess(
                 pid=process.pid,
+                process_id=process.process_id,
                 command=process.command,
                 cwd=process.cwd,
                 exit_code=process.exit_code,
@@ -272,12 +308,13 @@ class SupervisorSandboxProcessManager:
         request: SupervisorRequest,
         *,
         wait_ready: bool = False,
+        timeout_seconds: float = 5.0,
     ) -> SupervisorResponse:
         transport = _SupervisorTransport.connect(
             self.host,
             self.port,
             token=self.token,
-            timeout_seconds=(self.ready_timeout_seconds if wait_ready else 5.0),
+            timeout_seconds=(self.ready_timeout_seconds if wait_ready else timeout_seconds),
             retry=wait_ready,
             coordinator=self.connections,
         )

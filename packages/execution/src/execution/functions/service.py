@@ -21,6 +21,7 @@ from database.repositories.execution import (
 )
 from database.repositories.orchestration import ContainerRepository
 from database.types import DatabaseSession
+from observability.events import EventService
 from observability.stream_state import AsyncTaskChangeReader
 from pydantic import JsonValue
 from shared.app_identity import FUNCTION_IMAGE
@@ -104,6 +105,7 @@ from execution.mounts import (
 from execution.placement import workload_placement
 from execution.services import ExecutionServices, SchedulerSubmissionResult
 from execution.task_claims import TaskClaimReleaseService
+from execution.tasks import TaskClaimOutcome, TaskFinishOutcome
 
 LOGGER = logging.getLogger(__name__)
 
@@ -118,9 +120,10 @@ class FunctionControlService:
     def __post_init__(self) -> None:
         self.control_plane = ControlPlaneService(self.services.context)
 
-    def function_invoke(self, request: FunctionInvokeBody) -> FunctionInvokeResponse:
+    def function_invoke(
+        self, request: FunctionInvokeBody, *, stub: StubRecord
+    ) -> FunctionInvokeResponse:
         try:
-            stub = self.control_plane.get_stub(request.stub_id)
             if stub.kind is not StubKind.Function:
                 raise InvalidInputError(f"stub is not a function: {stub.id}")
             config = FunctionStubConfig.model_validate(stub.config, from_attributes=True)
@@ -210,6 +213,24 @@ class FunctionControlService:
                     deployment_id=task.deployment_id or "",
                 )
                 dependencies = self._create_task_dependencies(session, task, request)
+                self.services.events.emit_in_session(
+                    session,
+                    "function.invoked",
+                    level=EventLevel.Info,
+                    resource_type="task",
+                    resource_id=task.id,
+                    message=f"invoked function {stub.name}",
+                    data={
+                        "stub_id": stub.id,
+                        "parent_task_id": task.parent_task_id or "",
+                        "root_task_id": task.root_task_id or task.id,
+                        "dependency_count": len(dependencies),
+                        "headless": invoke_plan.headless,
+                    },
+                    workspace_id=stub.workspace_id,
+                )
+                # Every invocation touches this shared row. Acquire it only
+                # after the task's other writes, immediately before commit.
                 if task.claimable_at is not None:
                     self.services.execution_demand.activate_in_transaction(
                         session,
@@ -232,21 +253,6 @@ class FunctionControlService:
                     done=True,
                     exit_code=1,
                 )
-            self.services.events.emit(
-                "function.invoked",
-                level=EventLevel.Info,
-                resource_type="task",
-                resource_id=task.id,
-                message=f"invoked function {stub.name}",
-                data={
-                    "stub_id": stub.id,
-                    "parent_task_id": task.parent_task_id or "",
-                    "root_task_id": task.root_task_id or task.id,
-                    "dependency_count": len(dependencies),
-                    "headless": invoke_plan.headless,
-                },
-                workspace_id=stub.workspace_id,
-            )
             return FunctionInvokeResponse.from_result(task_id=task.id)
         except DomainError:
             raise
@@ -444,7 +450,7 @@ class FunctionControlService:
         result = next(
             self._launch_function_containers(
                 stub,
-                count=1,
+                target_containers=1,
                 task=None,
                 eligible_at=None,
                 authority=FunctionContainerStartAuthority.Preview,
@@ -458,8 +464,8 @@ class FunctionControlService:
             raise CapacityLimitReachedError(result.reason or "function preview could not start")
         return FunctionServeResponse(container_id=result.container_id)
 
-    def start_function_containers(self, stub_id: str, *, count: int) -> Iterator[str]:
-        if count <= 0:
+    def start_function_containers(self, stub_id: str, *, desired_count: int) -> Iterator[str]:
+        if desired_count <= 0:
             return
         stub = self.control_plane.get_stub(stub_id)
         if stub.kind is not StubKind.Function:
@@ -476,7 +482,7 @@ class FunctionControlService:
             return
         for launched in self._launch_function_containers(
             stub,
-            count=count,
+            target_containers=desired_count,
             task=pending,
             eligible_at=None,
             authority=FunctionContainerStartAuthority.Autoscaler,
@@ -509,7 +515,7 @@ class FunctionControlService:
         return next(
             self._launch_function_containers(
                 stub,
-                count=1,
+                target_containers=1,
                 task=task,
                 eligible_at=eligible_at,
                 authority=authority,
@@ -522,7 +528,7 @@ class FunctionControlService:
         self,
         stub: StubRecord,
         *,
-        count: int,
+        target_containers: int,
         task: Task | None,
         eligible_at: datetime | None,
         authority: FunctionContainerStartAuthority,
@@ -576,7 +582,7 @@ class FunctionControlService:
             if config.runtime.checkpoint_enabled
             else None
         )
-        for _ in range(count):
+        for _ in range(target_containers):
             container_id = str(uuid4())
             container_plan = plan_function_container_start(
                 FunctionContainerStartRequest(
@@ -629,7 +635,10 @@ class FunctionControlService:
                 eligible_at=eligible_at,
                 preemptible=config.runtime.preemptible,
                 authority=authority,
-                max_containers=function_container_ceiling(stub.config.autoscaler.max_containers),
+                max_containers=min(
+                    target_containers,
+                    function_container_ceiling(stub.config.autoscaler.max_containers),
+                ),
                 preview_timeout=preview_timeout,
             )
             if container is None:
@@ -783,6 +792,7 @@ class FunctionControlService:
         task_id: str,
         status: TaskStatus,
         *,
+        workspace_id: str,
         container_id: str = "",
         result: JsonValue = None,
         error: str | None = None,
@@ -790,7 +800,7 @@ class FunctionControlService:
         retry_allowed: bool = True,
         execution_entry: ExecutionEntryEvidence | None = None,
         claim_id: str | None = None,
-    ) -> Task:
+    ) -> TaskFinishOutcome:
         outcome = self.services.tasks.finish_with_retry(
             task_id,
             status,
@@ -801,6 +811,7 @@ class FunctionControlService:
             retry_allowed=retry_allowed,
             execution_entry=execution_entry,
             claim_id=claim_id,
+            function_workspace_id=workspace_id,
         )
         # A retry due immediately is not scheduled from here. Making it runnable
         # means releasing its claim, and that is `schedule_due_retries`, which
@@ -809,7 +820,7 @@ class FunctionControlService:
         # task in `retry` is invisible to a claim and counts toward no capacity.
         if outcome.state_changed and is_terminal_task_status(outcome.task.status):
             self.release_dependents(outcome.task)
-        return outcome.task
+        return outcome
 
     def cancel_task(
         self,
@@ -1271,7 +1282,7 @@ class FunctionControlService:
         self, request: FunctionClaimRequest, *, workspace_id: str
     ) -> FunctionClaimResponse:
         if not request.wait_seconds:
-            return await asyncio.to_thread(self.function_claim, request)
+            return await asyncio.to_thread(self.function_claim, request, workspace_id=workspace_id)
         if self.task_changes is None:
             raise RuntimeError("function claim notifications are not configured")
         # Subscribe before reading SQL so a commit between the read and wait
@@ -1281,7 +1292,12 @@ class FunctionControlService:
         ) as updates:
             deadline = time.monotonic() + request.wait_seconds
             while True:
-                response = await asyncio.to_thread(self.function_claim, request)
+                response, outcome = await asyncio.to_thread(
+                    self._function_claim_attempt, request, workspace_id=workspace_id
+                )
+                updates.completed(
+                    claimed=outcome.task is not None, queue_checked=outcome.queue_checked
+                )
                 if response.task is not None:
                     return response
                 remaining = deadline - time.monotonic()
@@ -1293,12 +1309,24 @@ class FunctionControlService:
                 except TimeoutError:
                     return FunctionClaimResponse()
 
-    def function_claim(self, request: FunctionClaimRequest) -> FunctionClaimResponse:
-        task = self.services.tasks.claim_and_start(
-            request.stub_id, container_id=request.container_id, claim_id=request.claim_id
+    def function_claim(
+        self, request: FunctionClaimRequest, *, workspace_id: str
+    ) -> FunctionClaimResponse:
+        response, _ = self._function_claim_attempt(request, workspace_id=workspace_id)
+        return response
+
+    def _function_claim_attempt(
+        self, request: FunctionClaimRequest, *, workspace_id: str
+    ) -> tuple[FunctionClaimResponse, TaskClaimOutcome]:
+        outcome = self.services.tasks.claim_and_start(
+            request.stub_id,
+            workspace_id=workspace_id,
+            container_id=request.container_id,
+            claim_id=request.claim_id,
         )
+        task = outcome.task
         if task is None:
-            return FunctionClaimResponse()
+            return FunctionClaimResponse(), outcome
         if task.invocation is None:
             # Failed rather than raised. The claim already happened, so raising
             # would leave a task owned by a container that was told nothing about
@@ -1310,7 +1338,7 @@ class FunctionControlService:
                 exit_code=1,
             )
             self.release_dependents(updated)
-            return FunctionClaimResponse()
+            return FunctionClaimResponse(), outcome
         validate_function_dependency_bindings(task.dependency_bindings)
         return FunctionClaimResponse(
             task=FunctionClaimedTask(
@@ -1321,7 +1349,7 @@ class FunctionControlService:
                 invocation=task.invocation,
                 dependencies=task.dependency_bindings,
             )
-        )
+        ), outcome
 
     def function_retire(
         self,
@@ -1363,60 +1391,71 @@ class FunctionControlService:
     def function_set_result(
         self,
         request: FunctionSetResultBody,
+        *,
+        workspace_id: str,
     ) -> FunctionSetResultResponse:
-        outcome = self.services.tasks.finish_with_retry(
-            request.task_id,
-            TaskStatus.Complete,
-            container_id=request.container_id,
-            function_result=request.result,
-            exit_code=0,
-            execution_entry=request.execution_entry,
-            claim_id=request.claim_id,
-        )
+        with self.services.context.database.session() as session:
+            outcome = self.services.tasks.finish_in_transaction(
+                session,
+                request.task_id,
+                TaskStatus.Complete,
+                container_id=request.container_id,
+                function_result=request.result,
+                exit_code=0,
+                execution_entry=request.execution_entry,
+                claim_id=request.claim_id,
+                function_workspace_id=workspace_id,
+            )
+            if outcome.state_changed:
+                EventService.emit_in_session(
+                    session,
+                    "function.result.set",
+                    level=EventLevel.Info,
+                    resource_type="task",
+                    resource_id=request.task_id,
+                    message=f"stored function result for {request.task_id}",
+                    data={"result_size_bytes": function_result_payload_size(request.result)},
+                    workspace_id=workspace_id,
+                )
+        self.services.tasks.publish_finished(outcome)
         if not outcome.state_changed:
-            return FunctionSetResultResponse(stored=False, status=outcome.task.status)
-        self.services.events.emit(
-            "function.result.set",
-            level=EventLevel.Info,
-            resource_type="task",
-            resource_id=request.task_id,
-            message=f"stored function result for {request.task_id}",
-            data={
-                "result_size_bytes": function_result_payload_size(request.result),
-            },
-            workspace_id=outcome.task.workspace_id,
-        )
+            return FunctionSetResultResponse(
+                stored=False,
+                status=outcome.task.status,
+                claim_acknowledged=outcome.claim_acknowledged,
+            )
         if is_terminal_task_status(outcome.task.status):
             self.release_dependents(outcome.task)
-        return FunctionSetResultResponse(status=outcome.task.status)
+        return FunctionSetResultResponse(
+            status=outcome.task.status, claim_acknowledged=outcome.claim_acknowledged
+        )
 
-    def function_monitor(self, request: FunctionMonitorRequest) -> FunctionMonitorResponse:
-        task = self.services.tasks.get(request.task_id)
-        workspace = self._task_workspace_id(task)
+    def function_monitor(
+        self, request: FunctionMonitorRequest, *, workspace_id: str
+    ) -> FunctionMonitorResponse:
+        with self.services.context.database.session() as session:
+            task = TaskRepository(session).function_state(
+                request.task_id, workspace_id=workspace_id, stub_id=request.stub_id
+            )
+        if task is None:
+            raise NotFoundError("function task not found")
         plan = plan_function_monitor(
             planning.FunctionMonitorRequest(
-                workspace_id=workspace,
+                workspace_id=workspace_id,
                 stub_id=request.stub_id,
                 container_id=request.container_id,
                 task_id=request.task_id,
                 task_status=task.status,
-                claimed=True,
+                claimed=task.container_id == request.container_id,
                 cancellation_requested=task.status is TaskStatus.Cancelled,
                 timeout_elapsed=task.status is TaskStatus.Timeout,
             )
         )
-        if plan.next_status is not None and task.status is not plan.next_status:
-            self.services.tasks.transition(task, plan.next_status)
         return FunctionMonitorResponse(
             cancelled=plan.cancelled,
             complete=plan.complete,
             timed_out=plan.timed_out,
         )
-
-    def _task_workspace_id(self, task: Task) -> str:
-        if not task.workspace_id:
-            raise InvalidInputError(f"function task {task.id} is missing workspace ownership")
-        return task.workspace_id
 
 
 def _function_result_payload(task: TaskResultSnapshot) -> FunctionResultPayload:

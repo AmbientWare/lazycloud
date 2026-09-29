@@ -200,9 +200,9 @@ class SourceCacheCleanupRepository:
         if not normalized_source_ids:
             return 0
 
-        generation_rows = list(
+        generation_ids = list(
             self.session.scalars(
-                select(WorkerCacheGenerationTable)
+                select(WorkerCacheGenerationTable.id)
                 .where(
                     WorkerCacheGenerationTable.state != WorkerCacheGenerationState.Retired.value,
                     or_(
@@ -211,10 +211,9 @@ class SourceCacheCleanupRepository:
                     ),
                 )
                 .order_by(WorkerCacheGenerationTable.id)
-                .with_for_update(read=True)
+                .with_for_update(read=True, key_share=True)
             )
         )
-        generation_ids = [str(row.id) for row in generation_rows]
         target_values: list[dict[str, SourceCacheInsertValue]] = []
         for generation_id in generation_ids:
             for source_object_id in normalized_source_ids:

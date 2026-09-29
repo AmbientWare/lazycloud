@@ -4,7 +4,7 @@ import asyncio
 import socket
 import threading
 import time
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -279,7 +279,8 @@ async def test_asgi_websocket_dispatch_session_heartbeats_and_finishes(
                     method="GET",
                     path="/ws",
                     headers={"x-client": ["realtime"]},
-                )
+                ),
+                stub=stub,
             )
             task = async_services.tasks.get(session.task_id)
             before = _dispatch_record(async_services, task).heartbeat_at
@@ -319,7 +320,7 @@ async def test_endpoint_request_times_out_without_running_capacity(
     service = _endpoint_service(async_services, _EndpointContainers())
 
     response = await service.forward_endpoint_request(
-        EndpointForwardRequest(stub_id=stub.id, method="POST", body=b"{}")
+        EndpointForwardRequest(stub_id=stub.id, method="POST", body=b"{}"), stub=stub
     )
 
     assert response.status_code == 504
@@ -355,7 +356,7 @@ def predict():
     service = _endpoint_service(async_services, containers, readiness=_readiness(async_services))
     invocation = asyncio.create_task(
         service.forward_endpoint_request(
-            EndpointForwardRequest(stub_id=stub.id, method="POST", body=b"{}")
+            EndpointForwardRequest(stub_id=stub.id, method="POST", body=b"{}"), stub=stub
         )
     )
     with _serve_handler(
@@ -437,7 +438,7 @@ async def test_endpoint_retry_requeues_the_relational_dispatch(
                 async_services,
                 containers,
             ).forward_endpoint_request(
-                EndpointForwardRequest(stub_id=stub.id, method="POST", body=b"{}")
+                EndpointForwardRequest(stub_id=stub.id, method="POST", body=b"{}"), stub=stub
             )
 
     task = next(task for task in async_services.tasks.list() if task.stub_id == stub.id)
@@ -475,7 +476,7 @@ async def test_endpoint_and_asgi_reject_before_creating_runs_when_request_buffer
             async_services,
             _EndpointContainers(),
         ).forward_endpoint_request(
-            EndpointForwardRequest(stub_id=stub.id, method="POST", body=b"{}")
+            EndpointForwardRequest(stub_id=stub.id, method="POST", body=b"{}"), stub=stub
         )
 
         assert response.status_code == 429
@@ -519,7 +520,9 @@ async def test_asgi_websocket_rejects_before_creating_run_when_request_buffer_is
         await _endpoint_service(
             async_services,
             _EndpointContainers(),
-        ).prepare_asgi_websocket(EndpointForwardRequest(stub_id=stub.id, method="GET", path="/ws"))
+        ).prepare_asgi_websocket(
+            EndpointForwardRequest(stub_id=stub.id, method="GET", path="/ws"), stub=stub
+        )
 
     assert exc_info.value.status_code == 429
     assert exc_info.value.task_id == ""
@@ -574,7 +577,9 @@ async def test_endpoint_service_ignores_stale_dispatch_records_for_backpressure(
     response = await _endpoint_service(
         services,
         _EndpointContainers(),
-    ).forward_endpoint_request(EndpointForwardRequest(stub_id=stub.id, method="POST", body=b"{}"))
+    ).forward_endpoint_request(
+        EndpointForwardRequest(stub_id=stub.id, method="POST", body=b"{}"), stub=stub
+    )
 
     assert response.status_code == 504
     newest_task = services.tasks.list()[0]
@@ -604,7 +609,7 @@ async def test_endpoint_service_cancelled_request_stops_waiting_for_capacity(
     )
 
     response = await service.forward_endpoint_request(
-        EndpointForwardRequest(stub_id=stub.id, method="POST", body=b"{}")
+        EndpointForwardRequest(stub_id=stub.id, method="POST", body=b"{}"), stub=stub
     )
 
     assert response.status_code == 499
@@ -856,16 +861,16 @@ class _CancellingEndpointDispatcher(AsyncEndpointInstanceDispatcher):
         self.runtime = runtime
         self.cancelled_task: Task | None = None
 
-    async def select_target(
+    async def ready_targets(
         self,
         stub_id: str,
         *,
-        container_loads: Mapping[str, int] | None = None,
-        max_inflight_per_container: int = 1,
-        excluded_container_ids: frozenset[str] | set[str] = frozenset(),
+        container_loads: Mapping[str, int],
+        max_inflight_per_container: int,
+        excluded_container_ids: set[str],
+        admit: Callable[[Sequence[str]], Awaitable[set[str]]],
         container_id: str | None = None,
-    ) -> EndpointDispatchTarget | None:
-        _ = container_loads, max_inflight_per_container
+    ) -> list[EndpointDispatchTarget]:
         if self.cancelled_task is None:
 
             def endpoint_tasks(session: Session) -> list[Task]:
@@ -877,11 +882,12 @@ class _CancellingEndpointDispatcher(AsyncEndpointInstanceDispatcher):
                 self.cancelled_task,
                 TaskStatus.Cancelled,
             )
-        return await super().select_target(
+        return await super().ready_targets(
             stub_id,
             container_loads=container_loads,
             max_inflight_per_container=max_inflight_per_container,
             excluded_container_ids=excluded_container_ids,
+            admit=admit,
             container_id=container_id,
         )
 

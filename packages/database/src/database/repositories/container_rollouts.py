@@ -38,9 +38,11 @@ class ContainerRolloutRepository:
         )
 
     def accepting_work(self, container_id: str, *, stub_id: str) -> bool:
-        container = self.session.scalar(
-            select(ContainerTable).where(ContainerTable.id == container_id).with_for_update()
-        )
+        container = self.session.execute(
+            select(ContainerTable.stub_id, ContainerTable.status)
+            .where(ContainerTable.id == container_id)
+            .with_for_update()
+        ).first()
         if (
             container is None
             or container.stub_id != stub_id

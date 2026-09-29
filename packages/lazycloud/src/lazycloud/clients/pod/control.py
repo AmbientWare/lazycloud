@@ -30,6 +30,7 @@ from shared.http.pods import (
     PodSandboxListUrlsResponse,
     PodSandboxReplaceInFilesRequest,
     PodSandboxReplaceInFilesResponse,
+    PodSandboxResultResponse,
     PodSandboxSnapshotMemoryRequest,
     PodSandboxSnapshotMemoryResponse,
     PodSandboxStatFileResponse,
@@ -111,6 +112,18 @@ class PodControlClient:
             self.channel.post(
                 self._scoped(f"/api/v1/pods/{container_id}/exec"),
                 request.model_dump(mode="json"),
+            )
+        )
+
+    def sandbox_result(
+        self, container_id: str, process_id: str, wait_seconds: float = 5.0
+    ) -> PodSandboxResultResponse:
+        return PodSandboxResultResponse.model_validate(
+            self.channel.get(
+                self._scoped(
+                    f"/api/v1/pods/{container_id}/processes/{process_id}/result"
+                    f"?wait_seconds={wait_seconds}"
+                )
             )
         )
 

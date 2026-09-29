@@ -375,16 +375,14 @@ class AppDeploymentIntentRepository:
     ) -> list[AppDeploymentIntentRecord]:
         rows = list(
             self.session.scalars(
-                select(AppDeploymentIntentTable)
+                update(AppDeploymentIntentTable)
                 .where(AppDeploymentIntentTable.app_id == app_id)
-                .order_by(AppDeploymentIntentTable.deployment_id)
-                .with_for_update()
+                .values(operation_revision=operation_revision, target=target.value)
+                .returning(AppDeploymentIntentTable)
+                .execution_options(populate_existing=True)
             )
         )
-        for row in rows:
-            row.operation_revision = operation_revision
-            row.target = target.value
-        self.session.flush()
+        rows.sort(key=lambda row: row.deployment_id)
         return [app_deployment_intent_from_table(row) for row in rows]
 
     def list(self, *, app_id: str) -> list[AppDeploymentIntentRecord]:
@@ -670,6 +668,25 @@ def _app_execution_summary(app_id: str, bucket_count: int) -> AppExecutionSummar
 @dataclass(slots=True)
 class StubRepository:
     session: Session
+
+    def exists(self, stub_id: str, *, workspace_id: str, kind: StubKind) -> bool:
+        try:
+            UUID(stub_id)
+        except ValueError:
+            return False
+        return bool(
+            self.session.scalar(
+                select(
+                    select(StubTable.id)
+                    .where(
+                        StubTable.id == stub_id,
+                        StubTable.workspace_id == workspace_id,
+                        StubTable.type == kind.value,
+                    )
+                    .exists()
+                )
+            )
+        )
 
     def upsert(self, stub: StubRecord) -> StubRecord:
         WorkspaceRepository(self.session).lock_active_owner(stub.workspace_id)

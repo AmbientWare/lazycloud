@@ -417,6 +417,9 @@ class Scheduler:
             if functions is None:
                 msg = "scheduler function control was not injected"
                 raise RuntimeError(msg)
+            stub = self.runtime_services.scheduler_workloads.get_stub(
+                stub_id, workspace=cron_job.workspace_id
+            )
             response = functions.function_invoke(
                 FunctionInvokeBody(
                     stub_id=stub_id,
@@ -424,7 +427,8 @@ class Scheduler:
                         result_encoding=FunctionPayloadEncoding.Cloudpickle
                     ),
                     headless=True,
-                )
+                ),
+                stub=stub,
             )
             accepted = bool(response.task_id and response.exit_code == 0)
             return CronJobRunDraft(

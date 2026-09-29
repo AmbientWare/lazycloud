@@ -456,6 +456,8 @@ def test_real_agent_tunnel_preserves_half_close_and_revokes_open_streams(
             old_connection = (await asyncio.to_thread(client.connect, request, 5)).socket
             try:
                 assert await (await get()).read() == b"5"
+                ready_revision = await http.readiness_revision(route.route_id, route.local_target)
+                assert ready_revision is not None
                 await gateway.drain()
                 async with asyncio.timeout(5):
                     await agent.wait_disconnected()
@@ -469,6 +471,7 @@ def test_real_agent_tunnel_preserves_half_close_and_revokes_open_streams(
                     )
                     assert not during_replacement.done()
                     await asyncio.sleep(0.05)
+                assert await http.readiness_revision(route.route_id, route.local_target) is None
                 with socket.create_server(("127.0.0.1", 0)) as reservation:
                     replacement_port = reservation.getsockname()[1]
                 replacement_gateway = AgentTunnelGateway(
@@ -490,6 +493,10 @@ def test_real_agent_tunnel_preserves_half_close_and_revokes_open_streams(
                 )
                 await replacement.start()
                 assert await (await get()).read() == b"6"
+                replacement_revision = await http.readiness_revision(
+                    route.route_id, route.local_target
+                )
+                assert replacement_revision is not None and replacement_revision != ready_revision
                 await during_replacement
                 await asyncio.to_thread(exchange)
 

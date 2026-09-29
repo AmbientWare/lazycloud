@@ -167,10 +167,10 @@ def test_sandbox_exposure_rejects_cross_workspace_stub_before_worker_callback(
 
     def reject_worker_callback(
         service: PodControlService,
-        container_id: str,
+        container: ContainerRecord,
     ) -> None:
         nonlocal callback_called
-        _ = service, container_id
+        _ = service, container
         callback_called = True
         raise AssertionError("worker callback must not run for invalid ownership")
 

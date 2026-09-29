@@ -583,6 +583,7 @@ async def _forwarded_request(
 
 
 async def _health_probe_response(
+    stub: StubRecord,
     service: EndpointApiService,
     forwarded: EndpointForwardRequest,
 ) -> Response | None:
@@ -590,7 +591,7 @@ async def _health_probe_response(
 
     if forwarded.path != CONTAINER_HEALTH_PATH:
         return None
-    result = await service.forward_endpoint_health(forwarded)
+    result = await service.forward_endpoint_health(forwarded, stub=stub)
     return forwarded_response(
         status_code=result.status_code, headers=result.headers, body=result.body
     )
@@ -602,7 +603,7 @@ async def _forward_endpoint_request(
     request: Request,
 ) -> Response:
     forwarded = await _forwarded_request(stub, request, request.path_params.get("subpath", ""))
-    result = await service.forward_endpoint_request(forwarded)
+    result = await service.forward_endpoint_request(forwarded, stub=stub)
     attribute_public_transfer(
         request,
         workspace_id=stub.workspace_id,
@@ -623,12 +624,12 @@ async def _forward_asgi_http_request(
     subpath: str = "",
 ) -> Response:
     forwarded = await _forwarded_request(stub, request, subpath)
-    probe = await _health_probe_response(service, forwarded)
+    probe = await _health_probe_response(stub, service, forwarded)
     if probe is not None:
         return probe
     session: EndpointIngressDispatchSession | None = None
     try:
-        session = await service.prepare_asgi_http(forwarded)
+        session = await service.prepare_asgi_http(forwarded, stub=stub)
         stream = await service.open_asgi_http_stream(session, forwarded)
     except EndpointWebSocketDispatchRejected as exc:
         return Response(content=str(exc), status_code=exc.status_code)
@@ -750,7 +751,7 @@ async def _forward_asgi_websocket(
     heartbeat: asyncio.Task[None] | None = None
     heartbeat_stop = asyncio.Event()
     try:
-        session = await service.prepare_asgi_websocket(forwarded)
+        session = await service.prepare_asgi_websocket(forwarded, stub=stub)
         backend = await _connect_backend_websocket(service, session, forwarded, websocket)
         await websocket.accept(subprotocol=backend.subprotocol)
         attribute_public_transfer(

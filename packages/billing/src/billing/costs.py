@@ -218,7 +218,7 @@ class BillingStandingService:
         credits = BillingCreditRepository(self.session)
         account = BillingAccountRepository(self.session).get_by_user(user_id)
         return BillingCreditSummary(
-            balance_nanos=credits.balance(user_id=user_id, at=at),
+            balance_nanos=credits.committed_balance(user_id=user_id, at=at),
             ready=account is not None and bool(account.provider_subscription_id),
         )
 

@@ -75,17 +75,25 @@ class VolumeDeletionService:
     def finish(self, name: str, *, workspace_id: str) -> bool:
         self.metering.finalize_volume_deletion(name, workspace_id=workspace_id)
         with self.context.database.session() as session:
+            volume = VolumeRepository(session).get(name, workspace_id=workspace_id)
+        if volume is None:
+            return True
+        if volume.deletion_requested_at is None:
+            raise ConflictError(f"volume {name} has no deletion request")
+        # The committed intent refuses new mounts and writes. Storage cleanup
+        # uses its immutable ID and needs no database lock across provider I/O.
+        self.filesystem.delete_volume(
+            VolumeNamespace(workspace_id=workspace_id, volume_id=volume.id)
+        )
+        with self.context.database.session() as session:
             WorkspaceRepository(session).lock_storage_accounting_owner(workspace_id)
             volumes = VolumeRepository(session)
             try:
                 row = volumes.lock(name, workspace_id=workspace_id, allow_deleting=True)
             except NotFoundError:
                 return True
-            if row.deletion_requested_at is None:
-                raise ConflictError(f"volume {name} has no deletion request")
-            self.filesystem.delete_volume(
-                VolumeNamespace(workspace_id=workspace_id, volume_id=str(row.id))
-            )
+            if str(row.id) != volume.id:
+                return True
             volumes.retain_cleanup(row)
             session.delete(row)
         self._publish(workspace_id, name, WorkspaceChangeType.Deleted)
@@ -121,18 +129,12 @@ class VolumeDeletionService:
                     row = VolumeRepository(session).lock_cleanup(
                         volume_id, workspace_id=workspace_id
                     )
-                    if row is None:
+                    if row is None or to_utc(row.swept_at) > observed_at - timedelta(hours=1):
                         continue
                     row.swept_at = observed_at
-                    try:
-                        self.filesystem.delete_volume(
-                            VolumeNamespace(workspace_id=workspace_id, volume_id=volume_id)
-                        )
-                    except Exception:
-                        LOGGER.exception(
-                            "unfenced volume write cleanup failed",
-                            extra={"workspace_id": workspace_id, "volume_id": volume_id},
-                        )
+                self.filesystem.delete_volume(
+                    VolumeNamespace(workspace_id=workspace_id, volume_id=volume_id)
+                )
             except Exception:
                 LOGGER.exception(
                     "unfenced volume write cleanup failed",

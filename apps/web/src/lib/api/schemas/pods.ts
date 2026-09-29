@@ -26,6 +26,7 @@ export type PodFileDownload = z.infer<typeof podFileDownloadSchema>;
 
 const podProcessSchema = z.object({
   pid: z.number(),
+  process_id: z.string(),
   command: z.string().default(""),
 });
 export type PodProcess = z.infer<typeof podProcessSchema>;
