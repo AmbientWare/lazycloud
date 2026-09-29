@@ -13,8 +13,10 @@ from shared.http.agent_tunnel import (
     TUNNEL_MAX_ROUTE_STREAMS,
     TUNNEL_MAX_STREAMS,
     TUNNEL_OPEN_TIMEOUT_SECONDS,
+    TunnelAttachRequest,
     TunnelCommand,
     TunnelCommandKind,
+    TunnelOpenFailure,
     TunnelPacket,
     TunnelPacketKind,
 )
@@ -194,6 +196,8 @@ class AgentTunnelClient:
                     task = asyncio.create_task(self._attach(command))
                     self.route_streams.add(task)
                     self._track(task)
+                else:
+                    await self._reject_open(command, TunnelOpenFailure.StreamLimit)
         except grpc.aio.AioRpcError as exc:
             if exc.code() in {grpc.StatusCode.UNAUTHENTICATED, grpc.StatusCode.PERMISSION_DENIED}:
                 await self._cancel_streams()
@@ -206,13 +210,28 @@ class AgentTunnelClient:
 
     async def _attach(self, command: TunnelCommand) -> None:
         target = self.resolve_route(command.route_id)
-        if target is None or self._channel is None:
-            raise ConnectionError("Agent route is not registered")
-        async with asyncio.timeout(TUNNEL_OPEN_TIMEOUT_SECONDS):
-            reader, writer = await asyncio.open_connection(*target)
+        if target is None:
+            await self._reject_open(command, TunnelOpenFailure.RouteUnavailable)
+            return
+        try:
+            async with asyncio.timeout(TUNNEL_OPEN_TIMEOUT_SECONDS):
+                reader, writer = await asyncio.open_connection(*target)
+        except OSError:
+            await self._reject_open(command, TunnelOpenFailure.ConnectionFailed)
+            return
+        if self._channel is None:
+            writer.close()
+            await writer.wait_closed()
+            raise ConnectionError("Agent tunnel channel is unavailable")
         call = tunnel_method(self._channel, ATTACH_METHOD)()
         try:
-            await call.write(command.model_dump_json().encode())
+            await call.write(
+                TunnelAttachRequest(
+                    connection_id=command.connection_id, stream_id=command.stream_id
+                )
+                .model_dump_json()
+                .encode()
+            )
             await bridge_socket(GrpcPacketStream(call.__aiter__(), call.write), reader, writer)
             await call.done_writing()
             async with asyncio.timeout(TUNNEL_OPEN_TIMEOUT_SECONDS):
@@ -221,6 +240,26 @@ class AgentTunnelClient:
             call.cancel()
             writer.close()
             await writer.wait_closed()
+
+    async def _reject_open(self, command: TunnelCommand, failure: TunnelOpenFailure) -> None:
+        if self._channel is None:
+            raise ConnectionError("Agent tunnel channel is unavailable")
+        call = tunnel_method(self._channel, ATTACH_METHOD)()
+        try:
+            async with asyncio.timeout(TUNNEL_OPEN_TIMEOUT_SECONDS):
+                await call.write(
+                    TunnelAttachRequest(
+                        connection_id=command.connection_id,
+                        stream_id=command.stream_id,
+                        failure=failure,
+                    )
+                    .model_dump_json()
+                    .encode()
+                )
+                await call.done_writing()
+                await call.code()
+        finally:
+            call.cancel()
 
     async def _control(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         if self._channel is None:

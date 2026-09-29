@@ -27,8 +27,10 @@ from shared.http.agent_tunnel import (
     TUNNEL_MAX_ROUTE_STREAMS,
     TUNNEL_MAX_STREAMS,
     TUNNEL_OPEN_TIMEOUT_SECONDS,
+    TunnelAttachRequest,
     TunnelCommand,
     TunnelCommandKind,
+    TunnelOpenFailure,
     TunnelPacket,
     TunnelPacketKind,
     TunnelRouteRequest,
@@ -53,7 +55,7 @@ LOGGER = logging.getLogger(__name__)
 
 @dataclass(slots=True)
 class _PendingStream:
-    stream: asyncio.Future[GrpcPacketStream]
+    stream: asyncio.Future[GrpcPacketStream | TunnelOpenFailure]
     completed: asyncio.Future[None]
     owner: asyncio.Task[None]
 
@@ -186,16 +188,19 @@ class AgentTunnelGateway:
         stream = GrpcPacketStream(incoming, context.write)
         async with asyncio.timeout(TUNNEL_OPEN_TIMEOUT_SECONDS):
             message = await stream.recv_message()
-        command = TunnelCommand.model_validate_json(message or b"")
-        session = self._sessions.get(command.connection_id)
+        request = TunnelAttachRequest.model_validate_json(message or b"")
+        session = self._sessions.get(request.connection_id)
         if session is None or session.record.identity != identity:
             await context.abort(
                 grpc.StatusCode.PERMISSION_DENIED, "Agent connection is unavailable"
             )
             return
-        pending = session.pending.get(command.stream_id)
+        pending = session.pending.get(request.stream_id)
         if pending is None or pending.stream.done():
             await context.abort(grpc.StatusCode.NOT_FOUND, "Requested stream is unavailable")
+            return
+        if request.failure is not None:
+            pending.stream.set_result(request.failure)
             return
         pending.stream.set_result(stream)
         try:
@@ -247,6 +252,14 @@ class AgentTunnelGateway:
             )
             async with asyncio.timeout(TUNNEL_OPEN_TIMEOUT_SECONDS):
                 agent = await pending.stream
+            if isinstance(agent, TunnelOpenFailure):
+                await context.abort(
+                    grpc.StatusCode.RESOURCE_EXHAUSTED
+                    if agent is TunnelOpenFailure.StreamLimit
+                    else grpc.StatusCode.FAILED_PRECONDITION,
+                    f"Agent could not open the backend: {agent.value}",
+                )
+                return
             await stream.send_message(TunnelPacket(kind=TunnelPacketKind.Opened).to_wire())
             await bridge_packets(stream, agent)
         except asyncio.CancelledError:

@@ -30,6 +30,18 @@ class TunnelCommand(HttpModel):
     route_id: str = ""
 
 
+class TunnelOpenFailure(StringEnum):
+    RouteUnavailable = "route_unavailable"
+    ConnectionFailed = "connection_failed"
+    StreamLimit = "stream_limit"
+
+
+class TunnelAttachRequest(HttpModel):
+    connection_id: str = Field(min_length=1)
+    stream_id: str = Field(min_length=1)
+    failure: TunnelOpenFailure | None = None
+
+
 class TunnelRouteRequest(HttpModel):
     workspace_id: str
     enrollment_id: str
