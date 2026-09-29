@@ -37,7 +37,7 @@ from networking.async_http import (
     AsyncBackendHttpResponse,
     AsyncBackendResponseError,
 )
-from networking.dialer import BackendRouteDialer
+from networking.dialer import BackendRouteDialer, BackendRouteUnavailable
 from networking.tunnel_agent import AgentTunnelClient
 from networking.tunnel_client import TunnelRouteClient
 from networking.tunnel_gateway import AgentTunnelGateway
@@ -236,11 +236,12 @@ def test_real_agent_tunnel_preserves_half_close_and_revokes_open_streams(
         )
         server = gateway.server(gateway_credentials, listen_address=f"127.0.0.1:{gateway_port}")
         await server.start()
+        local_routes = {route.route_id: ("127.0.0.1", backend_port)}
         agent = AgentTunnelClient(
             f"localhost:{gateway_port}",
             agent_credentials,
             agent_certificate.expires_at,
-            lambda route_id: ("127.0.0.1", backend_port) if route_id == route.route_id else None,
+            local_routes.get,
         )
         client = TunnelRouteClient(directory, control_credentials, "localhost")
         containers = RedisSchedulerContainerRepository(redis)
@@ -248,6 +249,7 @@ def test_real_agent_tunnel_preserves_half_close_and_revokes_open_streams(
         dialer = BackendRouteDialer(client, SchedulerBackendRouteResolver(containers))
         http = AsyncBackendHttpClient(dialer)
         replacement: AgentTunnelClient | None = None
+        saturated_agent: AgentTunnelClient | None = None
         expiring: AgentTunnelClient | None = None
         renewed: AgentTunnelClient | None = None
         expiring_client: TunnelRouteClient | None = None
@@ -292,6 +294,28 @@ def test_real_agent_tunnel_preserves_half_close_and_revokes_open_streams(
             request = TunnelRouteRequest(
                 workspace_id=workspace, enrollment_id=enrollment.id, route_id=route.route_id
             )
+            with socket.socket() as closed_backend:
+                closed_backend.bind(("127.0.0.1", 0))
+                local_routes[route.route_id] = ("127.0.0.1", closed_backend.getsockname()[1])
+                started = asyncio.get_running_loop().time()
+                try:
+                    with pytest.raises(BackendRouteUnavailable, match="connection_failed"):
+                        await asyncio.to_thread(
+                            dialer.dial_backend_route, route.route_id, timeout_seconds=5
+                        )
+                finally:
+                    elapsed = asyncio.get_running_loop().time() - started
+                    print(f"closed backend rejection seconds={elapsed:.6f}")
+                assert elapsed < 1
+            del local_routes[route.route_id]
+            started = asyncio.get_running_loop().time()
+            with pytest.raises(grpc.aio.AioRpcError) as missing:
+                await asyncio.to_thread(client.connect, request, 5)
+            elapsed = asyncio.get_running_loop().time() - started
+            print(f"missing route rejection seconds={elapsed:.6f}")
+            assert missing.value.code() is grpc.StatusCode.FAILED_PRECONDITION
+            assert elapsed < 1
+            local_routes[route.route_id] = ("127.0.0.1", backend_port)
             payload = b"request-before-half-close" * 16000
 
             def exchange() -> None:
@@ -344,7 +368,6 @@ def test_real_agent_tunnel_preserves_half_close_and_revokes_open_streams(
             finally:
                 states.save_agent_route_state(route)
                 containers.set_worker_address(container_id, route.local_target, route=route)
-            listener = await asyncio.start_server(agent.forward_control, "127.0.0.1", 0)
             occupied: list[socket.socket] = []
             try:
                 for _ in range(TUNNEL_MAX_ROUTE_STREAMS + 1):
@@ -356,6 +379,24 @@ def test_real_agent_tunnel_preserves_half_close_and_revokes_open_streams(
                     occupied.append(opened.socket)
                 else:
                     pytest.fail("route saturation did not preserve control capacity")
+                saturated_agent = agent
+                agent = AgentTunnelClient(
+                    saturated_agent.address,
+                    agent_credentials,
+                    agent_certificate.expires_at,
+                    local_routes.get,
+                    streams=saturated_agent.streams,
+                    route_streams=saturated_agent.route_streams,
+                )
+                await agent.start()
+                started = asyncio.get_running_loop().time()
+                with pytest.raises(grpc.aio.AioRpcError) as saturated:
+                    await asyncio.to_thread(client.connect, request, 5)
+                elapsed = asyncio.get_running_loop().time() - started
+                print(f"agent stream limit rejection seconds={elapsed:.6f}")
+                assert saturated.value.code() is grpc.StatusCode.RESOURCE_EXHAUSTED
+                assert elapsed < 1
+                listener = await asyncio.start_server(agent.forward_control, "127.0.0.1", 0)
                 control_reader, control_writer = await asyncio.open_connection(
                     "127.0.0.1", listener.sockets[0].getsockname()[1]
                 )
@@ -385,6 +426,7 @@ def test_real_agent_tunnel_preserves_half_close_and_revokes_open_streams(
                 await asyncio.gather(
                     *(asyncio.to_thread(finish_connection, connection) for connection in occupied)
                 )
+            await saturated_agent.retire()
             reader, writer = await asyncio.open_connection(
                 "127.0.0.1", listener.sockets[0].getsockname()[1]
             )
@@ -571,7 +613,7 @@ def test_real_agent_tunnel_preserves_half_close_and_revokes_open_streams(
             if expiring_client is not None:
                 await asyncio.to_thread(expiring_client.close)
             await agent.close()
-            for session in (replacement, expiring, renewed):
+            for session in (replacement, saturated_agent, expiring, renewed):
                 if session is not None:
                     await session.close()
             if replacement_server is not None:

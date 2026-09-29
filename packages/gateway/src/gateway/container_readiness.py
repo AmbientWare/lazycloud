@@ -1,27 +1,11 @@
-"""Dial a container to find out whether its workload is serving.
-
-The verdict is cached for a window rather than recomputed per call. Both routing
-paths re-select while they wait — the endpoint dispatcher every 50ms, the pod
-proxy every 250ms — so an uncached probe would dial each candidate backend tens
-of times a second for every caller queued behind it.
-
-Redis holds the window rather than a process-local dict: several API processes
-serve the same stub, and a per-process cache would multiply the probe rate by the
-number of them while giving each an independently stale view.
-
-A caller that finds no verdict probes rather than waiting on whichever caller is
-already probing. Suppressing the duplicate dial is tempting — it is the cold
-start, so every waiting caller misses at once — but the loser of that race has no
-verdict to report, and reporting "not ready" is read one layer up as "no capacity
-exists", which asks the scheduler for another container. Paying for a duplicate
-dial is cheaper than paying for a duplicate container, and the common cold-start
-failure is a refused connection, which returns at once rather than at the
-timeout.
-"""
+"""Share in-flight container probes and cache their verdicts across API processes."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import asyncio
+import logging
+from dataclasses import dataclass, field
+from functools import partial
 
 from coordination.redis_client import AsyncRedisClient, RedisWireScalar
 from execution.containers.readiness import (
@@ -33,6 +17,7 @@ from shared.workload_keys import container_readiness_key
 
 _READY = "1"
 _NOT_READY = "0"
+LOGGER = logging.getLogger(__name__)
 # The same range the checkpoint readiness probe accepts. A redirect is a serving
 # application answering, and a probe that demanded 200 would call a workload
 # unready for routing a request it would have handled.
@@ -50,6 +35,20 @@ class AsyncRedisContainerReadiness:
     client: AsyncBackendHttpClient
     timeout_seconds: float = DEFAULT_READINESS_PROBE_TIMEOUT_SECONDS
     cache_ttl_ms: int = DEFAULT_READINESS_CACHE_TTL_MS
+    _probes: dict[str, asyncio.Task[bool]] = field(default_factory=dict, init=False)
+    _closed: bool = field(default=False, init=False)
+
+    async def close(self) -> None:
+        self._closed = True
+        probes = list(self._probes.values())
+        for probe in probes:
+            probe.cancel()
+        await asyncio.gather(*probes, return_exceptions=True)
+
+    def _probe_finished(self, key: str, probe: asyncio.Task[bool]) -> None:
+        self._probes.pop(key, None)
+        if not probe.cancelled() and (error := probe.exception()) is not None:
+            LOGGER.error("Container readiness probe failed", exc_info=error)
 
     async def is_ready(
         self,
@@ -67,8 +66,23 @@ class AsyncRedisContainerReadiness:
         # proxied ports would otherwise let a verdict from one answer for the other.
         key = self.redis.key(container_readiness_key(container_id, port=port, path=health_path))
         cached = await self.redis.get(key)
+        if self._closed:
+            raise RuntimeError("Container readiness is closed")
         if cached is not None:
             return _decoded(cached) == _READY
+        probe = self._probes.get(key)
+        if probe is None:
+            probe = asyncio.create_task(
+                self._probe(key, container_id, address, route_id, health_path)
+            )
+            self._probes[key] = probe
+            probe.add_done_callback(partial(self._probe_finished, key))
+        # A disconnected caller must not cancel readiness for the other callers.
+        return await asyncio.shield(probe)
+
+    async def _probe(
+        self, key: str, container_id: str, address: str, route_id: str, health_path: str
+    ) -> bool:
         try:
             if health_path:
                 response = await self.client.open_stream(

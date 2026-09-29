@@ -1437,6 +1437,8 @@ class ApiTransport:
     async_dispatcher: AsyncEndpointInstanceDispatcher | None
 
     async def close(self) -> None:
+        if self.async_container_readiness is not None:
+            await self.async_container_readiness.close()
         if self.async_http is not None:
             await self.async_http.close()
 
