@@ -98,6 +98,7 @@ def _place(context: ServiceContext, machine_id: str, *, preemptible: bool, name:
         write_scheduling_request(
             row,
             SchedulerWorkerRequest(
+                fairness_account_id="test-account",
                 workspace_id=workspace_id,
                 stub_id="stub",
                 container_id=container_id,

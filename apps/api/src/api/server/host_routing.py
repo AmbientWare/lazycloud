@@ -13,14 +13,14 @@ from shared.urls import handler_prefix
 from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from api.server.services import ApiServices
+from api.server.services import ApiServiceCore
 
 PORT_HOST_PATTERN = re.compile(r"^(?P<target>.+)-(?P<port>[1-9][0-9]{0,4})$")
 PROXY_STUB_KINDS = {StubKind.Pod, StubKind.Sandbox}
 
 
-class ApiServicesProvider(Protocol):
-    def current(self) -> ApiServices: ...
+class ApiServiceCoreProvider(Protocol):
+    def current(self) -> ApiServiceCore: ...
 
 
 class GeneratedInvokeHostRoutingMiddleware:
@@ -35,7 +35,7 @@ class GeneratedInvokeHostRoutingMiddleware:
         self,
         app: ASGIApp,
         *,
-        services_provider: ApiServicesProvider,
+        services_provider: ApiServiceCoreProvider,
     ) -> None:
         self.app = app
         self.services_provider = services_provider
@@ -125,7 +125,7 @@ def invoke_host_workspace_id(scope: Scope) -> str | None:
 
 
 def _resolve_handler_route(
-    services: ApiServices,
+    services: ApiServiceCore,
     session: DatabaseSession,
     host: str,
     *,
@@ -163,7 +163,7 @@ def _resolve_handler_route(
 
 
 def _resolve_host_target(
-    services: ApiServices,
+    services: ApiServiceCore,
     session: DatabaseSession,
     host: str,
     *,
@@ -209,7 +209,7 @@ def _resolve_host_target(
 
 
 def _custom_hostname_target(
-    services: ApiServices,
+    services: ApiServiceCore,
     session: DatabaseSession,
     host: str,
 ) -> _HostTarget | None:
@@ -220,7 +220,7 @@ def _custom_hostname_target(
 
 
 def _port_host_target(
-    services: ApiServices,
+    services: ApiServiceCore,
     session: DatabaseSession,
     control_plane: ControlPlaneService,
     label: str,
@@ -268,7 +268,7 @@ def _port_host_target(
 
 
 def _deployment_host_target(
-    services: ApiServices,
+    services: ApiServiceCore,
     session: DatabaseSession,
     label: str,
 ) -> _HostTarget | None:

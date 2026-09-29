@@ -19,7 +19,7 @@ from shared.http.usage import (
 )
 from shared.payments import BILLING_CURRENCY
 
-from api.server.services import ApiServices
+from api.server.services import ApiServiceCore, ManagementServiceCore
 
 STUB_TYPE_ALIASES = {
     "endpoint": StubKind.Endpoint,
@@ -31,11 +31,11 @@ STUB_TYPE_ALIASES = {
 }
 
 
-def _management(services: ApiServices) -> ManagementService:
+def _management(services: ManagementServiceCore) -> ManagementService:
     return ManagementService(services)
 
 
-def member_workspaces(services: ApiServices, user_id: str) -> dict[str, str]:
+def member_workspaces(services: ApiServiceCore, user_id: str) -> dict[str, str]:
     """Every workspace this person reaches, and what each is called.
 
     The scope of an account-wide *reading*, resolved from the membership rows

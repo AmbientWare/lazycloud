@@ -1220,8 +1220,13 @@ class RedisCapacityReservationRepository:
 @dataclass(slots=True)
 class CapacityReservationService:
     reservations: RedisCapacityReservationRepository
-    controllers: Callable[[], Iterable[CapacityAcquisitionController]]
+    controllers: Callable[[], Iterable[CapacityAcquisitionController]] | None = None
     allocation_owners: CapacityAllocationOwnerDirectory | None = None
+
+    def _controllers(self) -> Iterable[CapacityAcquisitionController]:
+        if self.controllers is None:
+            raise RuntimeError("capacity acquisition requires fleet provider controllers")
+        return self.controllers()
 
     @contextmanager
     def mutation_lock(self, capacity_owner_id: str) -> Iterator[None]:
@@ -1271,7 +1276,7 @@ class CapacityReservationService:
 
         existing = {
             controller.capacity_owner_id: controller
-            for controller in self.controllers()
+            for controller in self._controllers()
             if controller.accepts(request)
         }
         for controller in sorted(
@@ -1574,13 +1579,7 @@ class CapacityReservationService:
                 total.gpu_count += allocation.gpu_count
         return reserved
 
-    def release_request(
-        self,
-        container_id: str,
-        *,
-        workers: Iterable[SchedulerWorkerRecord] = (),
-        now: datetime | None = None,
-    ) -> None:
+    def release_request(self, container_id: str) -> None:
         allocation = self.reservations.allocation_for_request(container_id)
         if allocation is None:
             return
@@ -1594,14 +1593,6 @@ class CapacityReservationService:
             self.reservations.release_allocation(
                 container_id, expected_reservation_id=allocation.reservation_id
             )
-            if self.reservations.allocations_for(reservation.id):
-                return
-            self._release_unallocated_reservation(
-                reservation,
-                workers=workers,
-                worker_reservations={},
-                now=now or utc_now(),
-            )
 
     def reconcile(
         self,
@@ -1612,7 +1603,7 @@ class CapacityReservationService:
         current_time = now or utc_now()
         worker_records = list(workers)
         controllers = {
-            controller.capacity_owner_id: controller for controller in self.controllers()
+            controller.capacity_owner_id: controller for controller in self._controllers()
         }
         self._reconcile_pool_sizing(
             tuple(controllers.values()),
@@ -2017,7 +2008,7 @@ class CapacityReservationService:
         return next(
             (
                 controller
-                for controller in self.controllers()
+                for controller in self._controllers()
                 if controller.capacity_owner_id == capacity_owner_id
             ),
             None,

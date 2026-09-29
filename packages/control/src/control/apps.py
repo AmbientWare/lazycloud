@@ -44,6 +44,7 @@ from sqlalchemy.orm import Session
 from control.context import ControlContext
 from control.deployment_cleanup import AppDeploymentLifecycleService
 from control.events import publish_workload_change
+from control.readers import DatabaseAppReader
 
 LOGGER = logging.getLogger(__name__)
 
@@ -93,10 +94,10 @@ class DatabaseAppExecutionAdmission:
         app_id: str,
         workspace_id: str,
     ) -> None:
-        app = AppRepository(session).get_for_update(app_id, workspace_id=workspace_id)
-        if app is None:
+        state = AppRepository(session).lock_lifecycle_state(app_id, workspace_id=workspace_id)
+        if state is None:
             raise NotFoundError(f"app not found: {app_id}")
-        if app.lifecycle_state is not AppLifecycleState.Active:
+        if state is not AppLifecycleState.Active:
             raise ConflictError(f"app {app_id} is not active")
 
 
@@ -142,6 +143,7 @@ class AppService:
             if stub is not None:
                 self.artifact_availability.assert_available(session, stub.id)
             repository = AppRepository(session)
+            repository.lock_name(workspace_id=workspace_record.id, name=app_name)
             existing = repository.get_by_name(
                 app_name,
                 workspace_id=workspace_record.id,
@@ -189,41 +191,14 @@ class AppService:
         return record
 
     def get(self, app_id_or_name: str, *, workspace: str | None = None) -> AppRecord:
-        with self.context.database.session() as session:
-            return self.get_in_session(session, app_id_or_name, workspace=workspace)
+        return DatabaseAppReader(self.context).get(app_id_or_name, workspace=workspace)
 
     def get_in_session(
-        self,
-        session: Session,
-        app_id_or_name: str,
-        *,
-        workspace: str | None = None,
+        self, session: Session, app_id_or_name: str, *, workspace: str | None = None
     ) -> AppRecord:
-        workspace_id = (
-            self.context.workspace(session, workspace).id if workspace is not None else None
+        return DatabaseAppReader(self.context).get_in_session(
+            session, app_id_or_name, workspace=workspace
         )
-        repository = AppRepository(session)
-        app_id = try_uuid(app_id_or_name)
-        if app_id is not None:
-            record = (
-                repository.get(app_id, workspace_id=workspace_id)
-                if workspace_id is not None
-                else repository.get_across_workspaces(app_id)
-            )
-        elif workspace_id is not None:
-            record = repository.get_by_name(app_id_or_name, workspace_id=workspace_id)
-        else:
-            matches = [
-                item for item in repository.list_across_workspaces() if item.name == app_id_or_name
-            ]
-            record = max(
-                matches,
-                key=lambda item: (item.version, item.updated_at),
-                default=None,
-            )
-        if record is not None:
-            return record
-        raise NotFoundError(f"app not found: {app_id_or_name}")
 
     def list(
         self,

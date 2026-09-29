@@ -61,6 +61,7 @@ class AgentTunnelService:
     _session: AgentTunnelClient | None = field(default=None, init=False)
     _retiring: set[asyncio.Task[None]] = field(default_factory=set, init=False)
     _streams: set[asyncio.Task[None]] = field(default_factory=set, init=False)
+    _route_streams: set[asyncio.Task[None]] = field(default_factory=set, init=False)
     _servers: dict[str, asyncio.Server] = field(default_factory=dict, init=False)
     _routes: dict[str, tuple[str, int]] = field(default_factory=dict, init=False)
     _failure: BaseException | None = field(default=None, init=False)
@@ -218,6 +219,7 @@ class AgentTunnelService:
                         certificate.expires_at,
                         self._routes.get,
                         streams=self._streams,
+                        route_streams=self._route_streams,
                     )
                     await session.start()
                     self._session = session

@@ -18,7 +18,7 @@ from control.releases import DeploymentReleaseService
 from coordination.event_bus import EventBusEvent, EventBusEventType, EventBusSendResult
 from database.repositories.apps import DeploymentRepository, StubRepository
 from database.repositories.execution import TaskRepository
-from database.repositories.identity import WorkspaceRepository
+from database.repositories.identity import WorkspaceMemberRepository, WorkspaceRepository
 from database.repositories.images import ImageArchiveRepository, ImageBuildRepository
 from database.repositories.orchestration import (
     AutoscalingTargetRepository,
@@ -535,7 +535,12 @@ class ContainerService:
                 options.memory_limit_mib * 1024 * 1024 if options.memory_limit_mib else None
             ),
         )
+        with self.context.database.session() as session:
+            owner = WorkspaceMemberRepository(session).owner(record.workspace_id)
+        if owner is None:
+            raise InvalidInputError("container workspace has no account owner")
         request = SchedulerWorkerRequest(
+            fairness_account_id=owner.user_id,
             workspace_id=record.workspace_id,
             stub_id=record.stub_id or options.stub_type or "containers",
             deployment_id=options.deployment_id or "",

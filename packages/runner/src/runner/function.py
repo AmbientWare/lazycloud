@@ -49,13 +49,12 @@ from shared.function_payloads import (
     FunctionResultPayload,
 )
 from shared.http.errors import HttpApiError, HttpTransportError
+from shared.http.execution_entry import ExecutionEntryEvidence
 from shared.http.functions import (
     FUNCTION_CALL_REF_MARKER,
     FunctionClaimedTask,
     FunctionClaimRequest,
     FunctionClaimResponse,
-    FunctionExecutionEntryRequest,
-    FunctionExecutionEntryResponse,
     FunctionMonitorRequest,
     FunctionMonitorResponse,
     FunctionRetireRequest,
@@ -98,6 +97,22 @@ from runner.worker_processes import stop_worker_processes
 DEFAULT_FUNCTION_POLL_INTERVAL_SECONDS = 0.1
 _CANCELLED_WORKER_EXIT_CODE = 75
 _FUNCTION_CALL_REFERENCE_ADAPTER = TypeAdapter[FunctionCallPersistentId](FunctionCallPersistentId)
+
+
+@dataclass(slots=True)
+class ExecutionTiming:
+    entered_at: float | None = None
+
+    def entered(self) -> None:
+        if self.entered_at is None:
+            self.entered_at = time.monotonic()
+
+    def evidence(self) -> ExecutionEntryEvidence | None:
+        if self.entered_at is None:
+            return None
+        return ExecutionEntryEvidence(
+            elapsed_since_entry_seconds=time.monotonic() - self.entered_at,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -432,10 +447,12 @@ class FunctionRunner:
 
     def _run_claimed_task(self, task: ClaimedTask) -> None:
         started = time.perf_counter()
+        timing = ExecutionTiming()
         try:
             self.run_task_hooks(task, LifecycleHookName.Running, TaskStatus.Running)
-            result = self.execute_with_log_capture(task)
-            self.set_result(task, _serialize_function_result(result, task.invocation))
+            result = self.execute_with_log_capture(task, timing)
+            serialized = _serialize_function_result(result, task.invocation)
+            self.set_result(task, serialized, execution_entry=timing.evidence())
             duration = time.perf_counter() - started
             self.run_task_hooks(
                 task,
@@ -465,7 +482,12 @@ class FunctionRunner:
                     task.task_id, f"traceback: {type(log_error).__name__}: {log_error}"
                 )
             self.run_error_hooks(task, exc, duration_seconds=duration)
-            response = self.end_failed_task(task, exc, duration_seconds=duration)
+            response = self.end_failed_task(
+                task,
+                exc,
+                duration_seconds=duration,
+                execution_entry=timing.evidence(),
+            )
             self.run_final_failure_hooks(task, exc, response, duration_seconds=duration)
 
     def handler(self) -> Any:
@@ -473,20 +495,13 @@ class FunctionRunner:
             self._handler = load_callable(self.config.handler_ref)
         return self._handler
 
-    def execute_with_log_capture(self, task: ClaimedTask) -> Any:
-        entered_at: float | None = None
-
-        def entered() -> None:
-            nonlocal entered_at
-            if entered_at is None:
-                entered_at = time.monotonic()
-
+    def execute_with_log_capture(self, task: ClaimedTask, timing: ExecutionTiming) -> Any:
         logs = TaskLogBuffer(
             lambda stream, messages: self.append_task_logs(task.task_id, stream, messages)
         )
         stdout = RunnerTaskLogStream("stdout", logs)
         stderr = RunnerTaskLogStream("stderr", logs)
-        with routed_output(stdout, stderr), observe_execution_entry(entered):
+        with routed_output(stdout, stderr), observe_execution_entry(timing.entered):
             try:
                 return invoke_handler(
                     self.handler(),
@@ -495,21 +510,6 @@ class FunctionRunner:
                     encoding=task.invocation.argument_encoding,
                 )
             finally:
-                if entered_at is not None and task.claim_id:
-                    try:
-                        FunctionExecutionEntryResponse.model_validate(
-                            self.control.post(
-                                "/api/v1/functions/execution-entry",
-                                FunctionExecutionEntryRequest(
-                                    task_id=task.task_id,
-                                    container_id=self.container_id,
-                                    claim_id=task.claim_id,
-                                    elapsed_since_entry_seconds=time.monotonic() - entered_at,
-                                ).model_dump(mode="json"),
-                            )
-                        )
-                    except Exception as exc:
-                        self.report_log_delivery_failure(task.task_id, f"execution entry: {exc}")
                 stdout.close()
                 stderr.close()
                 logs.close()
@@ -527,7 +527,13 @@ class FunctionRunner:
             flush=True,
         )
 
-    def set_result(self, task: ClaimedTask, result: FunctionResultPayload) -> None:
+    def set_result(
+        self,
+        task: ClaimedTask,
+        result: FunctionResultPayload,
+        *,
+        execution_entry: ExecutionEntryEvidence | None = None,
+    ) -> None:
         FunctionSetResultResponse.model_validate(
             self.control.post(
                 "/api/v1/functions/set-result",
@@ -535,6 +541,8 @@ class FunctionRunner:
                     task_id=task.task_id,
                     container_id=self.container_id,
                     result=result,
+                    claim_id=task.claim_id,
+                    execution_entry=execution_entry,
                 ).model_dump(mode="json"),
             )
         )
@@ -556,6 +564,7 @@ class FunctionRunner:
         exc: BaseException,
         *,
         duration_seconds: float,
+        execution_entry: ExecutionEntryEvidence | None = None,
     ) -> EndTaskResponse | None:
         try:
             return EndTaskResponse.model_validate(
@@ -570,6 +579,8 @@ class FunctionRunner:
                         container_id=self.container_id,
                         container_hostname=self.container_hostname,
                         result_base64="",
+                        execution_entry=execution_entry,
+                        claim_id=task.claim_id,
                     ).model_dump(mode="json"),
                 )
             )

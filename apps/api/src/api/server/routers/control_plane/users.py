@@ -33,11 +33,11 @@ from api.server.auth import (
 )
 from api.server.dependencies import (
     authorize_token_workspace,
-    current_services,
+    management_services,
     require_user_principal,
 )
 from api.server.identifiers import resource_identifier
-from api.server.services import ApiServices
+from api.server.services import ManagementServiceCore
 from billing import DatabaseBillingAdmission
 
 router = APIRouter()
@@ -89,7 +89,7 @@ def member_response(
 def create_user(
     request: UserCreateRequest,
     _auth: admin_access,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> UserResponse:
     """Create an account, optionally pre-linked to the GitHub identity that reaches it.
 
@@ -113,7 +113,7 @@ def create_user(
 )
 def list_users(
     _auth: admin_access,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> UserListResponse:
     records = services.users.list()
     identities = services.users.identities([record.id for record in records])
@@ -130,7 +130,7 @@ def list_users(
 def get_user(
     user_id: str,
     token: read_token,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> UserResponse:
     """Read one account: your own, or any account when you administer the platform."""
     _authorize_user_access(services, token, user_id)
@@ -146,7 +146,7 @@ def set_user_role(
     user_id: str,
     request: UserRoleRequest,
     _auth: admin_access,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> UserResponse:
     """Grant or withdraw platform administrator standing.
 
@@ -169,7 +169,7 @@ def set_user_status(
     user_id: str,
     request: UserStatusRequest,
     _auth: admin_access,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> UserResponse:
     updated = services.users.set_status(user_id, status=request.status)
     services.auth.credentials_revoked()
@@ -184,7 +184,7 @@ def set_user_status(
 def list_workspace_members(
     workspace: str,
     principal: read_principal,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> WorkspaceMemberListResponse:
     workspace_id = authorize_token_workspace(
         services,
@@ -212,7 +212,7 @@ def add_workspace_member(
     workspace: str,
     request: WorkspaceMemberAddRequest,
     principal: write_principal,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> WorkspaceMemberResponse:
     """Admitting someone to a workspace is an administrator's decision, not a member's."""
     workspace_id = authorize_token_workspace(
@@ -248,7 +248,7 @@ def set_workspace_member_role(
     user_id: str,
     request: WorkspaceMemberRoleRequest,
     principal: write_principal,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> WorkspaceMemberResponse:
     workspace_id = authorize_token_workspace(
         services,
@@ -282,7 +282,7 @@ def remove_workspace_member(
     workspace: str,
     user_id: str,
     principal: write_principal,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> Response:
     """Take a member out, or leave.
 
@@ -324,12 +324,12 @@ def _same_user(left: str, right: str) -> bool:
         return False
 
 
-def _is_platform_administrator(services: ApiServices, token: AuthTokenRecord) -> bool:
+def _is_platform_administrator(services: ManagementServiceCore, token: AuthTokenRecord) -> bool:
     return services.auth.platform_role(token) is PlatformRole.Administrator
 
 
 def _authorize_user_access(
-    services: ApiServices,
+    services: ManagementServiceCore,
     token: AuthTokenRecord,
     user_id: str,
 ) -> None:

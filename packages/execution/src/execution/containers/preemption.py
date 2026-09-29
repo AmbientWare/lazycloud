@@ -10,7 +10,9 @@ from shared.contracts import ContractModel
 from shared.deployments import StubKind
 from shared.tasks import TaskStatus
 
-from execution.services import ExecutionServices
+from execution.context import ExecutionContext
+from execution.services import ExecutionContainerService
+from execution.tasks import TaskService
 
 
 class PreemptedContainerResult(ContractModel):
@@ -21,6 +23,17 @@ class PreemptedContainerResult(ContractModel):
     changed: bool = False
     retry_scheduled: bool = False
     stale_attempt: bool = False
+
+
+class PreemptionServices(Protocol):
+    @property
+    def context(self) -> ExecutionContext: ...
+
+    @property
+    def containers(self) -> ExecutionContainerService: ...
+
+    @property
+    def tasks(self) -> TaskService: ...
 
 
 class PreemptionStubReader(Protocol):
@@ -43,7 +56,7 @@ class PreemptedContainerControl(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class PreemptedContainerService:
-    services: ExecutionServices
+    services: PreemptionServices
     stubs: PreemptionStubReader
 
     def recover_unsettled(self, *, limit: int = 100) -> list[str]:

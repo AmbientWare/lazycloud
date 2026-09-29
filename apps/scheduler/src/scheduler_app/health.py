@@ -10,10 +10,10 @@ from shared.process_liveness import check_heartbeats, heartbeat_path
 
 class SchedulerLoopName(StrEnum):
     Placement = "placement"
-    Acquisition = "acquisition"
-    Capacity = "capacity"
-    Housekeeping = "housekeeping"
+    Recovery = "recovery"
     Dispatch = "dispatch"
+    Builds = "builds"
+    Scheduled = "scheduled"
 
 
 def scheduler_heartbeat_paths(base: Path) -> dict[SchedulerLoopName, Path]:

@@ -51,6 +51,7 @@ def test_startup_report_keeps_failed_and_overdue_containers_in_the_cohort(
                 .values(
                     created_at=requested,
                     scheduling_requested_at=requested,
+                    scheduling_fairness_account_id=stub.workspace_id,
                     scheduling_assigned_at=requested + timedelta(milliseconds=100)
                     if duration is not None
                     else None,

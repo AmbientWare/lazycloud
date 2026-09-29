@@ -17,7 +17,9 @@ def connect_shell_backend(
     )
     if not route_id:
         raise ConnectionError("Shell requires an authorized backend route")
-    return route_dialer.dial_backend_route(route_id, timeout_seconds=target.dial_timeout_seconds)
+    return route_dialer.dial_backend_route(
+        route_id, timeout_seconds=target.dial_timeout_seconds
+    ).socket
 
 
 __all__ = ["connect_shell_backend"]

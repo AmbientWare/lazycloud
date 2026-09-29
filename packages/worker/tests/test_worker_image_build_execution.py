@@ -83,6 +83,7 @@ def test_worker_private_build_args_are_redacted_from_results_and_instance_logs(
         ),
     )
     request = SchedulerWorkerRequest(
+        fairness_account_id="test-account",
         placement=Placement.platform(),
         workspace_id="workspace-1",
         stub_id="image-build",

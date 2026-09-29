@@ -5,24 +5,20 @@ from datetime import datetime
 from typing import Never
 
 import pytest
-from agent.binary import AgentBinarySettings
-from compute.reclaim import ComputeReclaimPolicy
 from gateway.settings import GatewaySettings
 from images.settings import ImageBuildContainerSettings
 from observability.settings import (
     VolumeMeteringSettings,
     WorkspaceChangeStreamSettings,
 )
-from provider_clients.settings import AwsAccountConnectionSettings, AwsCapacitySettings
-from scheduler.service import DEFAULT_AUTOSCALING_RECONCILE_LIMIT
+from scheduler.reconciliation import DEFAULT_AUTOSCALING_RECONCILE_LIMIT
 from scheduler.state import RedisSchedulerContainerRepository
 from scheduler_app import main as scheduler
-from scheduler_app.runtime import SchedulerRuntime
-from scheduler_app.services import (
-    SchedulerCapacitySettings,
+from scheduler_app.composition_settings import (
     SchedulerObservabilitySettings,
     SchedulerStorageSettings,
 )
+from scheduler_app.runtime import SchedulerRuntime
 from shared.containers import ContainerStatus
 from sqlalchemy import Engine, text
 from sqlalchemy.engine import URL
@@ -55,12 +51,6 @@ def scheduler_runtime(
             image_archive=ImageArchiveSettings(bucket=objects.bucket),
             retention=RetentionSettings(),
             volume_metering=VolumeMeteringSettings(),
-        ),
-        capacity=SchedulerCapacitySettings(
-            aws_connections=AwsAccountConnectionSettings(),
-            aws_capacity=AwsCapacitySettings(),
-            agent_binaries=AgentBinarySettings(),
-            reclaim=ComputeReclaimPolicy(),
         ),
         image_build_container_settings=ImageBuildContainerSettings(),
     )

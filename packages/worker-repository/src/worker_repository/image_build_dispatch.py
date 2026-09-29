@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from uuid import uuid4
 
 from control.placement import PlacementResolver
-from database.repositories.identity import WorkspaceRepository
+from database.repositories.identity import WorkspaceMemberRepository, WorkspaceRepository
 from database.repositories.image_build_attempts import ImageBuildAttemptRepository
 from database.repositories.image_build_dispatch import ImageBuildDispatchRepository
 from database.repositories.images import ImageBuildRepository
@@ -115,10 +115,14 @@ class DurableImageBuildDispatch:
             placement = self.placement_resolver.resolve_placement(
                 session, workspace, request.machine
             )
+            owner = WorkspaceMemberRepository(session).owner(request.workspace_id)
+        if owner is None:
+            raise InvalidInputError("image build workspace has no account owner")
         payload = ImageBuildDispatchPayload(
             plan=plan_image_build_container_request(
                 request,
                 workspace_id=request.workspace_id,
+                fairness_account_id=owner.user_id,
                 placement=placement,
                 cpu_millicores=self.settings.cpu_millicores,
                 memory_mib=self.settings.memory_mib,

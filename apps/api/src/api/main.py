@@ -30,9 +30,10 @@ def run_api_server(
     port: int = 9000,
     log_level: str = "info",
     workers: int = 1,
+    app_factory: str = "api.fastapi_app:create_production_app",
 ) -> None:
     uvicorn.run(
-        "api.fastapi_app:create_production_app",
+        app_factory,
         factory=True,
         host=host,
         port=port,
@@ -43,6 +44,18 @@ def run_api_server(
 
 
 def main(argv: list[str] | None = None) -> None:
+    _run(argv, "api.fastapi_app:create_production_app")
+
+
+def execution_main(argv: list[str] | None = None) -> None:
+    _run(argv, "api.fastapi_app:create_execution_app")
+
+
+def runtime_main(argv: list[str] | None = None) -> None:
+    _run(argv, "api.fastapi_app:create_runtime_app")
+
+
+def _run(argv: list[str] | None, app_factory: str) -> None:
     load_environment_file()
     # Before anything else builds, so a failure while composing the service
     # graph is written rather than discarded.
@@ -54,6 +67,7 @@ def main(argv: list[str] | None = None) -> None:
         port=args.port,
         log_level=args.log_level,
         workers=args.workers,
+        app_factory=app_factory,
     )
 
 

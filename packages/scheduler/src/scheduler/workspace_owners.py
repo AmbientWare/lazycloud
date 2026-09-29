@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import dataclass
 
 from database.repositories.identity import WorkspaceMemberRepository
@@ -23,6 +24,10 @@ class DatabaseWorkspaceOwners:
         with self.context.database.session() as session:
             owner = WorkspaceMemberRepository(session).owner(workspace_id)
         return owner.user_id if owner is not None else ""
+
+    def owner_user_ids(self, workspace_ids: Collection[str]) -> dict[str, str]:
+        with self.context.database.session() as session:
+            return WorkspaceMemberRepository(session).owner_user_ids(workspace_ids)
 
 
 __all__ = ["DatabaseWorkspaceOwners"]

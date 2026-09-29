@@ -33,6 +33,7 @@ dependencies = [
 
 [project.scripts]
 lazycloud-scheduler = "scheduler_app.main:main"
+lazycloud-fleet-controller = "scheduler_app.fleet_main:main"
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]

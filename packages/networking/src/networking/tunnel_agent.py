@@ -10,6 +10,7 @@ import grpc
 import grpc.aio
 from shared.http.agent_tunnel import (
     TUNNEL_HEARTBEAT_SECONDS,
+    TUNNEL_MAX_ROUTE_STREAMS,
     TUNNEL_MAX_STREAMS,
     TUNNEL_OPEN_TIMEOUT_SECONDS,
     TunnelCommand,
@@ -44,6 +45,7 @@ class AgentTunnelClient:
     expires_at: datetime
     resolve_route: Callable[[str], tuple[str, int] | None]
     streams: set[asyncio.Task[None]] = field(default_factory=set, repr=False)
+    route_streams: set[asyncio.Task[None]] = field(default_factory=set, repr=False)
     connection_id: str = field(default="", init=False)
     accepting: bool = field(default=False, init=False)
     _channel: grpc.aio.Channel | None = field(default=None, init=False)
@@ -144,6 +146,7 @@ class AgentTunnelClient:
     def _stream_finished(self, task: asyncio.Task[None]) -> None:
         self._streams.discard(task)
         self.streams.discard(task)
+        self.route_streams.discard(task)
         if task.cancelled():
             return
         error = task.exception()
@@ -184,8 +187,13 @@ class AgentTunnelClient:
                     or not command.route_id
                 ):
                     raise ConnectionError("Gateway sent an invalid agent command")
-                if len(self.streams) < TUNNEL_MAX_STREAMS:
-                    self._track(asyncio.create_task(self._attach(command)))
+                if (
+                    len(self.streams) < TUNNEL_MAX_STREAMS
+                    and len(self.route_streams) < TUNNEL_MAX_ROUTE_STREAMS
+                ):
+                    task = asyncio.create_task(self._attach(command))
+                    self.route_streams.add(task)
+                    self._track(task)
         except grpc.aio.AioRpcError as exc:
             if exc.code() in {grpc.StatusCode.UNAUTHENTICATED, grpc.StatusCode.PERMISSION_DENIED}:
                 await self._cancel_streams()
@@ -207,6 +215,8 @@ class AgentTunnelClient:
             await call.write(command.model_dump_json().encode())
             await bridge_socket(GrpcPacketStream(call.__aiter__(), call.write), reader, writer)
             await call.done_writing()
+            async with asyncio.timeout(TUNNEL_OPEN_TIMEOUT_SECONDS):
+                await call.code()
         finally:
             call.cancel()
             writer.close()
@@ -225,6 +235,8 @@ class AgentTunnelClient:
                     raise ConnectionError("Gateway did not open the control connection")
             await bridge_socket(GrpcPacketStream(incoming, call.write), reader, writer)
             await call.done_writing()
+            async with asyncio.timeout(TUNNEL_OPEN_TIMEOUT_SECONDS):
+                await call.code()
         finally:
             call.cancel()
             writer.close()

@@ -56,6 +56,7 @@ kind: Service
 metadata:
   name: tcp-ingress
   annotations:
+    argocd.argoproj.io/sync-wave: "1"
     service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
     service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
     service.beta.kubernetes.io/aws-load-balancer-healthcheck-protocol: HTTP
@@ -67,7 +68,7 @@ spec:
   type: LoadBalancer
   loadBalancerClass: eks.amazonaws.com/nlb
   selector:
-    app: control-plane
+    app: execution-api
   ports:
     - name: tcp-ingress
       port: {{ .Values.tcpIngress.port }}

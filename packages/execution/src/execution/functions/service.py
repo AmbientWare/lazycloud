@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import AsyncGenerator, AsyncIterator, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
@@ -21,10 +21,10 @@ from database.repositories.execution import (
 )
 from database.repositories.orchestration import ContainerRepository
 from database.types import DatabaseSession
-from foundation.ids import required_uuid
 from observability.stream_state import AsyncTaskChangeReader
 from pydantic import JsonValue
 from shared.app_identity import FUNCTION_IMAGE
+from shared.autoscaler_state import AutoscalerTargetKind
 from shared.autoscaling import function_container_ceiling
 from shared.container_requests import (
     WORKER_USER_CODE_VOLUME,
@@ -50,14 +50,13 @@ from shared.function_payloads import (
     function_result_payload_size,
     validate_function_dependency_bindings,
 )
+from shared.http.execution_entry import ExecutionEntryEvidence
 from shared.http.functions import (
     FunctionCallGraphNode,
     FunctionCallGraphResponse,
     FunctionClaimedTask,
     FunctionClaimRequest,
     FunctionClaimResponse,
-    FunctionExecutionEntryRequest,
-    FunctionExecutionEntryResponse,
     FunctionInvokeBody,
     FunctionInvokeResponse,
     FunctionMonitorRequest,
@@ -135,13 +134,16 @@ class FunctionControlService:
                     raise InvalidInputError(
                         f"function returns {python_type}; call it through the Python SDK"
                     )
-            # Before the task row, because everything after this commits: a
-            # refusal taken later leaves a task queued forever for an account
-            # nothing will schedule. Asked with the GPU the container will want,
-            # and answered again when that container is reserved; what comes
-            # back here is discarded because nothing is created yet.
+            # Warm invocations reuse capacity. A cold invocation must also pass
+            # the container limit before committing a task it cannot run.
             with self.services.context.database.session() as session:
-                self.services.containers.admit_container_start(
+                needs_container = ContainerRepository(session).count_live_for_stub(stub.id) == 0
+                admit = (
+                    self.services.containers.admit_container_start
+                    if needs_container
+                    else self.services.payment_admission.assert_workload_eligible
+                )
+                admit(
                     session,
                     workspace_id=stub.workspace_id,
                     gpu=config.runtime.gpu,
@@ -149,8 +151,7 @@ class FunctionControlService:
                     region=config.runtime.region,
                     availability_zone=config.runtime.availability_zone,
                 )
-                # Same reason: a stub naming a machine that has left must refuse
-                # here, not leave a task waiting for capacity that never comes.
+                # Reject a departed machine before creating its task.
                 placement = workload_placement(
                     session,
                     resolver=self.services.placement_resolver,
@@ -175,12 +176,12 @@ class FunctionControlService:
                         session, app_id=stub.app_id, workspace_id=stub.workspace_id
                     )
                 if deployment_id:
-                    deployment = DeploymentRepository(session).get_for_update(
-                        deployment_id, workspace_id=stub.workspace_id
+                    active = DeploymentRepository(session).lock_invocation_active(
+                        deployment_id, workspace_id=stub.workspace_id, stub_id=stub.id
                     )
-                    if deployment is None or deployment.stub_id != stub.id:
+                    if active is None:
                         raise NotFoundError(f"deployment not found for function: {deployment_id}")
-                    if not deployment.active:
+                    if not active:
                         raise ConflictError(f"deployment is not active: {deployment_id}")
                 task = self.services.tasks.create_in_transaction(
                     session,
@@ -196,26 +197,34 @@ class FunctionControlService:
                     kwargs=task_kwargs,
                     invocation=invoke_plan.invocation,
                     retry_policy=retry_policy,
+                    claimable_at=utc_now() if not request.dependencies else None,
                 )
+                usage = self.services.usage.record_task_count_in_session(
+                    session,
+                    workspace_id=stub.workspace_id,
+                    resource_type="function",
+                    resource_id=stub.id,
+                    task_id=task.id,
+                    kind=stub.kind.value,
+                    app_id=stub.app_id or "",
+                    deployment_id=task.deployment_id or "",
+                )
+                dependencies = self._create_task_dependencies(session, task, request)
+                if task.claimable_at is not None:
+                    self.services.execution_demand.activate_in_transaction(
+                        session,
+                        stub_id=stub.id,
+                        workspace_id=stub.workspace_id,
+                        kind=AutoscalerTargetKind.Function,
+                    )
+            self.services.execution_demand.notify()
             self.services.tasks.publish_created(task)
-            if not task.root_task_id:
-                task.root_task_id = task.id
-                task = self.services.tasks.save(task)
-                self.services.tasks.publish_lifecycle_change(
-                    task,
-                    WorkspaceChangeType.Updated,
-                )
-            self.services.usage.record_task_count(
-                workspace_id=stub.workspace_id,
-                resource_type="function",
-                resource_id=stub.id,
-                task_id=task.id,
-                kind=stub.kind.value,
-                app_id=stub.app_id or "",
-                deployment_id=task.deployment_id or "",
-            )
-            dependencies = self._create_task_dependencies(task, request)
-            scheduled = self._try_schedule_waiting_task(task.id, placement=placement)
+            self.services.usage.publish_change(usage)
+            scheduled = None
+            if task.claimable_at is None:
+                scheduled = self._try_schedule_waiting_task(task.id, placement=placement)
+            elif needs_container:
+                scheduled = self._schedule_function_task(task, placement=placement)
             if scheduled is not None and not scheduled.accepted:
                 return FunctionInvokeResponse.from_result(
                     task_id=task.id,
@@ -284,31 +293,33 @@ class FunctionControlService:
 
     def _create_task_dependencies(
         self,
+        session: DatabaseSession,
         task: Task,
         request: FunctionInvokeBody,
     ) -> list[TaskDependency]:
         dependencies: list[TaskDependency] = []
         seen: set[str] = set()
-        with self.services.context.database.session() as session:
-            repository = TaskDependencyRepository(session)
-            for dependency in request.dependencies:
-                upstream_task_id = dependency.task_id.strip()
-                if not upstream_task_id or upstream_task_id in seen:
-                    continue
-                upstream = self._workspace_task(upstream_task_id, task.workspace_id or "")
-                seen.add(upstream_task_id)
-                dependencies.append(
-                    repository.create(
-                        TaskDependency(
-                            workspace_id=task.workspace_id,
-                            task_id=task.id,
-                            upstream_task_id=upstream.id,
-                            parent_task_id=task.parent_task_id,
-                            root_task_id=task.root_task_id or task.id,
-                            edge_type=dependency.edge_type or "argument",
-                        )
+        repository = TaskDependencyRepository(session)
+        for dependency in request.dependencies:
+            upstream_task_id = dependency.task_id.strip()
+            if not upstream_task_id or upstream_task_id in seen:
+                continue
+            upstream = TaskRepository(session).get_across_workspaces(upstream_task_id)
+            if upstream is None or upstream.workspace_id != task.workspace_id:
+                raise NotFoundError(f"task not found: {upstream_task_id}")
+            seen.add(upstream_task_id)
+            dependencies.append(
+                repository.create(
+                    TaskDependency(
+                        workspace_id=task.workspace_id,
+                        task_id=task.id,
+                        upstream_task_id=upstream.id,
+                        parent_task_id=task.parent_task_id,
+                        root_task_id=task.root_task_id,
+                        edge_type=dependency.edge_type or "argument",
                     )
                 )
+            )
         return dependencies
 
     def _try_schedule_waiting_task(
@@ -395,6 +406,14 @@ class FunctionControlService:
         # it was ready would be the container that failed to start.
         with self.services.context.database.session() as session:
             marked = TaskRepository(session).mark_claimable(task.id, at=utc_now())
+            if marked is not None and marked.stub_id and marked.workspace_id:
+                self.services.execution_demand.activate_in_transaction(
+                    session,
+                    stub_id=marked.stub_id,
+                    workspace_id=marked.workspace_id,
+                    kind=AutoscalerTargetKind.Function,
+                )
+        self.services.execution_demand.notify()
         if marked is not None:
             task = marked
         self.services.tasks.publish_lifecycle_change(task, WorkspaceChangeType.Updated)
@@ -422,12 +441,16 @@ class FunctionControlService:
             raise InvalidInputError("serve requires a function")
         if stub.deployment_id is not None:
             raise InvalidInputError("serve requires a prepared preview, not a deployed function")
-        result = self._launch_function_container(
-            stub,
-            task=None,
-            eligible_at=None,
-            authority=FunctionContainerStartAuthority.Preview,
-            preview_timeout=request.timeout,
+        result = next(
+            self._launch_function_containers(
+                stub,
+                count=1,
+                task=None,
+                eligible_at=None,
+                authority=FunctionContainerStartAuthority.Preview,
+                preview_timeout=request.timeout,
+            ),
+            None,
         )
         if result is None:
             raise CapacityLimitReachedError("this function already has a live container")
@@ -435,43 +458,34 @@ class FunctionControlService:
             raise CapacityLimitReachedError(result.reason or "function preview could not start")
         return FunctionServeResponse(container_id=result.container_id)
 
-    def start_function_container(self, stub_id: str) -> bool:
-        """Start one more container for this stub, because the autoscaler said so.
-
-        How deep the backlog warrants going has already been answered by the
-        caller; the ceiling is not taken on trust and is checked again where the
-        container is reserved, which is the only place it can be checked without
-        racing.
-
-        It takes the oldest unclaimed task if there is one — that is the
-        invocation this container will most likely serve, and a task that has
-        since finished withdraws the warrant. With nothing waiting, the warrant
-        is the stub's own warm floor, which is a promise about containers rather
-        than about work, so the container is reserved from the stub alone.
-        """
-
+    def start_function_containers(self, stub_id: str, *, count: int) -> Iterator[str]:
+        if count <= 0:
+            return
+        stub = self.control_plane.get_stub(stub_id)
+        if stub.kind is not StubKind.Function:
+            return
         with self.services.context.database.session() as session:
             candidates = TaskRepository(session).list_unclaimed_claimable(
                 limit=1,
                 stub_id=stub_id,
             )
         pending = next(iter(candidates), None)
-        if pending is not None:
-            scheduled = self._schedule_function_task(
-                pending,
-                authority=FunctionContainerStartAuthority.Autoscaler,
-            )
-            return scheduled is not None
-        stub = self.control_plane.get_stub(stub_id)
-        if stub.kind is not StubKind.Function:
-            return False
-        launched = self._launch_function_container(
+        if pending is not None and not self._scheduled_execution_allowed(
+            pending, scheduled=bool(stub.config.cron)
+        ):
+            return
+        for launched in self._launch_function_containers(
             stub,
-            task=None,
+            count=count,
+            task=pending,
             eligible_at=None,
             authority=FunctionContainerStartAuthority.Autoscaler,
-        )
-        return launched is not None
+        ):
+            if not launched.accepted:
+                raise CapacityLimitReachedError(
+                    launched.reason or "function container could not start"
+                )
+            yield launched.container_id
 
     def _schedule_function_task(
         self,
@@ -492,25 +506,30 @@ class FunctionControlService:
         stub = self.control_plane.get_stub(task.stub_id)
         if not self._scheduled_execution_allowed(task, scheduled=bool(stub.config.cron)):
             return None
-        return self._launch_function_container(
-            stub,
-            task=task,
-            eligible_at=eligible_at,
-            authority=authority,
-            placement=placement,
+        return next(
+            self._launch_function_containers(
+                stub,
+                count=1,
+                task=task,
+                eligible_at=eligible_at,
+                authority=authority,
+                placement=placement,
+            ),
+            None,
         )
 
-    def _launch_function_container(
+    def _launch_function_containers(
         self,
         stub: StubRecord,
         *,
+        count: int,
         task: Task | None,
         eligible_at: datetime | None,
         authority: FunctionContainerStartAuthority,
         preview_timeout: int | None = None,
         placement: Placement | None = None,
-    ) -> SchedulerSubmissionResult | None:
-        """Plan, reserve and submit one container for this stub.
+    ) -> Iterator[SchedulerSubmissionResult]:
+        """Share preparation while each reservation retains its admission fences.
 
         The container is the stub's, not the task's. A task is passed when one
         prompted the start, and it is read only to decide whether starting
@@ -529,7 +548,7 @@ class FunctionControlService:
                 error="function task is missing its invocation payload",
                 exit_code=1,
             )
-            return None
+            return
 
         # An invoke resolved this before it wrote its task; every other start
         # (a schedule, a retry, a warm floor) resolves here.
@@ -546,77 +565,8 @@ class FunctionControlService:
             if task is None:
                 raise
             self.services.tasks.transition(task, TaskStatus.Failed, error=str(error), exit_code=1)
-            return None
+            return
 
-        container_id = str(uuid4())
-        container_plan = plan_function_container_start(
-            FunctionContainerStartRequest(
-                workspace_name=workspace.name,
-                workspace_id=stub.workspace_id,
-                app_id=stub.app_id or "",
-                stub_id=stub.id,
-                handler=stub.handler or "",
-                container_id=container_id,
-                keep_warm_seconds=-1 if preview_timeout is not None else config.runtime.keep_warm,
-                concurrency=config.runtime.concurrency,
-                in_process=config.runtime.in_process,
-                python_executable=config.image.python_executable,
-                cpu_millicores=config.runtime.requested_cpu_millicores,
-                cpu_limit_millicores=config.runtime.limit_cpu_millicores,
-                memory_mib=config.runtime.requested_memory_mib,
-                memory_limit_mib=config.runtime.limit_memory_mib,
-                disk_mib=config.runtime.requested_disk_mib,
-                requires_gpu=config.runtime.gpu_required,
-                gpu_count=config.runtime.gpu_count,
-                gpu=list(config.runtime.gpu),
-                image_id=config.effective_image_id,
-                checkpoint_enabled=config.runtime.checkpoint_enabled,
-                env=[
-                    *config.env_list,
-                    *(
-                        [
-                            f"{HOT_RELOAD_ENV}=true",
-                            f"{HOT_RELOAD_DIR_ENV}={WORKER_USER_CODE_VOLUME}",
-                        ]
-                        if preview_timeout is not None
-                        else []
-                    ),
-                ],
-                secret_env=[],
-                lifecycle_hooks=config.lifecycle_hooks,
-            )
-        )
-        container = self._reserve_function_container(
-            task,
-            container_plan=container_plan,
-            stub_id=stub.id,
-            stub_name=stub.name,
-            stub_workspace_id=stub.workspace_id,
-            stub_app_id=stub.app_id,
-            region=config.runtime.region,
-            availability_zone=config.runtime.availability_zone,
-            eligible_at=eligible_at,
-            preemptible=config.runtime.preemptible,
-            authority=authority,
-            max_containers=function_container_ceiling(stub.config.autoscaler.max_containers),
-            preview_timeout=preview_timeout,
-        )
-        if container is None:
-            return None
-        self.services.containers.publish_lifecycle_change(
-            container,
-            WorkspaceChangeType.Created,
-        )
-        resource_mounts = container_resource_mounts(
-            context=self.services.context,
-            object_storage=self.services.object_storage,
-            workspace_id=stub.workspace_id,
-            workspace_name=workspace.name,
-            object_id=config.object_id,
-            stub_id=stub.id,
-            container_id=container.id,
-            volumes=config.volume_inputs,
-        )
         checkpoint = (
             latest_available_checkpoint(
                 self.services.context,
@@ -626,68 +576,139 @@ class FunctionControlService:
             if config.runtime.checkpoint_enabled
             else None
         )
-        scheduled = self.services.containers.submit_scheduler_request(
-            container,
-            ContainerSchedulingOptions(
-                workspace_name=workspace.name,
-                stub_type="function",
-                startup_kind=WorkerStartupKind.Function,
-                entrypoint=container_plan.entrypoint,
-                cwd=WORKER_USER_CODE_VOLUME,
-                env_list=container_plan.env,
-                image_id=container_plan.image_id or FUNCTION_IMAGE,
-                app_id=stub.app_id or "",
-                deployment_id=stub.deployment_id or "",
-                checkpoint_exposed_ports=(
-                    checkpoint.exposed_ports if checkpoint is not None else []
-                ),
-                checkpoint_id=checkpoint.checkpoint_id if checkpoint is not None else "",
-                checkpoint_enabled=config.runtime.checkpoint_enabled,
-                cpu_millicores=container_plan.cpu_millicores,
-                cpu_limit_millicores=container_plan.cpu_limit_millicores,
-                memory_mib=container_plan.memory_mib,
-                memory_limit_mib=container_plan.memory_limit_mib,
-                disk_mib=container_plan.disk_mib,
-                gpu=list(container.gpu),
-                gpu_count=container.gpu_count,
-                placement=placement,
+        for _ in range(count):
+            container_id = str(uuid4())
+            container_plan = plan_function_container_start(
+                FunctionContainerStartRequest(
+                    workspace_name=workspace.name,
+                    workspace_id=stub.workspace_id,
+                    app_id=stub.app_id or "",
+                    stub_id=stub.id,
+                    handler=stub.handler or "",
+                    container_id=container_id,
+                    keep_warm_seconds=-1
+                    if preview_timeout is not None
+                    else config.runtime.keep_warm,
+                    concurrency=config.runtime.concurrency,
+                    in_process=config.runtime.in_process,
+                    python_executable=config.image.python_executable,
+                    cpu_millicores=config.runtime.requested_cpu_millicores,
+                    cpu_limit_millicores=config.runtime.limit_cpu_millicores,
+                    memory_mib=config.runtime.requested_memory_mib,
+                    memory_limit_mib=config.runtime.limit_memory_mib,
+                    disk_mib=config.runtime.requested_disk_mib,
+                    requires_gpu=config.runtime.gpu_required,
+                    gpu_count=config.runtime.gpu_count,
+                    gpu=list(config.runtime.gpu),
+                    image_id=config.effective_image_id,
+                    checkpoint_enabled=config.runtime.checkpoint_enabled,
+                    env=[
+                        *config.env_list,
+                        *(
+                            [
+                                f"{HOT_RELOAD_ENV}=true",
+                                f"{HOT_RELOAD_DIR_ENV}={WORKER_USER_CODE_VOLUME}",
+                            ]
+                            if preview_timeout is not None
+                            else []
+                        ),
+                    ],
+                    secret_env=[],
+                    lifecycle_hooks=config.lifecycle_hooks,
+                )
+            )
+            container = self._reserve_function_container(
+                task,
+                container_plan=container_plan,
+                stub_id=stub.id,
+                stub_name=stub.name,
+                stub_workspace_id=stub.workspace_id,
+                stub_app_id=stub.app_id,
                 region=config.runtime.region,
                 availability_zone=config.runtime.availability_zone,
-                runtime=config.runtime.runtime,
-                runtime_class=config.runtime.runtime_class or "",
-                docker_enabled=config.runtime.docker_enabled,
+                eligible_at=eligible_at,
                 preemptible=config.runtime.preemptible,
-                workspace_gpu_quota=config.runtime.workspace_gpu_quota,
-                workspace_cpu_quota_millicores=config.runtime.workspace_cpu_quota_millicores,
-                secret_names=config.secrets,
-                gateway_token_required=True,
-                workspace_storage_required=(
-                    container_resource_mounts_require_workspace_storage(
-                        context=self.services.context,
-                        workspace_id=stub.workspace_id,
-                        mounts=resource_mounts,
-                    )
-                ),
-                mounts=resource_mounts,
-            ),
-        )
-        if not scheduled.accepted:
-            with self.services.context.database.session() as session:
-                container.status = ContainerStatus.Failed
-                ContainerRepository(session).upsert(container)
+                authority=authority,
+                max_containers=function_container_ceiling(stub.config.autoscaler.max_containers),
+                preview_timeout=preview_timeout,
+            )
+            if container is None:
+                return
             self.services.containers.publish_lifecycle_change(
                 container,
-                WorkspaceChangeType.Updated,
+                WorkspaceChangeType.Created,
             )
-            if task is not None:
-                updated = self.services.tasks.transition(
-                    task,
-                    TaskStatus.Failed,
-                    error=scheduled.reason,
-                    exit_code=1,
+            resource_mounts = container_resource_mounts(
+                context=self.services.context,
+                object_storage=self.services.object_storage,
+                workspace_id=stub.workspace_id,
+                workspace_name=workspace.name,
+                object_id=config.object_id,
+                stub_id=stub.id,
+                container_id=container.id,
+                volumes=config.volume_inputs,
+            )
+            scheduled = self.services.containers.submit_scheduler_request(
+                container,
+                ContainerSchedulingOptions(
+                    workspace_name=workspace.name,
+                    stub_type="function",
+                    startup_kind=WorkerStartupKind.Function,
+                    entrypoint=container_plan.entrypoint,
+                    cwd=WORKER_USER_CODE_VOLUME,
+                    env_list=container_plan.env,
+                    image_id=container_plan.image_id or FUNCTION_IMAGE,
+                    app_id=stub.app_id or "",
+                    deployment_id=stub.deployment_id or "",
+                    checkpoint_exposed_ports=(
+                        checkpoint.exposed_ports if checkpoint is not None else []
+                    ),
+                    checkpoint_id=checkpoint.checkpoint_id if checkpoint is not None else "",
+                    checkpoint_enabled=config.runtime.checkpoint_enabled,
+                    cpu_millicores=container_plan.cpu_millicores,
+                    cpu_limit_millicores=container_plan.cpu_limit_millicores,
+                    memory_mib=container_plan.memory_mib,
+                    memory_limit_mib=container_plan.memory_limit_mib,
+                    disk_mib=container_plan.disk_mib,
+                    gpu=list(container.gpu),
+                    gpu_count=container.gpu_count,
+                    placement=placement,
+                    region=config.runtime.region,
+                    availability_zone=config.runtime.availability_zone,
+                    runtime=config.runtime.runtime,
+                    runtime_class=config.runtime.runtime_class or "",
+                    docker_enabled=config.runtime.docker_enabled,
+                    preemptible=config.runtime.preemptible,
+                    workspace_gpu_quota=config.runtime.workspace_gpu_quota,
+                    workspace_cpu_quota_millicores=config.runtime.workspace_cpu_quota_millicores,
+                    secret_names=config.secrets,
+                    gateway_token_required=True,
+                    workspace_storage_required=(
+                        container_resource_mounts_require_workspace_storage(
+                            workspace=workspace,
+                            mounts=resource_mounts,
+                        )
+                    ),
+                    mounts=resource_mounts,
+                ),
+            )
+            if not scheduled.accepted:
+                with self.services.context.database.session() as session:
+                    container.status = ContainerStatus.Failed
+                    ContainerRepository(session).upsert(container)
+                self.services.containers.publish_lifecycle_change(
+                    container,
+                    WorkspaceChangeType.Updated,
                 )
-                self.release_dependents(updated)
-        return scheduled
+                if task is not None:
+                    updated = self.services.tasks.transition(
+                        task,
+                        TaskStatus.Failed,
+                        error=scheduled.reason,
+                        exit_code=1,
+                    )
+                    self.release_dependents(updated)
+            yield scheduled
 
     def _assert_within_pending_limit(self, stub_id: str, config: FunctionStubConfig) -> None:
         """Refuse work this function has no prospect of getting to.
@@ -767,6 +788,8 @@ class FunctionControlService:
         error: str | None = None,
         exit_code: int | None = None,
         retry_allowed: bool = True,
+        execution_entry: ExecutionEntryEvidence | None = None,
+        claim_id: str | None = None,
     ) -> Task:
         outcome = self.services.tasks.finish_with_retry(
             task_id,
@@ -776,6 +799,8 @@ class FunctionControlService:
             error=error,
             exit_code=exit_code,
             retry_allowed=retry_allowed,
+            execution_entry=execution_entry,
+            claim_id=claim_id,
         )
         # A retry due immediately is not scheduled from here. Making it runnable
         # means releasing its claim, and that is `schedule_due_retries`, which
@@ -1242,21 +1267,6 @@ class FunctionControlService:
             session, task, limit=1_000, cursor=cursor, follow=True
         ), task
 
-    def function_execution_entry(
-        self, request: FunctionExecutionEntryRequest, *, workspace_id: str
-    ) -> FunctionExecutionEntryResponse:
-        now = utc_now()
-        with self.services.context.database.session() as session:
-            recorded = TaskAttemptRepository(session).record_execution_entry(
-                task_id=required_uuid(request.task_id, field="task_id"),
-                workspace_id=workspace_id,
-                container_id=required_uuid(request.container_id, field="container_id"),
-                claim_id=required_uuid(request.claim_id, field="claim_id"),
-                elapsed_since_entry_seconds=request.elapsed_since_entry_seconds,
-                reported_at=now,
-            )
-        return FunctionExecutionEntryResponse(recorded=recorded)
-
     async def function_claim_wait(
         self, request: FunctionClaimRequest, *, workspace_id: str
     ) -> FunctionClaimResponse:
@@ -1284,8 +1294,6 @@ class FunctionControlService:
                     return FunctionClaimResponse()
 
     def function_claim(self, request: FunctionClaimRequest) -> FunctionClaimResponse:
-        if not self.services.containers.accepting_work(request.container_id):
-            return FunctionClaimResponse()
         task = self.services.tasks.claim_and_start(
             request.stub_id, container_id=request.container_id, claim_id=request.claim_id
         )
@@ -1362,6 +1370,8 @@ class FunctionControlService:
             container_id=request.container_id,
             function_result=request.result,
             exit_code=0,
+            execution_entry=request.execution_entry,
+            claim_id=request.claim_id,
         )
         if not outcome.state_changed:
             return FunctionSetResultResponse(stored=False, status=outcome.task.status)

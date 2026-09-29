@@ -12,8 +12,6 @@ from shared.function_payloads import FunctionJsonInvocation
 from shared.http.functions import (
     FunctionClaimRequest,
     FunctionClaimResponse,
-    FunctionExecutionEntryRequest,
-    FunctionExecutionEntryResponse,
     FunctionInvokeBody,
     FunctionInvokeResponse,
     FunctionMonitorRequest,
@@ -36,9 +34,10 @@ from api.server.http import request_query_params
 from api.server.ownership import require_function_stub_workspace, require_task_workspace
 from api.server.public_transfers import attribute_public_transfer
 from api.server.service_dependencies import control_plane_service, function_service
-from api.server.services import ApiServices, FunctionApiService
+from api.server.services import ApiServiceCore, FunctionApiService
 
 router = APIRouter(prefix="/api/v1/functions", tags=["function"])
+runtime_router = APIRouter(prefix="/api/v1/functions", tags=["function"])
 
 
 class _FunctionInvokeStreamResponse(StreamingResponse):
@@ -141,7 +140,7 @@ def function_invoke_stream(
     return _FunctionInvokeStreamResponse(service, initial, headless=request.headless)
 
 
-@router.post("/claim", response_model=FunctionClaimResponse)
+@runtime_router.post("/claim", response_model=FunctionClaimResponse)
 async def function_claim(
     request: FunctionClaimRequest,
     workspace_id: write_workspace,
@@ -154,32 +153,23 @@ async def function_claim(
     return await service.function_claim_wait(request, workspace_id=workspace_id)
 
 
-@router.post("/execution-entry", response_model=FunctionExecutionEntryResponse)
-def function_execution_entry(
-    request: FunctionExecutionEntryRequest,
-    workspace_id: write_workspace,
-    service: FunctionApiService = Depends(function_service),
-) -> FunctionExecutionEntryResponse:
-    return service.function_execution_entry(request, workspace_id=workspace_id)
-
-
-@router.post("/set-result", response_model=FunctionSetResultResponse)
+@runtime_router.post("/set-result", response_model=FunctionSetResultResponse)
 def function_set_result(
     request: FunctionSetResultBody,
     workspace_id: write_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ApiServiceCore = Depends(current_services),
     service: FunctionApiService = Depends(function_service),
 ) -> FunctionSetResultResponse:
     require_task_workspace(services, request.task_id, workspace_id)
     return service.function_set_result(request)
 
 
-@router.post("/monitor", response_model=FunctionMonitorResponse)
+@runtime_router.post("/monitor", response_model=FunctionMonitorResponse)
 def function_monitor(
     request: FunctionMonitorRequest,
     connection: Request,
     workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ApiServiceCore = Depends(current_services),
     control_plane: ControlPlaneService = Depends(control_plane_service),
     service: FunctionApiService = Depends(function_service),
 ) -> FunctionMonitorResponse:
@@ -204,7 +194,7 @@ def deployed_function_invoke_by_id(
     workspace_id: write_workspace,
     service: FunctionApiService = Depends(function_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
-    services: ApiServices = Depends(current_services),
+    services: ApiServiceCore = Depends(current_services),
 ) -> FunctionInvokeResponse:
     stub = resolve_deployed_stub_id(
         control_plane,
@@ -225,7 +215,7 @@ def deployed_public_function_invoke_by_id(
     invocation: HttpFunctionInvocation,
     service: FunctionApiService = Depends(function_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
-    services: ApiServices = Depends(current_services),
+    services: ApiServiceCore = Depends(current_services),
 ) -> FunctionInvokeResponse:
     stub = resolve_deployed_stub_id(
         control_plane,
@@ -245,7 +235,7 @@ def deployed_function_invoke_by_latest_path(
     invocation: HttpFunctionInvocation,
     workspace_id: write_workspace,
     service: FunctionApiService = Depends(function_service),
-    services: ApiServices = Depends(current_services),
+    services: ApiServiceCore = Depends(current_services),
 ) -> FunctionInvokeResponse:
     stub = resolve_deployed_stub(
         services,
@@ -266,7 +256,7 @@ def deployed_function_invoke_by_version(
     invocation: HttpFunctionInvocation,
     workspace_id: write_workspace,
     service: FunctionApiService = Depends(function_service),
-    services: ApiServices = Depends(current_services),
+    services: ApiServiceCore = Depends(current_services),
 ) -> FunctionInvokeResponse:
     stub = resolve_deployed_stub(
         services,

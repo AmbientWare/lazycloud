@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, Query, status
 from fastapi.responses import StreamingResponse
 from identity.authz import token_has_scope
 from operations.management import TaskDetailView, TaskView
+from operations.tasks import TaskManagementService
 from shared.deployments import StubKind
 from shared.http.compute import ContainerResponse
 from shared.http.functions import FunctionCallGraphResponse
@@ -32,9 +33,8 @@ from shared.tasks import Task, TaskProgressSnapshot, TaskStatus
 from api.server.auth import read_token, read_workspace, write_workspace
 from api.server.dependencies import current_services
 from api.server.identifiers import identifier_filter
-from api.server.routers.resource_api.common import _management
-from api.server.service_dependencies import task_rerun_service
-from api.server.services import ApiServices
+from api.server.service_dependencies import task_management_service, task_rerun_service
+from api.server.services import ApiServiceCore
 
 router = APIRouter()
 
@@ -102,9 +102,9 @@ def list_tasks(
     *,
     workspace_id: read_workspace,
     token: read_token,
-    services: ApiServices = Depends(current_services),
+    service: TaskManagementService = Depends(task_management_service),
 ) -> TaskPageResponse:
-    page = _management(services).task_page(
+    page = service.task_page(
         workspace_id,
         status=status_filter,
         deployment_id=deployment_id,
@@ -142,10 +142,10 @@ def task_metrics(
     app_id: identifier_filter = None,
     *,
     workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
+    service: TaskManagementService = Depends(task_management_service),
 ) -> TaskMetricsSummaryResponse:
     return TaskMetricsSummaryResponse.model_validate(
-        _management(services).task_metrics(
+        service.task_metrics(
             workspace=workspace_id,
             started_at=datetime.fromtimestamp(started_at, UTC),
             ended_at=datetime.fromtimestamp(ended_at, UTC),
@@ -161,12 +161,12 @@ def task_metrics(
 )
 def task_count_by_deployment(
     workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
+    service: TaskManagementService = Depends(task_management_service),
 ) -> TaskCountByDeploymentListResponse:
     return TaskCountByDeploymentListResponse(
         items=[
             TaskCountByDeploymentResponse.model_validate(item)
-            for item in _management(services).task_counts_by_deployment(workspace_id)
+            for item in service.task_counts_by_deployment(workspace_id)
         ]
     )
 
@@ -184,12 +184,12 @@ def aggregate_tasks_by_time_window(
     stub_id: identifier_filter = None,
     *,
     workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
+    service: TaskManagementService = Depends(task_management_service),
 ) -> TaskTimeWindowBucketListResponse:
     return TaskTimeWindowBucketListResponse(
         items=[
             TaskTimeWindowBucketResponse.model_validate(item)
-            for item in _management(services).aggregate_tasks_by_time_window(
+            for item in service.aggregate_tasks_by_time_window(
                 workspace_id,
                 window_seconds=window_seconds,
                 started_at=_optional_instant(started_at),
@@ -209,9 +209,9 @@ def aggregate_tasks_by_time_window(
 def stop_tasks(
     task_ids: Annotated[list[str], Query(default_factory=list)],
     workspace_id: write_workspace,
-    services: ApiServices = Depends(current_services),
+    service: TaskManagementService = Depends(task_management_service),
 ) -> TaskStopResponse:
-    return TaskStopResponse.model_validate(_management(services).stop_tasks(workspace_id, task_ids))
+    return TaskStopResponse.model_validate(service.stop_tasks(workspace_id, task_ids))
 
 
 @router.get(
@@ -222,12 +222,12 @@ def stop_tasks(
 def subscribe_task(
     task_id: str,
     workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
+    service: TaskManagementService = Depends(task_management_service),
 ) -> StreamingResponse:
-    _management(services).workspace_task(workspace_id, task_id)
+    service.workspace_task(workspace_id, task_id)
 
     def events() -> Iterator[str]:
-        task = _task_response(services.tasks.get(task_id))
+        task = _task_response(service.tasks.get(task_id))
         payload = json.dumps(task.model_dump(mode="json"))
         yield f"event: status\ndata: {payload}\n\n"
 
@@ -242,7 +242,7 @@ def subscribe_task(
 def task_call_graph(
     task_id: str,
     workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ApiServiceCore = Depends(current_services),
 ) -> FunctionCallGraphResponse:
     return FunctionControlService(services).function_call_graph(
         task_id,
@@ -258,12 +258,12 @@ def task_call_graph(
 def cancel_task(
     task_id: str,
     workspace_id: write_workspace,
-    services: ApiServices = Depends(current_services),
+    service: TaskManagementService = Depends(task_management_service),
 ) -> TaskResponse:
-    management = _management(services)
+    management = service
     management.workspace_task(workspace_id, task_id)
     management.stop_tasks(workspace_id, [task_id])
-    return _task_response(services.tasks.get(task_id))
+    return _task_response(service.tasks.get(task_id))
 
 
 @router.post(
@@ -289,10 +289,10 @@ def get_task(
     task_id: str,
     workspace_id: read_workspace,
     token: read_token,
-    services: ApiServices = Depends(current_services),
+    service: TaskManagementService = Depends(task_management_service),
 ) -> TaskDetailResponse:
     return _task_detail_response(
-        _management(services).task_detail(
+        service.task_detail(
             workspace_id,
             task_id,
             can_write=token_has_scope(token, AuthScope.Write),

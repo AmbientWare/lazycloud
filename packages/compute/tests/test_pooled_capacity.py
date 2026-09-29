@@ -669,6 +669,7 @@ def test_purchase_admission_respects_market_cooldown(
 
     service = CapacityReservationService(reservations, controllers)
     request = SchedulerWorkerRequest(
+        fairness_account_id="test-account",
         workspace_id=workspace_id,
         stub_id=str(uuid4()),
         container_id=str(uuid4()),
@@ -1824,6 +1825,7 @@ def test_registered_reservation_settles_against_durable_purchase_outcome(
     )
     now = datetime.now(UTC)
     request = SchedulerWorkerRequest(
+        fairness_account_id="test-account",
         placement=Placement.platform(),
         container_id=str(uuid4()),
         workspace_id=pool.workspace_id,

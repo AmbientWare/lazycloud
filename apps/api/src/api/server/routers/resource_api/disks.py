@@ -4,8 +4,8 @@ from fastapi import APIRouter, Depends, Response, status
 from shared.http.disks import DiskListResponse, DiskResponse
 
 from api.server.auth import read_workspace, write_workspace
-from api.server.dependencies import current_services
-from api.server.services import ApiServices
+from api.server.dependencies import management_services
+from api.server.services import ManagementServiceCore
 
 router = APIRouter(prefix="/api/v1/disks", tags=["disk"])
 
@@ -15,7 +15,7 @@ def list_disks(
     workspace_id: read_workspace,
     cursor: str = "",
     limit: int = 100,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> DiskListResponse:
     page = services.disks.list(workspace_id=workspace_id, after=cursor, limit=limit)
     return DiskListResponse(
@@ -30,7 +30,7 @@ def list_disks(
 def get_disk(
     name: str,
     workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> DiskResponse:
     record, workload = services.disks.describe(name, workspace_id=workspace_id)
     return DiskResponse.from_record(record, workload)
@@ -45,6 +45,6 @@ def get_disk(
 def delete_disk(
     name: str,
     workspace_id: write_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> None:
     services.disks.request_deletion(name, workspace_id=workspace_id)

@@ -71,6 +71,7 @@ class _InterruptionSource:
 
 def _request(container_id: str) -> SchedulerWorkerRequest:
     return SchedulerWorkerRequest(
+        fairness_account_id="test-account",
         placement=Placement.platform(),
         workspace_id="workspace-1",
         stub_id="stub-1",

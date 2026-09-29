@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -32,6 +33,7 @@ from shared.scheduling import (
     SchedulerContainerStatus,
     SchedulerContainerSubmitResult,
     SchedulerContainerSubmitStatus,
+    SchedulerPendingRequest,
     SchedulerWorkerRecord,
     SchedulerWorkerRequest,
     SchedulerWorkerStatus,
@@ -160,7 +162,7 @@ class SchedulerContainerStateRepository(Protocol):
 
 
 class SchedulerContainerWorkerRepository(Protocol):
-    def pending_gpu_requests(self) -> list[SchedulerWorkerRequest]: ...
+    def pending_gpu_requests(self) -> list[SchedulerPendingRequest]: ...
 
     def enqueue_container_request(
         self,
@@ -306,6 +308,8 @@ class SchedulerWorkspaceOwners(Protocol):
 
     def owner_user_id(self, workspace_id: str) -> str: ...
 
+    def owner_user_ids(self, workspace_ids: Collection[str]) -> dict[str, str]: ...
+
 
 class SchedulerDiskVolumeAttachments(Protocol):
     """Disk volumes on each machine that no running container's placement counts."""
@@ -349,9 +353,6 @@ class SchedulerCapacityReservations(Protocol):
     def release_request(
         self,
         container_id: str,
-        *,
-        workers: tuple[SchedulerWorkerRecord, ...] = (),
-        now: datetime | None = None,
     ) -> None: ...
 
 
@@ -382,7 +383,7 @@ class CapacityAcquisitionSweep:
 class SchedulerContainerRequestService:
     workers: SchedulerContainerWorkerRepository
     containers: SchedulerContainerStateRepository
-    placement: SchedulerContainerPlacement
+    placement: SchedulerContainerPlacement | None
     failure_handler: SchedulerContainerFailureHandler
     assignments: SchedulerContainerAssignmentRecorder
     dispatch_wake: WakeSignalPublisher
@@ -593,7 +594,7 @@ class SchedulerContainerRequestService:
         claims = [claim for claim in claims if claim not in cancelled]
         for claim in cancelled:
             self._acknowledge(claim)
-            self._release_capacity_reservation(claim.request.container_id, now=current_time)
+            self._release_capacity_reservation(claim.request.container_id)
         results = [
             SchedulerContainerDispatchResult(
                 status=SchedulerContainerDispatchStatus.Cancelled,
@@ -605,12 +606,13 @@ class SchedulerContainerRequestService:
         if not claims:
             return results
 
-        # Resolved once per distinct workspace rather than per request: a batch is
-        # mostly one tenant's work, and the owner cannot change inside a batch. Built
-        # before the reserved path so both dispatch routes read the same answers.
+        queued_gpu_requests = self.workers.pending_gpu_requests()
+        workspace_ids = {claim.request.workspace_id for claim in claims} | {
+            request.workspace_id for request in queued_gpu_requests
+        }
+        owners = self.workspace_owners.owner_user_ids(workspace_ids)
         owners_by_workspace_id = {
-            workspace_id: self.workspace_owners.owner_user_id(workspace_id)
-            for workspace_id in {claim.request.workspace_id for claim in claims}
+            workspace_id: owners.get(workspace_id, "") for workspace_id in workspace_ids
         }
         claims, reserved_dispatches = self._dispatch_registered_reservations(
             claims,
@@ -664,34 +666,50 @@ class SchedulerContainerRequestService:
                 queued_gpu_requests=[
                     scheduling_request(
                         queued,
-                        owner_user_id=self.workspace_owners.owner_user_id(queued.workspace_id),
+                        owner_user_id=owners_by_workspace_id[queued.workspace_id],
                     )
-                    for queued in self.workers.pending_gpu_requests()
+                    for queued in queued_gpu_requests
                 ],
                 allow_provisioning=self.capacity_reservations is not None,
                 worker_wait_delay=timedelta(seconds=self.requeue_delay_seconds),
             ).outcomes
         }
+        dispatch_groups: dict[
+            str,
+            list[tuple[SchedulerContainerRequestClaim, SchedulerWorkerRecord, SchedulingOutcome]],
+        ] = {}
+        for request in requests:
+            outcome = outcomes[request.container_id]
+            if outcome.decision is SchedulingDecision.Dispatch and outcome.worker_id:
+                worker = workers_by_id[outcome.worker_id]
+                dispatch_groups.setdefault(worker.capacity_owner_id or worker.worker_id, []).append(
+                    (claims_by_request_id[request.container_id], worker, outcome)
+                )
+
+        def dispatch_group(
+            group: tuple[
+                str,
+                list[
+                    tuple[SchedulerContainerRequestClaim, SchedulerWorkerRecord, SchedulingOutcome]
+                ],
+            ],
+        ) -> list[SchedulerContainerDispatchResult]:
+            _, planned = group
+            return [
+                self._dispatch_backfill(claim, worker, now=current_time)
+                if outcome.backfill
+                else self._dispatch(claim, worker, now=current_time)
+                for claim, worker, outcome in planned
+            ]
+
+        with ThreadPoolExecutor(max_workers=4, thread_name_prefix="container-dispatch") as executor:
+            for dispatched in executor.map(dispatch_group, dispatch_groups.items()):
+                results.extend(dispatched)
+
         for request in requests:
             claim = claims_by_request_id[request.container_id]
             outcome = outcomes[request.container_id]
             if outcome.decision is SchedulingDecision.Dispatch and outcome.worker_id:
-                if outcome.backfill:
-                    results.append(
-                        self._dispatch_backfill(
-                            claim,
-                            workers_by_id[outcome.worker_id],
-                            now=current_time,
-                        )
-                    )
-                    continue
-                results.append(
-                    self._dispatch(
-                        claim,
-                        workers_by_id[outcome.worker_id],
-                        now=current_time,
-                    )
-                )
                 continue
             if outcome.decision is not SchedulingDecision.WaitForWorker:
                 recovered = self._recover_gpu_backfill(
@@ -793,7 +811,7 @@ class SchedulerContainerRequestService:
                 reason="GPU backfill preemption service is not configured",
             )
         # Release first so a crash after GPU dispatch cannot retain a CPU allocation.
-        self._release_capacity_reservation(request.container_id, now=now)
+        self._release_capacity_reservation(request.container_id)
         backfill_claim = SchedulerContainerRequestClaim(
             request=request.model_copy(update={"backfill": True}),
             token=claim.token,
@@ -940,25 +958,53 @@ class SchedulerContainerRequestService:
         limit: int = 100,
         container_ids: Sequence[str] | None = None,
     ) -> CapacityAcquisitionSweep:
-        """Act on due capacity demand: every due request, or only the named ones.
+        """Acquire independent placement/region cohorts concurrently under owner leases."""
+        if self.capacity_reservations is None:
+            return CapacityAcquisitionSweep()
+        current_time = now or utc_now()
+        if container_ids is not None:
+            return self._acquire_capacity_group((), container_ids, now=now)
+        batch = self.assignments.capacity_requests_due(now=current_time, limit=limit)
+        unconstrained = {request.placement.key for request in batch if request.region is None}
+        groups: dict[tuple[str, str], list[SchedulerWorkerRequest]] = {}
+        for request in batch:
+            key = (
+                request.placement.key,
+                "" if request.placement.key in unconstrained else str(request.region),
+            )
+            groups.setdefault(key, []).append(request)
 
-        Naming them reads each request by its id and skips the due-demand scan,
-        which is how demand that met a held lease is retried.
-        """
+        def acquire_group(group: list[SchedulerWorkerRequest]) -> CapacityAcquisitionSweep:
+            return self._acquire_capacity_group(
+                group,
+                [request.container_id for request in group],
+                now=now,
+            )
+
+        with ThreadPoolExecutor(
+            max_workers=4, thread_name_prefix="capacity-acquisition"
+        ) as executor:
+            sweeps = list(executor.map(acquire_group, groups.values()))
+        return CapacityAcquisitionSweep(
+            acquired=sum(sweep.acquired for sweep in sweeps),
+            contended=tuple(container_id for sweep in sweeps for container_id in sweep.contended),
+        )
+
+    def _acquire_capacity_group(
+        self,
+        batch: Sequence[SchedulerWorkerRequest],
+        container_ids: Sequence[str],
+        *,
+        now: datetime | None,
+    ) -> CapacityAcquisitionSweep:
         capacity = self.capacity_reservations
         if capacity is None:
             return CapacityAcquisitionSweep()
         current_time = now or utc_now()
         acquired = 0
         contended: list[str] = []
-        batch = (
-            []
-            if container_ids is not None
-            else self.assignments.capacity_requests_due(now=current_time, limit=limit)
-        )
         cohort = {candidate.container_id: candidate for candidate in batch}
-        candidate_ids = list(container_ids) if container_ids is not None else list(cohort)
-        for container_id in candidate_ids:
+        for container_id in container_ids:
             cohort.pop(container_id, None)
             request: SchedulerWorkerRequest | None = None
             try:
@@ -1031,6 +1077,8 @@ class SchedulerContainerRequestService:
     ) -> CapacityAcquisitionResult:
         if self.capacity_reservations is None:
             raise RuntimeError("scheduler capacity reservation service was not injected")
+        if self.placement is None:
+            raise RuntimeError("capacity acquisition requires a provider placement service")
         try:
             result = self.capacity_reservations.acquire(
                 request,
@@ -1370,7 +1418,7 @@ class SchedulerContainerRequestService:
         except ContainerRequestCancelledError as exc:
             if self._rollback_undelivered_assignment(claim, worker_id=worker_id):
                 self.containers.delete_container_state(request.container_id)
-                self._release_capacity_reservation(request.container_id, now=now)
+                self._release_capacity_reservation(request.container_id)
             return SchedulerContainerDispatchResult(
                 status=SchedulerContainerDispatchStatus.Cancelled,
                 container_id=request.container_id,
@@ -1519,7 +1567,7 @@ class SchedulerContainerRequestService:
                 reason = (
                     f"{reason}; failed to release concurrency reservation: {type(exc).__name__}"
                 )
-        self._release_capacity_reservation(request.container_id, now=now)
+        self._release_capacity_reservation(request.container_id)
         return SchedulerContainerDispatchResult(
             status=SchedulerContainerDispatchStatus.Failed,
             container_id=request.container_id,
@@ -1529,17 +1577,11 @@ class SchedulerContainerRequestService:
     def _release_capacity_reservation(
         self,
         container_id: str,
-        *,
-        now: datetime | None = None,
     ) -> None:
         if self.capacity_reservations is None:
             return
         try:
-            self.capacity_reservations.release_request(
-                container_id,
-                workers=tuple(_schedulable_workers(self.workers, now=now or utc_now())),
-                now=now,
-            )
+            self.capacity_reservations.release_request(container_id)
         except Exception:
             LOGGER.warning(
                 "capacity reservation release failed; reconciliation will retry",
@@ -1632,7 +1674,7 @@ def container_state_for_request(
 
 
 def scheduling_request(
-    request: SchedulerWorkerRequest,
+    request: SchedulerWorkerRequest | SchedulerPendingRequest,
     *,
     owner_user_id: str,
     provisionable: bool = True,
@@ -1646,7 +1688,6 @@ def scheduling_request(
         id=request.container_id,
         owner_user_id=owner_user_id,
         queue=request.stub_id or "containers",
-        payload=request.payload,
         cpu=cpu,
         memory_mib=request.memory_mib,
         gpu_count=gpu_count,

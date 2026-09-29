@@ -9,7 +9,7 @@ from shared.errors import NotFoundError
 from shared.identity import AuthScope
 
 from api.server.dependencies import current_services, require_workspace_scope
-from api.server.services import ApiServices
+from api.server.services import ApiServiceCore
 
 ContainerScopeDependency = Callable[..., ContainerRecord]
 
@@ -28,7 +28,7 @@ def require_container_scope(scope: AuthScope) -> ContainerScopeDependency:
     # from module scope, which silently demotes the parameter to a query field.
     def dependency(
         container_id: str,
-        services: Annotated[ApiServices, Depends(current_services)],
+        services: Annotated[ApiServiceCore, Depends(current_services)],
         workspace_id: str = Depends(require_workspace_scope(scope)),
     ) -> ContainerRecord:
         try:

@@ -16,7 +16,7 @@ from operations.app_lifecycle import ProductionAppExecutionLifecycleEffects
 from operations.container_shutdown import ContainerShutdownService
 from operations.management import ManagementService
 from pydantic import JsonValue, TypeAdapter
-from scheduler.service import Scheduler
+from scheduler.fleet_controller import FleetController
 from shared.app_identity import FUNCTION_IMAGE
 from shared.app_lifecycle import AppLifecycleState
 from shared.container_requests import ContainerShutdownTarget
@@ -342,7 +342,7 @@ def test_scheduler_reconciles_unfinished_app_from_durable_state_after_restart(
     )
     restarted_services = replace(isolated_services, apps=restarted_app_service)
 
-    reconciled = Scheduler(services=restarted_services).reconcile_app_lifecycle()
+    reconciled = FleetController(services=restarted_services).reconcile_app_lifecycle()
 
     assert [record.id for record in reconciled] == [app.id]
     assert reconciled[0].lifecycle_state is AppLifecycleState.Paused
@@ -492,7 +492,7 @@ def test_disconnected_worker_shutdown_remains_durable_and_retry_cleans_ack_state
     )
     restarted_services = replace(services, apps=restarted_apps)
 
-    reconciled = Scheduler(services=restarted_services).reconcile_app_lifecycle()
+    reconciled = FleetController(services=restarted_services).reconcile_app_lifecycle()
 
     assert [record.lifecycle_state for record in reconciled] == [AppLifecycleState.Paused]
     with services.context.database.session() as session:

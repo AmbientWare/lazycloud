@@ -65,6 +65,7 @@ def plan_image_build_container_request(
     request: ImageBuildExecutionRequest,
     *,
     workspace_id: str,
+    fairness_account_id: str,
     stub_id: str = "",
     placement: Placement,
     cpu_millicores: int = DEFAULT_IMAGE_BUILD_CONTAINER_CPU_MILLICORES,
@@ -114,6 +115,7 @@ def plan_image_build_container_request(
     }
     gpu = request.plan.spec.gpu or ""
     scheduler_request = SchedulerWorkerRequest(
+        fairness_account_id=fairness_account_id,
         workspace_id=workspace_id,
         stub_id=stub_id or IMAGE_BUILD_REQUEST_KIND,
         container_id=request.session.container_id,

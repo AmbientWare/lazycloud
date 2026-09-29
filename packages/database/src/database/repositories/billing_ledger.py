@@ -135,6 +135,26 @@ class ContainerBillingShapeRepository:
             gpu_count=row.gpu_count,
         )
 
+    def shapes_for(self, container_ids: Sequence[str]) -> dict[str, ContainerShape]:
+        if not container_ids:
+            return {}
+        rows = self.session.scalars(
+            select(ContainerBillingShapeTable).where(
+                ContainerBillingShapeTable.container_id.in_(container_ids)
+            )
+        )
+        return {
+            str(row.container_id): ContainerShape(
+                billing_owner=UsageBillingOwner(row.billing_owner),
+                rate_class=row.rate_class,
+                gpu_type=row.gpu_type,
+                cpu_millicores=row.cpu_millicores,
+                memory_mib=row.memory_mib,
+                gpu_count=row.gpu_count,
+            )
+            for row in rows
+        }
+
 
 @dataclass(frozen=True, slots=True)
 class _RecordedSegments:

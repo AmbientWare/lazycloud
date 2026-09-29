@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
-from collections.abc import AsyncIterator
-from dataclasses import dataclass
+import threading
+import time
+from collections.abc import AsyncGenerator, AsyncIterator, Iterator
+from concurrent.futures import Future
+from contextlib import aclosing, asynccontextmanager, contextmanager, suppress
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Protocol
 from uuid import uuid4
@@ -106,6 +111,185 @@ class AsyncWorkspaceChangeReader:
             max_events=max_events,
             heartbeat_seconds=heartbeat_seconds,
         )
+
+
+@dataclass(slots=True)
+class AsyncWorkloadChangeReader:
+    tail: RedisStreamTailBroker
+
+    @asynccontextmanager
+    async def follow(
+        self, *, workspace_id: str, stub_id: str
+    ) -> AsyncIterator[AsyncIterator[None]]:
+        stream = workspace_change_stream_name(workspace_id)
+        subscription = await self.tail.subscribe(
+            (stream,), after={stream: None}, label="workload-readiness"
+        )
+        changed = asyncio.Event()
+        async with subscription:
+            listener = asyncio.create_task(self._listen(subscription, stub_id, changed))
+            try:
+                async with aclosing(self._updates(changed, listener)) as updates:
+                    yield updates
+            finally:
+                listener.cancel()
+                with suppress(asyncio.CancelledError):
+                    await listener
+
+    async def _listen(
+        self,
+        subscription: RedisStreamTailSubscription,
+        stub_id: str,
+        changed: asyncio.Event,
+    ) -> None:
+        try:
+            async with aclosing(subscription.items(heartbeat_seconds=0.5)) as items:
+                async for item in items:
+                    if item is None:
+                        continue
+                    _, entry = item
+                    event = workspace_change_record(entry).event
+                    if event.stub_id == stub_id and event.topic in {
+                        WorkspaceChangeTopic.Containers,
+                        WorkspaceChangeTopic.Tasks,
+                        WorkspaceChangeTopic.Workloads,
+                    }:
+                        changed.set()
+        finally:
+            changed.set()
+
+    async def _updates(
+        self, changed: asyncio.Event, listener: asyncio.Task[None]
+    ) -> AsyncGenerator[None]:
+        # A runtime can bind its port without publishing another lifecycle event.
+        recovery_seconds = 0.5
+        next_discovery = 0.0
+        while True:
+            try:
+                async with asyncio.timeout(recovery_seconds):
+                    await changed.wait()
+            except TimeoutError:
+                pass
+            if listener.done():
+                await listener
+                raise RuntimeError("workload notification stream closed")
+            # Collapse buffered events and bound SQL discovery during completion bursts.
+            await asyncio.sleep(max(next_discovery - time.monotonic(), 0.0))
+            changed.clear()
+            next_discovery = time.monotonic() + 0.05
+            yield None
+
+
+@dataclass(slots=True)
+class WorkloadChangeSubscription:
+    changed: threading.Event = field(default_factory=threading.Event)
+    completion: Future[None] = field(default_factory=Future)
+
+    def wait(self, timeout_seconds: float) -> bool:
+        signalled = timeout_seconds > 0 and self.changed.wait(timeout_seconds)
+        self.changed.clear()
+        if self.completion.done():
+            self.completion.result()
+            raise RuntimeError("workload notification subscription closed")
+        return signalled
+
+
+@dataclass(slots=True)
+class SyncWorkloadChangeReader:
+    reader: AsyncWorkloadChangeReader
+    _loop: asyncio.AbstractEventLoop | None = field(default=None, init=False)
+    _tasks: set[asyncio.Task[None]] = field(default_factory=set, init=False)
+
+    async def start(self) -> None:
+        if self._loop is not None:
+            raise RuntimeError("synchronous workload reader is already running")
+        self._loop = asyncio.get_running_loop()
+
+    async def close(self) -> None:
+        if self._loop is not None and self._loop is not asyncio.get_running_loop():
+            raise RuntimeError("workload reader must close on its owning event loop")
+        self._loop = None
+        tasks = tuple(self._tasks)
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    @contextmanager
+    def follow(self, *, workspace_id: str, stub_id: str) -> Iterator[WorkloadChangeSubscription]:
+        loop = self._loop
+        if loop is None or not loop.is_running():
+            raise RuntimeError("synchronous workload reader is not running")
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+        if current_loop is not None:
+            raise RuntimeError("synchronous workload discovery cannot block an event loop")
+        subscription = WorkloadChangeSubscription()
+        started = asyncio.run_coroutine_threadsafe(
+            self._subscribe(subscription, workspace_id=workspace_id, stub_id=stub_id), loop
+        )
+        try:
+            task = started.result()
+        except BaseException:
+            started.cancel()
+            raise
+        try:
+            yield subscription
+        finally:
+            if not task.done():
+                if not loop.is_running():
+                    raise RuntimeError("workload reader event loop stopped before unsubscribe")
+                asyncio.run_coroutine_threadsafe(self._unsubscribe(task), loop).result()
+
+    async def _subscribe(
+        self, subscription: WorkloadChangeSubscription, *, workspace_id: str, stub_id: str
+    ) -> asyncio.Task[None]:
+        if self._loop is None:
+            raise RuntimeError("synchronous workload reader is not running")
+        ready = asyncio.get_running_loop().create_future()
+        task = asyncio.create_task(
+            self._relay(subscription, ready, workspace_id=workspace_id, stub_id=stub_id)
+        )
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+        try:
+            await ready
+        except BaseException:
+            await self._unsubscribe(task)
+            raise
+        return task
+
+    async def _relay(
+        self,
+        subscription: WorkloadChangeSubscription,
+        ready: asyncio.Future[None],
+        *,
+        workspace_id: str,
+        stub_id: str,
+    ) -> None:
+        try:
+            async with self.reader.follow(workspace_id=workspace_id, stub_id=stub_id) as changes:
+                ready.set_result(None)
+                async for _ in changes:
+                    subscription.changed.set()
+            raise RuntimeError("workload notification stream closed")
+        except BaseException as exc:
+            failure = (
+                RuntimeError("workload notification subscription closed")
+                if isinstance(exc, asyncio.CancelledError)
+                else exc
+            )
+            if not ready.done():
+                ready.set_exception(failure)
+            subscription.completion.set_exception(failure)
+        finally:
+            subscription.changed.set()
+
+    @staticmethod
+    async def _unsubscribe(task: asyncio.Task[None]) -> None:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
 
 @dataclass(slots=True)

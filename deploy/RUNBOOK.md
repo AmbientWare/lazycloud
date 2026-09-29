@@ -61,15 +61,16 @@ uv run --group workspace python -m deploy.release
 
 It derives services from Compose, builds their images, restarts the stack, and
 polls container state, health and image identity. Once the platform is healthy it
-writes `.lazycloud-release/active.json`, mounted by API and scheduler. Worker
-registration uses the built image ID from `.env.release`. Both files are local
+writes `.lazycloud-release/active.json`, mounted by the APIs, scheduler, and fleet
+controller. Worker registration uses the built image ID from `.env.release`.
+Both files are local
 state. The same release admission code runs in Compose and Kubernetes.
 
 ### Shipping from Actions
 
 The `platform initialize` job creates the deployment namespace and validates its
-provider identities before the API and scheduler start. Deployment and worker
-credentials require no human account or token. Create administrator access
+provider identities before the APIs, scheduler, and fleet controller start.
+Deployment and worker credentials require no human account or token. Create administrator access
 separately with offline `auth bootstrap`; use offline recovery if access is lost.
 Revoked human credentials stay revoked during releases.
 
@@ -340,23 +341,27 @@ kubectl -n lazycloud-prod get pods
 
 ### Reading a slow scheduler
 
-The scheduler runs four loops in one process, each on its own cadence, and each
-stamping its own heartbeat at `/tmp/lazycloud-scheduler.heartbeat.<loop>`. The
-liveness probe reads all four, so a restart means one of them stopped finishing
-passes, not that the process died.
+The scheduler runs `placement`, `recovery`, `dispatch`, `builds`, and `scheduled`
+loops. Each writes `/tmp/lazycloud-scheduler.heartbeat.<loop>`. The fleet
+controller separately runs `acquisition`, `capacity`, and `housekeeping`, writing
+`/tmp/lazycloud-fleet-controller.heartbeat.<loop>`. Each process checks all its
+heartbeats for liveness.
 
 Which one is the first thing to establish:
 
 ```sh
 kubectl exec -n lazycloud-prod deploy/scheduler -- \
   sh -c 'for f in /tmp/lazycloud-scheduler.heartbeat.*; do echo "$f $(stat -c %Y "$f")"; done'
+kubectl exec -n lazycloud-prod deploy/fleet-controller -- \
+  sh -c 'for f in /tmp/lazycloud-fleet-controller.heartbeat.*; do echo "$f $(stat -c %Y "$f")"; done'
 ```
 
-The oldest names the wedged loop. `placement` means containers are not being
-decided on and callers are waiting; `capacity` means the fleet and its records
-are drifting; `housekeeping` means an external service is unreachable and the
-meter outbox is filling, which is durable and recoverable; `dispatch` means work
-is decided but not placed.
+An old heartbeat identifies the stalled loop. `placement` handles autoscaling;
+`recovery` handles task timeouts, retries, and lost scheduling requests;
+`dispatch` assigns queued containers; `builds` handles image build dispatch and
+recovery; `scheduled` starts cron work. In fleet control, `acquisition` purchases
+capacity, `capacity` reconciles machines and reserves, and `housekeeping` handles
+billing, mail, and cleanup.
 
 To see what placement latency actually is, read the gap between a task becoming
 claimable and starting, rather than inferring it from logs:
@@ -386,12 +391,12 @@ they land on the same nodes:
 
 | Workload | Declared in |
 | --- | --- |
-| control plane, scheduler, cache, tunnel, Jobs, once per deployment | `deploy/chart/values.yaml` |
+| APIs, scheduler, fleet controller, cache, tunnel, Jobs | `deploy/chart/values.yaml` |
 | External Secrets (3 pods) | `deploy/argocd/apps/external-secrets.yaml` |
 | Argo CD (7 pods) | `deploy/platform-core/argocd.tf` |
 
-The API, scheduler, Cloudflare connectors and gateway each require two nodes
-and two zones, including across revisions during a rollout. A replica may be
+The APIs, scheduler, fleet controller, Cloudflare connectors and gateway each
+require two nodes and two zones, including across revisions during a rollout. A replica may be
 Pending while Auto Mode provisions. Inspect its scheduling events, NodeClaims,
 NodeClass conditions and node availability together. A Spot shortage can affect
 both replicas; disruption budgets cannot prevent provider reclamation.
@@ -485,6 +490,34 @@ startup report's denominator.
 A rollback to an image older than the schema is refused rather than migrated
 from, because there is no path to compute from a revision that build does not
 carry. Roll forward, or restore the database.
+
+### Execution service and scheduling queue cutover
+
+Revision `0033_scheduling_fairness` requires an account identity on persisted
+scheduling requests. The Redis queue uses account indexes, and function results
+require the claim identity from the matching runner. Old writers and runners
+cannot participate in this release.
+
+Record Argo's sync settings and pause automatic sync while the complete release
+builds. Stop new workload admission and schedules, then drain active tasks,
+container requests, deliveries, and image builds. Inspect both durable records
+and Redis leases. An empty ready queue alone does not establish a drained queue.
+Stop idle workload containers so no old runner remains available for later calls.
+Preserve task history, storage, worker enrollment, and managed instances.
+
+Stop the old API and scheduler writers before migration. Do not clear Redis or
+delete pending work to create an empty queue. Investigate any remaining claim or
+delivery and settle it through its owning service. The new scheduler can recover
+durable requests after migration, but the cutover must not leave an old worker
+delivery or image-build payload in flight.
+
+Sync the complete release to migrate and start management, execution, runtime
+control, the execution scheduler, and fleet control. Check ingress routing to
+each API owner, aggregate database connections, pod memory, and fresh worker
+intake on the activated release. Run a real invocation, endpoint request,
+sandbox command, and cancellation before reopening admission and schedules.
+Restore the recorded Argo settings after those checks pass. Roll forward if a
+check fails; the old build cannot write the new scheduling schema or queue.
 
 ### Fleet sleep evidence cutover
 
@@ -686,7 +719,7 @@ of normal deployment; it is not a separate scheduler path.
 
 The `fleet-ensure` Job registers platform AWS networks and the connection
 role through the API after the control plane starts. Terraform owns those
-persistent resources. The scheduler owns the capacity launched through them.
+persistent resources. The fleet controller owns the capacity launched through them.
 Generate the connection-role policy from `provider_aws.connection_policy`.
 
 Review the Terraform plan before expanding an existing fleet network. Existing
@@ -705,11 +738,11 @@ for additions without replacing existing subnets.
 | Tunnel issuer and gateway bootstrap credential | Local CA volume/private environment or production operator secret document | Bootstrap once with `deploy.tunnel_identity`; plan CA trust rotation separately. Leaf certificates renew automatically. |
 | Cloudflare tunnel credentials | file named by `LAZYCLOUD_PUBLIC_INGRESS_CREDENTIALS_FILE` | Mint a second tunnel, repoint both DNS records, recreate `public-ingress`, then delete the old tunnel. see `deploy/public-ingress/README.md` |
 | Cloudflare API token (operator and certificate renewal) | Operator environment `CLOUDFLARE_API_TOKEN`; existing operator secret document property `LAZYCLOUD_TCP_DNS_API_TOKEN` | The same token authenticates Terraform and cert-manager. On rotation, update both stored copies. The chart projects the renewal copy only into the certificate controller's Secret. It retains its existing Tunnel, DNS, Zone and certificate permissions. |
-| Cloudflare API token (control plane) | `.env`, `LAZYCLOUD_CLOUDFLARE_API_TOKEN` | Reissue in the Cloudflare dashboard; scoped to Zone > SSL and Certificates > Edit. This is the one the control plane serves custom hostnames with. |
+| Cloudflare API token (custom domains) | `.env`, `LAZYCLOUD_CLOUDFLARE_API_TOKEN` | Reissue in the Cloudflare dashboard; scoped to Zone > SSL and Certificates > Edit. Update the stored key and restart `control-plane` and `fleet-controller`. |
 | Stripe webhook signing secret | `.env`, `LAZYCLOUD_STRIPE_WEBHOOK_SECRET` | Returned only when the endpoint is created. Replace the endpoint through `deploy/stripe`, take the new output, recreate `control-plane`. |
-| Stripe API key | `.env`, `LAZYCLOUD_STRIPE_API_KEY` | Roll the restricted key in the Stripe dashboard, update `.env`, recreate `control-plane`. |
+| Stripe API key | `.env`, `LAZYCLOUD_STRIPE_API_KEY` | Roll the restricted key in the Stripe dashboard, update `.env`, recreate `control-plane` and `fleet-controller`. |
 | Resend webhook secret | `.env`, `LAZYCLOUD_RESEND_WEBHOOK_SECRET` | Returned only when the endpoint is created. Re-register `POST /webhooks/resend` in the Resend dashboard, take the new secret, recreate `control-plane`. Mail keeps sending without it; only delivery reporting stops. |
-| Resend API key | `.env`, `LAZYCLOUD_RESEND_API_KEY` | Read by the scheduler, which sends the mail; the control plane only queues it. Create a new key in the Resend dashboard, update `.env`, recreate `scheduler`, then delete the old key. Queued messages are durable, so mail queued during the gap goes out after it. |
+| Resend API key | `.env`, `LAZYCLOUD_RESEND_API_KEY` | Create a new key in the Resend dashboard, update `.env`, recreate `fleet-controller`, then delete the old key. Queued messages are durable and resume sending after rotation. |
 
 ## Irreversible actions
 

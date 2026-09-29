@@ -46,7 +46,7 @@ from api.server.dependencies import (
     require_workspace_scope,
 )
 from api.server.service_dependencies import volume_service
-from api.server.services import ApiServices
+from api.server.services import ApiServiceCore
 
 router = APIRouter(prefix="/api/v1/volumes", tags=["volume"])
 
@@ -54,7 +54,7 @@ router = APIRouter(prefix="/api/v1/volumes", tags=["volume"])
 async def _presigned_url_workspace(
     request: CreatePresignedUrlRequest,
     connection: HTTPConnection,
-    services: ApiServices = Depends(current_services),
+    services: ApiServiceCore = Depends(current_services),
     credentials: AuthorizationCredentials = None,
     workspace: str | None = None,
 ) -> str:
@@ -72,7 +72,7 @@ async def _presigned_url_workspace(
 def list_volumes(
     workspace_id: read_workspace,
     service: VolumeControlService = Depends(volume_service),
-    services: ApiServices = Depends(current_services),
+    services: ApiServiceCore = Depends(current_services),
 ) -> ListVolumesResponse:
     response = service.list_volumes(workspace_id=workspace_id)
     relationships = StorageRelationshipService(services.deployment_resources).for_workspace(

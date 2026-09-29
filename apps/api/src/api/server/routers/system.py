@@ -53,9 +53,10 @@ from api.server.dependencies import (
     current_services,
     require_user_principal,
 )
-from api.server.services import ApiServices
+from api.server.services import ApiServiceCore
 
 router = APIRouter()
+health_router = APIRouter()
 
 
 def _public_token(record: AuthTokenRecord) -> AuthTokenResponse:
@@ -74,7 +75,7 @@ def _reject_self_token_mutation(
         raise ConflictError(f"cannot {action} the authenticating token")
 
 
-@router.get("/livez", status_code=status.HTTP_204_NO_CONTENT, include_in_schema=False)
+@health_router.get("/livez", status_code=status.HTTP_204_NO_CONTENT, include_in_schema=False)
 async def livez() -> Response:
     """Whether this process is still running its own event loop, and nothing else.
 
@@ -91,10 +92,10 @@ async def livez() -> Response:
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.get("/health", response_model=HealthResponse)
+@health_router.get("/health", response_model=HealthResponse)
 def health(
     response: Response,
-    services: Annotated[ApiServices, Depends(api_services)],
+    services: Annotated[ApiServiceCore, Depends(api_services)],
 ) -> HealthResponse:
     checks = {
         "database": _health_check(services.context.database.ping),
@@ -123,7 +124,7 @@ def _health_check(check: Callable[[], bool]) -> HealthCheckResult:
 
 @router.get("/api/v1/tokens/all", response_model=TokenListResponse, operation_id="list_tokens")
 def list_tokens(
-    services: ApiServices = Depends(current_services),
+    services: ApiServiceCore = Depends(current_services),
     *,
     _auth: admin_access,
 ) -> TokenListResponse:
@@ -139,7 +140,7 @@ def list_tokens(
 def api_v1_admin_update_workspace_tokens(
     workspace_id: str,
     request: TokenAdminUpdateRequest,
-    services: ApiServices = Depends(current_services),
+    services: ApiServiceCore = Depends(current_services),
     *,
     _auth: admin_access,
 ) -> TokenAdminUpdateResponse:
@@ -157,7 +158,7 @@ def api_v1_admin_update_workspace_tokens(
 )
 def api_v1_workspace_signing_key(
     workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ApiServiceCore = Depends(current_services),
 ) -> WorkspaceSigningKeyResponse:
     return WorkspaceSigningKeyResponse(
         signing_key=ControlPlaneService(services.context).workspace_signing_key(workspace_id)
@@ -175,7 +176,7 @@ def api_v1_list_account_tokens(
     include_device: bool = True,
     *,
     user_id: read_user,
-    services: ApiServices = Depends(current_services),
+    services: ApiServiceCore = Depends(current_services),
 ) -> TokenListResponse:
     result = services.auth.list_account_tokens(
         user_id, limit=limit, cursor=cursor, include_device=include_device
@@ -195,7 +196,7 @@ def api_v1_list_account_tokens(
 def api_v1_create_account_token(
     request: TokenCreateRequest,
     user_id: write_user,
-    services: ApiServices = Depends(current_services),
+    services: ApiServiceCore = Depends(current_services),
 ) -> TokenCreateResponse:
     raw_token, record = services.auth.create_account_token(
         user_id,
@@ -215,7 +216,7 @@ def api_v1_create_token_for_user(
     user_id: str,
     request: TokenCreateRequest,
     _auth: admin_access,
-    services: ApiServices = Depends(current_services),
+    services: ApiServiceCore = Depends(current_services),
 ) -> TokenCreateResponse:
     """Mint a credential belonging to another account.
 
@@ -242,7 +243,7 @@ def api_v1_revoke_account_token(
     token_id: str,
     user_id: write_user,
     token: write_token,
-    services: ApiServices = Depends(current_services),
+    services: ApiServiceCore = Depends(current_services),
 ) -> AuthTokenResponse:
     _reject_self_token_mutation(token, token_id, action="revoke")
     return _public_token(services.auth.revoke_account_token(user_id, token_id))
@@ -266,7 +267,7 @@ def _device_code_response(record: DeviceAuthorizationRecord) -> DeviceCodeRespon
 )
 def start_device_authorization(
     request: DeviceCodeCreateRequest,
-    services: ApiServices = Depends(current_services),
+    services: ApiServiceCore = Depends(current_services),
 ) -> DeviceCodeCreateResponse:
     started = DeviceAuthorizationService(services.context).start(client_name=request.client_name)
     verification_uri = (
@@ -289,7 +290,7 @@ def start_device_authorization(
 )
 def claim_device_authorization(
     request: DeviceCodeTokenRequest,
-    services: ApiServices = Depends(current_services),
+    services: ApiServiceCore = Depends(current_services),
 ) -> DeviceCodeTokenResponse:
     claim = DeviceAuthorizationService(services.context).claim(request.device_code)
     return DeviceCodeTokenResponse(status=claim.status, token=claim.token)
@@ -302,7 +303,7 @@ def claim_device_authorization(
 )
 def api_v1_get_device_code(
     user_code: str,
-    services: ApiServices = Depends(current_services),
+    services: ApiServiceCore = Depends(current_services),
     *,
     _token: read_token,
 ) -> DeviceCodeResponse:
@@ -316,7 +317,7 @@ def api_v1_get_device_code(
 )
 def api_v1_approve_device_code(
     user_code: str,
-    services: ApiServices = Depends(current_services),
+    services: ApiServiceCore = Depends(current_services),
     *,
     token: write_token,
 ) -> DeviceCodeResponse:
@@ -337,7 +338,7 @@ def api_v1_approve_device_code(
 )
 def api_v1_deny_device_code(
     user_code: str,
-    services: ApiServices = Depends(current_services),
+    services: ApiServiceCore = Depends(current_services),
     *,
     _token: write_token,
 ) -> DeviceCodeResponse:
@@ -351,7 +352,7 @@ def api_v1_deny_device_code(
 )
 def authorize(
     request: AuthorizeRequest,
-    services: ApiServices = Depends(current_services),
+    services: ApiServiceCore = Depends(current_services),
     authorization: AuthorizationCredentials = None,
 ) -> AuthorizeResponse:
     try:

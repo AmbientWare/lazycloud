@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import socket
 import threading
 import time
@@ -596,12 +597,15 @@ def test_standalone_ticket_cleanup_failure_preserves_truth_and_records_safe_even
     assert "endpoint" not in events[0].message
 
 
-def test_sandbox_exec_waits_for_worker_address_before_dial(isolated_services: ApiServices) -> None:
+@pytest.mark.anyio
+async def test_sandbox_exec_waits_for_worker_address_before_dial(
+    async_services: ApiServices,
+) -> None:
     control = ControlPlaneService(
-        isolated_services.context,
+        async_services.context,
     )
     stub = control.create_stub("delayed-sandbox", kind=StubKind.Sandbox)
-    container = _create_running_container(isolated_services, stub.id, stub.workspace_id)
+    container = _create_running_container(async_services, stub.id, stub.workspace_id)
     scheduler_containers = _FakeSchedulerContainers(
         state=SchedulerContainerState(
             container_id=container.id,
@@ -628,18 +632,19 @@ def test_sandbox_exec_waits_for_worker_address_before_dial(isolated_services: Ap
         },
     )
     service = PodControlService(
-        isolated_services,
-        redis=isolated_services.redis(),
+        async_services,
+        redis=async_services.redis(),
         scheduler_containers=scheduler_containers,
         container_clients=SchedulerContainerClientFactory(
             scheduler_containers=scheduler_containers,
             transport_factory=_RecordingTransportFactory(transport),
         ),
-        poll_interval_seconds=0,
-        container_connect_timeout_seconds=1,
+        sync_workload_changes=async_services.require_async_io().sync_workload_changes,
+        container_connect_timeout_seconds=2,
     )
 
-    response = service.sandbox_exec(
+    response = await asyncio.to_thread(
+        service.sandbox_exec,
         container.id,
         PodSandboxExecRequest(
             command="echo ready",
@@ -648,7 +653,7 @@ def test_sandbox_exec_waits_for_worker_address_before_dial(isolated_services: Ap
     )
 
     assert response == PodSandboxExecResponse(pid=42)
-    assert isolated_services.containers.get(container.id).status is ContainerStatus.Running
+    assert async_services.containers.get(container.id).status is ContainerStatus.Running
 
 
 def test_sandbox_connect_surfaces_terminal_scheduler_state_as_conflict(
@@ -672,7 +677,6 @@ def test_sandbox_connect_surfaces_terminal_scheduler_state_as_conflict(
         isolated_services,
         redis=isolated_services.redis(),
         scheduler_containers=scheduler_containers,
-        poll_interval_seconds=0,
         container_connect_timeout_seconds=1,
     )
 

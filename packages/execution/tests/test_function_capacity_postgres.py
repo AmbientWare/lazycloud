@@ -107,13 +107,7 @@ def _prove_a_simultaneous_burst_starts_one_container(services: ApiServices) -> N
 
 
 def _prove_the_autoscaler_stops_at_the_ceiling(services: ApiServices) -> None:
-    """Concurrent scale-ups provision the backlog and then refuse.
-
-    The autoscaler asks for one container at a time and reads the count between
-    asks, so a ceiling honoured only in its own loop would still hold here. What
-    is proved is the refusal itself: past the ceiling the reservation declines,
-    whichever caller holds the authority to ask.
-    """
+    """Concurrent batches retain committed starts and cannot cross the ceiling."""
 
     functions = FunctionControlService(services)
     stub = ControlPlaneService(services.context).create_stub(
@@ -131,9 +125,9 @@ def _prove_the_autoscaler_stops_at_the_ceiling(services: ApiServices) -> None:
         )
     start = Barrier(CONTENDERS)
 
-    def scale() -> bool:
+    def scale() -> int:
         start.wait(timeout=30)
-        return functions.start_function_container(stub.id)
+        return len(list(functions.start_function_containers(stub.id, count=CEILING)))
 
     with ThreadPoolExecutor(max_workers=CONTENDERS) as executor:
         started = [

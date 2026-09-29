@@ -17,9 +17,11 @@ from shared.placement import ProductRegion
 from shared.scheduling import SchedulerContainerSubmitStatus
 from storage.service import ObjectStorage
 
+from execution.admission import PaymentAdmission
 from execution.containers.planning import ContainerSchedulingOptions
 from execution.containers.service import PendingContainerReservation
 from execution.context import ExecutionContext
+from execution.demand import ExecutionDemandService
 from execution.tasks import TaskService
 
 
@@ -38,6 +40,18 @@ class SchedulerSubmissionResult(Protocol):
 
 
 class ExecutionContainerService(Protocol):
+    def admit_container_start(
+        self,
+        session: DatabaseSession,
+        *,
+        workspace_id: str,
+        gpu: Sequence[str],
+        gpu_count: int,
+        region: ProductRegion | None = None,
+        availability_zone: str = "",
+        stub_id: str | None = None,
+    ) -> list[str]: ...
+
     def reserve_image_build_container(
         self,
         *,
@@ -52,18 +66,6 @@ class ExecutionContainerService(Protocol):
         session: DatabaseSession,
         reservation: PendingContainerReservation,
     ) -> ContainerRecord: ...
-
-    def admit_container_start(
-        self,
-        session: DatabaseSession,
-        *,
-        workspace_id: str,
-        gpu: Sequence[str],
-        gpu_count: int,
-        region: ProductRegion | None = None,
-        availability_zone: str = "",
-        stub_id: str | None = None,
-    ) -> list[str]: ...
 
     def get(self, container_id: str) -> ContainerRecord: ...
 
@@ -114,6 +116,12 @@ class ExecutionLookupService(Protocol):
 
 
 class ExecutionServices(Protocol):
+    @property
+    def payment_admission(self) -> PaymentAdmission: ...
+
+    @property
+    def execution_demand(self) -> ExecutionDemandService: ...
+
     @property
     def context(self) -> ExecutionContext: ...
 

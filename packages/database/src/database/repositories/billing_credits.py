@@ -87,6 +87,10 @@ class BillingCreditRepository:
 
     def balance(self, *, user_id: str, at: datetime) -> int:
         self._lock(user_id)
+        balances = self._lot_balances(user_id=user_id, at=at)
+        outstanding = self._outstanding(user_id=user_id)
+        if not outstanding and all(amount >= 0 for _, amount in balances):
+            return sum(amount for _, amount in balances)
         self._pay_debt(user_id=user_id, at=at)
         return sum(amount for _, amount in self._lot_balances(user_id=user_id, at=at)) - sum(
             row.payable_nanos or 0 for row in self._outstanding(user_id=user_id)

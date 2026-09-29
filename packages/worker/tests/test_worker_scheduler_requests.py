@@ -252,6 +252,86 @@ def test_worker_scheduler_request_processor_backgrounds_long_lived_container(
     assert workers.capacity_changes == [("worker-1", "ctr-1", WorkerCapacityChange.Add)]
 
 
+def test_cleanup_does_not_block_other_admission_or_race_its_own_redelivery() -> None:
+    cleaning = threading.Event()
+    release = threading.Event()
+
+    class Execution(_ExecutionService):
+        def recover_cleanup(self, container_ids: Sequence[str]) -> None:
+            assert container_ids == ["old"]
+            cleaning.set()
+            assert release.wait(timeout=2)
+
+    request = _request(payload={"image_id": "image-1", "startup_kind": "function"})
+    old = request.model_copy(update={"container_id": "old"})
+    workers = _WorkerRepository()
+    execution = Execution()
+    processor = WorkerSchedulerRequestProcessor(
+        build_cancels=WorkerBuildCancelRegistry(),
+        worker_id="worker-1",
+        workers=workers,
+        containers=_ContainerRepository(
+            states={request.container_id: _state(request, status=SchedulerContainerStatus.Pending)},
+            cleanup=[
+                ContainerCleanupTarget(container_id="old", stop_reason=StopContainerReason.User)
+            ],
+        ),
+        execution=execution,
+        worker_gpu_type="",
+        container_stopper=_ShutdownStopper(threading.Event()),
+    )
+    try:
+        processor.run_once()
+        assert cleaning.wait(timeout=1)
+        workers.requests.append(request)
+        assert processor.run_once().background
+        result = _wait_for_background_result(processor, request.container_id)
+        assert result.status is WorkerSchedulerRequestStatus.Executed
+        workers.requests.append(old)
+        assert processor.run_once().status is WorkerSchedulerRequestStatus.Reconciled
+        assert workers.in_flight == [old]
+        assert [context.request.container_id for context in execution.contexts] == ["ctr-1"]
+    finally:
+        release.set()
+        processor.close()
+
+
+def test_startup_slots_return_when_running_before_container_exit() -> None:
+    started = threading.Event()
+    release = threading.Event()
+    request = _request(payload={"image_id": "image-1", "startup_kind": "function"})
+    second = request.model_copy(update={"container_id": "ctr-2"})
+    containers = _ContainerRepository(
+        states={
+            item.container_id: _state(item, status=SchedulerContainerStatus.Pending)
+            for item in (request, second)
+        }
+    )
+    workers = _WorkerRepository(requests=[request, second])
+    processor = WorkerSchedulerRequestProcessor(
+        build_cancels=WorkerBuildCancelRegistry(),
+        worker_id="worker-1",
+        workers=workers,
+        containers=containers,
+        execution=_BlockingExecutionService(started, release, containers),
+        worker_gpu_type="",
+        container_stopper=_ShutdownStopper(release),
+        node_cpu_millicores=1000,
+        node_memory_mib=1024,
+    )
+    try:
+        assert processor.run_once().background
+        assert started.wait(timeout=1)
+        assert processor.run_once().status is WorkerSchedulerRequestStatus.Idle
+        assert workers.requests == [second]
+        processor.record_container_started(request.container_id, 123)
+        assert processor.run_once().container_id == second.container_id
+        assert not workers.requests
+    finally:
+        release.set()
+        processor.close()
+
+
 def test_worker_scheduler_request_processor_drops_missing_state_and_releases_capacity() -> None:
     request = _request()
     workers = _WorkerRepository(requests=[request])
@@ -371,6 +451,7 @@ def test_worker_scheduler_request_processor_reconciles_a_redelivered_request(
     assert started.background
     assert runtime_started.wait(timeout=1)
 
+    processor.record_container_started("ctr-1", 1)
     redelivered = processor.run_once()
 
     assert redelivered.status is WorkerSchedulerRequestStatus.Reconciled

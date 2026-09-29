@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -15,6 +15,7 @@ from compute.capacity_errors import (
 from compute.request_placement import ComputeCapacityPurchase
 from coordination.redis_client import AsyncRedisClient
 from scheduler.capacity_reservations import (
+    CapacityAcquisitionController,
     CapacityAcquisitionResult,
     CapacityAcquisitionStatus,
     CapacityProvisioningReservation,
@@ -83,6 +84,7 @@ DEFAULT_POOL = Placement.platform()
 
 def _request(container_id: str, *, cpu: int = 1_000) -> SchedulerWorkerRequest:
     return SchedulerWorkerRequest(
+        fairness_account_id="test-account",
         workspace_id="workspace-1",
         stub_id="stub-1",
         container_id=container_id,
@@ -286,10 +288,11 @@ def _managed_pool() -> ComputeUnitRecord:
     )
 
 
-def _purchases(service: CapacityReservationService) -> tuple[ComputeCapacityPurchase, ...]:
+def _purchases(
+    controllers: Sequence[CapacityAcquisitionController],
+) -> tuple[ComputeCapacityPurchase, ...]:
     return tuple(
-        ComputeCapacityPurchase(item.capacity_owner_id, lambda: None)
-        for item in service.controllers()
+        ComputeCapacityPurchase(item.capacity_owner_id, lambda: None) for item in controllers
     )
 
 
@@ -419,6 +422,9 @@ class _UnownedWorkspaces:
     def owner_user_id(self, workspace_id: str) -> str:
         _ = workspace_id
         return ""
+
+    def owner_user_ids(self, workspace_ids: Collection[str]) -> dict[str, str]:
+        return {}
 
 
 class _Events:
@@ -562,7 +568,9 @@ def test_pending_capacity_is_reused_before_supplier_discovery(
     service = CapacityReservationService(repository, lambda: controllers)
     now = datetime(2026, 1, 1, tzinfo=UTC)
 
-    first = service.acquire(_request("container-1"), purchases=lambda: _purchases(service), now=now)
+    first = service.acquire(
+        _request("container-1"), purchases=lambda: _purchases(controllers), now=now
+    )
     other = _Controller(capacity_owner_id=OTHER_OWNER_ID, priority=100)
     controllers.insert(0, other)
 
@@ -589,11 +597,11 @@ def test_terminal_retry_releases_stale_reservation_before_new_attempt(
     now = datetime(2026, 1, 1, tzinfo=UTC)
 
     first = service.acquire(
-        _request("container-terminal"), purchases=lambda: _purchases(service), now=now
+        _request("container-terminal"), purchases=lambda: _purchases([controller]), now=now
     )
     second = service.acquire(
         _request("container-terminal").model_copy(update={"retry_count": 1}),
-        purchases=lambda: _purchases(service),
+        purchases=lambda: _purchases([controller]),
         now=now + timedelta(seconds=1),
     )
 
@@ -622,7 +630,9 @@ def test_unpinned_acquisition_fails_over_from_at_limit_pool_in_priority_order(
     request = _request("failover")
 
     result = service.acquire(
-        request, purchases=lambda: _purchases(service), now=datetime(2026, 1, 1, tzinfo=UTC)
+        request,
+        purchases=lambda: _purchases([fallback, primary]),
+        now=datetime(2026, 1, 1, tzinfo=UTC),
     )
 
     assert result.status is CapacityAcquisitionStatus.Requested
@@ -643,7 +653,7 @@ def test_rejected_acquisition_reassigns_requests_and_retries_owned_cleanup(
     service = CapacityReservationService(repository, lambda: [primary, fallback])
     now = datetime(2026, 1, 1, tzinfo=UTC)
     request = _request("rejected")
-    acquired = service.acquire(request, purchases=lambda: _purchases(service), now=now)
+    acquired = service.acquire(request, purchases=lambda: _purchases([primary, fallback]), now=now)
     primary.ensure_status = CapacityAcquisitionStatus.Rejected
     primary.release_status = CapacityAcquisitionStatus.TemporarilyUnavailable
 
@@ -658,7 +668,7 @@ def test_rejected_acquisition_reassigns_requests_and_retries_owned_cleanup(
 
     moved = service.acquire(
         request,
-        purchases=lambda: _purchases(service),
+        purchases=lambda: _purchases([primary, fallback]),
         now=now + timedelta(seconds=2),
     )
     assert moved.capacity_owner_id == OTHER_OWNER_ID
@@ -688,7 +698,7 @@ def test_rejected_first_response_retains_provider_reported_ownership_until_clean
     service = CapacityReservationService(repository, lambda: [controller])
     acquired = service.acquire(
         _request("recovered-rejection"),
-        purchases=lambda: _purchases(service),
+        purchases=lambda: _purchases([controller]),
         now=datetime(2026, 1, 1, tzinfo=UTC),
     )
     reservation = repository.get(acquired.reservation_id)
@@ -713,9 +723,9 @@ def test_uncertain_purchase_retains_demand_without_buying_from_another_owner(
     now = datetime(2026, 1, 1, tzinfo=UTC)
     request = _request("uncertain-purchase")
 
-    acquired = service.acquire(request, purchases=lambda: _purchases(service), now=now)
+    acquired = service.acquire(request, purchases=lambda: _purchases([primary, fallback]), now=now)
     retried = service.acquire(
-        request, purchases=lambda: _purchases(service), now=now + timedelta(seconds=1)
+        request, purchases=lambda: _purchases([primary, fallback]), now=now + timedelta(seconds=1)
     )
 
     assert acquired.status is CapacityAcquisitionStatus.TemporarilyUnavailable
@@ -968,10 +978,10 @@ def test_gpu_backfill_releases_only_its_pending_cpu_allocation(
     )
     request = _request("move-to-gpu").model_copy(update={"preemptible": True})
     assert requests.submit(request, ready_at=now).accepted
-    acquired = capacity.acquire(request, purchases=lambda: _purchases(capacity), now=now)
+    acquired = capacity.acquire(request, purchases=lambda: _purchases([controller]), now=now)
     if shared_cpu_reservation:
         sibling = capacity.acquire(
-            _request("keep-cpu"), purchases=lambda: _purchases(capacity), now=now
+            _request("keep-cpu"), purchases=lambda: _purchases([controller]), now=now
         )
         assert sibling.reservation_id == acquired.reservation_id
 
@@ -980,6 +990,7 @@ def test_gpu_backfill_releases_only_its_pending_cpu_allocation(
     assert result.status is SchedulerContainerDispatchStatus.Dispatched
     assert result.worker_id == gpu.worker_id
     assert repository.allocation_for_request(request.container_id) is None
+    capacity.reconcile([gpu], now=now)
     reservation = repository.get(acquired.reservation_id)
     assert reservation is not None and reservation.open
     if shared_cpu_reservation:
@@ -1099,9 +1110,9 @@ def test_pending_purchase_does_not_pin_dispatch_or_release_shared_demand(
     now = datetime.now(UTC)
     request = _request("ready-elsewhere").model_copy(update={"timestamp": now})
     assert requests.submit(request, ready_at=now).accepted
-    acquired = capacity.acquire(request, purchases=lambda: _purchases(capacity), now=now)
+    acquired = capacity.acquire(request, purchases=lambda: _purchases([controller]), now=now)
     shared = capacity.acquire(
-        _request("still-needs-purchase"), purchases=lambda: _purchases(capacity), now=now
+        _request("still-needs-purchase"), purchases=lambda: _purchases([controller]), now=now
     )
     assert acquired.reservation_id == shared.reservation_id
     worker = _worker(OTHER_OWNER_ID, created_at=now)
@@ -1325,7 +1336,7 @@ def test_available_worker_registration_uses_reported_schedulable_capacity(
     service = CapacityReservationService(repository, lambda: [controller])
     now = datetime(2026, 1, 1, tzinfo=UTC)
     acquired = service.acquire(
-        _request("container-1"), purchases=lambda: _purchases(service), now=now
+        _request("container-1"), purchases=lambda: _purchases([controller]), now=now
     )
     wrong_owner = _worker(OTHER_OWNER_ID, created_at=now + timedelta(seconds=1))
 
@@ -1381,7 +1392,7 @@ def test_registration_expiry_calls_capacity_owner_release_and_records_failure(
     service = CapacityReservationService(repository, lambda: [controller])
     now = datetime(2026, 1, 1, tzinfo=UTC)
     acquired = service.acquire(
-        _request("container-1"), purchases=lambda: _purchases(service), now=now
+        _request("container-1"), purchases=lambda: _purchases([controller]), now=now
     )
 
     reconciled = service.reconcile([], now=now + timedelta(seconds=31))
@@ -1398,13 +1409,12 @@ def test_cancellation_releases_exact_owned_capacity_after_last_allocation(
     service = CapacityReservationService(repository, lambda: [controller])
     now = datetime(2026, 1, 1, tzinfo=UTC)
     acquired = service.acquire(
-        _request("container-cancelled"), purchases=lambda: _purchases(service), now=now
+        _request("container-cancelled"), purchases=lambda: _purchases([controller]), now=now
     )
 
-    service.release_request(
-        "container-cancelled",
-        now=now + timedelta(seconds=1),
-    )
+    service.release_request("container-cancelled")
+    assert repository.allocation_for_request("container-cancelled") is None
+    service.reconcile([], now=now + timedelta(seconds=1))
 
     reservation = repository.get(acquired.reservation_id)
     assert controller.release_calls == [acquired.reservation_id]
@@ -1420,15 +1430,12 @@ def test_cancellation_after_registration_keeps_capacity_for_idle_drain(
     service = CapacityReservationService(repository, lambda: [controller])
     now = datetime(2026, 1, 1, tzinfo=UTC)
     acquired = service.acquire(
-        _request("container-registered-cancel"), purchases=lambda: _purchases(service), now=now
+        _request("container-registered-cancel"), purchases=lambda: _purchases([controller]), now=now
     )
     worker = _worker(OWNER_ID, created_at=now + timedelta(milliseconds=100))
 
-    service.release_request(
-        "container-registered-cancel",
-        workers=(worker,),
-        now=now + timedelta(seconds=1),
-    )
+    service.release_request("container-registered-cancel")
+    service.reconcile([worker], now=now + timedelta(seconds=1))
 
     reservation = repository.get(acquired.reservation_id)
     assert controller.release_calls == []
@@ -1454,10 +1461,10 @@ def test_reconcile_prunes_allocations_after_durable_container_owners_finish(
     )
     now = datetime(2026, 1, 1, tzinfo=UTC)
     finished = service.acquire(
-        _request("container-finished"), purchases=lambda: _purchases(service), now=now
+        _request("container-finished"), purchases=lambda: _purchases([controller]), now=now
     )
     running = service.acquire(
-        _request("container-running"), purchases=lambda: _purchases(service), now=now
+        _request("container-running"), purchases=lambda: _purchases([controller]), now=now
     )
     assert finished.reservation_id == running.reservation_id
     worker = _worker(OWNER_ID, created_at=now + timedelta(milliseconds=100))
@@ -1489,13 +1496,11 @@ def test_unconfirmed_cancellation_cleanup_remains_open_and_blocks_owner_mutation
     service = CapacityReservationService(repository, lambda: [controller])
     now = datetime(2026, 1, 1, tzinfo=UTC)
     acquired = service.acquire(
-        _request("container-cleanup-pending"), purchases=lambda: _purchases(service), now=now
+        _request("container-cleanup-pending"), purchases=lambda: _purchases([controller]), now=now
     )
 
-    service.release_request(
-        "container-cleanup-pending",
-        now=now + timedelta(seconds=1),
-    )
+    service.release_request("container-cleanup-pending")
+    service.reconcile([], now=now + timedelta(seconds=1))
 
     reservation = repository.get(acquired.reservation_id)
     assert reservation is not None
@@ -1620,7 +1625,7 @@ def test_concurrent_compatible_misses_deduplicate_after_lock_retry(
         barrier.wait()
         try:
             return services[index].acquire(
-                requests[index], purchases=lambda: _purchases(services[index]), now=now
+                requests[index], purchases=lambda: _purchases([controller]), now=now
             )
         except CapacityReservationLockContendedError as exc:
             return exc
@@ -1637,7 +1642,7 @@ def test_concurrent_compatible_misses_deduplicate_after_lock_retry(
     retry_index = 1 - succeeded_index
     retried = services[retry_index].acquire(
         requests[retry_index],
-        purchases=lambda: _purchases(services[retry_index]),
+        purchases=lambda: _purchases([controller]),
         now=now + timedelta(seconds=1),
     )
 

@@ -393,6 +393,7 @@ def test_purchase_reservation_and_placement_agree_on_fit(
             )
             reservation = shape.can_host(
                 SchedulerWorkerRequest(
+                    fairness_account_id="test-account",
                     workspace_id="00000000-0000-0000-0000-000000000001",
                     stub_id="stub-1",
                     container_id="container-1",

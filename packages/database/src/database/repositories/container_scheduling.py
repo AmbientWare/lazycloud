@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -24,6 +25,7 @@ def scheduling_request_statement(*, include_payload: bool = True) -> Select[tupl
         ContainerTable.scheduling_backfill,
         ContainerTable.scheduling_cpu_millicores,
         ContainerTable.scheduling_deployment_id,
+        ContainerTable.scheduling_fairness_account_id,
         ContainerTable.scheduling_disk_bytes,
         ContainerTable.scheduling_disk_count,
         ContainerTable.scheduling_docker_enabled,
@@ -179,6 +181,28 @@ class ContainerSchedulingRepository:
             )
         )
         return scheduling_request_from_row(row) if row is not None else None
+
+    def requests_for(self, container_ids: Sequence[str]) -> dict[str, SchedulerWorkerRequest]:
+        if not container_ids:
+            return {}
+        rows = self.session.scalars(
+            scheduling_request_statement().where(
+                ContainerTable.id.in_(container_ids),
+                ContainerTable.scheduling_requested_at.is_not(None),
+            )
+        )
+        return {str(row.id): scheduling_request_from_row(row) for row in rows}
+
+    def assignment_times(self, container_ids: Sequence[str]) -> dict[str, datetime]:
+        if not container_ids:
+            return {}
+        rows = self.session.execute(
+            select(ContainerTable.id, ContainerTable.scheduling_assigned_at).where(
+                ContainerTable.id.in_(container_ids),
+                ContainerTable.scheduling_assigned_at.is_not(None),
+            )
+        )
+        return {str(container_id): assigned_at for container_id, assigned_at in rows}
 
     def expired_assignments(
         self, *, before: datetime, limit: int

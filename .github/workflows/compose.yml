@@ -57,6 +57,7 @@ jobs:
           control-plane
           connection-gateway
           scheduler
+          fleet-controller
           container-worker
           cache-server
 

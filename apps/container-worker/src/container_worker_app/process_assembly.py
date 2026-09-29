@@ -396,6 +396,9 @@ def assemble_worker_process_services(
         node_cpu_millicores=read_worker_cpu_millicores(),
         node_memory_mib=read_worker_memory_mib(),
     )
+    lifecycle.cleanup_actions.insert(
+        0, WorkerCleanupAction(name="container-cleanup", action=processor.close)
+    )
 
     # Set after both exist rather than passed in: execution has to tell the
     # processor a pid, and the processor is built from execution. Without it a

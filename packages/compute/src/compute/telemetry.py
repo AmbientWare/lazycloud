@@ -62,6 +62,9 @@ class PoolMode(StrEnum):
 class AgentMetricSnapshot(Protocol):
     timestamp_unix_nano: int
     cpu_utilization_pct: float
+    cpu_pressure_pct: float | None
+    io_pressure_pct: float | None
+    memory_pressure_pct: float | None
     memory_used_mb: int
     memory_total_mb: int
     memory_utilization_pct: float
@@ -88,6 +91,9 @@ class AgentTelemetryStreamDecision(ContractModel):
 class AgentMachineMetrics(ContractModel):
     timestamp: datetime = Field(default_factory=utc_now)
     cpu_utilization_pct: float = 0.0
+    cpu_pressure_pct: float | None = Field(default=None, ge=0, le=100, allow_inf_nan=False)
+    io_pressure_pct: float | None = Field(default=None, ge=0, le=100, allow_inf_nan=False)
+    memory_pressure_pct: float | None = Field(default=None, ge=0, le=100, allow_inf_nan=False)
     memory_used_mb: int = 0
     memory_total_mb: int = 0
     memory_utilization_pct: float = 0.0
@@ -233,6 +239,9 @@ def machine_metrics_from_snapshot(
     return AgentMachineMetrics(
         timestamp=time_from_unix_nano(snapshot.timestamp_unix_nano, now=now),
         cpu_utilization_pct=snapshot.cpu_utilization_pct,
+        cpu_pressure_pct=snapshot.cpu_pressure_pct,
+        io_pressure_pct=snapshot.io_pressure_pct,
+        memory_pressure_pct=snapshot.memory_pressure_pct,
         memory_used_mb=snapshot.memory_used_mb,
         memory_total_mb=snapshot.memory_total_mb,
         memory_utilization_pct=snapshot.memory_utilization_pct,
@@ -344,6 +353,15 @@ def machine_heartbeat_event_attrs(
 ) -> dict[str, str]:
     capacity = capacity_metrics or host_metrics
     return {
+        **{
+            name: _format_float(value)
+            for name, value in (
+                ("host_cpu_pressure_pct", host_metrics.cpu_pressure_pct),
+                ("host_io_pressure_pct", host_metrics.io_pressure_pct),
+                ("host_memory_pressure_pct", host_metrics.memory_pressure_pct),
+            )
+            if value is not None
+        },
         "cpu_utilization_pct": _format_float(capacity.cpu_utilization_pct),
         "memory_used_mb": str(capacity.memory_used_mb),
         "memory_utilization_pct": _format_float(capacity.memory_utilization_pct),

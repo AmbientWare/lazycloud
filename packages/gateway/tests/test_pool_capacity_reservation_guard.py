@@ -904,6 +904,7 @@ def test_agent_update_preserves_durable_work_after_hot_worker_state_is_lost(
         ContainerRepository(session).upsert(container)
     assert not gateway.agent_release(instruction).update_agent
     request = SchedulerWorkerRequest(
+        fairness_account_id="test-account",
         placement=Placement.platform(),
         container_id=container.id,
         workspace_id=workspace_id,

@@ -143,6 +143,10 @@ class AutoscalingTargetRepository:
                     "generation": AutoscalingTargetTable.generation + 1,
                     "updated_at": insert.excluded.updated_at,
                 },
+                where=or_(
+                    AutoscalingTargetTable.claim_token.is_not(None),
+                    AutoscalingTargetTable.due_at > insert.excluded.due_at,
+                ),
             )
         )
 
@@ -157,8 +161,26 @@ class AutoscalingTargetRepository:
             return []
         current_time = now or datetime.now(UTC)
         token = token_urlsafe(24)
-        statement = (
-            select(AutoscalingTargetTable)
+        due = (
+            select(
+                AutoscalingTargetTable.stub_id,
+                func.row_number()
+                .over(
+                    partition_by=func.coalesce(
+                        WorkspaceMemberTable.user_id,
+                        AutoscalingTargetTable.workspace_id,
+                    ),
+                    order_by=(AutoscalingTargetTable.due_at, AutoscalingTargetTable.stub_id),
+                )
+                .label("account_position"),
+            )
+            .outerjoin(
+                WorkspaceMemberTable,
+                and_(
+                    WorkspaceMemberTable.workspace_id == AutoscalingTargetTable.workspace_id,
+                    WorkspaceMemberTable.role == WorkspaceRole.Owner.value,
+                ),
+            )
             .where(
                 AutoscalingTargetTable.due_at <= current_time,
                 or_(
@@ -166,11 +188,27 @@ class AutoscalingTargetRepository:
                     AutoscalingTargetTable.claim_expires_at <= current_time,
                 ),
             )
-            .order_by(AutoscalingTargetTable.due_at.asc(), AutoscalingTargetTable.stub_id.asc())
+            .subquery()
+        )
+        statement = (
+            select(AutoscalingTargetTable)
+            .join(due, due.c.stub_id == AutoscalingTargetTable.stub_id)
+            .where(
+                AutoscalingTargetTable.due_at <= current_time,
+                or_(
+                    AutoscalingTargetTable.claim_token.is_(None),
+                    AutoscalingTargetTable.claim_expires_at <= current_time,
+                ),
+            )
+            .order_by(
+                due.c.account_position,
+                AutoscalingTargetTable.due_at,
+                AutoscalingTargetTable.stub_id,
+            )
             .limit(limit)
         )
         if self.session.get_bind().dialect.name == "postgresql":
-            statement = statement.with_for_update(skip_locked=True)
+            statement = statement.with_for_update(of=AutoscalingTargetTable, skip_locked=True)
         else:
             statement = statement.with_for_update()
         rows = list(self.session.scalars(statement))

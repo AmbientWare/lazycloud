@@ -1,29 +1,20 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import TracebackType
 
-from compute.capacity_recovery import CAPACITY_WAKE_SCOPE
-from compute.state import RedisComputeStateRepository
-from control.custom_domains import CustomDomainService
 from control.placement import PlacementResolver
 from coordination.redis_client import RedisClient
 from coordination.wake_signal import RedisWakeSignal
-from execution.containers.preemption import PreemptedContainerService
+from execution.demand import PLACEMENT_WAKE_SCOPE
 from execution.endpoints.service import EndpointControlService
 from execution.functions.service import FunctionControlService
 from execution.pods.service import PodControlService
 from execution.services import ExecutionServices
-from identity.token_invalidation import AuthTokenInvalidation, configure_token_invalidation
 from images.changes import ImageBuildChanges
 from images.settings import ImageBuildContainerSettings
 from images.submission import ImageBuildSubmissionService
-from scheduler.adapters import (
-    DatabaseCapacityAllocationOwners,
-    DatabaseMachineContainers,
-    EndpointDispatchAutoscalingReader,
-)
-from scheduler.agent_pool import SchedulerAgentPoolService
+from scheduler.adapters import DatabaseCapacityAllocationOwners, EndpointDispatchAutoscalingReader
 from scheduler.autoscaling import (
     AutoscalingDriver,
     EndpointAutoscaler,
@@ -31,70 +22,29 @@ from scheduler.autoscaling import (
     PodAutoscaler,
 )
 from scheduler.autoscaling_targets import AutoscalingTargetService
-from scheduler.capacity_controls import SchedulerCapacityControllerProvider
 from scheduler.capacity_reservations import (
     CapacityReservationService,
     RedisCapacityReservationRepository,
 )
-from scheduler.containers import (
-    CONTAINER_DISPATCH_WAKE_SCOPE,
-    SchedulerContainerRequestService,
-)
-from scheduler.pool_drain import WorkerPoolDrainService
-from scheduler.pool_state import SchedulerPoolStateService
-from scheduler.preemption import (
-    SchedulerCapacityInterruptionService,
-    SchedulerWorkerMaintenanceService,
-    SchedulerWorkerPreemptionService,
-)
-from scheduler.reserves import FleetConsolidationService
-from scheduler.service import (
-    MANAGED_COMPUTE_RECONCILE_INTERVAL_SECONDS,
-    Scheduler,
-    SchedulerBillingEnforcementService,
-    SchedulerBillingPaymentsService,
-    SchedulerBillingReconciliationService,
-    SchedulerCapacityControls,
-    SchedulerDiskDeletionService,
-    SchedulerDiskVolumeService,
-    SchedulerEmailOutboxService,
-    SchedulerMaintenanceControls,
-    SchedulerMeterOutboxService,
-    SchedulerPlanChangeService,
-    SchedulerRetentionService,
-    SchedulerStateStores,
-    SchedulerStorageAccessService,
-    SchedulerVolumeDeletionService,
-    SchedulerVolumeMeteringService,
-    SchedulerWorkloadControls,
-)
+from scheduler.containers import CONTAINER_DISPATCH_WAKE_SCOPE, SchedulerContainerRequestService
+from scheduler.reconciliation import SchedulerStateStores, SchedulerWorkloadControls
+from scheduler.service import Scheduler
 from scheduler.services import SchedulerServices
-from scheduler.state import (
-    RedisOrphanedContainerConfirmationRepository,
-    RedisSchedulerContainerRepository,
-    RedisSchedulerWorkerRepository,
-    RedisWorkerNetworkIpRepository,
-    RedisWorkerPoolStateRepository,
-)
-from scheduler.worker_rollout import WorkerWorkloadDrainService
-from storage.retention_settings import RetentionSettings
+from scheduler.state import RedisSchedulerContainerRepository, RedisSchedulerWorkerRepository
 from worker_repository.image_build_dispatch import DurableImageBuildDispatch
 
 from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
-from scheduler_app.capacity_interruptions import DatabaseCapacityInterruptionSource
-from scheduler_app.services import (
-    SchedulerAppServices,
-    SchedulerCapacitySettings,
+from scheduler_app.composition_settings import (
     SchedulerObservabilitySettings,
     SchedulerStorageSettings,
 )
+from scheduler_app.services import SchedulerAppServices
 
 
 @dataclass(slots=True)
 class SchedulerRuntime:
     scheduler: Scheduler
     owned_services: SchedulerAppServices | None = None
-    reset_token_invalidation_on_close: bool = False
 
     @classmethod
     def create(
@@ -103,18 +53,13 @@ class SchedulerRuntime:
         public_gateway_http_url: str,
         observability: SchedulerObservabilitySettings,
         storage: SchedulerStorageSettings,
-        capacity: SchedulerCapacitySettings,
-        managed_compute_reconcile_interval_seconds: float = (
-            MANAGED_COMPUTE_RECONCILE_INTERVAL_SECONDS
-        ),
         image_build_container_settings: ImageBuildContainerSettings,
     ) -> SchedulerRuntime:
         database = DatabaseClient.from_settings(
             DatabaseSettings(application_name=DatabaseApplicationName.Scheduler)
         )
         redis_client = RedisClient.from_settings()
-        configure_token_invalidation(AuthTokenInvalidation.from_redis(redis_client))
-        app_services: SchedulerAppServices | None = None
+        app_services = None
         try:
             app_services = SchedulerAppServices.create(
                 database,
@@ -122,35 +67,19 @@ class SchedulerRuntime:
                 gateway_origin=public_gateway_http_url,
                 observability=observability,
                 storage=storage,
-                capacity=capacity,
             )
+            requests = app_services.containers.scheduler
+            if not isinstance(requests, SchedulerContainerRequestService):
+                raise RuntimeError("execution scheduler requires the durable request service")
             runtime = cls.from_services(
                 scheduler_services=app_services,
                 execution_services=app_services,
-                redis_client=app_services.redis_client,
-                container_requests=_container_requests(app_services),
+                redis_client=redis_client,
+                container_requests=requests,
                 image_build_container_settings=image_build_container_settings,
                 placement_resolver=app_services.compute_policies,
-                retention_settings=storage.retention,
-                volume_metering=app_services.volume_metering,
-                storage_access=app_services.storage_access,
-                volume_deletion=app_services.volume_deletion,
-                disk_deletion=app_services.disk_deletion,
-                disk_volumes=app_services.disk_volumes,
-                meter_outbox=app_services.meter_outbox,
-                email_outbox=app_services.email_outbox,
-                plan_changes=app_services.plan_changes,
-                billing_reconciliation=app_services.billing_reconciliation,
-                billing_payments=app_services.billing_payments,
-                billing_enforcement=app_services.billing_enforcement,
-                retention=app_services.retention,
-                custom_domains=app_services.custom_domains,
-                managed_compute_reconcile_interval_seconds=(
-                    managed_compute_reconcile_interval_seconds
-                ),
             )
         except BaseException:
-            configure_token_invalidation(None)
             if app_services is not None:
                 app_services.close()
             else:
@@ -160,7 +89,6 @@ class SchedulerRuntime:
                     database.dispose()
             raise
         runtime.owned_services = app_services
-        runtime.reset_token_invalidation_on_close = True
         return runtime
 
     @classmethod
@@ -173,195 +101,80 @@ class SchedulerRuntime:
         container_requests: SchedulerContainerRequestService,
         image_build_container_settings: ImageBuildContainerSettings,
         placement_resolver: PlacementResolver,
-        retention_settings: RetentionSettings,
-        volume_metering: SchedulerVolumeMeteringService,
-        storage_access: SchedulerStorageAccessService | None,
-        volume_deletion: SchedulerVolumeDeletionService,
-        disk_deletion: SchedulerDiskDeletionService,
-        disk_volumes: SchedulerDiskVolumeService,
-        meter_outbox: SchedulerMeterOutboxService,
-        email_outbox: SchedulerEmailOutboxService,
-        plan_changes: SchedulerPlanChangeService,
-        billing_reconciliation: SchedulerBillingReconciliationService,
-        billing_payments: SchedulerBillingPaymentsService,
-        billing_enforcement: SchedulerBillingEnforcementService,
-        retention: SchedulerRetentionService | None,
-        custom_domains: CustomDomainService,
-        managed_compute_reconcile_interval_seconds: float = (
-            MANAGED_COMPUTE_RECONCILE_INTERVAL_SECONDS
-        ),
     ) -> SchedulerRuntime:
-        compute_states = RedisComputeStateRepository(redis_client)
-        pool_states = RedisWorkerPoolStateRepository(redis_client)
-        worker_states = RedisSchedulerWorkerRepository(redis_client)
-        container_states = RedisSchedulerContainerRepository(redis_client)
-        function_control = FunctionControlService(
-            execution_services,
-        )
-        endpoint_control = EndpointControlService(
-            execution_services,
-        )
-        endpoint_dispatches = EndpointDispatchAutoscalingReader(execution_services.context.database)
-        pod_control = PodControlService(execution_services, redis=redis_client)
-        preemption_recovery = PreemptedContainerService(
-            services=execution_services,
-            stubs=scheduler_services.scheduler_workloads,
-        )
-        capacity_controllers = SchedulerCapacityControllerProvider(
-            services=scheduler_services,
-            compute_states=compute_states,
-            workers=worker_states,
-            containers=container_states,
-        )
-        agent_pool_service = SchedulerAgentPoolService(compute_states, worker_states)
-        capacity_reservations = CapacityReservationService(
-            RedisCapacityReservationRepository(redis_client),
-            capacity_controllers.capacity_acquisition_controllers,
-            DatabaseCapacityAllocationOwners(scheduler_services.context.database),
-        )
-        dispatch_requests = _container_requests_with_capacity(
+        workers = RedisSchedulerWorkerRepository(redis_client)
+        containers = RedisSchedulerContainerRepository(redis_client)
+        requests = replace(
             container_requests,
-            capacity_reservations=capacity_reservations,
+            capacity_reservations=CapacityReservationService(
+                RedisCapacityReservationRepository(redis_client),
+                allocation_owners=DatabaseCapacityAllocationOwners(
+                    scheduler_services.context.database
+                ),
+            ),
         )
-        scheduler = Scheduler(
-            services=scheduler_services,
-            managed_compute_reconcile_interval_seconds=(managed_compute_reconcile_interval_seconds),
-            workloads=SchedulerWorkloadControls(
-                image_builds=ImageBuildSubmissionService(
-                    scheduler_services.context.database,
-                    DurableImageBuildDispatch(
+        functions = FunctionControlService(execution_services)
+        return cls(
+            Scheduler(
+                services=scheduler_services,
+                states=SchedulerStateStores(cron_job_locks=redis_client),
+                workloads=SchedulerWorkloadControls(
+                    containers=requests,
+                    dispatch_wake=RedisWakeSignal(redis_client, CONTAINER_DISPATCH_WAKE_SCOPE),
+                    placement_wake=RedisWakeSignal(redis_client, PLACEMENT_WAKE_SCOPE),
+                    image_builds=ImageBuildSubmissionService(
                         scheduler_services.context.database,
-                        dispatch_requests,
-                        execution_services.containers,
-                        image_build_container_settings,
-                        placement_resolver,
+                        DurableImageBuildDispatch(
+                            scheduler_services.context.database,
+                            requests,
+                            execution_services.containers,
+                            image_build_container_settings,
+                            placement_resolver,
+                        ),
+                        execution_services.object_storage.object_client,
+                        ImageBuildChanges(redis_client),
                     ),
-                    execution_services.object_storage.object_client,
-                    ImageBuildChanges(redis_client),
-                ),
-                containers=dispatch_requests,
-                dispatch_wake=RedisWakeSignal(redis_client, CONTAINER_DISPATCH_WAKE_SCOPE),
-                capacity_wake=RedisWakeSignal(redis_client, CAPACITY_WAKE_SCOPE),
-                autoscaling_targets=AutoscalingTargetService(scheduler_services.context),
-                function_autoscaler=AutoscalingDriver(
-                    scheduler_services,
-                    redis=redis_client,
-                    workload=FunctionAutoscaler(scheduler_services, functions=function_control),
-                    container_states=container_states,
-                    container_requests=worker_states,
-                ),
-                endpoints=AutoscalingDriver(
-                    scheduler_services,
-                    redis=redis_client,
-                    workload=EndpointAutoscaler(
-                        scheduler_services,
-                        endpoints=endpoint_control,
-                        dispatches=endpoint_dispatches,
-                    ),
-                    container_states=container_states,
-                    container_requests=worker_states,
-                ),
-                pods=AutoscalingDriver(
-                    scheduler_services,
-                    redis=redis_client,
-                    workload=PodAutoscaler(
+                    autoscaling_targets=AutoscalingTargetService(scheduler_services.context),
+                    functions=functions,
+                    function_autoscaler=AutoscalingDriver(
                         scheduler_services,
                         redis=redis_client,
-                        pods=pod_control,
+                        workload=FunctionAutoscaler(scheduler_services, functions=functions),
+                        container_states=containers,
+                        container_requests=workers,
                     ),
-                    container_states=container_states,
-                    container_requests=worker_states,
-                ),
-                functions=function_control,
-                preemption_recovery=preemption_recovery,
-            ),
-            states=SchedulerStateStores(
-                compute=compute_states,
-                pools=SchedulerPoolStateService(
-                    worker_states,
-                    container_states,
-                    pool_states,
-                    compute_states,
-                ),
-                orphaned_container_networks=RedisWorkerNetworkIpRepository(redis_client),
-                orphaned_container_confirmations=(
-                    RedisOrphanedContainerConfirmationRepository(redis_client)
-                ),
-                cron_job_locks=redis_client,
-            ),
-            capacity=SchedulerCapacityControls(
-                agent_pools=agent_pool_service,
-                agent_pool_configs=capacity_controllers.agent_pool_configs,
-                capacity_reservations=capacity_reservations,
-                worker_pool_drain=WorkerPoolDrainService(
-                    capacity_controllers.worker_pool_drain_controllers,
-                    capacity_reservations,
-                ),
-                consolidation=(
-                    FleetConsolidationService(
-                        compute=scheduler_services.compute,
-                        containers=DatabaseMachineContainers(scheduler_services.context.database),
-                        workers=worker_states,
-                        stopper=scheduler_services.containers,
-                        leases=capacity_reservations,
-                        state=scheduler_services.compute.reserve_state,
-                        cooldown_seconds=(
-                            scheduler_services.compute.fleet_policy.consolidation_cooldown_seconds
+                    endpoints=AutoscalingDriver(
+                        scheduler_services,
+                        redis=redis_client,
+                        workload=EndpointAutoscaler(
+                            scheduler_services,
+                            endpoints=EndpointControlService(execution_services),
+                            dispatches=EndpointDispatchAutoscalingReader(
+                                scheduler_services.context.database
+                            ),
                         ),
-                        deadline_seconds=(
-                            scheduler_services.compute.fleet_policy.consolidation_deadline_seconds
+                        container_states=containers,
+                        container_requests=workers,
+                    ),
+                    pods=AutoscalingDriver(
+                        scheduler_services,
+                        redis=redis_client,
+                        workload=PodAutoscaler(
+                            scheduler_services,
+                            redis=redis_client,
+                            pods=PodControlService(execution_services, redis=redis_client),
                         ),
-                    )
-                    if scheduler_services.compute.reserve_state is not None
-                    else None
-                ),
-                capacity_interruptions=SchedulerCapacityInterruptionService(
-                    SchedulerWorkerPreemptionService(
-                        worker_states,
-                        container_states,
-                        scheduler_services.containers,
-                    ),
-                    worker_states,
-                    DatabaseCapacityInterruptionSource(
-                        scheduler_services.context.database,
-                    ),
-                    SchedulerWorkerMaintenanceService(worker_states),
-                    workload_drains=WorkerWorkloadDrainService(
-                        scheduler_services.context.database, container_states
+                        container_states=containers,
+                        container_requests=workers,
                     ),
                 ),
-            ),
-            maintenance=SchedulerMaintenanceControls(
-                storage_access=storage_access,
-                volume_metering=volume_metering,
-                volume_deletion=volume_deletion,
-                disk_deletion=disk_deletion,
-                disk_volumes=disk_volumes,
-                meter_outbox=meter_outbox,
-                email_outbox=email_outbox,
-                plan_changes=plan_changes,
-                billing_reconciliation=billing_reconciliation,
-                billing_payments=billing_payments,
-                billing_enforcement=billing_enforcement,
-                retention=retention,
-                custom_domains=custom_domains,
-            ),
-            retention_interval_seconds=retention_settings.interval_seconds,
-            retention_retry_initial_seconds=(retention_settings.retry_initial_seconds),
-            retention_retry_max_seconds=retention_settings.retry_max_seconds,
+            )
         )
-        return cls(scheduler=scheduler)
 
     def close(self) -> None:
-        owned_services = self.owned_services
-        self.owned_services = None
-        try:
-            if owned_services is not None:
-                owned_services.close()
-        finally:
-            if self.reset_token_invalidation_on_close:
-                configure_token_invalidation(None)
-                self.reset_token_invalidation_on_close = False
+        services, self.owned_services = self.owned_services, None
+        if services is not None:
+            services.close()
 
     def __enter__(self) -> SchedulerRuntime:
         return self
@@ -372,40 +185,4 @@ class SchedulerRuntime:
         exc_value: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        del exc_type, exc_value, traceback
         self.close()
-
-
-def _container_requests(services: SchedulerAppServices) -> SchedulerContainerRequestService:
-    container_requests = services.containers.scheduler
-    if not isinstance(container_requests, SchedulerContainerRequestService):
-        msg = "scheduler app container service requires its injected scheduler repository"
-        raise RuntimeError(msg)
-    return container_requests
-
-
-def _container_requests_with_capacity(
-    base: SchedulerContainerRequestService,
-    *,
-    capacity_reservations: CapacityReservationService,
-) -> SchedulerContainerRequestService:
-    return SchedulerContainerRequestService(
-        workers=base.workers,
-        containers=base.containers,
-        placement=base.placement,
-        failure_handler=base.failure_handler,
-        assignments=base.assignments,
-        dispatch_wake=base.dispatch_wake,
-        capacity_wake=base.capacity_wake,
-        lifecycle_events=base.lifecycle_events,
-        workspace_owners=base.workspace_owners,
-        disk_volume_attachments=base.disk_volume_attachments,
-        capacity_reservations=capacity_reservations,
-        backfill_preemption=base.backfill_preemption,
-        usage=base.usage,
-        reserve_state=base.reserve_state,
-        requeue_delay_seconds=base.requeue_delay_seconds,
-        max_retry_count=base.max_retry_count,
-        max_retry_age_seconds=base.max_retry_age_seconds,
-        claim_lease_seconds=base.claim_lease_seconds,
-    )

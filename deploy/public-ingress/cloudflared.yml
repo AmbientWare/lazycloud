@@ -19,17 +19,23 @@ ingress:
     path: ^/worker-repository(/|$)
     service: http_status:404
   - hostname: lazycloud.dev
+    path: ^(/api/v1/functions/(claim|set-result|monitor)$|/gateway/(agents|connections/certificate|provider-nodes|tasks|functions/retire)(/|$))
+    service: http://runtime-api:9000
+  - hostname: lazycloud.dev
+    path: ^(/api/v1/(functions|endpoints|asgi|pods|shells|ssh|artifacts|maps|simplequeues|volumes|tasks)(/|$)|/gateway/containers(/|$)|/(pod|sandbox)(/|$))
+    service: http://execution-api:9000
+  - hostname: lazycloud.dev
     service: http://control-plane:9000
 
   # Generated invoke hosts (<stub>.lazycloud.dev). Every path forwards: the
-  # control plane's host-routing middleware rewrites them to the stub's handler
+  # execution API's host-routing middleware rewrites them to the stub's handler
   # path, so a path filter here would break user applications.
   - hostname: "*.lazycloud.dev"
-    service: http://control-plane:9000
+    service: http://execution-api:9000
 
   # Hostnames a customer owns. Cloudflare for SaaS proxies them here carrying
   # their own Host header, so they match no rule above and there is no pattern
   # that would enumerate them. The origin resolves the header against the
   # domains a workspace registered and refuses every name it does not know, so
   # this widens what reaches the origin rather than what the platform serves.
-  - service: http://control-plane:9000
+  - service: http://execution-api:9000
