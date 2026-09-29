@@ -13,11 +13,11 @@ from typing import Protocol
 from urllib.parse import SplitResult, urlsplit
 
 from control.service import ControlPlaneService
+from database.repositories.apps import StubRepository
+from database.types import DatabaseSession
 from identity.signatures import sign_payload
 from observability.events import EventService
 from shared.callbacks import normalize_callback_url
-from shared.deployments import StubKind
-from shared.errors import NotFoundError
 from shared.events import EventLevel
 from shared.http.callbacks import TaskCallbackBody
 from shared.tasks import Task, TaskStatus, is_terminal_task_status
@@ -28,13 +28,6 @@ CALLBACK_DELIVERY_ATTEMPTS = 3
 CALLBACK_RETRY_DELAYS_SECONDS: tuple[float, ...] = (0.25, 0.75)
 CALLBACK_REQUEST_TIMEOUT_SECONDS = 5.0
 CALLBACK_RESPONSE_BODY_LIMIT = 64 * 1024
-CALLBACK_SUPPORTED_STUB_KINDS: frozenset[StubKind] = frozenset(
-    {
-        StubKind.Function,
-        StubKind.Endpoint,
-        StubKind.Asgi,
-    }
-)
 
 
 class TaskCallbackSender(Protocol):
@@ -42,7 +35,7 @@ class TaskCallbackSender(Protocol):
 
 
 class TaskCallbackDispatcher(Protocol):
-    def deliver(self, task: Task) -> None: ...
+    def deliver(self, task: Task, *, target: str) -> None: ...
 
 
 class CallbackDeliveryError(RuntimeError):
@@ -135,11 +128,8 @@ class TaskCallbackService:
     sleep: Callable[[float], None] = time.sleep
     now: Callable[[], float] = time.time
 
-    def deliver(self, task: Task) -> None:
+    def deliver(self, task: Task, *, target: str) -> None:
         if task.status is not TaskStatus.Retry and not is_terminal_task_status(task.status):
-            return
-        target = self._target(task)
-        if target is None:
             return
         payload = _callback_body(task)
         body = json.dumps(
@@ -207,16 +197,17 @@ class TaskCallbackService:
             workspace_id=task.workspace_id,
         )
 
-    def _target(self, task: Task) -> str | None:
-        if not task.stub_id:
+    @staticmethod
+    def target_in_session(session: DatabaseSession, task: Task) -> str | None:
+        if (
+            not task.stub_id
+            or not task.workspace_id
+            or (task.status is not TaskStatus.Retry and not is_terminal_task_status(task.status))
+        ):
             return None
-        try:
-            stub = ControlPlaneService(self.context).get_stub(task.stub_id)
-        except NotFoundError:
-            return None
-        if stub.kind not in CALLBACK_SUPPORTED_STUB_KINDS:
-            return None
-        return normalize_callback_url(stub.config.callback_url)
+        return normalize_callback_url(
+            StubRepository(session).callback_url(task.stub_id, workspace_id=task.workspace_id)
+        )
 
     def _signing_key(self, task: Task) -> str:
         if not task.workspace_id:

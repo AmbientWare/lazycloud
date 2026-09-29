@@ -11,6 +11,7 @@ from lazycloud.abstractions.sandbox import (
     Sandbox,
     SandboxConnectionError,
     SandboxInstance,
+    SandboxProcessManager,
 )
 from shared.deployment_records import VolumeMount
 from shared.http.errors import HttpApiError
@@ -41,6 +42,7 @@ from shared.http.pods import (
     PodSandboxProcessInfo,
     PodSandboxReplaceInFilesRequest,
     PodSandboxReplaceInFilesResponse,
+    PodSandboxResultResponse,
     PodSandboxSnapshotMemoryRequest,
     PodSandboxSnapshotMemoryResponse,
     PodSandboxStatFileResponse,
@@ -68,6 +70,7 @@ T = TypeVar("T")
 
 @dataclass
 class FakeSandboxPodClient:
+    results_expired: bool = False
     create_requests: list[CreatePodRequest] = field(default_factory=list)
     connect_requests: list[str] = field(default_factory=list)
     exec_requests: list[PodSandboxExecRequest] = field(default_factory=list)
@@ -118,7 +121,20 @@ class FakeSandboxPodClient:
     ) -> PodSandboxExecResponse:
         self.exec_requests.append(request)
         self.next_pid += 1
-        return PodSandboxExecResponse(pid=self.next_pid)
+        return PodSandboxExecResponse(pid=self.next_pid, process_id=str(self.next_pid))
+
+    def sandbox_result(
+        self, container_id: str, process_id: str, wait_seconds: float = 5.0
+    ) -> PodSandboxResultResponse:
+        if self.results_expired:
+            raise http_api_error("process result expired or not found", status_code=404)
+        return PodSandboxResultResponse(
+            pid=int(process_id),
+            process_id=process_id,
+            running=False,
+            exit_code=0,
+            stdout=f"stdout:{process_id}\n",
+        )
 
     def sandbox_status(self, container_id: str, pid: int) -> PodSandboxStatusResponse:
         return PodSandboxStatusResponse(status="complete", exit_code=0)
@@ -139,7 +155,7 @@ class FakeSandboxPodClient:
 
     def sandbox_list_processes(self, container_id: str) -> PodSandboxListProcessesResponse:
         return PodSandboxListProcessesResponse(
-            processes=[PodSandboxProcessInfo(pid=101, command="python3 -c pass")],
+            processes=[PodSandboxProcessInfo(pid=101, process_id="101", command="python3 -c pass")],
         )
 
     def sandbox_upload_file(
@@ -351,6 +367,18 @@ class ExportableVolume:
 
     def export(self) -> VolumeMount:
         return VolumeMount(name=self.name, mount_path=self.mount_path)
+
+
+def test_completed_command_retains_output_after_remote_result_expires() -> None:
+    client = FakeSandboxPodClient()
+    process = SandboxProcessManager("container", client).exec("echo", "output")
+    assert process.wait() == 0
+    client.results_expired = True
+    result = process.result()
+    assert result.stdout == f"stdout:{process.pid}\n"
+    assert process.stdout.read() == result.stdout
+    assert process.stderr.read() == ""
+    assert asyncio.run(process.aio.result()) == result
 
 
 def _bind_internal_state(resource: T, /, **values: object) -> T:

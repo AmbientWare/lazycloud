@@ -28,6 +28,7 @@ from lazycloud.abstractions.sandbox import (
     SandboxProcessManager,
     SandboxProcessResponse,
     SandboxProcessStream,
+    SandboxProcessTimeoutError,
 )
 from lazycloud.abstractions.secret import Secret
 from lazycloud.abstractions.volume import CloudBucket, CloudBucketConfig, Volume
@@ -77,6 +78,7 @@ __all__ = [
     "SandboxProcessManager",
     "SandboxProcessResponse",
     "SandboxProcessStream",
+    "SandboxProcessTimeoutError",
     "Secret",
     "Task",
     "TaskPendingProgress",

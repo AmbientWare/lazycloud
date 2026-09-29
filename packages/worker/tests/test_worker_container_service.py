@@ -8,6 +8,7 @@ from threading import Event
 
 import pytest
 from shared.deployments import StubKind
+from shared.http.pods import PodSandboxResultResponse
 from shared.http.workspace_sync import (
     WorkspaceSyncBatch,
     WorkspaceSyncEntry,
@@ -102,13 +103,16 @@ class ProcessManager:
     def status(self, pid: int) -> int | None:
         return self.statuses.get(pid)
 
+    async def result(self, process_id: str, wait_seconds: float) -> PodSandboxResultResponse:
+        raise AssertionError(f"unexpected result request: {process_id}")
+
     def stdout(self, pid: int) -> str:
         return self.stdout_by_pid.get(pid, "")
 
     def stderr(self, pid: int) -> str:
         return self.stderr_by_pid.get(pid, "")
 
-    def kill(self, pid: int) -> None:
+    def kill(self, pid: int, process_id: str = "") -> None:
         self.killed.append(pid)
 
     def list_processes(self) -> list[WorkerSandboxProcess]:
@@ -283,7 +287,9 @@ def test_worker_container_service_runtime_and_process_operations(tmp_path: Path)
         statuses={101: None, 102: 7},
         stdout_by_pid={101: "stdout"},
         stderr_by_pid={101: "stderr"},
-        processes=[WorkerSandboxProcess(pid=101, command="python app.py")],
+        processes=[
+            WorkerSandboxProcess(pid=101, process_id="command-101", command="python app.py")
+        ],
     )
     runtime = RuntimeController(
         exec_response=ContainerExecResponse(ok=True, exit_code=0, stdout="ok")

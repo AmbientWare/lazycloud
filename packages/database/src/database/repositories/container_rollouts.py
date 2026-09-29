@@ -15,14 +15,41 @@ from sqlalchemy.orm import Session
 class ContainerRolloutRepository:
     session: Session
 
-    def record_workload_ready(self, container_id: str, *, now: datetime) -> None:
-        self.session.execute(
-            update(ContainerTable)
-            .where(
-                ContainerTable.id == container_id,
-                ContainerTable.workload_ready_at.is_(None),
+    def accepting_function_claim(self, container_id: str, *, stub_id: str, now: datetime) -> bool:
+        active = (
+            ContainerTable.id == container_id,
+            ContainerTable.stub_id == stub_id,
+            ContainerTable.status.in_([item.value for item in LIVE_CONTAINER_STATUSES]),
+        )
+        ready = (
+            select(ContainerTable.id)
+            .where(*active, ContainerTable.workload_ready_at.is_not(None))
+            .with_for_update(read=True)
+        )
+        closed = exists().where(
+            ContainerRolloutDrainTable.container_id == container_id,
+            ContainerRolloutDrainTable.admission_closed_at.is_not(None),
+        )
+        if self.session.scalar(ready) is None:
+            # Initialize before taking SHARE. Two first claims upgrading their
+            # shared locks would deadlock; later claims never write this row.
+            initialized = self.session.scalar(
+                update(ContainerTable)
+                .where(*active, ContainerTable.workload_ready_at.is_(None), ~closed)
+                .values(workload_ready_at=now)
+                .returning(ContainerTable.id)
             )
-            .values(workload_ready_at=now)
+            if initialized is None and self.session.scalar(ready) is None:
+                return False
+        return not bool(self.session.scalar(select(closed)))
+
+    def lock_function_claim_replay(self, container_id: str, *, stub_id: str) -> None:
+        # Called in a fresh transaction after an empty SKIP LOCKED read. Wait
+        # for in-flight claims before deciding a retried claim never took work.
+        self.session.scalar(
+            select(ContainerTable.id)
+            .where(ContainerTable.id == container_id, ContainerTable.stub_id == stub_id)
+            .with_for_update()
         )
 
     def ready_container_ids(self, container_ids: Sequence[str]) -> set[str]:
@@ -38,9 +65,11 @@ class ContainerRolloutRepository:
         )
 
     def accepting_work(self, container_id: str, *, stub_id: str) -> bool:
-        container = self.session.scalar(
-            select(ContainerTable).where(ContainerTable.id == container_id).with_for_update()
-        )
+        container = self.session.execute(
+            select(ContainerTable.stub_id, ContainerTable.status)
+            .where(ContainerTable.id == container_id)
+            .with_for_update()
+        ).first()
         if (
             container is None
             or container.stub_id != stub_id

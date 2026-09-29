@@ -46,6 +46,26 @@ class PodSandboxExecRequest(HttpModel):
 
 class PodSandboxExecResponse(HttpModel):
     pid: int = 0
+    process_id: str = Field(min_length=1)
+
+
+class PodSandboxResultResponse(HttpModel):
+    """Output prefixes remain available for five minutes after exit while the container lives.
+
+    Each stream retains at most 256 KiB. Truncation also reports exhaustion of
+    the supervisor's shared 64 MiB command and log replay storage, or descendants
+    still writing when the one-second exit drain ends.
+    """
+
+    process_id: str = Field(min_length=1)
+    pid: int
+    running: bool
+    exit_code: int
+    stdout: str = ""
+    stderr: str = ""
+    stdout_truncated: bool = False
+    stderr_truncated: bool = False
+    expires_at: datetime | None = None
 
 
 class PodSandboxStatusResponse(HttpModel):
@@ -63,6 +83,7 @@ class PodSandboxStderrResponse(HttpModel):
 
 class PodSandboxKillRequest(HttpModel):
     pid: int
+    process_id: str = ""
 
 
 class PodSandboxKillResponse(HttpModel):
@@ -224,6 +245,7 @@ class PodSandboxSnapshotMemoryResponse(HttpModel):
 
 class PodSandboxProcessInfo(HttpModel):
     pid: int
+    process_id: str
     command: str
 
 
@@ -330,6 +352,7 @@ __all__ = [
     "PodSandboxListUrlsResponse",
     "PodSandboxReplaceInFilesRequest",
     "PodSandboxReplaceInFilesResponse",
+    "PodSandboxResultResponse",
     "PodSandboxSnapshotMemoryRequest",
     "PodSandboxSnapshotMemoryResponse",
     "PodSandboxStatFileResponse",

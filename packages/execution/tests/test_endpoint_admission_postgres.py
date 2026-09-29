@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import socket
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import datetime
@@ -59,6 +59,18 @@ class _AcceptingScheduler:
 
 
 class _NoEndpointDispatcher:
+    async def ready_targets(
+        self,
+        stub_id: str,
+        *,
+        container_loads: Mapping[str, int],
+        max_inflight_per_container: int,
+        excluded_container_ids: set[str],
+        admit: Callable[[Sequence[str]], Awaitable[set[str]]],
+        container_id: str | None = None,
+    ) -> list[EndpointDispatchTarget]:
+        return []
+
     async def select_target(
         self,
         stub_id: str,
@@ -112,20 +124,26 @@ async def test_postgresql_endpoint_admission_holds_one_buffer_slot_across_replic
             },
         )
         start = asyncio.Event()
-
-        async def invoke() -> EndpointForwardResponse:
-            service = EndpointControlService(
+        replicas = [
+            EndpointControlService(
                 services,
                 async_database=services.require_async_io().database,
                 async_dispatcher=_NoEndpointDispatcher(),
                 workload_changes=AsyncWorkloadChangeReader(services.require_async_io().realtime),
             )
+            for _ in range(2)
+        ]
+
+        async def invoke(service: EndpointControlService) -> EndpointForwardResponse:
             await start.wait()
             return await service.forward_endpoint_request(
-                EndpointForwardRequest(stub_id=stub.id, method="POST", body=b"{}")
+                EndpointForwardRequest(stub_id=stub.id, method="POST", body=b"{}"), stub=stub
             )
 
-        invocations = [asyncio.create_task(invoke()) for _ in range(CONTENDERS)]
+        invocations = [
+            asyncio.create_task(invoke(replicas[index % len(replicas)]))
+            for index in range(CONTENDERS)
+        ]
         start.set()
         responses = await asyncio.gather(*invocations)
 

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime
+
+from pydantic import JsonValue
 from shared.cron import CronJobRun
 from shared.errors import InvalidInputError
 from shared.events import Event, EventLevel
@@ -68,52 +71,54 @@ def task_from_table(row: TaskTable) -> Task:
     )
 
 
-def write_task_row(row: TaskTable, task: Task) -> None:
-    row.name = task.name
-    row.status = task.status.value
-    row.workspace_id = task.workspace_id
-    row.app_id = task.app_id
-    row.stub_id = task.stub_id
-    row.deployment_id = task.deployment_id
-    row.container_id = task.container_id
-    row.parent_task_id = task.parent_task_id
-    row.root_task_id = task.root_task_id
-    row.handler = task.handler
-    row.command = list(task.command)
-    row.args = list(task.args)
-    row.kwargs = dict(task.kwargs)
-    input_container_id = row.kwargs.get("container_id")
-    row.input_container_id = input_container_id if isinstance(input_container_id, str) else None
-    if row.input_container_id is not None:
-        del row.kwargs["container_id"]
-    row.invocation = (
-        task.invocation.model_dump(mode="json") if task.invocation is not None else None
-    )
-    row.dependency_bindings = [
-        binding.model_dump(mode="json") for binding in task.dependency_bindings
-    ]
-    row.function_result = (
-        task.function_result.model_dump(mode="json") if task.function_result is not None else None
-    )
+def task_row_values(task: Task) -> dict[str, JsonValue | datetime]:
+    kwargs = dict(task.kwargs)
+    input_container_id = kwargs.get("container_id")
+    if isinstance(input_container_id, str):
+        del kwargs["container_id"]
+    else:
+        input_container_id = None
     policy = task.retry_policy
     if policy is not None and policy.max_attempts != task.max_attempts:
         raise InvalidInputError("task retry limit must match its retry policy")
-    row.retry_backoff = policy.backoff.value if policy is not None else None
-    row.retry_delay_seconds = policy.delay_seconds if policy is not None else None
-    row.retry_max_delay_seconds = policy.max_delay_seconds if policy is not None else None
-    row.retry_on_statuses = (
-        [status.value for status in policy.retry_on_statuses] if policy is not None else None
-    )
-    row.attempt_number = task.attempt_number
-    row.max_attempts = task.max_attempts
-    row.next_retry_at = task.next_retry_at
-    row.claimable_at = task.claimable_at
-    row.result = task.result
-    row.error = task.error
-    row.exit_code = task.exit_code
-    row.created_at = task.created_at
-    row.started_at = task.started_at
-    row.finished_at = task.finished_at
+    return {
+        "id": task.id,
+        "name": task.name,
+        "status": task.status.value,
+        "workspace_id": task.workspace_id,
+        "app_id": task.app_id,
+        "stub_id": task.stub_id,
+        "deployment_id": task.deployment_id,
+        "container_id": task.container_id,
+        "parent_task_id": task.parent_task_id,
+        "root_task_id": task.root_task_id,
+        "handler": task.handler,
+        "command": list(task.command),
+        "args": list(task.args),
+        "kwargs": kwargs,
+        "input_container_id": input_container_id,
+        "invocation": task.invocation.model_dump(mode="json") if task.invocation else None,
+        "dependency_bindings": [item.model_dump(mode="json") for item in task.dependency_bindings],
+        "function_result": task.function_result.model_dump(mode="json")
+        if task.function_result
+        else None,
+        "retry_backoff": policy.backoff.value if policy else None,
+        "retry_delay_seconds": policy.delay_seconds if policy else None,
+        "retry_max_delay_seconds": policy.max_delay_seconds if policy else None,
+        "retry_on_statuses": [status.value for status in policy.retry_on_statuses]
+        if policy
+        else None,
+        "attempt_number": task.attempt_number,
+        "max_attempts": task.max_attempts,
+        "next_retry_at": task.next_retry_at,
+        "claimable_at": task.claimable_at,
+        "result": task.result,
+        "error": task.error,
+        "exit_code": task.exit_code,
+        "created_at": task.created_at,
+        "started_at": task.started_at,
+        "finished_at": task.finished_at,
+    }
 
 
 def task_attempt_from_table(row: TaskAttemptTable) -> TaskAttempt:
@@ -135,18 +140,21 @@ def task_attempt_from_table(row: TaskAttemptTable) -> TaskAttempt:
     )
 
 
-def write_task_attempt_row(row: TaskAttemptTable, attempt: TaskAttempt) -> None:
-    row.task_id = attempt.task_id
-    row.workspace_id = attempt.workspace_id
-    row.container_id = attempt.container_id
-    row.attempt_number = attempt.attempt_number
-    row.status = attempt.status.value
-    row.result = attempt.result
-    row.error = attempt.error
-    row.exit_code = attempt.exit_code
-    row.created_at = attempt.created_at
-    row.started_at = attempt.started_at
-    row.finished_at = attempt.finished_at
+def task_attempt_row_values(attempt: TaskAttempt) -> dict[str, JsonValue | datetime]:
+    return {
+        "id": attempt.id,
+        "task_id": attempt.task_id,
+        "workspace_id": attempt.workspace_id,
+        "container_id": attempt.container_id,
+        "attempt_number": attempt.attempt_number,
+        "status": attempt.status.value,
+        "result": attempt.result,
+        "error": attempt.error,
+        "exit_code": attempt.exit_code,
+        "created_at": attempt.created_at,
+        "started_at": attempt.started_at,
+        "finished_at": attempt.finished_at,
+    }
 
 
 def task_dependency_from_table(row: TaskDependencyTable) -> TaskDependency:
@@ -207,20 +215,6 @@ def event_from_table(row: EventTable) -> Event:
         data=data,
         created_at=to_utc(row.created_at),
     )
-
-
-def write_event_row(row: EventTable, event: Event) -> None:
-    row.action = event.action
-    row.level = event.level.value
-    row.resource_type = event.resource_type
-    row.resource_id = event.resource_id
-    row.message = event.message
-    row.data = dict(event.data)
-    container_id = row.data.get("container_id")
-    row.container_id = container_id if isinstance(container_id, str) else None
-    if row.container_id is not None:
-        del row.data["container_id"]
-    row.created_at = event.created_at
 
 
 def cron_job_run_from_table(row: CronJobRunTable) -> CronJobRun:

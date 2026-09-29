@@ -150,6 +150,9 @@ def test_retry_callback_uses_bounded_delivery_retries_and_stable_idempotency(
     callback = TaskCallbackBody.model_validate_json(sender.calls[0].body)
     assert callback.status is TaskStatus.Retry
     assert callback.retry_scheduled is True
+    replay = isolated_services.tasks.finish_with_retry(running.id, TaskStatus.Failed)
+    assert not replay.state_changed
+    assert len(sender.calls) == 3
 
 
 def test_permanent_callback_failure_is_observable_without_exposing_target_query(

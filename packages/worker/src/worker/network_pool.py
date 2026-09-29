@@ -33,55 +33,87 @@ class PreparedNetworkPool:
         repr=False,
     )
     _slots: deque[tuple[str, Future[None]]] = field(default_factory=deque, init=False)
-    _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
+    _condition: threading.Condition = field(default_factory=threading.Condition, init=False)
     _closed: bool = field(default=False, init=False)
+    _closing: bool = field(default=False, init=False)
+    _assignments: int = field(default=0, init=False)
+    _initialization: Future[None] | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         if not self.worker_id:
             raise ValueError("worker identity is required for prepared networks")
 
     def initialize(self) -> None:
-        with self._lock:
+        with self._condition:
             if self._closed:
                 raise RuntimeError("prepared network pool is closed")
-            if self._slots:
-                return
-            prefix = hashlib.sha256(self.worker_id.encode()).hexdigest()[:12]
-            for index in range(2):
-                name = f"lc-ready-{prefix}-{index}"
-                self._slots.append((name, self._executor.submit(self._prepare, name)))
-            for _, future in self._slots:
-                future.result()
+            initialization = self._initialization
+            first = initialization is None
+            if initialization is None:
+                initialization = self._initialization = Future()
+                prefix = hashlib.sha256(self.worker_id.encode()).hexdigest()[:12]
+                for index in range(2):
+                    name = f"lc-ready-{prefix}-{index}"
+                    self._slots.append((name, self._executor.submit(self._prepare, name)))
+                self._condition.notify_all()
+            preparing = tuple(future for _, future in self._slots)
+        if first:
+            try:
+                for future in preparing:
+                    future.result()
+            except BaseException as exc:
+                initialization.set_exception(exc)
+            else:
+                initialization.set_result(None)
+        initialization.result()
 
     def assign(self, container_id: str) -> None:
-        with self._lock:
-            if self._closed or not self._slots:
+        with self._condition:
+            if self._initialization is None:
                 raise RuntimeError("prepared network pool is unavailable")
+            while not self._slots and not self._closed:
+                self._condition.wait()
+            if self._closed:
+                raise RuntimeError("prepared network pool is closed")
             name, ready = self._slots.popleft()
+            self._assignments += 1
+        try:
+            ready.result()
+            self._transfer(name, container_id)
+        except Exception as transfer_error:
             try:
-                ready.result()
-                self._transfer(name, container_id)
-            except Exception as transfer_error:
-                try:
-                    self._remove(name)
-                except Exception as cleanup_error:
-                    raise ExceptionGroup(
-                        "prepared network assignment and cleanup failed",
-                        [transfer_error, cleanup_error],
-                    ) from cleanup_error
-                raise
-            finally:
-                self._slots.append((name, self._executor.submit(self._prepare, name)))
+                self._remove(name)
+            except Exception as cleanup_error:
+                raise ExceptionGroup(
+                    "prepared network assignment and cleanup failed",
+                    [transfer_error, cleanup_error],
+                ) from cleanup_error
+            raise
+        finally:
+            with self._condition:
+                if not self._closed:
+                    ready = self._executor.submit(self._prepare, name)
+                self._slots.append((name, ready))
+                self._assignments -= 1
+                self._condition.notify_all()
 
     def close(self) -> None:
-        with self._lock:
+        with self._condition:
+            while self._closing:
+                self._condition.wait()
             if self._closed and not self._slots:
                 return
             self._closed = True
+            self._closing = True
+            self._condition.notify_all()
+            while self._assignments:
+                self._condition.wait()
+            slots, self._slots = self._slots, deque()
+        errors: list[Exception] = []
+        remaining: deque[tuple[str, Future[None]]] = deque()
+        try:
             self._executor.shutdown(wait=True)
-            errors: list[Exception] = []
-            remaining: deque[tuple[str, Future[None]]] = deque()
-            for name, future in self._slots:
+            for name, future in slots:
                 try:
                     future.result()
                 except Exception as exc:
@@ -91,9 +123,13 @@ class PreparedNetworkPool:
                 except Exception as exc:
                     errors.append(exc)
                     remaining.append((name, future))
-            self._slots = remaining
-            if errors:
-                raise ExceptionGroup("prepared network pool cleanup failed", errors)
+        finally:
+            with self._condition:
+                self._slots = remaining
+                self._closing = False
+                self._condition.notify_all()
+        if errors:
+            raise ExceptionGroup("prepared network pool cleanup failed", errors)
 
     def _prepare(self, name: str) -> None:
         self._remove(name)

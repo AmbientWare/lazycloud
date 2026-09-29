@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import time
+from collections import deque
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable, Mapping
-from contextlib import aclosing, asynccontextmanager
+from contextlib import aclosing, asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -47,45 +49,137 @@ REALTIME_STREAM_TTL_SECONDS = 7 * 24 * 60 * 60
 REALTIME_STREAM_MAX_ENTRIES = 50_000
 
 
+@dataclass(eq=False, slots=True)
+class FunctionClaimChanges:
+    group: _FunctionClaimGroup
+    changed: asyncio.Event = field(default_factory=asyncio.Event)
+    permit: set[FunctionClaimChanges] | None = None
+    waiting: bool = False
+
+    def completed(self, *, claimed: bool, queue_checked: bool) -> None:
+        permit, self.permit = self.permit, None
+        if claimed:
+            # A missed publication may leave more work behind the claimed task.
+            self.group.notify()
+        elif not queue_checked and permit:
+            self.group.pending.append(permit)
+            self.group.dispatch()
+
+    def __aiter__(self) -> FunctionClaimChanges:
+        return self
+
+    async def __anext__(self) -> None:
+        self.waiting = True
+        self.group.dispatch()
+        await self.changed.wait()
+        self.changed.clear()
+        if self.group.error is not None:
+            raise self.group.error
+
+
+@dataclass(slots=True)
+class _FunctionClaimGroup:
+    subscription: RedisStreamTailSubscription
+    members: dict[FunctionClaimChanges, None] = field(default_factory=dict)
+    pending: deque[set[FunctionClaimChanges]] = field(default_factory=deque)
+    listener: asyncio.Task[None] | None = None
+    error: Exception | None = None
+
+    def notify(self) -> None:
+        outstanding = len(self.pending) + sum(member.permit is not None for member in self.members)
+        if outstanding < len(self.members):
+            self.pending.append(set(self.members))
+        self.dispatch()
+
+    def dispatch(self) -> None:
+        for _ in range(len(self.pending)):
+            permit = self.pending.popleft()
+            permit.intersection_update(self.members)
+            if not permit:
+                continue
+            member = next(
+                (member for member in self.members if member in permit and member.waiting), None
+            )
+            if member is None:
+                self.pending.append(permit)
+                continue
+            permit.remove(member)
+            member.permit = permit
+            member.waiting = False
+            member.changed.set()
+            del self.members[member]
+            self.members[member] = None
+
+
 @dataclass(slots=True)
 class AsyncTaskChangeReader:
     tail: RedisStreamTailBroker
     planner: EventStreamPlanner = field(default_factory=EventStreamPlanner)
+    _claims: dict[str, _FunctionClaimGroup] = field(default_factory=dict, init=False)
+    _claims_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
 
     @asynccontextmanager
     async def follow_claims(
         self, *, workspace_id: str, stub_id: str
-    ) -> AsyncIterator[AsyncIterator[None]]:
+    ) -> AsyncIterator[FunctionClaimChanges]:
         stream = self.planner.stub_task_stream_name(workspace_id, stub_id)
-        subscription = await self.tail.subscribe(
-            (stream,), after={stream: None}, label="function-claims"
-        )
-        async with subscription, aclosing(self._claim_updates(subscription)) as updates:
-            yield updates
+        async with self._claims_lock:
+            group = self._claims.get(stream)
+            if group is None:
+                subscription = await self.tail.subscribe(
+                    (stream,), after={stream: None}, label="function-claims"
+                )
+                group = _FunctionClaimGroup(subscription)
+                self._claims[stream] = group
+                group.listener = asyncio.create_task(self._claim_updates(group))
+            changes = FunctionClaimChanges(group)
+            group.members[changes] = None
+        try:
+            if group.error is not None:
+                raise group.error
+            yield changes
+        finally:
+            async with self._claims_lock:
+                del group.members[changes]
+                if changes.permit:
+                    group.pending.append(changes.permit)
+                group.dispatch()
+                if not group.members:
+                    del self._claims[stream]
+                    if group.listener is not None:
+                        group.listener.cancel()
+            if not group.members:
+                if group.listener is not None:
+                    with suppress(asyncio.CancelledError):
+                        await group.listener
+                await group.subscription.close()
 
-    async def _claim_updates(
-        self, subscription: RedisStreamTailSubscription
-    ) -> AsyncGenerator[None]:
+    async def _claim_updates(self, group: _FunctionClaimGroup) -> None:
         deadline = time.monotonic() + 5
-        async with aclosing(subscription.items(heartbeat_seconds=5)) as items:
-            async for item in items:
-                if item is None or time.monotonic() >= deadline:
-                    deadline = time.monotonic() + 5
-                    yield None
-                    continue
-                stream, entry = item
-                record = _record_from_entry(stream, entry)
-                if record is None:
-                    continue
-                data = record.body.get("data")
-                if (
-                    isinstance(data, dict)
-                    and data.get("status") in ("pending", "retry")
-                    and data.get("claimable_at")
-                    and not data.get("container_id")
-                ):
-                    deadline = time.monotonic() + 5
-                    yield None
+        try:
+            async with aclosing(group.subscription.items(heartbeat_seconds=5)) as items:
+                async for item in items:
+                    if item is None or time.monotonic() >= deadline:
+                        deadline = time.monotonic() + 5
+                        group.notify()
+                    if item is None:
+                        continue
+                    stream, entry = item
+                    record = _record_from_entry(stream, entry)
+                    if record is None:
+                        continue
+                    data = record.body.get("data")
+                    if (
+                        isinstance(data, dict)
+                        and data.get("status") in ("pending", "retry")
+                        and data.get("claimable_at")
+                        and not data.get("container_id")
+                    ):
+                        group.notify()
+        except Exception as error:
+            group.error = error
+            for member in group.members:
+                member.changed.set()
 
     @asynccontextmanager
     async def follow(

@@ -116,6 +116,10 @@ def test_late_expired_credit_pays_only_debt_inside_its_eligible_window(
             future.result(timeout=5)
     with service_context.database.session() as session:
         credits = BillingCreditRepository(session)
+        assert credits.committed_balance(user_id=user_id, at=now) == 90
+        settlement = session.get(BillingCreditSettlementTable, record.id)
+        assert settlement is not None
+        assert (settlement.credited_nanos, settlement.payable_nanos) == (10, 10)
         assert credits.balance(user_id=user_id, at=now) == 90
         settlement = session.get(BillingCreditSettlementTable, record.id)
         assert settlement is not None

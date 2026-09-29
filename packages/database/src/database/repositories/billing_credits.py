@@ -16,6 +16,7 @@ from database.tables.billing_credits import (
 )
 from database.tables.billing_ledger import BillingLedgerSegmentTable
 from database.tables.billing_outbox import BillingMeterOutboxTable
+from shared.billing_accounts import BillingAccount
 from shared.billing_credits import (
     CreditGrant,
     CreditKind,
@@ -24,7 +25,7 @@ from shared.billing_credits import (
 from shared.billing_quotes import BilledDimension, LedgerComponent
 from shared.errors import ConflictError, NotFoundError
 from shared.timestamps import to_utc, utc_now
-from sqlalchemy import func, or_, select
+from sqlalchemy import Select, func, or_, select
 from sqlalchemy.orm import Session
 
 
@@ -86,11 +87,42 @@ class BillingCreditRepository:
         return row.id
 
     def settled_balance(self, *, user_id: str, at: datetime) -> int | None:
-        """Read under the caller's shared account lock; None requires reconciliation."""
+        """Read under the caller's exclusive account lock; None requires reconciliation."""
         balances = self._lot_balances(user_id=user_id, at=at)
         if self._outstanding(user_id=user_id) or any(amount < 0 for _, amount in balances):
             return None
         return sum(amount for _, amount in balances)
+
+    def committed_balance(self, *, user_id: str, at: datetime) -> int:
+        """Read funds and debt from one committed snapshot without waiting on writers."""
+        lots = self._lot_balance_statement(user_id=user_id, at=at).order_by(None).subquery()
+        funded = (
+            select(func.coalesce(func.sum(lots.c.remaining), 0))
+            .where(
+                or_(
+                    lots.c.remaining < 0,
+                    lots.c.expires_at.is_(None),
+                    lots.c.expires_at > to_utc(at),
+                )
+            )
+            .scalar_subquery()
+        )
+        unpaid = (
+            select(func.coalesce(func.sum(BillingCreditSettlementTable.payable_nanos), 0))
+            .where(
+                BillingCreditSettlementTable.user_id == user_id,
+                BillingCreditSettlementTable.settled_at.is_not(None),
+                BillingCreditSettlementTable.payable_nanos > 0,
+                ~select(BillingMeterOutboxTable.id)
+                .where(
+                    BillingMeterOutboxTable.usage_record_id
+                    == BillingCreditSettlementTable.usage_record_id,
+                )
+                .exists(),
+            )
+            .scalar_subquery()
+        )
+        return int(self.session.scalar(select(funded - unpaid)) or 0)
 
     def balance(self, *, user_id: str, at: datetime) -> int:
         self._lock(user_id)
@@ -165,8 +197,19 @@ class BillingCreditRepository:
             )
         )
 
-    def settle(self, *, user_id: str, usage_record_id: str, waived: bool) -> CreditSettlement:
-        self._lock(user_id)
+    def settle(self, *, account: BillingAccount, usage_record_id: str) -> CreditSettlement | None:
+        """Settle under the caller's exclusive account lock; queued usage stays frozen."""
+        user_id = account.user_id
+        if (
+            self.session.scalar(
+                select(BillingMeterOutboxTable.id).where(
+                    BillingMeterOutboxTable.usage_record_id == usage_record_id,
+                )
+            )
+            is not None
+        ):
+            return None
+        waived = account.complimentary_since is not None
         existing = self.session.get(BillingCreditSettlementTable, usage_record_id)
         if existing is not None:
             if existing.user_id != user_id:
@@ -182,15 +225,6 @@ class BillingCreditRepository:
         ).all()
         if not segments or any(segment.owner_user_id != user_id for segment in segments):
             raise NotFoundError("no priced usage belongs to this billing account")
-        if (
-            self.session.scalar(
-                select(BillingMeterOutboxTable.id).where(
-                    BillingMeterOutboxTable.usage_record_id == usage_record_id,
-                )
-            )
-            is not None
-        ):
-            raise ConflictError("usage already queued for billing cannot be repriced with credits")
         if existing is None:
             existing = BillingCreditSettlementTable(
                 usage_record_id=usage_record_id,
@@ -517,6 +551,17 @@ class BillingCreditRepository:
     def _lot_balances(
         self, *, user_id: str, at: datetime
     ) -> list[tuple[BillingCreditLotTable, int]]:
+        rows = self.session.execute(self._lot_balance_statement(user_id=user_id, at=at)).all()
+        moment = to_utc(at)
+        return [
+            (lot, int(remaining))
+            for lot, remaining in rows
+            if remaining < 0 or lot.expires_at is None or to_utc(lot.expires_at) > moment
+        ]
+
+    def _lot_balance_statement(
+        self, *, user_id: str, at: datetime
+    ) -> Select[tuple[BillingCreditLotTable, int]]:
         spent = (
             select(
                 BillingCreditAllocationTable.credit_lot_id,
@@ -547,12 +592,14 @@ class BillingCreditRepository:
             .group_by(BillingCreditAdjustmentTable.credit_lot_id)
             .subquery()
         )
-        rows = self.session.execute(
+        return (
             select(
                 BillingCreditLotTable,
-                BillingCreditLotTable.amount_nanos
-                + func.coalesce(adjustments.c.amount, 0)
-                - func.coalesce(spent.c.amount, 0),
+                (
+                    BillingCreditLotTable.amount_nanos
+                    + func.coalesce(adjustments.c.amount, 0)
+                    - func.coalesce(spent.c.amount, 0)
+                ).label("remaining"),
             )
             .outerjoin(spent, spent.c.credit_lot_id == BillingCreditLotTable.id)
             .outerjoin(adjustments, adjustments.c.credit_lot_id == BillingCreditLotTable.id)
@@ -565,12 +612,7 @@ class BillingCreditRepository:
                 BillingCreditLotTable.effective_at,
                 BillingCreditLotTable.id,
             )
-        ).all()
-        return [
-            (lot, int(remaining))
-            for lot, remaining in rows
-            if remaining < 0 or lot.expires_at is None or to_utc(lot.expires_at) > moment
-        ]
+        )
 
     def _lock(self, user_id: str) -> None:
         if BillingAccountRepository(self.session).get_by_user(user_id, for_update=True) is None:

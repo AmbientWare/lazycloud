@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 from api.server.services import ApiServices
+from control.service import StubRecord
 from execution.task_rerun import TaskRerunService
 from shared.errors import InvalidInputError
 from shared.http.functions import FunctionInvokeBody, FunctionInvokeResponse
@@ -9,7 +10,9 @@ from shared.tasks import TaskStatus
 
 
 class _UnexpectedFunctionInvoker:
-    def function_invoke(self, request: FunctionInvokeBody) -> FunctionInvokeResponse:
+    def function_invoke(
+        self, request: FunctionInvokeBody, *, stub: StubRecord
+    ) -> FunctionInvokeResponse:
         raise AssertionError(f"historic command rerun invoked a function: {request}")
 
 

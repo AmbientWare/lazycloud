@@ -966,6 +966,16 @@ class ContainerRepository:
         row = self.session.get(ContainerTable, container_id)
         return container_from_row(row) if row is not None else None
 
+    def statuses_for_ids(self, container_ids: Sequence[str]) -> dict[str, ContainerStatus]:
+        if not container_ids:
+            return {}
+        rows = self.session.execute(
+            select(ContainerTable.id, ContainerTable.status).where(
+                ContainerTable.id.in_(container_ids)
+            )
+        )
+        return {str(row.id): ContainerStatus(row.status) for row in rows}
+
     def lock(self, container_id: str, *, workspace_id: str) -> ContainerRecord | None:
         row = self.session.scalar(
             select(ContainerTable)
@@ -1268,6 +1278,33 @@ class ContainerRepository:
             placed=worker_id is not None or bool(runtime_worker_id),
         )
 
+    def runtime_workers(self, container_ids: Sequence[str]) -> dict[str, str]:
+        if not container_ids:
+            return {}
+        return {
+            str(container_id): worker_id
+            for container_id, worker_id in self.session.execute(
+                select(ContainerTable.id, ContainerTable.runtime_worker_id).where(
+                    ContainerTable.id.in_(container_ids),
+                    ContainerTable.runtime_worker_id.is_not(None),
+                )
+            )
+            if worker_id
+        }
+
+    def runtime_workers_for_stub(self, stub_id: str) -> dict[str, str]:
+        return {
+            str(container_id): worker_id
+            for container_id, worker_id in self.session.execute(
+                select(ContainerTable.id, ContainerTable.runtime_worker_id).where(
+                    ContainerTable.stub_id == stub_id,
+                    ContainerTable.status.in_([status.value for status in LIVE_CONTAINER_STATUSES]),
+                    ContainerTable.runtime_worker_id.is_not(None),
+                )
+            )
+            if worker_id
+        }
+
     def recent_startup_failure(self, stub_id: str, *, since: datetime) -> StartupFailure | None:
         """The stub's newest container that failed to start since `since`, and why.
 
@@ -1280,7 +1317,7 @@ class ContainerRepository:
                 ContainerTable.stub_id == stub_id,
                 ContainerTable.status == ContainerStatus.Failed.value,
                 ContainerTable.started_at.is_(None),
-                ContainerTable.finished_at >= since,
+                func.coalesce(ContainerTable.finished_at, ContainerTable.created_at) >= since,
             )
             .order_by(ContainerTable.finished_at.desc(), ContainerTable.id.desc())
             .limit(1)

@@ -46,7 +46,7 @@ from billing import DatabaseBillingAdmission
 FUNCTION_IMAGE = "python:3.12-slim"
 
 
-def test_warm_paid_admissions_share_reads_and_fence_billing_writers(
+def test_warm_admission_reads_committed_funds_while_billing_writes(
     committed_service_context: ServiceContext,
 ) -> None:
     context = committed_service_context
@@ -60,37 +60,27 @@ def test_warm_paid_admissions_share_reads_and_fence_billing_writers(
             grant=CreditGrant("funded-admission", CreditKind.Purchased, 100, now),
         )
     admission = DatabaseBillingAdmission()
-    with context.database.session() as first:
-        admission.assert_workload_eligible(first, workspace_id=workspace_id, gpu=[], gpu_count=0)
-        with context.database.session() as second:
-            second.execute(text("SET LOCAL lock_timeout = '250ms'"))
-            admission.assert_workload_eligible(
-                second, workspace_id=workspace_id, gpu=[], gpu_count=0
-            )
-        with (
-            pytest.raises(OperationalError, match="lock timeout"),
-            context.database.session() as writer,
-        ):
-            writer.execute(text("SET LOCAL lock_timeout = '250ms'"))
-            BillingAccountRepository(writer).get_by_user(user_id, for_update=True)
-    with context.database.session() as first:
-        admission.admit_container_start(first, workspace_id=workspace_id, gpu=[], gpu_count=0)
-        with (
-            pytest.raises(OperationalError, match="lock timeout"),
-            context.database.session() as second,
-        ):
-            second.execute(text("SET LOCAL lock_timeout = '250ms'"))
-            admission.assert_workload_eligible(
-                second, workspace_id=workspace_id, gpu=[], gpu_count=0
-            )
-    with context.database.session() as session:
-        BillingCreditRepository(session).adjust(
+    with context.database.session() as writer:
+        BillingCreditRepository(writer).adjust(
             user_id=user_id,
             credit_lot_id=credit_lot_id,
             source_id="refunded-admission",
             amount_nanos=-110,
             effective_at=now,
         )
+        with context.database.session() as reader:
+            reader.execute(text("SET LOCAL lock_timeout = '250ms'"))
+            admission.assert_workload_eligible(
+                reader, workspace_id=workspace_id, gpu=[], gpu_count=0
+            )
+        with (
+            pytest.raises(OperationalError, match="lock timeout"),
+            context.database.session() as reservation,
+        ):
+            reservation.execute(text("SET LOCAL lock_timeout = '250ms'"))
+            admission.admit_container_start(
+                reservation, workspace_id=workspace_id, gpu=[], gpu_count=0
+            )
     with (
         pytest.raises(PaymentRequiredError, match="add credit"),
         context.database.session() as session,

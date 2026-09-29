@@ -22,6 +22,7 @@ from worker.container_client.models import (
     ContainerSandboxListFilesRequest,
     ContainerSandboxListProcessesRequest,
     ContainerSandboxReplaceInFilesRequest,
+    ContainerSandboxResultRequest,
     ContainerSandboxStatFileRequest,
     ContainerSandboxStatusRequest,
     ContainerSandboxStderrRequest,
@@ -40,6 +41,9 @@ from worker.container_service.service import WorkerContainerService
 @dataclass(slots=True)
 class WorkerContainerServiceTransport:
     service: WorkerContainerService
+
+    async def sandbox_result(self, request: ContainerServicePayload) -> ContainerServicePayload:
+        return await self.service.sandbox_result(_request(request, ContainerSandboxResultRequest))
 
     def unary(
         self,

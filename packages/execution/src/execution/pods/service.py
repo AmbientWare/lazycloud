@@ -22,13 +22,13 @@ from database.repositories.orchestration import AutoscalingTargetRepository, Con
 from database.types import DatabaseSession
 from observability.workspace_changes import AsyncWorkloadChangeReader, SyncWorkloadChangeReader
 from shared.app_identity import POD_IMAGE
+from shared.async_utils import complete_before_cancelling
 from shared.autoscaler_state import AutoscalerTargetKind
 from shared.autoscaling import PodStubType
 from shared.checkpoints import CheckpointRecord, CheckpointStatus
 from shared.container_requests import (
     WORKER_USER_CODE_VOLUME,
     RequestDisk,
-    RuntimeContainerStatus,
     StopContainerReason,
     WorkerStartupKind,
 )
@@ -69,6 +69,7 @@ from shared.http.pods import (
     PodSandboxProcessInfo,
     PodSandboxReplaceInFilesRequest,
     PodSandboxReplaceInFilesResponse,
+    PodSandboxResultResponse,
     PodSandboxSnapshotMemoryRequest,
     PodSandboxSnapshotMemoryResponse,
     PodSandboxStatFileResponse,
@@ -101,6 +102,7 @@ from storage.disks import get_or_create_disks
 from database import AsyncDatabaseClient
 from execution.checkpoints import latest_available_checkpoint
 from execution.container_clients import (
+    AsyncSandboxResultClient,
     ContainerClientHandle,
     ContainerOperationResponse,
     ContainerSandboxFileInfo,
@@ -184,6 +186,12 @@ def wake_pod(
 
 
 @dataclass(slots=True)
+class _SandboxResultWait:
+    task: asyncio.Task[PodSandboxResultResponse]
+    readers: int = 0
+
+
+@dataclass(slots=True)
 class PodControlService:
     services: ExecutionServices
     redis: RedisClient
@@ -194,6 +202,7 @@ class PodControlService:
     async_database: AsyncDatabaseClient | None = None
     async_scheduler_containers: AsyncPodSchedulerContainerDirectory | None = None
     async_pod_proxy_http_client: AsyncPodProxyForwardClient | None = None
+    async_sandbox_results: AsyncSandboxResultClient | None = None
     pod_proxy_socket_client: PodProxySocketClient | None = None
     pod_proxy_connections: PodProxyConnectionRepository | None = None
     container_readiness_probe: AsyncContainerReadiness | None = None
@@ -202,6 +211,9 @@ class PodControlService:
     container_connect_timeout_seconds: float = DEFAULT_POD_CONNECTION_TIMEOUT_SECONDS
     pod_proxy_start_timeout_seconds: float = DEFAULT_POD_PROXY_TIMEOUT_SECONDS
     control_plane: ControlPlaneService = field(init=False)
+    _result_waits: dict[tuple[str, str, float], _SandboxResultWait] = field(
+        default_factory=dict, init=False, repr=False
+    )
 
     def __post_init__(self) -> None:
         self.control_plane = ControlPlaneService(self.services.context)
@@ -553,10 +565,10 @@ class PodControlService:
         return checkpoint
 
     def sandbox_exec(
-        self, container_id: str, request: PodSandboxExecRequest
+        self, container: ContainerRecord, request: PodSandboxExecRequest
     ) -> PodSandboxExecResponse:
-        response = self._client(container_id).sandbox_exec(
-            container_id,
+        response = self._client(container).sandbox_exec(
+            container.id,
             request.command,
             env=request.env,
             cwd=request.cwd or ".",
@@ -566,17 +578,48 @@ class PodControlService:
             "pod.exec",
             level=EventLevel.Info,
             resource_type="container",
-            resource_id=container_id,
+            resource_id=container.id,
             message=f"requested pod command {request.command}",
             data={"pid": response.pid},
-            workspace_id=self._container(container_id).workspace_id,
+            workspace_id=container.workspace_id,
         )
-        return PodSandboxExecResponse(pid=response.pid)
+        return PodSandboxExecResponse(pid=response.pid, process_id=response.process_id)
+
+    async def sandbox_result(
+        self, container: ContainerRecord, process_id: str, wait_seconds: float
+    ) -> PodSandboxResultResponse:
+        if self.async_sandbox_results is None:
+            raise RuntimeError("sandbox result transport is not configured")
+        ready, reason = await asyncio.to_thread(self._container_client_readiness, container)
+        if ready is None:
+            raise UpstreamUnavailableError(reason)
+        key = (container.id, process_id, wait_seconds)
+        waiting = self._result_waits.get(key)
+        if waiting is None:
+            waiting = _SandboxResultWait(
+                asyncio.create_task(
+                    self.async_sandbox_results.sandbox_result(
+                        ready.worker_address, container.id, process_id, wait_seconds
+                    )
+                )
+            )
+            self._result_waits[key] = waiting
+        waiting.readers += 1
+        try:
+            return await asyncio.shield(waiting.task)
+        finally:
+            waiting.readers -= 1
+            if waiting.readers == 0:
+                del self._result_waits[key]
+                waiting.task.cancel()
+                await complete_before_cancelling(
+                    asyncio.gather(waiting.task, return_exceptions=True)
+                )
 
     def sandbox_status(self, container_id: str, pid: int) -> PodSandboxStatusResponse:
         if pid == 0:
             return self._container_status_response(container_id)
-        response = self._client(container_id).sandbox_status(container_id, pid)
+        response = self._client(self._container(container_id)).sandbox_status(container_id, pid)
         _raise_container_response_error(response)
         return PodSandboxStatusResponse(
             status=response.status,
@@ -584,21 +627,22 @@ class PodControlService:
         )
 
     def sandbox_stdout(self, container_id: str, pid: int) -> PodSandboxStdoutResponse:
-        response = self._client(container_id).sandbox_stdout(container_id, pid)
+        response = self._client(self._container(container_id)).sandbox_stdout(container_id, pid)
         _raise_container_response_error(response)
         return PodSandboxStdoutResponse(stdout=response.stdout)
 
     def sandbox_stderr(self, container_id: str, pid: int) -> PodSandboxStderrResponse:
-        response = self._client(container_id).sandbox_stderr(container_id, pid)
+        response = self._client(self._container(container_id)).sandbox_stderr(container_id, pid)
         _raise_container_response_error(response)
         return PodSandboxStderrResponse(stderr=response.stderr)
 
     def sandbox_kill(
         self, container_id: str, request: PodSandboxKillRequest
     ) -> PodSandboxKillResponse:
-        response = self._client(container_id).sandbox_kill(
+        response = self._client(self._container(container_id)).sandbox_kill(
             container_id,
             request.pid,
+            request.process_id,
         )
         _raise_container_response_error(response)
         return PodSandboxKillResponse()
@@ -608,7 +652,7 @@ class PodControlService:
         container_id: str,
         request: PodSandboxUploadFileBody,
     ) -> PodSandboxUploadFileResponse:
-        response = self._client(container_id).sandbox_upload_file(
+        response = self._client(self._container(container_id)).sandbox_upload_file(
             container_id,
             request.container_path,
             request.data,
@@ -631,7 +675,7 @@ class PodControlService:
         beforehand says nothing about a file still being written or one that
         reports none, such as those under /proc.
         """
-        response = self._client(container_id).sandbox_download_file(
+        response = self._client(self._container(container_id)).sandbox_download_file(
             container_id,
             container_path,
             # One byte past the bound tells a longer file from one that fits exactly.
@@ -653,7 +697,7 @@ class PodControlService:
         container_id: str,
         container_path: str,
     ) -> PodSandboxStatFileResponse:
-        response = self._client(container_id).sandbox_stat_file(
+        response = self._client(self._container(container_id)).sandbox_stat_file(
             container_id,
             container_path,
         )
@@ -667,7 +711,7 @@ class PodControlService:
         *,
         limit: int,
     ) -> PodSandboxListFilesResponse:
-        response = self._client(container_id).sandbox_list_files(
+        response = self._client(self._container(container_id)).sandbox_list_files(
             container_id,
             container_path,
             limit=limit,
@@ -683,7 +727,7 @@ class PodControlService:
         container_id: str,
         container_path: str,
     ) -> PodSandboxDeleteFileResponse:
-        response = self._client(container_id).sandbox_delete_file(
+        response = self._client(self._container(container_id)).sandbox_delete_file(
             container_id,
             container_path,
         )
@@ -695,7 +739,7 @@ class PodControlService:
         container_id: str,
         request: PodSandboxCreateDirectoryRequest,
     ) -> PodSandboxCreateDirectoryResponse:
-        response = self._client(container_id).sandbox_create_directory(
+        response = self._client(self._container(container_id)).sandbox_create_directory(
             container_id,
             request.container_path,
             mode=request.mode,
@@ -708,7 +752,7 @@ class PodControlService:
         container_id: str,
         container_path: str,
     ) -> PodSandboxDeleteDirectoryResponse:
-        response = self._client(container_id).sandbox_delete_directory(
+        response = self._client(self._container(container_id)).sandbox_delete_directory(
             container_id,
             container_path,
         )
@@ -720,7 +764,7 @@ class PodControlService:
         container_id: str,
         request: PodSandboxReplaceInFilesRequest,
     ) -> PodSandboxReplaceInFilesResponse:
-        response = self._client(container_id).sandbox_replace_in_files(
+        response = self._client(self._container(container_id)).sandbox_replace_in_files(
             container_id,
             request.container_path,
             request.pattern,
@@ -734,7 +778,7 @@ class PodControlService:
         container_id: str,
         request: PodSandboxFindInFilesRequest,
     ) -> PodSandboxFindInFilesResponse:
-        response = self._client(container_id).sandbox_find_in_files(
+        response = self._client(self._container(container_id)).sandbox_find_in_files(
             container_id,
             request.container_path,
             request.pattern,
@@ -760,7 +804,7 @@ class PodControlService:
         validated_container, stub = self._sandbox_container(container_id)
         if not validated_container.stub_id:
             raise InvalidInputError("sandbox container has no owning stub")
-        response = self._client(container_id).sandbox_expose_port(
+        response = self._client(validated_container).sandbox_expose_port(
             container_id,
             request.port,
         )
@@ -790,7 +834,7 @@ class PodControlService:
         container_id: str,
         request: PodSandboxUpdateNetworkPermissionsRequest,
     ) -> PodSandboxUpdateNetworkPermissionsResponse:
-        response = self._client(container_id).sandbox_update_network_permissions(
+        response = self._client(self._container(container_id)).sandbox_update_network_permissions(
             container_id,
             block_network=request.block_network,
             allow_list=request.allow_list,
@@ -905,7 +949,7 @@ class PodControlService:
         container_id: str,
         request: PodSandboxSnapshotMemoryRequest,
     ) -> PodSandboxSnapshotMemoryResponse:
-        response = self._client(container_id).checkpoint(container_id)
+        response = self._client(self._container(container_id)).checkpoint(container_id)
         _raise_container_response_error(response)
         return PodSandboxSnapshotMemoryResponse(checkpoint_id=response.checkpoint_id)
 
@@ -913,18 +957,20 @@ class PodControlService:
         self,
         container_id: str,
     ) -> PodSandboxListProcessesResponse:
-        response = self._client(container_id).sandbox_list_processes(container_id)
+        response = self._client(self._container(container_id)).sandbox_list_processes(container_id)
         _raise_container_response_error(response)
         return PodSandboxListProcessesResponse(
             processes=[
-                PodSandboxProcessInfo(pid=item.pid, command=item.command)
+                PodSandboxProcessInfo(
+                    pid=item.pid, process_id=item.process_id, command=item.command
+                )
                 for item in response.processes
             ],
         )
 
     def sandbox_list_urls(self, container_id: str) -> PodSandboxListUrlsResponse:
-        self._sandbox_container(container_id)
-        response = self._client(container_id).sandbox_list_exposed_ports(container_id)
+        container, _stub = self._sandbox_container(container_id)
+        response = self._client(container).sandbox_list_exposed_ports(container_id)
         _raise_container_response_error(response)
         exposed_ports = set(response.ports)
         urls = {
@@ -1074,11 +1120,7 @@ class PodControlService:
     def _delete_keep_warm_lock(self, key: str) -> None:
         self.redis.delete(self.redis.key(key))
 
-    def _client(self, container_id: str) -> PodContainerControlClient:
-        try:
-            container = self._container(container_id)
-        except NotFoundError:
-            raise
+    def _client(self, container: ContainerRecord) -> PodContainerControlClient:
         try:
             ready_client = self._wait_for_container_client(container)
         except RuntimeError as exc:
@@ -1099,7 +1141,7 @@ class PodControlService:
             self.container_connect_timeout_seconds if timeout_seconds is None else timeout_seconds
         )
         deadline = time.monotonic() + max(wait_seconds, 0.0)
-        ready, reason = self._container_client_readiness(container.id)
+        ready, reason = self._container_client_readiness(container)
         if ready is not None:
             return ready
         if time.monotonic() >= deadline:
@@ -1110,18 +1152,17 @@ class PodControlService:
             workspace_id=container.workspace_id, stub_id=container.stub_id or ""
         ) as changes:
             while True:
-                ready, reason = self._container_client_readiness(container.id)
+                ready, reason = self._container_client_readiness(self._container(container.id))
                 if ready is not None:
                     return ready
                 if not changes.wait(deadline - time.monotonic()):
                     raise RuntimeError(reason)
 
     def _container_client_readiness(
-        self, container_id: str
+        self, container: ContainerRecord
     ) -> tuple[ContainerClientHandle[PodContainerControlClient] | None, str]:
         if self.scheduler_containers is None:
             raise RuntimeError("pod scheduler directory is unavailable")
-        container = self._container(container_id)
         if container.status in TERMINAL_CONTAINER_STATUSES:
             raise ConflictError(
                 container.startup_error or f"container {container.id} is {container.status.value}"
@@ -1143,14 +1184,7 @@ class PodControlService:
         worker_address = self.scheduler_containers.get_worker_address(container.id)
         if worker_address is None or not worker_address.address:
             return None, f"worker address not published for container {container.id}"
-        try:
-            ready = self._container_client_factory().client_for(container)
-            status = ready.client.status(container.id)
-        except Exception as exc:
-            return None, f"container service not ready: {type(exc).__name__}: {exc}"
-        if status.ok and status.status == RuntimeContainerStatus.Running.value:
-            return ready, ""
-        return None, status.error_msg or f"container {container.id} runtime is {status.status}"
+        return self._container_client_factory().client_for(container), ""
 
     def _mark_container_running(
         self,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from contextlib import aclosing
+import asyncio
+from contextlib import AsyncExitStack, aclosing
 
 import anyio
 import pytest
@@ -8,11 +9,56 @@ from coordination.redis_client import AsyncRedisClient
 from coordination.stream_tail import RedisStreamTailBroker
 from observability.stream_state import (
     AsyncRedisEventStreamRepository,
+    AsyncTaskChangeReader,
     RedisEventStreamRepository,
 )
 from shared.realtime.contracts import EventRecordType
 from shared.realtime.streams import EventHistoryQuery, LogStreamQuery
 from tests.real_redis import RealRedisActors
+
+
+@pytest.mark.anyio
+async def test_claim_notification_passes_fenced_waiter_without_broadcasting(
+    stream_broker: RedisStreamTailBroker,
+    real_redis_actors: RealRedisActors,
+) -> None:
+    reader = AsyncTaskChangeReader(stream_broker)
+    repository = RedisEventStreamRepository(real_redis_actors.client())
+    pending: list[asyncio.Task[None]] = []
+    try:
+        async with AsyncExitStack() as stack:
+            followers = [
+                await stack.enter_async_context(
+                    reader.follow_claims(workspace_id="workspace", stub_id="stub")
+                )
+                for _ in range(16)
+            ]
+            pending = [asyncio.create_task(anext(follower)) for follower in followers]
+            repository.append_event(
+                EventRecordType.TaskUpdated,
+                {
+                    "workspace_id": "workspace",
+                    "stub_id": "stub",
+                    "task_id": "task",
+                    "status": "pending",
+                    "claimable_at": "2026-09-29T00:00:00Z",
+                },
+            )
+            async with asyncio.timeout(1):
+                await pending[0]
+                followers[0].completed(claimed=False, queue_checked=False)
+                await pending[1]
+                followers[1].completed(claimed=True, queue_checked=True)
+                await pending[2]
+                followers[2].completed(claimed=False, queue_checked=True)
+
+            completed, _ = await asyncio.wait(pending[3:], timeout=0.05)
+            assert not completed
+    finally:
+        for waiter in pending:
+            waiter.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+    assert stream_broker.status().sources == 0
 
 
 @pytest.mark.anyio

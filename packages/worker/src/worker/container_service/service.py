@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import shutil
 import time
 from collections.abc import Iterable
@@ -47,6 +48,8 @@ from worker.container_client.models import (
     ContainerSandboxProcessInfo,
     ContainerSandboxReplaceInFilesRequest,
     ContainerSandboxReplaceInFilesResponse,
+    ContainerSandboxResultRequest,
+    ContainerSandboxResultResponse,
     ContainerSandboxStatFileRequest,
     ContainerSandboxStatFileResponse,
     ContainerSandboxStatusRequest,
@@ -278,7 +281,9 @@ class WorkerContainerService:
                         daemon=True,
                     ).start()
                     handed_off = True
-                    return ContainerSandboxExecResponse(ok=True, pid=event.pid)
+                    return ContainerSandboxExecResponse(
+                        ok=True, pid=event.pid, process_id=event.process_id
+                    )
                 if event.event_type is SandboxProcessEventType.Chunk:
                     error = self._append_process_log(instance, event, plan.argv, plan.cwd or "")
                     manager.ack(event.pid, event.seq, ok=not error)
@@ -301,6 +306,21 @@ class WorkerContainerService:
             ok=False,
             error_msg="sandbox exec stream closed before process start",
         )
+
+    async def sandbox_result(
+        self, request: ContainerSandboxResultRequest
+    ) -> ContainerSandboxResultResponse:
+        manager = await asyncio.to_thread(self._ready_manager_response, request.container_id)
+        if isinstance(manager, str):
+            return ContainerSandboxResultResponse(ok=False, error_msg=manager)
+        try:
+            return ContainerSandboxResultResponse(
+                result=await manager.result(request.process_id, request.wait_seconds)
+            )
+        except Exception as exc:
+            return ContainerSandboxResultResponse(ok=False, error_msg=str(exc))
+        finally:
+            manager.cleanup()
 
     def sandbox_status(
         self,
@@ -375,7 +395,7 @@ class WorkerContainerService:
         if isinstance(manager, str):
             return ContainerSandboxKillResponse(ok=False, error_msg=manager)
         try:
-            manager.kill(request.pid)
+            manager.kill(request.pid, request.process_id)
         except Exception as exc:
             return ContainerSandboxKillResponse(ok=False, error_msg=str(exc))
         finally:
@@ -391,7 +411,9 @@ class WorkerContainerService:
             return ContainerSandboxListProcessesResponse(ok=False, error_msg=manager)
         try:
             processes = tuple(
-                ContainerSandboxProcessInfo(pid=process.pid, command=process.command)
+                ContainerSandboxProcessInfo(
+                    pid=process.pid, process_id=process.process_id, command=process.command
+                )
                 for process in manager.list_processes()
             )
         except Exception as exc:

@@ -93,7 +93,8 @@ def _prove_a_simultaneous_burst_starts_one_container(services: ApiServices) -> N
             FunctionInvokeBody(
                 stub_id=stub.id,
                 invocation=FunctionJsonInvocation(args=[value]),
-            )
+            ),
+            stub=stub,
         ).task_id
 
     with ThreadPoolExecutor(max_workers=CONTENDERS) as executor:
@@ -104,6 +105,7 @@ def _prove_a_simultaneous_burst_starts_one_container(services: ApiServices) -> N
 
     assert len(set(task_ids)) == CONTENDERS
     assert _container_count(services, stub_id=stub.id) == 1
+    assert list(functions.start_function_containers(stub.id, desired_count=1)) == []
 
 
 def _prove_the_autoscaler_stops_at_the_ceiling(services: ApiServices) -> None:
@@ -121,13 +123,16 @@ def _prove_the_autoscaler_stops_at_the_ceiling(services: ApiServices) -> None:
             FunctionInvokeBody(
                 stub_id=stub.id,
                 invocation=FunctionJsonInvocation(args=[value]),
-            )
+            ),
+            stub=stub,
         )
     start = Barrier(CONTENDERS)
 
+    desired = CEILING - 1
+
     def scale() -> int:
         start.wait(timeout=30)
-        return len(list(functions.start_function_containers(stub.id, count=CEILING)))
+        return len(list(functions.start_function_containers(stub.id, desired_count=desired)))
 
     with ThreadPoolExecutor(max_workers=CONTENDERS) as executor:
         started = [
@@ -135,10 +140,11 @@ def _prove_the_autoscaler_stops_at_the_ceiling(services: ApiServices) -> None:
             for future in [executor.submit(scale) for _ in range(CONTENDERS)]
         ]
 
+    assert _container_count(services, stub_id=stub.id) == desired
+    assert sum(started) == desired - 1
+    remaining = list(functions.start_function_containers(stub.id, desired_count=CEILING + 1))
+    assert len(remaining) == CEILING - desired
     assert _container_count(services, stub_id=stub.id) == CEILING
-    # One was already up from the invocation that found the stub idle, so the
-    # ceiling leaves room for two more and the rest are refused.
-    assert sum(started) == CEILING - 1
 
 
 def _container_count(services: ApiServices, *, stub_id: str) -> int:

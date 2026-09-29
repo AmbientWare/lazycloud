@@ -111,7 +111,7 @@ class BillingEnforcementService:
                 account.status is BillingAccountStatus.PastDue
                 or account.plan is None
                 or not account.provider_subscription_id
-                or credits.balance(user_id=account.user_id, at=now) <= 0
+                or credits.committed_balance(user_id=account.user_id, at=now) <= 0
                 or over_budget
             ):
                 return tuple(

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Protocol
 
 from control.apps import AppReader
@@ -70,6 +70,10 @@ class ExecutionContainerService(Protocol):
     def get(self, container_id: str) -> ContainerRecord: ...
 
     def accepting_work(self, container_id: str) -> bool: ...
+
+    def accepting_containers(self, container_ids: Sequence[str]) -> set[str]: ...
+
+    def accepting_container_workers(self, workers_by_container: Mapping[str, str]) -> set[str]: ...
 
     def submit_scheduler_request(
         self,

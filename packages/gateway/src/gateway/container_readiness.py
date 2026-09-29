@@ -13,7 +13,7 @@ from execution.containers.readiness import (
     DEFAULT_READINESS_PROBE_TIMEOUT_SECONDS,
 )
 from networking.async_http import AsyncBackendHttpClient, AsyncBackendHttpError
-from shared.workload_keys import container_readiness_key
+from shared.workload_keys import container_readiness_key, workload_readiness_stream_name
 
 _READY = "1"
 _NOT_READY = "0"
@@ -23,6 +23,17 @@ LOGGER = logging.getLogger(__name__)
 # unready for routing a request it would have handled.
 _HTTP_READY_MIN_STATUS = 200
 _HTTP_READY_MAX_STATUS = 400
+
+_PUBLISH_VERDICT = """
+local previous = redis.call('GET', KEYS[2])
+redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2])
+redis.call('SET', KEYS[2], ARGV[1], 'EX', 3600)
+if previous ~= ARGV[1] then
+    redis.call('XADD', KEYS[3], 'MAXLEN', '~', 128, '*', 'container_id', ARGV[3])
+    redis.call('EXPIRE', KEYS[3], 3600)
+end
+return 1
+"""
 
 
 def _decoded(value: RedisWireScalar) -> str:
@@ -65,23 +76,35 @@ class AsyncRedisContainerReadiness:
         # Keyed by what was probed rather than by the container: a pod serving two
         # proxied ports would otherwise let a verdict from one answer for the other.
         key = self.redis.key(container_readiness_key(container_id, port=port, path=health_path))
+        revision = await self.client.readiness_revision(route_id, address)
+        if revision is None:
+            await self._publish(key, stub_id, container_id, "unavailable", False)
+            return False
+        probe_key = f"{key}:{revision}"
         cached = await self.redis.get(key)
         if self._closed:
             raise RuntimeError("Container readiness is closed")
-        if cached is not None:
-            return _decoded(cached) == _READY
-        probe = self._probes.get(key)
+        if cached is not None and _decoded(cached).startswith(f"{revision}:"):
+            return _decoded(cached) == f"{revision}:{_READY}"
+        probe = self._probes.get(probe_key)
         if probe is None:
             probe = asyncio.create_task(
-                self._probe(key, container_id, address, route_id, health_path)
+                self._probe(key, stub_id, revision, container_id, address, route_id, health_path)
             )
-            self._probes[key] = probe
-            probe.add_done_callback(partial(self._probe_finished, key))
+            self._probes[probe_key] = probe
+            probe.add_done_callback(partial(self._probe_finished, probe_key))
         # A disconnected caller must not cancel readiness for the other callers.
         return await asyncio.shield(probe)
 
     async def _probe(
-        self, key: str, container_id: str, address: str, route_id: str, health_path: str
+        self,
+        key: str,
+        stub_id: str,
+        revision: str,
+        container_id: str,
+        address: str,
+        route_id: str,
+        health_path: str,
     ) -> bool:
         try:
             if health_path:
@@ -112,8 +135,25 @@ class AsyncRedisContainerReadiness:
             # neither may escape a probe and turn a routing decision into a failed
             # request.
             ready = False
-        await self.redis.set(key, _READY if ready else _NOT_READY, px=self.cache_ttl_ms)
+        # An old session's successful probe cannot establish readiness for its replacement.
+        if await self.client.readiness_revision(route_id, address) != revision:
+            return False
+        await self._publish(key, stub_id, container_id, revision, ready)
         return ready
+
+    async def _publish(
+        self, key: str, stub_id: str, container_id: str, revision: str, ready: bool
+    ) -> None:
+        await self.redis.eval_int(
+            _PUBLISH_VERDICT,
+            3,
+            key,
+            f"{key}:verdict",
+            self.redis.key(workload_readiness_stream_name(stub_id)),
+            f"{revision}:{_READY if ready else _NOT_READY}",
+            self.cache_ttl_ms,
+            container_id,
+        )
 
 
 __all__ = ["AsyncRedisContainerReadiness"]

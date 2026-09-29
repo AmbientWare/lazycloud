@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import socket
 import sys
-from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
@@ -216,6 +216,17 @@ class AsyncEndpointResponseStream(Protocol):
 
 
 class AsyncEndpointRequestDispatcher(Protocol):
+    async def ready_targets(
+        self,
+        stub_id: str,
+        *,
+        container_loads: Mapping[str, int],
+        max_inflight_per_container: int,
+        excluded_container_ids: set[str],
+        admit: Callable[[Sequence[str]], Awaitable[set[str]]],
+        container_id: str | None = None,
+    ) -> list[EndpointDispatchTarget]: ...
+
     async def select_target(
         self,
         stub_id: str,
@@ -249,6 +260,46 @@ class AsyncEndpointInstanceDispatcher:
     http_client: AsyncBackendHttpClient
     readiness_probe: AsyncContainerReadiness
     endpoint_port: int = CONTAINER_INNER_PORT
+
+    async def ready_targets(
+        self,
+        stub_id: str,
+        *,
+        container_loads: Mapping[str, int],
+        max_inflight_per_container: int,
+        excluded_container_ids: set[str],
+        admit: Callable[[Sequence[str]], Awaitable[set[str]]],
+        container_id: str | None = None,
+    ) -> list[EndpointDispatchTarget]:
+        targets = [
+            target
+            for target in await self._ordered_targets(
+                stub_id,
+                container_loads=container_loads,
+                max_inflight_per_container=max_inflight_per_container,
+                container_id=container_id,
+            )
+            if target.container_id not in excluded_container_ids
+        ]
+        admitted = await admit([target.container_id for target in targets])
+        targets = [target for target in targets if target.container_id in admitted]
+        probes = {
+            asyncio.create_task(self._is_ready(target, stub_id)): target for target in targets
+        }
+        pending = set(probes)
+        try:
+            while pending:
+                done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+                ready = {probes[probe].container_id for probe in done if probe.result()}
+                if ready:
+                    return [target for target in targets if target.container_id in ready]
+            return []
+        finally:
+            # The readiness owner shields and retains shared probes. A slow backend
+            # must not hold up callers whose other backends have already answered.
+            for probe in pending:
+                probe.cancel()
+            await asyncio.gather(*probes, return_exceptions=True)
 
     async def ready_container_ids(self, stub_id: str, container_ids: list[str]) -> set[str]:
         wanted = set(container_ids)

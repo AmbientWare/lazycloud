@@ -8,6 +8,7 @@ from secrets import token_urlsafe
 from typing import Protocol
 
 from coordination.redis_client import RedisClient
+from coordination.token_lock import release_token_lock
 from database.records.apps import AutoscalingStubConfig, AutoscalingStubRecord, StubKind
 from database.repositories.apps import AppRepository, DeploymentRepository, StubRepository
 from database.repositories.container_rollouts import ContainerRolloutRepository
@@ -112,7 +113,7 @@ class ContainerRequestReader(Protocol):
 
 
 class FunctionAutoscaleControl(Protocol):
-    def start_function_containers(self, stub_id: str, *, count: int) -> Iterator[str]: ...
+    def start_function_containers(self, stub_id: str, *, desired_count: int) -> Iterator[str]: ...
 
     def task_demand_counts(self, stub_ids: Sequence[str]) -> dict[str, int]: ...
 
@@ -286,7 +287,9 @@ class WorkloadAutoscaler(Protocol):
         self, stub: AutoscalingStubRecord, *, signal: int, current: int, now: datetime
     ) -> ScalePlan: ...
 
-    def start(self, stub: AutoscalingStubRecord, *, count: int) -> Iterator[str]:
+    def start(
+        self, stub: AutoscalingStubRecord, *, current_count: int, desired_count: int
+    ) -> Iterator[str]:
         """Yield committed starts, preserving partial success before a refusal."""
         ...
 
@@ -473,7 +476,7 @@ class AutoscalingDriver:
                 decision = scale_kind(desired, current)
         delta = desired - current
         if delta > 0 and active and plan.valid:
-            actions.extend(self._start(stub, delta))
+            actions.extend(self._start(stub, current_count=current, desired_count=desired))
         elif delta < 0:
             actions.extend(
                 self.workload.scale_down(
@@ -542,10 +545,14 @@ class AutoscalingDriver:
             )
         return actions, still_live
 
-    def _start(self, stub: AutoscalingStubRecord, count: int) -> list[AutoscaleAction]:
+    def _start(
+        self, stub: AutoscalingStubRecord, *, current_count: int, desired_count: int
+    ) -> list[AutoscaleAction]:
         actions: list[AutoscaleAction] = []
         try:
-            for container_id in self.workload.start(stub, count=count):
+            for container_id in self.workload.start(
+                stub, current_count=current_count, desired_count=desired_count
+            ):
                 actions.append(
                     AutoscaleAction(
                         container_id=container_id,
@@ -678,8 +685,7 @@ class AutoscalingDriver:
         return bool(self.redis.set(key, token, nx=True, ex=AUTOSCALER_LOCK_TTL_SECONDS))
 
     def _release_lock(self, key: str, token: str) -> None:
-        if _redis_text(self.redis.get(key)) == token:
-            self.redis.delete(key)
+        release_token_lock(self.redis, key, token)
 
 
 @dataclass(slots=True)
@@ -740,8 +746,10 @@ class FunctionAutoscaler:
             tasks_per_container=config.tasks_per_container,
         )
 
-    def start(self, stub: AutoscalingStubRecord, *, count: int) -> Iterator[str]:
-        return self.functions.start_function_containers(stub.id, count=count)
+    def start(
+        self, stub: AutoscalingStubRecord, *, current_count: int, desired_count: int
+    ) -> Iterator[str]:
+        return self.functions.start_function_containers(stub.id, desired_count=desired_count)
 
     def handle_failure_threshold(
         self,
@@ -773,21 +781,23 @@ class FunctionAutoscaler:
         signal: AutoscalingSignal,
         now: datetime,
     ) -> list[AutoscaleAction]:
-        """Release excess pending capacity and idle containers without an expiry.
+        """Release unassigned excess capacity and idle containers without an expiry.
 
-        Running containers with an idle window retire themselves. Pending
-        containers cannot retire themselves, and cancelled work may leave them
-        waiting for capacity indefinitely.
+        Assigned startups finish preparation and then observe their idle window.
+        Unassigned containers have no idle window and may wait for capacity forever.
+        Inactive workloads release assigned startups too.
         """
 
-        del scheduler_statuses, active_instance, signal, now
+        del scheduler_statuses, signal, now
         pending_only = stub.config.runtime.keep_warm >= 0
+        preserve_assigned_startup = active_instance and pending_only
         busy = self.functions.containers_holding_work([item.id for item in containers])
         idle = [
             container
             for container in containers
             if container.id not in busy
             and (not pending_only or container.status is ContainerStatus.Pending)
+            and (not preserve_assigned_startup or not container.runtime_worker_id)
             and not truthy_env_value(container.env.get(HOT_RELOAD_ENV))
         ]
         idle.sort(key=lambda container: container.created_at, reverse=True)
@@ -797,6 +807,7 @@ class FunctionAutoscaler:
                 container.id,
                 reason=StopContainerReason.Scheduler,
                 only_if_pending=pending_only,
+                only_if_unassigned=preserve_assigned_startup,
             )
             if stopped.status in {ContainerStatus.Pending, ContainerStatus.Running}:
                 continue
@@ -860,10 +871,12 @@ class EndpointAutoscaler:
             tasks_per_container=config.tasks_per_container,
         )
 
-    def start(self, stub: AutoscalingStubRecord, *, count: int) -> Iterator[str]:
+    def start(
+        self, stub: AutoscalingStubRecord, *, current_count: int, desired_count: int
+    ) -> Iterator[str]:
         try:
             for response in self.endpoints.start_endpoint_containers(
-                StartEndpointServeRequest(stub_id=stub.id), count=count
+                StartEndpointServeRequest(stub_id=stub.id), count=desired_count - current_count
             ):
                 yield response.container_id
         except EndpointReplicaLimitReachedError:
@@ -961,8 +974,10 @@ class PodAutoscaler:
             min_containers=config.min_containers,
         )
 
-    def start(self, stub: AutoscalingStubRecord, *, count: int) -> Iterator[str]:
-        for _ in range(count):
+    def start(
+        self, stub: AutoscalingStubRecord, *, current_count: int, desired_count: int
+    ) -> Iterator[str]:
+        for _ in range(desired_count - current_count):
             response = self.pods.create_pod(CreatePodRequest(stub_id=stub.id))
             if not response.container_id:
                 raise InvalidInputError("pod create returned no container id")

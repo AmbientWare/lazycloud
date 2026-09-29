@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import socket
@@ -8,11 +9,13 @@ import time
 from collections.abc import Iterable
 from contextlib import suppress
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import BinaryIO, Literal
 
 from pydantic import Field
 from shared.contracts import ContractModel
+from shared.http.pods import PodSandboxResultResponse
 
 from worker.container_service.models import (
     SandboxFilesystemOutput,
@@ -46,6 +49,8 @@ class SupervisorRequest(ContractModel):
     cwd: str = ""
     env: list[str] = Field(default_factory=list)
     pid: int = 0
+    process_id: str = ""
+    wait_seconds: float = 0
     signal: int = 0
     ack_seq: int = 0
     ok: bool = False
@@ -55,6 +60,7 @@ class SupervisorRequest(ContractModel):
 
 class SupervisorProcess(ContractModel):
     pid: int
+    process_id: str
     command: str
     cwd: str = ""
     running: bool = True
@@ -74,6 +80,10 @@ class SupervisorResponse(ContractModel):
     processes: list[SupervisorProcess] = Field(default_factory=list)
     stdout: str = ""
     stderr: str = ""
+    process_id: str = ""
+    stdout_truncated: bool = False
+    stderr_truncated: bool = False
+    expires_at: datetime | None = None
 
 
 @dataclass(slots=True)
@@ -130,6 +140,7 @@ class SupervisorSandboxProcessManager:
     )
     _transport: _SupervisorTransport | None = field(default=None, init=False)
     _pid: int = field(default=0, init=False)
+    _process_id: str = field(default="", init=False)
     _ack_seq: int = field(default=0, init=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False)
 
@@ -157,15 +168,21 @@ class SupervisorSandboxProcessManager:
                 transport.send(
                     request
                     if self._pid == 0
-                    else SupervisorRequest(op="watch", pid=self._pid, ack_seq=self._ack_seq)
+                    else SupervisorRequest(
+                        op="watch", process_id=self._process_id, ack_seq=self._ack_seq
+                    )
                 )
                 while response := transport.receive():
                     self._validate(response)
                     if response.type == "started":
+                        if not response.process_id:
+                            raise SandboxSupervisorError("supervisor did not identify the command")
                         self._pid = response.pid
+                        self._process_id = response.process_id
                         yield SandboxProcessEvent(
                             event_type=SandboxProcessEventType.Started,
                             pid=response.pid,
+                            process_id=response.process_id,
                         )
                     elif response.type == "chunk":
                         yield SandboxProcessEvent(
@@ -239,20 +256,69 @@ class SupervisorSandboxProcessManager:
         response = self._request(SupervisorRequest(op="status", pid=pid))
         return None if response.running else response.exit_code
 
+    async def result(self, process_id: str, wait_seconds: float) -> PodSandboxResultResponse:
+        async with asyncio.timeout(wait_seconds + 2):
+            while True:
+                await self.connections.wait_until_active_async(self.host)
+                # Both retained streams can expand sixfold when JSON escapes control bytes.
+                reader, writer = await asyncio.open_connection(
+                    self.host, self.port, limit=4 * 1024 * 1024
+                )
+                connection = _AsyncSupervisorConnection(asyncio.get_running_loop(), writer)
+                registered = self.connections.register(self.host, connection)
+                try:
+                    if not registered:
+                        continue
+                    request = SupervisorRequest(
+                        op="result",
+                        process_id=process_id,
+                        wait_seconds=wait_seconds,
+                        token=self.token,
+                    )
+                    writer.write(request.model_dump_json().encode() + b"\n")
+                    await writer.drain()
+                    line = await reader.readline()
+                    if not line:
+                        raise SandboxSupervisorError("sandbox supervisor returned no response")
+                    response = SupervisorResponse.model_validate_json(line)
+                    self._validate(response)
+                    if response.type == "error":
+                        raise SandboxSupervisorError(response.error or "sandbox result unavailable")
+                    break
+                finally:
+                    self.connections.unregister(self.host, connection)
+                    writer.close()
+                    with suppress(OSError):
+                        await writer.wait_closed()
+        if response.type != "result" or response.process_id != process_id:
+            raise SandboxSupervisorError("supervisor returned a different command result")
+        return PodSandboxResultResponse(
+            process_id=response.process_id,
+            pid=response.pid,
+            running=response.running,
+            exit_code=response.exit_code,
+            stdout=response.stdout,
+            stderr=response.stderr,
+            stdout_truncated=response.stdout_truncated,
+            stderr_truncated=response.stderr_truncated,
+            expires_at=response.expires_at,
+        )
+
     def stdout(self, pid: int) -> str:
         return self._request(SupervisorRequest(op="stdout", pid=pid)).stdout
 
     def stderr(self, pid: int) -> str:
         return self._request(SupervisorRequest(op="stderr", pid=pid)).stderr
 
-    def kill(self, pid: int) -> None:
-        self._request(SupervisorRequest(op="kill", pid=pid, signal=15))
+    def kill(self, pid: int, process_id: str = "") -> None:
+        self._request(SupervisorRequest(op="kill", pid=pid, process_id=process_id, signal=15))
 
     def list_processes(self) -> list[WorkerSandboxProcess]:
         response = self._request(SupervisorRequest(op="list"))
         return [
             WorkerSandboxProcess(
                 pid=process.pid,
+                process_id=process.process_id,
                 command=process.command,
                 cwd=process.cwd,
                 exit_code=process.exit_code,
@@ -272,12 +338,13 @@ class SupervisorSandboxProcessManager:
         request: SupervisorRequest,
         *,
         wait_ready: bool = False,
+        timeout_seconds: float = 5.0,
     ) -> SupervisorResponse:
         transport = _SupervisorTransport.connect(
             self.host,
             self.port,
             token=self.token,
-            timeout_seconds=(self.ready_timeout_seconds if wait_ready else 5.0),
+            timeout_seconds=(self.ready_timeout_seconds if wait_ready else timeout_seconds),
             retry=wait_ready,
             coordinator=self.connections,
         )
@@ -384,25 +451,54 @@ class _SupervisorTransport:
             self.connection.close()
 
 
+@dataclass(slots=True, eq=False)
+class _AsyncSupervisorConnection:
+    loop: asyncio.AbstractEventLoop
+    writer: asyncio.StreamWriter
+
+    def close(self) -> None:
+        self.loop.call_soon_threadsafe(self.writer.close)
+
+
 @dataclass(slots=True)
 class _SupervisorConnectionCoordinator:
     _condition: threading.Condition = field(default_factory=threading.Condition)
     _suspension_counts: dict[str, int] = field(default_factory=dict)
-    _connections: dict[str, set[socket.socket]] = field(default_factory=dict)
+    _connections: dict[str, set[socket.socket | _AsyncSupervisorConnection]] = field(
+        default_factory=dict
+    )
+    _async_waiters: dict[str, set[asyncio.Future[None]]] = field(default_factory=dict)
 
     def wait_until_active(self, host: str) -> None:
         with self._condition:
             while self._suspension_counts.get(host, 0) > 0:
                 self._condition.wait()
 
-    def register(self, host: str, connection: socket.socket) -> bool:
+    async def wait_until_active_async(self, host: str) -> None:
+        while True:
+            with self._condition:
+                if self._suspension_counts.get(host, 0) == 0:
+                    return
+                waiter = asyncio.get_running_loop().create_future()
+                self._async_waiters.setdefault(host, set()).add(waiter)
+            try:
+                await waiter
+            finally:
+                with self._condition:
+                    waiters = self._async_waiters.get(host)
+                    if waiters is not None:
+                        waiters.discard(waiter)
+                        if not waiters:
+                            del self._async_waiters[host]
+
+    def register(self, host: str, connection: socket.socket | _AsyncSupervisorConnection) -> bool:
         with self._condition:
             if self._suspension_counts.get(host, 0) > 0:
                 return False
             self._connections.setdefault(host, set()).add(connection)
             return True
 
-    def unregister(self, host: str, connection: socket.socket) -> None:
+    def unregister(self, host: str, connection: socket.socket | _AsyncSupervisorConnection) -> None:
         with self._condition:
             connections = self._connections.get(host)
             if connections is None:
@@ -416,8 +512,9 @@ class _SupervisorConnectionCoordinator:
             self._suspension_counts[host] = self._suspension_counts.get(host, 0) + 1
             connections = tuple(self._connections.pop(host, set()))
         for connection in connections:
-            with suppress(OSError):
-                connection.shutdown(socket.SHUT_RDWR)
+            if isinstance(connection, socket.socket):
+                with suppress(OSError):
+                    connection.shutdown(socket.SHUT_RDWR)
             with suppress(OSError):
                 connection.close()
 
@@ -429,6 +526,13 @@ class _SupervisorConnectionCoordinator:
                 return
             self._suspension_counts.pop(host, None)
             self._condition.notify_all()
+            for waiter in self._async_waiters.pop(host, ()):
+                waiter.get_loop().call_soon_threadsafe(_resume_supervisor_waiter, waiter)
+
+
+def _resume_supervisor_waiter(waiter: asyncio.Future[None]) -> None:
+    if not waiter.done():
+        waiter.set_result(None)
 
 
 def _drain_supervisor_connections(

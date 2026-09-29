@@ -174,17 +174,17 @@ class BillingAllowanceRepository:
         period_started_at: datetime,
         terms_version: SubscriptionTermsVersion,
     ) -> None:
-        row = self.session.scalar(
-            select(BillingAllowancePeriodTable)
+        period_id = self.session.scalar(
+            update(BillingAllowancePeriodTable)
             .where(
                 BillingAllowancePeriodTable.user_id == user_id,
                 BillingAllowancePeriodTable.period_started_at == to_utc(period_started_at),
             )
-            .with_for_update()
+            .values(funded_terms_version=terms_version.value)
+            .returning(BillingAllowancePeriodTable.id)
         )
-        if row is None:
+        if period_id is None:
             raise NotFoundError("the funded subscription period does not exist")
-        row.funded_terms_version = terms_version.value
         self.session.flush()
 
     def confirm_credit(self, *, user_id: str, period_started_at: datetime, at: datetime) -> None:

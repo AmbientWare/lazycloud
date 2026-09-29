@@ -92,7 +92,8 @@ def test_function_dependency_waits_then_schedules_materialized_args(
             invocation=FunctionCloudpickleInvocation.from_bytes(
                 cloudpickle_bytes({"args": (2,), "kwargs": {}})
             ),
-        )
+        ),
+        stub=stub,
     )
     downstream_invocation = _serialize_invocation(
         (FunctionCall[int](task_id=upstream.task_id, client=TaskClient()),), {"right": 3}
@@ -102,7 +103,8 @@ def test_function_dependency_waits_then_schedules_materialized_args(
             stub_id=stub.id,
             invocation=downstream_invocation.payload,
             dependencies=downstream_invocation.dependencies,
-        )
+        ),
+        stub=stub,
     )
 
     assert upstream.exit_code == 0
@@ -126,7 +128,8 @@ def test_function_dependency_waits_then_schedules_materialized_args(
             stub_id=stub.id,
             claim_id=claim_id,
             container_id=scheduler.requests[0].container_id,
-        )
+        ),
+        workspace_id=stub.workspace_id,
     )
     assert claimed.task is not None
     assert claimed.task.task_id == upstream.task_id
@@ -138,7 +141,8 @@ def test_function_dependency_waits_then_schedules_materialized_args(
             claim_id=claim_id,
             container_id=scheduler.requests[0].container_id,
             result=cloudpickle_result,
-        )
+        ),
+        workspace_id=stub.workspace_id,
     )
 
     # Still one container. The upstream's is warm and free, so the released
@@ -202,7 +206,8 @@ def test_function_result_and_completion_reject_stale_container_attempt(
             invocation=FunctionCloudpickleInvocation.from_bytes(
                 cloudpickle_bytes({"args": (2,), "kwargs": {}})
             ),
-        )
+        ),
+        stub=stub,
     )
     task = isolated_services.tasks.transition(
         isolated_services.tasks.get(invoked.task_id),
@@ -215,15 +220,17 @@ def test_function_result_and_completion_reject_stale_container_attempt(
             container_id="stale-container",
             claim_id=str(uuid4()),
             result=FunctionCloudpickleResult.from_bytes(cloudpickle_bytes(4)),
-        )
+        ),
+        workspace_id=stub.workspace_id,
     )
     finished = service.finish_function_task(
         task.id,
         TaskStatus.Complete,
+        workspace_id=stub.workspace_id,
         container_id="stale-container",
         result=4,
         exit_code=0,
-    )
+    ).task
 
     assert not stored.stored
     assert stored.status is TaskStatus.Running
@@ -262,7 +269,8 @@ def test_function_cancel_stops_container_and_rejects_terminal_writes(
             invocation=FunctionCloudpickleInvocation.from_bytes(
                 cloudpickle_bytes({"args": (3,), "kwargs": {}})
             ),
-        )
+        ),
+        stub=stub,
     )
     assign_runtime(
         services.containers, services.scheduler_workers, scheduler.requests[0].container_id
@@ -273,7 +281,8 @@ def test_function_cancel_stops_container_and_rejects_terminal_writes(
             stub_id=stub.id,
             claim_id=claim_id,
             container_id=scheduler.requests[0].container_id,
-        )
+        ),
+        workspace_id=stub.workspace_id,
     )
     assert claimed.task is not None
     task = services.tasks.transition(
@@ -289,15 +298,17 @@ def test_function_cancel_stops_container_and_rejects_terminal_writes(
             container_id=task.container_id,
             result=FunctionCloudpickleResult.from_bytes(cloudpickle_bytes(9)),
             claim_id=claim_id,
-        )
+        ),
+        workspace_id=stub.workspace_id,
     )
     finished = service.finish_function_task(
         task.id,
         TaskStatus.Complete,
+        workspace_id=stub.workspace_id,
         container_id=task.container_id,
         result=9,
         exit_code=0,
-    )
+    ).task
 
     assert cancelled.status is TaskStatus.Cancelled
     assert services.containers.get(task.container_id).status is ContainerStatus.Stopped
@@ -329,7 +340,8 @@ def test_function_dependency_failure_fails_downstream_without_scheduling(
             invocation=FunctionCloudpickleInvocation.from_bytes(
                 cloudpickle_bytes({"args": (2,), "kwargs": {}})
             ),
-        )
+        ),
+        stub=stub,
     )
     downstream_invocation = _serialize_invocation(
         (FunctionCall[int](task_id=upstream.task_id, client=TaskClient()),), {}
@@ -339,7 +351,8 @@ def test_function_dependency_failure_fails_downstream_without_scheduling(
             stub_id=stub.id,
             invocation=downstream_invocation.payload,
             dependencies=downstream_invocation.dependencies,
-        )
+        ),
+        stub=stub,
     )
     upstream_task = isolated_services.tasks.get(upstream.task_id)
 

@@ -10,6 +10,7 @@ from database.repositories.identity import WorkspaceRepository
 from database.repositories.orchestration import AutoscalerStateRepository
 from database.repositories.storage import ObjectRepository, VolumeRepository
 from database.tables.apps import StubTable
+from database.tables.execution import TaskTable
 from database.tables.identity import WorkspaceTable
 from database.tables.orchestration import ContainerTable
 from shared.autoscaler_state import (
@@ -22,9 +23,9 @@ from shared.identity import WorkspaceStatus
 from shared.objects import ObjectWriteCommand
 from shared.tasks import Task, TaskStatus
 from shared.timestamps import utc_now
-from sqlalchemy import delete
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.engine import URL
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from database import (
     DatabaseApplicationName,
@@ -150,6 +151,44 @@ def test_postgresql_workspace_deletion_fences_owned_write_races(migrated_databas
         _remove_test_workspace(database, writer_first_workspace_id)
         _remove_test_workspace(database, deletion_first_workspace_id)
         database.dispose()
+
+
+def test_task_batch_rejects_unavailable_workspace_without_partial_writes(
+    database: DatabaseClient,
+) -> None:
+    with database.session() as session:
+        active = WorkspaceRepository(session).create(name="batch-active")
+        unavailable = WorkspaceRepository(session).create(name="batch-unavailable")
+        WorkspaceRepository(session).mark_deleting(unavailable)
+    for owner in (unavailable.id, str(uuid4())):
+        tasks = [
+            Task(id=str(uuid4()), name="active", workspace_id=active.id),
+            Task(id=str(uuid4()), name="unavailable", workspace_id=owner),
+            Task(id=str(uuid4()), name="cluster"),
+        ]
+        with database.session() as session:
+            with pytest.raises(NotFoundError, match="workspace not found"):
+                TaskRepository(session).upsert_many(tasks)
+            assert session.scalar(select(func.count()).select_from(TaskTable)) == 0
+
+
+def test_task_batch_holds_workspace_deletion_fence(database: DatabaseClient) -> None:
+    with database.session() as session:
+        workspace = WorkspaceRepository(session).create(name="batch-fenced")
+    task = Task(id=str(uuid4()), name="fenced", workspace_id=workspace.id)
+    with database.session() as writer:
+        TaskRepository(writer).upsert_many([task])
+        with pytest.raises(OperationalError, match="lock timeout"), database.session() as deletion:
+            deletion.execute(text("SET LOCAL lock_timeout = '100ms'"))
+            WorkspaceRepository(deletion).lock_for_deletion(workspace.id)
+    with database.session() as deletion:
+        workspaces = WorkspaceRepository(deletion)
+        workspaces.mark_deleting(workspaces.lock_for_deletion(workspace.id))
+        with pytest.raises(OperationalError, match="lock timeout"), database.session() as writer:
+            writer.execute(text("SET LOCAL lock_timeout = '100ms'"))
+            TaskRepository(writer).upsert_many([task])
+    with pytest.raises(NotFoundError, match="workspace not found"), database.session() as session:
+        TaskRepository(session).upsert_many([task])
 
 
 def test_postgresql_same_object_location_in_sibling_workspaces_does_not_serialize(
@@ -436,9 +475,9 @@ def test_postgresql_released_claim_returns_to_exactly_one_other_container(
     try:
         with database.session() as session:
             first = TaskRepository(session).claim_for_stub(
-                stub_id, container_id=container_ids[0], limit=1
+                stub_id, workspace_id=workspace_id, container_id=container_ids[0], limit=1
             )
-        assert [task.id for task in first] == [task_id]
+        assert [task.id for task in first.tasks] == [task_id]
 
         # Settled twice, as two independent recovery paths would.
         for _ in range(2):
@@ -452,11 +491,14 @@ def test_postgresql_released_claim_returns_to_exactly_one_other_container(
                 start.wait(timeout=10)
                 return [
                     task.id
-                    for task in TaskRepository(session).claim_for_stub(
+                    for task in TaskRepository(session)
+                    .claim_for_stub(
                         stub_id,
+                        workspace_id=workspace_id,
                         container_id=container_ids[container_index + 1],
                         limit=1,
                     )
+                    .tasks
                 ]
 
         with ThreadPoolExecutor(max_workers=contenders - 1) as pool:
@@ -537,7 +579,12 @@ def test_postgresql_completed_task_is_not_dragged_back_by_a_late_release(
             settled = tasks.get_across_workspaces(task_id)
             assert settled is not None
             assert settled.status is TaskStatus.Complete
-            assert tasks.claim_for_stub(stub_id, container_id=str(uuid4()), limit=1) == []
+            assert (
+                tasks.claim_for_stub(
+                    stub_id, workspace_id=workspace_id, container_id=str(uuid4()), limit=1
+                ).tasks
+                == []
+            )
     finally:
         _remove_test_workspace(database, workspace_id)
         database.dispose()
@@ -621,11 +668,14 @@ def test_postgresql_claimable_task_is_taken_by_exactly_one_container(
             start.wait(timeout=10)
             return [
                 task.id
-                for task in TaskRepository(session).claim_for_stub(
+                for task in TaskRepository(session)
+                .claim_for_stub(
                     stub_id,
+                    workspace_id=workspace_id,
                     container_id=container_ids[container_index],
                     limit=4,
                 )
+                .tasks
             ]
 
     try:

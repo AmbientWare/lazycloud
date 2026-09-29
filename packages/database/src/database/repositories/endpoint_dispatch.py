@@ -9,6 +9,7 @@ from database.records.endpoint_dispatch import (
     EndpointDispatchStateRecord,
 )
 from database.tables.endpoint_dispatch import EndpointDispatchTable
+from database.tables.execution import TaskTable
 from shared.errors import NotFoundError
 from shared.timestamps import to_utc, to_utc_or_none
 from sqlalchemy import and_, func, or_, select, update
@@ -22,10 +23,46 @@ class EndpointDispatchRepository:
     session: Session
 
     def create(self, record: EndpointDispatchStateRecord) -> EndpointDispatchStateRecord:
-        row = EndpointDispatchTable(**_values(record))
-        self.session.add(row)
+        return self.create_many((record,))[0]
+
+    def create_many(
+        self, records: Sequence[EndpointDispatchStateRecord]
+    ) -> list[EndpointDispatchStateRecord]:
+        rows = [EndpointDispatchTable(**_values(record)) for record in records]
+        self.session.add_all(rows)
         self.session.flush()
-        return _record(row)
+        return [_record(row) for row in rows]
+
+    def get_many_for_update(
+        self, task_ids: Sequence[str]
+    ) -> dict[str, EndpointDispatchStateRecord]:
+        if not task_ids:
+            return {}
+        return {
+            row.task_id: _record(row)
+            for row in self.session.scalars(
+                select(EndpointDispatchTable)
+                .where(EndpointDispatchTable.task_id.in_(task_ids))
+                .order_by(EndpointDispatchTable.task_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        }
+
+    def update_many(self, records: Sequence[EndpointDispatchStateRecord]) -> None:
+        if records:
+            self.session.execute(
+                update(EndpointDispatchTable),
+                [
+                    {
+                        "task_id": record.task_id,
+                        **_mutable_values(record),
+                        "updated_at": record.heartbeat_at,
+                    }
+                    for record in records
+                ],
+                execution_options={"synchronize_session": False},
+            )
 
     def update(self, record: EndpointDispatchStateRecord) -> EndpointDispatchStateRecord:
         row = self.session.scalars(
@@ -112,6 +149,29 @@ class EndpointDispatchRepository:
             for container_id, count in rows
             if container_id is not None
         }
+
+    def inflight_count(self, container_id: str, *, at: datetime) -> int:
+        return int(
+            self.session.scalar(
+                select(func.count()).where(
+                    EndpointDispatchTable.container_id == container_id,
+                    EndpointDispatchTable.status == "inflight",
+                    EndpointDispatchTable.expires_at > at,
+                )
+            )
+            or 0
+        )
+
+    def cancelled_tasks(self, task_ids: Sequence[str]) -> frozenset[str]:
+        if not task_ids:
+            return frozenset()
+        return frozenset(
+            self.session.scalars(
+                select(TaskTable.id).where(
+                    TaskTable.id.in_(task_ids), TaskTable.status == "cancelled"
+                )
+            )
+        )
 
     def observations_by_stub(
         self,

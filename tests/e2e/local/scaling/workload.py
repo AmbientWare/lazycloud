@@ -19,7 +19,7 @@ MACHINE = "compose-agent"
     memory="512Mi",
     concurrency=4,
     keep_warm=180,
-    autoscaler=Autoscaler(max_containers=4),
+    autoscaler=Autoscaler(max_containers=2),
     retries=0,
 )
 def interactive(sequence: int, delay: float = 0.02) -> int:
@@ -52,7 +52,7 @@ def nested(sequence: int) -> int:
     memory="256Mi",
     concurrency=16,
     keep_warm=180,
-    autoscaler=Autoscaler(max_containers=2),
+    autoscaler=Autoscaler(max_containers=1),
 )
 def echo(sequence: int) -> dict[str, int]:
     return {"sequence": sequence}

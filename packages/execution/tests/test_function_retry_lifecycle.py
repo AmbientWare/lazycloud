@@ -64,7 +64,8 @@ def test_function_retry_reuses_a_warm_container_and_leaves_replacement_to_the_au
         FunctionInvokeBody(
             stub_id=stub.id,
             invocation=FunctionJsonInvocation(args=[1]),
-        )
+        ),
+        stub=stub,
     )
     first_container_id = scheduler.requests[0].container_id
     isolated_services.tasks.start(invoked.task_id, container_id=first_container_id)
@@ -72,10 +73,11 @@ def test_function_retry_reuses_a_warm_container_and_leaves_replacement_to_the_au
     retry = functions.finish_function_task(
         invoked.task_id,
         TaskStatus.Failed,
+        workspace_id=stub.workspace_id,
         container_id=first_container_id,
         error="retry",
         exit_code=1,
-    )
+    ).task
 
     assert retry.status is TaskStatus.Retry
     pending = isolated_services.tasks.progress.read([retry])[retry.id]

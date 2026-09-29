@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from uuid import uuid4
 
 import pytest
@@ -20,6 +21,56 @@ from shared.function_payloads import FunctionJsonInvocation
 from shared.http.functions import FunctionInvokeBody
 from sqlalchemy import func, select
 from tests.workspaces import workspace_owner_user_id
+
+
+@pytest.mark.anyio
+async def test_concurrent_function_admission_consumes_each_pending_slot(
+    async_services: ApiServices,
+) -> None:
+    stub = ControlPlaneService(async_services.context).create_stub(
+        "bounded-admission",
+        kind=StubKind.Function,
+        handler="main:hello",
+        config={"max_pending_tasks": 5},
+    )
+    with async_services.context.database.session() as session:
+        ContainerRepository(session).upsert(
+            ContainerRecord(
+                id=str(uuid4()),
+                name="warm",
+                image="python",
+                command=[],
+                workspace_id=stub.workspace_id,
+                stub_id=stub.id,
+                status=ContainerStatus.Running,
+            )
+        )
+    functions = FunctionControlService(
+        async_services, async_database=async_services.require_async_io().database
+    )
+    responses = await asyncio.gather(
+        *(
+            functions.function_invoke_async(
+                FunctionInvokeBody(stub_id=stub.id, invocation=FunctionJsonInvocation(args=[i])),
+                workspace_id=stub.workspace_id,
+                stub=stub,
+            )
+            for i in range(8)
+        ),
+        return_exceptions=True,
+    )
+    accepted = [response for response in responses if not isinstance(response, BaseException)]
+    assert len(accepted) == 5
+    assert len({response.task_id for response in accepted}) == 5
+    assert all(not response.done for response in accepted)
+    assert sum(isinstance(response, CapacityLimitReachedError) for response in responses) == 3
+    with async_services.context.database.session() as session:
+        assert (
+            session.scalar(
+                select(func.count()).select_from(TaskTable).where(TaskTable.stub_id == stub.id)
+            )
+            == 5
+        )
 
 
 def test_invoking_a_function_past_due_refuses_and_queues_nothing(
@@ -54,7 +105,8 @@ def test_invoking_a_function_past_due_refuses_and_queues_nothing(
             FunctionInvokeBody(
                 stub_id=stub.id,
                 invocation=FunctionJsonInvocation(args=[1]),
-            )
+            ),
+            stub=stub,
         )
     assert _row_counts(isolated_services, stub.workspace_id) == before
 
@@ -75,7 +127,8 @@ def test_free_function_pinned_placement_refuses_before_creating_work(
     before = _row_counts(isolated_services, stub.workspace_id)
     with pytest.raises(PaymentRequiredError, match="selection requires the Team plan"):
         FunctionControlService(isolated_services).function_invoke(
-            FunctionInvokeBody(stub_id=stub.id, invocation=FunctionJsonInvocation(args=[]))
+            FunctionInvokeBody(stub_id=stub.id, invocation=FunctionJsonInvocation(args=[])),
+            stub=stub,
         )
     assert _row_counts(isolated_services, stub.workspace_id) == before
 
@@ -112,14 +165,15 @@ def test_capacity_limit_allows_warm_invocation_but_refuses_cold_without_a_task(
     functions = FunctionControlService(isolated_services)
     before = _row_counts(isolated_services, warm.workspace_id)
     invoked = functions.function_invoke(
-        FunctionInvokeBody(stub_id=warm.id, invocation=FunctionJsonInvocation(args=[]))
+        FunctionInvokeBody(stub_id=warm.id, invocation=FunctionJsonInvocation(args=[])), stub=warm
     )
     assert invoked.task_id
     after_warm = _row_counts(isolated_services, warm.workspace_id)
     assert after_warm == (before[0] + 1, before[1])
     with pytest.raises(CapacityLimitReachedError):
         functions.function_invoke(
-            FunctionInvokeBody(stub_id=cold.id, invocation=FunctionJsonInvocation(args=[]))
+            FunctionInvokeBody(stub_id=cold.id, invocation=FunctionJsonInvocation(args=[])),
+            stub=cold,
         )
     assert _row_counts(isolated_services, warm.workspace_id) == after_warm
 
