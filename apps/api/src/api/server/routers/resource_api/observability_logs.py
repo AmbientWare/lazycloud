@@ -22,9 +22,9 @@ from shared.http.observability import (
 from shared.realtime.streams import LogStreamQuery
 
 from api.server.auth import read_workspace
-from api.server.dependencies import current_services
+from api.server.dependencies import management_services
 from api.server.routers.resource_api.common import _management, _parsed_time
-from api.server.services import ApiServices
+from api.server.services import ManagementServiceCore
 from api.server.sse import (
     SseItem,
     sse_response_items,
@@ -60,7 +60,7 @@ def api_v1_stream_logs(
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
     *,
     workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> StreamingResponse:
     request = _log_query_request(
         workspace_id=workspace_id,
@@ -122,7 +122,7 @@ def api_v1_get_logs(
     cursor: str | None = None,
     *,
     workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> LogQueryResponse:
     request = _log_query_request(
         workspace_id=workspace_id,
@@ -222,7 +222,7 @@ def _log_stream_query(
 
 
 def _resolve_log_query_request(
-    services: ApiServices,
+    services: ManagementServiceCore,
     request: LogQueryRequest,
 ) -> LogQueryRequest:
     if request.object_type is not LogObjectType.Deployment or not request.object_id:
@@ -286,7 +286,7 @@ def _effective_wait_seconds(
 
 
 def _redis_log_response(
-    services: ApiServices,
+    services: ManagementServiceCore,
     query: LogStreamQuery,
     *,
     max_events: int,

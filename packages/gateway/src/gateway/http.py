@@ -205,6 +205,9 @@ class AgentLogRecord(HttpModel):
 class AgentMetricSnapshot(HttpModel):
     timestamp_unix_nano: int = 0
     cpu_utilization_pct: float = 0.0
+    cpu_pressure_pct: float | None = Field(default=None, ge=0, le=100, allow_inf_nan=False)
+    io_pressure_pct: float | None = Field(default=None, ge=0, le=100, allow_inf_nan=False)
+    memory_pressure_pct: float | None = Field(default=None, ge=0, le=100, allow_inf_nan=False)
     memory_used_mb: int = 0
     memory_total_mb: int = 0
     memory_utilization_pct: float = 0.0

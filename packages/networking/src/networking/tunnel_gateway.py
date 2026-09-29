@@ -24,6 +24,7 @@ from shared.errors import DomainError
 from shared.http.agent_identity import AgentTunnelIdentity, TunnelServiceRole
 from shared.http.agent_tunnel import (
     TUNNEL_HEARTBEAT_SECONDS,
+    TUNNEL_MAX_ROUTE_STREAMS,
     TUNNEL_MAX_STREAMS,
     TUNNEL_OPEN_TIMEOUT_SECONDS,
     TunnelCommand,
@@ -225,7 +226,10 @@ class AgentTunnelGateway:
         except DomainError as exc:
             await context.abort(grpc.StatusCode.PERMISSION_DENIED, exc.message)
         owner = _current_task()
-        if len(session.streams) >= TUNNEL_MAX_STREAMS:
+        if (
+            len(session.streams) >= TUNNEL_MAX_STREAMS
+            or len(session.pending) >= TUNNEL_MAX_ROUTE_STREAMS
+        ):
             await context.abort(grpc.StatusCode.RESOURCE_EXHAUSTED, "Agent stream limit reached")
         session.streams.add(owner)
         loop = asyncio.get_running_loop()

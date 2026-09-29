@@ -49,6 +49,7 @@ from control.deployment_cleanup import (
 )
 from control.events import ControlEventEmitter
 from control.placement import PlacementResolver
+from control.readers import DatabaseDeploymentReader
 from control.tcp_ingress import require_tcp_ingress
 
 
@@ -334,21 +335,7 @@ class DeploymentService:
         return deployments
 
     def get(self, deployment_id_or_name: str) -> Deployment:
-        """Operator/system resolution by id or name across workspaces."""
-        with self.context.database.session() as session:
-            repository = DeploymentRepository(session)
-            record = repository.get_across_workspaces(deployment_id_or_name)
-            if record is not None:
-                return record
-            matches = [
-                item
-                for item in repository.list_across_workspaces()
-                if item.name == deployment_id_or_name
-            ]
-        if not matches:
-            msg = f"deployment not found: {deployment_id_or_name}"
-            raise NotFoundError(msg)
-        return max(matches, key=lambda item: item.version)
+        return DatabaseDeploymentReader(self.context).get(deployment_id_or_name)
 
     def delete(self, deployment_id: str, *, workspace: str = "default") -> Deployment:
         """Delete the workload this deployment is a version of, every version at once."""

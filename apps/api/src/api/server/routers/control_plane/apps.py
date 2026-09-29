@@ -24,9 +24,9 @@ from shared.http.stubs import StubResponse
 from shared.identity import AuthScope
 
 from api.server.auth import read_token, read_workspace, write_workspace
-from api.server.dependencies import current_services
+from api.server.dependencies import management_services
 from api.server.response_mapping import actionable_deployment_response
-from api.server.services import ApiServices
+from api.server.services import ManagementServiceCore
 
 router = APIRouter()
 
@@ -108,7 +108,7 @@ def list_apps(
     *,
     workspace_id: read_workspace,
     token: read_token,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> AppListResponse:
     return _app_list_response(
         services.apps.list(workspace=workspace_id, active=active),
@@ -125,7 +125,7 @@ def list_apps(
 def create_app_record(
     request: AppCreateRequest,
     workspace_id: write_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> AppResponse:
     return _app_response(
         services.apps.create(
@@ -147,7 +147,7 @@ def create_app_record(
 def list_app_summaries(
     workspace_id: read_workspace,
     token: read_token,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> AppSummaryListResponse:
     can_write = token_has_scope(token, AuthScope.Write)
     management = ManagementService(services)
@@ -189,7 +189,7 @@ def get_app(
     app_id: str,
     workspace_id: read_workspace,
     token: read_token,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> AppResponse:
     return _app_response(
         services.apps.get(app_id, workspace=workspace_id),
@@ -205,7 +205,7 @@ def get_app(
 def pause_app(
     app_id: str,
     workspace_id: write_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> AppResponse:
     return _app_response(
         services.apps.pause(app_id, workspace=workspace_id),
@@ -221,7 +221,7 @@ def pause_app(
 def resume_app(
     app_id: str,
     workspace_id: write_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> AppResponse:
     return _app_response(
         services.apps.resume(app_id, workspace=workspace_id),
@@ -238,6 +238,6 @@ def resume_app(
 def delete_app(
     app_id: str,
     workspace_id: write_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> None:
     services.apps.delete(app_id, workspace=workspace_id)

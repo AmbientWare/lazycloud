@@ -16,8 +16,8 @@ from shared.errors import InvalidInputError
 from shared.payments import PaymentEvent
 from shared.timestamps import utc_now
 
-from api.server.dependencies import current_services
-from api.server.services import ApiServices
+from api.server.dependencies import management_services
+from api.server.services import ManagementServiceCore
 from billing import BillingWebhookService
 from notifications import DeliveryReport, record_delivery
 
@@ -35,7 +35,7 @@ approaches it.
 
 async def _stripe_event(
     request: Request,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> PaymentEvent:
     settings = services.stripe_settings
     if not settings.webhooks_configured:
@@ -68,7 +68,7 @@ async def _stripe_event(
 )
 def receive_stripe_webhook(
     event: Annotated[PaymentEvent, Depends(_stripe_event)],
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> Response:
     """Take a delivery from the payment provider.
 
@@ -94,7 +94,7 @@ def receive_stripe_webhook(
 
 async def _resend_event(
     request: Request,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> ResendDeliveryEvent | None:
     settings = services.resend_settings
     if not settings.webhooks_configured:
@@ -132,7 +132,7 @@ async def _resend_event(
 )
 def receive_resend_webhook(
     event: Annotated[ResendDeliveryEvent | None, Depends(_resend_event)],
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> Response:
     """Take a delivery report from the email provider.
 

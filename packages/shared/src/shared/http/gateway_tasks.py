@@ -6,6 +6,7 @@ from pydantic import Field
 
 from shared.bytes_transport import decode_bytes
 from shared.http.base import HttpModel
+from shared.http.execution_entry import ExecutionEntryEvidence
 from shared.tasks import TaskStatus
 
 
@@ -38,6 +39,8 @@ class EndTaskRequest(HttpModel):
     result_base64: str = ""
     error: str | None = None
     retryable: bool = True
+    execution_entry: ExecutionEntryEvidence | None = None
+    claim_id: str | None = None
 
     def result_bytes(self) -> bytes:
         return decode_bytes(self.result_base64)

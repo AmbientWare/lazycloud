@@ -332,6 +332,12 @@ class ContainerTable(IdTable, DatabaseBase):
             "scheduling_disk_bytes >= 0 AND scheduling_disk_count >= 0",
             name="ck_containers_scheduling_disks",
         ),
+        CheckConstraint(
+            "scheduling_requested_at IS NULL OR "
+            "(scheduling_fairness_account_id IS NOT NULL "
+            "AND length(scheduling_fairness_account_id) > 0)",
+            name="ck_containers_scheduling_fairness",
+        ),
     )
 
     workspace_id: Mapped[str] = mapped_column(
@@ -401,6 +407,7 @@ class ContainerTable(IdTable, DatabaseBase):
     gpu: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list)
     timeout_seconds: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     scheduling_stub_id: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    scheduling_fairness_account_id: Mapped[str | None] = mapped_column(Text)
     scheduling_deployment_id: Mapped[str] = mapped_column(Text, nullable=False, default="")
     scheduling_cpu_millicores: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     scheduling_required_worker_id: Mapped[str] = mapped_column(Text, nullable=False, default="")

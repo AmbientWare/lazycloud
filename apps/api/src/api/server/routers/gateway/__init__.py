@@ -12,6 +12,7 @@ from api.server.routers.gateway import (
 router = APIRouter()
 router.include_router(auth_objects.router)
 router.include_router(containers_tasks.router)
+router.include_router(containers_tasks.runtime_router)
 router.include_router(stubs_deployments.router)
 router.include_router(agents.router)
 

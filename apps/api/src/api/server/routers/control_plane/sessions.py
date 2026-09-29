@@ -17,9 +17,9 @@ from shared.http.workspaces import workspace_response
 from shared.urls import normalize_return_path
 
 from api.server.auth import read_token
-from api.server.dependencies import current_services, require_user_principal
+from api.server.dependencies import management_services, require_user_principal
 from api.server.routers.control_plane.users import user_response
-from api.server.services import ApiServices
+from api.server.services import ManagementServiceCore
 
 LOGGER = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ _SIGN_IN_COMPLETE_PATH = "/callback"
 )
 def start_github_sign_in(
     return_to: str = "",
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> RedirectResponse:
     """Send the browser to GitHub, remembering where to put them afterwards.
 
@@ -87,7 +87,7 @@ def complete_github_sign_in(
     code: str = "",
     state: str = "",
     error: str = "",
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> RedirectResponse:
     """Land the browser back here with a single-use code it can trade for a session.
 
@@ -146,7 +146,7 @@ def sign_in(
     request: Request,
     payload: SessionCreateRequest,
     response: Response,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> SessionResponse:
     """Redeem the single-use sign-in code for the session credential.
 
@@ -173,7 +173,7 @@ def sign_in(
 )
 def get_current_session(
     token: read_token,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> CurrentSessionResponse:
     user_id = require_user_principal(token)
     user = services.users.get(user_id)
@@ -190,7 +190,7 @@ def get_current_session(
 )
 def sign_out(
     token: read_token,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> Response:
     """Revoke the credential that made this request, and nothing else.
 

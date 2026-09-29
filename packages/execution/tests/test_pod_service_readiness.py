@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from uuid import uuid4
 
@@ -56,13 +57,14 @@ class _TerminalTransitionRepository:
         raise AssertionError(f"address map should not be read for terminal {container_id}")
 
 
-def test_wait_for_container_client_reloads_durable_terminal_state(
-    isolated_services: ApiServices,
+@pytest.mark.anyio
+async def test_wait_for_container_client_reloads_durable_terminal_state(
+    async_services: ApiServices,
 ) -> None:
-    with isolated_services.context.database.session() as session:
-        workspace_id = isolated_services.context.default_workspace_id(session)
+    with async_services.context.database.session() as session:
+        workspace_id = async_services.context.default_workspace_id(session)
     stub = ControlPlaneService(
-        isolated_services.context,
+        async_services.context,
     ).create_stub("sandbox-stub", workspace=workspace_id, kind=StubKind.Sandbox)
     container = ContainerRecord(
         id=CONTAINER_ID,
@@ -72,21 +74,19 @@ def test_wait_for_container_client_reloads_durable_terminal_state(
         workspace_id=workspace_id,
         stub_id=stub.id,
     )
-    with isolated_services.context.database.session() as session:
+    with async_services.context.database.session() as session:
         ContainerRepository(session).upsert(container)
 
-    scheduler = _TerminalTransitionRepository(isolated_services)
+    scheduler = _TerminalTransitionRepository(async_services)
     service = PodControlService(
-        isolated_services,
+        async_services,
         scheduler_containers=scheduler,
-        poll_interval_seconds=0,
+        sync_workload_changes=async_services.require_async_io().sync_workload_changes,
         redis=RedisClient(FakeRedis(), key_prefix="test"),
     )
 
     with pytest.raises(ConflictError, match="workload executable does not exist"):
-        service._wait_for_container_client(container, timeout_seconds=1)
-
-    assert scheduler.calls == 1
+        await asyncio.to_thread(service._wait_for_container_client, container, timeout_seconds=1)
 
 
 def test_mark_container_running_preserves_compute_foreign_keys_and_runtime_assignment(

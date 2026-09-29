@@ -99,11 +99,14 @@ class FunctionControlClient:
         task_id: str,
         container_id: str,
         result: FunctionResultPayload,
+        *,
+        claim_id: str,
     ) -> FunctionSetResultResponse:
         body = FunctionSetResultBody(
             task_id=task_id,
             container_id=container_id,
             result=result,
+            claim_id=claim_id,
         )
         return _validate_response(
             FunctionSetResultResponse,

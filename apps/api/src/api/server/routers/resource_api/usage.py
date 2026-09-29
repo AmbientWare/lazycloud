@@ -19,7 +19,7 @@ from shared.usage_query import UsageQuery
 from api.server.auth import read_workspace
 from api.server.dependencies import current_services
 from api.server.routers.resource_api.common import _parsed_time, usage_cost_list_response
-from api.server.services import ApiServices
+from api.server.services import ApiServiceCore
 
 router = APIRouter()
 
@@ -39,7 +39,7 @@ def usage_costs(
     cursor: str | None = None,
     *,
     workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ApiServiceCore = Depends(current_services),
 ) -> UsageCostListResponse:
     """What this workspace's usage cost, attributed to what ran it.
 
@@ -90,7 +90,7 @@ def usage_records(
     cursor: str | None = None,
     *,
     workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ApiServiceCore = Depends(current_services),
 ) -> UsageRecordListResponse:
     page = services.usage.list_page(
         _usage_query(
@@ -125,7 +125,7 @@ def usage_summary(
     end: str | None = None,
     *,
     workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ApiServiceCore = Depends(current_services),
 ) -> UsageSummaryResponse:
     rows = services.usage.aggregate(
         query=_usage_query(

@@ -85,8 +85,7 @@ def test_container_resource_mounts_require_workspace_storage_when_workspace_has_
     # tier, so an unprovisioned workspace must fail rather than mount local disk.
     with pytest.raises(UpstreamUnavailableError, match="no storage provisioned"):
         container_resource_mounts_require_workspace_storage(
-            context=service_context,
-            workspace_id=unprovisioned.id,
+            workspace=unprovisioned,
             mounts=mounts,
         )
 
@@ -101,8 +100,7 @@ def test_container_resource_mounts_require_workspace_storage_when_workspace_has_
     )
 
     assert container_resource_mounts_require_workspace_storage(
-        context=service_context,
-        workspace_id=unprovisioned.id,
+        workspace=control.get_workspace(unprovisioned.id),
         mounts=mounts,
     )
 
@@ -119,8 +117,7 @@ def test_container_resource_mounts_require_workspace_storage_when_workspace_has_
         volumes=[{"id": "canonical", "mount_path": "/volumes/canonical"}],
     )
     assert container_resource_mounts_require_workspace_storage(
-        context=service_context,
-        workspace_id=unprovisioned.id,
+        workspace=control.get_workspace(unprovisioned.id),
         mounts=volume_only_mounts,
     )
 

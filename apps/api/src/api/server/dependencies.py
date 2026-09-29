@@ -21,7 +21,16 @@ from shared.identity import (
 from starlette.requests import HTTPConnection
 
 from api.server.host_routing import invoke_host_workspace_id
-from api.server.services import ApiServices
+from api.server.services import (
+    ApiRoutes,
+    ApiServiceCore,
+    ApiServices,
+    ExecutionRoutes,
+    ManagementRoutes,
+    ManagementServiceCore,
+    RuntimeRoutes,
+    RuntimeServiceCore,
+)
 
 _bearer = HTTPBearer(auto_error=False)
 AuthorizationCredentials = Annotated[HTTPAuthorizationCredentials | None, Security(_bearer)]
@@ -35,40 +44,47 @@ RequiredTokenDependency = Callable[..., Awaitable[AuthTokenRecord]]
 RequiredPrincipalDependency = Callable[..., Awaitable[AuthorizedPrincipal]]
 
 
-class _ApiServicesState(Protocol):
-    api_services: ApiServices
+class _ApiServiceCoreState(Protocol):
+    api_services: ApiServiceCore
 
 
-class _ApiServicesApplication(Protocol):
+class _ApiServiceCoreApplication(Protocol):
     @property
-    def state(self) -> _ApiServicesState: ...
+    def state(self) -> _ApiServiceCoreState: ...
 
 
-class _ApiServicesConnection(Protocol):
+class _ApiServiceCoreConnection(Protocol):
     @property
-    def app(self) -> _ApiServicesApplication: ...
+    def app(self) -> _ApiServiceCoreApplication: ...
 
 
-def api_services(connection: HTTPConnection) -> ApiServices:
+def api_services(connection: HTTPConnection) -> ApiServiceCore:
     return _api_services_from_connection(connection)
 
 
-def websocket_api_services(websocket: WebSocket) -> ApiServices:
+def route_services(connection: HTTPConnection) -> ApiRoutes:
+    routes = connection.app.state.api_routes
+    if not isinstance(routes, (ManagementRoutes, ExecutionRoutes, RuntimeRoutes, ApiServices)):
+        raise RuntimeError("FastAPI app is missing route services")
+    return routes
+
+
+def websocket_api_services(websocket: WebSocket) -> ApiServiceCore:
     return _api_services_from_connection(websocket)
 
 
-def _api_services_from_connection(connection: _ApiServicesConnection) -> ApiServices:
+def _api_services_from_connection(connection: _ApiServiceCoreConnection) -> ApiServiceCore:
     services = connection.app.state.api_services
-    if not isinstance(services, ApiServices):
+    if not isinstance(services, ApiServiceCore):
         raise RuntimeError("FastAPI app is missing API services")
     return services
 
 
-def current_services(services: Annotated[ApiServices, Depends(api_services)]) -> ApiServices:
+def current_services(services: Annotated[ApiServiceCore, Depends(api_services)]) -> ApiServiceCore:
     return services
 
 
-def canonical_workspace_id(services: ApiServices, workspace: str = "default") -> str:
+def canonical_workspace_id(services: ApiServiceCore, workspace: str = "default") -> str:
     try:
         record = ControlPlaneService(services.context).get_workspace(workspace)
         if record.kind is WorkspaceKind.Platform:
@@ -79,7 +95,7 @@ def canonical_workspace_id(services: ApiServices, workspace: str = "default") ->
 
 
 async def current_workspace_id(
-    services: Annotated[ApiServices, Depends(current_services)],
+    services: Annotated[ApiServiceCore, Depends(current_services)],
     workspace: str = "default",
 ) -> str:
     try:
@@ -93,7 +109,7 @@ async def current_workspace_id(
     return record.id
 
 
-async def _unnamed_workspace(services: ApiServices, token: AuthTokenRecord) -> str:
+async def _unnamed_workspace(services: ApiServiceCore, token: AuthTokenRecord) -> str:
     """The workspace a request meant when it named none.
 
     Every account here is given its own, so a workspace literally called
@@ -115,7 +131,7 @@ def require_workspace_scope(
     strict: bool = False,
 ) -> WorkspaceScopeDependency:
     async def dependency(
-        services: Annotated[ApiServices, Depends(current_services)],
+        services: Annotated[ApiServiceCore, Depends(current_services)],
         connection: HTTPConnection,
         credentials: AuthorizationCredentials = None,
         workspace: str | None = None,
@@ -137,9 +153,25 @@ def require_workspace_scope(
     return dependency
 
 
+def management_services(
+    services: Annotated[ApiServiceCore, Depends(api_services)],
+) -> ManagementServiceCore:
+    if not isinstance(services, ManagementServiceCore):
+        raise RuntimeError("management services are not owned by this API")
+    return services
+
+
+def runtime_services(
+    services: Annotated[ApiServiceCore, Depends(api_services)],
+) -> RuntimeServiceCore:
+    if not isinstance(services, RuntimeServiceCore):
+        raise RuntimeError("runtime services are not owned by this API")
+    return services
+
+
 def require_transfer_scope(scope: AuthScope) -> WorkspaceScopeDependency:
     async def dependency(
-        services: Annotated[ApiServices, Depends(current_services)],
+        services: Annotated[ApiServiceCore, Depends(current_services)],
         workspace_id: str = Depends(require_workspace_scope(scope)),
     ) -> str:
         await services.require_async_io().database.run_transaction(
@@ -154,7 +186,7 @@ def require_transfer_scope(scope: AuthScope) -> WorkspaceScopeDependency:
 
 
 def authorize_token_workspace(
-    services: ApiServices,
+    services: ApiServiceCore,
     token: AuthTokenRecord,
     workspace: str,
     action: AuthScope,
@@ -188,7 +220,7 @@ def authorize_token_workspace(
 
 
 async def authorize_token_workspace_async(
-    services: ApiServices,
+    services: ApiServiceCore,
     token: AuthTokenRecord,
     workspace: str,
     action: AuthScope,
@@ -258,8 +290,8 @@ def require_user_principal(token: AuthTokenRecord) -> str:
 
 
 def current_websocket_services(
-    services: Annotated[ApiServices, Depends(websocket_api_services)],
-) -> ApiServices:
+    services: Annotated[ApiServiceCore, Depends(websocket_api_services)],
+) -> ApiServiceCore:
     return services
 
 
@@ -276,7 +308,7 @@ def websocket_authorization_header(websocket: WebSocket) -> str | None:
 
 
 async def authorize_websocket(
-    services: ApiServices,
+    services: ApiServiceCore,
     websocket: WebSocket,
 ) -> AuthorizedPrincipal:
     try:
@@ -298,7 +330,7 @@ async def authorize_websocket(
 
 
 async def websocket_workspace(
-    services: ApiServices,
+    services: ApiServiceCore,
     websocket: WebSocket,
     principal: AuthorizedPrincipal,
     scope: AuthScope,
@@ -328,7 +360,7 @@ async def websocket_workspace(
         ) from exc
 
 
-async def authorize_websocket_workspace(services: ApiServices, websocket: WebSocket) -> str:
+async def authorize_websocket_workspace(services: ApiServiceCore, websocket: WebSocket) -> str:
     return await websocket_workspace(
         services,
         websocket,
@@ -338,7 +370,7 @@ async def authorize_websocket_workspace(services: ApiServices, websocket: WebSoc
 
 
 async def authorize_principal(
-    services: ApiServices,
+    services: ApiServiceCore,
     credentials: HTTPAuthorizationCredentials | None,
     scope: AuthScope,
     *,
@@ -361,7 +393,7 @@ async def authorize_principal(
 
 
 async def require_principal(
-    services: ApiServices,
+    services: ApiServiceCore,
     credentials: HTTPAuthorizationCredentials | None,
     scope: AuthScope,
 ) -> AuthorizedPrincipal:
@@ -372,7 +404,7 @@ async def require_principal(
 
 
 async def authorize_services(
-    services: ApiServices,
+    services: ApiServiceCore,
     credentials: HTTPAuthorizationCredentials | None,
     scope: AuthScope,
     *,
@@ -395,7 +427,7 @@ def require_app_scope(
     allow_if_no_tokens: bool = False,
 ) -> AuthScopeDependency:
     async def dependency(
-        services: Annotated[ApiServices, Depends(current_services)],
+        services: Annotated[ApiServiceCore, Depends(current_services)],
         credentials: AuthorizationCredentials = None,
     ) -> None:
         _ = await authorize_services(
@@ -414,7 +446,7 @@ def require_app_token(
     allow_if_no_tokens: bool = False,
 ) -> OptionalTokenDependency:
     async def dependency(
-        services: Annotated[ApiServices, Depends(current_services)],
+        services: Annotated[ApiServiceCore, Depends(current_services)],
         credentials: AuthorizationCredentials = None,
     ) -> AuthTokenRecord | None:
         return await authorize_services(
@@ -431,7 +463,7 @@ def require_workspace_token(
     scope: AuthScope,
 ) -> RequiredTokenDependency:
     async def dependency(
-        services: Annotated[ApiServices, Depends(current_services)],
+        services: Annotated[ApiServiceCore, Depends(current_services)],
         credentials: AuthorizationCredentials = None,
     ) -> AuthTokenRecord:
         return (await require_principal(services, credentials, scope)).token
@@ -445,7 +477,7 @@ def require_workspace_principal(
     """For a route that authorizes a workspace named in its path rather than its query."""
 
     async def dependency(
-        services: Annotated[ApiServices, Depends(current_services)],
+        services: Annotated[ApiServiceCore, Depends(current_services)],
         credentials: AuthorizationCredentials = None,
     ) -> AuthorizedPrincipal:
         return await require_principal(services, credentials, scope)
@@ -457,7 +489,7 @@ def require_user_scope(scope: AuthScope) -> WorkspaceScopeDependency:
     """Authorize the acting account for a resource a person owns."""
 
     async def dependency(
-        services: Annotated[ApiServices, Depends(current_services)],
+        services: Annotated[ApiServiceCore, Depends(current_services)],
         credentials: AuthorizationCredentials = None,
     ) -> str:
         principal = await require_principal(services, credentials, scope)
@@ -472,7 +504,7 @@ def require_app_requirement(
     allow_if_no_tokens: bool = False,
 ) -> AuthScopeDependency:
     async def dependency(
-        services: Annotated[ApiServices, Depends(current_services)],
+        services: Annotated[ApiServiceCore, Depends(current_services)],
         credentials: AuthorizationCredentials = None,
     ) -> None:
         _ = await authorize_services(

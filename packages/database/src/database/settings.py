@@ -10,7 +10,10 @@ from shared.deployment_settings import MissingDeploymentSettingError
 
 class DatabaseApplicationName(StrEnum):
     Api = "lazycloud-api"
+    ExecutionApi = "lazycloud-execution-api"
+    RuntimeApi = "lazycloud-runtime-api"
     Scheduler = "lazycloud-scheduler"
+    FleetController = "lazycloud-fleet-controller"
     ConnectionGateway = "lazycloud-connection-gateway"
     Admin = "lazycloud-admin"
     Bootstrap = "lazycloud-database-bootstrap"

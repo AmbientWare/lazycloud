@@ -48,10 +48,16 @@ def test_unmodified_private_image_uses_ephemeral_credentials_during_build(
     )
 
     plan = plan_image_build_container_request(
-        request, workspace_id="workspace-1", placement=Placement.platform()
+        request,
+        fairness_account_id="test-account",
+        workspace_id="workspace-1",
+        placement=Placement.platform(),
     )
     concurrent = plan_image_build_container_request(
-        request, workspace_id="workspace-1", placement=Placement.platform()
+        request,
+        fairness_account_id="test-account",
+        workspace_id="workspace-1",
+        placement=Placement.platform(),
     )
     metadata = plan.credential_metadata
     payload_json = json.dumps(plan.scheduler_request.payload, sort_keys=True)

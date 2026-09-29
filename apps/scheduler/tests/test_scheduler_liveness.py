@@ -3,8 +3,8 @@ from __future__ import annotations
 import threading
 from pathlib import Path
 
-from scheduler.service import SchedulerRunResult, SchedulerWorkloadControls
-from scheduler_app.loops import run_loop, start_scheduler_loops
+from scheduler.reconciliation import SchedulerRunResult
+from scheduler_app.loops import run_loop
 from shared.process_liveness import HeartbeatFile
 
 
@@ -85,45 +85,3 @@ def test_one_loop_failing_does_not_stop_the_others(tmp_path: Path) -> None:
 
     assert healthy_passes >= 3
     assert healthy_file.exists()
-
-
-def test_setting_the_stop_event_ends_every_loop() -> None:
-    """What a signal handler does, and the whole of what teardown depends on.
-
-    Before this the process had no stop condition at all, so the SIGTERM
-    Kubernetes sends killed it where it stood: no telemetry flush, no join, no
-    lease released.
-    """
-
-    class _Scheduler:
-        def __init__(self) -> None:
-            self.workloads = SchedulerWorkloadControls()
-
-        def run_placement_pass(self, **_: object) -> SchedulerRunResult:
-            return SchedulerRunResult()
-
-        def run_acquisition_pass(self, **_: object) -> SchedulerRunResult:
-            return SchedulerRunResult()
-
-        def run_capacity_pass(self, **_: object) -> SchedulerRunResult:
-            return SchedulerRunResult()
-
-        def run_housekeeping_pass(self, **_: object) -> SchedulerRunResult:
-            return SchedulerRunResult()
-
-    supervisor = start_scheduler_loops(
-        _Scheduler(),  # type: ignore[arg-type]
-        include_containers=False,
-        capacity_interval_seconds=0.01,
-        housekeeping_interval_seconds=0.01,
-    )
-    assert [loop.name for loop in supervisor.loops] == [
-        "placement",
-        "acquisition",
-        "capacity",
-        "housekeeping",
-    ]
-
-    supervisor.shutdown(timeout_seconds=5)
-
-    assert all(not loop.thread.is_alive() for loop in supervisor.loops)

@@ -1,8 +1,28 @@
 # LazyCloud chart
 
-Use this chart through the deployment workflow. It runs the API, scheduler,
+Use this chart through the deployment workflow. It runs the APIs, scheduler,
 cache, connection gateways, HTTP ingress, and bootstrap Jobs. Argo owns the
 installed resources; use local Helm rendering to review changes before deployment.
+
+`control-plane` serves account, workspace, deployment and dashboard operations.
+`execution-api` serves invocations, tasks, workload HTTP, pod and shell streams,
+and public TCP ingress. `runtime-api` receives worker control calls, task claims,
+completion and metering. Cloudflare selects the destination directly from the
+public hostname and path. Each connection gateway has an HAProxy sidecar that
+routes tunneled worker and container SDK requests to the same owners.
+
+Runtime replicas own agent route, disconnect and provider reconciliation.
+Management and execution replicas do not start these recurring scans.
+
+The gateway router binds only to loopback and starts before the gateway. Kubernetes
+keeps this sidecar running while the gateway drains. Each router requests 50m CPU
+and 32Mi memory, with a 256Mi memory limit and no CPU limit.
+
+Execution constructs workload admission, task reads, storage and transport owners.
+Its app and deployment dependencies only read durable state. Runtime adds worker,
+provider and disk control. Management adds identity provisioning, payment setup,
+app and deployment mutations, custom domains and deletion. Execution does not
+download agent artifacts or hold fleet provisioning configuration.
 
 Image archives share the application S3 bucket and workload identity.
 Infrastructure descriptor version 8 supplies its endpoint and bucket identities,
@@ -44,9 +64,12 @@ change an existing rate boundary or ledger row to make the sync pass.
 Sync waves order secret projection, migrations, administrator and billing
 bootstrap, and workloads. Inspect the first failed Job before retrying a sync.
 
-Each database Job is alone in its wave. The chart budgets both API engines,
-scheduler and gateway pools, one bootstrap Job, and bounded workload rollout
-overlap against Terraform's server ceiling. Scheduler readiness covers every loop.
+Each database Job is alone in its wave. Transaction clients share the bounded
+PgBouncer backend pool. Every API process also holds one direct recovery-fence
+session, which prevents offline administrator recovery while an API serves.
+Management also permits one direct workspace-deletion lock per replica. The chart
+includes both lock owners, one bootstrap Job and rollout overlap in the server
+connection calculation. Scheduler readiness covers every loop.
 Each gateway becomes ready after certificate issuance, listener startup, and
 successful database and Redis probes.
 
@@ -98,7 +121,7 @@ for initial credentials, DNS, rollout, drain limits, and acceptance.
 ## Public TCP ingress
 
 Public TCP workloads share a Network Load Balancer on port 1995. It passes TLS
-through to the control plane, where the SNI hostname selects the workload and
+through to the execution API, where the SNI hostname selects the workload and
 port. Clients must support TLS and send SNI. The load balancer preserves client
 addresses for transfer attribution.
 
@@ -110,7 +133,7 @@ exact NLB hostname and review the plan before applying it.
 The shared `cert-manager` Argo application installs the certificate controller.
 The namespace's `tcp-ingress` Issuer obtains a Let's Encrypt wildcard certificate
 using Cloudflare DNS validation and renews it automatically. Only this controller
-uses `tcp-ingress-dns`. The control plane mounts `tcp-ingress-tls` and reloads the
+uses `tcp-ingress-dns`. The execution API mounts `tcp-ingress-tls` and reloads the
 certificate without restarting.
 
 Before releasing this chart, save the existing deploy Cloudflare token as
@@ -161,11 +184,37 @@ Auto Mode provisions from declared pod requests. Measure representative usage
 before changing them, and include bootstrap Jobs and init containers in the
 budget. Keep memory limits and preserve headroom for startup and reconnects.
 
-`control-plane`, `scheduler`, `cloudflared`, and `connection-gateway` spread
+The APIs, scheduler, cloudflared and connection gateway spread
 replicas across nodes and availability zones. Both constraints require two
 domains and count old and new revisions together. A missing domain leaves a
 replica Pending so Auto Mode provisions capacity. Disruption budgets permit one
 replica to drain at a time; they cannot prevent a Spot interruption.
+
+Each API starts with two replicas requesting 640Mi of memory and a 1Gi memory
+limit. CPU requests are 150m for management, 300m for execution and 250m for
+runtime, without CPU limits. The previous combined API measured 529Mi resident
+memory before this split. Recheck resident memory, event-loop lag, executor
+queue time and database checkout time under mixed workload traffic before
+reducing requests or increasing replica counts.
+
+Management permits four transaction connections across its synchronous and
+asynchronous pools, including overflow. Execution and runtime each permit six.
+At two replicas per API, the pools permit 32 transaction client connections.
+The backend pool remains bounded independently. Direct recovery and management
+deletion sessions are budgeted separately, including terminating replicas. The
+default backend budget is 37 against the deployed ceiling of 40.
+
+API rollouts replace one replica at a time without an active surge. A replacement
+must remain ready beyond the previous pod's termination grace before the next
+replacement. Execution and runtime install in wave 0, ingress and connection
+gateways switch in wave 1, then management installs in wave 2. This prevents
+management from removing a route before its new owner is ready. Terminating pods
+can retain memory and direct sessions until their grace expires.
+
+The initial execution-scaling cutover requires admission to stop and existing
+claims, queued requests and image builds to drain before the new runtime and
+scheduler accept work. The new claim and fairness contracts cannot be mixed
+with older writers. Ordinary rolling updates resume after that cutover.
 
 ## Replica counts
 
@@ -183,3 +232,16 @@ certificate, database, and Redis access. See the gateway guide for drain limits.
 
 Cloudflare connectors report readiness after connecting to the edge. Keep
 replicas on separate nodes and verify public requests after a rollout.
+
+Execution scheduling and fleet control run as separate deployments using the
+scheduler image. The scheduler requests 400m CPU and 512Mi memory per replica;
+the fleet controller requests 250m CPU and 512Mi. Each has two replicas and a
+1Gi memory limit. CPU is not limited. Scheduler database pools allow five
+connections per replica; fleet pools allow three. Both use the bounded pooler.
+
+Execution scheduling receives no payment, email, DNS or fleet credentials.
+The fleet controller owns machine acquisition, reserves, rollout, consolidation
+and maintenance.
+Execution scheduling owns placement, dispatch, cron and build submission.
+The scheduler rolls in wave 3 and fleet control in wave 4, after the API cutover,
+with no surge replicas. Health checks read each process's own loop heartbeats.

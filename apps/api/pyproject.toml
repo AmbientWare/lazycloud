@@ -44,6 +44,8 @@ dependencies = [
 
 [project.scripts]
 lazycloud-api = "api.main:main"
+lazycloud-execution-api = "api.main:execution_main"
+lazycloud-runtime-api = "api.main:runtime_main"
 lazycloud-tcp-certificate = "api.tcp_certificate:main"
 
 [build-system]

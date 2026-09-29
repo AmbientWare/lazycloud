@@ -662,6 +662,17 @@ class WorkspaceMemberRepository:
             raise NotFoundError(f"workspace has no owner: {workspace_id}")
         return owner.user_id
 
+    def owner_user_ids(self, workspace_ids: Collection[str]) -> dict[str, str]:
+        if not workspace_ids:
+            return {}
+        rows = self.session.execute(
+            select(WorkspaceMemberTable.workspace_id, WorkspaceMemberTable.user_id).where(
+                WorkspaceMemberTable.workspace_id.in_(workspace_ids),
+                WorkspaceMemberTable.role == WorkspaceRole.Owner.value,
+            )
+        )
+        return {str(workspace_id): str(user_id) for workspace_id, user_id in rows}
+
     def for_workspace(self, workspace_id: str) -> list[WorkspaceMemberRecord]:
         rows = self.session.scalars(
             select(WorkspaceMemberTable)

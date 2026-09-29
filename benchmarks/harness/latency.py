@@ -1,20 +1,8 @@
-"""Container dispatch-latency benchmark.
+"""Measure first, immediate-repeat, and after-idle function invocations.
 
-Deploys a trivial function through the public SDK path against the root Compose
-stack and measures, per invocation, where the wall time goes between task
-submission and completion. The phase breakdown is taken from server-provided
-task timestamps (``created_at``/``started_at``/``finished_at``) and the
-container event-summary lifecycle durations, never from host wall-clock deltas,
-so the numbers are immune to Docker Desktop VM clock drift. Host wall time is
-reported only as an approximate round-trip and labelled as such.
-
-Three one-shot function scenarios are measured over ``runs`` deploy cycles:
-
-- ``cold``: first invocation of a freshly deployed function (no warm container).
-- ``back-to-back``: an immediate second invocation using a new function
-  container while the worker, image, and source caches are warm.
-- ``idle-fresh``: another new function container after a fixed idle interval,
-  with the image and source archive still cached.
+Task timestamps measure each invocation. Container startup phases apply only
+when the container starts after that task was submitted. Container IDs record
+whether subsequent calls reused a runner.
 """
 
 from __future__ import annotations
@@ -32,7 +20,6 @@ from pathlib import Path
 
 from lazycloud.abstractions.function import Function
 from pydantic import Field, JsonValue, SecretStr, TypeAdapter, ValidationError, field_validator
-from shared.containers import ContainerStatus
 from shared.env import GATEWAY_HTTP_URL_ENV, GATEWAY_TOKEN_ENV, WORKSPACE_ID_ENV
 from shared.http.compute import ContainerDetailResponse
 from shared.http.system import TokenCreateResponse
@@ -56,7 +43,7 @@ _JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, JsonValue])
 class LatencyScenario(StrEnum):
     Cold = "cold"
     BackToBack = "back-to-back"
-    IdleFresh = "idle-fresh"
+    AfterIdle = "after-idle"
 
 
 # Phase keys are plain strings so the container event-summary lifecycle metrics
@@ -176,7 +163,6 @@ class LatencyScenarioReport(BenchmarkModel):
 
 class LatencyReport(BenchmarkModel):
     config: LatencyConfig
-    one_shot_container_contract_confirmed: bool
     started_at: datetime
     finished_at: datetime
     duration_ms: float
@@ -196,8 +182,6 @@ class LatencyReport(BenchmarkModel):
             f"- Endpoint: `{self.config.endpoint}`",
             f"- Runs (deploy cycles): `{self.config.runs}`",
             f"- Idle interval: `{self.config.idle_seconds:.1f}s`",
-            "- One-shot function containers confirmed: "
-            f"`{str(self.one_shot_container_contract_confirmed).lower()}`",
             f"- Duration: `{self.duration_ms / 1000:.1f}s`",
             f"- Workspace: `{self.workspace_id}`",
             "",
@@ -244,12 +228,6 @@ def _scenario_markdown(scenario: LatencyScenarioReport) -> list[str]:
 
 
 def _ordered_phase_keys(present: set[str]) -> tuple[str, ...]:
-    """Task-record legs first, then event-summary lifecycle phases, host last.
-
-    Event phases are ordered by their median position would be ideal, but the
-    summary keys have no inherent order, so they are sorted lexically for a
-    stable table. The three task legs and the host round-trip are pinned.
-    """
     legs = [key for key in TASK_LEG_ORDER if key in present]
     host = [HOST_ROUND_TRIP] if HOST_ROUND_TRIP in present else []
     events = sorted(present - set(TASK_LEG_ORDER) - {HOST_ROUND_TRIP})
@@ -270,6 +248,10 @@ class LatencyBenchmark:
         self.workspace_token: str = ""
         self.cleanup_notes: list[str] = []
         self.cleanup_errors: list[str] = []
+        self.sdk_environment = {
+            name: os.environ.get(name)
+            for name in (GATEWAY_HTTP_URL_ENV, GATEWAY_TOKEN_ENV, WORKSPACE_ID_ENV)
+        }
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -294,9 +276,6 @@ class LatencyBenchmark:
         finished_at = datetime.now().astimezone()
         return LatencyReport(
             config=self.config,
-            one_shot_container_contract_confirmed=all(
-                sample.same_container_as_cold is not True for sample in samples
-            ),
             started_at=started_at,
             finished_at=finished_at,
             duration_ms=(time.perf_counter() - started) * 1000,
@@ -313,9 +292,9 @@ class LatencyBenchmark:
         back_to_back = self._invoke(function, LatencyScenario.BackToBack, cycle)
         back_to_back.same_container_as_cold = back_to_back.container_id == cold.container_id
         time.sleep(self.config.idle_seconds)
-        idle_fresh = self._invoke(function, LatencyScenario.IdleFresh, cycle)
-        idle_fresh.same_container_as_cold = idle_fresh.container_id == cold.container_id
-        return [cold, back_to_back, idle_fresh]
+        after_idle = self._invoke(function, LatencyScenario.AfterIdle, cycle)
+        after_idle.same_container_as_cold = after_idle.container_id == cold.container_id
+        return [cold, back_to_back, after_idle]
 
     # -- deploy + invoke -----------------------------------------------------
 
@@ -354,7 +333,6 @@ class LatencyBenchmark:
         )
         response = client.create(
             function.spec(),
-            name=function.resource_name,
             workspace=self._workspace.id,
             image=function.image,
         )
@@ -375,7 +353,7 @@ class LatencyBenchmark:
             raise LatencyBenchmarkError(f"{scenario.value} invocation returned no task id")
         record = self._await_terminal_task(task_id)
         round_trip_ms = (time.perf_counter() - host_start) * 1000
-        container = self._await_terminal_container(record.container_id or "")
+        container = self._container(record.container_id or "")
         sample = LatencyPhaseSample(
             scenario=scenario,
             cycle=cycle,
@@ -394,7 +372,13 @@ class LatencyBenchmark:
         self._fill_task_legs(sample, record)
         self._fill_container_legs(sample, record, container)
         sample.phase_ms[HOST_ROUND_TRIP] = round_trip_ms
-        self._fill_event_phases(sample)
+        if (
+            container is not None
+            and container.started_at is not None
+            and record.created_at is not None
+            and container.started_at >= record.created_at
+        ):
+            self._fill_event_phases(sample)
         return sample
 
     def _await_terminal_task(self, task_id: str) -> TaskResponse:
@@ -412,25 +396,11 @@ class LatencyBenchmark:
             f"task {task_id} did not reach a terminal status (last: {status})"
         )
 
-    def _await_terminal_container(self, container_id: str) -> ContainerDetailResponse | None:
+    def _container(self, container_id: str) -> ContainerDetailResponse | None:
         if not container_id:
             return None
-        deadline = time.monotonic() + self.config.invoke_timeout_seconds
-        last: ContainerDetailResponse | None = None
         path = f"/api/v1/containers/{urllib.parse.quote(container_id)}"
-        while time.monotonic() < deadline:
-            last = ContainerDetailResponse.model_validate(self._request_json("GET", path))
-            if last.status in {
-                ContainerStatus.Exited,
-                ContainerStatus.Failed,
-                ContainerStatus.Stopped,
-            }:
-                return last
-            time.sleep(self.config.poll_interval_seconds)
-        status = last.status.value if last is not None else "unknown"
-        raise LatencyBenchmarkError(
-            f"container {container_id} did not reach a terminal status (last: {status})"
-        )
+        return ContainerDetailResponse.model_validate(self._request_json("GET", path))
 
     @staticmethod
     def _fill_task_legs(sample: LatencyPhaseSample, record: TaskResponse) -> None:
@@ -450,13 +420,17 @@ class LatencyBenchmark:
         task: TaskResponse,
         container: ContainerDetailResponse | None,
     ) -> None:
-        if container is None or container.started_at is None:
+        if (
+            container is None
+            or container.started_at is None
+            or task.created_at is None
+            or container.started_at < task.created_at
+        ):
             return
-        if task.created_at is not None:
-            sample.phase_ms[LEG_CREATED_TO_CONTAINER_STARTED] = _delta_ms(
-                task.created_at,
-                container.started_at,
-            )
+        sample.phase_ms[LEG_CREATED_TO_CONTAINER_STARTED] = _delta_ms(
+            task.created_at,
+            container.started_at,
+        )
         if task.started_at is not None:
             sample.phase_ms[LEG_CONTAINER_STARTED_TO_TASK_STARTED] = _delta_ms(
                 container.started_at,
@@ -489,6 +463,7 @@ class LatencyBenchmark:
                 expected=201,
             )
         )
+        self.workspace = workspace
         token = TokenCreateResponse.model_validate(
             self._request_json(
                 "POST",
@@ -502,7 +477,6 @@ class LatencyBenchmark:
                 expected=201,
             )
         )
-        self.workspace = workspace
         self.workspace_token = token.token
         self._configure_sdk_environment()
 
@@ -529,8 +503,11 @@ class LatencyBenchmark:
             except Exception as exc:
                 self.cleanup_errors.append(f"delete workspace: {exc}")
             self._verify_workspace_absent(workspace_path)
-        for name in (GATEWAY_TOKEN_ENV, WORKSPACE_ID_ENV, GATEWAY_HTTP_URL_ENV):
-            os.environ.pop(name, None)
+        for name, previous in self.sdk_environment.items():
+            if previous is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = previous
 
     def _verify_workspace_absent(self, workspace_path: str) -> None:
         if not self.config.admin_token_value:

@@ -8,11 +8,12 @@ from typing import Protocol
 import grpc
 import grpc.aio
 from pydantic import Field
+from shared.agent_connections import AgentConnectionRecord
 from shared.contracts import ContractModel
 from shared.http.agent_tunnel import TUNNEL_OPEN_TIMEOUT_SECONDS, TunnelRouteRequest
 from shared.routing import AgentBackendRoute, BackendRouteState
 
-from networking.tunnel_client import TunnelRouteClient
+from networking.tunnel_client import TunnelRouteClient, TunnelRouteConnection
 
 DEFAULT_BACKEND_ROUTE_DIAL_TIMEOUT_SECONDS = 30.0
 DEFAULT_BACKEND_ROUTE_READY_POLL_SECONDS = 0.25
@@ -20,6 +21,13 @@ DEFAULT_BACKEND_ROUTE_READY_POLL_SECONDS = 0.25
 
 class BackendRouteUnavailable(ConnectionError):
     pass
+
+
+@dataclass(frozen=True, slots=True)
+class BackendRouteConnection:
+    route: AgentBackendRoute
+    socket: socket.socket
+    agent: AgentConnectionRecord
 
 
 class BackendRouteResolver(Protocol):
@@ -39,7 +47,7 @@ class BackendRouteDialer:
 
     def dial_backend_route(
         self, route_id: str, *, timeout_seconds: float | None = None
-    ) -> socket.socket:
+    ) -> BackendRouteConnection:
         timeout = (
             min(timeout_seconds, self.config.timeout_seconds)
             if timeout_seconds is not None
@@ -49,7 +57,8 @@ class BackendRouteDialer:
         while True:
             route = self.resolve_ready_route(route_id, deadline=deadline)
             try:
-                return self.dial_route(route, deadline=deadline)
+                connection = self.dial_route(route, deadline=deadline)
+                return BackendRouteConnection(route, connection.socket, connection.agent)
             except grpc.aio.AioRpcError as exc:
                 if exc.code() not in (
                     grpc.StatusCode.UNAVAILABLE,
@@ -70,7 +79,7 @@ class BackendRouteDialer:
 
     def dial_route(
         self, route: AgentBackendRoute, *, deadline: float | None = None
-    ) -> socket.socket:
+    ) -> TunnelRouteConnection:
         if route.state is not BackendRouteState.Ready:
             raise BackendRouteUnavailable(f"Backend route {route.route_id} is {route.state.value}")
         if not route.enrollment_id:

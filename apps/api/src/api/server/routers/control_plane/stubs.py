@@ -24,10 +24,10 @@ from shared.identity import AuthScope
 from api.server.auth import read_workspace, write_principal, write_workspace
 from api.server.dependencies import (
     authorize_token_workspace,
-    current_services,
+    management_services,
 )
 from api.server.service_dependencies import control_plane_service
-from api.server.services import ApiServices
+from api.server.services import ManagementServiceCore
 
 router = APIRouter()
 
@@ -169,7 +169,7 @@ def clone_stub(
     stub_id: str,
     request: StubCloneRequest,
     principal: write_principal,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
     service: ControlPlaneService = Depends(control_plane_service),
 ) -> StubCloneResponse:
     # The destination is named in the body rather than the query, so this asks the

@@ -8,6 +8,7 @@ from typing import Never
 
 import pytest
 from coordination.redis_client import AsyncRedisClient, RedisClient
+from redis.exceptions import ResponseError
 from scheduler.state import (
     ConcurrencyReservationStatus,
     RedisSchedulerContainerRepository,
@@ -38,6 +39,7 @@ class _FailingEvalRedis(FakeRedis):
 
 def _request(container_id: str, *, now: datetime) -> SchedulerWorkerRequest:
     return SchedulerWorkerRequest(
+        fairness_account_id="account-1",
         placement=Placement.platform(),
         workspace_id="workspace-1",
         stub_id="stub-1",
@@ -124,6 +126,108 @@ def test_pinned_zone_dispatch_requires_matching_worker_without_consuming_a_faile
     repository.add_worker(worker.model_copy(update={"availability_zone": "use1-az5"}), now=now)
     dispatched = repository.dispatch_claimed_container_request(worker.worker_id, claim, now=now)
     assert dispatched.free_cpu_millicores == worker.free_cpu_millicores - request.cpu_millicores
+
+
+def test_account_fair_claims_keep_large_work_and_other_accounts_progressing(
+    real_redis_actors: RealRedisActors,
+) -> None:
+    now = datetime(2026, 9, 28, tzinfo=UTC)
+    repository = RedisSchedulerWorkerRepository(real_redis_actors.client())
+    for index in range(20):
+        repository.enqueue_container_request(
+            _request(f"hot-{index:02}", now=now).model_copy(
+                update={
+                    "workspace_id": "hot-a" if index % 2 else "hot-b",
+                    "fairness_account_id": "hot",
+                    "cpu_millicores": 8000 if index == 0 else 100,
+                }
+            ),
+            ready_at=now - timedelta(seconds=1),
+        )
+    repository.enqueue_container_request(
+        _request("quiet", now=now).model_copy(
+            update={"workspace_id": "quiet", "fairness_account_id": "quiet"}
+        ),
+        ready_at=now,
+    )
+    first = repository.claim_ready_container_requests(now=now, limit=1)
+    second = repository.claim_ready_container_requests(now=now, limit=1)
+    assert [claim.request.container_id for claim in first + second] == ["hot-00", "quiet"]
+    assert all(repository.acknowledge_container_request(claim) for claim in first + second)
+    remaining = repository.claim_ready_container_requests(now=now, limit=20)
+    assert len(remaining) == 19
+    assert len({claim.request.container_id for claim in remaining}) == 19
+
+
+def test_retried_claim_does_not_charge_its_account_again(
+    real_redis_actors: RealRedisActors,
+) -> None:
+    now = datetime.now(UTC)
+    repository = RedisSchedulerWorkerRepository(real_redis_actors.client())
+    heavy = _request("heavy", now=now).model_copy(update={"cpu_millicores": 8000})
+    repository.enqueue_container_request(heavy, ready_at=now - timedelta(seconds=1))
+    for index in range(10):
+        repository.enqueue_container_request(
+            _request(f"other-{index:02}", now=now).model_copy(
+                update={"fairness_account_id": "account-2"}
+            ),
+            ready_at=now,
+        )
+    [first] = repository.claim_ready_container_requests(now=now)
+    assert first.request.container_id == "heavy"
+    repository.requeue_container_request(first, heavy, ready_at=now - timedelta(seconds=1))
+    for index in range(8):
+        [other] = repository.claim_ready_container_requests(now=now)
+        assert other.request.container_id == f"other-{index:02}"
+        assert repository.acknowledge_container_request(other)
+    [retry] = repository.claim_ready_container_requests(now=now)
+    assert retry.request.container_id == "heavy"
+    with pytest.raises(ResponseError, match="fairness account cannot change"):
+        repository.requeue_container_request(
+            retry, heavy.model_copy(update={"fairness_account_id": "account-2"}), ready_at=now
+        )
+    repository.requeue_container_request(retry, heavy, ready_at=now + timedelta(seconds=1))
+    repository.enqueue_container_request(
+        _request("new-small", now=now), ready_at=now - timedelta(seconds=1)
+    )
+    next_claims = repository.claim_ready_container_requests(now=now, limit=2)
+    assert {claim.request.container_id for claim in next_claims} == {"new-small", "other-08"}
+
+
+def test_continuously_ready_retries_yield_to_other_accounts_across_claim_batches(
+    real_redis_actors: RealRedisActors,
+) -> None:
+    now = datetime.now(UTC)
+    repository = RedisSchedulerWorkerRepository(real_redis_actors.client())
+    for container_id, account, cpu in (
+        ("retry-a", "a", 1000),
+        ("retry-c", "c", 1000),
+        ("large-first", "b", 8000),
+        ("large-next", "b", 8000),
+    ):
+        repository.enqueue_container_request(
+            _request(container_id, now=now).model_copy(
+                update={"fairness_account_id": account, "cpu_millicores": cpu}
+            ),
+            ready_at=now,
+        )
+    initial = repository.claim_ready_container_requests(now=now, limit=3)
+    assert {claim.request.container_id for claim in initial} == {
+        "retry-a",
+        "retry-c",
+        "large-first",
+    }
+    for claim in initial:
+        if claim.request.container_id.startswith("retry-"):
+            repository.requeue_container_request(claim, claim.request, ready_at=now)
+        else:
+            assert repository.acknowledge_container_request(claim)
+    selected: list[str] = []
+    for _ in range(3):
+        [claim] = repository.claim_ready_container_requests(now=now, limit=1)
+        selected.append(claim.request.container_id)
+        repository.requeue_container_request(claim, claim.request, ready_at=now)
+    assert selected == ["retry-a", "retry-c", "large-next"]
 
 
 def test_real_redis_claims_are_unique_and_expired_leases_recover(

@@ -184,7 +184,9 @@ class PodProxySocketClient:
         route_id = target.route_id or parse_backend_route_address(target.address)[0]
         if not route_id:
             raise ConnectionError("Pod request requires an authorized backend route")
-        connection = self.route_dialer.dial_backend_route(route_id, timeout_seconds=timeout_seconds)
+        connection = self.route_dialer.dial_backend_route(
+            route_id, timeout_seconds=timeout_seconds
+        ).socket
         connection.settimeout(timeout_seconds)
         return connection
 

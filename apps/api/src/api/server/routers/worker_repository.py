@@ -140,7 +140,7 @@ from api.server.dependencies import (
     current_services,
 )
 from api.server.service_dependencies import worker_repository_service
-from api.server.services import ApiServices
+from api.server.services import ApiServiceCore
 from api.server.sse import sse_response
 from api.server.worker_repository_service import WorkerRepositoryService
 
@@ -148,7 +148,7 @@ router = APIRouter(tags=["worker-repository"])
 
 
 async def worker_repository_principal(
-    services: Annotated[ApiServices, Depends(current_services)],
+    services: Annotated[ApiServiceCore, Depends(current_services)],
     credentials: AuthorizationCredentials = None,
 ) -> WorkerRepositoryPrincipal:
     try:
@@ -194,7 +194,7 @@ def get_next_container_request(
     request: GetNextContainerRequestRequest,
     service: WorkerRepo,
     principal: WorkerPrincipal,
-    services: Annotated[ApiServices, Depends(current_services)],
+    services: Annotated[ApiServiceCore, Depends(current_services)],
 ) -> StreamingResponse:
     _require_worker_subject(principal, request.worker_id, action="worker request stream")
     return sse_response(
@@ -228,7 +228,7 @@ async def acknowledge_container_request(
     request: AcknowledgeContainerRequestRequest,
     service: WorkerRepo,
     principal: WorkerPrincipal,
-    services: Annotated[ApiServices, Depends(current_services)],
+    services: Annotated[ApiServiceCore, Depends(current_services)],
 ) -> AcknowledgeContainerRequestResponse:
     _require_worker_subject(
         principal, request.worker_id, action="container request acknowledgement"
@@ -241,7 +241,7 @@ def stream_worker_events(
     request: StreamWorkerEventsRequest,
     service: WorkerRepo,
     principal: WorkerPrincipal,
-    services: Annotated[ApiServices, Depends(current_services)],
+    services: Annotated[ApiServiceCore, Depends(current_services)],
 ) -> StreamingResponse:
     _require_worker_subject(principal, request.worker_id, action="worker event stream")
     return sse_response(
@@ -264,7 +264,7 @@ async def acknowledge_worker_event(
     request: AcknowledgeWorkerEventRequest,
     service: WorkerRepo,
     principal: WorkerPrincipal,
-    services: Annotated[ApiServices, Depends(current_services)],
+    services: Annotated[ApiServiceCore, Depends(current_services)],
 ) -> AcknowledgeWorkerEventResponse:
     _require_worker_subject(principal, request.worker_id, action="worker event acknowledgement")
     return await service.acknowledge_worker_event(services.require_async_io(), request)

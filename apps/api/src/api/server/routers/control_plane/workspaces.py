@@ -26,9 +26,9 @@ from shared.http.workspaces import (
 from shared.identity import PlatformRole, WorkspaceRecord
 
 from api.server.auth import admin_access, read_token, read_workspace, write_token, write_workspace
-from api.server.dependencies import current_services, require_user_principal
+from api.server.dependencies import management_services, require_user_principal
 from api.server.service_dependencies import control_plane_service, gateway_service
-from api.server.services import ApiServices
+from api.server.services import ManagementServiceCore
 from api.server.workspace_deletion import WorkspaceDeletionService
 
 router = APIRouter()
@@ -58,7 +58,7 @@ def api_v1_create_workspace(
     request: WorkspaceCreateRequest,
     _auth: admin_access,
     token: write_token,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
     service: ControlPlaneService = Depends(control_plane_service),
 ) -> WorkspaceResponse:
     """Create a workspace owned by the account that asked for it.
@@ -90,7 +90,7 @@ def api_v1_list_workspaces(
     include_deleting: bool = False,
     *,
     token: read_token,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
     service: ControlPlaneService = Depends(control_plane_service),
 ) -> WorkspaceListResponse:
     """The workspaces this caller may act on.
@@ -121,7 +121,7 @@ def upsert_workspace(
     request: WorkspaceSetRequest,
     _auth: admin_access,
     token: write_token,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
     service: ControlPlaneService = Depends(control_plane_service),
 ) -> WorkspaceResponse:
     """Write a workspace's settings, creating it owned by the caller if it is new."""
@@ -158,7 +158,7 @@ def api_v1_update_current_workspace(
     request: WorkspaceUpdateRequest,
     workspace_id: write_workspace,
     token: write_token,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> WorkspaceResponse:
     return workspace_response(
         WorkspaceSettingsService(services.context).rename(
@@ -179,7 +179,7 @@ def api_v1_workspace_audit_history(
     cursor: str | None = None,
     *,
     workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> WorkspaceAuditListResponse:
     result = WorkspaceSettingsService(services.context).audit_history(
         workspace_id,
@@ -203,7 +203,7 @@ def api_v1_workspace_audit_history(
 def api_v1_export_workspace_config(
     workspace_id: read_workspace,
     service: ControlPlaneService = Depends(control_plane_service),
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> WorkspaceConfigExportResponse:
     parsed = urlparse(services.gateway_settings.public_http_url)
     scheme = parsed.scheme or "http"
@@ -245,7 +245,7 @@ def delete_workspace(
     workspace_id_or_name: str,
     _auth: admin_access,
     token: write_token,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
     gateway: GatewayControlService = Depends(gateway_service),
 ) -> None:
     WorkspaceDeletionService(services, gateway).delete(

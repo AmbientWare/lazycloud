@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -51,8 +51,10 @@ from scheduler.fleet import (
     SchedulerRetryReason,
     SchedulerWorkerStatus,
 )
+from scheduler.fleet_controller import FleetController
 from scheduler.pool_state import SchedulerPoolStateService
-from scheduler.service import Scheduler, SchedulerStateStores, SchedulerWorkloadControls
+from scheduler.reconciliation import SchedulerStateStores, SchedulerWorkloadControls
+from scheduler.service import Scheduler
 from scheduler.state import (
     DEFAULT_CONTAINER_REQUEST_CLAIM_LEASE_SECONDS,
     AgentBackendRoute,
@@ -160,6 +162,9 @@ class _UnownedWorkspaces:
     def owner_user_id(self, workspace_id: str) -> str:
         _ = workspace_id
         return ""
+
+    def owner_user_ids(self, workspace_ids: Collection[str]) -> dict[str, str]:
+        return {}
 
 
 class _RecordingDispatchWake:
@@ -487,6 +492,7 @@ def test_cron_failure_retries_same_run_then_persists_terminal_failure(
         functions.function_claim(
             FunctionClaimRequest(
                 stub_id=initial.stub_id,
+                claim_id=str(uuid4()),
                 container_id=container_scheduler.requests[0].container_id,
             )
         ).task
@@ -553,6 +559,7 @@ def test_cron_failure_retries_same_run_then_persists_terminal_failure(
         functions.function_claim(
             FunctionClaimRequest(
                 stub_id=retry_task.stub_id,
+                claim_id=str(uuid4()),
                 container_id=container_scheduler.requests[1].container_id,
             )
         ).task
@@ -633,6 +640,7 @@ def test_stopped_cron_deployment_cancels_due_retry_and_never_revives_it(
         functions.function_claim(
             FunctionClaimRequest(
                 stub_id=initial.stub_id,
+                claim_id=str(uuid4()),
                 container_id=container_scheduler.requests[0].container_id,
             )
         ).task
@@ -801,6 +809,7 @@ def test_scheduler_worker_repository_requeues_removed_worker_requests(
         "arguments": [1, "two", True, None, {"nested": 3.5}],
     }
     request = SchedulerWorkerRequest(
+        fairness_account_id="account-1",
         workspace_id="ws-1",
         stub_id="stub-1",
         container_id="container-1",
@@ -877,6 +886,7 @@ async def test_scheduler_worker_repository_requeues_expired_worker_requests(
         now=now,
     )
     request = SchedulerWorkerRequest(
+        fairness_account_id="account-1",
         placement=Placement.platform(),
         workspace_id="ws-1",
         stub_id="stub-1",
@@ -946,6 +956,7 @@ async def test_expired_worker_requeues_delivered_requests_but_not_ones_it_acted_
     )
     delivered = [
         SchedulerWorkerRequest(
+            fairness_account_id="account-1",
             placement=Placement.platform(),
             workspace_id="ws-1",
             stub_id="stub-1",
@@ -1041,6 +1052,7 @@ async def test_scheduler_worker_repository_lifecycle_capacity_queue_and_image_pu
     _assert_redis_ttl(redis, repo.keys.worker_state("worker-1"), 60)
 
     request = SchedulerWorkerRequest(
+        fairness_account_id="account-1",
         placement=Placement.platform(),
         workspace_id="ws-1",
         stub_id="stub-1",
@@ -1123,6 +1135,7 @@ def test_scheduler_request_claim_recovers_after_process_loss(
     repository = RedisSchedulerWorkerRepository(redis)
     now = datetime(2026, 1, 1, tzinfo=UTC)
     request = SchedulerWorkerRequest(
+        fairness_account_id="account-1",
         placement=Placement.platform(),
         workspace_id="ws-1",
         stub_id="stub-1",
@@ -1191,6 +1204,7 @@ async def test_claim_dispatch_commit_survives_scheduler_crash_without_duplicate_
         now=now,
     )
     request = SchedulerWorkerRequest(
+        fairness_account_id="account-1",
         placement=Placement.platform(),
         workspace_id="ws-1",
         stub_id="stub-1",
@@ -1562,6 +1576,7 @@ async def test_scheduler_container_request_service_queues_selects_and_dispatches
         now=now,
     )
     request = SchedulerWorkerRequest(
+        fairness_account_id="account-1",
         workspace_id="ws-1",
         stub_id="stub-1",
         container_id="container-1",
@@ -1683,6 +1698,7 @@ def test_scheduler_dispatch_preserves_durable_assignment_when_commit_response_is
         )
     )
     request = SchedulerWorkerRequest(
+        fairness_account_id="account-1",
         placement=Placement.platform(),
         workspace_id=workspace_id,
         stub_id="stub-1",
@@ -1768,6 +1784,7 @@ def test_durable_request_recovers_queue_publication_and_capacity_after_redis_los
             )
         )
     request = SchedulerWorkerRequest(
+        fairness_account_id="account-1",
         workspace_id=workspace_id,
         stub_id="container",
         container_id=container.id,
@@ -1866,6 +1883,7 @@ async def test_scheduler_claim_dispatch_honors_cancellation_before_atomic_commit
         )
     )
     request = SchedulerWorkerRequest(
+        fairness_account_id="account-1",
         placement=Placement.platform(),
         workspace_id="ws-1",
         stub_id="stub-1",
@@ -1925,6 +1943,7 @@ async def test_worker_request_dequeue_holds_one_delivery_without_the_worker_muta
     workers = RedisSchedulerWorkerRepository(redis)
     requests = [
         SchedulerWorkerRequest(
+            fairness_account_id="account-1",
             placement=Placement.platform(),
             workspace_id="ws-1",
             stub_id="stub-1",
@@ -1981,6 +2000,7 @@ async def test_worker_request_blocking_pop_wakes_on_assignment_without_duplicate
     redis = real_redis_actors.client()
     workers = RedisSchedulerWorkerRepository(redis)
     request = SchedulerWorkerRequest(
+        fairness_account_id="account-1",
         placement=Placement.platform(),
         workspace_id="ws-1",
         stub_id="stub-1",
@@ -2043,6 +2063,7 @@ async def test_scheduler_dispatch_records_the_placement_an_image_build_is_priced
         )
     )
     request = SchedulerWorkerRequest(
+        fairness_account_id="account-1",
         placement=Placement.platform(),
         workspace_id="ws-1",
         stub_id="image-build",
@@ -2114,6 +2135,7 @@ async def test_scheduler_container_cancellation_cannot_be_dispatched_or_requeued
         now=now,
     )
     request = SchedulerWorkerRequest(
+        fairness_account_id="account-1",
         placement=Placement.platform(),
         workspace_id="ws-1",
         stub_id="stub-1",
@@ -2164,6 +2186,7 @@ def test_scheduler_cancellation_removes_only_owned_backlog_and_preserves_fence(
     service = _request_service(workers, containers)
     now = datetime(2026, 1, 1, tzinfo=UTC)
     cancelled_request = SchedulerWorkerRequest(
+        fairness_account_id="account-1",
         placement=Placement.platform(),
         workspace_id="ws-1",
         stub_id="stub-1",
@@ -2316,6 +2339,7 @@ async def test_scheduler_cancellation_removes_assigned_request_and_all_indexes(
         now=now,
     )
     request = SchedulerWorkerRequest(
+        fairness_account_id="account-1",
         placement=Placement.platform(),
         workspace_id="ws-1",
         stub_id="stub-1",
@@ -2416,72 +2440,6 @@ def test_scheduler_stopping_transition_is_atomic_with_dispatch_state_replacement
 
 
 @pytest.mark.anyio
-async def test_scheduler_run_once_dispatches_when_pool_state_refresh_fails(
-    real_redis_actors: RealRedisActors,
-    async_redis: AsyncRedisClient,
-) -> None:
-    redis = real_redis_actors.client()
-    worker_repo = RedisSchedulerWorkerRepository(redis)
-    container_repo = RedisSchedulerContainerRepository(redis)
-    service = _request_service(
-        worker_repo,
-        container_repo,
-        capacity_reservations=_capacity_reservations(redis),
-    )
-    now = datetime(2026, 1, 1, tzinfo=UTC)
-    worker_repo.add_worker(
-        SchedulerWorkerRecord(
-            runtime_image="container-worker:local",
-            capacity_owner_id="11111111-1111-4111-8111-111111111111",
-            worker_id="worker-1",
-            placement=Placement.platform(),
-            status=SchedulerWorkerStatus.Available,
-            request_poll_expires_at=datetime.now(UTC) + timedelta(minutes=1),
-            free_cpu_millicores=1000,
-            free_memory_mib=1000,
-            total_cpu_millicores=1000,
-            total_memory_mib=1000,
-            created_at=now,
-            updated_at=now,
-        ),
-        now=now,
-    )
-    request = SchedulerWorkerRequest(
-        placement=Placement.platform(),
-        workspace_id="ws-1",
-        stub_id="stub-1",
-        container_id="container-1",
-        cpu_millicores=500,
-        memory_mib=100,
-        timestamp=now,
-    )
-    assert service.submit(request, ready_at=now).accepted
-    scheduler = Scheduler(
-        workloads=SchedulerWorkloadControls(containers=service),
-        states=SchedulerStateStores(pools=_failing_pool_state_service(redis)),
-        reconcile_agent_pools_enabled=False,
-    )
-
-    result = scheduler.run_once(
-        now=now,
-        include_cron_jobs=False,
-        include_containers=True,
-        container_limit=10,
-    )
-
-    assert len(result.container_dispatches) == 1
-    assert result.container_dispatches[0].status is SchedulerContainerDispatchStatus.Dispatched
-    assert result.pool_states == {}
-    queued = await worker_repo.wait_for_next_container_request(
-        async_redis,
-        "worker-1",
-        timeout_seconds=0.01,
-    )
-    assert queued is not None
-    assert queued.container_id == "container-1"
-
-
-@pytest.mark.anyio
 async def test_scheduler_dispatch_resumes_an_expired_claim_after_restart(
     real_redis_actors: RealRedisActors,
     async_redis: AsyncRedisClient,
@@ -2514,6 +2472,7 @@ async def test_scheduler_dispatch_resumes_an_expired_claim_after_restart(
         now=now,
     )
     request = SchedulerWorkerRequest(
+        fairness_account_id="account-1",
         placement=Placement.platform(),
         workspace_id="ws-1",
         stub_id="stub-1",
@@ -2584,6 +2543,7 @@ def test_scheduler_reconciles_confirmed_unrecoverable_sql_container(
             )
         )
     recoverable_request = SchedulerWorkerRequest(
+        fairness_account_id="account-1",
         placement=Placement.platform(),
         workspace_id=workspace_id,
         stub_id="container",
@@ -2592,7 +2552,7 @@ def test_scheduler_reconciles_confirmed_unrecoverable_sql_container(
     assert request_service.submit(recoverable_request).accepted
     container_repo.set_worker_address(orphaned.id, "10.0.0.1:9000")
     network_repo.set_container_ip("test-network", orphaned.id, "10.10.0.8")
-    scheduler = Scheduler(
+    scheduler = FleetController(
         services=isolated_services,
         workloads=SchedulerWorkloadControls(containers=request_service),
         states=SchedulerStateStores(
@@ -2660,7 +2620,7 @@ def test_scheduler_orphan_reconciliation_restores_pod_desired_capacity(
                 status=ContainerStatus.Pending,
             )
         )
-    scheduler = Scheduler(
+    scheduler = FleetController(
         services=isolated_services,
         workloads=SchedulerWorkloadControls(containers=request_service),
         states=SchedulerStateStores(
@@ -2740,6 +2700,7 @@ def test_scheduler_ready_pop_and_worker_dispatch_are_atomic_under_parallel_sched
         now=now,
     )
     request = SchedulerWorkerRequest(
+        fairness_account_id="account-1",
         placement=Placement.platform(),
         workspace_id="ws-1",
         stub_id="stub-1",
@@ -2794,6 +2755,7 @@ def test_worker_capacity_reservation_and_enqueue_are_worker_lock_guarded(
     )
     requests = [
         SchedulerWorkerRequest(
+            fairness_account_id="account-1",
             placement=Placement.platform(),
             workspace_id="ws-1",
             stub_id="stub-1",
@@ -2847,6 +2809,7 @@ def test_scheduler_container_request_service_bounds_no_capacity_retries(
     )
     now = datetime(2026, 1, 1, tzinfo=UTC)
     request = SchedulerWorkerRequest(
+        fairness_account_id="account-1",
         placement=Placement.platform(),
         workspace_id="ws-1",
         stub_id="stub-1",
@@ -2907,6 +2870,7 @@ def test_scheduler_image_build_failure_persists_coordination_evidence_and_fails_
     )
     now = datetime(2026, 1, 1, tzinfo=UTC)
     request = SchedulerWorkerRequest(
+        fairness_account_id="account-1",
         placement=Placement.platform(),
         workspace_id="ws-1",
         stub_id="image-build",
@@ -2969,6 +2933,7 @@ def test_scheduler_container_request_service_waits_for_pending_worker_without_re
         now=now,
     )
     request = SchedulerWorkerRequest(
+        fairness_account_id="account-1",
         placement=Placement.platform(),
         workspace_id="ws-1",
         stub_id="stub-1",
@@ -3012,6 +2977,7 @@ def test_scheduler_container_request_service_reserves_quota_on_submit(
         ),
     )
     request = SchedulerWorkerRequest(
+        fairness_account_id="account-1",
         placement=Placement.platform(),
         workspace_id="ws-1",
         stub_id="stub-1",
@@ -3428,36 +3394,6 @@ def _seed_hash(redis: RedisClient, key: str, model: ContractModel) -> None:
     )
 
 
-def _failing_pool_state_service(redis: RedisClient) -> SchedulerPoolStateService:
-    return SchedulerPoolStateService(
-        _FailingPoolWorkerRepository(),
-        _UnusedPoolContainerRepository(),
-        RedisWorkerPoolStateRepository(redis),
-    )
-
-
-class _FailingPoolWorkerRepository:
-    def list_workers(self) -> list[SchedulerWorkerRecord]:
-        raise RuntimeError("pool state unavailable")
-
-    def list_workers_for_capacity_owner(
-        self,
-        capacity_owner_id: str,
-    ) -> list[SchedulerWorkerRecord]:
-        _ = capacity_owner_id
-        raise RuntimeError("pool state unavailable")
-
-    def get_worker(self, worker_id: str) -> SchedulerWorkerRecord | None:
-        _ = worker_id
-        raise RuntimeError("pool state unavailable")
-
-
-class _UnusedPoolContainerRepository:
-    def list_by_worker(self, worker_id: str) -> list[SchedulerContainerState]:
-        _ = worker_id
-        return []
-
-
 class _FailureHandler:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []
@@ -3523,7 +3459,7 @@ def test_orphan_sweep_settles_the_claims_a_pooled_container_was_holding(
     )
     isolated_services.tasks.start(claimed.id, container_id=pooled.id)
 
-    scheduler = Scheduler(
+    scheduler = FleetController(
         services=isolated_services,
         workloads=SchedulerWorkloadControls(containers=request_service),
         states=SchedulerStateStores(
@@ -3604,6 +3540,7 @@ async def test_assignment_deadline_stops_the_durable_worker_despite_lost_hot_ass
     )
     if worker_removed:
         request = SchedulerWorkerRequest(
+            fairness_account_id="account-1",
             placement=Placement.platform(),
             container_id=container.id,
             workspace_id=workspace_id,
@@ -3621,7 +3558,7 @@ async def test_assignment_deadline_stops_the_durable_worker_despite_lost_hot_ass
         assert workers.remove_worker(worker_id, now=now).request_ids == [container.id]
         state = service.containers.get_container_state(container.id)
         assert state is not None and state.worker_id == ""
-    scheduler = Scheduler(
+    scheduler = FleetController(
         services=isolated_services,
         workloads=SchedulerWorkloadControls(containers=service),
         orphaned_container_reconcile_interval_seconds=0,
@@ -3703,6 +3640,7 @@ def test_undelivered_assignment_recovers_after_rollback_loses_redis(
         )
     )
     request = SchedulerWorkerRequest(
+        fairness_account_id="account-1",
         placement=Placement.platform(),
         container_id=container.id,
         workspace_id=workspace_id,

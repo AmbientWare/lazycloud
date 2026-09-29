@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from dataclasses import dataclass
 from datetime import datetime
@@ -20,6 +21,7 @@ from execution.pods.service import PodControlService
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from foundation.executor_pressure import MeasuredThreadPoolExecutor
 from gateway.events import (
     AsyncGatewayEventSink,
     GatewayRequestEventMiddleware,
@@ -28,6 +30,7 @@ from gateway.events import (
 from gateway.service import GatewayControlService
 from identity.auth import AuthError, AuthorizationDeniedError
 from images.control import ImageControlService
+from observability.settings import TelemetrySettings
 from observability.telemetry import setup_telemetry
 from pydantic import JsonValue
 from shared.app_identity import DISPLAY_NAME
@@ -45,17 +48,31 @@ from shared.http.errors import ErrorResponse
 from shared.timestamps import utc_now
 from starlette.types import Scope
 
-from api.control_runtime import ControlPlaneRuntime
-from api.server import include_api_routers, service_dependencies
+from api.control_runtime import (
+    ControlPlaneRuntime,
+    production_execution_services,
+    production_runtime_services,
+)
+from api.server import include_api_routers
 from api.server.async_io import ApiAsyncIo
 from api.server.client_version import ClientVersionMiddleware
 from api.server.host_routing import GeneratedInvokeHostRoutingMiddleware
 from api.server.public_transfers import PublicTransferMiddleware
 from api.server.rate_limit import UnauthenticatedRateLimitMiddleware
+from api.server.routers import (
+    include_execution_routers,
+    include_management_routers,
+    include_runtime_routers,
+)
 from api.server.services import (
+    ApiRoutes,
+    ApiServiceCore,
     ApiServices,
     EndpointApiService,
+    ExecutionRoutes,
     FunctionApiService,
+    RuntimeRoutes,
+    RuntimeServiceCore,
 )
 from api.server.tcp_ingress import tcp_ingress_server_from_settings
 from api.server.worker_repository_service import WorkerRepositoryService
@@ -102,17 +119,29 @@ def create_app(
         image_service=image_service,
         pod_service=pod_service,
     )
-    return _create_app(runtime)
+    app = _create_app(runtime, include_api_routers, _start_all)
+    _install_invoke_routing(app)
+    mount_web_app(app)
+    return app
 
 
-def _create_app(runtime: ControlPlaneRuntime) -> FastAPI:
+type _OnClose = Callable[[Callable[[], Awaitable[None]]], None]
+type _Spawn = Callable[[Coroutine[None, None, None]], None]
+type _StartApi = Callable[[ApiServiceCore, ApiRoutes, _OnClose, _Spawn], Awaitable[None]]
+
+
+def _create_app(
+    runtime: ControlPlaneRuntime,
+    include_routers: Callable[[FastAPI], None],
+    start_api: _StartApi,
+) -> FastAPI:
     cleanup_failures: list[Exception] = []
 
     @asynccontextmanager
     async def lifespan(lifespan_app: FastAPI) -> AsyncIterator[None]:
         cleanup_failures.clear()
         try:
-            async with AsyncExitStack() as cleanup:
+            async with AsyncExitStack() as executor_cleanup, AsyncExitStack() as cleanup:
 
                 def on_close(release: Callable[[], Awaitable[None]]) -> None:
                     cleanup.push_async_callback(_capture_cleanup_failure, cleanup_failures, release)
@@ -120,62 +149,33 @@ def _create_app(runtime: ControlPlaneRuntime) -> FastAPI:
                 def spawn(coroutine: Coroutine[None, None, None]) -> None:
                     on_close(partial(_cancel_task, _create_background_task(coroutine)))
 
-                telemetry = await asyncio.to_thread(setup_telemetry, runtime.telemetry_config)
-                on_close(partial(asyncio.to_thread, telemetry.shutdown))
-                on_close(partial(asyncio.to_thread, runtime.stop))
-                api_services = await asyncio.to_thread(runtime.start)
+                loop = asyncio.get_running_loop()
+                with ThreadPoolExecutor(max_workers=1, thread_name_prefix="api-startup") as startup:
+                    telemetry = await loop.run_in_executor(
+                        startup, setup_telemetry, runtime.telemetry_config
+                    )
+                    on_close(partial(asyncio.to_thread, telemetry.shutdown))
+                    on_close(partial(asyncio.to_thread, runtime.stop))
+                    api_services = await loop.run_in_executor(startup, runtime.start)
+                pool = api_services.context.database.settings
+                executor = MeasuredThreadPoolExecutor(
+                    max_workers=max(4, 4 * (pool.pool_size + pool.max_overflow)),
+                    thread_name_prefix="api-control",
+                )
+                executor_cleanup.callback(executor.shutdown, wait=True, cancel_futures=True)
+                loop.set_default_executor(executor)
                 async_io = api_services.require_async_io()
                 on_close(async_io.close)
                 await async_io.start()
-                spawn(_observe_runtime_pressure(api_services, async_io))
+                spawn(_observe_runtime_pressure(api_services, async_io, executor))
                 cleanup.callback(_unpublish_api_services, lifespan_app, api_services)
-                await api_services.workspace_compute_policy_service.reconcile_capacity_at_startup(
-                    async_io.database
-                )
-                route_repository = service_dependencies.worker_repository_service(api_services)
-                tcp_ingress = await tcp_ingress_server_from_settings(
-                    api_services,
-                    service_dependencies.pod_service(api_services),
-                    api_services.tcp_ingress_settings,
-                )
+                routes = runtime.routes
+                on_close(routes.transport.close)
                 recovery_fence = AsyncControlPlaneRecoveryFence(async_io.database)
                 on_close(recovery_fence.stop_serving)
                 await recovery_fence.start_serving()
-                if tcp_ingress is not None:
-                    on_close(tcp_ingress.close)
-                    await tcp_ingress.start()
-                spawn(
-                    _reconcile_agent_routes(
-                        route_repository,
-                        async_io,
-                        interval_seconds=(
-                            api_services.agent_route_reconciliation_settings.interval_seconds
-                        ),
-                        event_sink=api_services.events,
-                    )
-                )
-                spawn(_publish_agent_intake_presence(async_io.redis, utc_now()))
-                spawn(
-                    _reconcile_agent_disconnects(
-                        api_services.gateway_service,
-                        async_io,
-                        interval_seconds=(
-                            api_services.agent_disconnect_reconciliation_settings.interval_seconds
-                        ),
-                        event_sink=api_services.events,
-                    )
-                )
-                if api_services.aws_connections is not None:
-                    reconciliation = api_services.aws_capacity_reconciliation_settings
-                    spawn(
-                        _reconcile_aws_connections(
-                            api_services.aws_connections,
-                            interval_seconds=reconciliation.interval_seconds,
-                            limit=reconciliation.limit,
-                            event_sink=api_services.events,
-                        )
-                    )
-                _publish_api_services(lifespan_app, api_services)
+                await start_api(api_services, routes, on_close, spawn)
+                _publish_api_services(lifespan_app, api_services, routes)
                 yield
         except BaseException as exc:
             if cleanup_failures:
@@ -196,12 +196,8 @@ def _create_app(runtime: ControlPlaneRuntime) -> FastAPI:
         summary="Typed HTTP control plane for remote execution workflows.",
         lifespan=lifespan,
     )
-    services_provider = _FastApiServicesProvider(app)
+    services_provider = _FastApiServiceCoreProvider(app)
     public_ingress = PublicIngressSettings()
-    app.add_middleware(
-        GeneratedInvokeHostRoutingMiddleware,
-        services_provider=services_provider,
-    )
     app.add_middleware(
         PublicTransferMiddleware,
         usage=lambda: services_provider.current().usage,
@@ -291,14 +287,123 @@ def _create_app(runtime: ControlPlaneRuntime) -> FastAPI:
             headers={"X-Request-ID": request_id},
         )
 
-    include_api_routers(app)
+    include_routers(app)
+    return app
+
+
+def _install_invoke_routing(app: FastAPI) -> None:
+    app.add_middleware(
+        GeneratedInvokeHostRoutingMiddleware,
+        services_provider=_FastApiServiceCoreProvider(app),
+    )
+
+
+def create_production_app() -> FastAPI:
+    app = _create_app(
+        ControlPlaneRuntime.production(), include_management_routers, _start_management
+    )
     mount_web_app(app)
     return app
 
 
-def create_production_app() -> FastAPI:
-    runtime = ControlPlaneRuntime.production()
-    return _create_app(runtime)
+def create_execution_app() -> FastAPI:
+    runtime = ControlPlaneRuntime(
+        telemetry_config=TelemetrySettings().to_config(service_name="execution-api"),
+        _factory=production_execution_services,
+        _owns_services=True,
+    )
+    app = _create_app(runtime, include_execution_routers, _start_execution)
+    _install_invoke_routing(app)
+    return app
+
+
+def create_runtime_app() -> FastAPI:
+    runtime = ControlPlaneRuntime(
+        telemetry_config=TelemetrySettings().to_config(service_name="runtime-api"),
+        _factory=production_runtime_services,
+        _owns_services=True,
+    )
+    return _create_app(runtime, include_runtime_routers, _start_runtime)
+
+
+async def _start_management(
+    services: ApiServiceCore,
+    routes: ApiRoutes,
+    on_close: _OnClose,
+    spawn: _Spawn,
+) -> None:
+    await services.workspace_compute_policy_service.reconcile_capacity_at_startup(
+        services.require_async_io().database
+    )
+
+
+async def _start_execution(
+    services: ApiServiceCore,
+    routes: ApiRoutes,
+    on_close: _OnClose,
+    spawn: _Spawn,
+) -> None:
+    if not isinstance(routes, (ExecutionRoutes, ApiServices)):
+        raise RuntimeError("execution API requires execution route services")
+    tcp_ingress = await tcp_ingress_server_from_settings(
+        services,
+        routes.pod_service,
+        services.tcp_ingress_settings,
+    )
+    if tcp_ingress is not None:
+        on_close(tcp_ingress.close)
+        await tcp_ingress.start()
+
+
+async def _start_runtime(
+    services: ApiServiceCore,
+    routes: ApiRoutes,
+    on_close: _OnClose,
+    spawn: _Spawn,
+) -> None:
+    if not isinstance(services, RuntimeServiceCore) or not isinstance(
+        routes, (RuntimeRoutes, ApiServices)
+    ):
+        raise RuntimeError("runtime API requires runtime route services")
+    async_io = services.require_async_io()
+    spawn(
+        _reconcile_agent_routes(
+            routes.worker_repository_service,
+            async_io,
+            interval_seconds=services.agent_route_reconciliation_settings.interval_seconds,
+            event_sink=services.events,
+        )
+    )
+    spawn(_publish_agent_intake_presence(async_io.redis, utc_now()))
+    spawn(
+        _reconcile_agent_disconnects(
+            routes.gateway_service,
+            async_io,
+            interval_seconds=services.agent_disconnect_reconciliation_settings.interval_seconds,
+            event_sink=services.events,
+        )
+    )
+    if services.aws_connections is not None:
+        reconciliation = services.aws_capacity_reconciliation_settings
+        spawn(
+            _reconcile_aws_connections(
+                services.aws_connections,
+                interval_seconds=reconciliation.interval_seconds,
+                limit=reconciliation.limit,
+                event_sink=services.events,
+            )
+        )
+
+
+async def _start_all(
+    services: ApiServiceCore,
+    routes: ApiRoutes,
+    on_close: _OnClose,
+    spawn: _Spawn,
+) -> None:
+    await _start_management(services, routes, on_close, spawn)
+    await _start_execution(services, routes, on_close, spawn)
+    await _start_runtime(services, routes, on_close, spawn)
 
 
 async def _emit_reconciliation_failure(
@@ -472,7 +577,9 @@ async def _reconcile_aws_connections(
         await asyncio.sleep(max(interval_seconds, 0.1))
 
 
-async def _observe_runtime_pressure(services: ApiServices, async_io: ApiAsyncIo) -> None:
+async def _observe_runtime_pressure(
+    services: ApiServiceCore, async_io: ApiAsyncIo, executor: MeasuredThreadPoolExecutor
+) -> None:
     loop = asyncio.get_running_loop()
     sample_at = loop.time() + _RUNTIME_PRESSURE_INTERVAL_SECONDS
     while True:
@@ -480,19 +587,30 @@ async def _observe_runtime_pressure(services: ApiServices, async_io: ApiAsyncIo)
         observed_at = loop.time()
         lag_seconds = max(observed_at - sample_at, 0)
         try:
-            _record_runtime_pressure(services, async_io, lag_seconds)
+            _record_runtime_pressure(services, async_io, lag_seconds, executor)
         except Exception:
             logger.exception("API runtime pressure metrics were not recorded")
         sample_at = observed_at + _RUNTIME_PRESSURE_INTERVAL_SECONDS
 
 
 def _record_runtime_pressure(
-    services: ApiServices,
+    services: ApiServiceCore,
     async_io: ApiAsyncIo,
     lag_seconds: float,
+    executor: MeasuredThreadPoolExecutor,
 ) -> None:
     services.metrics.set_gauge("api_event_loop_lag_seconds", lag_seconds)
     services.metrics.observe_histogram("api_event_loop_lag_seconds_histogram", lag_seconds)
+    pressure = executor.pressure()
+    for state, count in (
+        ("capacity", pressure.capacity),
+        ("active", pressure.active),
+        ("pending", pressure.pending),
+    ):
+        services.metrics.set_gauge("api_executor_tasks", count, labels={"state": state})
+    services.metrics.set_gauge("api_executor_started_total", pressure.started)
+    services.metrics.set_gauge("api_executor_queue_seconds_total", pressure.queue_seconds_total)
+    services.metrics.set_gauge("api_executor_queue_seconds_max", pressure.queue_seconds_max)
 
     thread_pool = current_default_thread_limiter().statistics()
     capacity = float(thread_pool.total_tokens)
@@ -548,7 +666,7 @@ def _record_runtime_pressure(
     _record_realtime_metrics(services, async_io.realtime.status())
 
 
-def _record_realtime_metrics(services: ApiServices, status: RedisStreamTailStatus) -> None:
+def _record_realtime_metrics(services: ApiServiceCore, status: RedisStreamTailStatus) -> None:
     services.metrics.set_gauge("api_realtime_stream_sources", status.sources)
     for kind, count in status.subscribers.items():
         services.metrics.set_gauge(
@@ -567,7 +685,7 @@ def _record_realtime_metrics(services: ApiServices, status: RedisStreamTailStatu
 
 
 def _record_pool_metrics(
-    services: ApiServices,
+    services: ApiServiceCore,
     *,
     client: str,
     status: DatabasePoolStatus | RedisPoolStatus | None,
@@ -577,6 +695,12 @@ def _record_pool_metrics(
     if isinstance(status, DatabasePoolStatus):
         backend = "database"
         counts = (("in_use", status.checked_out), ("available", status.available))
+        for metric, value in (
+            ("api_database_checkouts_total", status.checkouts_total),
+            ("api_database_checkout_seconds_total", status.checkout_seconds_total),
+            ("api_database_checkout_seconds_max", status.checkout_seconds_max),
+        ):
+            services.metrics.set_gauge(metric, value, labels={"client": client})
     else:
         backend = "redis"
         counts = (("in_use", status.in_use), ("idle", status.idle))
@@ -600,19 +724,19 @@ def _record_pool_metrics(
 
 
 @dataclass(frozen=True, slots=True)
-class _FastApiServicesProvider:
+class _FastApiServiceCoreProvider:
     app: FastAPI
 
-    def current(self) -> ApiServices:
+    def current(self) -> ApiServiceCore:
         services = getattr(self.app.state, "api_services", None)
-        if not isinstance(services, ApiServices):
+        if not isinstance(services, ApiServiceCore):
             raise RuntimeError("FastAPI app is not serving API services")
         return services
 
 
 @dataclass(frozen=True, slots=True)
 class _CurrentGatewayEventSink:
-    services_provider: _FastApiServicesProvider
+    services_provider: _FastApiServiceCoreProvider
 
     async def emit_async(
         self,
@@ -638,7 +762,7 @@ class _CurrentGatewayEventSink:
 
 @dataclass(frozen=True, slots=True)
 class _CurrentGatewayMetricsSink:
-    services_provider: _FastApiServicesProvider
+    services_provider: _FastApiServiceCoreProvider
 
     def increment(
         self,
@@ -672,7 +796,7 @@ class _CurrentGatewayMetricsSink:
 
 @dataclass(frozen=True, slots=True)
 class _CurrentWorkspaceResolver:
-    services_provider: _FastApiServicesProvider
+    services_provider: _FastApiServiceCoreProvider
 
     async def __call__(self, scope: Scope) -> str:
         services = self.services_provider.current()
@@ -717,10 +841,12 @@ def _create_background_task(
         raise
 
 
-def _publish_api_services(app: FastAPI, services: ApiServices) -> None:
+def _publish_api_services(app: FastAPI, services: ApiServiceCore, routes: ApiRoutes) -> None:
     app.state.api_services = services
+    app.state.api_routes = routes
 
 
-def _unpublish_api_services(app: FastAPI, services: ApiServices) -> None:
+def _unpublish_api_services(app: FastAPI, services: ApiServiceCore) -> None:
     if getattr(app.state, "api_services", None) is services:
         del app.state.api_services
+        del app.state.api_routes

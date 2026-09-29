@@ -5,8 +5,8 @@ from shared.http.source_cache_cleanup import SourceCacheCleanupStatusResponse
 from worker_repository.source_cache_status import SourceCacheCleanupStatusService
 
 from api.server.auth import admin_access
-from api.server.dependencies import current_services
-from api.server.services import ApiServices
+from api.server.dependencies import management_services
+from api.server.services import ManagementServiceCore
 
 router = APIRouter()
 
@@ -19,7 +19,7 @@ router = APIRouter()
 def get_workspace_source_cache_cleanup_status(
     workspace_id_or_name: str,
     _auth: admin_access,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> SourceCacheCleanupStatusResponse:
     snapshot = SourceCacheCleanupStatusService(services.context).get(workspace_id_or_name)
     return SourceCacheCleanupStatusResponse.model_validate(snapshot)

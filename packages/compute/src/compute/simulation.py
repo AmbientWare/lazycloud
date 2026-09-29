@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import argparse
 import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime, timedelta
-from math import ceil
+from math import ceil, isfinite
 from pathlib import Path
 
 from pydantic import TypeAdapter
@@ -70,18 +70,30 @@ class Scenario:
     timings: Timings = Timings()
     price_description: str = "supplied scenario estimates"
     activation_failures: int = 0
+    container_start_samples: tuple[float, ...] = ()
 
     def __post_init__(self) -> None:
-        if self.duration_seconds <= 0 or self.timings.planning_seconds <= 0:
+        if (
+            not isfinite(self.duration_seconds)
+            or self.duration_seconds <= 0
+            or self.timings.planning_seconds <= 0
+        ):
             raise ValueError("scenario and planning durations must be positive")
-        if any(value < 0 for value in asdict(self.timings).values()):
-            raise ValueError("lifecycle durations cannot be negative")
+        if any(not isfinite(value) or value < 0 for value in asdict(self.timings).values()):
+            raise ValueError("lifecycle durations must be finite and nonnegative")
+        if any(not isfinite(value) or value < 0 for value in self.container_start_samples):
+            raise ValueError("container startup samples must be finite and nonnegative")
         if self.activation_failures < 0:
             raise ValueError("activation failures cannot be negative")
         if len({offer.key for offer in self.offers}) != len(self.offers):
             raise ValueError("scenario offer keys must be unique")
         for workload in self.workloads:
-            if workload.at < 0 or workload.duration <= 0:
+            if (
+                not isfinite(workload.at)
+                or not isfinite(workload.duration)
+                or workload.at < 0
+                or workload.duration <= 0
+            ):
                 raise ValueError("workloads require nonnegative arrival and positive duration")
             if not workload.capacity.covers(Capacity()) or workload.capacity.empty:
                 raise ValueError("workloads require positive resources")
@@ -115,6 +127,13 @@ class SimulationResult:
     cold_start_deadline_misses: int = 0
     cold_start_p95_seconds: float = 0
     maximum_start_seconds: float = 0
+    capacity_wait_p95_seconds: float = 0
+    container_start_p95_seconds: float = 0
+    container_start_sample_count: int = 0
+    running_node_hours: float = 0
+    stopped_node_hours: float = 0
+    idle_cpu_core_seconds: float = 0
+    idle_memory_gib_seconds: float = 0
     estimated_running_cost: float = 0
     estimated_stopped_cost: float = 0
     cpu_packing_fraction: float = 0
@@ -128,9 +147,12 @@ class SimulationResult:
     peak_nodes: int = 0
     planner_passes: int = 0
     assumptions: tuple[str, ...] = (
-        "Prices and startup durations are supplied estimates, not provider measurements.",
+        "Prices and node lifecycle durations are supplied estimates.",
+        "Container startup samples repeat in arrival order, independent of shape and load.",
         "Demand uses the production purchase planner with virtual capacity reservations.",
-        "Placement excludes network, storage, tenancy and application readiness.",
+        "Placement excludes network, storage and tenancy constraints.",
+        "Supplied container startup durations must include application readiness.",
+        "Startup contention and image locality are not modeled beyond supplied durations.",
         "Requested activation failures retain physical capacity and cost through cleanup.",
         "Work completes; migration, workload failures and warm dispatch are not simulated.",
     )
@@ -153,6 +175,12 @@ def simulate(scenario: Scenario) -> SimulationResult:
     reservations: dict[int, str] = {}
     history: dict[ReserveMarket, list[DemandSample]] = {}
     latencies: list[float] = []
+    capacity_waits: list[float] = []
+    startup_samples = scenario.container_start_samples or (
+        scenario.timings.container_start_seconds,
+    )
+    result.container_start_sample_count = len(scenario.container_start_samples)
+    result.container_start_p95_seconds = _p95(startup_samples)
     misses: set[int] = set()
     serial = 0
     for initial in scenario.initial:
@@ -234,10 +262,10 @@ def simulate(scenario: Scenario) -> SimulationResult:
                 ),
             )
             node.load += workload.capacity
-            latency = now - workload.at + scenario.timings.container_start_seconds
-            node.allocations[request_id] = (
-                now + scenario.timings.container_start_seconds + workload.duration
-            )
+            startup_seconds = startup_samples[request_id % len(startup_samples)]
+            capacity_waits.append(now - workload.at)
+            latency = now - workload.at + startup_seconds
+            node.allocations[request_id] = now + startup_seconds + workload.duration
             latencies.append(latency)
             result.started += 1
             result.cold_start_deadline_misses += int(latency >= COLD_CONTAINER_START_TARGET_SECONDS)
@@ -384,10 +412,12 @@ def simulate(scenario: Scenario) -> SimulationResult:
         for node in nodes.values():
             stopped = node.state.stopped
             if stopped:
+                result.stopped_node_hours += elapsed / 3600
                 result.estimated_stopped_cost += (
                     node.offer.stopped_hourly_cost_micros * elapsed / 3_600_000_000
                 )
             else:
+                result.running_node_hours += elapsed / 3600
                 result.estimated_running_cost += (
                     node.offer.hourly_cost_micros * elapsed / 3_600_000_000
                 )
@@ -396,6 +426,12 @@ def simulate(scenario: Scenario) -> SimulationResult:
                 memory_used += node.load.memory_mib * elapsed
                 cpu_available += node.offer.machine.cpu_millicores * elapsed
                 memory_available += node.offer.machine.memory_mib * elapsed
+                result.idle_cpu_core_seconds += (
+                    (node.offer.machine.cpu_millicores - node.load.cpu_millicores) * elapsed / 1000
+                )
+                result.idle_memory_gib_seconds += (
+                    (node.offer.machine.memory_mib - node.load.memory_mib) * elapsed / 1024
+                )
         now = following
 
     result.capacity_misses = len(misses)
@@ -408,14 +444,17 @@ def simulate(scenario: Scenario) -> SimulationResult:
         for workload in pending.values()
     )
     if latencies:
-        ordered = sorted(latencies)
-        result.cold_start_p95_seconds = ordered[
-            min(len(ordered) - 1, (len(ordered) * 95 + 99) // 100 - 1)
-        ]
-        result.maximum_start_seconds = ordered[-1]
+        result.cold_start_p95_seconds = _p95(latencies)
+        result.maximum_start_seconds = max(latencies)
+        result.capacity_wait_p95_seconds = _p95(capacity_waits)
     result.cpu_packing_fraction = cpu_used / cpu_available if cpu_available else 0
     result.memory_packing_fraction = memory_used / memory_available if memory_available else 0
     return result
+
+
+def _p95(values: tuple[float, ...] | list[float]) -> float:
+    ordered = sorted(values)
+    return ordered[(len(ordered) * 95 + 99) // 100 - 1]
 
 
 def _acquire_pending(
@@ -801,8 +840,15 @@ def main() -> None:
         type=Path,
         help="JSON Scenario with explicit offers, prices, workloads and timings",
     )
+    parser.add_argument(
+        "--container-start-samples",
+        type=Path,
+        help="JSON array of observed container startup seconds, replayed in arrival order",
+    )
     args = parser.parse_args()
     if args.scenario and args.scenario.startswith("rollout-"):
+        if args.container_start_samples:
+            parser.error("container startup samples do not apply to rollout simulations")
         print(
             json.dumps(
                 asdict(simulate_rollout(named_rollout_scenario(args.scenario))), sort_keys=True
@@ -814,6 +860,13 @@ def main() -> None:
         if args.input
         else named_scenario(args.scenario)
     )
+    if args.container_start_samples:
+        samples = TypeAdapter(tuple[float, ...]).validate_json(
+            args.container_start_samples.read_text()
+        )
+        if not samples:
+            parser.error("container startup samples cannot be empty")
+        scenario = replace(scenario, container_start_samples=samples)
     print(json.dumps(asdict(simulate(scenario)), sort_keys=True))
 
 

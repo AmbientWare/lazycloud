@@ -16,7 +16,6 @@ from control.deployment_resources import DeploymentResourceService
 from control.releases import DeploymentReleaseService
 from coordination.event_bus import (
     EventBusEvent,
-    EventBusEventType,
     RedisEventBus,
 )
 from coordination.redis_client import AsyncRedisClient, RedisClient, redis_text
@@ -829,13 +828,6 @@ class WorkerRepositoryService:
             request.event_id,
         )
         return AcknowledgeWorkerEventResponse(acknowledged=True)
-
-    def wake_source_cache_cleanup(self, workspace_id: str) -> None:
-        del workspace_id
-        if self.redis is None:
-            return
-        event = EventBusEvent(type=EventBusEventType.PurgeSourceCache)
-        self.events.send(event)
 
     def set_image_pull_lock(
         self,

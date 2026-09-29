@@ -138,13 +138,13 @@ AMI inspection, and customer CloudFormation operations.
 
 Platform S3 access logs use a private bucket and an SQS queue from the infrastructure
 descriptor. `LAZYCLOUD_AWS_STORAGE_ACCESS_BUCKET` and
-`LAZYCLOUD_AWS_STORAGE_ACCESS_QUEUE_URL` use the scheduler's existing AWS identity.
+`LAZYCLOUD_AWS_STORAGE_ACCESS_QUEUE_URL` use the fleet controller's AWS identity.
 The issuer enables logging before granting workspace access. Customer buckets keep
 their own storage configuration.
 
-The scheduler retains deduplicated request observations in PostgreSQL. It acknowledges
+The fleet controller retains deduplicated request observations in PostgreSQL. It acknowledges
 each queue message only after its log objects are recorded. Failed messages retry,
-then enter the dead-letter queue after ten receives. Inspect scheduler errors and
+then enter the dead-letter queue after ten receives. Inspect fleet-controller errors and
 queue age, fix the cause, then redrive that queue. Messages expire after 14 days and
 raw log objects after 30 days. Raw logs contain signed URLs and must stay private.
 Logs can arrive late or omit requests; region evidence does not prove a paid transfer.
@@ -183,8 +183,9 @@ The API and connection gateways run independently. Recreate the API without
 recreating the gateway services.
 
 Workers and user containers send callbacks to their local agent connector. Its
-authenticated outbound tunnel carries them to a gateway, which opens the API
-Service at `control-plane:9000`. API replica addresses never become agent state.
+authenticated outbound tunnel carries them to a gateway. Its local HAProxy router
+selects the management, execution or runtime API by request path. API replica
+addresses never become agent state.
 
 Check authenticated session ownership and logs at the agent and gateway when a
 machine is unreachable. Gateway process health alone does not prove that route.
@@ -206,9 +207,10 @@ API and gateway health prove their processes and dependencies, not workload rout
 ### Enrolled local capacity
 
 The `agent` service joins a machine owned by the `customer` account. Its
-`tenant-customer` workspace selects the `self-hosted` pool. The agent launches
-the built worker image in its own network namespace and registers authenticated
-routes through the outbound tunnel.
+`tenant-customer` workspace can use the joined `compose-agent` machine. Workloads
+must select `machine="compose-agent"`; image builds inherit that selection.
+The agent launches the built worker image in its own network namespace and
+registers authenticated routes through the outbound tunnel.
 
 The agent's Compose entrypoint also forwards loopback port 5000 to the local
 workload registry. The worker shares that namespace. This registry listener is

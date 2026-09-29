@@ -10,12 +10,8 @@ import pytest
 from agent.binary import AgentBinarySettings
 from api.fastapi_app import create_app
 from api.server.async_io import ApiAsyncIo
-from api.server.services import ApiServices
+from api.server.services import ApiServices, compose_api_services, create_api_core
 from coordination.redis_client import RedisClient, RedisSettings
-from execution.collections.redis import (
-    RedisMapService,
-    RedisSimpleQueueService,
-)
 from fastapi.testclient import TestClient
 from identity.auth import AuthService
 from identity.platform import PlatformNamespaceService
@@ -44,37 +40,35 @@ def service_graph(
 ) -> Iterator[ApiServices]:
     """Compose services over a migrated database. The caller owns async I/O."""
 
-    maps = RedisMapService(binary_redis_client)
     PlatformNamespaceService(database).initialize()
-    simple_queues = RedisSimpleQueueService(binary_redis_client)
 
-    services = ApiServices.create(
-        database,
-        root=tmp_path,
-        redis_client=redis_client,
-        binary_redis_client=binary_redis_client,
-        async_io=async_io,
-        owns_redis_client=False,
-        owns_binary_redis_client=False,
-        map_service=maps,
-        simple_queue_service=simple_queues,
-        object_store_client=FakeObjectClient(),
-        workspace_storage_client=FakeWorkspaceBuckets(),
-        agent_binary_settings=AgentBinarySettings(
-            binary_dir=tmp_path,
-            binary_version="test",
-            binary_sha256_by_arch={"amd64": "a" * 64},
-        ),
-        aws_account_connection_settings=AwsAccountConnectionSettings(),
-        aws_capacity_settings=AwsCapacitySettings(
-            worker_image_digest=f"worker@sha256:{'0' * 64}",
-            agent_binary_url=(
-                f"https://s3.us-east-1.amazonaws.com/releases/agents/test/{'0' * 64}/"
-                "lazycloud-agent-linux-amd64.tar.gz"
+    services = compose_api_services(
+        create_api_core(
+            database,
+            root=tmp_path,
+            redis_client=redis_client,
+            binary_redis_client=binary_redis_client,
+            async_io=async_io,
+            owns_redis_client=False,
+            owns_binary_redis_client=False,
+            object_store_client=FakeObjectClient(),
+            workspace_storage_client=FakeWorkspaceBuckets(),
+            agent_binary_settings=AgentBinarySettings(
+                binary_dir=tmp_path,
+                binary_version="test",
+                binary_sha256_by_arch={"amd64": "a" * 64},
             ),
-            cpu_ami_ids={"us-east-1": "ami-00000000000000000"},
-            gpu_ami_ids={"us-east-1": "ami-00000000000000000"},
-        ),
+            aws_account_connection_settings=AwsAccountConnectionSettings(),
+            aws_capacity_settings=AwsCapacitySettings(
+                worker_image_digest=f"worker@sha256:{'0' * 64}",
+                agent_binary_url=(
+                    f"https://s3.us-east-1.amazonaws.com/releases/agents/test/{'0' * 64}/"
+                    "lazycloud-agent-linux-amd64.tar.gz"
+                ),
+                cpu_ami_ids={"us-east-1": "ami-00000000000000000"},
+                gpu_ami_ids={"us-east-1": "ami-00000000000000000"},
+            ),
+        )
     )
     try:
         yield services
@@ -117,16 +111,18 @@ def services_with_object_storage(
     object_storage: ObjectStorage,
     request: pytest.FixtureRequest,
 ) -> ApiServices:
-    replacement = ApiServices.create(
-        services.database,
-        root=services.root,
-        workspace_storage_issuer=services.workspace_storage_issuer,
-        object_storage=object_storage,
-        redis_client=services.redis_client,
-        binary_redis_client=services.binary_redis_client,
-        async_io=services.require_async_io(),
-        owns_redis_client=False,
-        owns_binary_redis_client=False,
+    replacement = compose_api_services(
+        create_api_core(
+            services.database,
+            root=services.root,
+            workspace_storage_issuer=services.workspace_storage_issuer,
+            object_storage=object_storage,
+            redis_client=services.redis_client,
+            binary_redis_client=services.binary_redis_client,
+            async_io=services.require_async_io(),
+            owns_redis_client=False,
+            owns_binary_redis_client=False,
+        )
     )
     request.addfinalizer(replacement.close)
     return replacement

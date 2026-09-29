@@ -7,9 +7,9 @@ from fastapi import APIRouter, Depends, Query
 from shared.http.fleet import FleetNodeListResponse, FleetSummaryResponse
 
 from api.server.auth import admin_access
-from api.server.dependencies import current_services
+from api.server.dependencies import management_services
 from api.server.service_dependencies import fleet_status_service
-from api.server.services import ApiServices
+from api.server.services import ManagementServiceCore
 
 router = APIRouter()
 
@@ -18,7 +18,7 @@ router = APIRouter()
 def get_fleet(
     _auth: admin_access,
     fleet: Annotated[FleetStatusService, Depends(fleet_status_service)],
-    services: Annotated[ApiServices, Depends(current_services)],
+    services: Annotated[ManagementServiceCore, Depends(management_services)],
 ) -> FleetSummaryResponse:
     return fleet.summary(
         DeploymentReleaseService().active(), services.scheduler_workers.list_workers()
@@ -31,7 +31,7 @@ def get_fleet(
 def list_fleet_nodes(
     _auth: admin_access,
     fleet: Annotated[FleetStatusService, Depends(fleet_status_service)],
-    services: Annotated[ApiServices, Depends(current_services)],
+    services: Annotated[ManagementServiceCore, Depends(management_services)],
     cursor: UUID | None = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
 ) -> FleetNodeListResponse:

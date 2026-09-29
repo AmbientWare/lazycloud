@@ -61,10 +61,14 @@ class CleanupRepository:
         object_ids: set[str],
         image_ids: set[str],
     ) -> None:
-        self.lock_keys(
-            {f"object:{object_id}" for object_id in object_ids}
-            | {f"image:{workspace_id}:{image_id}" for image_id in image_ids}
-        )
+        keys = {f"object:{object_id}" for object_id in object_ids} | {
+            f"image:{workspace_id}:{image_id}" for image_id in image_ids
+        }
+        for key in sorted(keys):
+            self.session.execute(
+                text("SELECT pg_advisory_xact_lock_shared(hashtextextended(:key, 0))"),
+                {"key": f"artifact-cleanup:{key}"},
+            )
         object_rows = (
             list(
                 self.session.scalars(

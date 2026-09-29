@@ -1,21 +1,3 @@
-"""The scheduler's loops, and the supervisor that owns their lifetime.
-
-One process, several cadences. Placement answers in milliseconds because a
-caller is waiting for it; acquisition starts or buys the machine a waiting
-request needs; capacity keeps the fleet and its records agreeing;
-housekeeping waits on Stripe, S3, and Cloudflare, which answer on
-their own schedule. Running all of it on one thread meant placement waited for
-the slowest of them, and a task took fifty-five seconds to start behind a
-Stripe drain.
-
-Each loop is separate because its cadence is, not because its work is
-unrelated. What makes that safe is that every reconciliation already guards
-itself: the interval stamps on `Scheduler` are each written and read by one
-reconciliation, and the ones with non-idempotent effects take their own Redis
-lease. Keeping a reconciliation in exactly one loop is the whole of the
-discipline here.
-"""
-
 from __future__ import annotations
 
 import logging
@@ -28,84 +10,28 @@ from time import monotonic
 from types import FrameType
 
 from coordination.redis_client import REDIS_UNAVAILABLE_ERRORS
-from scheduler.service import (
-    DEFAULT_AUTOSCALING_RECONCILE_LIMIT,
-    Scheduler,
-    SchedulerRunResult,
-)
+from coordination.wake_signal import WakeSignalWaiter
+from scheduler.reconciliation import DEFAULT_AUTOSCALING_RECONCILE_LIMIT, SchedulerRunResult
+from scheduler.service import Scheduler
 
 from scheduler_app.health import SchedulerLoopName
 
 LOGGER = logging.getLogger(__name__)
 
 PLACEMENT_SWEEP_INTERVAL_SECONDS = 1.0
-"""How often placement looks for work that has nowhere to run.
+"""Wake wait bound used to observe shutdown and heartbeat progress."""
 
-A plain timed sweep rather than a wake, deliberately. `RedisWakeSignal.wait` is a
-blocking pop, so it consumes what it receives: a second waiter on the dispatch
-scope would take wakeups meant for dispatch and delay the loop it was trying to
-help. Placement would need a scope of its own, published from wherever a stub's
-backlog grows. A one-second fallback bounds wake-free placement latency without
-running four full placement snapshots per second while the system is idle.
-"""
-
-ACQUISITION_SWEEP_INTERVAL_SECONDS = 5.0
-"""How often acquisition looks for capacity demand nobody woke it for.
-
-Demand is normally announced on the capacity wake the moment a request finds
-no worker, so this sweep only bounds a lost wake, a retry that came due, or
-a capacity owner whose lease another replica held.
-"""
-
-ACQUISITION_CONTENDED_RETRY_SECONDS = 1.0
-
-CAPACITY_INTERVAL_SECONDS = 5.0
-"""Cadence for the pass that decides what capacity exists.
-
-Also the cadence billing enforcement runs on, and that is the binding
-constraint: every second between an account running out and its containers
-stopping is spend that will not be collected.
-"""
-
-HOUSEKEEPING_INTERVAL_SECONDS = 30.0
-"""Cadence for everything that waits on somebody else's service.
-
-Coarse on purpose. Nothing placement needs is produced here, and the meter
-outbox is durable, so a slower drain delays delivery rather than losing it.
-"""
+PLACEMENT_MIN_INTERVAL_SECONDS = 0.1
+"""Coalesce demand bursts before another placement snapshot."""
 
 LOOP_FAILURE_RETRY_MAX_SECONDS = 30.0
-
-
-@dataclass(slots=True)
-class _ContendedDemand:
-    """Demand the acquisition loop retries alone after it met a held lease."""
-
-    container_ids: tuple[str, ...] = ()
-    attempts: int = 0
-    full_sweep: bool = True
-
-    @property
-    def retrying(self) -> tuple[str, ...]:
-        return () if self.full_sweep else self.container_ids
-
-    def observe(self, contended: tuple[str, ...]) -> None:
-        self.attempts = self.attempts + 1 if contended and not self.full_sweep else 0
-        self.container_ids = contended
-        self.full_sweep = not contended
-
-    def delay_seconds(self) -> float:
-        return ACQUISITION_CONTENDED_RETRY_SECONDS * (1 << min(self.attempts, 3))
-
-    def sweep_next(self) -> None:
-        self.full_sweep = True
 
 
 @dataclass(frozen=True, slots=True)
 class SchedulerLoop:
     """One running loop and the switch that stops it."""
 
-    name: SchedulerLoopName
+    name: str
     thread: threading.Thread
     beat: Callable[[], None] | None = None
 
@@ -123,8 +49,9 @@ class SchedulerLoopSupervisor:
 
     def shutdown(self, *, timeout_seconds: float) -> None:
         self.stop.set()
+        deadline = monotonic() + timeout_seconds
         for loop in self.loops:
-            loop.thread.join(timeout=timeout_seconds)
+            loop.thread.join(timeout=max(0.0, deadline - monotonic()))
             if loop.thread.is_alive():
                 LOGGER.warning("scheduler loop %s did not stop promptly", loop.name)
 
@@ -138,15 +65,7 @@ def run_loop(
     beat: Callable[[], None] | None = None,
     wait: Callable[[float], None] | None = None,
 ) -> None:
-    """Run one pass forever, on its own failure budget.
-
-    The backoff counter is per loop rather than per process. Sharing one meant a
-    housekeeping pass that could not reach Stripe throttled placement, which is
-    the coupling this whole arrangement exists to remove.
-
-    The beat is stamped after the pass, not before. Stamped before, it says the
-    loop entered a pass; what an operator needs to know is that one finished.
-    """
+    """Back off failures per loop and stamp progress only after completed work."""
 
     consecutive_failures = 0
     while not stop.is_set():
@@ -185,8 +104,6 @@ def start_scheduler_loops(
     include_containers: bool = True,
     container_limit: int = 100,
     autoscaling_limit: int = DEFAULT_AUTOSCALING_RECONCILE_LIMIT,
-    capacity_interval_seconds: float = CAPACITY_INTERVAL_SECONDS,
-    housekeeping_interval_seconds: float = HOUSEKEEPING_INTERVAL_SECONDS,
     beats: dict[str, Callable[[], None]] | None = None,
     stop: threading.Event | None = None,
 ) -> SchedulerLoopSupervisor:
@@ -196,9 +113,7 @@ def start_scheduler_loops(
     resolved_beats = beats or {}
     loops: list[SchedulerLoop] = []
 
-    def wait_for_demand(timeout: float) -> bool:
-        """Wait for the capacity wake or the timeout; True when the wake arrived."""
-        wake = scheduler.workloads.capacity_wake
+    def wait_for_wake(wake: WakeSignalWaiter | None, timeout: float) -> bool:
         if wake is None:
             resolved_stop.wait(timeout)
             return False
@@ -212,7 +127,7 @@ def start_scheduler_loops(
                 if wake.wait(timeout_seconds=min(remaining, 1.0)):
                     return True
         except REDIS_UNAVAILABLE_ERRORS:
-            LOGGER.warning("capacity wake unavailable; using the durable due-work sweep")
+            LOGGER.warning("scheduler wake unavailable; using the durable due-work sweep")
             resolved_stop.wait(timeout)
         return False
 
@@ -239,57 +154,58 @@ def start_scheduler_loops(
         thread.start()
         loops.append(SchedulerLoop(name=name, thread=thread, beat=beat))
 
+    last_placement_started = 0.0
+    demand_pending = False
+
+    def place() -> SchedulerRunResult:
+        nonlocal last_placement_started, demand_pending
+        if not demand_pending:
+            return SchedulerRunResult()
+        demand_pending = False
+        last_placement_started = monotonic()
+        return scheduler.run_placement_pass(
+            include_containers=include_containers,
+            autoscaling_limit=autoscaling_limit,
+        )
+
+    def wait_for_placement(timeout: float) -> None:
+        nonlocal demand_pending
+        demand_pending = wait_for_wake(scheduler.workloads.placement_wake, timeout)
+        remaining = PLACEMENT_MIN_INTERVAL_SECONDS - (monotonic() - last_placement_started)
+        if remaining > 0:
+            resolved_stop.wait(remaining)
+
     spawn(
         SchedulerLoopName.Placement,
         PLACEMENT_SWEEP_INTERVAL_SECONDS,
-        lambda: scheduler.run_placement_pass(
+        place,
+        wait=wait_for_placement,
+    )
+    spawn(
+        SchedulerLoopName.Recovery,
+        0.1,
+        lambda: scheduler.run_recovery_pass(
             include_containers=include_containers,
             container_limit=container_limit,
             autoscaling_limit=autoscaling_limit,
         ),
     )
-    retry = _ContendedDemand()
-
-    def acquire() -> SchedulerRunResult:
-        result = scheduler.run_acquisition_pass(
-            include_containers=include_containers,
-            container_limit=container_limit,
-            retry_container_ids=retry.retrying,
-        )
-        retry.observe(tuple(result.capacity_demand_contended))
-        return result
-
-    def wait_for_acquisition(timeout: float) -> None:
-        if not retry.container_ids:
-            wait_for_demand(timeout)
-            return
-        # A capacity owner's lease is held for one provider round trip. Demand
-        # that met it retries alone, one second later and then doubling, unless
-        # new demand wakes a whole pass first.
-        if wait_for_demand(min(retry.delay_seconds(), timeout)):
-            retry.sweep_next()
-
     spawn(
-        SchedulerLoopName.Acquisition,
-        ACQUISITION_SWEEP_INTERVAL_SECONDS,
-        acquire,
-        wait=wait_for_acquisition,
-    )
-    spawn(
-        SchedulerLoopName.Capacity,
-        capacity_interval_seconds,
-        lambda: scheduler.run_capacity_pass(
-            include_cron_jobs=include_cron_jobs,
-            include_containers=include_containers,
-            container_limit=container_limit,
+        SchedulerLoopName.Scheduled,
+        1.0,
+        lambda: (
+            scheduler.run_scheduled_pass(limit=container_limit)
+            if include_cron_jobs
+            else SchedulerRunResult()
         ),
     )
     spawn(
-        SchedulerLoopName.Housekeeping,
-        housekeeping_interval_seconds,
-        lambda: scheduler.run_housekeeping_pass(
-            include_containers=include_containers,
-            container_limit=container_limit,
+        SchedulerLoopName.Builds,
+        1.0,
+        lambda: (
+            scheduler.run_build_pass(container_limit=container_limit)
+            if include_containers
+            else SchedulerRunResult()
         ),
     )
     if include_containers:
@@ -320,12 +236,7 @@ def scheduler_shutdown_handlers(
     *,
     enabled: bool = True,
 ) -> Iterator[None]:
-    """Turn the signal Kubernetes sends into an ordered stop.
-
-    Without this the process dies where it stands on SIGTERM: no telemetry
-    flush, no thread join, no lease released. Handlers install only on the main
-    thread, because that is the only thread Python allows them on.
-    """
+    """Signal handlers install on the main thread and request an ordered stop."""
 
     if not enabled or threading.current_thread() is not threading.main_thread():
         yield
@@ -345,9 +256,6 @@ def scheduler_shutdown_handlers(
 
 
 __all__ = [
-    "ACQUISITION_SWEEP_INTERVAL_SECONDS",
-    "CAPACITY_INTERVAL_SECONDS",
-    "HOUSEKEEPING_INTERVAL_SECONDS",
     "PLACEMENT_SWEEP_INTERVAL_SECONDS",
     "SchedulerLoop",
     "SchedulerLoopSupervisor",

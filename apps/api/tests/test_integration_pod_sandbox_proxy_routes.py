@@ -120,7 +120,6 @@ def test_pod_proxy_records_demand_before_waiting_for_scale_from_zero(
             pod_proxy_connections=connections,
             container_readiness_probe=_ServingContainers(),
             pod_proxy_start_timeout_seconds=0.1,
-            poll_interval_seconds=0.0,
         )
         client = client_stack.enter_context(
             TestClient(create_app(isolated_services, pod_service=service))

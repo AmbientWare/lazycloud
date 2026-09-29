@@ -1193,6 +1193,7 @@ def test_worker_repository_api_authenticates_and_streams_container_requests(
             workers,
             RedisSchedulerContainerRepository(redis),
             SchedulerWorkerRequest(
+                fairness_account_id="test-account",
                 workspace_id=workspace.id,
                 stub_id=stub.id,
                 container_id=container_id,
@@ -1391,6 +1392,7 @@ async def test_worker_repository_stream_blocks_until_scheduler_assignment(
         workers,
         containers,
         SchedulerWorkerRequest(
+            fairness_account_id="test-account",
             workspace_id=workspace_id,
             stub_id=str(uuid4()),
             container_id=container_id,
@@ -1506,6 +1508,7 @@ async def test_worker_stream_rechecks_cache_after_dequeue_and_requeues_on_drain(
         )
     )
     request = SchedulerWorkerRequest(
+        fairness_account_id="test-account",
         placement=Placement.platform(),
         workspace_id="workspace-a",
         stub_id="stub-1",

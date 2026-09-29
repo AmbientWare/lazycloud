@@ -1,84 +1,39 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
 
-from agent.binary import AgentBinarySettings
-from billing.payment_maintenance import BillingPaymentMaintenance
-from compute.aws_connections import AwsAccountConnectionDirectory
-from compute.bucket_access import AwsDeploymentBucketAccessService
 from compute.capacity_recovery import CAPACITY_WAKE_SCOPE
 from compute.policy import WorkspaceComputePolicyService
-from compute.provider_state import ProviderUnitStateService
-from compute.providers import ResolvedBlockVolumes
-from compute.reclaim import ComputeReclaimPolicy
-from compute.request_placement import ComputeCapacityPlacementService
 from compute.reserve_state import RedisFleetReserveState
-from compute.service import ComputeService
-from compute.state import RedisComputeStateRepository
-from compute.telemetry import AGENT_INTAKE_PRESENCE_ROLE
 from control.apps import (
-    AppService,
     DatabaseAppExecutionAdmission,
-    DatabaseAppImageAvailability,
 )
-from control.custom_domains import CustomDomainService
-from control.deployment_cleanup import AppDeploymentLifecycleService
-from control.deployment_plans import DeploymentPlanService
-from control.deployment_registration import DeploymentRegistrationService
-from control.deployment_resources import DeploymentResourceService
-from control.deployments import CronJobService, DeploymentService
+from control.deployments import CronJobService
 from control.placement import PlacementResolver
+from control.readers import DatabaseAppReader, DatabaseDeploymentReader
 from control.service import ControlPlaneService
 from coordination.event_bus import RedisEventBus
-from coordination.process_presence import RedisProcessPresence
 from coordination.redis_client import RedisClient
 from coordination.wake_signal import RedisWakeSignal
 from database.context import ServiceContext
 from execution.containers.runtime_state import RedisContainerRuntimeStateRepository
 from execution.containers.scheduling import ContainerSchedulingPersistenceService
 from execution.containers.service import ContainerService
+from execution.demand import PLACEMENT_WAKE_SCOPE, ExecutionDemandService
 from execution.task_progress import TaskProgressService
 from execution.tasks import TaskService
-from gateway.pool_bootstrap import PoolBootstrapProvisioner
-from gateway.settings import GatewaySettings
-from identity.platform import PlatformNamespaceService
 from observability.events import EventService
 from observability.metrics import MetricsService
-from observability.settings import (
-    VolumeMeteringSettings,
-    WorkspaceChangeStreamSettings,
-)
 from observability.stream_state import RedisEventStreamRepository
 from observability.usage import UsageService
 from observability.workspace_changes import WorkspaceChangeRepository, WorkspaceChangeService
-from operations.app_lifecycle import ProductionAppExecutionLifecycleEffects
 from operations.container_shutdown import (
     ContainerShutdownService,
     DatabaseContainerStorageRelease,
     DatabaseDurableWorkerAbsence,
 )
-from provider_aws.provider import AwsEcrImageRegistry
-from provider_aws.storage_access import AwsStorageAccessSettings, AwsStorageAccessSource
-from provider_clients import (
-    workspace_compute_provider_resolver,
-)
-from provider_clients.aws_connections import configured_aws_account_connection_components
-from provider_clients.settings import (
-    AwsAccountConnectionSettings,
-    AwsCapacitySettings,
-    PlatformCapacitySettings,
-)
-from provider_clients.workspace_compute import configured_platform_compute_providers
-from provider_clients.workspace_storage import workspace_storage_router
-from provider_cloudflare import CloudflareSettings
-from provider_resend import ResendSettings
-from provider_stripe import StripeSettings
 from scheduler.adapters import SchedulerWorkloadDirectoryAdapter
 from scheduler.autoscaler_states import AutoscalerStateService
-from scheduler.capacity_reservations import RedisCapacityReservationRepository
-from scheduler.compute_hooks import SchedulerComputeHooks
-from scheduler.compute_placement import SchedulerComputePlacement
 from scheduler.containers import (
     CONTAINER_DISPATCH_WAKE_SCOPE,
     SchedulerContainerRequestService,
@@ -91,97 +46,39 @@ from scheduler.state import (
     RedisSchedulerWorkerRepository,
 )
 from scheduler.workspace_owners import DatabaseWorkspaceOwners
-from shared.checkpoints import checkpoint_recent_stub_key
-from shared.deployment_settings import MissingDeploymentSettingError
-from shared.image_building.credentials import parse_ecr_registry, registry_host_for_image
-from shared.workspace_storage import WorkspaceStorageProvider
-from storage.access_metering import StorageAccessMeteringService
-from storage.disk_volumes import DiskVolumeService
-from storage.disks import DiskDeletionService, DiskService
-from storage.image_archive import ImageArchiveSettings
-from storage.retention import (
-    RetentionResult,
-    RetentionService,
-)
-from storage.retention_settings import RetentionSettings
-from storage.service import CacheStorage, ObjectStorage
-from storage.unfunded_retention import UnfundedStorageRetentionService
-from storage.volume_deletion import VolumeDeletionService
-from storage.volume_filesystem import (
-    WorkspaceVolumeFilesystem,
-    workspace_volume_store_resolver,
-)
-from storage.volume_metering import PersistentVolumeMeteringService
-from storage.workspace_storage_issuers import WorkspaceStorageIssuerSettings
-from storage_client.s3 import S3ObjectStoreClient, S3ObjectStoreSettings
+from storage.service import ObjectStorage
+from storage_client.s3 import S3ObjectStoreClient
 
 from billing import (
-    BillingEnforcementService,
-    BillingMeterOutboxService,
-    BillingPlanChangeService,
-    BillingReconciliationService,
     DatabaseBillingAdmission,
 )
 from database import DatabaseClient
-from notifications import EmailOutboxDrain
-
-
-@dataclass(frozen=True, slots=True)
-class SchedulerObservabilitySettings:
-    workspace_changes: WorkspaceChangeStreamSettings
-
-
-@dataclass(frozen=True, slots=True)
-class SchedulerStorageSettings:
-    object_store: S3ObjectStoreSettings
-    image_archive: ImageArchiveSettings
-    retention: RetentionSettings
-    volume_metering: VolumeMeteringSettings
-    workload_image_registry_repository: str = ""
-
-
-@dataclass(frozen=True, slots=True)
-class SchedulerCapacitySettings:
-    aws_connections: AwsAccountConnectionSettings
-    aws_capacity: AwsCapacitySettings
-    agent_binaries: AgentBinarySettings
-    reclaim: ComputeReclaimPolicy
+from scheduler_app.composition_settings import (
+    SchedulerObservabilitySettings,
+    SchedulerStorageSettings,
+)
 
 
 @dataclass(slots=True)
 class SchedulerAppServices:
     context: ServiceContext
+    payment_admission: DatabaseBillingAdmission
     events: EventService
     workspace_changes: WorkspaceChangeService
     metrics: MetricsService
     autoscaler_states: AutoscalerStateService
-    apps: AppService
-    deployments: DeploymentService
-    deployment_plans: DeploymentPlanService
+    apps: DatabaseAppReader
+    deployments: DatabaseDeploymentReader
     cron_jobs: CronJobService
     containers: ContainerService
     container_shutdowns: ContainerShutdownService
     scheduler_workloads: SchedulerWorkloadDirectory
-    compute: ComputeService
     compute_policies: WorkspaceComputePolicyService
-    custom_domains: CustomDomainService
     tasks: TaskService
+    execution_demand: ExecutionDemandService
     usage: UsageService
     object_storage: ObjectStorage
     object_store_client: S3ObjectStoreClient
-    volume_filesystem: WorkspaceVolumeFilesystem
-    volume_metering: PersistentVolumeMeteringService
-    storage_access: StorageAccessMeteringService | None
-    volume_deletion: VolumeDeletionService
-    disk_deletion: DiskDeletionService
-    disk_volumes: DiskVolumeService
-    meter_outbox: BillingMeterOutboxService
-    email_outbox: EmailOutboxDrain
-    plan_changes: BillingPlanChangeService
-    billing_reconciliation: BillingReconciliationService
-    billing_payments: BillingPaymentMaintenance
-    billing_enforcement: BillingEnforcementService
-    retention: SchedulerRetention | None
     redis_client: RedisClient
 
     @property
@@ -197,30 +94,39 @@ class SchedulerAppServices:
         gateway_origin: str,
         observability: SchedulerObservabilitySettings,
         storage: SchedulerStorageSettings,
-        capacity: SchedulerCapacitySettings,
     ) -> SchedulerAppServices:
         context = ServiceContext.create(database)
-        image_archive_config = storage.image_archive
+
         object_client = S3ObjectStoreClient.from_settings(storage.object_store)
+
         redis = redis_client
+
         stream_events = RedisEventStreamRepository(redis)
+
         events = EventService(context, stream_events=stream_events)
+
         workspace_changes = WorkspaceChangeService(
             WorkspaceChangeRepository(
                 redis,
                 max_length=observability.workspace_changes.max_length,
             )
         )
+
         compute_policies = WorkspaceComputePolicyService(context)
+
         control_plane = ControlPlaneService(
             context,
             workspace_storage_client=object_client,
             public_http_origin=gateway_origin,
             workspace_changes=workspace_changes,
         )
+
         scheduler_workloads = SchedulerWorkloadDirectoryAdapter(control_plane)
+
         container_repository = RedisSchedulerContainerRepository(redis)
+
         worker_repository = RedisSchedulerWorkerRepository(redis)
+
         tasks = TaskService(
             context,
             events,
@@ -228,153 +134,31 @@ class SchedulerAppServices:
             progress=TaskProgressService(context, container_repository, worker_repository),
             workspace_changes=workspace_changes,
         )
+
         usage = UsageService(
             context,
             workspace_changes=workspace_changes,
         )
-        volume_filesystem = WorkspaceVolumeFilesystem(
-            resolve_store=workspace_volume_store_resolver(
-                context.database,
-                object_store=object_client,
-                storage_issuer=workspace_storage_router(
-                    context.database, storage.object_store, public_origin=gateway_origin
-                ),
-            )
-        )
-        volume_metering = PersistentVolumeMeteringService.from_settings(
-            context,
-            filesystem=volume_filesystem,
-            interval_seconds=storage.volume_metering.interval_seconds,
-        )
+
         object_storage = ObjectStorage(
             context, object_client=object_client, default_bucket=storage.object_store.bucket
         )
-        stripe_settings = StripeSettings()
-        # Factories defer credential validation until delivery; missing credentials
-        # must leave billing and email work queued for the next sweep.
-        meter_outbox = BillingMeterOutboxService(
-            database=context.database,
-            payments=stripe_settings.provider_factory(),
-            events=events,
-        )
-        email_outbox = EmailOutboxDrain(
-            database=context.database,
-            sender_factory=ResendSettings().sender_factory(),
-        )
-        plan_changes = BillingPlanChangeService(
-            database=context.database,
-            payments=stripe_settings.provider_factory(),
-            events=events,
-        )
-        billing_reconciliation = BillingReconciliationService(
-            database=context.database,
-            payments=stripe_settings.provider_factory(),
-            events=events,
-        )
-        billing_payments = BillingPaymentMaintenance(
-            context.database, stripe_settings.provider_factory()
-        )
-        volume_deletion = VolumeDeletionService(
-            context,
-            volume_filesystem,
-            volume_metering,
-            DatabaseDurableWorkerAbsence(context, worker_repository),
-            workspace_changes,
-        )
-        disks = DiskService(
-            context.database,
-            worker_absence=DatabaseDurableWorkerAbsence(context, worker_repository),
-        )
-        retention = scheduler_retention(
-            context=context,
-            object_storage=object_storage,
-            cache_storage=CacheStorage(context),
-            settings=storage.retention,
-            image_archive_settings=image_archive_config,
-            volume_deletion=volume_deletion,
-            disks=disks,
-            workload_image_registry_repository=storage.workload_image_registry_repository,
-        )
-        # See the API composition: the resolver exists only where connected AWS is
-        # configured, and a half-configured deployment is rejected by settings.
-        platform_capacity = PlatformCapacitySettings()
-        connection_directory = AwsAccountConnectionDirectory(context)
 
-        platform_namespace_id = PlatformNamespaceService(context.database).namespace_id
-
-        def platform_capacity_workspace() -> str:
-            return platform_namespace_id
-
-        provider_resolver = (
-            workspace_compute_provider_resolver(
-                capacity.aws_capacity,
-                capacity.agent_binaries,
-                connections=connection_directory.list_for_workspace,
-                capacity_workspace=connection_directory.capacity_workspace,
-                platform_providers=configured_platform_compute_providers(
-                    platform_capacity,
-                    provider_state=ProviderUnitStateService(context.database),
-                    capacity_workspace=platform_capacity_workspace,
-                    binaries_by_region=(
-                        capacity.aws_capacity.binaries_by_region(capacity.agent_binaries)
-                        if capacity.aws_capacity.configured
-                        else {}
-                    ),
-                ),
-                gateway_origin=gateway_origin,
-                presigned_origin=storage.object_store.endpoint_url,
-            )
-            if capacity.aws_connections.configured or platform_capacity.configured
-            else None
-        )
-        disk_volumes = DiskVolumeService(
-            context.database,
-            providers=ResolvedBlockVolumes(provider_resolver),
-            deployment=platform_namespace_id,
-            worker_absence=DatabaseDurableWorkerAbsence(context, worker_repository),
-        )
-        agent_version, agent_sha256 = (
-            capacity.agent_binaries.require_amd64() if provider_resolver is not None else ("", "")
-        )
-
-        pool_bootstrap = (
-            PoolBootstrapProvisioner(
-                control_plane_url=gateway_origin,
-                agent_version=agent_version,
-                agent_sha256=agent_sha256,
-                agent_binary_url=capacity.aws_capacity.agent_binary_url,
-            )
-            if provider_resolver is not None
-            else None
-        )
-
-        scheduler_hooks = SchedulerComputeHooks(
-            RedisComputeStateRepository(redis),
-            worker_repository,
-            agent_intake=RedisProcessPresence(redis, AGENT_INTAKE_PRESENCE_ROLE),
-        )
         reserve_state = RedisFleetReserveState(redis)
-        compute = ComputeService(
-            context,
-            provider_resolver=provider_resolver,
-            pool_bootstrap_factory=pool_bootstrap if provider_resolver is not None else None,
-            scheduler_hooks=scheduler_hooks,
-            workspace_changes=workspace_changes,
-            reclaim=capacity.reclaim,
-            capacity_owner_mutations=RedisCapacityReservationRepository(redis),
-            reserve_state=reserve_state,
-        )
+
         container_runtime_state = RedisContainerRuntimeStateRepository(redis)
+
         scheduling_persistence = ContainerSchedulingPersistenceService(
             context,
             events,
             workspace_changes,
             runtime_state=container_runtime_state,
         )
+
         container_scheduler = SchedulerContainerRequestService(
             worker_repository,
             container_repository,
-            placement=SchedulerComputePlacement(ComputeCapacityPlacementService(context, compute)),
+            placement=None,
             failure_handler=scheduling_persistence,
             assignments=scheduling_persistence,
             usage=usage,
@@ -385,6 +169,7 @@ class SchedulerAppServices:
             disk_volume_attachments=DatabaseDiskVolumeAttachments(context),
             reserve_state=reserve_state,
         )
+
         container_shutdowns = ContainerShutdownService(
             container_repository,
             RedisEventBus(redis),
@@ -392,12 +177,14 @@ class SchedulerAppServices:
             storage_release=DatabaseContainerStorageRelease(context),
             durable_worker_absence=DatabaseDurableWorkerAbsence(context, worker_repository),
         )
+
+        payment_admission = DatabaseBillingAdmission()
         containers = ContainerService(
             context,
             events,
             tasks,
             DatabaseAppExecutionAdmission(),
-            DatabaseBillingAdmission(),
+            payment_admission,
             scheduler=container_scheduler,
             scheduler_cancellation=container_scheduler,
             event_bus=RedisEventBus(redis),
@@ -407,204 +194,43 @@ class SchedulerAppServices:
             workers=worker_repository,
             placement_resolver=compute_policies,
         )
+
         container_scheduler.backfill_preemption = SchedulerGpuBackfillPreemptionService(
             worker_repository, container_repository, containers
         )
-        # After the container service, because stopping containers is the whole
-        # of what this sweep does.
-        billing_enforcement = BillingEnforcementService(
-            database=context.database,
-            containers=containers,
-            events=events,
-        )
-        placement_resources = (
-            AwsDeploymentBucketAccessService(
-                context,
-                configured_aws_account_connection_components(
-                    capacity.aws_connections,
-                    capacity=capacity.aws_capacity,
-                    gateway_origin=gateway_origin,
-                ).bucket_access,
-            )
-            if capacity.aws_connections.configured
-            else None
-        )
-        deployment_lifecycle = AppDeploymentLifecycleService(
-            context,
-            workspace_changes=workspace_changes,
-            placement_resources=placement_resources,
-        )
-        execution_lifecycle = ProductionAppExecutionLifecycleEffects(
-            context,
-            containers,
-            tasks,
-            redis,
-            container_shutdowns,
-        )
-        deployment_plans = DeploymentPlanService(
-            context,
-            execution_lifecycle,
-            workspace_changes=workspace_changes,
-            placement_resources=placement_resources,
-        )
-        apps = AppService(
-            context,
-            deployment_lifecycle,
-            execution_lifecycle,
-            DatabaseAppImageAvailability(),
-            workspace_changes=workspace_changes,
-        )
+
         cron_jobs = CronJobService(
             context,
             workspace_changes=workspace_changes,
         )
-        deployments = DeploymentService(
-            context,
-            events,
-            compute_policies,
-            DeploymentRegistrationService(apps, control_plane),
-            cron_jobs,
-            DatabaseBillingAdmission(),
-            execution_lifecycle,
-            workspace_changes=workspace_changes,
-        )
+
         return cls(
             context=context,
+            payment_admission=payment_admission,
             events=events,
             workspace_changes=workspace_changes,
             metrics=MetricsService(),
             autoscaler_states=AutoscalerStateService(context),
-            apps=apps,
-            deployments=deployments,
-            deployment_plans=deployment_plans,
+            apps=DatabaseAppReader(context),
+            deployments=DatabaseDeploymentReader(context),
             cron_jobs=cron_jobs,
             containers=containers,
             container_shutdowns=container_shutdowns,
             scheduler_workloads=scheduler_workloads,
-            compute=compute,
             compute_policies=compute_policies,
-            custom_domains=CustomDomainService(
-                context=context,
-                provider_factory=CloudflareSettings().provider,
-                platform_base_domain=GatewaySettings().public_base_domain,
-                admission=DatabaseBillingAdmission(),
-            ),
             tasks=tasks,
+            execution_demand=ExecutionDemandService(RedisWakeSignal(redis, PLACEMENT_WAKE_SCOPE)),
             usage=usage,
             object_storage=object_storage,
             object_store_client=object_client,
-            volume_filesystem=volume_filesystem,
-            volume_metering=volume_metering,
-            storage_access=_storage_access(context.database, storage.object_store),
-            volume_deletion=volume_deletion,
-            disk_deletion=DiskDeletionService(
-                context.database,
-                disks=disks,
-                volumes=disk_volumes,
-                objects=volume_filesystem,
-                metering=volume_metering,
-            ),
-            disk_volumes=disk_volumes,
-            meter_outbox=meter_outbox,
-            email_outbox=email_outbox,
-            plan_changes=plan_changes,
-            billing_reconciliation=billing_reconciliation,
-            billing_payments=billing_payments,
-            billing_enforcement=billing_enforcement,
-            retention=retention,
             redis_client=redis,
         )
 
     def close(self) -> None:
         try:
-            try:
-                if self.storage_access is not None:
-                    self.storage_access.source.close()
-            finally:
-                self.volume_filesystem.close()
+            self.object_store_client.close()
         finally:
             try:
-                self.object_store_client.close()
+                self.redis_client.close()
             finally:
-                try:
-                    self.redis_client.close()
-                finally:
-                    self.context.database.dispose()
-
-
-def _storage_access(
-    database: DatabaseClient, settings: S3ObjectStoreSettings
-) -> StorageAccessMeteringService | None:
-    match WorkspaceStorageIssuerSettings().issuer:
-        case WorkspaceStorageProvider.Aws:
-            return StorageAccessMeteringService(
-                database, AwsStorageAccessSource(AwsStorageAccessSettings(), settings), settings
-            )
-        case WorkspaceStorageProvider.Garage:
-            return None
-        case None:
-            raise MissingDeploymentSettingError(
-                "LAZYCLOUD_WORKSPACE_STORAGE_ISSUER",
-                purpose="the storage access observation source",
-            )
-
-
-@dataclass(slots=True)
-class SchedulerRetention:
-    service: RetentionService
-    deployment_resources: DeploymentResourceService
-    unfunded_storage: UnfundedStorageRetentionService
-
-    def protected_checkpoint_stub_keys(self) -> list[str]:
-        return sorted(
-            checkpoint_recent_stub_key(resource.stub.workspace_id, resource.stub.id)
-            for resource in self.deployment_resources.list(workspace=None, active=True)
-        )
-
-    def reconcile(self, *, now: datetime | None = None) -> RetentionResult:
-        self.unfunded_storage.reconcile(now=now)
-        return self.service.reconcile(
-            active_recent_stub_keys=self.protected_checkpoint_stub_keys(),
-            now=now,
-        )
-
-
-def scheduler_retention(
-    *,
-    context: ServiceContext,
-    object_storage: ObjectStorage,
-    cache_storage: CacheStorage,
-    settings: RetentionSettings,
-    image_archive_settings: ImageArchiveSettings,
-    volume_deletion: VolumeDeletionService,
-    disks: DiskService,
-    workload_image_registry_repository: str = "",
-) -> SchedulerRetention | None:
-    if not settings.enabled:
-        return None
-    repository = workload_image_registry_repository.strip()
-    workload_registry = (
-        AwsEcrImageRegistry(repository)
-        if parse_ecr_registry(registry_host_for_image(repository)) is not None
-        else None
-    )
-    return SchedulerRetention(
-        service=RetentionService(
-            context=context,
-            object_storage=object_storage,
-            cache_storage=cache_storage,
-            config=settings.service_config(
-                checkpoint_bucket=object_storage.default_bucket,
-            ),
-            image_archive_settings=image_archive_settings,
-            image_archive_client=object_storage.object_client,
-            workload_image_registry=workload_registry,
-        ),
-        deployment_resources=DeploymentResourceService(context),
-        unfunded_storage=UnfundedStorageRetentionService(
-            context=context,
-            volume_deletion=volume_deletion,
-            disks=disks,
-            max_items_per_workspace=settings.max_items_per_cycle,
-        ),
-    )
+                self.context.database.dispose()

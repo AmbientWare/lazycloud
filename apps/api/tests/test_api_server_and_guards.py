@@ -6,7 +6,13 @@ from threading import Barrier
 import pytest
 from api.control_runtime import ControlPlaneRuntime, ControlPlaneRuntimeState
 from api.fastapi_app import create_app
-from api.server.services import ApiServices
+from api.server.services import (
+    ApiProcessServices,
+    ApiServiceCore,
+    ApiServices,
+    compose_api_services,
+    create_api_core,
+)
 from coordination.redis_client import RedisClient, RedisWireScalar
 from fastapi.testclient import TestClient
 from shared.http.system import HealthResponse
@@ -24,7 +30,7 @@ def test_control_plane_runtime_start_is_one_shot_under_concurrency(
     runtime = ControlPlaneRuntime.from_services(isolated_services)
     barrier = Barrier(2)
 
-    def start_runtime() -> ApiServices | RuntimeError:
+    def start_runtime() -> ApiServiceCore | RuntimeError:
         barrier.wait()
         try:
             return runtime.start()
@@ -45,7 +51,7 @@ def test_control_plane_runtime_start_is_one_shot_under_concurrency(
 
 
 def test_control_plane_runtime_factory_failure_is_terminal() -> None:
-    def fail_factory() -> ApiServices:
+    def fail_factory() -> ApiProcessServices:
         raise RuntimeError("service graph failed")
 
     runtime = ControlPlaneRuntime(_factory=fail_factory)
@@ -74,12 +80,14 @@ def test_dependency_failure_degrades_readiness_but_preserves_liveness(
     isolated_services: ApiServices,
 ) -> None:
     redis = RedisClient(_FailingRedis(), key_prefix="test")
-    services = ApiServices.create(
-        isolated_services.database,
-        root=isolated_services.root,
-        redis_client=redis,
-        binary_redis_client=redis,
-        async_io=isolated_services.require_async_io(),
+    services = compose_api_services(
+        create_api_core(
+            isolated_services.database,
+            root=isolated_services.root,
+            redis_client=redis,
+            binary_redis_client=redis,
+            async_io=isolated_services.require_async_io(),
+        )
     )
     app = create_app(services)
     with TestClient(app) as client:

@@ -16,10 +16,10 @@ from shared.http.compute import (
 from shared.identity import AuthScope
 
 from api.server.auth import admin_access, read_token, read_workspace, write_workspace
-from api.server.dependencies import current_services
+from api.server.dependencies import management_services
 from api.server.identifiers import identifier_filter
 from api.server.routers.resource_api.common import _management
-from api.server.services import ApiServices
+from api.server.services import ManagementServiceCore
 
 router = APIRouter()
 
@@ -37,7 +37,7 @@ def list_containers(
     cursor: str | None = Query(default=None, max_length=1024),
     *,
     workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> ContainerWithAppPageResponse:
     page = _management(services).container_page(
         workspace_id,
@@ -62,7 +62,7 @@ def list_containers(
 def run_container(
     request: ContainerRunRequest,
     workspace_id: write_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> ContainerResponse:
     return ContainerResponse.model_validate(
         services.containers.run(
@@ -86,7 +86,7 @@ def run_container(
 def get_container_as_admin(
     container_id: str,
     _auth: admin_access,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> ContainerResponse:
     return ContainerResponse.model_validate(_management(services).get_container(container_id))
 
@@ -98,7 +98,7 @@ def get_container_as_admin(
 )
 def stop_all_containers(
     workspace_id: write_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> ContainerStopAllResponse:
     return ContainerStopAllResponse(
         message="all containers stopped",
@@ -118,7 +118,7 @@ def get_container(
     container_id: str,
     workspace_id: read_workspace,
     token: read_token,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> ContainerDetailResponse:
     return ContainerDetailResponse.model_validate(
         _management(services).container_view(
@@ -137,7 +137,7 @@ def get_container(
 def stop_container(
     container_id: str,
     workspace_id: write_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> ContainerResponse:
     return ContainerResponse.model_validate(
         _management(services).stop_container(workspace_id, container_id)
@@ -153,6 +153,6 @@ def stop_container(
 def delete_container(
     container_id: str,
     workspace_id: write_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> None:
     _management(services).delete_container(workspace_id, container_id)

@@ -439,6 +439,47 @@
           "minimum": 2
         }
       }
+    },
+    "executionApi": {
+      "$ref": "#/properties/controlPlane"
+    },
+    "runtimeApi": {
+      "$ref": "#/properties/controlPlane"
+    },
+    "fleetController": {
+      "type": "object",
+      "properties": {
+        "replicas": {
+          "type": "integer",
+          "minimum": 2
+        },
+        "database": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "poolSize",
+            "maxOverflow"
+          ],
+          "properties": {
+            "poolSize": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "maxOverflow": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "minReadySeconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "terminationGracePeriodSeconds": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
     }
   }
 }

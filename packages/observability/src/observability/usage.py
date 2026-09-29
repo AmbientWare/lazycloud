@@ -109,7 +109,7 @@ class UsageService:
                 labels=labels,
                 metadata=dict(metadata) if metadata is not None else None,
             )
-        self._publish_change(record)
+        self.publish_change(record)
         return record
 
     def _record_in_session(
@@ -176,7 +176,7 @@ class UsageService:
     def append(self, record: UsageRecord) -> UsageRecord:
         with self.context.database.session() as session:
             saved = self.append_in_session(session, record)
-        self._publish_change(saved)
+        self.publish_change(saved)
         return saved
 
     def append_in_session(self, session: DatabaseSession, record: UsageRecord) -> UsageRecord:
@@ -253,6 +253,32 @@ class UsageService:
         app_id: str = "",
         deployment_id: str = "",
     ) -> UsageRecord:
+        with self.context.database.session() as session:
+            record = self.record_task_count_in_session(
+                session,
+                workspace_id=workspace_id,
+                resource_type=resource_type,
+                resource_id=resource_id,
+                task_id=task_id,
+                kind=kind,
+                app_id=app_id,
+                deployment_id=deployment_id,
+            )
+        self.publish_change(record)
+        return record
+
+    def record_task_count_in_session(
+        self,
+        session: DatabaseSession,
+        *,
+        workspace_id: str,
+        resource_type: str,
+        resource_id: str,
+        task_id: str,
+        kind: str,
+        app_id: str = "",
+        deployment_id: str = "",
+    ) -> UsageRecord:
         labels = _task_count_labels(
             resource_id=resource_id,
             task_id=task_id,
@@ -260,7 +286,8 @@ class UsageService:
             app_id=app_id,
             deployment_id=deployment_id,
         )
-        return self.record(
+        return self._record_in_session(
+            session,
             id=usage_record_id(UsageMetric.TaskCount.value, workspace_id, task_id),
             workspace_id=workspace_id,
             resource_type=resource_type,
@@ -300,7 +327,7 @@ class UsageService:
             labels=labels,
         )
 
-    def _publish_change(self, record: UsageRecord) -> None:
+    def publish_change(self, record: UsageRecord) -> None:
         identity = _usage_change_identity(record)
         if self.workspace_changes is None or identity is None:
             return

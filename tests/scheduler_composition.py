@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from api.server.services import ApiServices
+from api.server.services import ApiServices, compose_api_services, create_api_core
 from compute.capacity_recovery import CAPACITY_WAKE_SCOPE
 from coordination.redis_client import RedisClient
 from coordination.wake_signal import RedisWakeSignal
@@ -49,26 +49,28 @@ def services_with_redis_container_control(
     services: ApiServices,
     redis: RedisClient,
 ) -> ApiServices:
-    return ApiServices.create(
-        services.database,
-        root=services.root,
-        workspace_storage_issuer=services.workspace_storage_issuer,
-        tcp_ingress_settings=services.tcp_ingress_settings,
-        agent_route_reconciliation_settings=services.agent_route_reconciliation_settings,
-        gateway_settings=services.gateway_settings,
-        workspace_change_stream_settings=services.workspace_change_stream_settings,
-        agent_binary_settings=services.agent_binary_settings,
-        aws_account_connection_settings=services.aws_account_connection_settings,
-        aws_capacity_settings=services.aws_capacity_settings,
-        aws_capacity_reconciliation_settings=services.aws_capacity_reconciliation_settings,
-        object_store_settings=services.object_store_settings,
-        object_storage=services.object_storage,
-        image_build_registry_settings=services.image_build_registry_settings,
-        container_service_settings=services.container_service_settings,
-        volume_metering=services.volume_metering,
-        redis_client=redis,
-        binary_redis_client=redis,
-        async_io=services.require_async_io(),
+    return compose_api_services(
+        create_api_core(
+            services.database,
+            root=services.root,
+            workspace_storage_issuer=services.workspace_storage_issuer,
+            tcp_ingress_settings=services.tcp_ingress_settings,
+            agent_route_reconciliation_settings=services.agent_route_reconciliation_settings,
+            gateway_settings=services.gateway_settings,
+            workspace_change_stream_settings=services.workspace_change_stream_settings,
+            agent_binary_settings=services.agent_binary_settings,
+            aws_account_connection_settings=services.aws_account_connection_settings,
+            aws_capacity_settings=services.aws_capacity_settings,
+            aws_capacity_reconciliation_settings=services.aws_capacity_reconciliation_settings,
+            object_store_settings=services.object_store_settings,
+            object_storage=services.object_storage,
+            image_build_registry_settings=services.image_build_registry_settings,
+            container_service_settings=services.container_service_settings,
+            volume_metering=services.volume_metering,
+            redis_client=redis,
+            binary_redis_client=redis,
+            async_io=services.require_async_io(),
+        )
     )
 
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import socket
-from collections.abc import AsyncGenerator, AsyncIterator, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Iterator, Sequence
 from contextlib import ExitStack
 from urllib.parse import urlsplit
 
@@ -28,8 +28,6 @@ from shared.http.endpoints import (
 from shared.http.functions import (
     FunctionClaimRequest,
     FunctionClaimResponse,
-    FunctionExecutionEntryRequest,
-    FunctionExecutionEntryResponse,
     FunctionInvokeBody,
     FunctionInvokeResponse,
     FunctionMonitorRequest,
@@ -86,8 +84,8 @@ class RecordingFunctionService:
     def task_demand_counts(self, stub_ids: Sequence[str]) -> dict[str, int]:
         raise AssertionError(f"unexpected task_demand_counts call: {stub_ids}")
 
-    def start_function_container(self, stub_id: str) -> bool:
-        raise AssertionError(f"unexpected start_function_container call: {stub_id}")
+    def start_function_containers(self, stub_id: str, *, count: int) -> Iterator[str]:
+        raise AssertionError(f"unexpected start_function_containers call: {stub_id}, count={count}")
 
     def start_function_serve(self, request: FunctionServeRequest) -> FunctionServeResponse:
         raise AssertionError(f"unexpected start_function_serve call: {request}")
@@ -113,11 +111,6 @@ class RecordingFunctionService:
         self, request: FunctionClaimRequest, *, workspace_id: str
     ) -> FunctionClaimResponse:
         raise AssertionError(f"unexpected function_claim_wait call: {request}")
-
-    def function_execution_entry(
-        self, request: FunctionExecutionEntryRequest, *, workspace_id: str
-    ) -> FunctionExecutionEntryResponse:
-        raise AssertionError(f"unexpected function_execution_entry call: {request}")
 
     def function_retire(
         self,

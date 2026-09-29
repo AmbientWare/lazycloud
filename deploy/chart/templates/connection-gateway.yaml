@@ -2,6 +2,8 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: connection-gateway
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
 spec:
   replicas: {{ .Values.connectionGateway.replicas }}
   minReadySeconds: 35
@@ -17,6 +19,7 @@ spec:
     metadata:
       annotations:
         lazycloud.dev/secret-revision: {{ .Values.secretRevisions.connectionGateway | quote }}
+        checksum/api-ingress: {{ .Files.Get "files/api-ingress.cfg" | sha256sum }}
       labels:
         app: connection-gateway
     spec:
@@ -27,6 +30,41 @@ spec:
       volumes:
         - name: identity
           emptyDir: {}
+        - name: api-ingress
+          configMap:
+            name: gateway-api-ingress
+      initContainers:
+        - name: api-router
+          restartPolicy: Always
+          image: {{ .Values.connectionGateway.apiRouter.image | quote }}
+          env:
+            - name: LAZYCLOUD_INGRESS_HOST
+              value: {{ .Values.cloudflared.apex | quote }}
+            - name: LAZYCLOUD_PUBLIC_INGRESS_BIND
+              value: "127.0.0.1:9000"
+            - name: LAZYCLOUD_PRIVATE_INGRESS_BIND
+              value: "127.0.0.1:9001"
+            - name: LAZYCLOUD_MANAGEMENT_API_ADDRESS
+              value: "control-plane.{{ .Release.Namespace }}.svc.cluster.local:9000"
+            - name: LAZYCLOUD_EXECUTION_API_ADDRESS
+              value: "execution-api.{{ .Release.Namespace }}.svc.cluster.local:9000"
+            - name: LAZYCLOUD_RUNTIME_API_ADDRESS
+              value: "runtime-api.{{ .Release.Namespace }}.svc.cluster.local:9000"
+          volumeMounts:
+            - name: api-ingress
+              mountPath: /usr/local/etc/haproxy
+              readOnly: true
+          startupProbe:
+            exec:
+              command: ["wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9001/livez"]
+            periodSeconds: 1
+            failureThreshold: 30
+          readinessProbe:
+            exec:
+              command: ["wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9001/livez"]
+            periodSeconds: 2
+          resources:
+            {{- toYaml .Values.connectionGateway.apiRouter.resources | nindent 12 }}
       containers:
         - name: connection-gateway
           image: {{ include "lazycloud.image" (list . "connection-gateway") }}
@@ -45,7 +83,7 @@ spec:
             - name: LAZYCLOUD_CONNECTION_GATEWAY_LISTEN_ADDRESS
               value: "0.0.0.0:8443"
             - name: LAZYCLOUD_CONNECTION_GATEWAY_CONTROL_ADDRESS
-              value: "control-plane:9000"
+              value: "127.0.0.1:9001"
           volumeMounts:
             - name: identity
               mountPath: /var/lib/lazycloud/connection-gateway
@@ -57,6 +95,16 @@ spec:
             failureThreshold: 1
           resources:
             {{- toYaml .Values.connectionGateway.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gateway-api-ingress
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+data:
+  haproxy.cfg: |
+    {{- .Files.Get "files/api-ingress.cfg" | nindent 4 }}
 ---
 apiVersion: v1
 kind: Service

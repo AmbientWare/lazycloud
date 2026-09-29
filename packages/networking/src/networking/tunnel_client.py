@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 import grpc.aio
 from coordination.agent_connections import RedisAgentConnectionDirectory
 from cryptography.hazmat.primitives import hashes
+from shared.agent_connections import AgentConnectionRecord
 from shared.http.agent_tunnel import (
     TUNNEL_OPEN_TIMEOUT_SECONDS,
     TunnelPacket,
@@ -30,6 +31,12 @@ from networking.tunnel_tls import TunnelCredentials
 LOGGER = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True, slots=True)
+class TunnelRouteConnection:
+    socket: socket.socket
+    agent: AgentConnectionRecord
+
+
 @dataclass(slots=True)
 class TunnelRouteClient:
     directory: RedisAgentConnectionDirectory
@@ -42,7 +49,7 @@ class TunnelRouteClient:
     )
     _channel_expirations: set[asyncio.Task[None]] = field(default_factory=set, init=False)
     _streams: set[asyncio.Task[None]] = field(default_factory=set, init=False)
-    _pending: set[asyncio.Task[socket.socket]] = field(default_factory=set, init=False)
+    _pending: set[asyncio.Task[TunnelRouteConnection]] = field(default_factory=set, init=False)
     _lifecycle: threading.Lock = field(default_factory=threading.Lock, init=False)
     _thread: threading.Thread = field(init=False)
     _closed: bool = field(default=False, init=False)
@@ -51,7 +58,7 @@ class TunnelRouteClient:
         self._thread = threading.Thread(target=self._run, name="agent-tunnel-routes", daemon=True)
         self._thread.start()
 
-    def connect(self, request: TunnelRouteRequest, timeout_seconds: float) -> socket.socket:
+    def connect(self, request: TunnelRouteRequest, timeout_seconds: float) -> TunnelRouteConnection:
         with self._lifecycle:
             if self._closed:
                 raise ConnectionError("Agent tunnel client is closed")
@@ -79,7 +86,9 @@ class TunnelRouteClient:
             self._loop.run_until_complete(self._loop.shutdown_default_executor())
             self._loop.close()
 
-    async def _dial(self, request: TunnelRouteRequest, timeout_seconds: float) -> socket.socket:
+    async def _dial(
+        self, request: TunnelRouteRequest, timeout_seconds: float
+    ) -> TunnelRouteConnection:
         task = asyncio.current_task()
         if task is None:
             raise RuntimeError("Tunnel dialing requires an active task")
@@ -89,7 +98,9 @@ class TunnelRouteClient:
         finally:
             self._pending.discard(task)
 
-    async def _open(self, request: TunnelRouteRequest, timeout_seconds: float) -> socket.socket:
+    async def _open(
+        self, request: TunnelRouteRequest, timeout_seconds: float
+    ) -> TunnelRouteConnection:
         async with asyncio.timeout(timeout_seconds):
             record = await asyncio.to_thread(
                 self.directory.get, request.workspace_id, request.enrollment_id
@@ -134,7 +145,7 @@ class TunnelRouteClient:
                 channel_streams = self._channel_streams.setdefault(channel, set())
                 channel_streams.add(task)
                 task.add_done_callback(channel_streams.discard)
-                return client
+                return TunnelRouteConnection(client, record)
             except BaseException:
                 call.cancel()
                 raise

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 import shutil
 import subprocess
@@ -8,7 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from subprocess import CompletedProcess
-from typing import Protocol
+from typing import Literal, Protocol
 
 from agent.service_manager import (
     bytes_to_mib,
@@ -90,6 +91,9 @@ class AgentMetricSampler:
         return AgentMetricSnapshot(
             timestamp_unix_nano=time.time_ns(),
             cpu_utilization_pct=agent_cpu_utilization_pct(),
+            cpu_pressure_pct=agent_pressure_percent("cpu"),
+            io_pressure_pct=agent_pressure_percent("io"),
+            memory_pressure_pct=agent_pressure_percent("memory"),
             memory_used_mb=memory.used_mb,
             memory_total_mb=memory.total_mb,
             memory_utilization_pct=memory.utilization_pct,
@@ -104,6 +108,25 @@ class AgentMetricSampler:
             worker_count=worker_count,
             free_gpu_count=len(self.gpu_provider.available_devices()),
         )
+
+
+def agent_pressure_percent(resource: Literal["cpu", "io", "memory"]) -> float | None:
+    """Fraction of the last ten seconds with at least one task stalled."""
+    try:
+        text = Path("/proc/pressure", resource).read_text()
+    except FileNotFoundError:
+        return None
+    for line in text.splitlines():
+        fields = line.split()
+        if fields and fields[0] == "some":
+            for field in fields[1:]:
+                name, separator, value = field.partition("=")
+                if separator and name == "avg10":
+                    pressure = float(value)
+                    if math.isfinite(pressure) and 0 <= pressure <= 100:
+                        return pressure
+                    raise ValueError(f"invalid {resource} pressure percentage")
+    raise ValueError(f"missing {resource} pressure average")
 
 
 def agent_metric_snapshot(

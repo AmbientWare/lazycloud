@@ -29,11 +29,11 @@ from shared.http.stubs import StubResponse
 from shared.identity import AuthScope
 
 from api.server.auth import read_token, read_transfer, read_workspace, write_workspace
-from api.server.dependencies import current_services
+from api.server.dependencies import management_services
 from api.server.identifiers import identifier_filter
 from api.server.response_mapping import actionable_deployment_response
 from api.server.routers.resource_api.common import STUB_TYPE_ALIASES, _management
-from api.server.services import ApiServices
+from api.server.services import ManagementServiceCore
 
 router = APIRouter()
 
@@ -46,7 +46,7 @@ router = APIRouter()
 def plan_app_deployment(
     request: DeploymentPlanRequest,
     workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> DeploymentPlanResponse:
     return services.deployment_plans.plan(request, workspace=workspace_id)
 
@@ -59,7 +59,7 @@ def plan_app_deployment(
 def prune_app_deployments(
     request: DeploymentPruneRequest,
     workspace_id: write_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> DeploymentPruneResponse:
     return services.deployment_plans.prune(request, workspace=workspace_id)
 
@@ -68,7 +68,7 @@ def _deployment_scaling_responses(
     deployments: list[Deployment] | tuple[Deployment, ...],
     *,
     workspace: str,
-    services: ApiServices,
+    services: ManagementServiceCore,
 ) -> dict[str, DeploymentScalingResponse]:
     states = _management(services).pod_deployment_scaling(
         workspace,
@@ -96,7 +96,7 @@ def _parsed_deployment_version(version: str) -> int | None:
 def _deployment_app_active(
     deployment: Deployment,
     workspace: str,
-    services: ApiServices,
+    services: ManagementServiceCore,
 ) -> bool:
     if deployment.app_id is None:
         return True
@@ -112,7 +112,7 @@ def _deployment_list_response(
     next_cursor: str,
     workspace: str,
     can_write: bool,
-    services: ApiServices,
+    services: ManagementServiceCore,
 ) -> DeploymentListResponse:
     app_states = {
         app.id: app.active for app in services.apps.list(workspace=workspace, active=None)
@@ -150,7 +150,7 @@ def list_deployments(
     *,
     workspace_id: read_workspace,
     token: read_token,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> DeploymentListResponse:
     management = _management(services)
     can_write = token_has_scope(token, AuthScope.Write)
@@ -196,7 +196,7 @@ def list_deployments(
 def create_deployment(
     request: DeploymentSpec,
     workspace_id: write_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> DeploymentResponse:
     deployment = services.deployments.deploy(request, workspace=workspace_id)
     scaling = _deployment_scaling_responses([deployment], workspace=workspace_id, services=services)
@@ -215,7 +215,7 @@ def create_deployment(
 )
 def stop_all_active_deployments(
     workspace_id: write_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> DeploymentStopAllResponse:
     stopped = _management(services).stop_all_active_deployments(workspace_id)
     return DeploymentStopAllResponse(
@@ -242,7 +242,7 @@ def deployment_url_by_name(
     *,
     workspace_id: read_workspace,
     token: read_token,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> DeploymentUrlResponse:
     if stub_type not in STUB_TYPE_ALIASES:
         msg = f"invalid stub type: {stub_type}"
@@ -277,7 +277,7 @@ def deployment_url_by_name(
 def download_deployment_package(
     stub_id: str,
     workspace_id: read_transfer,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> Response | DeploymentPackagePlanResponse:
     plan = _management(services).deployment_package(workspace_id, stub_id)
     if plan.path:
@@ -302,7 +302,7 @@ def deployment_url(
     *,
     workspace_id: read_workspace,
     token: read_token,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> DeploymentUrlResponse:
     result = _management(services).deployment_url(
         deployment_id,
@@ -333,7 +333,7 @@ def deployment_manifest(
     external_url: str = "http://127.0.0.1:9000",
     *,
     workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> ClientManifestResource:
     return _management(services).deployment_manifest(
         deployment_id,
@@ -350,7 +350,7 @@ def deployment_manifest(
 def stop_deployment(
     deployment_id: str,
     workspace_id: write_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> DeploymentResponse:
     deployment = _management(services).set_deployment_active(
         workspace_id,
@@ -375,7 +375,7 @@ def stop_deployment(
 def start_deployment(
     deployment_id: str,
     workspace_id: write_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> DeploymentResponse:
     deployment = _management(services).set_deployment_active(
         workspace_id,
@@ -401,7 +401,7 @@ def scale_deployment(
     deployment_id: str,
     request: DeploymentScaleRequest,
     workspace_id: write_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> DeploymentResponse:
     deployment = _management(services).scale_deployment(
         workspace_id,
@@ -427,7 +427,7 @@ def get_deployment(
     deployment_id: str,
     workspace_id: read_workspace,
     token: read_token,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> DeploymentDetailResponse:
     deployment = _management(services).retrieve_deployment(workspace_id, deployment_id)
     response = actionable_deployment_response(
@@ -444,7 +444,7 @@ def get_deployment(
 
 
 def _devbox(
-    deployment: Deployment, workspace_id: str, services: ApiServices
+    deployment: Deployment, workspace_id: str, services: ManagementServiceCore
 ) -> DevboxResponse | None:
     if resolve_pod_role(deployment.kind, deployment.spec.role) is not PodRole.Devbox:
         return None
@@ -462,7 +462,7 @@ def _devbox(
 def get_devbox(
     deployment_id: str,
     workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> DevboxResponse:
     """A devbox's status alone, cheap enough to poll while a connection waits for it."""
     devbox = services.devboxes.describe(_deployment_resource(services, deployment_id, workspace_id))
@@ -479,7 +479,7 @@ def get_devbox(
 def start_devbox(
     deployment_id: str,
     workspace_id: write_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> DevboxResponse:
     """Ask a devbox to start; answers at once, and the status shows it starting."""
     return services.devboxes.start(
@@ -496,7 +496,7 @@ def start_devbox(
 def stop_devbox(
     deployment_id: str,
     workspace_id: write_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> DevboxResponse:
     """Stop a devbox until something starts it again; its deployment stays on."""
     return services.devboxes.stop(
@@ -506,7 +506,7 @@ def stop_devbox(
 
 
 def _deployment_resource(
-    services: ApiServices, deployment_id: str, workspace_id: str
+    services: ManagementServiceCore, deployment_id: str, workspace_id: str
 ) -> DeploymentResource:
     resource = services.deployment_resources.get_by_deployment_id(
         deployment_id, workspace=workspace_id
@@ -525,6 +525,6 @@ def _deployment_resource(
 def delete_deployment(
     deployment_id: str,
     workspace_id: write_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> None:
     _management(services).delete_deployment(workspace_id, deployment_id)

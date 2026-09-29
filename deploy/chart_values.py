@@ -150,16 +150,10 @@ def check_transition_budget(
         previous_database.get("poolerMaxConnections"), strict=True
     )
     pooler = max(pooler, previous_pooler)
-    api_replicas = max(
-        positive_integer.validate_python(
-            _mapping(override, "controlPlane").get(
-                "replicas", _mapping(common, "controlPlane").get("replicas")
-            ),
-            strict=True,
-        )
+    direct = max(
+        _direct_api_connections(common, override)
         for common, override in ((previous_defaults, previous), (defaults, proposed))
     )
-    direct = 2 * api_replicas
     bootstrap = _mapping(defaults, "bootstrap")
     configured_bootstrap = _mapping(proposed, "bootstrap")
     jobs = DatabasePool.model_validate(
@@ -176,6 +170,24 @@ def check_transition_budget(
             f"ceiling {ceiling}: pooler {pooler}, session locks "
             f"{direct}, jobs {jobs}, reserve {reserved}."
         )
+
+
+def _direct_api_connections(defaults: dict[str, JsonValue], override: dict[str, JsonValue]) -> int:
+    owners = ("controlPlane", "executionApi", "runtimeApi")
+    replicas = {
+        owner: TypeAdapter[int](Annotated[int, Field(gt=0)]).validate_python(
+            _mapping(override, owner).get("replicas", _mapping(defaults, owner).get("replicas")),
+            strict=True,
+        )
+        for owner in owners
+        if owner in defaults
+    }
+    if "runtimeApi" not in replicas:
+        return 2 * replicas["controlPlane"]
+    # Each API waits beyond its termination grace before the next rolling replacement.
+    fences = sum(replicas.values()) + len(replicas)
+    workspace_deletions = replicas["controlPlane"] + 1
+    return fences + workspace_deletions
 
 
 def render(

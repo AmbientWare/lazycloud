@@ -1,16 +1,21 @@
 from __future__ import annotations
 
+from uuid import uuid4
+
 import pytest
 from api.server.services import ApiServices
 from control.service import ControlPlaneService, StubKind
 from database.repositories.billing import BillingAccountRepository
+from database.repositories.orchestration import ContainerRepository
 from database.tables.execution import TaskTable
 from database.tables.orchestration import ContainerTable
 from execution.functions.service import FunctionControlService
 from pydantic import JsonValue
 from shared.billing_accounts import BillingAccountStatus
 from shared.billing_plans import BillingPlanId, SubscriptionTermsVersion
-from shared.errors import PaymentRequiredError
+from shared.billing_rate_card import account_terms
+from shared.containers import ContainerRecord, ContainerStatus
+from shared.errors import CapacityLimitReachedError, PaymentRequiredError
 from shared.function_payloads import FunctionJsonInvocation
 from shared.http.functions import FunctionInvokeBody
 from sqlalchemy import func, select
@@ -73,6 +78,50 @@ def test_free_function_pinned_placement_refuses_before_creating_work(
             FunctionInvokeBody(stub_id=stub.id, invocation=FunctionJsonInvocation(args=[]))
         )
     assert _row_counts(isolated_services, stub.workspace_id) == before
+
+
+def test_capacity_limit_allows_warm_invocation_but_refuses_cold_without_a_task(
+    isolated_services: ApiServices,
+) -> None:
+    control = ControlPlaneService(isolated_services.context)
+    warm = control.create_stub(
+        "warm-at-limit", kind=StubKind.Function, handler="pkg.workloads:handler"
+    )
+    cold = control.create_stub(
+        "cold-at-limit", kind=StubKind.Function, handler="pkg.workloads:handler"
+    )
+    user_id = workspace_owner_user_id(isolated_services.context, warm.workspace_id)
+    with isolated_services.context.database.session() as session:
+        account = BillingAccountRepository(session).get_by_user(user_id)
+        assert account is not None and account.plan is not None
+        limit = account_terms(
+            account.plan, has_payment_method=account.payment_method_attached_at is not None
+        ).entitlements.max_concurrent_cpu_containers
+        for index in range(limit):
+            ContainerRepository(session).upsert(
+                ContainerRecord(
+                    id=str(uuid4()),
+                    name=f"held-{index}",
+                    image="python:3.12-slim",
+                    command=[],
+                    workspace_id=warm.workspace_id,
+                    stub_id=warm.id,
+                    status=ContainerStatus.Running,
+                )
+            )
+    functions = FunctionControlService(isolated_services)
+    before = _row_counts(isolated_services, warm.workspace_id)
+    invoked = functions.function_invoke(
+        FunctionInvokeBody(stub_id=warm.id, invocation=FunctionJsonInvocation(args=[]))
+    )
+    assert invoked.task_id
+    after_warm = _row_counts(isolated_services, warm.workspace_id)
+    assert after_warm == (before[0] + 1, before[1])
+    with pytest.raises(CapacityLimitReachedError):
+        functions.function_invoke(
+            FunctionInvokeBody(stub_id=cold.id, invocation=FunctionJsonInvocation(args=[]))
+        )
+    assert _row_counts(isolated_services, warm.workspace_id) == after_warm
 
 
 def _past_due(services: ApiServices, workspace_id: str) -> None:

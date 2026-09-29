@@ -27,9 +27,13 @@ class WorkerCapacityRecovery:
     def restore(self, worker_id: str) -> None:
         with self.database.session() as session:
             assignments = ContainerRepository(session).list_live_runtime_assignments(worker_id)
-            shapes = ContainerBillingShapeRepository(session)
+            container_ids = [container.id for container in assignments]
+            shapes = ContainerBillingShapeRepository(session).shapes_for(container_ids)
+            scheduling = ContainerSchedulingRepository(session)
+            requests = scheduling.requests_for(container_ids)
+            assignment_times = scheduling.assignment_times(container_ids)
             for container in assignments:
-                shape = shapes.shape_for(container.id)
+                shape = shapes.get(container.id)
                 if shape is None:
                     raise UpstreamUnavailableError(
                         f"worker admission cannot recover reserved resources for {container.id}"
@@ -37,7 +41,7 @@ class WorkerCapacityRecovery:
                 state = self.containers.get_container_state(container.id)
                 if state is not None and state.worker_id not in {"", worker_id}:
                     raise ConflictError("worker inventory conflicts with durable assignment")
-                request = ContainerSchedulingRepository(session).request_for(container.id)
+                request = requests.get(container.id)
                 if state is None and request is not None:
                     state = container_state_for_request(request, worker_id=worker_id)
                 recovered = SchedulerContainerState(
@@ -50,8 +54,7 @@ class WorkerCapacityRecovery:
                         if container.status is ContainerStatus.Running
                         else SchedulerContainerStatus.Pending
                     ),
-                    scheduled_at=ContainerSchedulingRepository(session).assigned_at(container.id)
-                    or container.created_at,
+                    scheduled_at=assignment_times.get(container.id, container.created_at),
                     started_at=container.started_at,
                     cpu_millicores=shape.cpu_millicores,
                     memory_mib=billable_memory_capacity(shape.memory_mib),

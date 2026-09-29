@@ -258,13 +258,16 @@ class WorkerSchedulerRequestProcessor:
     _delivery_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
     _image_build_result_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
     _cleanup_after: float = field(default=0, init=False)
+    _cleanup_thread: threading.Thread | None = field(default=None, init=False)
+    _cleanup_owned: set[str] = field(default_factory=set, init=False)
+    _starting: set[str] = field(default_factory=set, init=False)
     _ending: set[str] = field(default_factory=set, init=False)
     """Containers a cleanup pass found still running and asked to stop."""
 
     _ending_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
 
     def run_once(self) -> WorkerSchedulerRequestResult:
-        self._recover_cleanup()
+        self._schedule_cleanup()
         self._retry_acknowledgements()
         reported = self._retry_image_build_result()
         if reported is not None:
@@ -272,6 +275,19 @@ class WorkerSchedulerRequestProcessor:
         completed = self._pop_completed_background()
         if completed is not None:
             return completed
+
+        startup_limit = max(
+            1,
+            min(self.node_cpu_millicores // 1000, self.node_memory_mib // 512),
+        )
+        with self._delivery_lock:
+            preparing = len(self._starting)
+        if preparing >= startup_limit:
+            return WorkerSchedulerRequestResult(
+                worker_id=self.worker_id,
+                status=WorkerSchedulerRequestStatus.Idle,
+                action=WorkerSchedulerRequestAction.Idle,
+            )
 
         request = self.workers.get_next_container_request(self.worker_id)
         if request is None:
@@ -365,6 +381,8 @@ class WorkerSchedulerRequestProcessor:
         """Take this delivery, or refuse it because the worker already holds it."""
 
         with self._delivery_lock:
+            if request.container_id in self._cleanup_owned:
+                return False
             delivery = self._deliveries.get(request.container_id)
             if delivery is not None and (delivery.held or delivery.committed):
                 return False
@@ -534,7 +552,16 @@ class WorkerSchedulerRequestProcessor:
         )
         active.thread = thread
         self._background[request.container_id] = active
-        thread.start()
+        with self._delivery_lock:
+            self._starting.add(request.container_id)
+        try:
+            thread.start()
+        except BaseException:
+            self._background.pop(request.container_id, None)
+            with self._delivery_lock:
+                self._starting.discard(request.container_id)
+            self._release_container(request.container_id)
+            raise
         return WorkerSchedulerRequestResult(
             worker_id=self.worker_id,
             status=WorkerSchedulerRequestStatus.Executed,
@@ -555,6 +582,8 @@ class WorkerSchedulerRequestProcessor:
         active = self._background.get(container_id)
         if active is not None:
             active.pid = pid
+        with self._delivery_lock:
+            self._starting.discard(container_id)
 
     def resident_containers(self) -> list[ResidentContainer]:
         """The containers this worker is holding, and the cgroup accounting for each.
@@ -619,7 +648,11 @@ class WorkerSchedulerRequestProcessor:
                     else "worker execution failed"
                 ),
             )
-        active.result = self._release_capacity(active.request, result)
+        try:
+            active.result = self._release_capacity(active.request, result)
+        finally:
+            with self._delivery_lock:
+                self._starting.discard(active.request.container_id)
 
     def _execute_registered_container(
         self,
@@ -630,28 +663,49 @@ class WorkerSchedulerRequestProcessor:
         finally:
             self._release_container(context.request.container_id)
 
-    def _recover_cleanup(self) -> None:
+    def _schedule_cleanup(self) -> None:
         now = monotonic()
-        if now < self._cleanup_after:
+        if now < self._cleanup_after or (
+            self._cleanup_thread is not None and self._cleanup_thread.is_alive()
+        ):
             return
         self._cleanup_after = now + 5
+        self._cleanup_thread = threading.Thread(
+            target=self._recover_cleanup,
+            name="container-cleanup",
+            daemon=True,
+        )
+        self._cleanup_thread.start()
+
+    def close(self) -> None:
+        if self._cleanup_thread is not None and self._cleanup_thread.ident is not None:
+            self._cleanup_thread.join()
+
+    def _recover_cleanup(self) -> None:
+        recover: list[str] = []
         try:
-            with self._image_build_result_lock:
-                pending_results = set(self._pending_image_build_results)
             targets = self.containers.list_pending_storage_cleanup()
             for target in targets:
                 if target.container_id in self._background:
                     self._end_missed_stop(target)
-            self.execution.recover_cleanup(
-                [
+            # Redelivery cannot take storage while recovery is detaching it.
+            with self._delivery_lock, self._image_build_result_lock:
+                recover = [
                     target.container_id
                     for target in targets
                     if target.container_id not in self._background
-                    and target.container_id not in pending_results
+                    and target.container_id not in self._pending_image_build_results
+                    and not (
+                        (delivery := self._deliveries.get(target.container_id)) and delivery.held
+                    )
                 ]
-            )
+                self._cleanup_owned.update(recover)
+            self.execution.recover_cleanup(recover)
         except Exception:
             LOGGER.exception("container storage cleanup recovery failed")
+        finally:
+            with self._delivery_lock:
+                self._cleanup_owned.difference_update(recover)
 
     def _end_missed_stop(self, target: ContainerCleanupTarget) -> None:
         """Stop a container the platform has ended; its own execution then finalizes it.
@@ -835,6 +889,8 @@ class WorkerSchedulerRequestProcessor:
                 )
             finally:
                 self.build_cancels.unregister(request.container_id)
+                with self._delivery_lock:
+                    self._starting.discard(request.container_id)
             active.result = (
                 result
                 if result.image_build_report_pending
@@ -847,10 +903,14 @@ class WorkerSchedulerRequestProcessor:
             target=execute, name=f"image-build-{request.container_id}", daemon=True
         )
         self._background[request.container_id] = active
+        with self._delivery_lock:
+            self._starting.add(request.container_id)
         try:
             active.thread.start()
-        except Exception:
+        except BaseException:
             self._background.pop(request.container_id, None)
+            with self._delivery_lock:
+                self._starting.discard(request.container_id)
             self._release_container(request.container_id)
             raise
         return WorkerSchedulerRequestResult(

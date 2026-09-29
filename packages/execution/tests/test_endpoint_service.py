@@ -140,7 +140,9 @@ async def test_dispatch_names_dead_capacity_instead_of_waiting_out_its_deadline(
         services,
         async_database=async_io.database,
         async_dispatcher=dispatcher,
+        workload_changes=composed_endpoint.workload_changes,
     )
+    await async_io.start()
     try:
         response = await service.forward_endpoint_request(
             EndpointForwardRequest(stub_id=stub.id, method="POST", body=b"{}")

@@ -24,6 +24,7 @@ from execution.endpoints.dispatch import (
     EndpointDispatchTarget,
 )
 from execution.endpoints.service import EndpointControlService
+from observability.workspace_changes import AsyncWorkloadChangeReader
 from shared.http.endpoints import EndpointForwardRequest, EndpointForwardResponse
 from shared.scheduling import (
     SchedulerContainerSubmitResult,
@@ -117,6 +118,7 @@ async def test_postgresql_endpoint_admission_holds_one_buffer_slot_across_replic
                 services,
                 async_database=services.require_async_io().database,
                 async_dispatcher=_NoEndpointDispatcher(),
+                workload_changes=AsyncWorkloadChangeReader(services.require_async_io().realtime),
             )
             await start.wait()
             return await service.forward_endpoint_request(
@@ -159,6 +161,7 @@ async def _postgres_services(
         ),
     )
     try:
+        await async_io.start()
         with service_graph(
             database,
             tmp_path,

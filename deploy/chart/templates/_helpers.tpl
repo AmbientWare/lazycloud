@@ -66,10 +66,16 @@ Auto Mode a reason to provision capacity in another node and zone.
 {{- if le (int .Values.scheduler.minReadySeconds) (int .Values.scheduler.terminationGracePeriodSeconds) -}}
 {{- fail "scheduler.minReadySeconds must exceed terminationGracePeriodSeconds to bound rollout overlap" -}}
 {{- end -}}
+{{- if le (int .Values.fleetController.minReadySeconds) (int .Values.fleetController.terminationGracePeriodSeconds) -}}
+{{- fail "fleetController.minReadySeconds must exceed terminationGracePeriodSeconds to bound rollout overlap" -}}
+{{- end -}}
 {{- $ceiling := int .Values.database.maxConnections -}}
 {{- $reserved := int .Values.database.reserved -}}
 {{- $pooler := int .Values.database.poolerMaxConnections -}}
-{{- $direct := mul 2 (int .Values.controlPlane.replicas) -}}
+{{- $apiReplicas := add (int .Values.controlPlane.replicas) (int .Values.executionApi.replicas) (int .Values.runtimeApi.replicas) -}}
+{{- $fences := add $apiReplicas 3 -}}
+{{- $deletions := add (int .Values.controlPlane.replicas) 1 -}}
+{{- $direct := add $fences $deletions -}}
 {{- $jobs := add (int .Values.bootstrap.database.poolSize) (int .Values.bootstrap.database.maxOverflow) -}}
 {{- $total := add $pooler $direct $jobs $reserved -}}
 {{- if gt $total $ceiling -}}

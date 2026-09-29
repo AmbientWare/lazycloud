@@ -4,6 +4,8 @@ import logging
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
+from threading import Lock
+from time import monotonic
 
 from anyio import CancelScope
 from anyio.lowlevel import checkpoint_if_cancelled
@@ -31,6 +33,9 @@ class DatabasePoolStatus:
     checked_out: int
     capacity: int
     exhaustions_total: int = 0
+    checkouts_total: int = 0
+    checkout_seconds_total: float = 0
+    checkout_seconds_max: float = 0
 
     @property
     def available(self) -> int:
@@ -42,12 +47,29 @@ class DatabasePoolStatus:
 
 
 @dataclass(slots=True)
+class _CheckoutTimings:
+    count: int = 0
+    total_seconds: float = 0
+    max_seconds: float = 0
+    lock: Lock = field(default_factory=Lock)
+
+    def record(self, seconds: float) -> None:
+        with self.lock:
+            self.count += 1
+            self.total_seconds += seconds
+            self.max_seconds = max(self.max_seconds, seconds)
+
+
+@dataclass(slots=True)
 class DatabaseClient:
     settings: DatabaseSettings
     engine: Engine
     sessions: sessionmaker[Session]
     _direct_engine: Engine | None = field(default=None, repr=False)
     _pool_exhaustions: int = field(default=0, init=False, repr=False)
+    _checkout_timings: _CheckoutTimings = field(
+        default_factory=_CheckoutTimings, init=False, repr=False
+    )
 
     @classmethod
     def from_settings(cls, settings: DatabaseSettings) -> DatabaseClient:
@@ -79,6 +101,7 @@ class DatabaseClient:
 
     def _checkout(self) -> Session:
         session = self.sessions()
+        started = monotonic()
         try:
             session.connection()
         except PoolTimeout as exc:
@@ -87,6 +110,8 @@ class DatabaseClient:
         except BaseException:
             session.close()
             raise
+        finally:
+            self._checkout_timings.record(monotonic() - started)
         return session
 
     def _pool_exhausted(self, exc: BaseException) -> UpstreamUnavailableError:
@@ -125,7 +150,9 @@ class DatabaseClient:
                 connection.close()
 
     def pool_status(self) -> DatabasePoolStatus | None:
-        return _pool_status(self.engine.pool, self.settings, self._pool_exhaustions)
+        return _pool_status(
+            self.engine.pool, self.settings, self._pool_exhaustions, self._checkout_timings
+        )
 
 
 @dataclass(slots=True)
@@ -135,6 +162,9 @@ class AsyncDatabaseClient:
     sessions: async_sessionmaker[AsyncSession]
     _pool_exhaustions: int = field(default=0, init=False, repr=False)
     _direct_engine: AsyncEngine | None = field(default=None, repr=False)
+    _checkout_timings: _CheckoutTimings = field(
+        default_factory=_CheckoutTimings, init=False, repr=False
+    )
 
     @classmethod
     def from_settings(cls, settings: DatabaseSettings) -> AsyncDatabaseClient:
@@ -184,6 +214,7 @@ class AsyncDatabaseClient:
             return await session.run_sync(operation)
 
     async def _checkout(self, session: AsyncSession) -> None:
+        started = monotonic()
         try:
             await session.connection()
         except PoolTimeout as exc:
@@ -192,6 +223,8 @@ class AsyncDatabaseClient:
         except BaseException:
             await session.close()
             raise
+        finally:
+            self._checkout_timings.record(monotonic() - started)
 
     def _pool_exhausted(self, exc: BaseException) -> UpstreamUnavailableError:
         self._pool_exhaustions += 1
@@ -231,21 +264,31 @@ class AsyncDatabaseClient:
         await checkpoint_if_cancelled()
 
     def pool_status(self) -> DatabasePoolStatus | None:
-        return _pool_status(self.engine.sync_engine.pool, self.settings, self._pool_exhaustions)
+        return _pool_status(
+            self.engine.sync_engine.pool,
+            self.settings,
+            self._pool_exhaustions,
+            self._checkout_timings,
+        )
 
 
 def _pool_status(
     pool: Pool,
     settings: DatabaseSettings,
     exhaustions: int,
+    timings: _CheckoutTimings,
 ) -> DatabasePoolStatus | None:
     if not isinstance(pool, QueuePool):
         return None
-    return DatabasePoolStatus(
-        checked_out=pool.checkedout(),
-        capacity=settings.pool_size + settings.max_overflow,
-        exhaustions_total=exhaustions,
-    )
+    with timings.lock:
+        return DatabasePoolStatus(
+            checked_out=pool.checkedout(),
+            capacity=settings.pool_size + settings.max_overflow,
+            exhaustions_total=exhaustions,
+            checkouts_total=timings.count,
+            checkout_seconds_total=timings.total_seconds,
+            checkout_seconds_max=timings.max_seconds,
+        )
 
 
 def _pool_exhausted_error(

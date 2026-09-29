@@ -341,9 +341,11 @@ class TaskRepository:
         )
         claimed: list[Task] = []
         for row in rows:
-            task = task_from_table(row)
-            task.container_id = container_id
-            claimed.append(self.upsert(task))
+            if row.workspace_id is not None:
+                WorkspaceRepository(self.session).lock_active_owner(row.workspace_id)
+            row.container_id = container_id
+            claimed.append(task_from_table(row))
+        self.session.flush()
         return claimed
 
     def release_claim(self, task_id: str, *, container_id: str | None) -> Task | None:
@@ -980,14 +982,15 @@ def _is_uuid_text(value: str) -> bool:
 class TaskAttemptRepository:
     session: Session
 
-    def record_execution_entry(
+    def accept_claim_completion(
         self,
         *,
         task_id: str,
         workspace_id: str,
         container_id: str,
         claim_id: str,
-        elapsed_since_entry_seconds: float,
+        attempt_number: int,
+        elapsed_since_entry_seconds: float | None,
         reported_at: datetime,
     ) -> bool:
         row = self.session.execute(
@@ -1001,11 +1004,15 @@ class TaskAttemptRepository:
                 TaskAttemptTable.workspace_id == workspace_id,
                 TaskAttemptTable.container_id == container_id,
                 TaskAttemptTable.claim_id == claim_id,
+                TaskAttemptTable.attempt_number == attempt_number,
+                TaskAttemptTable.status == TaskStatus.Running.value,
             )
             .with_for_update()
         ).one_or_none()
         if row is None or row.started_at is None:
             return False
+        if elapsed_since_entry_seconds is None:
+            return True
         # A monotonic duration removes runner wall-clock skew. Transport time
         # remains in this upper bound, which must never precede the server claim.
         elapsed = min(

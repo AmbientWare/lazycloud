@@ -63,9 +63,6 @@ from compute.telemetry import (
     AgentMetricSnapshot as AgentMetricSnapshotProtocol,
 )
 from compute.tunnel_authority import AgentTunnelAuthority
-from control.apps import AppService
-from control.deployment_resources import DeploymentResourceService, client_manifest_resource
-from control.deployments import DeploymentService
 from control.placement import PlacementResolver
 from control.releases import DeploymentReleaseService
 from control.service import ControlPlaneService, StubKind
@@ -82,7 +79,6 @@ from database.repositories.compute import (
     ComputeMachineEnrollmentRepository,
     ComputeUnitRepository,
 )
-from database.repositories.execution import LogRepository
 from database.repositories.identity import WorkspaceMemberRepository, WorkspaceRepository
 from database.repositories.orchestration import (
     ContainerRepository,
@@ -98,11 +94,8 @@ from identity.auth import AuthorizationDeniedError, AuthService
 from identity.authz import AuthzRequirement
 from identity.signatures import sign_payload
 from observability.events import EventService
-from observability.log_retention import LogRetentionService
 from observability.metrics import MetricsService
-from observability.stream_state import AsyncRedisEventStreamRepository
 from observability.usage import UsageService
-from operations.management import ManagementService
 from pydantic import JsonValue
 from scheduler.preemption import (
     SchedulerWorkerMaintenance,
@@ -119,7 +112,6 @@ from scheduler.workers import (
     SchedulerWorkerContainerRepository,
 )
 from shared.app_identity import AGENT_NAME
-from shared.app_slug import app_slug_or_default, validate_app_slug
 from shared.capacity import UnitName
 from shared.compute_enrollment import (
     AgentCapacityState,
@@ -137,8 +129,6 @@ from shared.compute_policy import (
 )
 from shared.container_requests import StopContainerReason
 from shared.containers import ContainerRecord, ContainerStatus
-from shared.deployment_records import resolve_authorized, resolve_max_pending_tasks, resolve_retries
-from shared.deployments import DeploymentKind
 from shared.errors import (
     ConflictError,
     DomainError,
@@ -148,11 +138,6 @@ from shared.errors import (
 )
 from shared.events import EventLevel
 from shared.http.agent_identity import AgentTunnelIdentity
-from shared.http.client_manifests import (
-    INVOKABLE_DEPLOYMENT_KINDS,
-    ClientManifestRequest,
-    ClientManifestResponse,
-)
 from shared.http.compute import (
     MachineJoinCommandRequest,
     MachineJoinCommandResponse,
@@ -165,19 +150,6 @@ from shared.http.compute import (
 from shared.http.gateway import (
     AgentCapacityInterruptionRequest,
     AgentCapacityInterruptionResponse,
-    AttachToContainerRequest,
-    AttachToContainerResponse,
-    CheckpointContainerRequest,
-    CheckpointContainerResponse,
-    DeployStubRequest,
-    DeployStubResponse,
-    GatewayUrlKind,
-    GetOrCreateStubRequest,
-    GetOrCreateStubResponse,
-    GetUrlRequest,
-    GetUrlResponse,
-    ResolveDeploymentTargetRequest,
-    ResolveDeploymentTargetResponse,
 )
 from shared.http.gateway_tasks import (
     AppendTaskLogRequest,
@@ -200,12 +172,9 @@ from shared.http.objects import (
     PutObjectResponse,
 )
 from shared.http.releases import AgentReleaseRequest, AgentReleaseResponse
-from shared.http.workspace_sync import WorkspaceSyncBatch, WorkspaceSyncResponse
 from shared.identity import AuthScope, TokenKind, TokenStatus
-from shared.logs import LogEntry
 from shared.objects import ObjectRecord
 from shared.placement import Placement, PlacementKind
-from shared.realtime.streams import LogStreamQuery
 from shared.releases import ActiveRelease
 from shared.routing import AgentBackendRoute
 from shared.scheduling import (
@@ -220,7 +189,6 @@ from shared.usage import UsageBillingOwner, UsageMetric, UsageUnit, usage_record
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from storage.service import ObjectStorage
-from worker.container_client.scheduler import SchedulerContainerClientFactory
 
 from database import AsyncDatabaseClient
 from gateway.agent_enrollment import AgentJoinResult, private_unit_for_enrollment
@@ -247,12 +215,9 @@ from gateway.http import (
     UpdateAgentRouteStatusResponse,
 )
 from gateway.payloads import (
-    CONTAINER_OUTPUT_LOG_LIMIT,
-    container_output,
     object_key,
     task_result_value,
 )
-from gateway.stub_config import deployment_spec_from_stub, stub_config, stub_kind
 from gateway.unit_state import GatewayUnitStateCoordinator, billing_owner_for_unit
 from gateway.views import (
     agent_route_view,
@@ -270,15 +235,6 @@ class GatewayServices(Protocol):
 
     @property
     def auth(self) -> AuthService: ...
-
-    @property
-    def apps(self) -> AppService: ...
-
-    @property
-    def deployments(self) -> DeploymentService: ...
-
-    @property
-    def deployment_resources(self) -> DeploymentResourceService: ...
 
     @property
     def compute(self) -> ComputeService: ...
@@ -324,31 +280,6 @@ class AgentCapacityInterruptionSink(Protocol):
     def preempt_agent_capacity(self, state: ComputeAgentTokenState) -> None: ...
 
 
-def _deployment_kind_to_stub_kind(kind: DeploymentKind) -> StubKind:
-    try:
-        return StubKind(kind.value)
-    except ValueError as exc:
-        msg = f"deployment kind is not invokable: {kind}"
-        raise ValueError(msg) from exc
-
-
-def _request_with_workload_defaults(
-    request: GetOrCreateStubRequest,
-    kind: StubKind,
-) -> GetOrCreateStubRequest:
-    fields_set = request.model_fields_set
-    updates: dict[str, bool | int] = {}
-    if "authorized" not in fields_set:
-        updates["authorized"] = resolve_authorized(kind.value, None)
-    if "max_pending_tasks" not in fields_set:
-        max_pending_tasks = resolve_max_pending_tasks(kind.value, None)
-        if max_pending_tasks is not None:
-            updates["max_pending_tasks"] = max_pending_tasks
-    if "retries" not in fields_set and request.retry_policy is None:
-        updates["retries"] = resolve_retries(kind.value, None)
-    return request.model_copy(update=updates) if updates else request
-
-
 DISCONNECT_SWEEP_LIMIT = 200
 """Machines one disconnect sweep will mark.
 
@@ -371,7 +302,7 @@ def _domain_error(exc: KeyError | ValueError) -> DomainError:
 class GatewayControlService:
     services: GatewayServices
     control_plane: ControlPlaneService
-    management: ManagementService
+    function_tasks: FunctionControlService
     compute_state: RedisComputeStateRepository
     scheduler_workers: SchedulerWorkerAdminRepository
     scheduler_containers: SchedulerWorkerContainerRepository
@@ -381,7 +312,6 @@ class GatewayControlService:
     gateway_endpoint: GatewayEndpointConfig
     agent_image: AgentImageConfig
     container_stopper: GatewayContainerStopper
-    container_client_factory: SchedulerContainerClientFactory
     connections: RedisAgentConnectionDirectory
     tunnel_authority: AgentTunnelAuthority
     capacity_interruption_sink: AgentCapacityInterruptionSink | None = None
@@ -519,36 +449,6 @@ class GatewayControlService:
             expires_seconds=expires_seconds,
         )
 
-    def checkpoint_container(
-        self,
-        request: CheckpointContainerRequest,
-        *,
-        workspace_id: str,
-    ) -> CheckpointContainerResponse:
-        try:
-            container = self._container_for_workspace(request.container_id, workspace_id)
-            response = self.container_client_factory.client_for(container).client.checkpoint(
-                container.id,
-                checkpoint_id=request.checkpoint_id or str(uuid4()),
-            )
-            if not response.ok:
-                raise InvalidInputError(response.error_msg or "container checkpoint failed")
-            if not response.checkpoint_id:
-                raise UpstreamUnavailableError("container worker did not return a checkpoint id")
-            self.services.events.emit(
-                "container.checkpoint",
-                resource_type="container",
-                resource_id=container.id,
-                message=f"created checkpoint for container {container.name}",
-                data={"checkpoint_id": response.checkpoint_id},
-                workspace_id=container.workspace_id,
-            )
-        except (KeyError, ValueError) as exc:
-            raise _domain_error(exc) from exc
-        except RuntimeError as exc:
-            raise UpstreamUnavailableError(str(exc)) from exc
-        return CheckpointContainerResponse(checkpoint_id=response.checkpoint_id)
-
     def _stop_container_by_id(self, container_id: str) -> None:
         container = self.services.containers.get(container_id)
         # `Scheduler`, not `Admin`: a drained container is usually also serving
@@ -573,77 +473,6 @@ class GatewayControlService:
                 level=EventLevel.Warning,
                 workspace_id=container.workspace_id,
             )
-
-    async def attach_to_container(
-        self,
-        request: AttachToContainerRequest,
-        *,
-        workspace_id: str,
-        database: AsyncDatabaseClient,
-        redis: AsyncRedisClient,
-    ) -> AttachToContainerResponse:
-        try:
-            container, task_logs = await database.run_transaction(
-                lambda session: self._container_output_state(
-                    session,
-                    request.container_id,
-                    workspace_id,
-                )
-            )
-        except (KeyError, ValueError) as exc:
-            raise _domain_error(exc) from exc
-        output = await container_output(
-            container,
-            task_logs=task_logs,
-            logs=AsyncRedisEventStreamRepository(redis),
-        )
-        done = container.finished_at is not None
-        return AttachToContainerResponse(
-            output=output,
-            done=done,
-            exit_code=container.exit_code,
-        )
-
-    @staticmethod
-    def _container_output_state(
-        session: Session,
-        container_id: str,
-        workspace_id: str,
-    ) -> tuple[ContainerRecord, tuple[LogEntry, ...]]:
-        container = ContainerRepository(session).get(container_id, workspace_id=workspace_id)
-        if container is None:
-            raise NotFoundError(f"container not found: {container_id}")
-        if not container.task_id:
-            return container, ()
-        page = LogRepository(session).page(
-            LogStreamQuery(
-                workspace_id=workspace_id,
-                task_id=container.task_id,
-                start_time=LogRetentionService.cutoff_in_session(session, workspace_id),
-            ),
-            workspace_id=workspace_id,
-            limit=CONTAINER_OUTPUT_LOG_LIMIT,
-        )
-        return container, tuple(record.entry for record in page.data)
-
-    def sync_container_workspace(
-        self,
-        request: WorkspaceSyncBatch,
-        *,
-        workspace_id: str,
-    ) -> WorkspaceSyncResponse:
-        try:
-            container = self._container_for_workspace(request.manifest.container_id, workspace_id)
-            response = self.container_client_factory.client_for(container).client.sync_workspace(
-                request
-            )
-        except (KeyError, ValueError) as exc:
-            raise _domain_error(exc) from exc
-        except RuntimeError as exc:
-            raise UpstreamUnavailableError(str(exc)) from exc
-        if not response.ok:
-            raise InvalidInputError(response.error_msg or "container workspace sync failed")
-        return WorkspaceSyncResponse(applied=response.applied)
 
     def start_task(self, request: StartTaskRequest, *, workspace_id: str) -> StartTaskResponse:
         try:
@@ -691,9 +520,9 @@ class GatewayControlService:
             )
             stub = stub_for_task(self.control_plane, pending)
             if stub is not None and stub.kind is StubKind.Function:
-                task = FunctionControlService(
-                    self.services,
-                ).finish_function_task(
+                if request.claim_id is None:
+                    raise InvalidInputError("function completion requires a claim ID")
+                task = self.function_tasks.finish_function_task(
                     request.task_id,
                     request.task_status,
                     container_id=request.container_id,
@@ -701,6 +530,8 @@ class GatewayControlService:
                     error=error,
                     exit_code=0 if request.task_status is TaskStatus.Complete else 1,
                     retry_allowed=request.retryable,
+                    claim_id=request.claim_id,
+                    execution_entry=request.execution_entry,
                 )
             else:
                 task = self.services.tasks.finish(
@@ -777,145 +608,6 @@ class GatewayControlService:
             level=EventLevel.Error if task.status is TaskStatus.Failed else EventLevel.Info,
             data=data,
             workspace_id=workspace_id or None,
-        )
-
-    def get_or_create_stub(self, request: GetOrCreateStubRequest) -> GetOrCreateStubResponse:
-        try:
-            kind = stub_kind(request.stub_type)
-            request = _request_with_workload_defaults(request, kind)
-            config = stub_config(request)
-            app_name = app_slug_or_default(request.app_name, default=request.name)
-            metadata: dict[str, JsonValue] = {
-                "object_id": request.object_id,
-                "image_id": request.image_id,
-                "force_create": request.force_create,
-                "app": app_name,
-            }
-            config_metadata = dict(config.metadata)
-            config_metadata["app"] = app_name
-            config.metadata = config_metadata
-            stub = self.control_plane.create_stub(
-                request.name,
-                workspace=request.workspace,
-                kind=kind,
-                handler=request.handler or None,
-                public=not request.authorized,
-                config=config,
-                metadata=metadata,
-            )
-        except (KeyError, ValueError) as exc:
-            raise _domain_error(exc) from exc
-        return GetOrCreateStubResponse(stub_id=stub.id)
-
-    def deploy_stub(self, request: DeployStubRequest) -> DeployStubResponse:
-        try:
-            stub = self.control_plane.get_stub(request.stub_id, workspace=request.workspace)
-            workspace = request.workspace or stub.workspace_id
-            deployment = self.services.deployments.deploy(
-                deployment_spec_from_stub(stub, name=request.name or stub.name),
-                workspace=workspace,
-            )
-            resource = self.services.deployment_resources.get_by_deployment_id(
-                deployment.id,
-                workspace=workspace,
-            )
-            if resource is None:
-                msg = f"deployment resource not found after deploy: {deployment.id}"
-                raise ValueError(msg)
-            invoke_url = resource.invoke_url(request.external_url)
-        except (KeyError, ValueError) as exc:
-            raise _domain_error(exc) from exc
-        return DeployStubResponse(
-            stub_id=resource.stub.id,
-            deployment_id=deployment.id,
-            app_id=resource.app.id,
-            version=deployment.version,
-            invoke_url=invoke_url,
-            name=deployment.name,
-            role=deployment.spec.role,
-            keep_warm_seconds=deployment.spec.resources.keep_warm,
-            preemptible=deployment.spec.resources.preemptible,
-        )
-
-    def get_url(self, request: GetUrlRequest) -> GetUrlResponse:
-        try:
-            if request.url_type is GatewayUrlKind.Deployment and request.deployment_id:
-                url = self.management.deployment_url(
-                    request.deployment_id,
-                    workspace=request.workspace,
-                    external_url=request.external_url,
-                    port=request.port,
-                ).url
-            else:
-                url = self.control_plane.stub_url(
-                    request.stub_id,
-                    workspace=request.workspace,
-                    deployment_id=request.deployment_id or None,
-                    external_url=request.external_url,
-                    port=request.port,
-                    container_id=request.container_id,
-                ).url
-        except (KeyError, ValueError) as exc:
-            raise _domain_error(exc) from exc
-        return GetUrlResponse(url=url)
-
-    def resolve_deployment_target(
-        self,
-        request: ResolveDeploymentTargetRequest,
-    ) -> ResolveDeploymentTargetResponse:
-        try:
-            stub_type = _deployment_kind_to_stub_kind(request.kind)
-            app_id = None
-            if request.app:
-                app = self.services.apps.get(
-                    validate_app_slug(request.app),
-                    workspace=request.workspace,
-                )
-                app_id = app.id
-            result = self.management.deployment_url_by_name(
-                request.workspace,
-                stub_type,
-                request.name,
-                request.deployment_version,
-                app_id=app_id,
-                external_url=request.external_url,
-            )
-            if result.stub is None:
-                raise NotFoundError(f"deployment target has no stub: {request.name}")
-        except (KeyError, ValueError) as exc:
-            raise _domain_error(exc) from exc
-        return ResolveDeploymentTargetResponse(
-            kind=request.kind,
-            stub_id=result.stub.id,
-            deployment_id=result.deployment.id,
-            deployment_name=result.deployment.name,
-            deployment_version=result.deployment.version,
-            url=result.url,
-        )
-
-    def client_manifest(self, request: ClientManifestRequest) -> ClientManifestResponse:
-        try:
-            app = self.services.apps.get(request.app, workspace=request.workspace)
-            deployed_resources = self.services.deployment_resources.list(
-                workspace=request.workspace,
-                app=app.name,
-                kinds=INVOKABLE_DEPLOYMENT_KINDS,
-                active=True,
-                latest_per_resource=True,
-            )
-            resources = [
-                client_manifest_resource(
-                    deployed_resource,
-                    external_url=request.external_url,
-                )
-                for deployed_resource in deployed_resources
-            ]
-        except (KeyError, ValueError) as exc:
-            raise _domain_error(exc) from exc
-        return ClientManifestResponse(
-            app=app.name,
-            workspace=request.workspace,
-            resources=resources,
         )
 
     def delete_unit(self, unit_id: str, *, workspace_id: str) -> None:
@@ -2958,17 +2650,6 @@ class GatewayControlService:
             )
         except NotFoundError:
             return None
-
-    def _container_for_workspace(
-        self,
-        container_id: str,
-        workspace_id: str,
-    ) -> ContainerRecord:
-        container = self.services.containers.get(container_id)
-        if container.workspace_id != workspace_id:
-            msg = f"container not found: {container_id}"
-            raise NotFoundError(msg)
-        return container
 
     def _task_for_workspace(self, task_id: str, workspace_id: str) -> Task:
         task = self.services.tasks.get(task_id)
