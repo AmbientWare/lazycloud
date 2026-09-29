@@ -41,7 +41,7 @@ from shared.errors import (
     InvalidInputError,
     NotFoundError,
 )
-from shared.events import EventLevel
+from shared.events import Event, EventLevel
 from shared.function_payloads import (
     FunctionDependencyBinding,
     FunctionInvocationPayload,
@@ -83,6 +83,7 @@ from shared.tasks import (
 from shared.timestamps import utc_now
 
 from database import AsyncDatabaseClient
+from execution.batching import RequestBatch
 from execution.checkpoints import latest_available_checkpoint
 from execution.containers.planning import ContainerSchedulingOptions
 from execution.containers.service import PendingContainerReservation
@@ -110,12 +111,21 @@ from execution.tasks import TaskClaimOutcome, TaskFinishOutcome
 LOGGER = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True, slots=True)
+class _InvocationResult:
+    response: FunctionInvokeResponse
+    headless: bool
+
+
 @dataclass(slots=True)
 class FunctionControlService:
     services: ExecutionServices
     async_database: AsyncDatabaseClient | None = None
     task_changes: AsyncTaskChangeReader | None = None
     control_plane: ControlPlaneService = field(init=False)
+    _admissions: dict[tuple[str, str], RequestBatch[FunctionInvokeBody, _InvocationResult]] = field(
+        default_factory=dict, init=False
+    )
 
     def __post_init__(self) -> None:
         self.control_plane = ControlPlaneService(self.services.context)
@@ -123,146 +133,253 @@ class FunctionControlService:
     def function_invoke(
         self, request: FunctionInvokeBody, *, stub: StubRecord
     ) -> FunctionInvokeResponse:
-        try:
-            if stub.kind is not StubKind.Function:
-                raise InvalidInputError(f"stub is not a function: {stub.id}")
-            config = FunctionStubConfig.model_validate(stub.config, from_attributes=True)
-            if (
-                isinstance(request.invocation, FunctionJsonInvocation)
-                and request.invocation.result_encoding is FunctionPayloadEncoding.Json
-                and stub.config.client_contract is not None
-            ):
-                python_type = stub.config.client_contract.operation.return_python_type
-                if python_type:
-                    raise InvalidInputError(
-                        f"function returns {python_type}; call it through the Python SDK"
-                    )
-            # Warm invocations reuse capacity. A cold invocation must also pass
-            # the container limit before committing a task it cannot run.
-            with self.services.context.database.session() as session:
-                needs_container = ContainerRepository(session).count_live_for_stub(stub.id) == 0
-                admit = (
-                    self.services.containers.admit_container_start
-                    if needs_container
-                    else self.services.payment_admission.assert_workload_eligible
-                )
-                admit(
-                    session,
-                    workspace_id=stub.workspace_id,
-                    gpu=config.runtime.gpu,
-                    gpu_count=config.runtime.gpu_count,
-                    region=config.runtime.region,
-                    availability_zone=config.runtime.availability_zone,
-                )
-                # Reject a departed machine before creating its task.
-                placement = workload_placement(
-                    session,
-                    resolver=self.services.placement_resolver,
-                    stub=stub,
-                    workspace=self.services.context.workspace(session, stub.workspace_id),
-                )
-            self._assert_within_pending_limit(stub.id, config)
-            retry_policy = config.effective_retry_policy
-            invoke_plan = plan_function_invoke(
-                planning.FunctionInvokeRequest(
-                    invocation=request.invocation,
-                    headless=request.headless,
-                    configured_retry_count=retry_policy.retry_count,
+        result = self._invoke_batch([request], stub=stub)[0]
+        if isinstance(result, Exception):
+            raise result
+        return result.response
+
+    async def function_invoke_async(
+        self,
+        request: FunctionInvokeBody,
+        *,
+        workspace_id: str,
+        stub: StubRecord | None = None,
+    ) -> FunctionInvokeResponse:
+        if stub is None:
+            stub = await self._async_database().run_transaction(
+                lambda session: self.control_plane.get_stub_in_session(
+                    session, request.stub_id, workspace=workspace_id
                 )
             )
-            parent_task_id, root_task_id = self._task_graph_context(request, stub.workspace_id)
-            task_args, task_kwargs = _persisted_invocation_arguments(invoke_plan.invocation)
-            deployment_id = stub.deployment_id
-            with self.services.context.database.session() as session:
-                if stub.app_id:
-                    DatabaseAppExecutionAdmission().assert_active(
-                        session, app_id=stub.app_id, workspace_id=stub.workspace_id
+        if stub.workspace_id != workspace_id or stub.kind is not StubKind.Function:
+            raise NotFoundError("function not found")
+        # Graph validation can fail independently of admission. Keep those calls
+        # isolated so a missing dependency cannot roll back another caller.
+        graph = bool(request.dependencies or request.parent_task_id or request.root_task_id)
+        key = (stub.id, str(uuid4()) if graph else "")
+        batch = self._admissions.get(key)
+        if batch is None:
+            admitted_stub = stub
+
+            async def execute(
+                requests: Sequence[FunctionInvokeBody],
+            ) -> Sequence[_InvocationResult | Exception]:
+                return await asyncio.to_thread(self._invoke_batch, requests, stub=admitted_stub)
+
+            async def abandon(result: _InvocationResult) -> None:
+                if result.response.task_id and not result.headless:
+                    await asyncio.to_thread(self.cancel_task, result.response.task_id)
+
+            def on_idle() -> None:
+                self._admissions.pop(key, None)
+
+            batch = RequestBatch(
+                execute=execute,
+                abandon=abandon,
+                on_idle=on_idle,
+            )
+            self._admissions[key] = batch
+        return (await batch.submit(request)).response
+
+    def _invoke_batch(
+        self, requests: Sequence[FunctionInvokeBody], *, stub: StubRecord
+    ) -> list[_InvocationResult | Exception]:
+        try:
+            return self._admit_invocations(requests, stub=stub)
+        except DomainError as exc:
+            return [exc for _ in requests]
+        except Exception as exc:
+            return [
+                _InvocationResult(
+                    FunctionInvokeResponse.from_result(
+                        task_id="", output=str(exc), done=True, exit_code=1
+                    ),
+                    request.headless,
+                )
+                for request in requests
+            ]
+
+    def _admit_invocations(
+        self, requests: Sequence[FunctionInvokeBody], *, stub: StubRecord
+    ) -> list[_InvocationResult | Exception]:
+        if stub.kind is not StubKind.Function:
+            raise InvalidInputError(f"stub is not a function: {stub.id}")
+        config = FunctionStubConfig.model_validate(stub.config, from_attributes=True)
+        retry_policy = config.effective_retry_policy
+        prepared: list[tuple[int, FunctionInvokeBody, Task]] = []
+        results: list[_InvocationResult | Exception] = [
+            RuntimeError("function admission omitted its result") for _ in requests
+        ]
+        for index, request in enumerate(requests):
+            try:
+                if (
+                    isinstance(request.invocation, FunctionJsonInvocation)
+                    and request.invocation.result_encoding is FunctionPayloadEncoding.Json
+                    and stub.config.client_contract is not None
+                ):
+                    python_type = stub.config.client_contract.operation.return_python_type
+                    if python_type:
+                        raise InvalidInputError(
+                            f"function returns {python_type}; call it through the Python SDK"
+                        )
+                invoke_plan = plan_function_invoke(
+                    planning.FunctionInvokeRequest(
+                        invocation=request.invocation,
+                        headless=request.headless,
+                        configured_retry_count=retry_policy.retry_count,
                     )
-                if deployment_id:
-                    active = DeploymentRepository(session).lock_invocation_active(
-                        deployment_id, workspace_id=stub.workspace_id, stub_id=stub.id
-                    )
-                    if active is None:
-                        raise NotFoundError(f"deployment not found for function: {deployment_id}")
-                    if not active:
-                        raise ConflictError(f"deployment is not active: {deployment_id}")
-                task = self.services.tasks.create_in_transaction(
-                    session,
-                    f"function-{stub.name}",
+                )
+                parent_task_id, root_task_id = self._task_graph_context(request, stub.workspace_id)
+                task_args, task_kwargs = _persisted_invocation_arguments(invoke_plan.invocation)
+                task = Task(
+                    id=str(uuid4()),
+                    name=f"function-{stub.name}",
                     workspace_id=stub.workspace_id,
                     app_id=stub.app_id,
                     stub_id=stub.id,
-                    deployment_id=deployment_id,
+                    deployment_id=stub.deployment_id,
                     parent_task_id=parent_task_id or None,
                     root_task_id=root_task_id or None,
                     handler=stub.handler,
-                    args=task_args,
-                    kwargs=task_kwargs,
+                    args=task_args or [],
+                    kwargs=task_kwargs or {},
                     invocation=invoke_plan.invocation,
                     retry_policy=retry_policy,
+                    max_attempts=retry_policy.max_attempts,
                     claimable_at=utc_now() if not request.dependencies else None,
                 )
-                usage = self.services.usage.record_task_count_in_session(
-                    session,
-                    workspace_id=stub.workspace_id,
-                    resource_type="function",
-                    resource_id=stub.id,
-                    task_id=task.id,
-                    kind=stub.kind.value,
-                    app_id=stub.app_id or "",
-                    deployment_id=task.deployment_id or "",
-                )
-                dependencies = self._create_task_dependencies(session, task, request)
-                self.services.events.emit_in_session(
-                    session,
-                    "function.invoked",
-                    level=EventLevel.Info,
-                    resource_type="task",
-                    resource_id=task.id,
-                    message=f"invoked function {stub.name}",
-                    data={
-                        "stub_id": stub.id,
-                        "parent_task_id": task.parent_task_id or "",
-                        "root_task_id": task.root_task_id or task.id,
-                        "dependency_count": len(dependencies),
-                        "headless": invoke_plan.headless,
-                    },
-                    workspace_id=stub.workspace_id,
-                )
-                # Every invocation touches this shared row. Acquire it only
-                # after the task's other writes, immediately before commit.
-                if task.claimable_at is not None:
-                    self.services.execution_demand.activate_in_transaction(
-                        session,
-                        stub_id=stub.id,
-                        workspace_id=stub.workspace_id,
-                        kind=AutoscalerTargetKind.Function,
-                    )
-            self.services.execution_demand.notify()
-            self.services.tasks.publish_created(task)
-            self.services.usage.publish_change(usage)
-            scheduled = None
-            if task.claimable_at is None:
-                scheduled = self._try_schedule_waiting_task(task.id, placement=placement)
-            elif needs_container:
-                scheduled = self._schedule_function_task(task, placement=placement)
-            if scheduled is not None and not scheduled.accepted:
-                return FunctionInvokeResponse.from_result(
-                    task_id=task.id,
-                    output=scheduled.reason or "function container scheduling failed",
-                    done=True,
-                    exit_code=1,
-                )
-            return FunctionInvokeResponse.from_result(task_id=task.id)
-        except DomainError:
-            raise
-        except Exception as exc:
-            return FunctionInvokeResponse.from_result(
-                task_id="",
-                output=str(exc),
-                done=True,
-                exit_code=1,
+                prepared.append((index, request, task))
+            except DomainError as exc:
+                results[index] = exc
+        if not prepared:
+            return results
+
+        # Cold eligibility can lock billing accounts. Commit before acquiring
+        # artifact and workspace fences in the task creation transaction.
+        with self.services.context.database.session() as session:
+            needs_container = ContainerRepository(session).count_live_for_stub(stub.id) == 0
+            admit = (
+                self.services.containers.admit_container_start
+                if needs_container
+                else self.services.payment_admission.assert_workload_eligible
             )
+            admit(
+                session,
+                workspace_id=stub.workspace_id,
+                gpu=config.runtime.gpu,
+                gpu_count=config.runtime.gpu_count,
+                region=config.runtime.region,
+                availability_zone=config.runtime.availability_zone,
+            )
+            placement = workload_placement(
+                session,
+                resolver=self.services.placement_resolver,
+                stub=stub,
+                workspace=self.services.context.workspace(session, stub.workspace_id),
+            )
+            limit = config.effective_max_pending_tasks
+            available = len(prepared)
+            if limit > 0:
+                # Concurrent processes can observe the same count, as with a
+                # single invocation. A batch must still consume each local slot.
+                in_flight = TaskRepository(session).count_inflight_for_stub(stub.id)
+                available = max(0, limit - in_flight)
+                for index, _, _ in prepared[available:]:
+                    results[index] = CapacityLimitReachedError(
+                        f"this function already has {limit} calls in flight, which is the most "
+                        f"it accepts ({limit}); raise max_pending_tasks to queue more"
+                    )
+        prepared = prepared[:available]
+        if not prepared:
+            return results
+
+        with self.services.context.database.session() as session:
+            if stub.app_id:
+                DatabaseAppExecutionAdmission().assert_active(
+                    session, app_id=stub.app_id, workspace_id=stub.workspace_id
+                )
+            if stub.deployment_id:
+                active = DeploymentRepository(session).lock_invocation_active(
+                    stub.deployment_id, workspace_id=stub.workspace_id, stub_id=stub.id
+                )
+                if active is None:
+                    raise NotFoundError(f"deployment not found for function: {stub.deployment_id}")
+                if not active:
+                    raise ConflictError(f"deployment is not active: {stub.deployment_id}")
+            tasks = self.services.tasks.create_batch_in_transaction(
+                session, [task for _, _, task in prepared]
+            )
+            usage = self.services.usage.record_task_counts_in_session(
+                session,
+                workspace_id=stub.workspace_id,
+                resource_type="function",
+                resource_id=stub.id,
+                task_ids=[task.id for task in tasks],
+                kind=stub.kind.value,
+                app_id=stub.app_id or "",
+                deployment_id=stub.deployment_id or "",
+            )
+            events: list[tuple[Event, str | None]] = []
+            for (_, request, _), task in zip(prepared, tasks, strict=True):
+                dependencies = self._create_task_dependencies(session, task, request)
+                events.append(
+                    (
+                        Event(
+                            id=str(uuid4()),
+                            action="function.invoked",
+                            level=EventLevel.Info,
+                            resource_type="task",
+                            resource_id=task.id,
+                            message=f"invoked function {stub.name}",
+                            data={
+                                "stub_id": stub.id,
+                                "parent_task_id": task.parent_task_id or "",
+                                "root_task_id": task.root_task_id or task.id,
+                                "dependency_count": len(dependencies),
+                                "headless": request.headless,
+                            },
+                        ),
+                        stub.workspace_id,
+                    )
+                )
+            self.services.events.emit_many_in_session(session, events)
+            # This is the only shared write across independent invocations.
+            if any(task.claimable_at is not None for task in tasks):
+                self.services.execution_demand.activate_in_transaction(
+                    session,
+                    stub_id=stub.id,
+                    workspace_id=stub.workspace_id,
+                    kind=AutoscalerTargetKind.Function,
+                )
+        self.services.execution_demand.notify()
+        for (index, request, _), task, record in zip(prepared, tasks, usage, strict=True):
+            response = FunctionInvokeResponse.from_result(task_id=task.id)
+            try:
+                self.services.tasks.publish_created(task)
+                self.services.usage.publish_change(record)
+                scheduled = None
+                if task.claimable_at is None:
+                    scheduled = self._try_schedule_waiting_task(task.id, placement=placement)
+                elif needs_container:
+                    scheduled = self._schedule_function_task(task, placement=placement)
+                if scheduled is not None and not scheduled.accepted:
+                    response = FunctionInvokeResponse.from_result(
+                        task_id=task.id,
+                        output=scheduled.reason or "function container scheduling failed",
+                        done=True,
+                        exit_code=1,
+                    )
+            except Exception as exc:
+                LOGGER.exception("post-commit function admission failed for task %s", task.id)
+                try:
+                    self.cancel_task(task.id)
+                except Exception:
+                    LOGGER.exception("failed to cancel admitted task %s", task.id)
+                response = FunctionInvokeResponse.from_result(
+                    task_id=task.id, output=str(exc), done=True, exit_code=1
+                )
+            results[index] = _InvocationResult(response, request.headless)
+        return results
 
     def _task_graph_context(
         self,
@@ -719,32 +836,6 @@ class FunctionControlService:
                     self.release_dependents(updated)
             yield scheduled
 
-    def _assert_within_pending_limit(self, stub_id: str, config: FunctionStubConfig) -> None:
-        """Refuse work this function has no prospect of getting to.
-
-        A fan-out that outruns what the platform will start containers for
-        otherwise queues without bound, and every queued call is billable work
-        somebody is waiting on. Failing the call that crosses the line tells the
-        caller immediately, where accepting it would report success and then be
-        indistinguishable from a function that is merely slow.
-
-        Deliberately approximate: two calls arriving together can both read the
-        same count and both be admitted. The limit bounds a runaway rather than
-        rationing the last slot, and a tighter one would mean serialising every
-        invocation of every function behind a lock.
-        """
-
-        limit = config.effective_max_pending_tasks
-        if limit <= 0:
-            return
-        with self.services.context.database.session() as session:
-            in_flight = TaskRepository(session).count_inflight_for_stub(stub_id)
-        if in_flight >= limit:
-            raise CapacityLimitReachedError(
-                f"this function already has {in_flight} calls in flight, which is the most "
-                f"it accepts ({limit}); raise max_pending_tasks to queue more"
-            )
-
     def _scheduled_execution_allowed(self, task: Task, *, scheduled: bool) -> bool:
         """A run that fired may outlive the deployment that scheduled it.
 
@@ -1176,87 +1267,124 @@ class FunctionControlService:
         *,
         keepalive_interval_seconds: float,
     ) -> AsyncGenerator[FunctionInvokeResponse]:
-
         log_cursor: LogPageCursor | None = None
         last_status = ""
         last_progress: TaskPendingProgress | None = None
         last_progress_read = 0.0
         last_keepalive = time.monotonic()
-        while True:
-            try:
-                log_page, task = await self._async_database().run_transaction(
-                    lambda session, cursor=log_cursor: self._function_stream_page_in_session(
-                        session,
-                        initial.task_id,
-                        cursor=cursor,
+        progress_read: asyncio.Task[dict[str, TaskPendingProgress | None]] | None = None
+        progress_status: TaskStatus | None = None
+        update_read: asyncio.Future[None] | None = None
+        try:
+            while True:
+                try:
+                    log_page, task, completed = await self._async_database().run_transaction(
+                        lambda session, cursor=log_cursor: self._function_stream_page_in_session(
+                            session, initial.task_id, cursor=cursor
+                        )
                     )
-                )
-            except NotFoundError as exc:
-                yield FunctionInvokeResponse.from_result(
-                    task_id=initial.task_id,
-                    output=str(exc),
-                    done=True,
-                    exit_code=1,
-                )
-                return
-            for record in log_page.data:
-                entry = record.entry
-                log_cursor = record.cursor
-                last_keepalive = time.monotonic()
-                yield FunctionInvokeResponse.from_result(
-                    task_id=initial.task_id,
-                    output=_stream_log_output(entry.message),
-                    stream=entry.stream,
-                )
-            if log_page.next is not None:
-                continue
-            progress = last_progress
-            progress_due = time.monotonic() - last_progress_read >= 1.0
-            if progress_due or task.status.value != last_status:
-                progress_by_task = await asyncio.to_thread(
-                    self.services.tasks.progress.read, [task]
-                )
-                progress = progress_by_task[task.id]
-                last_progress_read = time.monotonic()
-            if task.status.value != last_status or progress != last_progress:
-                last_status = task.status.value
-                last_progress = progress
-                last_keepalive = time.monotonic()
-                yield FunctionInvokeResponse.from_result(
-                    task_id=initial.task_id,
-                    status=last_status,
-                    pending_progress=progress,
-                )
-            if is_terminal_task_status(task.status):
-                completed = await self._async_database().run_transaction(
-                    lambda session: TaskRepository(session).result_snapshot(initial.task_id)
-                )
-                if completed is None:
-                    raise NotFoundError(f"task not found: {task.id}")
-                yield FunctionInvokeResponse.from_result(
-                    task_id=task.id,
-                    result=(
-                        _function_result_payload(completed)
+                except NotFoundError as exc:
+                    yield FunctionInvokeResponse.from_result(
+                        task_id=initial.task_id, output=str(exc), done=True, exit_code=1
+                    )
+                    return
+                for record in log_page.data:
+                    log_cursor = record.cursor
+                    last_keepalive = time.monotonic()
+                    yield FunctionInvokeResponse.from_result(
+                        task_id=initial.task_id,
+                        output=_stream_log_output(record.entry.message),
+                        stream=record.entry.stream,
+                    )
+                if log_page.next is not None:
+                    continue
+                progress = last_progress
+                pending = task.status in {TaskStatus.Pending, TaskStatus.Retry}
+                if progress_read is not None and progress_read.done():
+                    try:
+                        observed = progress_read.result()
+                    except Exception:
+                        LOGGER.exception("pending progress read failed for task %s", task.id)
+                    else:
+                        if progress_status is task.status:
+                            progress = observed[task.id]
+                    progress_read = None
+                if not pending:
+                    progress = None
+                    if progress_read is not None:
+                        progress_read.cancel()
+                        progress_read = None
+                if (
+                    pending
+                    and progress_read is None
+                    and (
+                        time.monotonic() - last_progress_read >= 1.0
+                        or progress_status is not task.status
+                    )
+                ):
+                    progress_status = task.status
+                    last_progress_read = time.monotonic()
+                    progress_read = asyncio.create_task(
+                        asyncio.to_thread(self.services.tasks.progress.read, [task])
+                    )
+                # Progress is advisory. A queued read must never hold a committed
+                # result behind an executor or database connection.
+                if (not pending or progress_read is None or last_status) and (
+                    task.status.value != last_status or progress != last_progress
+                ):
+                    last_status = task.status.value
+                    last_progress = progress
+                    last_keepalive = time.monotonic()
+                    yield FunctionInvokeResponse.from_result(
+                        task_id=initial.task_id,
+                        status=last_status,
+                        pending_progress=progress,
+                    )
+                if is_terminal_task_status(task.status):
+                    if completed is None:
+                        raise NotFoundError(f"task not found: {task.id}")
+                    yield FunctionInvokeResponse.from_result(
+                        task_id=task.id,
+                        result=(
+                            _function_result_payload(completed)
+                            if task.status is TaskStatus.Complete
+                            else None
+                        ),
+                        output=completed.error or "",
+                        done=True,
+                        exit_code=task.exit_code
+                        if task.exit_code is not None
+                        else 0
                         if task.status is TaskStatus.Complete
-                        else None
-                    ),
-                    output=completed.error or "",
-                    done=True,
-                    exit_code=task.exit_code
-                    if task.exit_code is not None
-                    else 0
-                    if task.status is TaskStatus.Complete
-                    else 1,
-                )
-                return
-            if time.monotonic() - last_keepalive >= max(keepalive_interval_seconds, 1.0):
-                last_keepalive = time.monotonic()
-                yield FunctionInvokeResponse.from_result(
-                    task_id=initial.task_id, status=last_status, pending_progress=last_progress
-                )
-            # The heartbeat also reconciles a commit whose notification was lost
-            # when its publishing process exited. Results always come from SQL.
-            await anext(updates)
+                        else 1,
+                    )
+                    return
+                if time.monotonic() - last_keepalive >= max(keepalive_interval_seconds, 1.0):
+                    last_keepalive = time.monotonic()
+                    yield FunctionInvokeResponse.from_result(
+                        task_id=initial.task_id,
+                        status=last_status,
+                        pending_progress=last_progress,
+                    )
+                if update_read is None:
+                    update_read = asyncio.ensure_future(anext(updates))
+                waiting: set[
+                    asyncio.Future[None] | asyncio.Task[dict[str, TaskPendingProgress | None]]
+                ] = {update_read}
+                if progress_read is not None:
+                    waiting.add(progress_read)
+                await asyncio.wait(waiting, return_when=asyncio.FIRST_COMPLETED)
+                if update_read.done():
+                    update_read.result()
+                    update_read = None
+        finally:
+            reads = [read for read in (progress_read, update_read) if read is not None]
+            for read in reads:
+                read.cancel()
+            if progress_read is not None:
+                await asyncio.gather(progress_read, return_exceptions=True)
+            if update_read is not None:
+                await asyncio.gather(update_read, return_exceptions=True)
 
     def _async_database(self) -> AsyncDatabaseClient:
         if self.async_database is None:
@@ -1269,14 +1397,18 @@ class FunctionControlService:
         task_id: str,
         *,
         cursor: LogPageCursor | None,
-    ) -> tuple[LogPage, TaskProgressSnapshot]:
+    ) -> tuple[LogPage, TaskProgressSnapshot, TaskResultSnapshot | None]:
         tasks = self.services.tasks
         task = TaskRepository(session).progress_snapshot(task_id)
         if task is None:
             raise NotFoundError(f"task not found: {task_id}")
-        return tasks.log_page_in_session(
-            session, task, limit=1_000, cursor=cursor, follow=True
-        ), task
+        log_page = tasks.log_page_in_session(session, task, limit=1_000, cursor=cursor, follow=True)
+        completed = (
+            TaskRepository(session).result_snapshot(task_id)
+            if is_terminal_task_status(task.status) and log_page.next is None
+            else None
+        )
+        return log_page, task, completed
 
     async def function_claim_wait(
         self, request: FunctionClaimRequest, *, workspace_id: str

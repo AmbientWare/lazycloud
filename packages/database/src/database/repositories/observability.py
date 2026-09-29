@@ -11,6 +11,7 @@ from database.mappers.observability import (
     write_usage_row,
 )
 from database.repositories.identity import WorkspaceRepository
+from database.repositories.workspace_writes import workspace_fenced_insert
 from database.tables.observability import (
     UsageRecordTable,
     WorkerEventTable,
@@ -27,7 +28,6 @@ from shared.usage import (
 from shared.usage_query import UsageQuery
 from shared.worker_events import WorkerEventFilter, WorkerEventRecord
 from sqlalchemy import CursorResult, Float, and_, delete, func, or_, select
-from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -122,38 +122,40 @@ class UsageRepository:
             if previous is not None and UUID(previous.workspace_id) != UUID(record.workspace_id):
                 raise ConflictError("usage ownership cannot change")
             unique[identity] = UsageRecord.model_validate(dict(record))
-        for workspace_id in sorted({str(UUID(record.workspace_id)) for record in unique.values()}):
-            WorkspaceRepository(self.session).lock_active_owner(workspace_id)
+        owners = sorted({str(UUID(record.workspace_id)) for record in unique.values()})
         rows: list[UsageRecordTable] = []
         for record in unique.values():
             row = UsageRecordTable(id=record.id)
             write_usage_row(row, record)
             rows.append(row)
-        statement = postgresql_insert(UsageRecordTable).values(
-            [
-                {
-                    "id": row.id,
-                    "workspace_id": row.workspace_id,
-                    "resource_type": row.resource_type,
-                    "resource_id": row.resource_id,
-                    "metric": row.metric,
-                    "quantity": row.quantity,
-                    "unit": row.unit,
-                    "labels": row.labels,
-                    "metadata_json": row.metadata_json,
-                    "metering_started_at": row.metering_started_at,
-                    "metering_ended_at": row.metering_ended_at,
-                    "app_id": row.app_id,
-                    "stub_id": row.stub_id,
-                    "deployment_id": row.deployment_id,
-                    "gpu": row.gpu,
-                    "task_id": row.task_id,
-                    "worker_id": row.worker_id,
-                    "container_id": row.container_id,
-                    "created_at": row.created_at,
-                }
-                for row in rows
-            ]
+        values: list[dict[str, JsonValue | datetime]] = [
+            {
+                "id": row.id,
+                "workspace_id": row.workspace_id,
+                "resource_type": row.resource_type,
+                "resource_id": row.resource_id,
+                "metric": row.metric,
+                "quantity": row.quantity,
+                "unit": row.unit,
+                "labels": dict(row.labels),
+                "metadata_json": row.metadata_json,
+                "metering_started_at": row.metering_started_at,
+                "metering_ended_at": row.metering_ended_at,
+                "app_id": row.app_id,
+                "stub_id": row.stub_id,
+                "deployment_id": row.deployment_id,
+                "gpu": row.gpu,
+                "task_id": row.task_id,
+                "worker_id": row.worker_id,
+                "container_id": row.container_id,
+                "created_at": row.created_at,
+            }
+            for row in rows
+        ]
+        statement = workspace_fenced_insert(
+            UsageRecordTable,
+            values,
+            workspace_ids=owners,
         )
         saved = list(
             self.session.scalars(
@@ -189,6 +191,8 @@ class UsageRepository:
             )
         )
         if len(saved) != len(unique):
+            for owner in owners:
+                WorkspaceRepository(self.session).lock_active_owner(owner)
             raise ConflictError("usage ownership cannot change")
         by_id = {UUID(str(row.id)): usage_record_from_table(row) for row in saved}
         return [by_id[UUID(record.id)] for record in records]

@@ -669,6 +669,17 @@ def _app_execution_summary(app_id: str, bucket_count: int) -> AppExecutionSummar
 class StubRepository:
     session: Session
 
+    def callback_url(self, stub_id: str, *, workspace_id: str) -> str | None:
+        return self.session.scalar(
+            select(StubTable.configuration["callback_url"].as_string()).where(
+                StubTable.id == stub_id,
+                StubTable.workspace_id == workspace_id,
+                StubTable.type.in_(
+                    [StubKind.Function.value, StubKind.Endpoint.value, StubKind.Asgi.value]
+                ),
+            )
+        )
+
     def exists(self, stub_id: str, *, workspace_id: str, kind: StubKind) -> bool:
         try:
             UUID(stub_id)

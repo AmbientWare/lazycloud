@@ -6,6 +6,7 @@ import logging
 import socket
 from contextlib import suppress
 from datetime import timedelta
+from http.client import RemoteDisconnected
 from pathlib import Path
 from uuid import uuid4
 
@@ -38,6 +39,7 @@ from networking.async_http import (
     AsyncBackendResponseError,
 )
 from networking.dialer import BackendRouteDialer, BackendRouteUnavailable
+from networking.sync_http import BackendHttpConnectionPool
 from networking.tunnel_agent import AgentTunnelClient
 from networking.tunnel_client import TunnelRouteClient
 from networking.tunnel_gateway import AgentTunnelGateway
@@ -382,6 +384,36 @@ def test_real_agent_tunnel_preserves_half_close_and_revokes_open_streams(
             finally:
                 states.save_agent_route_state(route)
                 containers.set_worker_address(container_id, route.local_target, route=route)
+            control_http = BackendHttpConnectionPool(dialer)
+
+            def control_get(path: str = "/") -> bytes:
+                with control_http.connection(route.route_id, 5) as connection:
+                    connection.request("GET", path)
+                    return connection.getresponse().read()
+
+            try:
+                first = await asyncio.to_thread(control_get)
+                assert await asyncio.to_thread(control_get) == first
+                changed = route.model_copy(update={"updated_at": 2})
+                states.save_agent_route_state(changed)
+                containers.set_worker_address(container_id, route.local_target, route=changed)
+                assert await asyncio.to_thread(control_get) != first
+                requests_before = http_requests
+                with pytest.raises(RemoteDisconnected):
+                    await asyncio.to_thread(control_get, "/disconnect")
+                assert http_requests == requests_before + 1
+                await asyncio.to_thread(control_get)
+                closing = route.model_copy(update={"state": BackendRouteState.Closing})
+                states.save_agent_route_state(closing)
+                containers.set_worker_address(container_id, route.local_target, route=closing)
+                with pytest.raises(BackendRouteUnavailable):
+                    await asyncio.to_thread(control_get)
+            finally:
+                control_http.close()
+                states.save_agent_route_state(route)
+                containers.set_worker_address(container_id, route.local_target, route=route)
+            with pytest.raises(ConnectionError, match="pool is closed"):
+                await asyncio.to_thread(control_get)
             occupied: list[socket.socket] = []
             try:
                 for _ in range(TUNNEL_MAX_ROUTE_STREAMS + 1):
@@ -455,7 +487,7 @@ def test_real_agent_tunnel_preserves_half_close_and_revokes_open_streams(
 
             old_connection = (await asyncio.to_thread(client.connect, request, 5)).socket
             try:
-                assert await (await get()).read() == b"5"
+                before_replacement = await (await get()).read()
                 ready_revision = await http.readiness_revision(route.route_id, route.local_target)
                 assert ready_revision is not None
                 await gateway.drain()
@@ -492,7 +524,7 @@ def test_real_agent_tunnel_preserves_half_close_and_revokes_open_streams(
                     lambda update: None,
                 )
                 await replacement.start()
-                assert await (await get()).read() == b"6"
+                assert await (await get()).read() != before_replacement
                 replacement_revision = await http.readiness_revision(
                     route.route_id, route.local_target
                 )

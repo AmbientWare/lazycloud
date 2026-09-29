@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Sequence
 from datetime import datetime, timedelta
 from decimal import Decimal
 from uuid import uuid4
 
 import pytest
+from api.server.services import ApiServices
 from database.context import ServiceContext
 from database.repositories.billing_allowance import BillingAllowanceRepository
 from database.repositories.billing_ledger import (
@@ -127,6 +129,50 @@ def _quantity_of(
 
 def _cost_of(segments: Sequence[BillingLedgerSegmentTable], component: LedgerComponent) -> int:
     return sum(segment.cost_nanos for segment in segments if segment.component == component.value)
+
+
+@pytest.mark.anyio
+async def test_async_usage_cancellation_preserves_pricing_and_replay_order(
+    async_services: ApiServices,
+) -> None:
+    services = async_services
+    with services.database.session() as session:
+        workspace_id = services.context.default_workspace_id(session)
+    ended_at = utc_now() + timedelta(days=1)
+    records = [
+        _usage(
+            workspace_id=workspace_id,
+            resource_id="batched-transfer",
+            metric=UsageMetric.NetworkEgressBytes,
+            unit=UsageUnit.Bytes,
+            quantity=100 + index,
+            started_at=ended_at - timedelta(seconds=1),
+            ended_at=ended_at,
+        )
+        for index in range(8)
+    ]
+    calls = [asyncio.create_task(services.usage.append_async(record)) for record in records]
+    replay = asyncio.create_task(
+        services.usage.append_async(records[0].model_copy(update={"quantity": 999}))
+    )
+    await asyncio.sleep(0)
+    calls[0].cancel()
+    await asyncio.sleep(0)
+    calls[0].cancel()
+    outcomes = await asyncio.gather(*calls, replay, return_exceptions=True)
+    assert isinstance(outcomes[0], asyncio.CancelledError)
+    assert all(isinstance(outcome, UsageRecord) for outcome in outcomes[1:])
+    for record in records:
+        segments = _segments(services.context, record.id)
+        assert segments
+        assert _quantity_of(segments, LedgerComponent.Egress) == Decimal(str(record.quantity))
+    with services.database.session() as session:
+        assert (
+            session.scalar(
+                select(UsageRecordTable.quantity).where(UsageRecordTable.id == records[0].id)
+            )
+            == 999
+        )
 
 
 def test_compute_usage_crossing_a_rate_change_prices_as_tiling_segments(

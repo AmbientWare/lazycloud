@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import inspect
 import json
+import os
+import threading
 import types
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
@@ -78,6 +80,8 @@ from lazycloud.session.deployment import DeploymentClient, DeploymentControlClie
 from lazycloud.terminal import Terminal
 
 if TYPE_CHECKING:
+    from shared.http_transport import HttpChannel
+
     from lazycloud.abstractions.serve import ServeGatewayClient, ServeResourceClient
     from lazycloud.abstractions.shell import ShellSession
     from lazycloud.session.preparation import DeploymentPreparation
@@ -195,6 +199,35 @@ class EndpointResponse:
 
 
 @dataclass
+class _InvocationChannel:
+    _config: ControlClientConfig | None = field(default=None, repr=False)
+    _channel: HttpChannel | None = field(default=None, repr=False)
+    _pid: int = field(default_factory=os.getpid)
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    def __reduce__(self) -> tuple[type[_InvocationChannel], tuple[()]]:
+        return type(self), ()
+
+    def get(self, config: ControlClientConfig) -> HttpChannel:
+        from shared.http_transport import HttpChannel
+
+        if self._pid != os.getpid():
+            # A parent thread may have held the lock when the process forked.
+            self._lock = threading.Lock()
+            self._channel = None
+            self._pid = os.getpid()
+        with self._lock:
+            if self._channel is None or self._config != config:
+                self._channel = HttpChannel(
+                    endpoint=config.endpoint,
+                    token=config.token,
+                    timeout_seconds=config.timeout_seconds,
+                )
+                self._config = config
+            return self._channel
+
+
+@dataclass
 class Endpoint(Generic[P, R]):
     func: Callable[P, R]
     _app_slug: str
@@ -246,6 +279,9 @@ class Endpoint(Generic[P, R]):
     sync_local_dir: str | None = field(default=None, init=False)
     gateway_client: ServeGatewayClient | None = field(default=None, init=False, repr=False)
     resource_client: ServeResourceClient | None = field(default=None, init=False, repr=False)
+    _invocation_channel: _InvocationChannel = field(
+        default_factory=_InvocationChannel, init=False, repr=False
+    )
     _handler_reference_override: str | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -655,6 +691,9 @@ class ASGI:
     sync_local_dir: str | None = field(default=None, init=False)
     gateway_client: ServeGatewayClient | None = field(default=None, init=False, repr=False)
     resource_client: ServeResourceClient | None = field(default=None, init=False, repr=False)
+    _invocation_channel: _InvocationChannel = field(
+        default_factory=_InvocationChannel, init=False, repr=False
+    )
     _handler_reference_target: Callable[..., Any] | None = field(
         default=None,
         init=False,
@@ -1097,21 +1136,26 @@ def _resolve_endpoint_invocation_target(
     config: ControlClientConfig,
     options: InvocationOptions,
 ) -> InvocationTarget:
+    from lazycloud.clients.gateway.control import GatewayControlClient
     from lazycloud.clients.resource.control import ResourceControlClient
 
-    preview_client = owner.resource_client or ResourceControlClient.from_endpoint(
-        config.endpoint,
-        token=config.token,
-        workspace=config.workspace,
-        timeout_seconds=config.timeout_seconds,
-    )
+    preview_client = owner.resource_client
+    if preview_client is None and options.target != "deployed" and is_local():
+        preview_client = ResourceControlClient(
+            channel=owner._invocation_channel.get(config), workspace=config.workspace
+        )
+    deployment_client = owner.deployment_client
+    if deployment_client is None and options.target != "served":
+        deployment_client = GatewayControlClient(
+            channel=owner._invocation_channel.get(config), workspace=config.workspace
+        )
     try:
         return resolve_invocation_target(
             kind=spec.kind,
             name=spec.name,
             app=owner._app_slug,
             config=config,
-            deployment_client=owner.deployment_client,
+            deployment_client=deployment_client,
             preview_client=preview_client,
             target=options.target,
             deployment_name=options.deployment_name,

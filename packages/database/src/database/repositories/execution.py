@@ -22,6 +22,7 @@ from database.mappers.execution import (
 from database.records.execution import PodUrlRecord
 from database.repositories.container_rollouts import ContainerRolloutRepository
 from database.repositories.identity import WorkspaceRepository
+from database.repositories.workspace_writes import workspace_fenced_insert
 from database.tables.apps import AppTable, DeploymentTable, StubTable
 from database.tables.billing import BillingAccountTable
 from database.tables.execution import (
@@ -35,6 +36,7 @@ from database.tables.execution import (
 )
 from database.tables.identity import WorkspaceMemberTable
 from database.tables.orchestration import ContainerTable
+from psycopg.errors import UniqueViolation
 from pydantic import BaseModel, JsonValue, field_validator
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.cron import CronJobRun
@@ -72,6 +74,7 @@ from sqlalchemy import (
     update,
 )
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 
@@ -79,6 +82,10 @@ from sqlalchemy.orm import Session
 class TaskClaimBatch:
     tasks: list[Task]
     queue_checked: bool
+
+
+class TaskClaimCollisionError(ConflictError):
+    """Another transaction committed this container's claim identifier."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,10 +210,9 @@ class TaskRepository:
             return []
         if len({task.id for task in tasks}) != len(tasks):
             raise ConflictError("a task can appear only once in a write batch")
-        for owner in sorted({task.workspace_id for task in tasks if task.workspace_id is not None}):
-            WorkspaceRepository(self.session).lock_active_owner(owner)
+        owners = sorted({task.workspace_id for task in tasks if task.workspace_id is not None})
         values = [task_row_values(task) for task in tasks]
-        insert = postgresql_insert(TaskTable).values(values)
+        insert = workspace_fenced_insert(TaskTable, values, workspace_ids=owners)
         persisted = set(
             self.session.scalars(
                 insert.on_conflict_do_update(
@@ -221,6 +227,8 @@ class TaskRepository:
             )
         )
         if len(persisted) != len(tasks):
+            for owner in owners:
+                WorkspaceRepository(self.session).lock_active_owner(owner)
             raise ConflictError("task ownership cannot change")
         for task in tasks:
             row = self.session.identity_map.get((TaskTable, (task.id,), None))
@@ -382,41 +390,25 @@ class TaskRepository:
         Only tasks whose inputs have resolved are visible here, so a dependent
         cannot be picked up before the results it is waiting on exist.
 
-        A `claim_id` this container already used answers with the task it took,
-        still running, or with nothing once that attempt has ended. The lookup
-        follows the container row lock, so a retry racing its own first request
-        waits for that commit instead of missing it and taking a second task.
+        The shared container fence blocks retirement and stopping while distinct
+        slots claim independently. Duplicate claim IDs are arbitrated by the
+        attempt index when the service commits the running attempt.
         """
 
         if limit <= 0:
             return TaskClaimBatch([], queue_checked=False)
         rollouts = ContainerRolloutRepository(self.session)
-        admitting = rollouts.accepting_work(container_id, stub_id=stub_id)
+        admitting = rollouts.accepting_function_claim(
+            container_id, stub_id=stub_id, now=datetime.now(UTC)
+        )
         if claim_id is not None:
-            prior = self.session.execute(
-                select(TaskTable, TaskAttemptTable.status, TaskAttemptTable.attempt_number)
-                .join(TaskAttemptTable, TaskAttemptTable.task_id == TaskTable.id)
-                .where(
-                    TaskAttemptTable.container_id == container_id,
-                    TaskAttemptTable.claim_id == claim_id,
-                    TaskTable.stub_id == stub_id,
-                    TaskTable.workspace_id == workspace_id,
-                )
-            ).one_or_none()
+            prior = self.replay_function_claim(
+                stub_id, workspace_id=workspace_id, container_id=container_id, claim_id=claim_id
+            )
             if prior is not None:
-                row, attempt_status, attempt_number = prior
-                resumable = (
-                    attempt_status == TaskStatus.Running.value
-                    and attempt_number == row.attempt_number
-                    and row.status == TaskStatus.Running.value
-                    and row.container_id == container_id
-                )
-                return TaskClaimBatch(
-                    [task_from_table(row)] if resumable else [], queue_checked=False
-                )
+                return prior
         if not admitting:
             return TaskClaimBatch([], queue_checked=False)
-        rollouts.record_workload_ready(container_id, now=datetime.now(UTC))
         rows = (
             self.session.scalars(
                 select(TaskTable)
@@ -440,6 +432,30 @@ class TaskRepository:
             claimed.append(task_from_table(row))
         self.session.flush()
         return TaskClaimBatch(claimed, queue_checked=True)
+
+    def replay_function_claim(
+        self, stub_id: str, *, workspace_id: str, container_id: str, claim_id: str
+    ) -> TaskClaimBatch | None:
+        prior = self.session.execute(
+            select(TaskTable, TaskAttemptTable.status, TaskAttemptTable.attempt_number)
+            .join(TaskAttemptTable, TaskAttemptTable.task_id == TaskTable.id)
+            .where(
+                TaskAttemptTable.container_id == container_id,
+                TaskAttemptTable.claim_id == claim_id,
+                TaskTable.stub_id == stub_id,
+                TaskTable.workspace_id == workspace_id,
+            )
+        ).one_or_none()
+        if prior is None:
+            return None
+        row, attempt_status, attempt_number = prior
+        resumable = (
+            attempt_status == TaskStatus.Running.value
+            and attempt_number == row.attempt_number
+            and row.status == TaskStatus.Running.value
+            and row.container_id == container_id
+        )
+        return TaskClaimBatch([task_from_table(row)] if resumable else [], queue_checked=False)
 
     def release_claim(self, task_id: str, *, container_id: str | None) -> Task | None:
         """Give a claimed task back, so some container can take it again.
@@ -1234,35 +1250,45 @@ class TaskAttemptRepository:
             insert.excluded.claim_id.is_not(None),
             TaskAttemptTable.claim_id.is_distinct_from(insert.excluded.claim_id),
         )
-        persisted = set(
-            self.session.scalars(
-                insert.on_conflict_do_update(
-                    index_elements=[TaskAttemptTable.id],
-                    set_={
-                        **{
-                            name: insert.excluded[name]
-                            for name in values[0]
-                            if name not in {"id", "workspace_id", "task_id", "claim_id"}
+        try:
+            persisted = set(
+                self.session.scalars(
+                    insert.on_conflict_do_update(
+                        index_elements=[TaskAttemptTable.id],
+                        set_={
+                            **{
+                                name: insert.excluded[name]
+                                for name in values[0]
+                                if name not in {"id", "workspace_id", "task_id", "claim_id"}
+                            },
+                            "claim_id": func.coalesce(
+                                insert.excluded.claim_id, TaskAttemptTable.claim_id
+                            ),
+                            "execution_entry_upper_bound_at": case(
+                                (new_claim, None),
+                                else_=TaskAttemptTable.execution_entry_upper_bound_at,
+                            ),
+                            "execution_entry_reported_at": case(
+                                (new_claim, None),
+                                else_=TaskAttemptTable.execution_entry_reported_at,
+                            ),
                         },
-                        "claim_id": func.coalesce(
-                            insert.excluded.claim_id, TaskAttemptTable.claim_id
+                        where=and_(
+                            TaskAttemptTable.workspace_id.is_not_distinct_from(
+                                insert.excluded.workspace_id
+                            ),
+                            TaskAttemptTable.task_id == insert.excluded.task_id,
                         ),
-                        "execution_entry_upper_bound_at": case(
-                            (new_claim, None), else_=TaskAttemptTable.execution_entry_upper_bound_at
-                        ),
-                        "execution_entry_reported_at": case(
-                            (new_claim, None), else_=TaskAttemptTable.execution_entry_reported_at
-                        ),
-                    },
-                    where=and_(
-                        TaskAttemptTable.workspace_id.is_not_distinct_from(
-                            insert.excluded.workspace_id
-                        ),
-                        TaskAttemptTable.task_id == insert.excluded.task_id,
-                    ),
-                ).returning(TaskAttemptTable.id)
+                    ).returning(TaskAttemptTable.id)
+                )
             )
-        )
+        except IntegrityError as exc:
+            if (
+                isinstance(exc.orig, UniqueViolation)
+                and exc.orig.diag.constraint_name == "uq_task_attempts_container_claim"
+            ):
+                raise TaskClaimCollisionError("function claim already committed") from exc
+            raise
         if len(persisted) != len(attempts):
             raise ConflictError("task attempt ownership cannot change")
         for attempt, _ in attempts:
@@ -1613,8 +1639,7 @@ class EventRepository:
             return []
         if len({event.id for event, _ in events}) != len(events):
             raise ConflictError("an event can appear only once in a write batch")
-        for owner in sorted({owner for _, owner in events if owner is not None}):
-            WorkspaceRepository(self.session).lock_active_owner(owner)
+        owners = sorted({owner for _, owner in events if owner is not None})
         values: list[dict[str, JsonValue | datetime]] = []
         for event, owner in events:
             data = dict(event.data)
@@ -1636,7 +1661,7 @@ class EventRepository:
                     "created_at": event.created_at,
                 }
             )
-        insert = postgresql_insert(EventTable).values(values)
+        insert = workspace_fenced_insert(EventTable, values, workspace_ids=owners)
         persisted = set(
             self.session.scalars(
                 insert.on_conflict_do_update(
@@ -1653,6 +1678,8 @@ class EventRepository:
             )
         )
         if len(persisted) != len(events):
+            for owner in owners:
+                WorkspaceRepository(self.session).lock_active_owner(owner)
             raise ConflictError("event ownership cannot change")
         for event, _ in events:
             row = self.session.identity_map.get((EventTable, (event.id,), None))

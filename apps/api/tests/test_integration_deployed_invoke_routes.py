@@ -60,6 +60,16 @@ class RecordingFunctionService:
         self.requests.append(request)
         return FunctionInvokeResponse.from_result(task_id=f"fn-{len(self.requests)}")
 
+    async def function_invoke_async(
+        self,
+        request: FunctionInvokeBody,
+        *,
+        workspace_id: str,
+        stub: StubRecord | None = None,
+    ) -> FunctionInvokeResponse:
+        assert stub is not None and stub.workspace_id == workspace_id
+        return self.function_invoke(request, stub=stub)
+
     async def function_invoke_stream(
         self,
         initial: FunctionInvokeResponse,

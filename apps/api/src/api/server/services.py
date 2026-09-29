@@ -121,7 +121,11 @@ from observability.settings import (
     VolumeMeteringSettings,
     WorkspaceChangeStreamSettings,
 )
-from observability.stream_state import AsyncTaskChangeReader, RedisEventStreamRepository
+from observability.stream_state import (
+    AsyncRedisEventStreamRepository,
+    AsyncTaskChangeReader,
+    RedisEventStreamRepository,
+)
 from observability.usage import UsageService, WorkerEventService
 from observability.workspace_changes import (
     AsyncWorkloadChangeReader,
@@ -329,6 +333,14 @@ class FunctionApiService(Protocol):
 
     def function_invoke(
         self, request: FunctionInvokeBody, *, stub: StubRecord
+    ) -> FunctionInvokeResponse: ...
+
+    async def function_invoke_async(
+        self,
+        request: FunctionInvokeBody,
+        *,
+        workspace_id: str,
+        stub: StubRecord | None = None,
     ) -> FunctionInvokeResponse: ...
 
     def function_invoke_stream(
@@ -830,6 +842,7 @@ def create_workload_core(
         context,
         events,
         log_streams=stream_events,
+        async_log_streams=AsyncRedisEventStreamRepository(async_io.redis) if async_io else None,
         progress=TaskProgressService(context, container_repository, worker_repository),
         workspace_changes=workspace_changes,
         async_database=async_database,
@@ -1444,6 +1457,7 @@ def create_api_core(
 class ApiTransport:
     route_resolver: SchedulerBackendRouteResolver
     route_dialer: BackendRouteDialer
+    container_transport: HttpContainerServiceTransportFactory
     container_clients: SchedulerContainerClientFactory
     proxy_client: PodProxySocketClient
     async_database: AsyncDatabaseClient | None
@@ -1457,6 +1471,7 @@ class ApiTransport:
             await self.async_container_readiness.close()
         if self.async_http is not None:
             await self.async_http.close()
+        self.container_transport.close()
 
 
 def compose_api_transport(core: ApiServiceCore) -> ApiTransport:
@@ -1494,6 +1509,7 @@ def compose_api_transport(core: ApiServiceCore) -> ApiTransport:
     return ApiTransport(
         route_resolver=route_resolver,
         route_dialer=route_dialer,
+        container_transport=transport_factory,
         container_clients=container_clients,
         proxy_client=proxy_client,
         async_database=async_database,

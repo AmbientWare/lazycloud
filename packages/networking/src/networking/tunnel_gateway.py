@@ -201,13 +201,18 @@ class AgentTunnelGateway:
     async def attach(
         self, incoming: AsyncIterator[bytes], context: grpc.aio.ServicerContext[bytes, bytes]
     ) -> None:
-        identity, _ = await self._agent(context)
+        identity, _ = await self._agent_certificate(context)
         stream = GrpcPacketStream(incoming, context.write)
         async with asyncio.timeout(TUNNEL_OPEN_TIMEOUT_SECONDS):
             message = await stream.recv_message()
         request = TunnelAttachRequest.model_validate_json(message or b"")
         session = self._sessions.get(request.connection_id)
-        if session is None or session.record.identity != identity:
+        if (
+            session is None
+            or not session.connected
+            or session.close_status is not None
+            or session.record.identity != identity
+        ):
             await context.abort(
                 grpc.StatusCode.PERMISSION_DENIED, "Agent connection is unavailable"
             )
@@ -216,6 +221,8 @@ class AgentTunnelGateway:
         if pending is None or pending.stream.done():
             await context.abort(grpc.StatusCode.NOT_FOUND, "Requested stream is unavailable")
             return
+        # The pending stream was authorized against this enrollment immediately
+        # before Open. Its session heartbeat keeps revocation authoritative.
         if request.failure is not None:
             pending.stream.set_result(request.failure)
             return
@@ -478,12 +485,22 @@ class AgentTunnelGateway:
     async def _agent(
         self, context: grpc.aio.ServicerContext[bytes, bytes]
     ) -> tuple[AgentTunnelIdentity, datetime]:
+        identity, expiry = await self._agent_certificate(context)
+        try:
+            async with asyncio.timeout(TUNNEL_HEARTBEAT_SECONDS):
+                await asyncio.to_thread(self.authority.validate_agent, identity)
+        except DomainError as exc:
+            await context.abort(grpc.StatusCode.PERMISSION_DENIED, exc.message)
+            raise
+        return identity, expiry
+
+    async def _agent_certificate(
+        self, context: grpc.aio.ServicerContext[bytes, bytes]
+    ) -> tuple[AgentTunnelIdentity, datetime]:
         certificate = await _certificate(context)
         try:
             identity = agent_identity_from_verified_certificate(certificate)
-            async with asyncio.timeout(TUNNEL_HEARTBEAT_SECONDS):
-                await asyncio.to_thread(self.authority.validate_agent, identity)
-        except (ValueError, DomainError) as exc:
+        except ValueError as exc:
             await context.abort(grpc.StatusCode.PERMISSION_DENIED, str(exc))
             raise
         return identity, x509.load_pem_x509_certificate(certificate.encode()).not_valid_after_utc

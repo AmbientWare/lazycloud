@@ -260,9 +260,12 @@ class RunnerASGIApplication:
 class _EndpointServeHTTPHandler(BaseHTTPRequestHandler):
     endpoint_runner: EndpointServeRunner
     server_version = "RunnerEndpointServe/1.0"
+    protocol_version = "HTTP/1.1"
+    timeout = 30
+    disable_nagle_algorithm = True
 
     def do_CONNECT(self) -> None:
-        self._serve()
+        self.send_error(405, "CONNECT is not supported")
 
     def do_DELETE(self) -> None:
         self._serve()
@@ -292,6 +295,11 @@ class _EndpointServeHTTPHandler(BaseHTTPRequestHandler):
         _ = format, args
 
     def _serve(self, *, send_body: bool = True) -> None:
+        try:
+            body = self._body()
+        except ValueError as exc:
+            self.send_error(400, str(exc))
+            return
         path = urlsplit(self.path).path or "/"
         if path == CONTAINER_HEALTH_PATH:
             self._write(EndpointForwardResponse(body=b"ok"), send_body=send_body)
@@ -302,32 +310,43 @@ class _EndpointServeHTTPHandler(BaseHTTPRequestHandler):
             path=path,
             query_params=parse_qs(urlsplit(self.path).query, keep_blank_values=True),
             headers=_headers_from_request(self),
-            body=self._body(),
+            body=body,
         )
         self._write(self.endpoint_runner.handle(request), send_body=send_body)
 
     def _body(self) -> bytes:
-        try:
-            length = int(self.headers.get("content-length", "0"))
-        except ValueError:
-            length = 0
-        if length <= 0:
-            return b""
-        return self.rfile.read(length)
+        if self.headers.get("transfer-encoding") is not None:
+            raise ValueError("Transfer-Encoding is not supported")
+        lengths = self.headers.get_all("content-length", [])
+        if len(lengths) > 1 or (lengths and not lengths[0].isascii()):
+            raise ValueError("invalid Content-Length")
+        raw_length = lengths[0] if lengths else "0"
+        if not raw_length.isdecimal():
+            raise ValueError("invalid Content-Length")
+        length = int(raw_length)
+        body = self.rfile.read(length)
+        if len(body) != length:
+            raise ValueError("incomplete request body")
+        return body
 
     def _write(self, response: EndpointForwardResponse, *, send_body: bool) -> None:
+        if response.status_code < 200:
+            self.send_error(
+                502, "endpoint returned an informational response without a final response"
+            )
+            return
         self.send_response(response.status_code)
-        has_content_length = False
         for key, values in response.headers.items():
+            if key.lower() in {"content-length", "transfer-encoding"}:
+                continue
             for value in values:
-                if key.lower() == "content-length":
-                    has_content_length = True
                 self.send_header(key, value)
-        if not has_content_length:
-            self.send_header("content-length", str(len(response.body)))
+        body = b"" if response.status_code in {204, 205, 304} else response.body
+        if response.status_code not in {204, 304}:
+            self.send_header("content-length", str(len(body)))
         self.end_headers()
-        if send_body and response.body:
-            self.wfile.write(response.body)
+        if send_body and body:
+            self.wfile.write(body)
 
 
 def run_endpoint_serve_forever(

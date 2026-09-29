@@ -10,11 +10,13 @@ from uuid import uuid4
 from coordination.redis_client import REDIS_UNAVAILABLE_ERRORS
 from database.repositories.apps import StubRepository
 from database.repositories.cleanup import CleanupRepository
+from database.repositories.container_rollouts import ContainerRolloutRepository
 from database.repositories.execution import (
     LogPage,
     LogPageCursor,
     LogRepository,
     TaskAttemptRepository,
+    TaskClaimCollisionError,
     TaskRepository,
 )
 from database.repositories.orchestration import ContainerRepository
@@ -22,7 +24,7 @@ from database.types import DatabaseSession
 from foundation.ids import optional_uuid, required_uuid
 from observability.events import EventService
 from observability.log_retention import LogRetentionService
-from observability.stream_state import RedisEventStreamRepository
+from observability.stream_state import AsyncRedisEventStreamRepository, RedisEventStreamRepository
 from observability.workspace_changes import AsyncWorkspaceChangeService, WorkspaceChangePublisher
 from pydantic import JsonValue
 from shared.containers import TERMINAL_CONTAINER_STATUSES, ContainerStatus
@@ -33,7 +35,7 @@ from shared.function_payloads import FunctionInvocationPayload, FunctionResultPa
 from shared.http.execution_entry import ExecutionEntryEvidence
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
 from shared.logs import LogEntry
-from shared.realtime.contracts import EventRecordType
+from shared.realtime.contracts import EventDataInput, EventRecordType
 from shared.realtime.streams import LogStreamQuery
 from shared.tasks import (
     RetryDecision,
@@ -68,6 +70,7 @@ class TaskFinishOutcome:
     retry_decision: RetryDecision
     state_changed: bool
     claim_acknowledged: bool
+    callback_url: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,6 +103,7 @@ class TaskService:
     callback_dispatcher: TaskCallbackDispatcher | None = None
     async_database: AsyncDatabaseClient | None = None
     async_workspace_changes: AsyncWorkspaceChangeService | None = None
+    async_log_streams: AsyncRedisEventStreamRepository | None = None
 
     def create(
         self,
@@ -349,6 +353,7 @@ class TaskService:
                 error=error,
                 exit_code=exit_code,
             )
+            callback_url = TaskCallbackService.target_in_session(session, updated)
         self.events.emit(
             f"task.{status.value}",
             resource_type="task",
@@ -358,7 +363,8 @@ class TaskService:
             workspace_id=task.workspace_id,
         )
         self.publish_lifecycle_change(updated, WorkspaceChangeType.Updated)
-        self._deliver_callback(updated)
+        if callback_url is not None:
+            self._deliver_callback(updated, callback_url)
         return updated
 
     async def transition_async(
@@ -379,8 +385,9 @@ class TaskService:
                 claim=True,
             )
         database = self._async_database()
-        updated = await database.run_transaction(
-            lambda session: self._transition_in_session(
+
+        def transition(session: DatabaseSession) -> tuple[Task, str | None]:
+            updated = self._transition_in_session(
                 session,
                 task,
                 status,
@@ -389,7 +396,9 @@ class TaskService:
                 error=error,
                 exit_code=exit_code,
             )
-        )
+            return updated, TaskCallbackService.target_in_session(session, updated)
+
+        updated, callback_url = await database.run_transaction(transition)
         await self.events.emit_async(
             f"task.{status.value}",
             resource_type="task",
@@ -399,7 +408,8 @@ class TaskService:
             workspace_id=task.workspace_id,
         )
         await self.publish_lifecycle_change_async(updated, WorkspaceChangeType.Updated)
-        await asyncio.to_thread(self._deliver_callback, updated)
+        if callback_url is not None:
+            await asyncio.to_thread(self._deliver_callback, updated, callback_url)
         return updated
 
     @staticmethod
@@ -450,33 +460,67 @@ class TaskService:
     ) -> TaskClaimOutcome:
         resolved_container_id = required_uuid(container_id, field="container_id")
         resolved_claim_id = optional_uuid(claim_id, field="claim_id")
-        with self.context.database.session() as session:
-            if not StubRepository(session).exists(
-                stub_id, workspace_id=workspace_id, kind=StubKind.Function
-            ):
-                raise NotFoundError("function not found")
-            claimed = TaskRepository(session).claim_for_stub(
-                stub_id,
-                workspace_id=workspace_id,
-                container_id=resolved_container_id,
-                limit=1,
-                claim_id=resolved_claim_id,
+        persisted: _TaskStartPersistence | None = None
+        try:
+            with self.context.database.session() as session:
+                if not StubRepository(session).exists(
+                    stub_id, workspace_id=workspace_id, kind=StubKind.Function
+                ):
+                    raise NotFoundError("function not found")
+                claimed = TaskRepository(session).claim_for_stub(
+                    stub_id,
+                    workspace_id=workspace_id,
+                    container_id=resolved_container_id,
+                    limit=1,
+                    claim_id=resolved_claim_id,
+                )
+                if claimed.tasks:
+                    [task] = claimed.tasks
+                    if task.status is TaskStatus.Running:
+                        return TaskClaimOutcome(task, queue_checked=claimed.queue_checked)
+                    persisted = self._start_locked_task(
+                        session,
+                        task,
+                        resolved_container_id=resolved_container_id,
+                        claim=True,
+                        claim_id=resolved_claim_id,
+                    )
+        except TaskClaimCollisionError:
+            if resolved_claim_id is None:
+                raise
+            # The unique-index conflict waits for the winning transaction to
+            # commit. Rolling back also releases the loser's candidate task.
+            with self.context.database.session() as session:
+                prior = TaskRepository(session).replay_function_claim(
+                    stub_id,
+                    workspace_id=workspace_id,
+                    container_id=resolved_container_id,
+                    claim_id=resolved_claim_id,
+                )
+            return TaskClaimOutcome(
+                prior.tasks[0] if prior is not None and prior.tasks else None, queue_checked=False
             )
-            if not claimed.tasks:
-                return TaskClaimOutcome(None, queue_checked=claimed.queue_checked)
-            [task] = claimed.tasks
-            # Fresh claims are pending; a running one is this claim's own retry.
-            if task.status is TaskStatus.Running:
-                return TaskClaimOutcome(task, queue_checked=claimed.queue_checked)
-            persisted = self._start_locked_task(
-                session,
-                task,
-                resolved_container_id=resolved_container_id,
-                claim=True,
-                claim_id=resolved_claim_id,
-            )
-        self._publish_task_started(persisted)
-        return TaskClaimOutcome(persisted.task, queue_checked=claimed.queue_checked)
+        if persisted is not None:
+            self._publish_task_started(persisted)
+            return TaskClaimOutcome(persisted.task, queue_checked=claimed.queue_checked)
+        if resolved_claim_id is not None and claimed.queue_checked:
+            # An empty SKIP LOCKED result may be a retry racing its own first
+            # claim. Release SHARE before waiting for outstanding claims.
+            with self.context.database.session() as session:
+                ContainerRolloutRepository(session).lock_function_claim_replay(
+                    resolved_container_id, stub_id=stub_id
+                )
+                prior = TaskRepository(session).replay_function_claim(
+                    stub_id,
+                    workspace_id=workspace_id,
+                    container_id=resolved_container_id,
+                    claim_id=resolved_claim_id,
+                )
+            if prior is not None:
+                return TaskClaimOutcome(
+                    prior.tasks[0] if prior.tasks else None, queue_checked=False
+                )
+        return TaskClaimOutcome(None, queue_checked=claimed.queue_checked)
 
     def _start_task(self, task: Task, *, container_id: str | None = None, claim: bool) -> Task:
         resolved_container_id = optional_uuid(container_id, field="container_id")
@@ -773,7 +817,8 @@ class TaskService:
     def publish_finished(self, outcome: TaskFinishOutcome) -> None:
         if outcome.state_changed:
             self.publish_lifecycle_change(outcome.task, WorkspaceChangeType.Updated)
-            self._deliver_callback(outcome.task)
+            if outcome.callback_url is not None:
+                self._deliver_callback(outcome.task, outcome.callback_url)
 
     async def finish_with_retry_async(
         self,
@@ -806,7 +851,8 @@ class TaskService:
     async def publish_finished_async(self, outcome: TaskFinishOutcome) -> None:
         if outcome.state_changed:
             await self.publish_lifecycle_change_async(outcome.task, WorkspaceChangeType.Updated)
-            await asyncio.to_thread(self._deliver_callback, outcome.task)
+            if outcome.callback_url is not None:
+                await asyncio.to_thread(self._deliver_callback, outcome.task, outcome.callback_url)
 
     @staticmethod
     def _record_finish_in_session(
@@ -962,6 +1008,7 @@ class TaskService:
             retry_decision=decision,
             state_changed=True,
             claim_acknowledged=claim_id is not None,
+            callback_url=TaskCallbackService.target_in_session(session, updated),
         )
         TaskService._record_finish_in_session(session, outcome, status)
         return outcome
@@ -1005,7 +1052,8 @@ class TaskService:
                 )
                 for task in candidates
             ]
-        for task in failed:
+            callbacks = [TaskCallbackService.target_in_session(session, task) for task in failed]
+        for task, callback_url in zip(failed, callbacks, strict=True):
             self.events.emit(
                 "task.failed",
                 resource_type="task",
@@ -1015,7 +1063,8 @@ class TaskService:
                 workspace_id=task.workspace_id,
             )
             self.publish_lifecycle_change(task, WorkspaceChangeType.Updated)
-            self._deliver_callback(task)
+            if callback_url is not None:
+                self._deliver_callback(task, callback_url)
         return failed
 
     def list(
@@ -1125,6 +1174,7 @@ class TaskService:
                 error=error,
                 exit_code=exit_code,
             )
+            callback_url = TaskCallbackService.target_in_session(session, updated)
         self.events.emit(
             f"task.{status.value}",
             resource_type="task",
@@ -1134,7 +1184,8 @@ class TaskService:
             workspace_id=updated.workspace_id,
         )
         self.publish_lifecycle_change(updated, WorkspaceChangeType.Updated)
-        self._deliver_callback(updated)
+        if callback_url is not None:
+            self._deliver_callback(updated, callback_url)
         return TaskCancellationOutcome(updated, state_changed=True)
 
     def logs(self, task_id: str, *, limit: int = 100) -> list[LogEntry]:
@@ -1204,7 +1255,13 @@ class TaskService:
     ) -> None:
         if not task.workspace_id:
             return
-        await asyncio.to_thread(self._publish_lifecycle_event, task, change)
+        if self.async_log_streams is None:
+            raise RuntimeError("asynchronous task event streams are not configured")
+        event_type, data = _task_lifecycle_event(task, change)
+        try:
+            await self.async_log_streams.append_event(event_type, data)
+        except REDIS_UNAVAILABLE_ERRORS as exc:
+            _log_lifecycle_publication_failure(task, exc)
         if self.async_workspace_changes is None:
             return
         await self.async_workspace_changes.emit_change(
@@ -1221,37 +1278,11 @@ class TaskService:
         )
 
     def _publish_lifecycle_event(self, task: Task, change: WorkspaceChangeType) -> None:
+        event_type, data = _task_lifecycle_event(task, change)
         try:
-            self.log_streams.append_event(
-                EventRecordType.TaskCreated
-                if change is WorkspaceChangeType.Created
-                else EventRecordType.TaskUpdated,
-                {
-                    "task_id": task.id,
-                    "workspace_id": task.workspace_id,
-                    "app_id": task.app_id,
-                    "stub_id": task.stub_id,
-                    "deployment_id": task.deployment_id,
-                    "container_id": task.container_id,
-                    "root_task_id": task.root_task_id,
-                    "parent_task_id": task.parent_task_id,
-                    "status": task.status.value,
-                    "attempt_number": task.attempt_number,
-                    "claimable_at": task.claimable_at,
-                    "max_attempts": task.max_attempts,
-                    "error": task.error,
-                    "exit_code": task.exit_code,
-                    "created_at": task.created_at,
-                    "updated_at": utc_now(),
-                },
-            )
+            self.log_streams.append_event(event_type, data)
         except REDIS_UNAVAILABLE_ERRORS as exc:
-            LOGGER.warning(
-                "Task lifecycle notification unavailable: task_id=%s status=%s error_type=%s",
-                task.id,
-                task.status.value,
-                type(exc).__name__,
-            )
+            _log_lifecycle_publication_failure(task, exc)
 
     async def publish_created_async(self, task: Task) -> None:
         await self.publish_lifecycle_change_async(task, WorkspaceChangeType.Created)
@@ -1261,13 +1292,13 @@ class TaskService:
             raise RuntimeError("asynchronous task database is not configured")
         return self.async_database
 
-    def _deliver_callback(self, task: Task) -> None:
+    def _deliver_callback(self, task: Task, target: str) -> None:
         dispatcher = self.callback_dispatcher
         if dispatcher is None:
             dispatcher = TaskCallbackService(self.context, self.events)
             self.callback_dispatcher = dispatcher
         try:
-            dispatcher.deliver(task)
+            dispatcher.deliver(task, target=target)
         except Exception as exc:
             self.events.emit(
                 "task.callback.failed",
@@ -1300,6 +1331,43 @@ def _task_retry_policy(
     return resolved
 
 
+def _task_lifecycle_event(
+    task: Task, change: WorkspaceChangeType
+) -> tuple[EventRecordType, EventDataInput]:
+    return (
+        EventRecordType.TaskCreated
+        if change is WorkspaceChangeType.Created
+        else EventRecordType.TaskUpdated,
+        {
+            "task_id": task.id,
+            "workspace_id": task.workspace_id,
+            "app_id": task.app_id,
+            "stub_id": task.stub_id,
+            "deployment_id": task.deployment_id,
+            "container_id": task.container_id,
+            "root_task_id": task.root_task_id,
+            "parent_task_id": task.parent_task_id,
+            "status": task.status.value,
+            "attempt_number": task.attempt_number,
+            "claimable_at": task.claimable_at,
+            "max_attempts": task.max_attempts,
+            "error": task.error,
+            "exit_code": task.exit_code,
+            "created_at": task.created_at,
+            "updated_at": utc_now(),
+        },
+    )
+
+
+def _log_lifecycle_publication_failure(task: Task, exc: Exception) -> None:
+    LOGGER.warning(
+        "Task lifecycle notification unavailable: task_id=%s status=%s error_type=%s",
+        task.id,
+        task.status.value,
+        type(exc).__name__,
+    )
+
+
 def _unchanged_finish_outcome(
     task: Task, reason: str, *, claim_acknowledged: bool = False
 ) -> TaskFinishOutcome:
@@ -1312,4 +1380,5 @@ def _unchanged_finish_outcome(
         ),
         state_changed=False,
         claim_acknowledged=claim_acknowledged,
+        callback_url=None,
     )

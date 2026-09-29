@@ -28,7 +28,6 @@ from shared.checkpoints import CheckpointRecord, CheckpointStatus
 from shared.container_requests import (
     WORKER_USER_CODE_VOLUME,
     RequestDisk,
-    RuntimeContainerStatus,
     StopContainerReason,
     WorkerStartupKind,
 )
@@ -1151,14 +1150,7 @@ class PodControlService:
         worker_address = self.scheduler_containers.get_worker_address(container.id)
         if worker_address is None or not worker_address.address:
             return None, f"worker address not published for container {container.id}"
-        try:
-            ready = self._container_client_factory().client_for(container)
-            status = ready.client.status(container.id)
-        except Exception as exc:
-            return None, f"container service not ready: {type(exc).__name__}: {exc}"
-        if status.ok and status.status == RuntimeContainerStatus.Running.value:
-            return ready, ""
-        return None, status.error_msg or f"container {container.id} runtime is {status.status}"
+        return self._container_client_factory().client_for(container), ""
 
     def _mark_container_running(
         self,

@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import http.client
 import json
-import socket
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from networking.dialer import (
     BackendRouteDialer,
 )
+from networking.sync_http import BackendHttpConnectionPool
 from pydantic import JsonValue, TypeAdapter
 from shared.contracts import ContractModel
 from shared.errors import UpstreamTimeoutError, UpstreamUnavailableError
@@ -36,6 +36,13 @@ _JSON_VALUE: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
 @dataclass(slots=True)
 class HttpContainerServiceTransportFactory:
     route_dialer: BackendRouteDialer
+    connections: BackendHttpConnectionPool = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.connections = BackendHttpConnectionPool(self.route_dialer)
+
+    def close(self) -> None:
+        self.connections.close()
 
     def create_transport(
         self,
@@ -43,14 +50,14 @@ class HttpContainerServiceTransportFactory:
     ) -> ContainerServiceTransport:
         return HttpContainerServiceTransport(
             options,
-            route_dialer=self.route_dialer,
+            connections=self.connections,
         )
 
 
 @dataclass(slots=True)
 class HttpContainerServiceTransport:
     options: ContainerClientConnectionOptions
-    route_dialer: BackendRouteDialer
+    connections: BackendHttpConnectionPool
 
     def unary(
         self,
@@ -145,34 +152,22 @@ class HttpContainerServiceTransport:
     @contextmanager
     def _connection(self, timeout_seconds: float | None) -> Iterator[http.client.HTTPConnection]:
         timeout = (
-            self.route_dialer.config.timeout_seconds if timeout_seconds is None else timeout_seconds
+            self.connections.route_dialer.config.timeout_seconds
+            if timeout_seconds is None
+            else timeout_seconds
         )
         if not self.options.backend_route_id:
             raise UpstreamUnavailableError("Container control requires an authorized backend route")
         try:
-            backend_socket = self.route_dialer.dial_backend_route(
+            with self.connections.connection(
                 self.options.backend_route_id,
-                timeout_seconds=timeout,
-            ).socket
-            connection = _ExistingSocketHttpConnection(backend_socket, timeout=timeout)
-            try:
+                timeout,
+            ) as connection:
                 yield connection
-            finally:
-                connection.close()
         except TimeoutError as exc:
             raise UpstreamTimeoutError("Container service exceeded its request deadline") from exc
         except (OSError, http.client.HTTPException) as exc:
             raise UpstreamUnavailableError("Container service connection failed") from exc
-
-
-class _ExistingSocketHttpConnection(http.client.HTTPConnection):
-    def __init__(self, backend_socket: socket.socket, *, timeout: float) -> None:
-        super().__init__("backend.route", timeout=timeout)
-        self._socket = backend_socket
-
-    def connect(self) -> None:
-        self.sock = self._socket
-        self.sock.settimeout(self.timeout)
 
 
 __all__ = [

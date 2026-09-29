@@ -6,8 +6,8 @@ from dataclasses import replace
 import pytest
 from api.server.services import ApiServices
 from control.service import ControlPlaneService, StubKind
-from coordination.redis_client import RedisClient, RedisSettings
-from observability.stream_state import RedisEventStreamRepository
+from coordination.redis_client import AsyncRedisClient, RedisClient, RedisSettings
+from observability.stream_state import AsyncRedisEventStreamRepository, RedisEventStreamRepository
 from shared.tasks import TaskStatus
 
 
@@ -20,10 +20,14 @@ async def test_redis_publication_outage_preserves_task_admission_and_completion(
     )
     with socket.socket() as unavailable_port:
         unavailable_port.bind(("127.0.0.1", 0))
-        redis = RedisClient.from_settings(
-            RedisSettings(url=f"redis://127.0.0.1:{unavailable_port.getsockname()[1]}/0")
+        settings = RedisSettings(url=f"redis://127.0.0.1:{unavailable_port.getsockname()[1]}/0")
+        redis = RedisClient.from_settings(settings)
+        async_redis = AsyncRedisClient.from_settings(settings)
+        tasks = replace(
+            async_services.tasks,
+            log_streams=RedisEventStreamRepository(redis=redis),
+            async_log_streams=AsyncRedisEventStreamRepository(redis=async_redis),
         )
-        tasks = replace(async_services.tasks, log_streams=RedisEventStreamRepository(redis=redis))
         try:
             task = tasks.create("accepted", workspace_id=stub.workspace_id, stub_id=stub.id)
             outcome = await tasks.finish_with_retry_async(
@@ -35,3 +39,4 @@ async def test_redis_publication_outage_preserves_task_admission_and_completion(
             assert saved.result == {"value": 7}
         finally:
             redis.close()
+            await async_redis.close()

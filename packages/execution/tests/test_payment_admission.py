@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from uuid import uuid4
 
 import pytest
@@ -20,6 +21,56 @@ from shared.function_payloads import FunctionJsonInvocation
 from shared.http.functions import FunctionInvokeBody
 from sqlalchemy import func, select
 from tests.workspaces import workspace_owner_user_id
+
+
+@pytest.mark.anyio
+async def test_concurrent_function_admission_consumes_each_pending_slot(
+    async_services: ApiServices,
+) -> None:
+    stub = ControlPlaneService(async_services.context).create_stub(
+        "bounded-admission",
+        kind=StubKind.Function,
+        handler="main:hello",
+        config={"max_pending_tasks": 5},
+    )
+    with async_services.context.database.session() as session:
+        ContainerRepository(session).upsert(
+            ContainerRecord(
+                id=str(uuid4()),
+                name="warm",
+                image="python",
+                command=[],
+                workspace_id=stub.workspace_id,
+                stub_id=stub.id,
+                status=ContainerStatus.Running,
+            )
+        )
+    functions = FunctionControlService(
+        async_services, async_database=async_services.require_async_io().database
+    )
+    responses = await asyncio.gather(
+        *(
+            functions.function_invoke_async(
+                FunctionInvokeBody(stub_id=stub.id, invocation=FunctionJsonInvocation(args=[i])),
+                workspace_id=stub.workspace_id,
+                stub=stub,
+            )
+            for i in range(8)
+        ),
+        return_exceptions=True,
+    )
+    accepted = [response for response in responses if not isinstance(response, BaseException)]
+    assert len(accepted) == 5
+    assert len({response.task_id for response in accepted}) == 5
+    assert all(not response.done for response in accepted)
+    assert sum(isinstance(response, CapacityLimitReachedError) for response in responses) == 3
+    with async_services.context.database.session() as session:
+        assert (
+            session.scalar(
+                select(func.count()).select_from(TaskTable).where(TaskTable.stub_id == stub.id)
+            )
+            == 5
+        )
 
 
 def test_invoking_a_function_past_due_refuses_and_queues_nothing(

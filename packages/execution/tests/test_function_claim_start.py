@@ -3,7 +3,8 @@ from __future__ import annotations
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
-from threading import Barrier
+from threading import Barrier, Event
+from time import monotonic
 from uuid import uuid4
 
 import pytest
@@ -16,6 +17,7 @@ from database.tables.execution import TaskAttemptTable
 from execution.functions.service import FunctionControlService
 from execution.task_claims import TaskClaimReleaseService
 from observability.startup_latency import StartupLatencyService
+from psycopg.errors import LockNotAvailable
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.errors import ConflictError, NotFoundError
 from shared.function_payloads import FunctionJsonInvocation, FunctionJsonResult
@@ -29,7 +31,8 @@ from shared.http.functions import (
 from shared.http.workspace_changes import WorkspaceChangeType
 from shared.tasks import Task, TaskStatus
 from shared.timestamps import utc_now
-from sqlalchemy import select
+from sqlalchemy import select, text
+from sqlalchemy.exc import OperationalError
 from tests.releases import assign_runtime
 
 
@@ -236,6 +239,149 @@ def test_claim_commits_one_running_attempt_before_returning_work(
         assert attempt.status is TaskStatus.Running
         assert attempt.container_id == claimed.container_id
         assert attempt.attempt_number == claimed.attempt_number
+
+
+@pytest.mark.parametrize("pending_count,initially_ready", [(1, True), (2, True), (2, False)])
+def test_concurrent_retries_of_one_claim_take_only_one_task(
+    isolated_services: ApiServices, pending_count: int, initially_ready: bool
+) -> None:
+    services = isolated_services
+    stub = ControlPlaneService(services.context).create_stub(
+        "racing-claim", kind=StubKind.Function, handler="main:hello"
+    )
+    container = ContainerRecord(
+        id=str(uuid4()),
+        name="claimant",
+        image="python",
+        command=[],
+        workspace_id=stub.workspace_id,
+        stub_id=stub.id,
+        status=ContainerStatus.Running,
+    )
+    with services.context.database.session() as session:
+        ContainerRepository(session).upsert(container)
+        tasks = services.tasks.create_batch_in_transaction(
+            session,
+            [
+                Task(
+                    id=str(uuid4()),
+                    name=f"claim-{index}",
+                    workspace_id=stub.workspace_id,
+                    stub_id=stub.id,
+                    invocation=FunctionJsonInvocation(),
+                    claimable_at=utc_now(),
+                )
+                for index in range(pending_count)
+            ],
+        )
+        if initially_ready:
+            assert ContainerRolloutRepository(session).accepting_function_claim(
+                container.id, stub_id=stub.id, now=utc_now()
+            )
+    claim_id = str(uuid4())
+    barrier = Barrier(2)
+
+    def claim() -> Task | None:
+        barrier.wait(timeout=5)
+        return services.tasks.claim_and_start(
+            stub.id, workspace_id=stub.workspace_id, container_id=container.id, claim_id=claim_id
+        ).task
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        with services.context.database.session() as gate:
+            gate.execute(text("LOCK TABLE task_attempts IN SHARE MODE"))
+            futures = [pool.submit(claim) for _ in range(2)]
+            deadline = monotonic() + 5
+            while True:
+                with services.context.database.session() as observer:
+                    blocked = observer.scalar(
+                        text(
+                            "SELECT count(*) FROM pg_stat_activity "
+                            "WHERE datname = current_database() "
+                            "AND wait_event_type = 'Lock' AND pid != pg_backend_pid()"
+                        )
+                    )
+                if blocked == 2:
+                    break
+                assert monotonic() < deadline, f"claim requests did not overlap: {blocked}"
+                Event().wait(0.01)
+        claims = [future.result(timeout=5) for future in futures]
+    assert all(task is not None for task in claims)
+    assert len({task.id for task in claims if task is not None}) == 1
+    saved = [services.tasks.get(task.id) for task in tasks]
+    assert sum(task.status is TaskStatus.Running for task in saved) == 1
+    assert (
+        sum(task.status is TaskStatus.Pending and task.container_id is None for task in saved)
+        == pending_count - 1
+    )
+    assert sum(len(services.tasks.attempts(task.id)) for task in tasks) == 1
+
+
+def test_distinct_claims_overlap_while_container_stop_and_retirement_are_fenced(
+    isolated_services: ApiServices,
+) -> None:
+    services = isolated_services
+    stub = ControlPlaneService(services.context).create_stub(
+        "independent-claims", kind=StubKind.Function, handler="main:hello"
+    )
+    container = ContainerRecord(
+        id=str(uuid4()),
+        name="claimant",
+        image="python",
+        command=[],
+        workspace_id=stub.workspace_id,
+        stub_id=stub.id,
+        status=ContainerStatus.Running,
+    )
+    with services.context.database.session() as session:
+        ContainerRepository(session).upsert(container)
+        services.tasks.create_batch_in_transaction(
+            session,
+            [
+                Task(
+                    id=str(uuid4()),
+                    name=f"claim-{index}",
+                    workspace_id=stub.workspace_id,
+                    stub_id=stub.id,
+                    invocation=FunctionJsonInvocation(),
+                    claimable_at=utc_now(),
+                )
+                for index in range(2)
+            ],
+        )
+        rollouts = ContainerRolloutRepository(session)
+        assert rollouts.accepting_function_claim(container.id, stub_id=stub.id, now=utc_now())
+        rollouts.prepare(container, serving_floor=0, now=utc_now())
+    with services.context.database.session() as first:
+        claimed = TaskRepository(first).claim_for_stub(
+            stub.id, workspace_id=stub.workspace_id, container_id=container.id, limit=1
+        )
+        with services.context.database.session() as second:
+            second.execute(text("SET LOCAL lock_timeout = '500ms'"))
+            concurrent = TaskRepository(second).claim_for_stub(
+                stub.id, workspace_id=stub.workspace_id, container_id=container.id, limit=1
+            )
+        assert claimed.tasks and concurrent.tasks
+        assert claimed.tasks[0].id != concurrent.tasks[0].id
+        for stopping in (True, False):
+            with (
+                pytest.raises(OperationalError) as error,
+                services.context.database.session() as closing,
+            ):
+                closing.execute(text("SET LOCAL lock_timeout = '100ms'"))
+                if stopping:
+                    ContainerRepository(closing).upsert(
+                        container.model_copy(update={"status": ContainerStatus.Stopped})
+                    )
+                else:
+                    ContainerRolloutRepository(closing).close_admission(container.id, now=utc_now())
+            assert isinstance(error.value.orig, LockNotAvailable)
+    with services.context.database.session() as session:
+        assert ContainerRolloutRepository(session).close_admission(container.id, now=utc_now())
+    refused = services.tasks.claim_and_start(
+        stub.id, workspace_id=stub.workspace_id, container_id=container.id, claim_id=str(uuid4())
+    )
+    assert refused.task is None and not refused.queue_checked
 
 
 def test_retried_claim_returns_the_task_it_already_took(

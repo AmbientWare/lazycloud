@@ -6,7 +6,7 @@ import hashlib
 import json
 import logging
 import shlex
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -607,6 +607,9 @@ class ContainerService:
             return set()
         with self.context.database.session() as session:
             workers_by_container = ContainerRepository(session).runtime_workers(container_ids)
+        return self.accepting_container_workers(workers_by_container)
+
+    def accepting_container_workers(self, workers_by_container: Mapping[str, str]) -> set[str]:
         workers = [
             worker
             for worker_id in set(workers_by_container.values())

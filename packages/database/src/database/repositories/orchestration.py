@@ -1292,6 +1292,19 @@ class ContainerRepository:
             if worker_id
         }
 
+    def runtime_workers_for_stub(self, stub_id: str) -> dict[str, str]:
+        return {
+            str(container_id): worker_id
+            for container_id, worker_id in self.session.execute(
+                select(ContainerTable.id, ContainerTable.runtime_worker_id).where(
+                    ContainerTable.stub_id == stub_id,
+                    ContainerTable.status.in_([status.value for status in LIVE_CONTAINER_STATUSES]),
+                    ContainerTable.runtime_worker_id.is_not(None),
+                )
+            )
+            if worker_id
+        }
+
     def recent_startup_failure(self, stub_id: str, *, since: datetime) -> StartupFailure | None:
         """The stub's newest container that failed to start since `since`, and why.
 

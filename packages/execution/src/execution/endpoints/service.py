@@ -26,6 +26,7 @@ from observability.events import EventService
 from observability.workspace_changes import AsyncWorkloadChangeReader
 from pydantic import JsonValue
 from shared.app_identity import ENDPOINT_IMAGE
+from shared.async_utils import complete_before_cancelling
 from shared.autoscaler_state import AutoscalerTargetKind
 from shared.container_requests import (
     CONTAINER_INNER_PORT,
@@ -70,10 +71,10 @@ from shared.urls import endpoint_route_path
 from shared.usage import UsageRecord
 
 from database import AsyncDatabaseClient
+from execution.batching import RequestBatch
 from execution.checkpoints import latest_available_checkpoint
 from execution.containers.planning import ContainerSchedulingOptions
 from execution.containers.service import PendingContainerReservation
-from execution.endpoints.batching import EndpointBatch, complete_before_cancelling
 from execution.endpoints.capacity import EndpointCapacity, EndpointCapacitySnapshot
 from execution.endpoints.config import EndpointStubConfig
 from execution.endpoints.dispatch import (
@@ -175,10 +176,10 @@ class EndpointControlService:
     _capacity: dict[tuple[str, str | None], EndpointCapacity] = field(
         default_factory=dict, init=False
     )
-    _admissions: dict[str, EndpointBatch[_AdmissionRequest, EndpointDispatchAdmission | None]] = (
+    _admissions: dict[str, RequestBatch[_AdmissionRequest, EndpointDispatchAdmission | None]] = (
         field(default_factory=dict, init=False)
     )
-    _claims: dict[str, EndpointBatch[_ClaimRequest, tuple[EndpointDispatchRecord, Task] | None]] = (
+    _claims: dict[str, RequestBatch[_ClaimRequest, tuple[EndpointDispatchRecord, Task] | None]] = (
         field(default_factory=dict, init=False)
     )
 
@@ -693,7 +694,7 @@ class EndpointControlService:
             def remove_batch() -> None:
                 del self._admissions[stub.id]
 
-            batch = EndpointBatch(
+            batch = RequestBatch(
                 self._execute_admissions,
                 self._abandon_admission,
                 remove_batch,
@@ -706,7 +707,7 @@ class EndpointControlService:
             )
             if admission is not None:
                 await self.services.tasks.publish_created_async(admission.task)
-                await asyncio.to_thread(self.services.usage.publish_change, admission.usage)
+                await self.services.usage.publish_change_async(admission.usage)
             return admission
         except asyncio.CancelledError:
             if admission is not None:
@@ -1013,19 +1014,23 @@ class EndpointControlService:
 
                 def read(
                     session: DatabaseSession,
-                ) -> tuple[dict[str, int], set[str], frozenset[str]]:
+                ) -> tuple[dict[str, int], set[str], frozenset[str], dict[str, str]]:
                     dispatches = EndpointDispatchRepository(session)
                     return (
                         dispatches.inflight_counts(stub.id, at=utc_now()),
                         ContainerRolloutRepository(session).closed_for_stub(stub.id),
                         dispatches.cancelled_tasks(task_ids),
+                        ContainerRepository(session).runtime_workers_for_stub(stub.id),
                     )
 
-                loads, closed, cancelled = await self._async_database().run_transaction(read)
+                loads, closed, cancelled, workers = await self._async_database().run_transaction(
+                    read
+                )
 
                 async def admit(container_ids: Sequence[str]) -> set[str]:
                     return await asyncio.to_thread(
-                        self.services.containers.accepting_containers, container_ids
+                        self.services.containers.accepting_container_workers,
+                        {key: workers[key] for key in container_ids if key in workers},
                     )
 
                 targets = await dispatcher.ready_targets(
@@ -1086,7 +1091,7 @@ class EndpointControlService:
             def remove_batch() -> None:
                 del self._claims[container_id]
 
-            batch = EndpointBatch(
+            batch = RequestBatch(
                 self._execute_claims,
                 self._abandon_claim,
                 remove_batch,

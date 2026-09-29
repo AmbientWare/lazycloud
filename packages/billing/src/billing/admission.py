@@ -37,6 +37,13 @@ from billing.preferences import BillingPreferencesService
 
 
 @dataclass(frozen=True, slots=True)
+class _BillableAccount:
+    user_id: str
+    terms: AccountTerms
+    complimentary: bool
+
+
+@dataclass(frozen=True, slots=True)
 class DatabaseBillingAdmission:
     """Check account credit and plan entitlements before starting billed work."""
 
@@ -49,12 +56,14 @@ class DatabaseBillingAdmission:
         resolved = self._billable_account(session, workspace_id=workspace_id, lock_account=False)
         if resolved is None:
             raise PaymentRequiredError("billed work requires a workspace billing owner")
-        self._assert_funds(session, user_id=resolved[0], lock_account=False)
+        self._assert_funds(session, account=resolved, lock_account=False)
 
-    def _assert_funds(self, session: Session, *, user_id: str, lock_account: bool = True) -> None:
-        account = BillingAccountRepository(session).get_by_user(user_id)
-        if account is not None and account.complimentary_since is not None:
+    def _assert_funds(
+        self, session: Session, *, account: _BillableAccount, lock_account: bool = True
+    ) -> None:
+        if account.complimentary:
             return
+        user_id = account.user_id
         credits = BillingCreditRepository(session)
         balance = (
             credits.balance(user_id=user_id, at=utc_now())
@@ -146,17 +155,16 @@ class DatabaseBillingAdmission:
         if (
             (region is not None or availability_zone)
             and resolved is not None
-            and not resolved[1].entitlements.region_selection
+            and not resolved.terms.entitlements.region_selection
         ):
             raise PaymentRequiredError(
                 "region or availability zone selection requires the Team plan"
             )
         if resolved is None:
             raise PaymentRequiredError("billed work requires a workspace billing owner")
-        owner_user_id, terms = resolved
-        self._assert_funds(session, user_id=owner_user_id, lock_account=lock_account)
-        models = _admitted_gpu_models(gpu, terms.entitlements) if gpu_count or gpu else []
-        return owner_user_id, terms, models
+        self._assert_funds(session, account=resolved, lock_account=lock_account)
+        models = _admitted_gpu_models(gpu, resolved.terms.entitlements) if gpu_count or gpu else []
+        return resolved.user_id, resolved.terms, models
 
     def assert_disk_allowance(
         self, session: Session, *, workspace_id: str, declared_bytes: int
@@ -166,7 +174,7 @@ class DatabaseBillingAdmission:
         resolved = self._billable_account(session, workspace_id=workspace_id)
         if resolved is None:
             raise PaymentRequiredError("billed work requires a workspace billing owner")
-        limit_gib = resolved[1].entitlements.max_workspace_disk_gib
+        limit_gib = resolved.terms.entitlements.max_workspace_disk_gib
         if declared_bytes > limit_gib * BYTES_PER_GIB:
             declared_gib = f"{declared_bytes / BYTES_PER_GIB:.1f}".removesuffix(".0")
             raise CapacityLimitReachedError(
@@ -199,7 +207,7 @@ class DatabaseBillingAdmission:
         resolved = self._billable_account(session, workspace_id=workspace_id)
         if resolved is None:
             return
-        owner_user_id, terms = resolved
+        owner_user_id, terms = resolved.user_id, resolved.terms
         self._assert_no_pending_plan_change(session, user_id=owner_user_id)
         repository = WorkspaceMemberRepository(session)
         if repository.is_member_for_owner(
@@ -220,7 +228,7 @@ class DatabaseBillingAdmission:
         resolved = self._billable_account(session, workspace_id=workspace_id)
         if resolved is None:
             return
-        owner_user_id, terms = resolved
+        owner_user_id, terms = resolved.user_id, resolved.terms
         self._assert_no_pending_plan_change(session, user_id=owner_user_id)
         members = WorkspaceMemberRepository(session)
         if members.member_user_id_for_owner_email(owner_user_id=owner_user_id, email=email):
@@ -314,7 +322,7 @@ class DatabaseBillingAdmission:
 
     def _billable_account(
         self, session: Session, *, workspace_id: str, lock_account: bool = True
-    ) -> tuple[str, AccountTerms] | None:
+    ) -> _BillableAccount | None:
         """Resolve the payer, fencing account changes when reserving capacity."""
 
         owner = WorkspaceMemberRepository(session).owner(workspace_id)
@@ -324,7 +332,7 @@ class DatabaseBillingAdmission:
             owner.user_id, for_update=lock_account
         )
         if account is not None and account.complimentary_since is not None:
-            return owner.user_id, complimentary_terms()
+            return _BillableAccount(owner.user_id, complimentary_terms(), complimentary=True)
         if account is None or not account.provider_subscription_id or account.plan is None:
             raise PaymentRequiredError(
                 "this account holds no subscription for its usage to be billed on; "
@@ -337,7 +345,7 @@ class DatabaseBillingAdmission:
             )
         has_card = account.payment_method_attached_at is not None
         terms = account_terms(account.plan, has_payment_method=has_card)
-        return owner.user_id, terms
+        return _BillableAccount(owner.user_id, terms, complimentary=False)
 
     def _account_terms_for_user(self, session: Session, *, user_id: str) -> AccountTerms:
         account = BillingAccountRepository(session).get_by_user(user_id, for_update=True)

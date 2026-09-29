@@ -5,27 +5,7 @@ from collections import deque
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 
-from anyio import CancelScope
-
-
-async def complete_before_cancelling[ResultT](operation: Awaitable[ResultT]) -> ResultT:
-    async def complete() -> ResultT:
-        return await operation
-
-    task = asyncio.create_task(complete())
-    cancelled = None
-    with CancelScope(shield=True):
-        while True:
-            try:
-                await asyncio.shield(task)
-                break
-            except asyncio.CancelledError as exc:
-                if task.cancelled():
-                    raise
-                cancelled = exc
-    if cancelled is not None:
-        raise cancelled
-    return task.result()
+from shared.async_utils import complete_before_cancelling
 
 
 @dataclass(slots=True)
@@ -36,7 +16,7 @@ class _Pending[RequestT, ResultT]:
 
 
 @dataclass(slots=True)
-class EndpointBatch[RequestT, ResultT]:
+class RequestBatch[RequestT, ResultT]:
     execute: Callable[[Sequence[RequestT]], Awaitable[Sequence[ResultT | Exception]]]
     abandon: Callable[[ResultT], Awaitable[None]]
     on_idle: Callable[[], None]
@@ -81,7 +61,7 @@ class EndpointBatch[RequestT, ResultT]:
                 try:
                     results = await self.execute([item.request for item in batch])
                     if len(results) != len(batch):
-                        raise RuntimeError("endpoint batch omitted a result")
+                        raise RuntimeError("request batch omitted a result")
                 except Exception as exc:
                     for pending in batch:
                         pending.result.set_exception(exc)
