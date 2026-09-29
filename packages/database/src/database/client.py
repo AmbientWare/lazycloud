@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import logging
+import os
+import sys
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
+from itertools import count
 from threading import Lock
 from time import monotonic
 
@@ -26,6 +29,53 @@ from sqlalchemy.pool import Pool, QueuePool
 from database.settings import DatabaseApplicationName, DatabaseSettings
 
 LOGGER = logging.getLogger(__name__)
+_SESSION_IDS = count(1)
+
+
+@dataclass(slots=True)
+class _SessionLog:
+    identity: str
+    application: str
+    client: str
+    owner: str
+    requested_at: float = field(default_factory=monotonic)
+    acquired_at: float | None = None
+
+    def acquired(self) -> None:
+        self.acquired_at = monotonic()
+        self.write("acquired")
+
+    def write(self, phase: str) -> None:
+        now = monotonic()
+        acquired = self.acquired_at
+        LOGGER.debug(
+            "database_session phase=%s session=%s application=%s client=%s owner=%s "
+            "checkout_ms=%.3f held_ms=%.3f",
+            phase,
+            self.identity,
+            self.application,
+            self.client,
+            self.owner,
+            ((acquired if acquired is not None else now) - self.requested_at) * 1000,
+            (now - acquired) * 1000 if acquired is not None else 0,
+        )
+
+
+def _session_log(settings: DatabaseSettings, client: str) -> _SessionLog | None:
+    if not LOGGER.isEnabledFor(logging.DEBUG):
+        return None
+    frame = sys._getframe(1)
+    while frame.f_globals.get("__name__") in {__name__, "contextlib"} and frame.f_back is not None:
+        frame = frame.f_back
+    owner = f"{frame.f_globals.get('__name__')}:{frame.f_code.co_qualname}:{frame.f_lineno}"
+    entry = _SessionLog(
+        identity=f"{os.getpid()}-{next(_SESSION_IDS)}",
+        application=settings.application_name.value,
+        client=client,
+        owner=owner,
+    )
+    entry.write("requested")
+    return entry
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,7 +139,15 @@ class DatabaseClient:
 
     @contextmanager
     def session(self) -> Iterator[Session]:
-        session = self._checkout()
+        entry = _session_log(self.settings, "sync")
+        try:
+            session = self._checkout()
+        except BaseException:
+            if entry is not None:
+                entry.write("checkout_failed")
+            raise
+        if entry is not None:
+            entry.acquired()
         try:
             yield session
             session.commit()
@@ -98,6 +156,8 @@ class DatabaseClient:
             raise
         finally:
             session.close()
+            if entry is not None:
+                entry.write("released")
 
     def _checkout(self) -> Session:
         session = self.sessions()
@@ -186,8 +246,16 @@ class AsyncDatabaseClient:
     async def session(self) -> AsyncIterator[AsyncSession]:
         await checkpoint_if_cancelled()
         session = self.sessions()
-        with CancelScope(shield=True):
-            await self._checkout(session)
+        entry = _session_log(self.settings, "async")
+        try:
+            with CancelScope(shield=True):
+                await self._checkout(session)
+        except BaseException:
+            if entry is not None:
+                entry.write("checkout_failed")
+            raise
+        if entry is not None:
+            entry.acquired()
         try:
             await checkpoint_if_cancelled()
             # Level cancellation can interrupt the driver's own cancellation cleanup.
@@ -204,6 +272,8 @@ class AsyncDatabaseClient:
         finally:
             with CancelScope(shield=True):
                 await session.close()
+            if entry is not None:
+                entry.write("released")
         await checkpoint_if_cancelled()
 
     async def run_transaction[ResultT](

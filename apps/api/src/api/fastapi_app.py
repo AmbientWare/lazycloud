@@ -22,6 +22,7 @@ from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from foundation.executor_pressure import MeasuredThreadPoolExecutor
+from foundation.process_logs import configure_process_logging
 from gateway.events import (
     AsyncGatewayEventSink,
     GatewayRequestEventMiddleware,
@@ -299,6 +300,7 @@ def _install_invoke_routing(app: FastAPI) -> None:
 
 
 def create_production_app() -> FastAPI:
+    configure_process_logging()
     app = _create_app(
         ControlPlaneRuntime.production(), include_management_routers, _start_management
     )
@@ -307,6 +309,7 @@ def create_production_app() -> FastAPI:
 
 
 def create_execution_app() -> FastAPI:
+    configure_process_logging()
     runtime = ControlPlaneRuntime(
         telemetry_config=TelemetrySettings().to_config(service_name="execution-api"),
         _factory=production_execution_services,
@@ -318,6 +321,7 @@ def create_execution_app() -> FastAPI:
 
 
 def create_runtime_app() -> FastAPI:
+    configure_process_logging()
     runtime = ControlPlaneRuntime(
         telemetry_config=TelemetrySettings().to_config(service_name="runtime-api"),
         _factory=production_runtime_services,
