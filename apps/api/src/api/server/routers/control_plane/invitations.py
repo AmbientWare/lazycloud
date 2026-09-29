@@ -14,12 +14,12 @@ from shared.identity import AuthScope, WorkspaceRole
 from api.server.auth import read_principal, read_token, write_principal, write_token
 from api.server.dependencies import (
     authorize_token_workspace,
-    current_services,
+    management_services,
     require_user_principal,
 )
 from api.server.identifiers import resource_identifier
 from api.server.routers.control_plane.users import member_response
-from api.server.services import ApiServices
+from api.server.services import ManagementServiceCore
 from billing import DatabaseBillingAdmission
 
 router = APIRouter()
@@ -62,7 +62,7 @@ def _preview_response(preview: InvitationPreview) -> InvitationPreviewResponse:
 def list_workspace_invitations(
     workspace: str,
     principal: read_principal,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> WorkspaceInvitationListResponse:
     """Who has been asked in but has not answered.
 
@@ -93,7 +93,7 @@ def create_workspace_invitation(
     workspace: str,
     request: WorkspaceInvitationCreateRequest,
     principal: write_principal,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> WorkspaceInvitationResponse:
     """Inviting someone is an administrator's decision, like adding them outright.
 
@@ -128,7 +128,7 @@ def resend_workspace_invitation(
     workspace: str,
     invitation_id: str,
     principal: write_principal,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> WorkspaceInvitationResponse:
     """Send the offer again on a new link. The previous link stops working."""
     workspace_id = authorize_token_workspace(
@@ -156,7 +156,7 @@ def revoke_workspace_invitation(
     workspace: str,
     invitation_id: str,
     principal: write_principal,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> Response:
     workspace_id = authorize_token_workspace(
         services,
@@ -182,7 +182,7 @@ def revoke_workspace_invitation(
 def preview_invitation(
     token: str,
     credential: read_token,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> InvitationPreviewResponse:
     """What the link opens onto, so somebody sees what they are joining first.
 
@@ -204,7 +204,7 @@ def preview_invitation(
 def accept_invitation(
     token: str,
     credential: write_token,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> WorkspaceMemberResponse:
     """Redeem the link as whoever is signed in, and join.
 
@@ -228,7 +228,7 @@ def accept_invitation(
 def decline_invitation(
     token: str,
     credential: write_token,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> Response:
     require_user_principal(credential)
     services.invitations.decline(token, actor=credential)

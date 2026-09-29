@@ -61,7 +61,7 @@ class SchedulerContainerSubmitStatus(StringEnum):
     Error = "error"
 
 
-class WorkerExecutionRequest(ContractModel):
+class ContainerSchedulingRequest(ContractModel):
     workspace_id: str
     stub_id: str
     deployment_id: str = ""
@@ -106,7 +106,6 @@ class WorkerExecutionRequest(ContractModel):
     workspace_cpu_quota_millicores: int = 0
     retry_count: int = 0
     timestamp: datetime = Field(default_factory=utc_now)
-    payload: dict[str, JsonValue] = Field(default_factory=dict)
 
     @field_validator(
         "cpu_millicores",
@@ -126,7 +125,14 @@ class WorkerExecutionRequest(ContractModel):
         return value
 
 
-class SchedulerWorkerRequest(WorkerExecutionRequest):
+class WorkerExecutionRequest(ContainerSchedulingRequest):
+    payload: dict[str, JsonValue] = Field(default_factory=dict)
+
+
+class SchedulerPendingRequest(ContainerSchedulingRequest):
+    fairness_account_id: str = Field(min_length=1)
+    """Admission account for queue fairness; current ownership authorizes placement."""
+
     backfill: bool = False
     preferred_worker_id: str = ""
     """A worker to choose among equals, never a requirement.
@@ -146,6 +152,8 @@ class SchedulerWorkerRequest(WorkerExecutionRequest):
 
     capacity_retry_at: datetime | None = None
 
+
+class SchedulerWorkerRequest(SchedulerPendingRequest, WorkerExecutionRequest):
     def requeued(self, *, now: datetime | None = None) -> SchedulerWorkerRequest:
         return self.model_copy(
             update={"retry_count": self.retry_count + 1, "timestamp": now or utc_now()}

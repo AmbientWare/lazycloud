@@ -153,7 +153,7 @@ class HttpContainerServiceTransport:
             backend_socket = self.route_dialer.dial_backend_route(
                 self.options.backend_route_id,
                 timeout_seconds=timeout,
-            )
+            ).socket
             connection = _ExistingSocketHttpConnection(backend_socket, timeout=timeout)
             try:
                 yield connection

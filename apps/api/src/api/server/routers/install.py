@@ -13,8 +13,8 @@ from agent.operations import (
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import FileResponse, PlainTextResponse
 
-from api.server.dependencies import current_services
-from api.server.services import ApiServices
+from api.server.dependencies import management_services
+from api.server.services import ManagementServiceCore
 
 router = APIRouter()
 _AGENT_VERSION_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
@@ -22,7 +22,7 @@ _AGENT_VERSION_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
 @router.get("/install/agent", response_class=PlainTextResponse)
 def install_agent_script(
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> PlainTextResponse:
     artifact_settings = services.agent_binary_settings
     script = build_agent_install_script(
@@ -44,7 +44,7 @@ def install_agent_script(
 def install_agent_binary(
     os_name: AgentInstallOS,
     arch: AgentInstallArch,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> FileResponse:
     artifact_settings = services.agent_binary_settings
     binary_dir = artifact_settings.binary_dir
@@ -80,7 +80,7 @@ def install_versioned_agent_binary(
     version: str,
     os_name: AgentInstallOS,
     arch: AgentInstallArch,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> FileResponse:
     artifact_settings = services.agent_binary_settings
     configured_version = artifact_settings.binary_version

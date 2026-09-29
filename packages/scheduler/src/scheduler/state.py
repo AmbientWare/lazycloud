@@ -47,6 +47,7 @@ from shared.scheduling import (
     SchedulerContainerAddressMap,
     SchedulerContainerState,
     SchedulerContainerStatus,
+    SchedulerPendingRequest,
     SchedulerWorkerRecord,
     SchedulerWorkerRequest,
     SchedulerWorkerStatus,
@@ -91,7 +92,75 @@ DEFAULT_CONCURRENCY_COUNTER_REPAIR_INTERVAL_SECONDS = 5.0
 DEFAULT_CONCURRENCY_RESERVATION_IN_FLIGHT_TTL_SECONDS = 120.0
 DEFAULT_CONTAINER_REQUEST_CLAIM_LEASE_SECONDS = 60.0
 
-ENQUEUE_CONTAINER_REQUEST_SCRIPT = """
+_QUEUE_INDEX_SCRIPT = """
+local function refresh_account(base, account)
+    local first = redis.call("ZRANGE", base .. ":account:" .. account, 0, 0, "WITHSCORES")
+    if #first == 0 then
+        redis.call("ZREM", base .. ":accounts", account)
+    else
+        redis.call("ZADD", base .. ":accounts", first[2], account)
+    end
+end
+
+local function ready_request(base, request_id, ready_at)
+    local metadata = redis.call("HGET", base .. ":metadata", request_id)
+    if not metadata then return false end
+    local account = cjson.decode(metadata).fairness_account_id
+    redis.call("ZADD", base, ready_at, request_id)
+    redis.call("ZADD", base .. ":account:" .. account, ready_at, request_id)
+    refresh_account(base, account)
+    return true
+end
+
+local function validate_request(base, request_id, payload)
+    local request = cjson.decode(payload)
+    local account = request.fairness_account_id
+    if not account or account == "" then error("scheduler request has no fairness account") end
+    local charged = redis.call("HGET", base .. ":charged", request_id)
+    if charged and cjson.decode(charged)[1] ~= account then
+        error("scheduler request fairness account cannot change")
+    end
+    local existing = redis.call("HGET", base .. ":metadata", request_id)
+    if existing and cjson.decode(existing).fairness_account_id ~= account then
+        error("scheduler request fairness account cannot change")
+    end
+    return request
+end
+
+local function publish_request(base, payloads, request_id, payload, ready_at)
+    local request = validate_request(base, request_id, payload)
+    local has_gpu = #request.gpu > 0 or request.gpu_count > 0
+    request.payload = nil
+    -- Lua encodes an empty array as an object; omission retains the model's empty-list default.
+    if #request.gpu == 0 then request.gpu = nil end
+    local metadata = cjson.encode(request)
+    redis.call("HSET", payloads, request_id, payload)
+    redis.call("HSET", base .. ":metadata", request_id, metadata)
+    if has_gpu then
+        redis.call("HSET", base .. ":gpu", request_id, metadata)
+    else
+        redis.call("HDEL", base .. ":gpu", request_id)
+    end
+    ready_request(base, request_id, ready_at)
+end
+
+local function forget_request(base, request_id, forget_charge)
+    local metadata = redis.call("HGET", base .. ":metadata", request_id)
+    if metadata then
+        local account = cjson.decode(metadata).fairness_account_id
+        redis.call("ZREM", base .. ":account:" .. account, request_id)
+        refresh_account(base, account)
+    end
+    redis.call("ZREM", base, request_id)
+    redis.call("HDEL", base .. ":metadata", request_id)
+    redis.call("HDEL", base .. ":gpu", request_id)
+    if forget_charge then redis.call("HDEL", base .. ":charged", request_id) end
+end
+"""
+
+ENQUEUE_CONTAINER_REQUEST_SCRIPT = (
+    _QUEUE_INDEX_SCRIPT
+    + """
 if redis.call("EXISTS", KEYS[3]) == 1 then
     return 0
 end
@@ -102,90 +171,161 @@ if (worker and cjson.decode(worker) ~= "")
     or redis.call("HEXISTS", KEYS[2], ARGV[1]) == 1 then
     return 0
 end
-redis.call("HSET", KEYS[2], ARGV[1], ARGV[2])
-return redis.call("ZADD", KEYS[1], ARGV[3], ARGV[1])
+publish_request(KEYS[1], KEYS[2], ARGV[1], ARGV[2], ARGV[3])
+return 1
 """
+)
 
-CLAIM_READY_CONTAINER_REQUESTS_SCRIPT = """
-local expired_ids = redis.call("ZRANGEBYSCORE", KEYS[3], "-inf", ARGV[1])
+CLAIM_READY_CONTAINER_REQUESTS_SCRIPT = (
+    _QUEUE_INDEX_SCRIPT
+    + """
+local expired_ids = redis.call("ZRANGEBYSCORE", KEYS[3], "-inf", ARGV[1],
+    "LIMIT", 0, math.max(64, tonumber(ARGV[2])))
 for _, request_id in ipairs(expired_ids) do
     redis.call("ZREM", KEYS[3], request_id)
     redis.call("HDEL", KEYS[4], request_id)
     if redis.call("HEXISTS", KEYS[2], request_id) == 1 then
-        redis.call("ZADD", KEYS[1], ARGV[1], request_id)
+        ready_request(KEYS[1], request_id, ARGV[1])
+    else
+        forget_request(KEYS[1], request_id, true)
     end
 end
-local request_ids = redis.call("ZRANGEBYSCORE", KEYS[1], "-inf", ARGV[1], "LIMIT", 0, ARGV[2])
+local virtual_key = KEYS[1] .. ":virtual"
+local turn_key = KEYS[1] .. ":turn"
+local virtual_time = tonumber(redis.call("GET", virtual_key) or "0")
+local accounts = {}
+for _, account in ipairs(redis.call("ZRANGEBYSCORE", KEYS[1] .. ":accounts", "-inf", ARGV[1])) do
+    local key = KEYS[1] .. ":service:" .. account
+    table.insert(accounts, {
+        id = account, key = key,
+        turn = tonumber(redis.call("GET", key .. ":turn") or "0"),
+        finish = math.max(virtual_time, tonumber(redis.call("GET", key) or "0")),
+        ready = true,
+    })
+end
 local requests = {}
-for _, request_id in ipairs(request_ids) do
-    local payload = redis.call("HGET", KEYS[2], request_id)
-    redis.call("ZREM", KEYS[1], request_id)
-    if payload then
-        redis.call("ZADD", KEYS[3], ARGV[4], request_id)
-        redis.call("HSET", KEYS[4], request_id, ARGV[3])
-        table.insert(requests, request_id)
-        table.insert(requests, payload)
+for _ = 1, tonumber(ARGV[2]) do
+    local selected = nil
+    local last_finish = virtual_time
+    for _, account in ipairs(accounts) do
+        if account.ready then last_finish = math.max(last_finish, account.finish) end
+        if account.ready and (not selected or account.finish < selected.finish
+            or (account.finish == selected.finish and account.turn < selected.turn)) then
+            selected = account
+        end
     end
+    if not selected then break end
+    local account_key = KEYS[1] .. ":account:" .. selected.id
+    local head = redis.call("ZRANGE", account_key, 0, 0)
+    local request_id = head[1]
+    local payload = redis.call("HGET", KEYS[2], request_id)
+    local request = cjson.decode(redis.call("HGET", KEYS[1] .. ":metadata", request_id))
+    virtual_time = selected.finish
+    local charged = redis.call("HGET", KEYS[1] .. ":charged", request_id)
+    if charged then
+        -- Retrying keeps its resource charge but yields a turn to other ready accounts.
+        selected.finish = math.max(last_finish, cjson.decode(charged)[2])
+    else
+        selected.finish = selected.finish + math.max(1, request.cpu_millicores / 1000,
+            request.memory_mib / 1024, request.gpu_count)
+        redis.call("HSET", KEYS[1] .. ":charged", request_id,
+            cjson.encode({selected.id, selected.finish}))
+    end
+    redis.call("SET", selected.key, selected.finish, "EX", 60)
+    selected.turn = redis.call("INCR", turn_key)
+    redis.call("EXPIRE", turn_key, 60)
+    redis.call("SET", selected.key .. ":turn", selected.turn, "EX", 60)
+    redis.call("ZREM", account_key, request_id)
+    refresh_account(KEYS[1], selected.id)
+    local next_ready = redis.call("ZSCORE", KEYS[1] .. ":accounts", selected.id)
+    selected.ready = next_ready and tonumber(next_ready) <= tonumber(ARGV[1])
+    redis.call("ZREM", KEYS[1], request_id)
+    redis.call("ZADD", KEYS[3], ARGV[4], request_id)
+    redis.call("HSET", KEYS[4], request_id, ARGV[3])
+    table.insert(requests, request_id)
+    table.insert(requests, payload)
 end
+if #requests > 0 then redis.call("SET", virtual_key, virtual_time, "EX", 60) end
 return requests
 """
+)
 
-ACKNOWLEDGE_CONTAINER_REQUEST_SCRIPT = """
+PENDING_GPU_REQUESTS_SCRIPT = """
+return redis.call("HVALS", KEYS[1] .. ":gpu")
+"""
+
+ACKNOWLEDGE_CONTAINER_REQUEST_SCRIPT = (
+    _QUEUE_INDEX_SCRIPT
+    + """
 if redis.call("HGET", KEYS[2], ARGV[1]) ~= ARGV[2] then
     return 0
 end
 redis.call("ZREM", KEYS[1], ARGV[1])
 redis.call("HDEL", KEYS[2], ARGV[1])
 redis.call("HDEL", KEYS[3], ARGV[1])
+forget_request(KEYS[4], ARGV[1], true)
 return 1
 """
+)
 
-REQUEUE_DRAINED_WORKER_REQUEST_SCRIPT = """
+REQUEUE_DRAINED_WORKER_REQUEST_SCRIPT = (
+    _QUEUE_INDEX_SCRIPT
+    + """
 if redis.call("EXISTS", KEYS[3]) == 1 then
     return 0
 end
 local status = redis.call("HGET", KEYS[4], "status")
 if status and cjson.decode(status) ~= "pending" then
+    redis.call("HDEL", KEYS[1] .. ":charged", ARGV[1])
     return 0
 end
 local worker = redis.call("HGET", KEYS[4], "worker_id")
 if worker and cjson.decode(worker) ~= "" and cjson.decode(worker) ~= ARGV[4] then
     return 0
 end
+validate_request(KEYS[1], ARGV[1], ARGV[2])
 if status then
     redis.call("HSET", KEYS[4], "worker_id", cjson.encode(""))
 end
 redis.call("SREM", KEYS[5], KEYS[4])
 if redis.call("HEXISTS", KEYS[2], ARGV[1]) == 0 then
-    redis.call("HSET", KEYS[2], ARGV[1], ARGV[2])
-    redis.call("ZADD", KEYS[1], ARGV[3], ARGV[1])
+    publish_request(KEYS[1], KEYS[2], ARGV[1], ARGV[2], ARGV[3])
 end
 return 1
 """
+)
 
-REQUEUE_CONTAINER_REQUEST_SCRIPT = """
+REQUEUE_CONTAINER_REQUEST_SCRIPT = (
+    _QUEUE_INDEX_SCRIPT
+    + """
 if redis.call("HGET", KEYS[4], ARGV[1]) ~= ARGV[2] then
     return -1
 end
+validate_request(KEYS[1], ARGV[1], ARGV[3])
 redis.call("ZREM", KEYS[3], ARGV[1])
 redis.call("HDEL", KEYS[4], ARGV[1])
 if redis.call("EXISTS", KEYS[5]) == 1 then
     redis.call("HDEL", KEYS[2], ARGV[1])
+    forget_request(KEYS[1], ARGV[1], true)
     return 0
 end
-redis.call("HSET", KEYS[2], ARGV[1], ARGV[3])
-redis.call("ZADD", KEYS[1], ARGV[4], ARGV[1])
+publish_request(KEYS[1], KEYS[2], ARGV[1], ARGV[3], ARGV[4])
 return 1
 """
+)
 
-FENCE_CONTAINER_REQUEST_SCRIPT = """
+FENCE_CONTAINER_REQUEST_SCRIPT = (
+    _QUEUE_INDEX_SCRIPT
+    + """
 redis.call("SET", KEYS[5], "1", "EX", ARGV[2])
 local removed = redis.call("ZREM", KEYS[1], ARGV[1])
 removed = removed + redis.call("HDEL", KEYS[2], ARGV[1])
 removed = removed + redis.call("ZREM", KEYS[3], ARGV[1])
 removed = removed + redis.call("HDEL", KEYS[4], ARGV[1])
+forget_request(KEYS[1], ARGV[1], true)
 return removed
 """
+)
 
 PLACE_WORKER_REQUEST_SCRIPT = """
 if redis.call("EXISTS", KEYS[3]) == 1 then
@@ -198,7 +338,9 @@ redis.call("RPUSH", KEYS[1], ARGV[1])
 return 1
 """
 
-DISPATCH_CLAIMED_WORKER_REQUEST_SCRIPT = """
+DISPATCH_CLAIMED_WORKER_REQUEST_SCRIPT = (
+    _QUEUE_INDEX_SCRIPT
+    + """
 local clock = redis.call("TIME")
 local now = tonumber(clock[1]) + tonumber(clock[2]) / 1000000
 if tonumber(ARGV[8]) <= now then
@@ -232,16 +374,16 @@ if request.backfill == true then
     if recovery and redis.call("HEXISTS", KEYS[6], recovery) == 1 then return -5 end
     if recovery then redis.call("DEL", KEYS[13]) end
     local gpu_matches = cjson.decode(ARGV[7])
-    for _, payload in ipairs(redis.call("HVALS", KEYS[6])) do
+    for _, payload in ipairs(redis.call("HVALS", KEYS[5] .. ":gpu")) do
         local queued = cjson.decode(payload)
-        local requested_gpu = math.max(queued.gpu_count, #queued.gpu > 0 and 1 or 0)
+        local requested_gpu = math.max(queued.gpu_count, queued.gpu and #queued.gpu > 0 and 1 or 0)
         if requested_gpu > 0 and requested_gpu <= total_gpu
             and queued.placement == worker_field("placement", "")
             and (queued.region == cjson.null or queued.region == nil
                 or queued.region == worker_field("region", cjson.null))
             and (queued.availability_zone == nil or queued.availability_zone == ""
                 or queued.availability_zone == worker_field("availability_zone", "")) then
-            for _, gpu in ipairs(queued.gpu) do
+            for _, gpu in ipairs(queued.gpu or {}) do
                 if gpu_matches[gpu] ~= false then return -5 end
             end
         end
@@ -257,6 +399,7 @@ redis.call("ZREM", KEYS[5], ARGV[1])
 redis.call("HDEL", KEYS[6], ARGV[1])
 redis.call("ZREM", KEYS[7], ARGV[1])
 redis.call("HDEL", KEYS[8], ARGV[1])
+forget_request(KEYS[5], ARGV[1], false)
 if redis.call("GET", KEYS[13]) == ARGV[1] then redis.call("DEL", KEYS[13]) end
 if ARGV[5] == "1" then
     redis.call("DEL", KEYS[9])
@@ -265,6 +408,7 @@ if ARGV[5] == "1" then
 end
 return 1
 """
+)
 
 PREEMPT_GPU_BACKFILL_SCRIPT = """
 if redis.call("HGET", KEYS[1], "resource_version") ~= ARGV[1] then return {"stale"} end
@@ -335,24 +479,31 @@ if redis.call("LREM", KEYS[1], 0, ARGV[1]) == 0 then
     return 0
 end
 redis.call("HDEL", KEYS[2], ARGV[1])
+redis.call("HDEL", KEYS[3] .. ":charged", ARGV[1])
 return 1
 """
 
-RETURN_WORKER_REQUEST_SCRIPT = """
+RETURN_WORKER_REQUEST_SCRIPT = (
+    _QUEUE_INDEX_SCRIPT
+    + """
+validate_request(KEYS[4], ARGV[1], ARGV[2])
 redis.call("LREM", KEYS[1], 0, ARGV[1])
 redis.call("LREM", KEYS[2], 0, ARGV[1])
 redis.call("HDEL", KEYS[3], ARGV[1])
 if redis.call("EXISTS", KEYS[6]) == 1 then
+    forget_request(KEYS[4], ARGV[1], true)
     return 0
 end
-redis.call("HSET", KEYS[5], ARGV[1], ARGV[2])
-return redis.call("ZADD", KEYS[4], ARGV[3], ARGV[1])
+publish_request(KEYS[4], KEYS[5], ARGV[1], ARGV[2], ARGV[3])
+return 1
 """
+)
 
 CANCEL_WORKER_REQUEST_SCRIPT = """
 local removed = redis.call("LREM", KEYS[1], 0, ARGV[1])
 local delivered = redis.call("LREM", KEYS[3], 0, ARGV[1])
 redis.call("HDEL", KEYS[2], ARGV[1])
+redis.call("HDEL", KEYS[4] .. ":charged", ARGV[1])
 return {removed + delivered, delivered}
 """
 
@@ -384,7 +535,9 @@ end
 return drained
 """
 
-PREEMPT_WORKER_REQUESTS_SCRIPT = """
+PREEMPT_WORKER_REQUESTS_SCRIPT = (
+    _QUEUE_INDEX_SCRIPT
+    + """
 if redis.call("GET", KEYS[6]) == ARGV[2] then
     return {0}
 end
@@ -395,6 +548,10 @@ if redis.call("HGET", KEYS[1], "resource_version") ~= ARGV[1]
     or redis.call("HGET", KEYS[1], "capacity_owner_id") ~= ARGV[7]
     or (ARGV[8] ~= "" and redis.call("HGET", KEYS[1], "machine_id") ~= ARGV[8]) then
     return {-2}
+end
+for index = 1, tonumber(ARGV[3]) do
+    validate_request(KEYS[4], ARGV[11 + ((index - 1) * 2) + 1],
+        ARGV[11 + ((index - 1) * 2) + 2])
 end
 redis.call("HSET", KEYS[1],
     "status", ARGV[4],
@@ -416,14 +573,16 @@ for index = 1, request_count do
     local status = redis.call("HGET", KEYS[7 + request_count + index], "status")
     local started = status and status ~= ARGV[11]
     if not cancelled and not started then
-        redis.call("HSET", KEYS[5], request_id, payload)
-        redis.call("ZADD", KEYS[4], ARGV[9], request_id)
+        publish_request(KEYS[4], KEYS[5], request_id, payload, ARGV[9])
         table.insert(requeued, request_id)
+    else
+        forget_request(KEYS[4], request_id, true)
     end
 end
 redis.call("SET", KEYS[6], ARGV[2], "EX", ARGV[10])
 return requeued
 """
+)
 
 
 RESERVE_CONCURRENCY_SCRIPT = """
@@ -1608,15 +1767,16 @@ class RedisSchedulerWorkerRepository:
                 f"scheduler request dispatch returned unexpected status {result}: {request_id}"
             )
 
-    def pending_gpu_requests(self) -> list[SchedulerWorkerRequest]:
+    def pending_gpu_requests(self) -> list[SchedulerPendingRequest]:
         return [
-            request
-            for payload in self.redis.hash_get_all(self.keys.container_request_payloads()).values()
-            if (
-                request := SchedulerWorkerRequest.model_validate_json(
-                    redis_serialization.redis_text(payload)
+            SchedulerPendingRequest.model_validate_json(payload)
+            for payload in _redis_script_text_items(
+                self.redis.eval_scalars(
+                    PENDING_GPU_REQUESTS_SCRIPT,
+                    1,
+                    self.keys.container_requests(),
                 )
-            ).gpu
+            )
         ]
 
     def mark_gpu_backfill_evictions(
@@ -1778,10 +1938,11 @@ class RedisSchedulerWorkerRepository:
         return bool(
             self.redis.eval_int(
                 ACKNOWLEDGE_CONTAINER_REQUEST_SCRIPT,
-                3,
+                4,
                 self.keys.container_request_claims(),
                 self.keys.container_request_claim_owners(),
                 self.keys.container_request_payloads(),
+                self.keys.container_requests(),
                 request_id,
                 claim.token,
             )
@@ -1936,9 +2097,10 @@ class RedisSchedulerWorkerRepository:
         return bool(
             await redis.eval_int(
                 ACKNOWLEDGE_WORKER_REQUEST_SCRIPT,
-                2,
+                3,
                 self.keys.worker_inflight_requests(worker_id),
                 self.keys.worker_request_payloads(worker_id),
+                self.keys.container_requests(),
                 container_id,
             )
         )
@@ -1989,10 +2151,11 @@ class RedisSchedulerWorkerRepository:
             result = _redis_script_text_items(
                 self.redis.eval_scalars(
                     CANCEL_WORKER_REQUEST_SCRIPT,
-                    3,
+                    4,
                     queue_key,
                     payloads_key,
                     inflight_key,
+                    self.keys.container_requests(),
                     container_id,
                 )
             )

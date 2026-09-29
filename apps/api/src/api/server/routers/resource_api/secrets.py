@@ -17,8 +17,8 @@ from shared.http.secrets import (
 )
 
 from api.server.auth import read_workspace, write_workspace
-from api.server.dependencies import current_services
-from api.server.services import ApiServices
+from api.server.dependencies import management_services
+from api.server.services import ManagementServiceCore
 
 router = APIRouter()
 
@@ -26,7 +26,7 @@ router = APIRouter()
 @router.get("/api/v1/secrets", response_model=SecretMaskedListResponse, operation_id="list_secrets")
 def list_secrets_masked(
     workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> SecretMaskedListResponse:
     relationships = StorageRelationshipService(services.deployment_resources).for_workspace(
         workspace_id
@@ -52,7 +52,7 @@ def list_secrets_masked(
 )
 def list_secrets(
     workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> ListSecretsResponse:
     relationships = StorageRelationshipService(services.deployment_resources).for_workspace(
         workspace_id
@@ -71,7 +71,7 @@ def list_secrets(
 def get_secret(
     name: str,
     workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> GetSecretResponse:
     record = services.secrets.get(name, workspace=workspace_id)
     relationships = StorageRelationshipService(services.deployment_resources).for_workspace(
@@ -94,7 +94,7 @@ def get_secret(
 def create_secret(
     request: SecretPayload,
     workspace_id: write_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> CreateSecretResponse:
     return CreateSecretResponse.from_record(
         services.secrets.create(request.name, request.value, workspace=workspace_id)
@@ -111,7 +111,7 @@ def set_secret(
     name: str,
     request: SecretValuePayload,
     workspace_id: write_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> SecretMaskedSetResponse:
     record = services.secrets.set(name, request.value, workspace=workspace_id)
     return SecretMaskedSetResponse(name=record.name, value=record.masked())
@@ -126,7 +126,7 @@ def update_secret(
     name: str,
     request: SecretValuePayload,
     workspace_id: write_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> UpdateSecretResponse:
     services.secrets.update(name, request.value, workspace=workspace_id)
     return UpdateSecretResponse()
@@ -140,7 +140,7 @@ def update_secret(
 def delete_secret(
     name: str,
     workspace_id: write_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> SecretDeleteResponse:
     services.secrets.delete(name, workspace=workspace_id)
     return SecretDeleteResponse()

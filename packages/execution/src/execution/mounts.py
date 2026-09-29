@@ -17,6 +17,7 @@ from shared.container_requests import (
     RequestMountType,
 )
 from shared.errors import UpstreamUnavailableError
+from shared.identity import WorkspaceRecord
 from shared.mounts import MountAuthMode, validate_mount_auth
 from storage.service import ObjectStorage
 
@@ -41,14 +42,7 @@ def source_code_mounts(
     if not object_id:
         return []
     with context.database.session() as session:
-        record = next(
-            (
-                item
-                for item in ObjectRepository(session).list(workspace_id=workspace_id)
-                if item.id == object_id
-            ),
-            None,
-        )
+        record = ObjectRepository(session).get(object_id, workspace_id=workspace_id)
     if record is None:
         return []
 
@@ -117,12 +111,9 @@ def container_resource_mounts(
 
 def container_resource_mounts_require_workspace_storage(
     *,
-    context: ExecutionContext,
-    workspace_id: str,
+    workspace: WorkspaceRecord,
     mounts: Iterable[RequestMount],
 ) -> bool:
-    with context.database.session() as session:
-        workspace = context.workspace(session, workspace_id)
     required = any(_mount_requires_workspace_storage(mount) for mount in mounts)
     if required and not workspace.storage.bucket:
         # There is no fallback tier: without workspace storage the mount would

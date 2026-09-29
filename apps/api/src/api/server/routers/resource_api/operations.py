@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query, Response, status
 from scheduler.autoscaler_operations import AutoscalerOperationsService
-from scheduler.service import Scheduler, SchedulerWorkloadControls
+from scheduler.reconciliation import SchedulerWorkloadControls
+from scheduler.service import Scheduler
 from shared.autoscaler_state import AutoscalerTargetKind
 from shared.http.operations import (
     AgentLeaseListResponse,
@@ -43,11 +44,11 @@ from api.server.auth import (
     write_workspace,
 )
 from api.server.dependencies import (
-    current_services,
+    management_services,
 )
 from api.server.identifiers import identifier_filter
 from api.server.service_dependencies import autoscaler_operations_service
-from api.server.services import ApiServices
+from api.server.services import ManagementServiceCore
 
 router = APIRouter()
 
@@ -55,7 +56,7 @@ router = APIRouter()
 @router.get("/api/v1/cron-jobs", response_model=CronJobListResponse, operation_id="list_cron_jobs")
 def list_cron_jobs(
     workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> CronJobListResponse:
     return CronJobListResponse(
         cron_jobs=[
@@ -74,7 +75,7 @@ def list_cron_jobs(
 def delete_cron_job(
     name: str,
     workspace_id: write_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> None:
     services.cron_jobs.delete(name, workspace=workspace_id)
 
@@ -89,7 +90,7 @@ def list_cron_job_runs(
     workspace_id: read_workspace,
     limit: int = Query(100, gt=0, le=1_000),
     cursor: str | None = None,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> CronJobRunListResponse:
     page = Scheduler(services).list_cron_job_runs(
         workspace_id=workspace_id,
@@ -110,7 +111,7 @@ def list_cron_job_runs(
 )
 def tick_scheduler(
     _auth: admin_access,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> CronJobRunListResponse:
     return CronJobRunListResponse(
         data=[CronJobRunResponse.model_validate(item) for item in Scheduler(services).tick()]
@@ -127,7 +128,7 @@ def dispatch_scheduler_containers(
     limit: int = 100,
     *,
     _auth: admin_access,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> SchedulerContainerDispatchListResponse:
     scheduler = Scheduler(
         services,
@@ -240,7 +241,7 @@ def resume_autoscaler(
 )
 def list_image_builds(
     workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> ImageBuildListResponse:
     return ImageBuildListResponse(
         builds=[
@@ -258,7 +259,7 @@ def list_image_builds(
 def get_image_build(
     build_id: str,
     workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> ImageBuildResponse:
     return ImageBuildResponse.model_validate(
         services.images.get_for_workspace(build_id, workspace_id=workspace_id)
@@ -274,7 +275,7 @@ def get_image_build(
 def create_image_build(
     request: ImageBuildRequest,
     workspace_id: write_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> ImageBuildResponse:
     return ImageBuildResponse.model_validate(
         services.images.build(
@@ -293,7 +294,7 @@ def create_image_build(
 def cancel_image_build(
     build_id: str,
     workspace_id: write_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> ImageBuildResponse:
     return ImageBuildResponse.model_validate(
         services.images.cancel_for_workspace(build_id, workspace_id=workspace_id)
@@ -303,7 +304,7 @@ def cancel_image_build(
 @router.get("/api/v1/objects", response_model=ObjectListResponse, operation_id="list_objects")
 def list_objects(
     workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
     bucket: str | None = None,
     prefix: str = "",
 ) -> ObjectListResponse:
@@ -328,7 +329,7 @@ def list_objects(
 def create_object(
     request: ObjectCreateRequest,
     workspace_id: write_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> ObjectResponse:
     return ObjectResponse.model_validate(
         services.object_storage.put_bytes_for_workspace(
@@ -351,7 +352,7 @@ def read_object(
     bucket: str,
     key: str,
     workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> ObjectContentResponse:
     record, data = services.object_storage.read_content_for_workspace(
         workspace_id=workspace_id,
@@ -374,7 +375,7 @@ def delete_object(
     bucket: str,
     key: str,
     workspace_id: write_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> None:
     services.object_storage.delete_required_for_workspace(
         workspace_id=workspace_id,
@@ -386,7 +387,7 @@ def delete_object(
 @router.get("/api/v1/cache", response_model=CacheEntryListResponse, operation_id="list_cache")
 def list_cache(
     _auth: admin_access,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> CacheEntryListResponse:
     return CacheEntryListResponse(
         entries=[CacheEntryResponse.model_validate(item) for item in services.cache_storage.list()]
@@ -402,7 +403,7 @@ def list_cache(
 def create_cache_entry(
     request: CacheCreateRequest,
     _auth: admin_access,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> CacheEntryResponse:
     return CacheEntryResponse.model_validate(
         services.cache_storage.put_bytes(request.namespace, request.key, request.bytes_value())
@@ -418,7 +419,7 @@ def read_cache_entry(
     namespace: str,
     key: str,
     _auth: admin_access,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> CacheContentResponse:
     entry, data = services.cache_storage.get_bytes(namespace, key)
     return CacheContentResponse.from_content(
@@ -437,7 +438,7 @@ def delete_cache_entry(
     namespace: str,
     key: str,
     _auth: admin_access,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> None:
     services.cache_storage.delete(namespace, key)
 
@@ -446,7 +447,7 @@ def delete_cache_entry(
 def list_agents(
     workspace_id: read_workspace,
     _auth: admin_access,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> AgentListResponse:
     return AgentListResponse(
         agents=[
@@ -466,7 +467,7 @@ def register_agent(
     request: AgentRegisterRequest,
     workspace_id: write_workspace,
     _auth: admin_access,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> AgentResponse:
     return AgentResponse.model_validate(
         services.agents.register(
@@ -488,7 +489,7 @@ def heartbeat_agent(
     agent_id: str,
     workspace_id: write_workspace,
     _auth: admin_access,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> AgentResponse:
     return AgentResponse.model_validate(services.agents.heartbeat(agent_id, workspace=workspace_id))
 
@@ -504,7 +505,7 @@ def lease_agent(
     request: AgentLeaseRequest,
     workspace_id: write_workspace,
     _auth: admin_access,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> AgentLeaseResponse:
     return AgentLeaseResponse.model_validate(
         services.agents.lease(
@@ -527,7 +528,7 @@ def delete_agent(
     agent_id: str,
     workspace_id: write_workspace,
     _auth: admin_access,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> None:
     services.agents.delete(agent_id, workspace=workspace_id)
 
@@ -538,7 +539,7 @@ def list_leases(
     *,
     workspace_id: read_workspace,
     _auth: admin_access,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> AgentLeaseListResponse:
     return AgentLeaseListResponse(
         leases=[
@@ -560,7 +561,7 @@ def release_lease(
     lease_id: str,
     workspace_id: write_workspace,
     _auth: admin_access,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> AgentLeaseResponse:
     return AgentLeaseResponse.model_validate(
         services.agents.release(lease_id, workspace=workspace_id)

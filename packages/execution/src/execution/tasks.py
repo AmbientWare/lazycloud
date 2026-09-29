@@ -23,9 +23,10 @@ from observability.stream_state import RedisEventStreamRepository
 from observability.workspace_changes import AsyncWorkspaceChangeService, WorkspaceChangePublisher
 from pydantic import JsonValue
 from shared.containers import TERMINAL_CONTAINER_STATUSES
-from shared.errors import ConflictError, NotFoundError
+from shared.errors import ConflictError, InvalidInputError, NotFoundError
 from shared.events import EventLevel
 from shared.function_payloads import FunctionInvocationPayload, FunctionResultPayload
+from shared.http.execution_entry import ExecutionEntryEvidence
 from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
 from shared.logs import LogEntry
 from shared.realtime.contracts import EventRecordType
@@ -97,6 +98,7 @@ class TaskService:
         kwargs: dict[str, JsonValue] | None = None,
         invocation: FunctionInvocationPayload | None = None,
         retry_policy: RetryPolicy | Mapping[str, JsonValue] | None = None,
+        claimable_at: datetime | None = None,
     ) -> Task:
         with self.context.database.session() as session:
             task = self.create_in_transaction(
@@ -115,6 +117,7 @@ class TaskService:
                 kwargs=kwargs,
                 invocation=invocation,
                 retry_policy=retry_policy,
+                claimable_at=claimable_at,
             )
         self.publish_created(task)
         return task
@@ -137,6 +140,7 @@ class TaskService:
         kwargs: dict[str, JsonValue] | None = None,
         invocation: FunctionInvocationPayload | None = None,
         retry_policy: RetryPolicy | Mapping[str, JsonValue] | None = None,
+        claimable_at: datetime | None = None,
     ) -> Task:
         resolved_deployment_id = optional_uuid(deployment_id, field="deployment_id")
         resolved_app_id = optional_uuid(app_id, field="app_id")
@@ -151,9 +155,10 @@ class TaskService:
         persisted_container_id = (
             resolved_container_id if _container_exists(session, resolved_container_id) else None
         )
+        task_id = str(uuid4())
         return TaskRepository(session).upsert(
             Task(
-                id=str(uuid4()),
+                id=task_id,
                 name=name,
                 workspace_id=resolved_workspace_id,
                 app_id=resolved_app_id,
@@ -161,12 +166,13 @@ class TaskService:
                 deployment_id=resolved_deployment_id,
                 container_id=persisted_container_id,
                 parent_task_id=resolved_parent_task_id,
-                root_task_id=resolved_root_task_id,
+                root_task_id=resolved_root_task_id or task_id,
                 handler=handler,
                 command=command or [],
                 args=args or [],
                 kwargs=dict(kwargs or {}),
                 invocation=invocation,
+                claimable_at=claimable_at,
                 retry_policy=resolved_retry_policy,
                 max_attempts=resolved_retry_policy.max_attempts
                 if resolved_retry_policy is not None
@@ -396,7 +402,7 @@ class TaskService:
             # Fresh claims are pending; a running one is this claim's own retry.
             if task.status is TaskStatus.Running:
                 return task
-            persisted = self._start_task_in_session(
+            persisted = self._start_locked_task(
                 session,
                 task,
                 resolved_container_id=resolved_container_id,
@@ -431,6 +437,24 @@ class TaskService:
         current = task_repository.get_for_update_across_workspaces(task.id)
         if current is None:
             raise NotFoundError(f"task not found: {task.id}")
+        return TaskService._start_locked_task(
+            session,
+            current,
+            resolved_container_id=resolved_container_id,
+            claim=claim,
+            claim_id=claim_id,
+        )
+
+    @staticmethod
+    def _start_locked_task(
+        session: DatabaseSession,
+        current: Task,
+        *,
+        resolved_container_id: str | None,
+        claim: bool,
+        claim_id: str | None = None,
+    ) -> _TaskStartPersistence:
+        task_repository = TaskRepository(session)
         if is_terminal_task_status(current.status):
             raise ConflictError(f"task {current.id} is already {current.status.value}")
         assigned_container_id = current.container_id or ""
@@ -591,6 +615,8 @@ class TaskService:
         exit_code: int | None = None,
         retry_allowed: bool = True,
         attempt_number: int | None = None,
+        execution_entry: ExecutionEntryEvidence | None = None,
+        claim_id: str | None = None,
     ) -> TaskFinishOutcome:
         with self.context.database.session() as session:
             outcome = self._finish_with_retry_in_session(
@@ -604,6 +630,8 @@ class TaskService:
                 exit_code=exit_code,
                 retry_allowed=retry_allowed,
                 attempt_number=attempt_number,
+                execution_entry=execution_entry,
+                claim_id=claim_id,
             )
         if not outcome.state_changed:
             return outcome
@@ -713,6 +741,8 @@ class TaskService:
         exit_code: int | None,
         retry_allowed: bool,
         attempt_number: int | None = None,
+        execution_entry: ExecutionEntryEvidence | None = None,
+        claim_id: str | None = None,
     ) -> TaskFinishOutcome:
         task_repository = TaskRepository(session)
         current = task_repository.get_for_update_across_workspaces(task_id)
@@ -731,6 +761,24 @@ class TaskService:
             )
         if attempt_number is not None and current.attempt_number != attempt_number:
             return _unchanged_finish_outcome(current, "completion does not own the active attempt")
+        if claim_id is not None:
+            if not current.workspace_id or not container_id:
+                raise InvalidInputError("claim completion requires a workspace and container")
+            recorded = TaskAttemptRepository(session).accept_claim_completion(
+                task_id=current.id,
+                workspace_id=current.workspace_id,
+                container_id=container_id,
+                claim_id=required_uuid(claim_id, field="claim_id"),
+                attempt_number=current.attempt_number,
+                elapsed_since_entry_seconds=(
+                    execution_entry.elapsed_since_entry_seconds if execution_entry else None
+                ),
+                reported_at=utc_now(),
+            )
+            if not recorded:
+                return _unchanged_finish_outcome(current, "completion does not own the claim")
+        elif execution_entry is not None:
+            raise InvalidInputError("execution entry requires a claim")
         policy = current.retry_policy or RetryPolicy(max_attempts=current.max_attempts)
         decision = (
             plan_retry(

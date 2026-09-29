@@ -50,7 +50,7 @@ from api.server.service_dependencies import (
     backend_route_dialer,
     shell_service,
 )
-from api.server.services import ApiServices
+from api.server.services import ApiServiceCore
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +63,7 @@ def create_standalone_shell(
     workspace_id: write_workspace,
     token: read_token,
     service: ShellControlService = Depends(shell_service),
-    services: ApiServices = Depends(current_services),
+    services: ApiServiceCore = Depends(current_services),
 ) -> CreateStandaloneShellResponse:
     session = service.create_standalone_shell(
         workspace_id=workspace_id,
@@ -103,7 +103,7 @@ def create_shell_in_existing_container(
     workspace_id: write_workspace,
     token: read_token,
     service: ShellControlService = Depends(shell_service),
-    services: ApiServices = Depends(current_services),
+    services: ApiServiceCore = Depends(current_services),
 ) -> CreateShellInExistingContainerResponse:
     session = service.create_shell_in_existing_container(
         workspace_id=workspace_id,
@@ -191,7 +191,7 @@ async def shell_connect_websocket(
     stub_id: str,
     container_id: str,
     service: ShellControlService = Depends(shell_service),
-    services: ApiServices = Depends(current_websocket_services),
+    services: ApiServiceCore = Depends(current_websocket_services),
     route_dialer: BackendRouteDialer = Depends(backend_route_dialer),
 ) -> None:
     authorization = await _authorize_shell_websocket(
@@ -294,7 +294,7 @@ async def _request_body_to_socket(
 
 
 def _mint_shell_ticket(
-    services: ApiServices,
+    services: ApiServiceCore,
     token: AuthTokenRecord,
     *,
     workspace_id: str,
@@ -313,7 +313,7 @@ def _mint_shell_ticket(
 
 async def _authorize_shell_websocket(
     websocket: WebSocket,
-    services: ApiServices,
+    services: ApiServiceCore,
     *,
     stub_id: str,
     container_id: str,

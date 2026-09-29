@@ -8,12 +8,12 @@ from fastapi import HTTPException
 from shared.deployments import DeploymentKind
 from shared.errors import NotFoundError
 
-from api.server.services import ApiServices
+from api.server.services import ApiServiceCore
 
 
 def resolve_deployed_stub_id(
     control_plane: ControlPlaneService,
-    services: ApiServices,
+    services: ApiServiceCore,
     stub_id: str,
     expected_kind: StubKind,
     *,
@@ -36,7 +36,7 @@ def resolve_deployed_stub_id(
 
 async def resolve_deployed_stub_id_async(
     control_plane: ControlPlaneService,
-    services: ApiServices,
+    services: ApiServiceCore,
     stub_id: str,
     expected_kind: StubKind,
     *,
@@ -57,7 +57,7 @@ async def resolve_deployed_stub_id_async(
 
 
 def resolve_deployed_stub(
-    services: ApiServices,
+    services: ApiServiceCore,
     deployment_name: str,
     expected_kind: StubKind,
     *,
@@ -78,7 +78,7 @@ def resolve_deployed_stub(
 
 
 async def resolve_deployed_stub_async(
-    services: ApiServices,
+    services: ApiServiceCore,
     deployment_name: str,
     expected_kind: StubKind,
     *,
@@ -99,7 +99,7 @@ async def resolve_deployed_stub_async(
 
 def _stub_by_id(
     control_plane: ControlPlaneService,
-    services: ApiServices,
+    services: ApiServiceCore,
     stub_id: str,
     expected_kind: StubKind,
     *,
@@ -122,7 +122,7 @@ def _stub_by_id(
 
 
 def _stub_by_deployment(
-    services: ApiServices,
+    services: ApiServiceCore,
     deployment_name: str,
     expected_kind: StubKind,
     *,

@@ -1,10 +1,15 @@
 import socket
+from uuid import uuid4
 
 import pytest
 from api.server.services import ApiServices
 from gateway.container_transport import HttpContainerServiceTransport
-from networking.dialer import BackendRouteDialer
+from networking.dialer import BackendRouteConnection, BackendRouteDialer
+from shared.agent_connections import AgentConnectionRecord
 from shared.errors import UpstreamTimeoutError, UpstreamUnavailableError
+from shared.http.agent_identity import AgentTunnelIdentity
+from shared.routing import AgentBackendRoute
+from shared.timestamps import utc_now
 from worker.container_client.control import plan_container_client_connection_options
 from worker.container_client.models import ContainerServiceMethod, ContainerStatusRequest
 
@@ -19,8 +24,22 @@ def test_unresponsive_container_closes_connection_and_reports_timeout(
 
     def dial(
         self: BackendRouteDialer, route_id: str, *, timeout_seconds: float | None = None
-    ) -> socket.socket:
-        return connection
+    ) -> BackendRouteConnection:
+        return BackendRouteConnection(
+            AgentBackendRoute(route_id=route_id),
+            connection,
+            AgentConnectionRecord(
+                identity=AgentTunnelIdentity(
+                    workspace_id=str(uuid4()),
+                    enrollment_id=str(uuid4()),
+                    credential_generation=1,
+                ),
+                gateway_id=str(uuid4()),
+                connection_id=str(uuid4()),
+                gateway_address="localhost:1234",
+                expires_at=utc_now(),
+            ),
+        )
 
     monkeypatch.setattr(BackendRouteDialer, "dial_backend_route", dial)
     transport = HttpContainerServiceTransport(

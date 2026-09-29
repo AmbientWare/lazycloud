@@ -15,6 +15,7 @@ from control.service import ControlPlaneService, StubRecord
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.orchestration import ContainerRepository
 from database.types import DatabaseSession
+from observability.workspace_changes import SyncWorkloadChangeReader
 from shared.app_identity import SHELL_IMAGE, SHELL_LOG_PATH
 from shared.container_requests import WORKER_USER_CODE_VOLUME, WorkerStartupKind
 from shared.containers import TERMINAL_CONTAINER_STATUSES, ContainerRecord, ContainerStatus
@@ -120,7 +121,7 @@ class ShellControlService:
         async_database: AsyncDatabaseClient | None = None,
         async_scheduler_containers: AsyncShellContainerDirectory | None = None,
         connections: PodProxyConnectionRepository | None = None,
-        poll_interval_seconds: float = 1.0,
+        sync_workload_changes: SyncWorkloadChangeReader | None = None,
     ) -> None:
         self.services = services
         self.control_plane = ControlPlaneService(services.context)
@@ -133,7 +134,7 @@ class ShellControlService:
         self.async_database = async_database
         self.async_scheduler_containers = async_scheduler_containers
         self.connections = connections
-        self.poll_interval_seconds = poll_interval_seconds
+        self.sync_workload_changes = sync_workload_changes
 
     def create_standalone_shell(
         self,
@@ -208,8 +209,7 @@ class ShellControlService:
             secret_names=config.secrets,
             gateway_token_required=True,
             workspace_storage_required=container_resource_mounts_require_workspace_storage(
-                context=self.services.context,
-                workspace_id=stub.workspace_id,
+                workspace=workspace,
                 mounts=mounts,
             ),
             mounts=mounts,
@@ -246,7 +246,20 @@ class ShellControlService:
         if not submitted.accepted:
             reason = submitted.reason or "failed to schedule shell container"
             raise UpstreamUnavailableError(reason)
-        self._poll_running(record.id, plan.wait_timeout_seconds)
+        try:
+            self._wait_running(record, plan.wait_timeout_seconds)
+        except BaseException as exc:
+            try:
+                self.services.containers.stop(record.id)
+            except Exception:
+                LOGGER.exception(
+                    "failed to stop shell container after startup failure: %s", record.id
+                )
+            if isinstance(exc, RuntimeError):
+                raise ShellTargetUnavailableError(
+                    "shell startup notifications unavailable"
+                ) from exc
+            raise
         self.services.events.emit(
             "shell.created",
             level=EventLevel.Info,
@@ -700,42 +713,42 @@ class ShellControlService:
             workspace_id=stub.workspace_id,
         )
 
-    def _poll_running(self, container_id: str, timeout_seconds: int) -> None:
+    def _wait_running(self, container: ContainerRecord, timeout_seconds: int) -> None:
         if self.scheduler_containers is None:
             raise UpstreamUnavailableError("shell scheduler directory is unavailable")
+        if self.sync_workload_changes is None:
+            raise UpstreamUnavailableError("shell workload notifications are not configured")
         deadline = time.monotonic() + max(timeout_seconds, 0)
-        while True:
-            record = self.services.containers.get(container_id)
-            state = self.scheduler_containers.get_container_state(container_id)
-            LOGGER.info(
-                "shell startup container=%s durable_status=%s scheduler_status=%s worker=%s",
-                container_id,
-                record.status.value,
-                state.status.value if state is not None else "absent",
-                record.worker_id,
-            )
-            if record.status in TERMINAL_CONTAINER_STATUSES:
-                raise ShellTargetUnavailableError(
-                    record.startup_error or f"shell container is {record.status.value}"
-                )
-            if state is not None:
-                if (
-                    state.status is SchedulerContainerStatus.Running
-                    and record.status is ContainerStatus.Running
-                ):
-                    return
-                if state.status in {
-                    SchedulerContainerStatus.Complete,
-                    SchedulerContainerStatus.Failed,
-                    SchedulerContainerStatus.Stopping,
-                }:
+        with self.sync_workload_changes.follow(
+            workspace_id=container.workspace_id, stub_id=container.stub_id or ""
+        ) as changes:
+            while True:
+                record = self.services.containers.get(container.id)
+                state = self.scheduler_containers.get_container_state(container.id)
+                if record.status in TERMINAL_CONTAINER_STATUSES:
                     raise ShellTargetUnavailableError(
-                        record.startup_error or f"shell container is {state.status.value}"
+                        record.startup_error or f"shell container is {record.status.value}"
                     )
-            if time.monotonic() >= deadline:
-                self.services.containers.stop(container_id)
-                raise ShellTargetUnavailableError("shell container startup timed out")
-            time.sleep(max(self.poll_interval_seconds, 0.0))
+                if state is not None:
+                    if state.workspace_id != container.workspace_id:
+                        raise ShellTargetUnavailableError(
+                            "shell scheduler state workspace mismatch"
+                        )
+                    if (
+                        state.status is SchedulerContainerStatus.Running
+                        and record.status is ContainerStatus.Running
+                    ):
+                        return
+                    if state.status in {
+                        SchedulerContainerStatus.Complete,
+                        SchedulerContainerStatus.Failed,
+                        SchedulerContainerStatus.Stopping,
+                    }:
+                        raise ShellTargetUnavailableError(
+                            record.startup_error or f"shell container is {state.status.value}"
+                        )
+                if not changes.wait(deadline - time.monotonic()):
+                    raise ShellTargetUnavailableError("shell container startup timed out")
 
     def _container_after_stop_failure(
         self,

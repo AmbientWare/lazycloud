@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from secrets import token_urlsafe
@@ -111,7 +112,7 @@ class ContainerRequestReader(Protocol):
 
 
 class FunctionAutoscaleControl(Protocol):
-    def start_function_container(self, stub_id: str) -> bool: ...
+    def start_function_containers(self, stub_id: str, *, count: int) -> Iterator[str]: ...
 
     def task_demand_counts(self, stub_ids: Sequence[str]) -> dict[str, int]: ...
 
@@ -127,10 +128,12 @@ class FunctionAutoscaleControl(Protocol):
 
 
 class EndpointAutoscaleControl(Protocol):
-    def start_endpoint_serve(
+    def start_endpoint_containers(
         self,
         request: StartEndpointServeRequest,
-    ) -> StartEndpointServeResponse: ...
+        *,
+        count: int,
+    ) -> Iterator[StartEndpointServeResponse]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -283,13 +286,8 @@ class WorkloadAutoscaler(Protocol):
         self, stub: AutoscalingStubRecord, *, signal: int, current: int, now: datetime
     ) -> ScalePlan: ...
 
-    def start_one(self, stub: AutoscalingStubRecord) -> str | None:
-        """Start one container and name it, or answer `None` to stop asking.
-
-        `None` is a refusal the platform already made — a ceiling reached, no
-        work to warrant one — and not a failure worth recording. Raise
-        `DomainError` for that, and the driver records it and stops.
-        """
+    def start(self, stub: AutoscalingStubRecord, *, count: int) -> Iterator[str]:
+        """Yield committed starts, preserving partial success before a refusal."""
         ...
 
     def handle_failure_threshold(
@@ -360,27 +358,26 @@ class AutoscalingDriver:
         current_time = now or utc_now()
         stubs = [stub for stub in snapshot.stubs if self.selects(stub)][: max(limit, 0)]
         signals = self.workload.samples(stubs)
-        results: list[AutoscaleResult] = []
-        for stub in stubs:
+
+        def reconcile(stub: AutoscalingStubRecord) -> AutoscaleResult:
             token = token_urlsafe(16)
             lock_key = self._lock_key(stub)
             if not self._acquire_lock(lock_key, token):
-                results.append(self._record_lock_contention(stub))
-                continue
+                return self._record_lock_contention(stub)
             try:
-                results.append(
-                    self._reconcile_stub(
-                        stub,
-                        active=snapshot.active_by_stub.get(stub.id, False),
-                        containers=list(snapshot.containers_by_stub.get(stub.id, ())),
-                        scheduler_statuses=snapshot.scheduler_statuses,
-                        signal=signals.get(stub.id, AutoscalingSignal(value=0)),
-                        now=current_time,
-                    )
+                return self._reconcile_stub(
+                    stub,
+                    active=snapshot.active_by_stub.get(stub.id, False),
+                    containers=list(snapshot.containers_by_stub.get(stub.id, ())),
+                    scheduler_statuses=snapshot.scheduler_statuses,
+                    signal=signals.get(stub.id, AutoscalingSignal(value=0)),
+                    now=current_time,
                 )
             finally:
                 self._release_lock(lock_key, token)
-        return results
+
+        with ThreadPoolExecutor(max_workers=4, thread_name_prefix="autoscaling") as executor:
+            return list(executor.map(reconcile, stubs))
 
     def reconcile_stub(
         self,
@@ -546,29 +543,18 @@ class AutoscalingDriver:
         return actions, still_live
 
     def _start(self, stub: AutoscalingStubRecord, count: int) -> list[AutoscaleAction]:
-        """Ask for containers one at a time until the workload stops giving them.
-
-        Here rather than in each workload so that one event carries one name: the
-        action is a metric label and a state-row entry, and three loops spelled it
-        three ways with two different renderings of the same refusal.
-        """
-
         actions: list[AutoscaleAction] = []
-        for _ in range(count):
-            try:
-                container_id = self.workload.start_one(stub)
-            except DomainError as exc:
-                actions.append(AutoscaleAction(action=SCALE_UP_FAILED_ACTION, reason=exc.message))
-                break
-            if container_id is None:
-                break
-            actions.append(
-                AutoscaleAction(
-                    container_id=container_id,
-                    action="start",
-                    reason="pressure requires more containers",
+        try:
+            for container_id in self.workload.start(stub, count=count):
+                actions.append(
+                    AutoscaleAction(
+                        container_id=container_id,
+                        action="start",
+                        reason="pressure requires more containers",
+                    )
                 )
-            )
+        except DomainError as exc:
+            actions.append(AutoscaleAction(action=SCALE_UP_FAILED_ACTION, reason=exc.message))
         return actions
 
     def _record(
@@ -754,10 +740,8 @@ class FunctionAutoscaler:
             tasks_per_container=config.tasks_per_container,
         )
 
-    def start_one(self, stub: AutoscalingStubRecord) -> str | None:
-        # The container is reserved against the stub, so its id is settled where
-        # the ceiling is checked rather than here.
-        return "" if self.functions.start_function_container(stub.id) else None
+    def start(self, stub: AutoscalingStubRecord, *, count: int) -> Iterator[str]:
+        return self.functions.start_function_containers(stub.id, count=count)
 
     def handle_failure_threshold(
         self,
@@ -876,14 +860,14 @@ class EndpointAutoscaler:
             tasks_per_container=config.tasks_per_container,
         )
 
-    def start_one(self, stub: AutoscalingStubRecord) -> str | None:
+    def start(self, stub: AutoscalingStubRecord, *, count: int) -> Iterator[str]:
         try:
-            response = self.endpoints.start_endpoint_serve(
-                StartEndpointServeRequest(stub_id=stub.id)
-            )
+            for response in self.endpoints.start_endpoint_containers(
+                StartEndpointServeRequest(stub_id=stub.id), count=count
+            ):
+                yield response.container_id
         except EndpointReplicaLimitReachedError:
-            return None
-        return response.container_id
+            return
 
     def handle_failure_threshold(
         self,
@@ -977,13 +961,12 @@ class PodAutoscaler:
             min_containers=config.min_containers,
         )
 
-    def start_one(self, stub: AutoscalingStubRecord) -> str | None:
-        response = self.pods.create_pod(CreatePodRequest(stub_id=stub.id))
-        if not response.container_id:
-            # A pod that reports no container is a failure to record, not a
-            # refusal to respect: nothing was started and nothing named it.
-            raise InvalidInputError("pod create returned no container id")
-        return response.container_id
+    def start(self, stub: AutoscalingStubRecord, *, count: int) -> Iterator[str]:
+        for _ in range(count):
+            response = self.pods.create_pod(CreatePodRequest(stub_id=stub.id))
+            if not response.container_id:
+                raise InvalidInputError("pod create returned no container id")
+            yield response.container_id
 
     def handle_failure_threshold(
         self,

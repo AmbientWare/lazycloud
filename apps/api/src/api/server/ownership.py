@@ -7,7 +7,7 @@ from fastapi import HTTPException, status
 from shared.errors import NotFoundError
 from shared.tasks import Task
 
-from api.server.services import ApiServices
+from api.server.services import ApiServiceCore
 
 ENDPOINT_STUB_KINDS = frozenset({StubKind.Endpoint, StubKind.Asgi})
 
@@ -59,7 +59,7 @@ def require_endpoint_stub_workspace(
     )
 
 
-def require_task_workspace(services: ApiServices, task_id: str, workspace_id: str) -> Task:
+def require_task_workspace(services: ApiServiceCore, task_id: str, workspace_id: str) -> Task:
     try:
         task = services.tasks.get(task_id)
     except NotFoundError as exc:

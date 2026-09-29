@@ -192,7 +192,19 @@ integer there is and pull every one of that account's requests onto itself,
 starving the cloud pool that account is paying for.
 
 It is a property of capacity rather than of work, so there is no per-request
-priority. Requests are served oldest first.
+priority. Ready requests share service across admission accounts, weighted by
+requested CPU, memory and GPU count. Workspaces owned by the same account share
+one queue. Within that queue, requests retain their readiness order. A request
+retains its service charge across claim expiry, placement retries and undelivered
+worker recovery; retrying does not charge the account again. A retry moves behind
+the currently ready accounts, with selection order retained across claim batches,
+so continuously due retries cannot starve another account.
+
+The admission account is a fairness snapshot, never placement authority. Dispatch
+reads current workspace owners before selecting private capacity. Redis keeps
+account readiness and compact scheduling facts separate from executable payloads,
+so claiming a batch reads account heads and only the selected payloads. Enqueue,
+return, cancellation, acknowledgement and dispatch update those indexes atomically.
 
 A worker fits a request only when the two placements are equal. A placement is
 an identity: the platform, one connected account by connection id, or one joined

@@ -2,6 +2,8 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: scheduler
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
 spec:
   replicas: {{ .Values.scheduler.replicas }}
   minReadySeconds: {{ .Values.scheduler.minReadySeconds }}
@@ -16,7 +18,6 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/aws-chain: {{ include (print $.Template.BasePath "/aws-chain.yaml") . | sha256sum }}
         lazycloud.dev/secret-revision: {{ .Values.secretRevisions.scheduler | quote }}
       labels:
         app: scheduler
@@ -30,49 +31,13 @@ spec:
           configMap:
             name: active-release
             optional: true
-        - name: agent-binarys
-          emptyDir: {}
-        - name: aws-chain
-          configMap:
-            name: aws-chain
-      initContainers:
-        # Release validation requires the agent artifact alongside the worker image and AMIs.
-        - name: agent-artifact
-          image: {{ include "lazycloud.image" (list . "database-bootstrap") }}
-          command:
-            - lazycloud-admin
-            - --json
-            - release
-            - fetch-agent
-            - --into
-            - /var/lib/lazycloud/agent-binarys
-          env:
-            {{- include "lazycloud.env" (list . "agentArtifact") | nindent 12 }}
-          volumeMounts:
-            - name: agent-binarys
-              mountPath: /var/lib/lazycloud/agent-binarys
-          resources:
-            {{- toYaml .Values.scheduler.initResources | nindent 12 }}
       containers:
         - name: scheduler
           image: {{ include "lazycloud.image" (list . "scheduler") }}
           env:
             {{- include "lazycloud.env" (list . "scheduler") | nindent 12 }}
             {{- include "lazycloud.databaseEnv" .Values.scheduler.database | nindent 12 }}
-            - name: LAZYCLOUD_AGENT_BINARY_DIR
-              value: /var/lib/lazycloud/agent-binarys
-            - name: AWS_CONFIG_FILE
-              value: /run/lazycloud/aws/config
-            # Not AWS_PROFILE: boto applies that to every client in the
-            # process, and only calls into a connected account belong on the
-            # control principal.
-            - name: LAZYCLOUD_AWS_CONNECTION_PROFILE
-              value: {{ include "lazycloud.awsProfile" . | quote }}
           volumeMounts:
-            - name: agent-binarys
-              mountPath: /var/lib/lazycloud/agent-binarys
-            - name: aws-chain
-              mountPath: /run/lazycloud/aws
             - name: active-release
               mountPath: /run/lazycloud/release
               readOnly: true

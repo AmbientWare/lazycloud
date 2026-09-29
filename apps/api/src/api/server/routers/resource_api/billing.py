@@ -50,10 +50,10 @@ from shared.payments import BILLING_CURRENCY
 from shared.timestamps import utc_now
 
 from api.server.auth import admin_access, read_user, write_user
-from api.server.dependencies import current_services
+from api.server.dependencies import management_services
 from api.server.routers.control_plane.users import user_response
 from api.server.routers.resource_api.common import usage_cost_list_response
-from api.server.services import ApiServices
+from api.server.services import ManagementServiceCore
 from billing import (
     MAX_ACCOUNT_PAGE,
     RECENT_COST_WINDOW,
@@ -73,7 +73,7 @@ router = APIRouter(prefix="/api/v1/billing", tags=["billing"])
 )
 def get_automatic_reload(
     user_id: read_user,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> AutomaticReloadStatus:
     return AutomaticReloadService(services.context.database, services.payment_provider).status(
         user_id=user_id
@@ -87,7 +87,7 @@ def get_automatic_reload(
 )
 def resume_automatic_reload(
     user_id: write_user,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> AutomaticReloadStatus:
     return AutomaticReloadService(services.context.database, services.payment_provider).resume(
         user_id=user_id
@@ -99,7 +99,7 @@ def resume_automatic_reload(
 )
 def get_billing_preferences(
     user_id: read_user,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> BillingPreferences:
     with services.context.database.session() as session:
         return BillingPreferencesService(session).get(user_id=user_id)
@@ -111,7 +111,7 @@ def get_billing_preferences(
 def set_billing_preferences(
     request: BillingPreferences,
     user_id: write_user,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> BillingPreferences:
     with services.context.database.session() as session:
         return BillingPreferencesService(session).set(user_id=user_id, preferences=request)
@@ -120,7 +120,7 @@ def set_billing_preferences(
 @router.get("/usage-budget", response_model=UsageBudgetResponse, operation_id="get_usage_budget")
 def get_usage_budget(
     user_id: read_user,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> UsageBudgetResponse:
     with services.context.database.session() as session:
         budget = BillingPreferencesService(session).usage_budget(user_id=user_id)
@@ -130,7 +130,7 @@ def get_usage_budget(
 @router.get("/credits", response_model=CreditBalanceResponse, operation_id="get_credit_balance")
 def get_credit_balance(
     user_id: read_user,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> CreditBalanceResponse:
     with services.context.database.session() as session:
         summary = BillingStandingService(session).credit_balance(user_id=user_id, at=utc_now())
@@ -146,7 +146,7 @@ def get_credit_balance(
 def create_credit_purchase(
     request: CreditPurchaseRequest,
     user_id: write_user,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> CreditPurchaseResponse:
     return CreditPurchaseService(services.context.database, services.payment_provider).create(
         user_id=user_id,
@@ -166,7 +166,7 @@ def create_credit_purchase(
 def get_credit_purchase(
     purchase_id: UUID,
     user_id: read_user,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> CreditPurchaseResponse:
     return CreditPurchaseService(services.context.database, services.payment_provider).get(
         user_id=user_id, purchase_id=str(purchase_id)
@@ -180,7 +180,7 @@ def get_credit_purchase(
 )
 def billing_summary(
     user_id: read_user,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> BillingSummaryResponse:
     """What this account is on, and what it has left to spend.
 
@@ -209,7 +209,7 @@ def account_costs(
     category: UsageCostCategory | None = None,
     limit: int = Query(50, ge=1, le=MAX_COST_PAGE),
     cursor: str | None = None,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> UsageCostListResponse:
     """Costs charged to this account, grouped by app, workload, or task.
 
@@ -249,7 +249,7 @@ def account_cost_series(
     end: datetime,
     user_id: read_user,
     bucket: UsageCostBucket = UsageCostBucket.Day,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> UsageCostSeriesResponse:
     """Gross costs by interval and subscription credits allocated to the same usage window."""
 
@@ -271,7 +271,7 @@ def account_cost_series(
 def change_billing_plan(
     request: BillingPlanChangeRequest,
     user_id: write_user,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> BillingSummaryResponse:
     """Move this account onto a published plan, with the usage that plan includes.
 
@@ -320,7 +320,7 @@ def change_billing_plan(
 def start_billing_card_setup(
     request: BillingHostedSessionRequest,
     user_id: write_user,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> BillingHostedSessionResponse:
     """Begin saving a card, at the payment provider.
 
@@ -369,7 +369,7 @@ def start_billing_card_setup(
 def start_billing_portal(
     request: BillingHostedSessionRequest,
     user_id: write_user,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> BillingHostedSessionResponse:
     """Open the provider's page for managing what this platform bills.
 
@@ -472,7 +472,7 @@ def list_billing_accounts(
     search: str = Query("", max_length=200),
     role: PlatformRole | None = None,
     status: UserStatus | None = None,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> BillingAccountAdminListResponse:
     """Every account on the platform with its standing and recent spend.
 
@@ -514,7 +514,7 @@ def set_billing_complimentary(
     user_id: str,
     request: BillingComplimentaryRequest,
     _auth: admin_access,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> BillingAccountAdminResponse:
     """Waive an account's bill, or stop waiving it. An administrator's decision alone."""
 
@@ -552,7 +552,7 @@ def _administered_account(
     )
 
 
-def _own_url(services: ApiServices, candidate: str) -> str:
+def _own_url(services: ManagementServiceCore, candidate: str) -> str:
     """Refuse to send anyone anywhere but back here.
 
     The provider redirects the person to whatever this hands it, so an

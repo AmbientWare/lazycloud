@@ -1,6 +1,7 @@
 # Operate public HTTP ingress
 
-`cloudflared` forwards public HTTP traffic to `control-plane:9000`.
+`cloudflared` forwards management requests to `control-plane:9000`, execution
+requests to `execution-api:9000`, and worker control requests to `runtime-api:9000`.
 The tunnel is locally managed; `cloudflared.yml` owns its routes.
 Adding hostnames in the Cloudflare dashboard does not change those routes.
 
@@ -15,6 +16,20 @@ Rules are ordered and first match wins. On the apex hostname, the edge refuses
 Generated workload hostnames forward all paths. The API rewrites those hosts
 to the workload's handler. The final rule forwards customer-owned hostnames
 that cannot be enumerated in the tunnel configuration.
+
+Runtime function claim, result and monitor paths precede the broader execution
+function prefix. Keep that ordering when changing routes. Worker repository
+traffic reaches the runtime API through the authenticated connection gateway
+and its private router. Nested SDK requests reach execution or management through
+that same router. Worker repository paths remain blocked at public ingress.
+
+Local Compose exposes `api-ingress` on the public API port. Its HAProxy rules in
+`../chart/files/api-ingress.cfg` select the same owners and preserve HTTP streaming
+and WebSockets. Port 9000 is public; port 9001 stays inside Compose for connection
+gateway traffic. Production gateway sidecars use this same configuration with
+both listeners bound to loopback.
+The three APIs run their production entrypoints. Direct service addresses are
+internal destinations, not alternate public API origins.
 
 Keep authorization at the origin. An edge rule only controls that ingress
 path; internal callers and other hostnames still reach the API.

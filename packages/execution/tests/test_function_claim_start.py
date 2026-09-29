@@ -18,9 +18,9 @@ from execution.task_claims import TaskClaimReleaseService
 from observability.startup_latency import StartupLatencyService
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.function_payloads import FunctionJsonInvocation
+from shared.http.execution_entry import ExecutionEntryEvidence
 from shared.http.functions import (
     FunctionClaimRequest,
-    FunctionExecutionEntryRequest,
     FunctionRetireRequest,
 )
 from shared.http.workspace_changes import WorkspaceChangeType
@@ -122,25 +122,55 @@ def test_retried_claim_returns_the_task_it_already_took(
     assert fresh.id != first.id
     with isolated_services.context.database.session() as session:
         assert len(TaskAttemptRepository(session).list_for_task(first.id)) == 1
-    service = FunctionControlService(isolated_services)
-    entry = FunctionExecutionEntryRequest(
-        task_id=first.id,
-        container_id=container.id,
-        claim_id=lost_claim,
+    entry = ExecutionEntryEvidence(
         elapsed_since_entry_seconds=0,
     )
-    assert not service.function_execution_entry(
-        entry.model_copy(update={"claim_id": str(uuid4())}), workspace_id=stub.workspace_id
-    ).recorded
-    assert not service.function_execution_entry(entry, workspace_id=str(uuid4())).recorded
-    assert service.function_execution_entry(entry, workspace_id=stub.workspace_id).recorded
+    with isolated_services.context.database.session() as session:
+        TaskClaimReleaseService(session).release(first.id, container_id=container.id)
+    resumed_claim = str(uuid4())
+    resumed = claim(resumed_claim)
+    assert resumed is not None and resumed.id == first.id
+    assert resumed.attempt_number == first.attempt_number
+    stale = isolated_services.tasks.finish_with_retry(
+        first.id,
+        TaskStatus.Complete,
+        container_id=container.id,
+        claim_id=lost_claim,
+    )
+    assert not stale.state_changed
+    assert stale.task.status is TaskStatus.Running
+    with isolated_services.context.database.session() as session:
+        assert (
+            session.scalar(
+                select(TaskAttemptTable.execution_entry_upper_bound_at).where(
+                    TaskAttemptTable.task_id == first.id
+                )
+            )
+            is None
+        )
+    finished = isolated_services.tasks.finish_with_retry(
+        first.id,
+        TaskStatus.Complete,
+        container_id=container.id,
+        execution_entry=entry,
+        claim_id=resumed_claim,
+    )
+    assert finished.state_changed
     with isolated_services.context.database.session() as session:
         original = session.scalar(
             select(TaskAttemptTable.execution_entry_upper_bound_at).where(
                 TaskAttemptTable.task_id == first.id
             )
         )
-    assert service.function_execution_entry(entry, workspace_id=stub.workspace_id).recorded
+    assert original is not None
+    repeated = isolated_services.tasks.finish_with_retry(
+        first.id,
+        TaskStatus.Complete,
+        container_id=container.id,
+        execution_entry=entry,
+        claim_id=resumed_claim,
+    )
+    assert not repeated.state_changed
     with isolated_services.context.database.session() as session:
         assert (
             session.scalar(
@@ -155,21 +185,6 @@ def test_retried_claim_returns_the_task_it_already_took(
     )
     assert report.execution.reported_entries == 1
     assert report.execution.missing_entry_evidence == 1
-    with isolated_services.context.database.session() as session:
-        TaskClaimReleaseService(session).release(first.id, container_id=container.id)
-    resumed = claim(str(uuid4()))
-    assert resumed is not None and resumed.id == first.id
-    assert resumed.attempt_number == first.attempt_number
-    assert not service.function_execution_entry(entry, workspace_id=stub.workspace_id).recorded
-    with isolated_services.context.database.session() as session:
-        assert (
-            session.scalar(
-                select(TaskAttemptTable.execution_entry_upper_bound_at).where(
-                    TaskAttemptTable.task_id == first.id
-                )
-            )
-            is None
-        )
 
 
 @pytest.mark.anyio
@@ -274,6 +289,7 @@ def test_idle_retirement_fences_claims_without_releasing_physical_capacity(
     request = FunctionClaimRequest(
         stub_id=stub.id,
         container_id=container.id,
+        claim_id=str(uuid4()),
     )
     task = isolated_services.tasks.create(
         "work",

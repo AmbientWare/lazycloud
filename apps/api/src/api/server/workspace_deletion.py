@@ -3,15 +3,19 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from coordination.event_bus import EventBusEvent, EventBusEventType, RedisEventBus
 from coordination.redis_client import REDIS_UNAVAILABLE_ERRORS, RedisClient
 from database.repositories.compute import ComputeUnitRepository
 from database.repositories.disks import DiskRepository
 from database.repositories.source_cache import SourceCacheCleanupRepository
 from database.repositories.storage import ObjectRepository, VolumeRepository
 from database.types import DatabaseSession
+from execution.collections.redis import RedisMapService, RedisSimpleQueueService
+from execution.volumes.control import VolumeControlService
 from gateway.service import GatewayControlService
 from identity.workspaces import WorkspaceDeletionIdentityService
 from observability.stream_state import RedisEventStreamRepository
+from operations.management import ManagementService
 from shared.app_identity import SOURCE_PACKAGE_BUCKET
 from shared.compute_policy import ComputeUnitPhase
 from shared.errors import ConflictError, UpstreamUnavailableError
@@ -19,7 +23,7 @@ from shared.http.volumes import DeleteVolumeRequest
 from shared.identity import AuthTokenRecord, WorkspaceRecord, WorkspaceStatus
 from shared.timestamps import utc_now
 
-from api.server.services import ApiServices
+from api.server.services import ManagementServiceCore
 from database import WorkspaceDeletionFence
 
 logger = logging.getLogger(__name__)
@@ -45,7 +49,7 @@ def _delete_workspace_workload_state(redis: RedisClient, workspace_id: str) -> i
 
 @dataclass(slots=True)
 class WorkspaceDeletionService:
-    services: ApiServices
+    services: ManagementServiceCore
     gateway: GatewayControlService
 
     def delete(
@@ -126,8 +130,8 @@ class WorkspaceDeletionService:
 
     def _wake_source_cache_cleanup(self, workspace_id: str) -> None:
         try:
-            self.services.worker_repository_service.wake_source_cache_cleanup(
-                workspace_id=workspace_id
+            RedisEventBus(self.services.redis_client).send(
+                EventBusEvent(type=EventBusEventType.PurgeSourceCache)
             )
         except REDIS_UNAVAILABLE_ERRORS:
             logger.warning(
@@ -135,7 +139,7 @@ class WorkspaceDeletionService:
             )
 
     def _delete_external_and_ephemeral_state(self, workspace: WorkspaceRecord) -> None:
-        management = self.gateway.management
+        management = ManagementService(self.services)
         container_targets = management.capture_container_shutdown_targets_for_workspace_deletion(
             workspace.id
         )
@@ -144,7 +148,7 @@ class WorkspaceDeletionService:
         management.stop_all_active_deployments_for_workspace_deletion(workspace.id)
         management.stop_all_containers_for_workspace_deletion(workspace.id)
         self.services.container_shutdowns.confirm(container_targets)
-        self.services.worker_repository_service.containers.delete_workspace_container_state(
+        self.services.scheduler_containers.delete_workspace_container_state(
             workspace.id,
             container_ids=container_ids,
         )
@@ -157,7 +161,9 @@ class WorkspaceDeletionService:
             )
         self.gateway.compute_states.delete_workspace_state(workspace.id)
 
-        volumes_api = self.services.volume_service
+        volumes_api = VolumeControlService(
+            self.services, filesystem=self.services.volume_filesystem
+        )
         volumes = volumes_api.list_volumes_for_workspace_deletion(workspace.id)
         for volume in volumes.volumes:
             volumes_api.delete_volume_for_workspace_deletion(
@@ -167,8 +173,8 @@ class WorkspaceDeletionService:
         self.services.disk_deletion.delete_workspace_disks(workspace.id)
         self.services.object_storage.delete_workspace_objects_for_deletion(workspace.id)
 
-        self.services.map_service.delete_workspace(workspace.id)
-        self.services.simple_queue_service.delete_workspace(workspace.id)
+        RedisMapService(self.services.binary_redis_client).delete_workspace(workspace.id)
+        RedisSimpleQueueService(self.services.binary_redis_client).delete_workspace(workspace.id)
         self.services.workspace_changes.delete_workspace(workspace.id)
         RedisEventStreamRepository(self.services.redis_client).delete_workspace(workspace.id)
 

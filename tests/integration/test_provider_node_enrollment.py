@@ -48,6 +48,7 @@ from shared.aws_connections import (
     AwsAccountConnectionPhase,
 )
 from shared.capacity import CapacityOwnerKind, CapacityOwnerSource
+from shared.capacity_lifecycle import CapacitySleepRequest
 from shared.compute_enrollment import (
     ComputePreflightCheck,
     MachineBootstrapFailureReason,
@@ -136,9 +137,12 @@ class _PooledProvider:
         return ()
 
     def complete_machine_preparation(
-        self, request: ProviderUnitRequest, provider_instance_id: str, *, hibernate: bool
+        self,
+        request: ProviderUnitRequest,
+        provider_instance_id: str,
+        *,
+        sleep_request: CapacitySleepRequest | None,
     ) -> ProviderUnitSnapshot:
-        del hibernate
         raise AssertionError("enrollment must not complete reserve preparation")
 
     def refresh_machine(
@@ -147,7 +151,11 @@ class _PooledProvider:
         raise AssertionError("enrollment must not stop provider nodes")
 
     def stop_machine(
-        self, request: ProviderUnitRequest, provider_instance_id: str
+        self,
+        request: ProviderUnitRequest,
+        provider_instance_id: str,
+        *,
+        sleep_request: CapacitySleepRequest,
     ) -> ProviderUnitSnapshot:
         raise AssertionError("enrollment must not stop provider nodes")
 

@@ -43,6 +43,7 @@ def test_gpu_arrival_fences_backfill_before_atomic_dispatch(
         )
     )
     cpu = SchedulerWorkerRequest(
+        fairness_account_id="test-account",
         placement=Placement.platform(),
         workspace_id="workspace",
         stub_id="stub",
@@ -131,6 +132,7 @@ def test_concurrent_gpu_recovery_claims_only_marked_cpu_backfill(
         )
     workers.enqueue_container_request(
         SchedulerWorkerRequest(
+            fairness_account_id="test-account",
             placement=Placement.platform(),
             workspace_id="workspace",
             stub_id="stub",

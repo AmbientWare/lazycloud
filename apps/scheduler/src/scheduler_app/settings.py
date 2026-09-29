@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from scheduler.service import MANAGED_COMPUTE_RECONCILE_INTERVAL_SECONDS
+from scheduler.reconciliation import MANAGED_COMPUTE_RECONCILE_INTERVAL_SECONDS
 from shared.app_identity import ENV_PREFIX
 
 

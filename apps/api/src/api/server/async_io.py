@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from coordination.redis_client import AsyncRedisClient, RedisSettings
 from coordination.stream_tail import RedisStreamTailBroker
 from identity.token_invalidation import AsyncAuthTokenInvalidation
+from observability.workspace_changes import AsyncWorkloadChangeReader, SyncWorkloadChangeReader
 
 from api.server.worker_event_broker import WorkerEventBroker
 from database import AsyncDatabaseClient, DatabaseSettings
@@ -18,6 +19,7 @@ class ApiAsyncIo:
     auth_invalidation: AsyncAuthTokenInvalidation
     worker_events: WorkerEventBroker
     realtime: RedisStreamTailBroker
+    sync_workload_changes: SyncWorkloadChangeReader
 
     @classmethod
     def from_settings(
@@ -28,22 +30,26 @@ class ApiAsyncIo:
         database = AsyncDatabaseClient.from_settings(database_settings)
         redis = AsyncRedisClient.from_settings(redis_settings)
         binary_redis = AsyncRedisClient.from_settings(redis_settings, decode_responses=False)
+        realtime = RedisStreamTailBroker(redis)
         return cls(
             database=database,
             redis=redis,
             binary_redis=binary_redis,
             auth_invalidation=AsyncAuthTokenInvalidation.from_redis(redis),
             worker_events=WorkerEventBroker(redis),
-            realtime=RedisStreamTailBroker(redis),
+            realtime=realtime,
+            sync_workload_changes=SyncWorkloadChangeReader(AsyncWorkloadChangeReader(realtime)),
         )
 
     async def start(self) -> None:
         await self.worker_events.start()
         await self.realtime.start()
+        await self.sync_workload_changes.start()
 
     async def close(self) -> None:
         failures: list[BaseException] = []
         for close in (
+            self.sync_workload_changes.close,
             self.realtime.close,
             self.worker_events.close,
             self.binary_redis.close,

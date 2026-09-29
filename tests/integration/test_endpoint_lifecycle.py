@@ -36,6 +36,7 @@ from fastapi.testclient import TestClient
 from gateway.container_readiness import AsyncRedisContainerReadiness
 from identity.auth import AuthService
 from networking.async_http import AsyncBackendHttpClient
+from observability.workspace_changes import AsyncWorkloadChangeReader
 from runner.serve import EndpointServeRunner, RunnerASGIApplication
 from scheduler.containers import SchedulerContainerSubmitResult, SchedulerContainerSubmitStatus
 from scheduler.fleet import SchedulerContainerStatus
@@ -44,10 +45,6 @@ from scheduler.state import (
     SchedulerContainerAddressMap,
     SchedulerContainerState,
     SchedulerWorkerRequest,
-)
-from shared.container_requests import (
-    CONTAINER_INNER_PORT,
-    WorkerContainerRequestPayload,
 )
 from shared.deployment_records import DeploymentSpec
 from shared.deployments import DeploymentKind
@@ -305,7 +302,7 @@ async def test_asgi_websocket_dispatch_session_heartbeats_and_finishes(
 
 
 @pytest.mark.anyio
-async def test_endpoint_service_without_running_container_schedules_warmup(
+async def test_endpoint_request_times_out_without_running_capacity(
     async_services: ApiServices,
 ) -> None:
     scheduler = _RecordingScheduler()
@@ -327,10 +324,6 @@ async def test_endpoint_service_without_running_container_schedules_warmup(
 
     assert response.status_code == 504
     assert b"Timed out waiting for a backend container" in response.body
-    assert len(scheduler.requests) == 1
-    payload = WorkerContainerRequestPayload.model_validate(scheduler.requests[0].payload)
-    assert payload.ports == [CONTAINER_INNER_PORT]
-    assert payload.requested_ports == [CONTAINER_INNER_PORT]
     task = async_services.tasks.list()[0]
     dispatch = _dispatch_record(async_services, task)
     assert dispatch.status == EndpointDispatchStatus.Timeout.value
@@ -747,6 +740,7 @@ def _endpoint_service(
     return EndpointControlService(
         services,
         async_database=async_io.database,
+        workload_changes=AsyncWorkloadChangeReader(async_io.realtime),
         async_dispatcher=(
             dispatcher
             or AsyncEndpointInstanceDispatcher(

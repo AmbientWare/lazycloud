@@ -66,7 +66,7 @@ from api.server.http import (
 from api.server.ownership import require_endpoint_stub_workspace
 from api.server.public_transfers import attribute_public_transfer
 from api.server.service_dependencies import control_plane_service, endpoint_service
-from api.server.services import ApiServices, EndpointApiService
+from api.server.services import ApiServiceCore, EndpointApiService
 
 router = APIRouter(tags=["endpoint"])
 endpoint_router = APIRouter(prefix="/api/v1/endpoints", tags=["endpoint"])
@@ -94,7 +94,7 @@ async def deployed_endpoint_request_by_id(
     workspace_id: write_workspace,
     service: EndpointApiService = Depends(endpoint_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
-    services: ApiServices = Depends(current_services),
+    services: ApiServiceCore = Depends(current_services),
 ) -> Response:
     stub = await resolve_deployed_stub_id_async(
         control_plane,
@@ -118,7 +118,7 @@ async def deployed_public_endpoint_request_by_id(
     request: Request,
     service: EndpointApiService = Depends(endpoint_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
-    services: ApiServices = Depends(current_services),
+    services: ApiServiceCore = Depends(current_services),
 ) -> Response:
     stub = await resolve_deployed_stub_id_async(
         control_plane,
@@ -141,7 +141,7 @@ def deployed_endpoint_warmup_by_id(
     workspace_id: write_workspace,
     service: EndpointApiService = Depends(endpoint_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
-    services: ApiServices = Depends(current_services),
+    services: ApiServiceCore = Depends(current_services),
 ) -> StartEndpointServeResponse:
     stub = resolve_deployed_stub_id(
         control_plane,
@@ -163,7 +163,7 @@ def deployed_endpoint_warmup_by_latest_path(
     deployment_name: str,
     workspace_id: write_workspace,
     service: EndpointApiService = Depends(endpoint_service),
-    services: ApiServices = Depends(current_services),
+    services: ApiServiceCore = Depends(current_services),
 ) -> StartEndpointServeResponse:
     stub = resolve_deployed_stub(
         services,
@@ -185,7 +185,7 @@ def deployed_endpoint_warmup_by_version(
     version: int,
     workspace_id: write_workspace,
     service: EndpointApiService = Depends(endpoint_service),
-    services: ApiServices = Depends(current_services),
+    services: ApiServiceCore = Depends(current_services),
 ) -> StartEndpointServeResponse:
     stub = resolve_deployed_stub(
         services,
@@ -208,7 +208,7 @@ async def deployed_endpoint_request_by_latest_path(
     request: Request,
     workspace_id: write_workspace,
     service: EndpointApiService = Depends(endpoint_service),
-    services: ApiServices = Depends(current_services),
+    services: ApiServiceCore = Depends(current_services),
 ) -> Response:
     stub = await resolve_deployed_stub_async(
         services,
@@ -236,7 +236,7 @@ async def deployed_endpoint_request_by_version(
     request: Request,
     workspace_id: write_workspace,
     service: EndpointApiService = Depends(endpoint_service),
-    services: ApiServices = Depends(current_services),
+    services: ApiServiceCore = Depends(current_services),
 ) -> Response:
     stub = await resolve_deployed_stub_async(
         services,
@@ -270,7 +270,7 @@ def deployed_asgi_warmup_by_id(
     workspace_id: write_workspace,
     service: EndpointApiService = Depends(endpoint_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
-    services: ApiServices = Depends(current_services),
+    services: ApiServiceCore = Depends(current_services),
 ) -> StartEndpointServeResponse:
     stub = resolve_deployed_stub_id(
         control_plane,
@@ -292,7 +292,7 @@ def deployed_asgi_warmup_by_latest_path(
     deployment_name: str,
     workspace_id: write_workspace,
     service: EndpointApiService = Depends(endpoint_service),
-    services: ApiServices = Depends(current_services),
+    services: ApiServiceCore = Depends(current_services),
 ) -> StartEndpointServeResponse:
     stub = resolve_deployed_stub(
         services,
@@ -314,7 +314,7 @@ def deployed_asgi_warmup_by_version(
     version: int,
     workspace_id: write_workspace,
     service: EndpointApiService = Depends(endpoint_service),
-    services: ApiServices = Depends(current_services),
+    services: ApiServiceCore = Depends(current_services),
 ) -> StartEndpointServeResponse:
     stub = resolve_deployed_stub(
         services,
@@ -335,7 +335,7 @@ async def deployed_asgi_websocket_by_id(
     subpath: str = "",
     service: EndpointApiService = Depends(endpoint_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
-    services: ApiServices = Depends(current_websocket_services),
+    services: ApiServiceCore = Depends(current_websocket_services),
 ) -> None:
     workspace_id = await authorize_websocket_workspace(services, websocket)
     stub = await resolve_deployed_stub_id_async(
@@ -363,7 +363,7 @@ async def deployed_public_asgi_websocket_by_id(
     subpath: str = "",
     service: EndpointApiService = Depends(endpoint_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
-    services: ApiServices = Depends(current_websocket_services),
+    services: ApiServiceCore = Depends(current_websocket_services),
 ) -> None:
     stub = await resolve_deployed_stub_id_async(
         control_plane,
@@ -388,7 +388,7 @@ async def deployed_asgi_websocket_by_latest_path(
     deployment_name: str,
     subpath: str = "",
     service: EndpointApiService = Depends(endpoint_service),
-    services: ApiServices = Depends(current_websocket_services),
+    services: ApiServiceCore = Depends(current_websocket_services),
 ) -> None:
     workspace_id = await authorize_websocket_workspace(services, websocket)
     stub = await resolve_deployed_stub_async(
@@ -415,7 +415,7 @@ async def deployed_asgi_websocket_by_version(
     version: int,
     subpath: str = "",
     service: EndpointApiService = Depends(endpoint_service),
-    services: ApiServices = Depends(current_websocket_services),
+    services: ApiServiceCore = Depends(current_websocket_services),
 ) -> None:
     workspace_id = await authorize_websocket_workspace(services, websocket)
     stub = await resolve_deployed_stub_async(
@@ -448,7 +448,7 @@ async def deployed_asgi_request_by_id(
     workspace_id: write_workspace,
     service: EndpointApiService = Depends(endpoint_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
-    services: ApiServices = Depends(current_services),
+    services: ApiServiceCore = Depends(current_services),
 ) -> Response:
     stub = await resolve_deployed_stub_id_async(
         control_plane,
@@ -479,7 +479,7 @@ async def deployed_public_asgi_request_by_id(
     subpath: str = "",
     service: EndpointApiService = Depends(endpoint_service),
     control_plane: ControlPlaneService = Depends(control_plane_service),
-    services: ApiServices = Depends(current_services),
+    services: ApiServiceCore = Depends(current_services),
 ) -> Response:
     stub = await resolve_deployed_stub_id_async(
         control_plane,
@@ -514,7 +514,7 @@ async def deployed_asgi_request_by_latest_path(
     *,
     workspace_id: write_workspace,
     service: EndpointApiService = Depends(endpoint_service),
-    services: ApiServices = Depends(current_services),
+    services: ApiServiceCore = Depends(current_services),
 ) -> Response:
     stub = await resolve_deployed_stub_async(
         services,
@@ -550,7 +550,7 @@ async def deployed_asgi_request_by_version(
     *,
     workspace_id: write_workspace,
     service: EndpointApiService = Depends(endpoint_service),
-    services: ApiServices = Depends(current_services),
+    services: ApiServiceCore = Depends(current_services),
 ) -> Response:
     stub = await resolve_deployed_stub_async(
         services,

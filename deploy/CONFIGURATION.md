@@ -12,7 +12,7 @@ with its OIDC role, which has no Terraform-state access.
 
 Python provider definitions own purchase enablement, approved locations,
 instance catalogs and supplier price assumptions. `compute.fleet_policy` owns
-fleet limits and warm targets. Helm owns Kubernetes resources, process settings
+capacity targets and scaling decisions. Helm owns Kubernetes resources, process settings
 and secret property bindings. Edit their owner and deploy. Runtime processes
 receive environment variables and mounted files, never Terraform output files.
 
@@ -68,9 +68,10 @@ PlanetScale's built-in transaction pooler on port 6432 for application SQL.
 commands, and session advisory locks. Neither endpoint is inferred from the other.
 Missing direct configuration fails the operation that requires it.
 
-Each API replica has one bounded direct connection for workspace deletion and
-one for its recovery fence. Direct connections use autocommit and close their
-physical backend on exit, even if unlocking fails. Application transactions set
+Each API replica holds one direct recovery-fence connection. Management replicas
+also permit one direct workspace-deletion lock each. Direct connections use
+autocommit and close their physical backend on exit, even if unlocking fails.
+Application transactions set
 their statement timeout with `SET LOCAL`, not startup options. Protocol prepared
 statements remain enabled; clients require libpq 17 or newer. PlanetScale's
 default `max_prepared_statements` is 200. See the
@@ -80,30 +81,22 @@ and [psycopg requirements](https://www.psycopg.org/psycopg3/docs/advanced/prepar
 Terraform sets `max_db_connections` to bound the local pooler at 20 backend
 connections per database, across all user pools. Other pooler settings retain
 PlanetScale's defaults; its API omits overrides equal to those defaults.
-The infrastructure descriptor exports that bound to Helm. With two API
-replicas, two bootstrap connections and three reserved connections, the normal
-backend budget is 29 against a server ceiling of 40. Application client pools
-are separate from this backend budget.
+The infrastructure descriptor exports that bound to Helm. Management, execution
+and runtime each have two API replicas. Including one terminating replica per
+API owner, the chart budgets nine recovery fences and three management deletion
+locks. These 12 direct sessions, 20 pooled backends, two bootstrap connections
+and three reserved connections total 37 against a server ceiling of 40.
 
-Only for an installation still using direct application connections, start from a stable
-deployment with no rollout in progress:
+Application client pools are separate. Both API engines together allow four
+connections per management replica and six per execution or runtime replica.
+At two replicas each, APIs allow 32 transaction clients. Scheduler replicas allow
+five each, fleet replicas three each, and gateways one each. The steady total is
+50 transaction clients across these services; they share the 20 pooled backends.
 
-1. Review and apply Terraform with `database_pooler_max_connections=3`, retaining
-   the existing database, role and password. It publishes both URLs and the
-   current infrastructure descriptor. Never accept a database replacement or a
-   state rewrite to get past a provider read failure.
-2. Run Ship. Existing pods keep their direct URL until replaced; the old 28
-   application connections plus three pooler backends, four direct lock
-   connections, two bootstrap connections and three reserved connections total 40.
-3. Verify every application pod runs the new release and port-6432 configuration.
-   Check database sessions, successful workload enrollment, task completion and
-   worker logs. Only lock holders and administrator operations should remain direct.
-4. Apply Terraform with the normal bound of 20. Record its descriptor through
-   the normal deploy workflow, preserving the same application and release pins.
-
-Future deployments use the normal bound. Changing a client pool does not change
-the pooler's server allocation. Keep the operator reserve and direct lock budget
-when changing the server ceiling or replica count.
+Changing a client pool does not change the pooler's server allocation. Preserve
+the operator reserve and direct lock budget when changing replica counts.
+Helm checks the proposed budget; the values renderer also checks the transition
+against the previous deployment's pooler and direct-session requirements.
 
 ## Credential changes
 

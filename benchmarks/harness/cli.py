@@ -25,9 +25,6 @@ from benchmarks.harness.latency import (
     LatencyConfig,
     run_latency_benchmark,
 )
-from benchmarks.harness.models import BenchmarkKind
-from benchmarks.harness.reports import report_to_json, report_to_markdown
-from benchmarks.harness.runner import run_named_suite, run_suite
 from benchmarks.harness.sandbox_parallel import (
     DEFAULT_CONTAINER_COMMAND,
     DEFAULT_EXEC_COMMAND,
@@ -40,36 +37,22 @@ from benchmarks.harness.sandbox_parallel import (
     run_sandbox_parallel,
     write_sandbox_parallel_outputs,
 )
-from benchmarks.harness.suites import DEFAULT_CASES, available_suites
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="benchmark-harness")
-    case_choices = [item.kind.value for item in DEFAULT_CASES]
-    parser.add_argument(
-        "--case",
-        dest="cases",
-        action="append",
-        choices=case_choices,
-        help="Benchmark case to run. May be passed multiple times.",
-    )
-    parser.add_argument("--suite", help="Named suite definition to run.")
-    parser.add_argument(
-        "--list-suites",
-        action="store_true",
-        help="List named suite definitions.",
-    )
-    parser.add_argument(
+    modes = parser.add_mutually_exclusive_group(required=True)
+    modes.add_argument(
         "--sandbox-parallel",
         action="store_true",
         help="Plan or run the parallel sandbox operational benchmark.",
     )
-    parser.add_argument(
+    modes.add_argument(
         "--latency",
         action="store_true",
         help="Run the container dispatch-latency benchmark against the Compose stack.",
     )
-    parser.add_argument(
+    modes.add_argument(
         "--control-plane-streams",
         action="store_true",
         help="Run the live customer and worker stream benchmark.",
@@ -120,7 +103,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--idle-seconds",
         type=float,
-        help="Latency benchmark delay before the idle-fresh one-shot invocation.",
+        help="Latency benchmark delay before the after-idle invocation.",
     )
     parser.add_argument(
         "--run-live",
@@ -191,25 +174,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
-    if args.list_suites:
-        print("\n".join(available_suites()))
-        return
-    if args.suite and args.cases:
-        raise SystemExit("--suite cannot be combined with --case")
-    if args.sandbox_parallel and (args.suite or args.cases):
-        raise SystemExit("--sandbox-parallel cannot be combined with --suite or --case")
-    if args.latency and (
-        args.suite or args.cases or args.sandbox_parallel or args.control_plane_streams
-    ):
-        raise SystemExit("--latency cannot be combined with other benchmark modes")
-    if args.control_plane_streams and (args.suite or args.cases or args.sandbox_parallel):
-        raise SystemExit(
-            "--control-plane-streams cannot be combined with suite, case, or sandbox modes"
-        )
     if args.latency:
         report = run_latency_benchmark(_latency_config(args))
         output = report.to_json() if args.json else report.to_markdown()
         print(output, end="")
+        if report.cleanup_errors or any(not sample.ok for sample in report.all_samples):
+            raise SystemExit(1)
         return
     if args.control_plane_streams:
         if not args.run_live:
@@ -267,14 +237,6 @@ def main(argv: list[str] | None = None) -> None:
             output = plan.to_json() if args.json else plan.to_markdown()
         print(output, end="")
         return
-    cases = [BenchmarkKind(item) for item in args.cases] if args.cases else None
-    report = (
-        run_named_suite(args.suite, workspace=args.workspace)
-        if args.suite
-        else run_suite(cases, workspace=args.workspace)
-    )
-    output = report_to_json(report) if args.json else report_to_markdown(report)
-    print(output, end="")
 
 
 def _latency_config(args: argparse.Namespace) -> LatencyConfig:

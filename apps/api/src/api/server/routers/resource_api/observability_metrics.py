@@ -16,10 +16,10 @@ from shared.realtime.contracts import EventRecordType
 from shared.realtime.streams import EventHistoryQuery
 
 from api.server.auth import read_user, read_workspace
-from api.server.dependencies import current_services
+from api.server.dependencies import management_services
 from api.server.identifiers import identifier_filter
 from api.server.routers.resource_api.common import _management, _parsed_time, member_workspaces
-from api.server.services import ApiServices
+from api.server.services import ManagementServiceCore
 
 router = APIRouter()
 
@@ -37,7 +37,7 @@ def api_v1_task_latency_timeseries(
     end: str | None = None,
     *,
     workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> TaskLatencyTimeseriesResponse:
     return TaskLatencyTimeseriesResponse.model_validate(
         _management(services).task_latency_timeseries(
@@ -58,7 +58,7 @@ def api_v1_task_latency_timeseries(
 )
 def api_v1_account_container_counts(
     user_id: read_user,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> AccountContainerCountsResponse:
     """What the signed-in account is holding right now.
 
@@ -88,7 +88,7 @@ def api_v1_account_activity(
     limit: int = Query(default=5, ge=1, le=20),
     *,
     user_id: read_user,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> AccountActivityResponse:
     """What the account started, or held, over a window — split by app.
 
@@ -120,7 +120,7 @@ def api_v1_container_metrics_timeseries(
     limit: int = Query(default=500, ge=1, le=2000),
     *,
     workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> ContainerMetricsTimeseriesResponse:
     management = _management(services)
     container = management.get_container(container_id, workspace=workspace_id)

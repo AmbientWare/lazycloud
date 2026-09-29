@@ -1,13 +1,10 @@
 from __future__ import annotations
 
 import json
-from dataclasses import replace
 
 import pytest
 from api.server.services import ApiServices
-from compute.state import RedisComputeStateRepository
 from control.service import ControlPlaneService
-from coordination.redis_client import RedisClient
 from database.repositories.apps import StubRecord
 from gateway.stub_config import deployment_spec_from_stub, stub_config
 from pydantic import ValidationError
@@ -21,7 +18,6 @@ from shared.disks import DiskMount
 from shared.http.gateway import DeployStubRequest, GetOrCreateStubRequest
 from shared.placement import ProductRegion
 from shared.workload_config import StubConfig
-from tests.redis_fakes import FakeRedis
 
 GIB = 1024**3
 
@@ -48,12 +44,7 @@ def test_pod_checkpoint_readiness_is_retained_by_source_and_deployed_stubs(
     assert normalized.checkpoint_readiness_timeout_seconds == 60
     assert normalized.checkpoint_readiness_interval_seconds == 0.25
 
-    gateway = replace(
-        isolated_services.gateway_service,
-        compute_state=RedisComputeStateRepository(
-            RedisClient(FakeRedis(), key_prefix="checkpoint-readiness")
-        ),
-    )
+    gateway = isolated_services.gateway_deployment_service
     prepared = gateway.get_or_create_stub(request)
     control = ControlPlaneService(
         isolated_services.context,
@@ -81,7 +72,7 @@ def test_pod_checkpoint_readiness_is_retained_by_source_and_deployed_stubs(
 def test_runtime_prepare_stays_outside_apps_and_deployments_until_publish(
     isolated_services: ApiServices,
 ) -> None:
-    gateway = isolated_services.gateway_service
+    gateway = isolated_services.gateway_deployment_service
     request = GetOrCreateStubRequest(
         name="hello",
         app_name="runtime_boundary",

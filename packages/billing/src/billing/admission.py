@@ -76,6 +76,63 @@ class DatabaseBillingAdmission:
     ) -> list[str]:
         """Check funds and concurrency, resolving GPU wildcards against plan entitlements."""
 
+        owner_user_id, terms, models = self._eligible_workload(
+            session,
+            workspace_id=workspace_id,
+            gpu=gpu,
+            gpu_count=gpu_count,
+            region=region,
+            availability_zone=availability_zone,
+        )
+        containers = ContainerRepository(session)
+        if gpu_count == 0 and not gpu:
+            live = containers.count_live_cpu_for_owner(owner_user_id=owner_user_id)
+            limit = terms.entitlements.max_concurrent_cpu_containers
+            if live >= limit:
+                raise CapacityLimitReachedError(
+                    f"this account already has {live} containers running or queued, "
+                    f"which is the most its plan allows ({limit})"
+                )
+            return []
+        held = containers.count_live_gpus_for_owner(owner_user_id=owner_user_id)
+        gpu_limit = terms.entitlements.max_concurrent_gpus
+        if held + gpu_count > gpu_limit:
+            raise CapacityLimitReachedError(
+                f"this account already holds {held} GPUs across the containers it is "
+                f"running or has queued, and {gpu_count} more would pass the most its "
+                f"plan allows ({gpu_limit})"
+            )
+        return models
+
+    def assert_workload_eligible(
+        self,
+        session: Session,
+        *,
+        workspace_id: str,
+        gpu: Sequence[str],
+        gpu_count: int,
+        region: ProductRegion | None = None,
+        availability_zone: str = "",
+    ) -> None:
+        self._eligible_workload(
+            session,
+            workspace_id=workspace_id,
+            gpu=gpu,
+            gpu_count=gpu_count,
+            region=region,
+            availability_zone=availability_zone,
+        )
+
+    def _eligible_workload(
+        self,
+        session: Session,
+        *,
+        workspace_id: str,
+        gpu: Sequence[str],
+        gpu_count: int,
+        region: ProductRegion | None,
+        availability_zone: str,
+    ) -> tuple[str, AccountTerms, list[str]]:
         resolved = self._billable_account(session, workspace_id=workspace_id)
         if (
             (region is not None or availability_zone)
@@ -89,26 +146,8 @@ class DatabaseBillingAdmission:
             raise PaymentRequiredError("billed work requires a workspace billing owner")
         owner_user_id, terms = resolved
         self._assert_funds(session, user_id=owner_user_id)
-        containers = ContainerRepository(session)
-        if gpu_count == 0 and not gpu:
-            live = containers.count_live_cpu_for_owner(owner_user_id=owner_user_id)
-            limit = terms.entitlements.max_concurrent_cpu_containers
-            if live >= limit:
-                raise CapacityLimitReachedError(
-                    f"this account already has {live} containers running or queued, "
-                    f"which is the most its plan allows ({limit})"
-                )
-            return []
-        models = _admitted_gpu_models(gpu, terms.entitlements)
-        held = containers.count_live_gpus_for_owner(owner_user_id=owner_user_id)
-        gpu_limit = terms.entitlements.max_concurrent_gpus
-        if held + gpu_count > gpu_limit:
-            raise CapacityLimitReachedError(
-                f"this account already holds {held} GPUs across the containers it is "
-                f"running or has queued, and {gpu_count} more would pass the most its "
-                f"plan allows ({gpu_limit})"
-            )
-        return models
+        models = _admitted_gpu_models(gpu, terms.entitlements) if gpu_count or gpu else []
+        return owner_user_id, terms, models
 
     def assert_disk_allowance(
         self, session: Session, *, workspace_id: str, declared_bytes: int

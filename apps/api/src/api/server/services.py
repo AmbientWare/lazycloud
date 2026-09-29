@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import socket
-from collections.abc import AsyncGenerator, Callable, Sequence
-from dataclasses import dataclass
+from collections.abc import AsyncGenerator, Callable, Iterator, Sequence
+from dataclasses import dataclass, replace
 from datetime import datetime
 from functools import partial
 from pathlib import Path
@@ -16,24 +16,28 @@ from compute.capacity_recovery import CAPACITY_WAKE_SCOPE
 from compute.policy import AwsDefaultCapacityBaseline, WorkspaceComputePolicyService
 from compute.provider_state import ProviderUnitStateService
 from compute.providers import ResolvedBlockVolumes
-from compute.request_placement import ComputeCapacityPlacementService
 from compute.reserve_state import RedisFleetReserveState
 from compute.service import ComputeService
 from compute.state import ComputeAgentTokenState, RedisComputeStateRepository
 from compute.telemetry import AGENT_INTAKE_PRESENCE_ROLE
 from compute.tunnel_authority import AgentTunnelAuthority
 from control.apps import (
+    AppReader,
     AppService,
     DatabaseAppExecutionAdmission,
     DatabaseAppImageAvailability,
 )
 from control.custom_domains import CustomDomainService
-from control.deployment_cleanup import AppDeploymentLifecycleService
+from control.deployment_cleanup import (
+    AppDeploymentLifecycleService,
+    DeploymentPlacementResourceManager,
+)
 from control.deployment_plans import DeploymentPlanService
 from control.deployment_registration import DeploymentRegistrationService
 from control.deployment_resources import DeploymentResourceService
 from control.deployments import CronJobService, DeploymentService
 from control.placement import PlacementResolver
+from control.readers import DatabaseAppReader, DatabaseDeploymentReader
 from control.service import ControlPlaneService, WorkspaceBucketClient
 from control.tcp_ingress import TcpIngressSettings
 from coordination.agent_connections import RedisAgentConnectionDirectory
@@ -48,6 +52,7 @@ from execution.containers.preemption import PreemptedContainerService
 from execution.containers.runtime_state import RedisContainerRuntimeStateRepository
 from execution.containers.scheduling import ContainerSchedulingPersistenceService
 from execution.containers.service import ContainerService
+from execution.demand import PLACEMENT_WAKE_SCOPE, ExecutionDemandService
 from execution.endpoints.dispatch import (
     AsyncEndpointInstanceDispatcher,
     AsyncEndpointResponseStream,
@@ -60,6 +65,7 @@ from execution.functions.service import FunctionControlService
 from execution.pods.devboxes import DevboxService, StreamContainerStartupReader
 from execution.pods.service import PodControlService
 from execution.secrets.service import SecretService
+from execution.services import ExecutionLookupService
 from execution.shells.service import ShellControlService
 from execution.task_progress import TaskProgressService
 from execution.task_rerun import TaskRerunService
@@ -68,6 +74,8 @@ from execution.volumes.control import VolumeControlService
 from execution.volumes.records import VolumeService
 from gateway.container_readiness import AsyncRedisContainerReadiness
 from gateway.container_transport import HttpContainerServiceTransportFactory
+from gateway.containers import GatewayContainerService
+from gateway.deployments import GatewayDeploymentService
 from gateway.machine_lifecycle import MachineLifecycleService
 from gateway.pod_proxy import (
     AsyncPodProxyHttpClient,
@@ -116,6 +124,7 @@ from observability.settings import (
 from observability.stream_state import AsyncTaskChangeReader, RedisEventStreamRepository
 from observability.usage import UsageService, WorkerEventService
 from observability.workspace_changes import (
+    AsyncWorkloadChangeReader,
     AsyncWorkspaceChangeService,
     WorkspaceChangeRepository,
     WorkspaceChangeService,
@@ -127,6 +136,7 @@ from operations.container_shutdown import (
     DatabaseDurableWorkerAbsence,
 )
 from operations.management import ManagementService
+from operations.tasks import TaskManagementService
 from provider_aws.provider import AwsProvider, AwsProviderSettings
 from provider_clients import (
     AwsProviderNodeIdentityAdapter,
@@ -163,7 +173,6 @@ from scheduler.capacity_reservations import (
     RedisCapacityReservationRepository,
 )
 from scheduler.compute_hooks import SchedulerComputeHooks
-from scheduler.compute_placement import SchedulerComputePlacement
 from scheduler.containers import (
     CONTAINER_DISPATCH_WAKE_SCOPE,
     SchedulerContainerRequestService,
@@ -199,8 +208,6 @@ from shared.http.endpoints import (
 from shared.http.functions import (
     FunctionClaimRequest,
     FunctionClaimResponse,
-    FunctionExecutionEntryRequest,
-    FunctionExecutionEntryResponse,
     FunctionInvokeBody,
     FunctionInvokeResponse,
     FunctionMonitorRequest,
@@ -222,7 +229,6 @@ from storage.image_archive import IMAGE_ARCHIVE_EXTENSION, ImageArchiveSettings
 from storage.retention_settings import RetentionSettings
 from storage.service import CacheStorage, ObjectByteClient, ObjectStorage
 from storage.volume_filesystem import (
-    VolumeFilesystem,
     WorkspaceVolumeFilesystem,
     WorkspaceVolumeObjectClient,
     workspace_volume_store_resolver,
@@ -333,7 +339,7 @@ class FunctionApiService(Protocol):
 
     def task_demand_counts(self, stub_ids: Sequence[str]) -> dict[str, int]: ...
 
-    def start_function_container(self, stub_id: str) -> bool: ...
+    def start_function_containers(self, stub_id: str, *, count: int) -> Iterator[str]: ...
 
     def containers_holding_work(self, container_ids: Sequence[str]) -> set[str]: ...
 
@@ -346,10 +352,6 @@ class FunctionApiService(Protocol):
     ) -> int: ...
 
     def function_claim(self, request: FunctionClaimRequest) -> FunctionClaimResponse: ...
-
-    def function_execution_entry(
-        self, request: FunctionExecutionEntryRequest, *, workspace_id: str
-    ) -> FunctionExecutionEntryResponse: ...
 
     async def function_claim_wait(
         self, request: FunctionClaimRequest, *, workspace_id: str
@@ -438,26 +440,14 @@ class _RuntimeWorkspaceBucketClient(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
-class ApiServiceCore:
+class ApiInfrastructure:
+    workspace_bucket_client: WorkspaceBucketClient | None
     context: ServiceContext
     auth: AuthService
-    users: UserService
-    invitations: WorkspaceInvitationService
-    sign_in: SignInService
     auth_token_cache: AuthTokenCache
     tcp_ingress_settings: TcpIngressSettings
-    agent_route_reconciliation_settings: AgentRouteReconciliationSettings
-    agent_disconnect_reconciliation_settings: AgentDisconnectReconciliationSettings
     gateway_settings: GatewaySettings
-    stripe_settings: StripeSettings
-    resend_settings: ResendSettings
-    payment_provider: Callable[[], PaymentProvider]
     workspace_change_stream_settings: WorkspaceChangeStreamSettings
-    agent_binary_settings: AgentBinarySettings
-    aws_account_connection_settings: AwsAccountConnectionSettings
-    aws_capacity_settings: AwsCapacitySettings
-    platform_capacity_settings: PlatformCapacitySettings
-    aws_capacity_reconciliation_settings: AwsCapacityReconciliationSettings
     tunnel_certificate_service: TunnelCertificateService
     agent_tunnel_client: TunnelRouteClient
     object_store_settings: S3ObjectStoreSettings
@@ -468,51 +458,21 @@ class ApiServiceCore:
     container_service_settings: ContainerServiceSettings
     events: EventService
     workspace_changes: WorkspaceChangeService
-    tasks: TaskService
-    control_plane_service: ControlPlaneService
-    aws_account_connection_directory: AwsAccountConnectionDirectory
-    workspace_compute_policy_service: WorkspaceComputePolicyService
-    apps: AppService
-    deployments: DeploymentService
-    deployment_plans: DeploymentPlanService
-    deployment_resources: DeploymentResourceService
-    custom_domains: CustomDomainService
-    cron_jobs: CronJobService
-    secrets: SecretService
-    volumes: VolumeService
-    compute: ComputeService
-    containers: ContainerService
-    container_shutdowns: ContainerShutdownService
-    scheduler_workers: RedisSchedulerWorkerRepository
-    scheduler_containers: RedisSchedulerContainerRepository
-    scheduler_container_requests: SchedulerContainerRequestService
-    scheduler_pool_states: RedisWorkerPoolStateRepository
-    capacity_reservation_repository: RedisCapacityReservationRepository
-    scheduler_workloads: SchedulerWorkloadDirectory
-    images: ImageBuildService
-    agents: AgentService
     object_storage: ObjectStorage
     cache_storage: CacheStorage
-    metrics: MetricsService
-    worker_events: WorkerEventService
     usage: UsageService
-    checkpoints: CheckpointService
-    autoscaler_states: AutoscalerStateService
-    volume_metering: PersistentVolumeMeteringService
-    volume_filesystem: VolumeFilesystem
-    disks: DiskService
-    devboxes: DevboxService
-    disk_deletion: DiskDeletionService
-    disk_volumes: DiskVolumeService
-    payment_admission: DatabaseBillingAdmission
+    volume_filesystem: WorkspaceVolumeFilesystem
     redis_client: RedisClient
     binary_redis_client: RedisClient
     async_io: ApiAsyncIo | None
-    aws_connections: AwsAccountConnectionService | None
     owns_redis_client: bool
     owns_binary_redis_client: bool
     owned_resources: tuple[ApiOwnedResource, ...]
     client_release_version: str | None
+    scheduler_workers: RedisSchedulerWorkerRepository
+    scheduler_containers: RedisSchedulerContainerRepository
+    scheduler_pool_states: RedisWorkerPoolStateRepository
+    capacity_reservation_repository: RedisCapacityReservationRepository
 
     @property
     def database(self) -> DatabaseClient:
@@ -521,10 +481,6 @@ class ApiServiceCore:
     @property
     def root(self) -> Path:
         return self.context.paths.root
-
-    @property
-    def placement_resolver(self) -> PlacementResolver:
-        return self.workspace_compute_policy_service
 
     def redis(self) -> RedisClient:
         return self.redis_client
@@ -536,596 +492,6 @@ class ApiServiceCore:
         if self.async_io is None:
             raise RuntimeError("API asynchronous I/O resources were not composed")
         return self.async_io
-
-
-@dataclass(frozen=True, slots=True)
-class ApiServices(ApiServiceCore):
-    map_service: RedisMapService
-    simple_queue_service: RedisSimpleQueueService
-    artifact_service: ArtifactStorageService
-    endpoint_service: EndpointApiService
-    function_service: FunctionApiService
-    gateway_service: GatewayControlService
-    image_service: ImageControlService
-    pod_service: PodControlService
-    shell_service: ShellControlService
-    volume_service: VolumeControlService
-    worker_repository_service: WorkerRepositoryService
-    provider_node_enrollment_service: ProviderNodeEnrollmentService | None
-    machine_lifecycle_service: MachineLifecycleService
-    backend_route_resolver: SchedulerBackendRouteResolver
-    backend_route_dialer: BackendRouteDialer
-    task_rerun_service: TaskRerunService
-    autoscaler_operations_service: AutoscalerOperationsService
-    scheduler_worker_admin_service: SchedulerWorkerAdminService
-
-    @classmethod
-    def create(
-        cls,
-        database: DatabaseClient,
-        *,
-        tcp_ingress_settings: TcpIngressSettings | None = None,
-        agent_route_reconciliation_settings: AgentRouteReconciliationSettings | None = None,
-        agent_disconnect_reconciliation_settings: (
-            AgentDisconnectReconciliationSettings | None
-        ) = None,
-        gateway_settings: GatewaySettings | None = None,
-        workspace_change_stream_settings: WorkspaceChangeStreamSettings | None = None,
-        agent_binary_settings: AgentBinarySettings | None = None,
-        aws_account_connection_settings: AwsAccountConnectionSettings | None = None,
-        aws_capacity_settings: AwsCapacitySettings | None = None,
-        aws_capacity_reconciliation_settings: AwsCapacityReconciliationSettings | None = None,
-        object_store_settings: S3ObjectStoreSettings | None = None,
-        workspace_storage_issuer: WorkspaceStorageIssuer | None = None,
-        object_storage: ObjectStorage | None = None,
-        object_store_client: ObjectByteClient | None = None,
-        workspace_storage_client: WorkspaceBucketClient | None = None,
-        image_build_execution_settings: ImageBuildExecutionSettings | None = None,
-        image_build_registry_settings: ImageBuildRegistrySettings | None = None,
-        image_build_container_settings: ImageBuildContainerSettings | None = None,
-        container_service_settings: ContainerServiceSettings | None = None,
-        retention_settings: RetentionSettings | None = None,
-        volume_metering_settings: VolumeMeteringSettings | None = None,
-        volume_metering: PersistentVolumeMeteringService | None = None,
-        root: Path | None = None,
-        redis_client: RedisClient,
-        binary_redis_client: RedisClient,
-        async_io: ApiAsyncIo | None = None,
-        owns_redis_client: bool = False,
-        owns_binary_redis_client: bool = False,
-        map_service: RedisMapService | None = None,
-        simple_queue_service: RedisSimpleQueueService | None = None,
-        owned_resources: tuple[ApiOwnedResource, ...] = (),
-        client_release_version: str | None = None,
-    ) -> ApiServices:
-        context = ServiceContext.create(database, root=root)
-        auth_token_cache = AuthTokenCache()
-        auth = AuthService(context, token_cache=auth_token_cache)
-        users = UserService(context)
-        tcp_ingress_config = tcp_ingress_settings or TcpIngressSettings()
-        agent_route_reconciliation_config = (
-            agent_route_reconciliation_settings or AgentRouteReconciliationSettings()
-        )
-        agent_disconnect_reconciliation_config = (
-            agent_disconnect_reconciliation_settings or AgentDisconnectReconciliationSettings()
-        )
-        gateway_config = gateway_settings or GatewaySettings()
-        stripe_config = StripeSettings()
-        # Read here only so the webhook endpoint can check the signature on a
-        # delivery report. Sending belongs to the scheduler.
-        resend_config = ResendSettings()
-        workspace_change_stream_config = (
-            workspace_change_stream_settings or WorkspaceChangeStreamSettings()
-        )
-        agent_artifact_config = agent_binary_settings or AgentBinarySettings()
-        aws_account_connection_config = (
-            aws_account_connection_settings or AwsAccountConnectionSettings()
-        )
-        aws_capacity_config = aws_capacity_settings or AwsCapacitySettings()
-        platform_capacity_config = PlatformCapacitySettings()
-        aws_capacity_reconciliation_config = (
-            aws_capacity_reconciliation_settings or AwsCapacityReconciliationSettings()
-        )
-        object_store_config = object_store_settings or S3ObjectStoreSettings()
-        image_archive_config = ImageArchiveSettings(bucket=object_store_config.bucket)
-        image_build_execution_config = (
-            image_build_execution_settings or ImageBuildExecutionSettings()
-        )
-        image_build_registry_config = image_build_registry_settings or ImageBuildRegistrySettings()
-        image_build_container_config = (
-            image_build_container_settings or ImageBuildContainerSettings()
-        )
-        container_service_config = container_service_settings or ContainerServiceSettings()
-        retention_config = retention_settings or RetentionSettings()
-        volume_metering_config = volume_metering_settings or VolumeMeteringSettings()
-        redis = redis_client
-        stream_events = RedisEventStreamRepository(redis)
-        async_database = async_io.database if async_io is not None else None
-        async_workspace_changes = (
-            AsyncWorkspaceChangeService(
-                async_io.redis,
-                max_length=workspace_change_stream_config.max_length,
-            )
-            if async_io is not None
-            else None
-        )
-        events = EventService(
-            context,
-            stream_events=stream_events,
-            async_database=async_database,
-        )
-        workspace_changes = WorkspaceChangeService(
-            WorkspaceChangeRepository(
-                redis,
-                max_length=workspace_change_stream_config.max_length,
-            )
-        )
-        container_repository = RedisSchedulerContainerRepository(redis)
-        worker_repository = RedisSchedulerWorkerRepository(redis)
-        tasks = TaskService(
-            context,
-            events,
-            log_streams=stream_events,
-            progress=TaskProgressService(context, container_repository, worker_repository),
-            workspace_changes=workspace_changes,
-            async_database=async_database,
-            async_workspace_changes=async_workspace_changes,
-        )
-        secrets = SecretService(context, events, workspace_changes=workspace_changes)
-        # Same decision as the provider resolver below: a deployment without
-        # connected AWS advertises no AWS catalog, and building one would demand
-        # the capacity and agent-artifact configuration it has no reason to hold.
-        aws_compute_catalog = (
-            configured_aws_compute_catalog(
-                aws_capacity_config,
-                agent_artifact_config,
-            )
-            if aws_account_connection_config.configured
-            else ()
-        )
-        compute_policies = WorkspaceComputePolicyService(
-            context,
-            available_catalog=aws_compute_catalog,
-        )
-        cache_storage = CacheStorage(context)
-        if object_storage is not None and object_store_client is not None:
-            raise ValueError("object_storage and object_store_client are mutually exclusive")
-        owned_runtime_resources = list(owned_resources)
-        if object_storage is not None:
-            object_storage_service = object_storage
-            object_storage_service.allowed_buckets = frozenset(
-                {*object_storage_service.allowed_buckets, image_archive_config.bucket}
-            )
-        elif object_store_client is not None:
-            object_storage_service = ObjectStorage(
-                context,
-                object_client=object_store_client,
-                default_bucket=object_store_config.bucket,
-                allowed_buckets=(image_archive_config.bucket,),
-            )
-        else:
-            object_storage_service = ObjectStorage.from_settings(
-                context,
-                object_store_config,
-                allowed_buckets=(image_archive_config.bucket,),
-            )
-            if isinstance(object_storage_service.object_client, ApiOwnedResource):
-                owned_runtime_resources.append(object_storage_service.object_client)
-        if not isinstance(object_storage_service.object_client, PresignedPutClient):
-            raise RuntimeError("the primary object store must support signed archive uploads")
-        resolved_image_archive_presigner = object_storage_service.object_client
-        control_plane = ControlPlaneService(
-            context,
-            public_http_origin=gateway_config.public_http_url,
-            workspace_storage_client=(
-                workspace_storage_client
-                or _workspace_bucket_client(object_storage_service.object_client)
-            ),
-            connected_workspace_storage=connected_workspace_storage(
-                public_origin=gateway_config.public_http_url
-            ),
-            workspace_changes=workspace_changes,
-        )
-        workspace_storage_issuer = workspace_storage_issuer or workspace_storage_router(
-            context.database,
-            object_store_config,
-            public_origin=gateway_config.public_http_url,
-        )
-        payment_provider = stripe_config.provider_factory()
-        # No mailer here. Inviting queues a message and returns. The scheduler's
-        # drain holds the email credential and talks to the provider.
-        invitations = WorkspaceInvitationService(
-            context,
-            invitations_url=f"{gateway_config.public_http_url.rstrip('/')}/invitations",
-        )
-        # Neither adapter is constructed here — both are callables that read their
-        # credential when first asked — so a deployment that has not configured a
-        # GitHub App or a payment credential still starts and fails at the sign-in
-        # route naming what is missing, instead of refusing to serve anything at all.
-        sign_in = SignInService(
-            context=context,
-            redis=redis,
-            provider_factory=GitHubAppSettings().provider,
-            provision_default_workspace=control_plane.ensure_default_workspace,
-            provision_billing_account=_billing_account_provisioner(context, payment_provider),
-        )
-        if not isinstance(object_storage_service.object_client, WorkspaceVolumeObjectClient):
-            raise RuntimeError("workspace volumes require the configured object client")
-        resolved_volume_filesystem = WorkspaceVolumeFilesystem(
-            resolve_store=workspace_volume_store_resolver(
-                context.database,
-                object_store=object_storage_service.object_client,
-                storage_issuer=workspace_storage_issuer,
-            )
-        )
-        owned_runtime_resources.append(resolved_volume_filesystem)
-        pool_state_repository = RedisWorkerPoolStateRepository(redis)
-        capacity_reservation_repository = RedisCapacityReservationRepository(redis)
-        usage = UsageService(
-            context,
-            workspace_changes=workspace_changes,
-            async_database=async_database,
-            async_workspace_changes=async_workspace_changes,
-        )
-        volume_metering_service = volume_metering or (
-            PersistentVolumeMeteringService.from_settings(
-                context,
-                filesystem=resolved_volume_filesystem,
-                interval_seconds=volume_metering_config.interval_seconds,
-            )
-        )
-        aws_connection_directory = AwsAccountConnectionDirectory(context)
-
-        platform_namespace_id = PlatformNamespaceService(context.database).namespace_id
-
-        def platform_capacity_workspace() -> str:
-            return platform_namespace_id
-
-        # Connected AWS is an optional deployment shape. When it is unconfigured there is
-        # no connection to resolve, and building the resolver would demand the remote
-        # network configuration a local stack has no reason to hold. A half-configured
-        # deployment never reaches here: the settings validator rejects it.
-        provider_resolver = (
-            workspace_compute_provider_resolver(
-                aws_capacity_config,
-                agent_artifact_config,
-                connections=aws_connection_directory.list_for_workspace,
-                capacity_workspace=aws_connection_directory.capacity_workspace,
-                platform_providers=configured_platform_compute_providers(
-                    platform_capacity_config,
-                    provider_state=ProviderUnitStateService(context.database),
-                    capacity_workspace=platform_capacity_workspace,
-                    binaries_by_region=(
-                        aws_capacity_config.binaries_by_region(agent_artifact_config)
-                        if aws_capacity_config.configured
-                        else {}
-                    ),
-                ),
-                gateway_origin=gateway_config.public_http_url,
-                presigned_origin=object_store_config.endpoint_url,
-            )
-            if aws_account_connection_config.configured or platform_capacity_config.configured
-            else None
-        )
-
-        pool_bootstrap = None
-        if provider_resolver is not None:
-            agent_version, agent_sha256 = agent_artifact_config.require_amd64()
-            pool_bootstrap = PoolBootstrapProvisioner(
-                control_plane_url=gateway_config.public_http_url,
-                agent_version=agent_version,
-                agent_sha256=agent_sha256,
-                agent_binary_url=aws_capacity_config.agent_binary_url,
-            )
-
-        scheduler_hooks = SchedulerComputeHooks(
-            RedisComputeStateRepository(redis),
-            worker_repository,
-            agent_intake=RedisProcessPresence(redis, AGENT_INTAKE_PRESENCE_ROLE),
-        )
-        compute = ComputeService(
-            context,
-            provider_resolver=provider_resolver,
-            pool_bootstrap_factory=pool_bootstrap,
-            scheduler_hooks=scheduler_hooks,
-            workspace_changes=workspace_changes,
-            capacity_owner_mutations=capacity_reservation_repository,
-            reserve_state=RedisFleetReserveState(redis),
-        )
-        compute_policies.aws_default_capacity = AwsDefaultCapacityBaseline(compute)
-        aws_composition = aws_account_connection_composition_from_settings(
-            context=context,
-            pool_drainer=compute,
-            connection_settings=aws_account_connection_config,
-            capacity_settings=aws_capacity_config,
-            gateway_origin=gateway_config.public_http_url,
-            workspace_changes=workspace_changes,
-            capacity_baseline=compute_policies,
-            admission=DatabaseBillingAdmission(),
-        )
-        placement_resources = (
-            aws_composition.deployment_bucket_access if aws_composition is not None else None
-        )
-        container_runtime_state = RedisContainerRuntimeStateRepository(redis)
-        scheduling_persistence = ContainerSchedulingPersistenceService(
-            context,
-            events,
-            workspace_changes,
-            runtime_state=container_runtime_state,
-        )
-        container_scheduler = SchedulerContainerRequestService(
-            worker_repository,
-            container_repository,
-            placement=SchedulerComputePlacement(ComputeCapacityPlacementService(context, compute)),
-            failure_handler=scheduling_persistence,
-            assignments=scheduling_persistence,
-            usage=usage,
-            dispatch_wake=RedisWakeSignal(redis, CONTAINER_DISPATCH_WAKE_SCOPE),
-            capacity_wake=RedisWakeSignal(redis, CAPACITY_WAKE_SCOPE),
-            lifecycle_events=stream_events,
-            workspace_owners=DatabaseWorkspaceOwners(context),
-            disk_volume_attachments=DatabaseDiskVolumeAttachments(context),
-        )
-        payment_admission = DatabaseBillingAdmission()
-        container_shutdowns = ContainerShutdownService(
-            container_repository,
-            RedisEventBus(redis),
-            redis,
-            storage_release=DatabaseContainerStorageRelease(context),
-            durable_worker_absence=DatabaseDurableWorkerAbsence(context, worker_repository),
-        )
-        disks = DiskService(
-            context.database,
-            worker_absence=DatabaseDurableWorkerAbsence(context, worker_repository),
-        )
-        disk_volumes = DiskVolumeService(
-            context.database,
-            providers=ResolvedBlockVolumes(provider_resolver),
-            deployment=platform_namespace_id,
-            worker_absence=DatabaseDurableWorkerAbsence(context, worker_repository),
-        )
-        disk_deletion = DiskDeletionService(
-            context.database,
-            disks=disks,
-            volumes=disk_volumes,
-            objects=resolved_volume_filesystem,
-            metering=volume_metering_service,
-        )
-        containers = ContainerService(
-            context,
-            events,
-            tasks,
-            DatabaseAppExecutionAdmission(),
-            payment_admission,
-            scheduler=container_scheduler,
-            scheduler_cancellation=container_scheduler,
-            event_bus=RedisEventBus(redis),
-            workspace_changes=workspace_changes,
-            runtime_state=container_runtime_state,
-            container_shutdowns=container_shutdowns,
-            workers=worker_repository,
-            placement_resolver=compute_policies,
-        )
-        container_scheduler.backfill_preemption = SchedulerGpuBackfillPreemptionService(
-            worker_repository, container_repository, containers
-        )
-        deployment_lifecycle = AppDeploymentLifecycleService(
-            context,
-            workspace_changes=workspace_changes,
-            placement_resources=placement_resources,
-        )
-        execution_lifecycle = ProductionAppExecutionLifecycleEffects(
-            context,
-            containers,
-            tasks,
-            redis,
-            container_shutdowns,
-        )
-        deployment_plans = DeploymentPlanService(
-            context,
-            execution_lifecycle,
-            workspace_changes=workspace_changes,
-            placement_resources=placement_resources,
-        )
-        apps = AppService(
-            context,
-            deployment_lifecycle,
-            execution_lifecycle,
-            DatabaseAppImageAvailability(),
-            workspace_changes=workspace_changes,
-        )
-        cron_jobs = CronJobService(
-            context,
-            workspace_changes=workspace_changes,
-        )
-        deployments = DeploymentService(
-            context,
-            events,
-            compute_policies,
-            DeploymentRegistrationService(apps, control_plane),
-            cron_jobs,
-            payment_admission,
-            execution_lifecycle,
-            workspace_changes=workspace_changes,
-            placement_resources=placement_resources,
-        )
-        if not isinstance(object_storage_service.object_client, ImageBuildArchiveObjectStore):
-            raise RuntimeError("the primary object store must verify immutable archive candidates")
-        resolved_image_archive_store = object_storage_service.object_client
-        publication_publisher = _image_build_publication_publisher(
-            cache_storage,
-            image_archive_config,
-            image_build_execution_config,
-            image_build_registry_config,
-            context=context,
-            archive_store=resolved_image_archive_store,
-        )
-        images = ImageBuildService(
-            context,
-            ImageBuildSubmissionService(
-                context.database,
-                DurableImageBuildDispatch(
-                    context.database,
-                    container_scheduler,
-                    containers,
-                    image_build_container_config,
-                    compute_policies,
-                ),
-                resolved_image_archive_store,
-                ImageBuildChanges(redis),
-            ),
-            events,
-            publication_publisher,
-            archive_settings=image_archive_config,
-            archive_store=resolved_image_archive_store,
-        )
-        container_scheduler.failure_handler = ApiContainerSchedulingFailureHandler(
-            scheduling_persistence, images
-        )
-        deployment_resources = DeploymentResourceService(context)
-        custom_domains = CustomDomainService(
-            context=context,
-            provider_factory=CloudflareSettings().provider,
-            platform_base_domain=gateway_config.public_base_domain,
-            admission=DatabaseBillingAdmission(),
-        )
-        volumes = VolumeService(context, workspace_changes=workspace_changes)
-        scheduler_workloads = SchedulerWorkloadDirectoryAdapter(control_plane)
-        agents = AgentService(context, workspace_changes=workspace_changes)
-        metrics = MetricsService()
-        worker_events = WorkerEventService(context)
-        checkpoints = CheckpointService(
-            context,
-            retention_seconds=retention_config.checkpoint_seconds,
-        )
-        autoscaler_states = AutoscalerStateService(context)
-        tunnel_certificate_service = TunnelCertificateService.load(
-            context.database, RedisComputeStateRepository(redis), TunnelCertificateSettings()
-        )
-        tunnel_identity = ControlPlaneTunnelIdentity(tunnel_certificate_service)
-        owned_runtime_resources.append(tunnel_identity)
-        agent_tunnel_client = TunnelRouteClient(
-            RedisAgentConnectionDirectory(redis),
-            tunnel_identity.credentials,
-            tunnel_certificate_service.settings.hostname,
-        )
-        owned_runtime_resources.append(agent_tunnel_client)
-        core = ApiServiceCore(
-            client_release_version=client_release_version,
-            context=context,
-            auth=auth,
-            users=users,
-            invitations=invitations,
-            sign_in=sign_in,
-            auth_token_cache=auth_token_cache,
-            tcp_ingress_settings=tcp_ingress_config,
-            agent_route_reconciliation_settings=agent_route_reconciliation_config,
-            agent_disconnect_reconciliation_settings=agent_disconnect_reconciliation_config,
-            gateway_settings=gateway_config,
-            stripe_settings=stripe_config,
-            resend_settings=resend_config,
-            payment_provider=payment_provider,
-            workspace_change_stream_settings=workspace_change_stream_config,
-            agent_binary_settings=agent_artifact_config,
-            aws_account_connection_settings=aws_account_connection_config,
-            aws_capacity_settings=aws_capacity_config,
-            platform_capacity_settings=platform_capacity_config,
-            aws_capacity_reconciliation_settings=aws_capacity_reconciliation_config,
-            tunnel_certificate_service=tunnel_certificate_service,
-            agent_tunnel_client=agent_tunnel_client,
-            object_store_settings=object_store_config,
-            workspace_storage_issuer=workspace_storage_issuer,
-            image_archive_settings=image_archive_config,
-            image_archive_presigner=resolved_image_archive_presigner,
-            image_build_registry_settings=image_build_registry_config,
-            container_service_settings=container_service_config,
-            events=events,
-            workspace_changes=workspace_changes,
-            tasks=tasks,
-            control_plane_service=control_plane,
-            aws_account_connection_directory=aws_connection_directory,
-            workspace_compute_policy_service=compute_policies,
-            apps=apps,
-            deployments=deployments,
-            deployment_plans=deployment_plans,
-            deployment_resources=deployment_resources,
-            custom_domains=custom_domains,
-            cron_jobs=cron_jobs,
-            secrets=secrets,
-            volumes=volumes,
-            compute=compute,
-            containers=containers,
-            container_shutdowns=container_shutdowns,
-            scheduler_workers=worker_repository,
-            scheduler_containers=container_repository,
-            scheduler_container_requests=container_scheduler,
-            scheduler_pool_states=pool_state_repository,
-            capacity_reservation_repository=capacity_reservation_repository,
-            scheduler_workloads=scheduler_workloads,
-            images=images,
-            agents=agents,
-            object_storage=object_storage_service,
-            cache_storage=cache_storage,
-            metrics=metrics,
-            worker_events=worker_events,
-            usage=usage,
-            checkpoints=checkpoints,
-            autoscaler_states=autoscaler_states,
-            volume_metering=volume_metering_service,
-            payment_admission=payment_admission,
-            volume_filesystem=resolved_volume_filesystem,
-            disks=disks,
-            devboxes=DevboxService(
-                context.database,
-                keep_alive=container_runtime_state,
-                startup=StreamContainerStartupReader(stream_events),
-                worker_absence=DatabaseDurableWorkerAbsence(context, worker_repository),
-            ),
-            disk_deletion=disk_deletion,
-            disk_volumes=disk_volumes,
-            aws_connections=aws_composition.service if aws_composition is not None else None,
-            redis_client=redis,
-            binary_redis_client=binary_redis_client,
-            async_io=async_io,
-            owns_redis_client=owns_redis_client,
-            owns_binary_redis_client=owns_binary_redis_client,
-            owned_resources=tuple(owned_runtime_resources),
-        )
-        return _compose_api_services(
-            core,
-            map_service=map_service,
-            simple_queue_service=simple_queue_service,
-        )
-
-    def with_route_services(
-        self,
-        *,
-        endpoint_service: EndpointApiService | None = None,
-        function_service: FunctionApiService | None = None,
-        gateway_service: GatewayControlService | None = None,
-        image_service: ImageControlService | None = None,
-        pod_service: PodControlService | None = None,
-    ) -> ApiServices:
-        return _compose_api_services(
-            self,
-            map_service=self.map_service,
-            simple_queue_service=self.simple_queue_service,
-            artifact_service=self.artifact_service,
-            endpoint_service=(
-                endpoint_service if endpoint_service is not None else self.endpoint_service
-            ),
-            function_service=(
-                function_service if function_service is not None else self.function_service
-            ),
-            gateway_service=(
-                gateway_service if gateway_service is not None else self.gateway_service
-            ),
-            image_service=image_service if image_service is not None else self.image_service,
-            pod_service=pod_service if pod_service is not None else self.pod_service,
-            shell_service=self.shell_service,
-            volume_service=self.volume_service,
-            worker_repository_service=self.worker_repository_service,
-        )
 
     def close(self) -> None:
         failures: list[Exception] = []
@@ -1147,25 +513,936 @@ class ApiServices(ApiServiceCore):
             raise ExceptionGroup("API service shutdown was incomplete", failures)
 
 
-def _compose_api_services(
+@dataclass(frozen=True, slots=True)
+class ApiServiceCore(ApiInfrastructure):
+    volume_metering: PersistentVolumeMeteringService
+    deployment_resources: DeploymentResourceService
+    users: UserService
+    tasks: TaskService
+    execution_demand: ExecutionDemandService
+    control_plane_service: ControlPlaneService
+    workspace_compute_policy_service: WorkspaceComputePolicyService
+    apps: AppReader
+    deployments: ExecutionLookupService
+    secrets: SecretService
+    volumes: VolumeService
+    containers: ContainerService
+    container_shutdowns: ContainerShutdownService
+    scheduler_container_requests: SchedulerContainerRequestService
+    scheduler_workloads: SchedulerWorkloadDirectory
+    images: ImageBuildService
+    metrics: MetricsService
+    payment_admission: DatabaseBillingAdmission
+
+    @property
+    def placement_resolver(self) -> PlacementResolver:
+        return self.workspace_compute_policy_service
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeServiceCore(ApiServiceCore):
+    agent_route_reconciliation_settings: AgentRouteReconciliationSettings
+    agent_disconnect_reconciliation_settings: AgentDisconnectReconciliationSettings
+    agent_binary_settings: AgentBinarySettings
+    aws_account_connection_settings: AwsAccountConnectionSettings
+    aws_capacity_settings: AwsCapacitySettings
+    platform_capacity_settings: PlatformCapacitySettings
+    aws_capacity_reconciliation_settings: AwsCapacityReconciliationSettings
+    aws_account_connection_directory: AwsAccountConnectionDirectory
+    compute: ComputeService
+    worker_events: WorkerEventService
+    checkpoints: CheckpointService
+    disks: DiskService
+    disk_volumes: DiskVolumeService
+    aws_connections: AwsAccountConnectionService | None
+    deployment_placement_resources: DeploymentPlacementResourceManager | None
+
+
+@dataclass(frozen=True, slots=True)
+class ManagementServiceCore(RuntimeServiceCore):
+    invitations: WorkspaceInvitationService
+    sign_in: SignInService
+    stripe_settings: StripeSettings
+    resend_settings: ResendSettings
+    payment_provider: Callable[[], PaymentProvider]
+    deployment_plans: DeploymentPlanService
+    custom_domains: CustomDomainService
+    cron_jobs: CronJobService
+    agents: AgentService
+    autoscaler_states: AutoscalerStateService
+    devboxes: DevboxService
+    disk_deletion: DiskDeletionService
+    apps: AppService
+    deployments: DeploymentService
+
+
+@dataclass(frozen=True, slots=True)
+class ApiServices(ManagementServiceCore):
+    task_management_service: TaskManagementService
+    gateway_container_service: GatewayContainerService
+    transport: ApiTransport
+    gateway_deployment_service: GatewayDeploymentService
+    map_service: RedisMapService
+    simple_queue_service: RedisSimpleQueueService
+    artifact_service: ArtifactStorageService
+    endpoint_service: EndpointApiService
+    function_service: FunctionApiService
+    gateway_service: GatewayControlService
+    image_service: ImageControlService
+    pod_service: PodControlService
+    shell_service: ShellControlService
+    volume_service: VolumeControlService
+    worker_repository_service: WorkerRepositoryService
+    provider_node_enrollment_service: ProviderNodeEnrollmentService | None
+    machine_lifecycle_service: MachineLifecycleService
+    backend_route_resolver: SchedulerBackendRouteResolver
+    backend_route_dialer: BackendRouteDialer
+    task_rerun_service: TaskRerunService
+    autoscaler_operations_service: AutoscalerOperationsService
+    scheduler_worker_admin_service: SchedulerWorkerAdminService
+
+    def with_route_services(
+        self,
+        *,
+        endpoint_service: EndpointApiService | None = None,
+        function_service: FunctionApiService | None = None,
+        gateway_service: GatewayControlService | None = None,
+        image_service: ImageControlService | None = None,
+        pod_service: PodControlService | None = None,
+    ) -> ApiServices:
+        return replace(
+            self,
+            endpoint_service=endpoint_service or self.endpoint_service,
+            function_service=function_service or self.function_service,
+            gateway_service=gateway_service or self.gateway_service,
+            image_service=image_service or self.image_service,
+            pod_service=pod_service or self.pod_service,
+        )
+
+
+def create_api_infrastructure(
+    database: DatabaseClient,
+    *,
+    tcp_ingress_settings: TcpIngressSettings | None = None,
+    gateway_settings: GatewaySettings | None = None,
+    workspace_change_stream_settings: WorkspaceChangeStreamSettings | None = None,
+    object_store_settings: S3ObjectStoreSettings | None = None,
+    workspace_storage_issuer: WorkspaceStorageIssuer | None = None,
+    object_storage: ObjectStorage | None = None,
+    object_store_client: ObjectByteClient | None = None,
+    workspace_storage_client: WorkspaceBucketClient | None = None,
+    image_build_registry_settings: ImageBuildRegistrySettings | None = None,
+    container_service_settings: ContainerServiceSettings | None = None,
+    root: Path | None = None,
+    redis_client: RedisClient,
+    binary_redis_client: RedisClient,
+    async_io: ApiAsyncIo | None = None,
+    owns_redis_client: bool = False,
+    owns_binary_redis_client: bool = False,
+    owned_resources: tuple[ApiOwnedResource, ...] = (),
+    client_release_version: str | None = None,
+) -> ApiInfrastructure:
+    context = ServiceContext.create(database, root=root)
+    auth_token_cache = AuthTokenCache()
+    auth = AuthService(context, token_cache=auth_token_cache)
+    tcp_ingress_config = tcp_ingress_settings or TcpIngressSettings()
+    gateway_config = gateway_settings or GatewaySettings()
+    workspace_change_stream_config = (
+        workspace_change_stream_settings or WorkspaceChangeStreamSettings()
+    )
+    object_store_config = object_store_settings or S3ObjectStoreSettings()
+    image_archive_config = ImageArchiveSettings(bucket=object_store_config.bucket)
+    image_build_registry_config = image_build_registry_settings or ImageBuildRegistrySettings()
+    container_service_config = container_service_settings or ContainerServiceSettings()
+    redis = redis_client
+    stream_events = RedisEventStreamRepository(redis)
+    async_database = async_io.database if async_io is not None else None
+    async_workspace_changes = (
+        AsyncWorkspaceChangeService(
+            async_io.redis,
+            max_length=workspace_change_stream_config.max_length,
+        )
+        if async_io is not None
+        else None
+    )
+    events = EventService(
+        context,
+        stream_events=stream_events,
+        async_database=async_database,
+    )
+    workspace_changes = WorkspaceChangeService(
+        WorkspaceChangeRepository(
+            redis,
+            max_length=workspace_change_stream_config.max_length,
+        )
+    )
+    container_repository = RedisSchedulerContainerRepository(redis)
+    worker_repository = RedisSchedulerWorkerRepository(redis)
+    cache_storage = CacheStorage(context)
+    if object_storage is not None and object_store_client is not None:
+        raise ValueError("object_storage and object_store_client are mutually exclusive")
+    owned_runtime_resources = list(owned_resources)
+    if object_storage is not None:
+        object_storage_service = object_storage
+        object_storage_service.allowed_buckets = frozenset(
+            {*object_storage_service.allowed_buckets, image_archive_config.bucket}
+        )
+    elif object_store_client is not None:
+        object_storage_service = ObjectStorage(
+            context,
+            object_client=object_store_client,
+            default_bucket=object_store_config.bucket,
+            allowed_buckets=(image_archive_config.bucket,),
+        )
+    else:
+        object_storage_service = ObjectStorage.from_settings(
+            context,
+            object_store_config,
+            allowed_buckets=(image_archive_config.bucket,),
+        )
+        if isinstance(object_storage_service.object_client, ApiOwnedResource):
+            owned_runtime_resources.append(object_storage_service.object_client)
+    if not isinstance(object_storage_service.object_client, PresignedPutClient):
+        raise RuntimeError("the primary object store must support signed archive uploads")
+    resolved_image_archive_presigner = object_storage_service.object_client
+    workspace_storage_issuer = workspace_storage_issuer or workspace_storage_router(
+        context.database,
+        object_store_config,
+        public_origin=gateway_config.public_http_url,
+    )
+    if not isinstance(object_storage_service.object_client, WorkspaceVolumeObjectClient):
+        raise RuntimeError("workspace volumes require the configured object client")
+    resolved_volume_filesystem = WorkspaceVolumeFilesystem(
+        resolve_store=workspace_volume_store_resolver(
+            context.database,
+            object_store=object_storage_service.object_client,
+            storage_issuer=workspace_storage_issuer,
+        )
+    )
+    owned_runtime_resources.append(resolved_volume_filesystem)
+    pool_state_repository = RedisWorkerPoolStateRepository(redis)
+    capacity_reservation_repository = RedisCapacityReservationRepository(redis)
+    usage = UsageService(
+        context,
+        workspace_changes=workspace_changes,
+        async_database=async_database,
+        async_workspace_changes=async_workspace_changes,
+    )
+    tunnel_certificate_service = TunnelCertificateService.load(
+        context.database, RedisComputeStateRepository(redis), TunnelCertificateSettings()
+    )
+    tunnel_identity = ControlPlaneTunnelIdentity(tunnel_certificate_service)
+    owned_runtime_resources.append(tunnel_identity)
+    agent_tunnel_client = TunnelRouteClient(
+        RedisAgentConnectionDirectory(redis),
+        tunnel_identity.credentials,
+        tunnel_certificate_service.settings.hostname,
+    )
+    owned_runtime_resources.append(agent_tunnel_client)
+    return ApiInfrastructure(
+        workspace_bucket_client=workspace_storage_client
+        or _workspace_bucket_client(object_storage_service.object_client),
+        context=context,
+        auth=auth,
+        auth_token_cache=auth_token_cache,
+        tcp_ingress_settings=tcp_ingress_config,
+        gateway_settings=gateway_config,
+        workspace_change_stream_settings=workspace_change_stream_config,
+        tunnel_certificate_service=tunnel_certificate_service,
+        agent_tunnel_client=agent_tunnel_client,
+        object_store_settings=object_store_config,
+        workspace_storage_issuer=workspace_storage_issuer,
+        image_archive_settings=image_archive_config,
+        image_archive_presigner=resolved_image_archive_presigner,
+        image_build_registry_settings=image_build_registry_config,
+        container_service_settings=container_service_config,
+        events=events,
+        workspace_changes=workspace_changes,
+        object_storage=object_storage_service,
+        cache_storage=cache_storage,
+        usage=usage,
+        volume_filesystem=resolved_volume_filesystem,
+        redis_client=redis,
+        binary_redis_client=binary_redis_client,
+        async_io=async_io,
+        owns_redis_client=owns_redis_client,
+        owns_binary_redis_client=owns_binary_redis_client,
+        owned_resources=tuple(owned_runtime_resources),
+        client_release_version=client_release_version,
+        scheduler_workers=worker_repository,
+        scheduler_containers=container_repository,
+        scheduler_pool_states=pool_state_repository,
+        capacity_reservation_repository=capacity_reservation_repository,
+    )
+
+
+def create_workload_core(
+    infrastructure: ApiInfrastructure,
+    *,
+    volume_metering_settings: VolumeMeteringSettings | None = None,
+    volume_metering: PersistentVolumeMeteringService | None = None,
+    image_build_execution_settings: ImageBuildExecutionSettings | None = None,
+    image_build_container_settings: ImageBuildContainerSettings | None = None,
+) -> ApiServiceCore:
+    context = infrastructure.context
+    gateway_config = infrastructure.gateway_settings
+    workspace_change_stream_config = infrastructure.workspace_change_stream_settings
+    image_archive_config = infrastructure.image_archive_settings
+    image_build_registry_config = infrastructure.image_build_registry_settings
+    events = infrastructure.events
+    workspace_changes = infrastructure.workspace_changes
+    object_storage_service = infrastructure.object_storage
+    cache_storage = infrastructure.cache_storage
+    usage = infrastructure.usage
+    redis = infrastructure.redis_client
+    async_io = infrastructure.async_io
+    worker_repository = infrastructure.scheduler_workers
+    container_repository = infrastructure.scheduler_containers
+    stream_events = RedisEventStreamRepository(redis)
+    async_database = async_io.database if async_io is not None else None
+    async_workspace_changes = (
+        AsyncWorkspaceChangeService(
+            async_io.redis,
+            max_length=workspace_change_stream_config.max_length,
+        )
+        if async_io is not None
+        else None
+    )
+    image_build_execution_config = image_build_execution_settings or ImageBuildExecutionSettings()
+    image_build_container_config = image_build_container_settings or ImageBuildContainerSettings()
+    tasks = TaskService(
+        context,
+        events,
+        log_streams=stream_events,
+        progress=TaskProgressService(context, container_repository, worker_repository),
+        workspace_changes=workspace_changes,
+        async_database=async_database,
+        async_workspace_changes=async_workspace_changes,
+    )
+    secrets = SecretService(context, events, workspace_changes=workspace_changes)
+    compute_policies = WorkspaceComputePolicyService(context)
+    control_plane = ControlPlaneService(
+        context,
+        public_http_origin=gateway_config.public_http_url,
+        workspace_storage_client=infrastructure.workspace_bucket_client,
+        connected_workspace_storage=connected_workspace_storage(
+            public_origin=gateway_config.public_http_url
+        ),
+        workspace_changes=workspace_changes,
+    )
+    container_runtime_state = RedisContainerRuntimeStateRepository(redis)
+    scheduling_persistence = ContainerSchedulingPersistenceService(
+        context,
+        events,
+        workspace_changes,
+        runtime_state=container_runtime_state,
+    )
+    container_scheduler = SchedulerContainerRequestService(
+        worker_repository,
+        container_repository,
+        placement=None,
+        reserve_state=RedisFleetReserveState(redis),
+        failure_handler=scheduling_persistence,
+        assignments=scheduling_persistence,
+        usage=usage,
+        dispatch_wake=RedisWakeSignal(redis, CONTAINER_DISPATCH_WAKE_SCOPE),
+        capacity_wake=RedisWakeSignal(redis, CAPACITY_WAKE_SCOPE),
+        lifecycle_events=stream_events,
+        workspace_owners=DatabaseWorkspaceOwners(context),
+        disk_volume_attachments=DatabaseDiskVolumeAttachments(context),
+    )
+    payment_admission = DatabaseBillingAdmission()
+    container_shutdowns = ContainerShutdownService(
+        container_repository,
+        RedisEventBus(redis),
+        redis,
+        storage_release=DatabaseContainerStorageRelease(context),
+        durable_worker_absence=DatabaseDurableWorkerAbsence(context, worker_repository),
+    )
+    containers = ContainerService(
+        context,
+        events,
+        tasks,
+        DatabaseAppExecutionAdmission(),
+        payment_admission,
+        scheduler=container_scheduler,
+        scheduler_cancellation=container_scheduler,
+        event_bus=RedisEventBus(redis),
+        workspace_changes=workspace_changes,
+        runtime_state=container_runtime_state,
+        container_shutdowns=container_shutdowns,
+        workers=worker_repository,
+        placement_resolver=compute_policies,
+    )
+    container_scheduler.backfill_preemption = SchedulerGpuBackfillPreemptionService(
+        worker_repository, container_repository, containers
+    )
+    if not isinstance(object_storage_service.object_client, ImageBuildArchiveObjectStore):
+        raise RuntimeError("the primary object store must verify immutable archive candidates")
+    resolved_image_archive_store = object_storage_service.object_client
+    publication_publisher = _image_build_publication_publisher(
+        cache_storage,
+        image_archive_config,
+        image_build_execution_config,
+        image_build_registry_config,
+        context=context,
+        archive_store=resolved_image_archive_store,
+    )
+    images = ImageBuildService(
+        context,
+        ImageBuildSubmissionService(
+            context.database,
+            DurableImageBuildDispatch(
+                context.database,
+                container_scheduler,
+                containers,
+                image_build_container_config,
+                compute_policies,
+            ),
+            resolved_image_archive_store,
+            ImageBuildChanges(redis),
+        ),
+        events,
+        publication_publisher,
+        archive_settings=image_archive_config,
+        archive_store=resolved_image_archive_store,
+    )
+    container_scheduler.failure_handler = ApiContainerSchedulingFailureHandler(
+        scheduling_persistence, images
+    )
+    volumes = VolumeService(context, workspace_changes=workspace_changes)
+    scheduler_workloads = SchedulerWorkloadDirectoryAdapter(control_plane)
+    metrics = MetricsService()
+    users = UserService(context)
+    deployment_resources = DeploymentResourceService(context)
+    volume_metering_config = volume_metering_settings or VolumeMeteringSettings()
+    resolved_volume_filesystem = infrastructure.volume_filesystem
+    volume_metering_service = volume_metering or (
+        PersistentVolumeMeteringService.from_settings(
+            context,
+            filesystem=resolved_volume_filesystem,
+            interval_seconds=volume_metering_config.interval_seconds,
+        )
+    )
+    return ApiServiceCore(
+        workspace_bucket_client=infrastructure.workspace_bucket_client,
+        context=infrastructure.context,
+        auth=infrastructure.auth,
+        auth_token_cache=infrastructure.auth_token_cache,
+        tcp_ingress_settings=infrastructure.tcp_ingress_settings,
+        gateway_settings=infrastructure.gateway_settings,
+        workspace_change_stream_settings=infrastructure.workspace_change_stream_settings,
+        tunnel_certificate_service=infrastructure.tunnel_certificate_service,
+        agent_tunnel_client=infrastructure.agent_tunnel_client,
+        object_store_settings=infrastructure.object_store_settings,
+        workspace_storage_issuer=infrastructure.workspace_storage_issuer,
+        image_archive_settings=infrastructure.image_archive_settings,
+        image_archive_presigner=infrastructure.image_archive_presigner,
+        image_build_registry_settings=infrastructure.image_build_registry_settings,
+        container_service_settings=infrastructure.container_service_settings,
+        events=infrastructure.events,
+        workspace_changes=infrastructure.workspace_changes,
+        object_storage=infrastructure.object_storage,
+        cache_storage=infrastructure.cache_storage,
+        usage=infrastructure.usage,
+        volume_filesystem=infrastructure.volume_filesystem,
+        redis_client=infrastructure.redis_client,
+        binary_redis_client=infrastructure.binary_redis_client,
+        async_io=infrastructure.async_io,
+        owns_redis_client=infrastructure.owns_redis_client,
+        owns_binary_redis_client=infrastructure.owns_binary_redis_client,
+        owned_resources=infrastructure.owned_resources,
+        client_release_version=infrastructure.client_release_version,
+        scheduler_workers=infrastructure.scheduler_workers,
+        scheduler_containers=infrastructure.scheduler_containers,
+        scheduler_pool_states=infrastructure.scheduler_pool_states,
+        capacity_reservation_repository=infrastructure.capacity_reservation_repository,
+        tasks=tasks,
+        execution_demand=ExecutionDemandService(RedisWakeSignal(redis, PLACEMENT_WAKE_SCOPE)),
+        control_plane_service=control_plane,
+        workspace_compute_policy_service=compute_policies,
+        apps=DatabaseAppReader(context),
+        deployments=DatabaseDeploymentReader(context),
+        secrets=secrets,
+        volumes=volumes,
+        containers=containers,
+        container_shutdowns=container_shutdowns,
+        scheduler_container_requests=container_scheduler,
+        scheduler_workloads=scheduler_workloads,
+        images=images,
+        metrics=metrics,
+        payment_admission=payment_admission,
+        users=users,
+        deployment_resources=deployment_resources,
+        volume_metering=volume_metering_service,
+    )
+
+
+def create_runtime_core(
     core: ApiServiceCore,
     *,
-    map_service: RedisMapService | None = None,
-    simple_queue_service: RedisSimpleQueueService | None = None,
-    artifact_service: ArtifactStorageService | None = None,
-    endpoint_service: EndpointApiService | None = None,
-    function_service: FunctionApiService | None = None,
-    gateway_service: GatewayControlService | None = None,
-    image_service: ImageControlService | None = None,
-    pod_service: PodControlService | None = None,
-    shell_service: ShellControlService | None = None,
-    volume_service: VolumeControlService | None = None,
-    worker_repository_service: WorkerRepositoryService | None = None,
-) -> ApiServices:
-    redis = core.redis()
-    scheduler_workers = core.scheduler_workers
+    agent_route_reconciliation_settings: AgentRouteReconciliationSettings | None = None,
+    agent_disconnect_reconciliation_settings: AgentDisconnectReconciliationSettings | None = None,
+    agent_binary_settings: AgentBinarySettings | None = None,
+    aws_account_connection_settings: AwsAccountConnectionSettings | None = None,
+    aws_capacity_settings: AwsCapacitySettings | None = None,
+    aws_capacity_reconciliation_settings: AwsCapacityReconciliationSettings | None = None,
+    retention_settings: RetentionSettings | None = None,
+) -> RuntimeServiceCore:
+    context = core.context
+    gateway_config = core.gateway_settings
+    object_store_config = core.object_store_settings
+    workspace_changes = core.workspace_changes
+    redis = core.redis_client
+    worker_repository = core.scheduler_workers
+    capacity_reservation_repository = core.capacity_reservation_repository
+    compute_policies = core.workspace_compute_policy_service
+    agent_route_reconciliation_config = (
+        agent_route_reconciliation_settings or AgentRouteReconciliationSettings()
+    )
+    agent_disconnect_reconciliation_config = (
+        agent_disconnect_reconciliation_settings or AgentDisconnectReconciliationSettings()
+    )
+    agent_artifact_config = agent_binary_settings or AgentBinarySettings()
+    aws_account_connection_config = (
+        aws_account_connection_settings or AwsAccountConnectionSettings()
+    )
+    aws_capacity_config = aws_capacity_settings or AwsCapacitySettings()
+    platform_capacity_config = PlatformCapacitySettings()
+    aws_capacity_reconciliation_config = (
+        aws_capacity_reconciliation_settings or AwsCapacityReconciliationSettings()
+    )
+    retention_config = retention_settings or RetentionSettings()
+    aws_compute_catalog = (
+        configured_aws_compute_catalog(
+            aws_capacity_config,
+            agent_artifact_config,
+        )
+        if aws_account_connection_config.configured
+        else ()
+    )
+    compute_policies.available_catalog = aws_compute_catalog
+
+    aws_connection_directory = AwsAccountConnectionDirectory(context)
+    platform_namespace_id = PlatformNamespaceService(context.database).namespace_id
+
+    def platform_capacity_workspace() -> str:
+        return platform_namespace_id
+
+    provider_resolver = (
+        workspace_compute_provider_resolver(
+            aws_capacity_config,
+            agent_artifact_config,
+            connections=aws_connection_directory.list_for_workspace,
+            capacity_workspace=aws_connection_directory.capacity_workspace,
+            platform_providers=configured_platform_compute_providers(
+                platform_capacity_config,
+                provider_state=ProviderUnitStateService(context.database),
+                capacity_workspace=platform_capacity_workspace,
+                binaries_by_region=(
+                    aws_capacity_config.binaries_by_region(agent_artifact_config)
+                    if aws_capacity_config.configured
+                    else {}
+                ),
+            ),
+            gateway_origin=gateway_config.public_http_url,
+            presigned_origin=object_store_config.endpoint_url,
+        )
+        if aws_account_connection_config.configured or platform_capacity_config.configured
+        else None
+    )
+    pool_bootstrap = None
+    if provider_resolver is not None:
+        agent_version, agent_sha256 = agent_artifact_config.require_amd64()
+        pool_bootstrap = PoolBootstrapProvisioner(
+            control_plane_url=gateway_config.public_http_url,
+            agent_version=agent_version,
+            agent_sha256=agent_sha256,
+            agent_binary_url=aws_capacity_config.agent_binary_url,
+        )
+    scheduler_hooks = SchedulerComputeHooks(
+        RedisComputeStateRepository(redis),
+        worker_repository,
+        agent_intake=RedisProcessPresence(redis, AGENT_INTAKE_PRESENCE_ROLE),
+    )
+    compute = ComputeService(
+        context,
+        provider_resolver=provider_resolver,
+        pool_bootstrap_factory=pool_bootstrap,
+        scheduler_hooks=scheduler_hooks,
+        workspace_changes=workspace_changes,
+        capacity_owner_mutations=capacity_reservation_repository,
+        reserve_state=RedisFleetReserveState(redis),
+    )
+    compute_policies.aws_default_capacity = AwsDefaultCapacityBaseline(compute)
+    aws_composition = aws_account_connection_composition_from_settings(
+        context=context,
+        pool_drainer=compute,
+        connection_settings=aws_account_connection_config,
+        capacity_settings=aws_capacity_config,
+        gateway_origin=gateway_config.public_http_url,
+        workspace_changes=workspace_changes,
+        capacity_baseline=compute_policies,
+        admission=DatabaseBillingAdmission(),
+    )
+    placement_resources = (
+        aws_composition.deployment_bucket_access if aws_composition is not None else None
+    )
+    disks = DiskService(
+        context.database,
+        worker_absence=DatabaseDurableWorkerAbsence(context, worker_repository),
+    )
+    disk_volumes = DiskVolumeService(
+        context.database,
+        providers=ResolvedBlockVolumes(provider_resolver),
+        deployment=platform_namespace_id,
+        worker_absence=DatabaseDurableWorkerAbsence(context, worker_repository),
+    )
+    worker_events = WorkerEventService(context)
+    checkpoints = CheckpointService(
+        context,
+        retention_seconds=retention_config.checkpoint_seconds,
+    )
+    return RuntimeServiceCore(
+        workspace_bucket_client=core.workspace_bucket_client,
+        context=core.context,
+        auth=core.auth,
+        auth_token_cache=core.auth_token_cache,
+        tcp_ingress_settings=core.tcp_ingress_settings,
+        gateway_settings=core.gateway_settings,
+        workspace_change_stream_settings=core.workspace_change_stream_settings,
+        tunnel_certificate_service=core.tunnel_certificate_service,
+        agent_tunnel_client=core.agent_tunnel_client,
+        object_store_settings=core.object_store_settings,
+        workspace_storage_issuer=core.workspace_storage_issuer,
+        image_archive_settings=core.image_archive_settings,
+        image_archive_presigner=core.image_archive_presigner,
+        image_build_registry_settings=core.image_build_registry_settings,
+        container_service_settings=core.container_service_settings,
+        events=core.events,
+        workspace_changes=core.workspace_changes,
+        object_storage=core.object_storage,
+        cache_storage=core.cache_storage,
+        usage=core.usage,
+        volume_filesystem=core.volume_filesystem,
+        redis_client=core.redis_client,
+        binary_redis_client=core.binary_redis_client,
+        async_io=core.async_io,
+        owns_redis_client=core.owns_redis_client,
+        owns_binary_redis_client=core.owns_binary_redis_client,
+        owned_resources=core.owned_resources,
+        client_release_version=core.client_release_version,
+        scheduler_workers=core.scheduler_workers,
+        scheduler_containers=core.scheduler_containers,
+        scheduler_pool_states=core.scheduler_pool_states,
+        capacity_reservation_repository=core.capacity_reservation_repository,
+        tasks=core.tasks,
+        execution_demand=core.execution_demand,
+        control_plane_service=core.control_plane_service,
+        workspace_compute_policy_service=core.workspace_compute_policy_service,
+        apps=core.apps,
+        deployments=core.deployments,
+        secrets=core.secrets,
+        volumes=core.volumes,
+        containers=core.containers,
+        container_shutdowns=core.container_shutdowns,
+        scheduler_container_requests=core.scheduler_container_requests,
+        scheduler_workloads=core.scheduler_workloads,
+        images=core.images,
+        metrics=core.metrics,
+        payment_admission=core.payment_admission,
+        agent_route_reconciliation_settings=agent_route_reconciliation_config,
+        agent_disconnect_reconciliation_settings=agent_disconnect_reconciliation_config,
+        agent_binary_settings=agent_artifact_config,
+        aws_account_connection_settings=aws_account_connection_config,
+        aws_capacity_settings=aws_capacity_config,
+        platform_capacity_settings=platform_capacity_config,
+        aws_capacity_reconciliation_settings=aws_capacity_reconciliation_config,
+        aws_account_connection_directory=aws_connection_directory,
+        compute=compute,
+        worker_events=worker_events,
+        checkpoints=checkpoints,
+        disks=disks,
+        disk_volumes=disk_volumes,
+        aws_connections=aws_composition.service if aws_composition is not None else None,
+        deployment_placement_resources=placement_resources,
+        users=core.users,
+        deployment_resources=core.deployment_resources,
+        volume_metering=core.volume_metering,
+    )
+
+
+def create_management_core(core: RuntimeServiceCore) -> ManagementServiceCore:
+    context = core.context
+    gateway_config = core.gateway_settings
+    events = core.events
+    workspace_changes = core.workspace_changes
+    resolved_volume_filesystem = core.volume_filesystem
+    redis = core.redis_client
+    worker_repository = core.scheduler_workers
+    tasks = core.tasks
+    control_plane = core.control_plane_service
+    compute_policies = core.workspace_compute_policy_service
+    apps = core.apps
+    deployments = core.deployments
+    containers = core.containers
+    container_shutdowns = core.container_shutdowns
+    payment_admission = core.payment_admission
+    volume_metering_service = core.volume_metering
+    disks = core.disks
+    disk_volumes = core.disk_volumes
+    volume_metering_service = core.volume_metering
+    placement_resources = core.deployment_placement_resources
+    container_runtime_state = RedisContainerRuntimeStateRepository(redis)
+    stream_events = RedisEventStreamRepository(redis)
+    stripe_config = StripeSettings()
+    resend_config = ResendSettings()
+    payment_provider = stripe_config.provider_factory()
+    invitations = WorkspaceInvitationService(
+        context,
+        invitations_url=f"{gateway_config.public_http_url.rstrip('/')}/invitations",
+    )
+    sign_in = SignInService(
+        context=context,
+        redis=redis,
+        provider_factory=GitHubAppSettings().provider,
+        provision_default_workspace=control_plane.ensure_default_workspace,
+        provision_billing_account=_billing_account_provisioner(context, payment_provider),
+    )
+    disk_deletion = DiskDeletionService(
+        context.database,
+        disks=disks,
+        volumes=disk_volumes,
+        objects=resolved_volume_filesystem,
+        metering=volume_metering_service,
+    )
+    deployment_lifecycle = AppDeploymentLifecycleService(
+        context,
+        workspace_changes=workspace_changes,
+        placement_resources=placement_resources,
+    )
+    execution_lifecycle = ProductionAppExecutionLifecycleEffects(
+        context,
+        containers,
+        tasks,
+        redis,
+        container_shutdowns,
+    )
+    deployment_plans = DeploymentPlanService(
+        context,
+        execution_lifecycle,
+        workspace_changes=workspace_changes,
+        placement_resources=placement_resources,
+    )
+    apps = AppService(
+        context,
+        deployment_lifecycle,
+        execution_lifecycle,
+        DatabaseAppImageAvailability(),
+        workspace_changes=workspace_changes,
+    )
+    cron_jobs = CronJobService(
+        context,
+        workspace_changes=workspace_changes,
+    )
+    deployments = DeploymentService(
+        context,
+        events,
+        compute_policies,
+        DeploymentRegistrationService(apps, control_plane),
+        cron_jobs,
+        payment_admission,
+        execution_lifecycle,
+        workspace_changes=workspace_changes,
+        placement_resources=placement_resources,
+    )
+    custom_domains = CustomDomainService(
+        context=context,
+        provider_factory=CloudflareSettings().provider,
+        platform_base_domain=gateway_config.public_base_domain,
+        admission=DatabaseBillingAdmission(),
+    )
+    agents = AgentService(context, workspace_changes=workspace_changes)
+    autoscaler_states = AutoscalerStateService(context)
+    return ManagementServiceCore(
+        workspace_bucket_client=core.workspace_bucket_client,
+        context=core.context,
+        auth=core.auth,
+        auth_token_cache=core.auth_token_cache,
+        tcp_ingress_settings=core.tcp_ingress_settings,
+        gateway_settings=core.gateway_settings,
+        workspace_change_stream_settings=core.workspace_change_stream_settings,
+        tunnel_certificate_service=core.tunnel_certificate_service,
+        agent_tunnel_client=core.agent_tunnel_client,
+        object_store_settings=core.object_store_settings,
+        workspace_storage_issuer=core.workspace_storage_issuer,
+        image_archive_settings=core.image_archive_settings,
+        image_archive_presigner=core.image_archive_presigner,
+        image_build_registry_settings=core.image_build_registry_settings,
+        container_service_settings=core.container_service_settings,
+        events=core.events,
+        workspace_changes=core.workspace_changes,
+        object_storage=core.object_storage,
+        cache_storage=core.cache_storage,
+        usage=core.usage,
+        volume_filesystem=core.volume_filesystem,
+        redis_client=core.redis_client,
+        binary_redis_client=core.binary_redis_client,
+        async_io=core.async_io,
+        owns_redis_client=core.owns_redis_client,
+        owns_binary_redis_client=core.owns_binary_redis_client,
+        owned_resources=core.owned_resources,
+        client_release_version=core.client_release_version,
+        scheduler_workers=core.scheduler_workers,
+        scheduler_containers=core.scheduler_containers,
+        scheduler_pool_states=core.scheduler_pool_states,
+        capacity_reservation_repository=core.capacity_reservation_repository,
+        tasks=core.tasks,
+        execution_demand=core.execution_demand,
+        control_plane_service=core.control_plane_service,
+        workspace_compute_policy_service=core.workspace_compute_policy_service,
+        secrets=core.secrets,
+        volumes=core.volumes,
+        containers=core.containers,
+        container_shutdowns=core.container_shutdowns,
+        scheduler_container_requests=core.scheduler_container_requests,
+        scheduler_workloads=core.scheduler_workloads,
+        images=core.images,
+        metrics=core.metrics,
+        payment_admission=core.payment_admission,
+        agent_route_reconciliation_settings=core.agent_route_reconciliation_settings,
+        agent_disconnect_reconciliation_settings=core.agent_disconnect_reconciliation_settings,
+        agent_binary_settings=core.agent_binary_settings,
+        aws_account_connection_settings=core.aws_account_connection_settings,
+        aws_capacity_settings=core.aws_capacity_settings,
+        platform_capacity_settings=core.platform_capacity_settings,
+        aws_capacity_reconciliation_settings=core.aws_capacity_reconciliation_settings,
+        aws_account_connection_directory=core.aws_account_connection_directory,
+        compute=core.compute,
+        worker_events=core.worker_events,
+        checkpoints=core.checkpoints,
+        disks=core.disks,
+        disk_volumes=core.disk_volumes,
+        aws_connections=core.aws_connections,
+        invitations=invitations,
+        sign_in=sign_in,
+        stripe_settings=stripe_config,
+        resend_settings=resend_config,
+        payment_provider=payment_provider,
+        deployment_plans=deployment_plans,
+        custom_domains=custom_domains,
+        cron_jobs=cron_jobs,
+        agents=agents,
+        autoscaler_states=autoscaler_states,
+        devboxes=DevboxService(
+            context.database,
+            keep_alive=container_runtime_state,
+            startup=StreamContainerStartupReader(stream_events),
+            worker_absence=DatabaseDurableWorkerAbsence(context, worker_repository),
+        ),
+        disk_deletion=disk_deletion,
+        apps=apps,
+        deployments=deployments,
+        deployment_placement_resources=core.deployment_placement_resources,
+        users=core.users,
+        deployment_resources=core.deployment_resources,
+        volume_metering=core.volume_metering,
+    )
+
+
+def create_api_core(
+    database: DatabaseClient,
+    *,
+    tcp_ingress_settings: TcpIngressSettings | None = None,
+    agent_route_reconciliation_settings: AgentRouteReconciliationSettings | None = None,
+    agent_disconnect_reconciliation_settings: (AgentDisconnectReconciliationSettings | None) = None,
+    gateway_settings: GatewaySettings | None = None,
+    workspace_change_stream_settings: WorkspaceChangeStreamSettings | None = None,
+    agent_binary_settings: AgentBinarySettings | None = None,
+    aws_account_connection_settings: AwsAccountConnectionSettings | None = None,
+    aws_capacity_settings: AwsCapacitySettings | None = None,
+    aws_capacity_reconciliation_settings: AwsCapacityReconciliationSettings | None = None,
+    object_store_settings: S3ObjectStoreSettings | None = None,
+    workspace_storage_issuer: WorkspaceStorageIssuer | None = None,
+    object_storage: ObjectStorage | None = None,
+    object_store_client: ObjectByteClient | None = None,
+    workspace_storage_client: WorkspaceBucketClient | None = None,
+    image_build_execution_settings: ImageBuildExecutionSettings | None = None,
+    image_build_registry_settings: ImageBuildRegistrySettings | None = None,
+    image_build_container_settings: ImageBuildContainerSettings | None = None,
+    container_service_settings: ContainerServiceSettings | None = None,
+    retention_settings: RetentionSettings | None = None,
+    volume_metering_settings: VolumeMeteringSettings | None = None,
+    volume_metering: PersistentVolumeMeteringService | None = None,
+    root: Path | None = None,
+    redis_client: RedisClient,
+    binary_redis_client: RedisClient,
+    async_io: ApiAsyncIo | None = None,
+    owns_redis_client: bool = False,
+    owns_binary_redis_client: bool = False,
+    owned_resources: tuple[ApiOwnedResource, ...] = (),
+    client_release_version: str | None = None,
+) -> ManagementServiceCore:
+    infrastructure = create_api_infrastructure(
+        database,
+        tcp_ingress_settings=tcp_ingress_settings,
+        gateway_settings=gateway_settings,
+        workspace_change_stream_settings=workspace_change_stream_settings,
+        object_store_settings=object_store_settings,
+        workspace_storage_issuer=workspace_storage_issuer,
+        object_storage=object_storage,
+        object_store_client=object_store_client,
+        workspace_storage_client=workspace_storage_client,
+        image_build_registry_settings=image_build_registry_settings,
+        container_service_settings=container_service_settings,
+        root=root,
+        redis_client=redis_client,
+        binary_redis_client=binary_redis_client,
+        async_io=async_io,
+        owns_redis_client=owns_redis_client,
+        owns_binary_redis_client=owns_binary_redis_client,
+        owned_resources=owned_resources,
+        client_release_version=client_release_version,
+    )
+    workload = create_workload_core(
+        infrastructure,
+        image_build_execution_settings=image_build_execution_settings,
+        image_build_container_settings=image_build_container_settings,
+        volume_metering_settings=volume_metering_settings,
+        volume_metering=volume_metering,
+    )
+    runtime = create_runtime_core(
+        workload,
+        agent_route_reconciliation_settings=agent_route_reconciliation_settings,
+        agent_disconnect_reconciliation_settings=agent_disconnect_reconciliation_settings,
+        agent_binary_settings=agent_binary_settings,
+        aws_account_connection_settings=aws_account_connection_settings,
+        aws_capacity_settings=aws_capacity_settings,
+        aws_capacity_reconciliation_settings=aws_capacity_reconciliation_settings,
+        retention_settings=retention_settings,
+    )
+    return create_management_core(runtime)
+
+
+@dataclass(frozen=True, slots=True)
+class ApiTransport:
+    route_resolver: SchedulerBackendRouteResolver
+    route_dialer: BackendRouteDialer
+    container_clients: SchedulerContainerClientFactory
+    proxy_client: PodProxySocketClient
+    async_database: AsyncDatabaseClient | None
+    async_scheduler_containers: AsyncRedisSchedulerContainerReader | None
+    async_http: AsyncBackendHttpClient | None
+    async_container_readiness: AsyncRedisContainerReadiness | None
+    async_dispatcher: AsyncEndpointInstanceDispatcher | None
+
+    async def close(self) -> None:
+        if self.async_http is not None:
+            await self.async_http.close()
+
+
+def compose_api_transport(core: ApiServiceCore) -> ApiTransport:
     scheduler_containers = core.scheduler_containers
-    scheduler_pool_states = core.scheduler_pool_states
     route_resolver = SchedulerBackendRouteResolver(scheduler_containers)
     route_dialer = BackendRouteDialer(core.agent_tunnel_client, route_resolver)
     transport_factory = HttpContainerServiceTransportFactory(
@@ -1196,57 +1473,150 @@ def _compose_api_services(
             async_http,
             async_container_readiness,
         )
-    endpoint = endpoint_service or EndpointControlService(
-        core,
-        async_database=async_database,
-        async_dispatcher=async_dispatcher,
-    )
-    function = function_service or FunctionControlService(
-        core,
-        async_database=async_database,
-        task_changes=AsyncTaskChangeReader(async_io.realtime) if async_io is not None else None,
-    )
-    gateway = gateway_service or _gateway_control_service(
-        core,
-        scheduler_workers=scheduler_workers,
-        scheduler_containers=scheduler_containers,
-        scheduler_pool_states=scheduler_pool_states,
-        container_clients=container_clients,
-    )
-    image = image_service or ImageControlService(
-        core,
-        base_image_digest_inspector=core.image_build_registry_settings.create_inspector(),
-        build_context_reader=core.object_storage,
-        registry_credential_resolver=ProductionRegistryCredentialResolver(),
-    )
-    pod = pod_service or _pod_control_service(
-        core,
-        scheduler_containers=scheduler_containers,
+    return ApiTransport(
+        route_resolver=route_resolver,
+        route_dialer=route_dialer,
         container_clients=container_clients,
         proxy_client=proxy_client,
         async_database=async_database,
         async_scheduler_containers=async_scheduler_containers,
         async_http=async_http,
         async_container_readiness=async_container_readiness,
+        async_dispatcher=async_dispatcher,
     )
-    shell = shell_service or ShellControlService(
+
+
+@dataclass(frozen=True, slots=True)
+class TaskControlRoutes:
+    transport: ApiTransport
+    function_service: FunctionApiService
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionRoutes(TaskControlRoutes):
+    task_management_service: TaskManagementService
+    gateway_container_service: GatewayContainerService
+    task_rerun_service: TaskRerunService
+    endpoint_service: EndpointApiService
+    pod_service: PodControlService
+    shell_service: ShellControlService
+    map_service: RedisMapService
+    simple_queue_service: RedisSimpleQueueService
+    artifact_service: ArtifactStorageService
+    volume_service: VolumeControlService
+    backend_route_resolver: SchedulerBackendRouteResolver
+    backend_route_dialer: BackendRouteDialer
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeRoutes(TaskControlRoutes):
+    gateway_service: GatewayControlService
+    worker_repository_service: WorkerRepositoryService
+    provider_node_enrollment_service: ProviderNodeEnrollmentService | None
+    machine_lifecycle_service: MachineLifecycleService
+
+
+@dataclass(frozen=True, slots=True)
+class ManagementRoutes(TaskControlRoutes):
+    gateway_service: GatewayControlService
+    gateway_deployment_service: GatewayDeploymentService
+    image_service: ImageControlService
+    task_rerun_service: TaskRerunService
+    autoscaler_operations_service: AutoscalerOperationsService
+    scheduler_worker_admin_service: SchedulerWorkerAdminService
+    machine_lifecycle_service: MachineLifecycleService
+
+
+type ApiRoutes = ManagementRoutes | ExecutionRoutes | RuntimeRoutes | ApiServices
+
+
+@dataclass(frozen=True, slots=True)
+class ApiProcessServices:
+    core: ApiServiceCore
+    routes: ApiRoutes
+
+
+def compose_task_routes(core: ApiServiceCore) -> TaskControlRoutes:
+    transport = compose_api_transport(core)
+    async_io = core.async_io
+    function = FunctionControlService(
         core,
-        scheduler_containers=scheduler_containers,
-        container_clients=container_clients,
+        async_database=transport.async_database,
+        task_changes=AsyncTaskChangeReader(async_io.realtime) if async_io is not None else None,
+    )
+    return TaskControlRoutes(transport, function)
+
+
+def compose_execution_routes(core: ApiServiceCore, tasks: TaskControlRoutes) -> ExecutionRoutes:
+    transport = tasks.transport
+    async_io = core.async_io
+    endpoint = EndpointControlService(
+        core,
+        async_database=transport.async_database,
+        async_dispatcher=transport.async_dispatcher,
+        workload_changes=(
+            AsyncWorkloadChangeReader(core.async_io.realtime) if core.async_io is not None else None
+        ),
+    )
+    pod = _pod_control_service(
+        core,
+        scheduler_containers=core.scheduler_containers,
+        container_clients=transport.container_clients,
+        proxy_client=transport.proxy_client,
+        async_database=transport.async_database,
+        async_scheduler_containers=transport.async_scheduler_containers,
+        async_http=transport.async_http,
+        async_container_readiness=transport.async_container_readiness,
+    )
+    shell = ShellControlService(
+        core,
+        sync_workload_changes=async_io.sync_workload_changes if async_io is not None else None,
+        scheduler_containers=core.scheduler_containers,
+        container_clients=transport.container_clients,
         backend_connector=partial(
             connect_shell_backend,
-            route_dialer=route_dialer,
+            route_dialer=transport.route_dialer,
         ),
-        async_database=async_database,
-        async_scheduler_containers=async_scheduler_containers,
+        async_database=transport.async_database,
+        async_scheduler_containers=transport.async_scheduler_containers,
         connections=(
             AsyncRedisPodProxyConnectionRepository(async_io.redis) if async_io is not None else None
         ),
     )
-    worker_repository = worker_repository_service or _worker_repository_service(
+    return ExecutionRoutes(
+        task_management_service=TaskManagementService(
+            core.context, core.tasks, FunctionControlService(core)
+        ),
+        task_rerun_service=TaskRerunService(core, function_invoker=tasks.function_service),
+        transport=transport,
+        function_service=tasks.function_service,
+        gateway_container_service=GatewayContainerService(
+            core.containers, core.events, transport.container_clients
+        ),
+        endpoint_service=endpoint,
+        pod_service=pod,
+        shell_service=shell,
+        map_service=RedisMapService(core.binary_redis()),
+        simple_queue_service=RedisSimpleQueueService(core.binary_redis()),
+        artifact_service=ArtifactStorageService(core.context, object_storage=core.object_storage),
+        volume_service=VolumeControlService(core, filesystem=core.volume_filesystem),
+        backend_route_resolver=transport.route_resolver,
+        backend_route_dialer=transport.route_dialer,
+    )
+
+
+def compose_runtime_routes(core: RuntimeServiceCore, tasks: TaskControlRoutes) -> RuntimeRoutes:
+    gateway = _gateway_control_service(
         core,
-        scheduler_workers=scheduler_workers,
-        scheduler_containers=scheduler_containers,
+        scheduler_workers=core.scheduler_workers,
+        scheduler_containers=core.scheduler_containers,
+        scheduler_pool_states=core.scheduler_pool_states,
+        container_clients=tasks.transport.container_clients,
+    )
+    worker_repository = _worker_repository_service(
+        core,
+        scheduler_workers=core.scheduler_workers,
+        scheduler_containers=core.scheduler_containers,
     )
     public_ingress_config = PublicIngressSettings()
     provider_node_enrollment = (
@@ -1254,58 +1624,137 @@ def _compose_api_services(
             gateway=gateway,
             compute=core.compute,
             events=core.events,
-            rate_limiter=redis,
+            rate_limiter=core.redis(),
             proof_max_inflight=public_ingress_config.provider_node_proof_max_inflight,
             identity_verifier=AwsProviderNodeIdentityAdapter(
                 http_client=BoundedProviderNodeIdentityHttpClient(),
-                replay_guard=RedisProviderNodeIdentityReplayGuard(redis),
+                replay_guard=RedisProviderNodeIdentityReplayGuard(core.redis()),
             ),
         )
         if core.compute.provider_resolver is not None
         and core.compute.pool_bootstrap_factory is not None
         else None
     )
+    return RuntimeRoutes(
+        transport=tasks.transport,
+        function_service=tasks.function_service,
+        gateway_service=gateway,
+        worker_repository_service=worker_repository,
+        provider_node_enrollment_service=provider_node_enrollment,
+        machine_lifecycle_service=MachineLifecycleService(
+            gateway=gateway, provider_compute=core.compute
+        ),
+    )
+
+
+def compose_management_routes(
+    core: ManagementServiceCore, tasks: TaskControlRoutes
+) -> ManagementRoutes:
+    gateway = _gateway_control_service(
+        core,
+        scheduler_workers=core.scheduler_workers,
+        scheduler_containers=core.scheduler_containers,
+        scheduler_pool_states=core.scheduler_pool_states,
+        container_clients=tasks.transport.container_clients,
+    )
+    transport = tasks.transport
+    function = tasks.function_service
+    endpoint = EndpointControlService(
+        core,
+        async_database=transport.async_database,
+        async_dispatcher=transport.async_dispatcher,
+        workload_changes=(
+            AsyncWorkloadChangeReader(core.async_io.realtime) if core.async_io is not None else None
+        ),
+    )
+    pod = _pod_control_service(
+        core,
+        scheduler_containers=core.scheduler_containers,
+        container_clients=transport.container_clients,
+        proxy_client=transport.proxy_client,
+        async_database=transport.async_database,
+        async_scheduler_containers=transport.async_scheduler_containers,
+        async_http=transport.async_http,
+        async_container_readiness=transport.async_container_readiness,
+    )
+    image = ImageControlService(
+        core,
+        base_image_digest_inspector=core.image_build_registry_settings.create_inspector(),
+        build_context_reader=core.object_storage,
+        registry_credential_resolver=ProductionRegistryCredentialResolver(),
+    )
     autoscaler_operations = AutoscalerOperationsService(
         core,
         function_autoscaler=AutoscalingDriver(
             core,
-            redis=redis,
+            redis=core.redis(),
             workload=FunctionAutoscaler(core, functions=function),
-            container_states=scheduler_containers,
-            container_requests=scheduler_workers,
+            container_states=core.scheduler_containers,
+            container_requests=core.scheduler_workers,
         ),
         endpoint_autoscaler=AutoscalingDriver(
             core,
-            redis=redis,
+            redis=core.redis(),
             workload=EndpointAutoscaler(
                 core,
                 endpoints=endpoint,
                 dispatches=EndpointDispatchAutoscalingReader(core.context.database),
             ),
-            container_states=scheduler_containers,
-            container_requests=scheduler_workers,
+            container_states=core.scheduler_containers,
+            container_requests=core.scheduler_workers,
         ),
         pod_autoscaler=AutoscalingDriver(
             core,
-            redis=redis,
+            redis=core.redis(),
             workload=PodAutoscaler(
                 core,
-                redis=redis,
+                redis=core.redis(),
                 pods=pod,
             ),
-            container_states=scheduler_containers,
-            container_requests=scheduler_workers,
+            container_states=core.scheduler_containers,
+            container_requests=core.scheduler_workers,
         ),
     )
     scheduler_worker_admin = SchedulerWorkerAdminService(
-        scheduler_workers,
-        scheduler_containers,
+        core.scheduler_workers,
+        core.scheduler_containers,
         stop_container=lambda container_id: _stop_scheduler_worker_container(
             core,
             container_id,
         ),
     )
+    return ManagementRoutes(
+        transport=transport,
+        function_service=function,
+        gateway_service=gateway,
+        gateway_deployment_service=GatewayDeploymentService(
+            control_plane=core.control_plane_service,
+            apps=core.apps,
+            deployments=core.deployments,
+            deployment_resources=core.deployment_resources,
+            management=ManagementService(core),
+        ),
+        image_service=image,
+        task_rerun_service=TaskRerunService(core, function_invoker=function),
+        autoscaler_operations_service=autoscaler_operations,
+        scheduler_worker_admin_service=scheduler_worker_admin,
+        machine_lifecycle_service=MachineLifecycleService(
+            gateway=gateway, provider_compute=core.compute
+        ),
+    )
+
+
+def compose_api_services(core: ManagementServiceCore) -> ApiServices:
+    tasks = compose_task_routes(core)
+    execution = compose_execution_routes(core, tasks)
+    runtime = compose_runtime_routes(core, tasks)
+    management = compose_management_routes(core, tasks)
     return ApiServices(
+        task_management_service=execution.task_management_service,
+        workspace_bucket_client=core.workspace_bucket_client,
+        transport=tasks.transport,
+        gateway_deployment_service=management.gateway_deployment_service,
+        deployment_placement_resources=core.deployment_placement_resources,
         client_release_version=core.client_release_version,
         context=core.context,
         auth=core.auth,
@@ -1337,6 +1786,7 @@ def _compose_api_services(
         events=core.events,
         workspace_changes=core.workspace_changes,
         tasks=core.tasks,
+        execution_demand=core.execution_demand,
         control_plane_service=core.control_plane_service,
         aws_account_connection_directory=core.aws_account_connection_directory,
         workspace_compute_policy_service=core.workspace_compute_policy_service,
@@ -1380,30 +1830,25 @@ def _compose_api_services(
         owns_redis_client=core.owns_redis_client,
         owns_binary_redis_client=core.owns_binary_redis_client,
         owned_resources=core.owned_resources,
-        map_service=map_service or RedisMapService(core.binary_redis()),
-        simple_queue_service=(simple_queue_service or RedisSimpleQueueService(core.binary_redis())),
-        artifact_service=artifact_service
-        or ArtifactStorageService(core.context, object_storage=core.object_storage),
-        endpoint_service=endpoint,
-        function_service=function,
-        gateway_service=gateway,
-        image_service=image,
-        pod_service=pod,
-        shell_service=shell,
-        volume_service=(
-            volume_service or VolumeControlService(core, filesystem=core.volume_filesystem)
-        ),
-        worker_repository_service=worker_repository,
-        provider_node_enrollment_service=provider_node_enrollment,
-        machine_lifecycle_service=MachineLifecycleService(
-            gateway=gateway,
-            provider_compute=core.compute,
-        ),
-        backend_route_resolver=route_resolver,
-        backend_route_dialer=route_dialer,
-        task_rerun_service=TaskRerunService(core, function_invoker=function),
-        autoscaler_operations_service=autoscaler_operations,
-        scheduler_worker_admin_service=scheduler_worker_admin,
+        map_service=execution.map_service,
+        simple_queue_service=execution.simple_queue_service,
+        artifact_service=execution.artifact_service,
+        endpoint_service=execution.endpoint_service,
+        function_service=tasks.function_service,
+        gateway_service=runtime.gateway_service,
+        gateway_container_service=execution.gateway_container_service,
+        image_service=management.image_service,
+        pod_service=execution.pod_service,
+        shell_service=execution.shell_service,
+        volume_service=execution.volume_service,
+        worker_repository_service=runtime.worker_repository_service,
+        provider_node_enrollment_service=runtime.provider_node_enrollment_service,
+        machine_lifecycle_service=runtime.machine_lifecycle_service,
+        backend_route_resolver=execution.backend_route_resolver,
+        backend_route_dialer=execution.backend_route_dialer,
+        task_rerun_service=management.task_rerun_service,
+        autoscaler_operations_service=management.autoscaler_operations_service,
+        scheduler_worker_admin_service=management.scheduler_worker_admin_service,
     )
 
 
@@ -1415,7 +1860,7 @@ def _stop_scheduler_worker_container(
 
 
 def _gateway_control_service(
-    core: ApiServiceCore,
+    core: RuntimeServiceCore,
     *,
     scheduler_workers: RedisSchedulerWorkerRepository,
     scheduler_containers: RedisSchedulerContainerRepository,
@@ -1426,7 +1871,7 @@ def _gateway_control_service(
     return GatewayControlService(
         core,
         control_plane=core.control_plane_service,
-        management=ManagementService(core),
+        function_tasks=FunctionControlService(core),
         compute_state=compute_states,
         scheduler_workers=scheduler_workers,
         scheduler_containers=scheduler_containers,
@@ -1440,7 +1885,6 @@ def _gateway_control_service(
         connections=RedisAgentConnectionDirectory(core.redis()),
         tunnel_authority=AgentTunnelAuthority(core.context.database, compute_states),
         container_stopper=SchedulerContainerServiceStopper(container_clients),
-        container_client_factory=container_clients,
         gateway_endpoint=GatewayEndpointConfig(http_url=core.gateway_settings.public_http_url),
         agent_artifact_version=core.agent_binary_settings.binary_version,
         agent_sha256_by_arch=core.agent_binary_settings.binary_sha256_by_arch,
@@ -1477,6 +1921,10 @@ def _pod_control_service(
     async_io = core.async_io
     return PodControlService(
         core,
+        sync_workload_changes=async_io.sync_workload_changes if async_io is not None else None,
+        workload_changes=(
+            AsyncWorkloadChangeReader(async_io.realtime) if async_io is not None else None
+        ),
         filesystem_images=FilesystemImageService(core.images),
         gateway_http_url=core.gateway_settings.public_http_url,
         scheduler_containers=scheduler_containers,
@@ -1496,7 +1944,7 @@ def _pod_control_service(
 
 
 def _worker_repository_service(
-    core: ApiServiceCore,
+    core: RuntimeServiceCore,
     *,
     scheduler_workers: RedisSchedulerWorkerRepository,
     scheduler_containers: RedisSchedulerContainerRepository,

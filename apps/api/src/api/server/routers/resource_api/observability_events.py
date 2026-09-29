@@ -25,9 +25,9 @@ from shared.http.observability import SSE_HEARTBEAT_SECONDS, EventListResponse, 
 from shared.realtime.streams import EventHistoryQuery
 
 from api.server.auth import read_workspace
-from api.server.dependencies import current_services
+from api.server.dependencies import management_services
 from api.server.routers.resource_api.common import _management
-from api.server.services import ApiServices
+from api.server.services import ManagementServiceCore
 from api.server.sse import (
     SseItem,
     sse_response_items,
@@ -47,7 +47,7 @@ def api_v1_stream_workspace_changes(
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
     *,
     workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> StreamingResponse:
     changes = AsyncWorkspaceChangeReader(services.require_async_io().realtime)
     return sse_response_prepared(
@@ -65,7 +65,7 @@ def list_events(
     limit: int = Query(100, ge=1, le=1000),
     *,
     workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> EventListResponse:
     return EventListResponse(
         events=services.events.list(
@@ -115,7 +115,7 @@ def api_v1_stream_container_events(
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
     *,
     workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> StreamingResponse:
     query = EventHistoryQuery(workspace_id=workspace_id, container_id=container_id)
     if response := _redis_event_response(
@@ -141,7 +141,7 @@ def api_v1_container_event_summary(
     include_events: bool = False,
     *,
     workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> ContainerEventSummary | None:
     request = ContainerEventsBatchRequest(
         targets=[ContainerEventsBatchTarget(container_id=container_id)],
@@ -162,7 +162,7 @@ def api_v1_get_container_events(
     cursor: str | None = None,
     *,
     workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> EventQueryResponse:
     return _management(services).event_history(
         workspace_id,
@@ -186,7 +186,7 @@ def api_v1_stream_stub_container_events(
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
     *,
     workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> StreamingResponse:
     query = EventHistoryQuery(
         workspace_id=workspace_id,
@@ -221,7 +221,7 @@ def api_v1_stub_container_event_summary(
     include_events: bool = False,
     *,
     workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> ContainerEventSummary | None:
     request = ContainerEventsBatchRequest(
         targets=[ContainerEventsBatchTarget(container_id=container_id, stub_id=stub_id)],
@@ -243,7 +243,7 @@ def api_v1_get_stub_container_events(
     cursor: str | None = None,
     *,
     workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> EventQueryResponse:
     result = _management(services).event_history(
         workspace_id,
@@ -273,7 +273,7 @@ def api_v1_stream_stub_events(
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
     *,
     workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> StreamingResponse:
     query = EventHistoryQuery(workspace_id=workspace_id, stub_id=stub_id)
     if response := _redis_event_response(
@@ -304,7 +304,7 @@ def api_v1_stream_task_events(
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
     *,
     workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> StreamingResponse:
     query = EventHistoryQuery(workspace_id=workspace_id, task_id=task_id)
     if response := _redis_event_response(
@@ -333,7 +333,7 @@ def api_v1_stream_app_events(
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
     *,
     workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> StreamingResponse:
     query = EventHistoryQuery(workspace_id=workspace_id, app_id=app_id)
     if response := _redis_event_response(
@@ -367,7 +367,7 @@ def api_v1_event_history(
     cursor: str | None = None,
     *,
     workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> EventQueryResponse:
     return _management(services).event_history(
         workspace_id,
@@ -392,7 +392,7 @@ def api_v1_stream_workspace_events(
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
     *,
     workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> StreamingResponse:
     query = EventHistoryQuery(workspace_id=workspace_id)
     if response := _redis_event_response(
@@ -416,13 +416,13 @@ def api_v1_stream_workspace_events(
 def api_v1_container_events_batch(
     request: ContainerEventsBatchRequest,
     workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> ContainerEventsBatchResponse:
     return services.events.container_events_batch(request, workspace_id=workspace_id)
 
 
 def _redis_event_response(
-    services: ApiServices,
+    services: ManagementServiceCore,
     query: EventHistoryQuery,
     *,
     follow: bool,
@@ -504,7 +504,7 @@ def api_v1_get_task_events(
     cursor: str | None = None,
     *,
     workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> EventQueryResponse:
     return _management(services).event_history(
         workspace_id,

@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Annotated
 
 from execution.pods.proxy import PodProxyUnavailable
+from execution.pods.service import PodControlService
 from execution.ssh.service import PodSshTunnelService, SshIdentityService
 from fastapi import APIRouter, Depends, Query, WebSocket, status
 from shared.deployments import PodRole
@@ -19,7 +20,8 @@ from api.server.dependencies import (
 )
 from api.server.http import WebSocketSocketBridge, close_websocket
 from api.server.public_transfers import attribute_public_transfer
-from api.server.services import ApiServices
+from api.server.service_dependencies import pod_service
+from api.server.services import ApiServiceCore
 
 SSH_TUNNEL_BUFFER_BYTES = 64 * 1024
 SSH_TUNNEL_EARLY_BYTES = 1024 * 1024
@@ -29,17 +31,18 @@ AppQuery = Annotated[str, Query(min_length=1, description="Name of the app the p
 
 
 def ssh_identity_service(
-    services: Annotated[ApiServices, Depends(current_services)],
+    services: Annotated[ApiServiceCore, Depends(current_services)],
 ) -> SshIdentityService:
     return SshIdentityService(services.context.database)
 
 
 def pod_ssh_tunnel_service(
-    services: Annotated[ApiServices, Depends(current_websocket_services)],
+    services: Annotated[ApiServiceCore, Depends(current_websocket_services)],
+    pods: Annotated[PodControlService, Depends(pod_service)],
 ) -> PodSshTunnelService:
     return PodSshTunnelService(
         async_database=services.require_async_io().database,
-        pods=services.pod_service,
+        pods=pods,
     )
 
 
@@ -86,7 +89,7 @@ async def pod_ssh_tunnel(
     websocket: WebSocket,
     name: str,
     app: AppQuery,
-    services: Annotated[ApiServices, Depends(current_websocket_services)],
+    services: Annotated[ApiServiceCore, Depends(current_websocket_services)],
     service: Annotated[PodSshTunnelService, Depends(pod_ssh_tunnel_service)],
 ) -> None:
     workspace_id = await authorize_websocket_workspace(services, websocket)

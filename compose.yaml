@@ -411,12 +411,12 @@ services:
         exec lazycloud-connection-gateway
     environment:
       <<: [*process-env, *database-env, *redis-env, *gateway-env, *tunnel-env]
-      LAZYCLOUD_CONNECTION_GATEWAY_CONTROL_ADDRESS: "control-plane:9000"
+      LAZYCLOUD_CONNECTION_GATEWAY_CONTROL_ADDRESS: "api-ingress:9001"
       LAZYCLOUD_DATABASE_POOL_SIZE: "1"
       LAZYCLOUD_DATABASE_MAX_OVERFLOW: "0"
     extra_hosts: *local-hosts
     depends_on:
-      control-plane:
+      api-ingress:
         condition: service_healthy
     volumes:
       - connection-gateway-0:/var/lib/lazycloud/connection-gateway
@@ -454,7 +454,7 @@ services:
       timeout: 2s
       retries: 10
 
-  control-plane:
+  control-plane: &api-process
     image: "api:${LAZYCLOUD_COMPOSE_IMAGE_TAG:-local}"
     extra_hosts: *local-hosts
     restart: unless-stopped
@@ -471,10 +471,14 @@ services:
         "0.0.0.0",
         "--port",
         "9000",
+        "--workers",
+        "2",
         "--log-level",
         "${LAZYCLOUD_LOG_LEVEL:-INFO}",
       ]
-    environment:
+    environment: &api-environment
+      LAZYCLOUD_DATABASE_POOL_SIZE: "1"
+      LAZYCLOUD_DATABASE_MAX_OVERFLOW: "1"
       <<:
         [
           *process-env,
@@ -503,9 +507,6 @@ services:
       nofile:
         soft: 1048576
         hard: 1048576
-    ports:
-      - "${LAZYCLOUD_COMPOSE_CONTROL_PLANE_PORT:-8000}:9000"
-      - "${LAZYCLOUD_COMPOSE_TCP_INGRESS_PORT:-1995}:1995"
     depends_on:
       <<: *lazycloud-depends
       platform-initialize:
@@ -533,6 +534,58 @@ services:
       timeout: 5s
       retries: 12
       start_period: 30s
+
+  execution-api:
+    <<: *api-process
+    command: ["lazycloud-execution-api", "--host", "0.0.0.0", "--port", "9000", "--workers", "2"]
+    environment:
+      <<: *api-environment
+      LAZYCLOUD_DATABASE_POOL_SIZE: "2"
+      LAZYCLOUD_DATABASE_MAX_OVERFLOW: "1"
+    ports:
+      - "${LAZYCLOUD_COMPOSE_TCP_INGRESS_PORT:-1995}:1995"
+
+  runtime-api:
+    <<: *api-process
+    command: ["lazycloud-runtime-api", "--host", "0.0.0.0", "--port", "9000", "--workers", "2"]
+    environment:
+      <<: *api-environment
+      LAZYCLOUD_DATABASE_POOL_SIZE: "2"
+      LAZYCLOUD_DATABASE_MAX_OVERFLOW: "1"
+
+  api-ingress:
+    image: haproxy:3.2-alpine
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        origin="$${LAZYCLOUD_GATEWAY_PUBLIC_HTTP_URL#*://}"
+        export LAZYCLOUD_INGRESS_HOST="$${origin%%[:/]*}"
+        exec haproxy -W -db -f /usr/local/etc/haproxy/haproxy.cfg
+    environment:
+      <<: *gateway-env
+      LAZYCLOUD_PUBLIC_INGRESS_BIND: ":9000"
+      LAZYCLOUD_PRIVATE_INGRESS_BIND: ":9001"
+      LAZYCLOUD_MANAGEMENT_API_ADDRESS: "control-plane:9000"
+      LAZYCLOUD_EXECUTION_API_ADDRESS: "execution-api:9000"
+      LAZYCLOUD_RUNTIME_API_ADDRESS: "runtime-api:9000"
+    ports:
+      - "${LAZYCLOUD_COMPOSE_CONTROL_PLANE_PORT:-8000}:9000"
+    volumes:
+      - ./deploy/chart/files/api-ingress.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    depends_on:
+      control-plane:
+        condition: service_healthy
+      execution-api:
+        condition: service_healthy
+      runtime-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
 
   cli:
     profiles: ["tools"]
@@ -570,6 +623,10 @@ services:
     restart: unless-stopped
     depends_on:
       control-plane:
+        condition: service_healthy
+      execution-api:
+        condition: service_healthy
+      runtime-api:
         condition: service_healthy
     command:
       - tunnel
@@ -651,12 +708,12 @@ services:
         mv "$$temporary" "$$token_path"
         echo "compose agent one-use join credential initialized"
     environment:
-      GATEWAY_HTTP_URL: "http://control-plane:9000"
+      GATEWAY_HTTP_URL: "http://api-ingress:9000"
       WORKSPACE_ID: "${LAZYCLOUD_COMPOSE_CUSTOMER_WORKSPACE:-tenant-customer}"
     depends_on:
       customer-bootstrap:
         condition: service_completed_successfully
-      control-plane:
+      api-ingress:
         condition: service_healthy
     volumes:
       - "${LAZYCLOUD_COMPOSE_AGENT_STATE_DIR:-/var/lib/lazycloud/agent}:${LAZYCLOUD_COMPOSE_AGENT_STATE_DIR:-/var/lib/lazycloud/agent}"
@@ -744,10 +801,6 @@ services:
   scheduler:
     image: "scheduler:${LAZYCLOUD_COMPOSE_IMAGE_TAG:-local}"
     extra_hosts: *local-hosts
-    # Two, like the control plane. The work that spends money already
-    # serialises on a Redis key per capacity owner; what needed fixing was the
-    # orphan confirmation window and pod expiry, both of which decided from
-    # process-local state.
     deploy:
       replicas: 2
     restart: unless-stopped
@@ -763,6 +816,59 @@ services:
         "${LAZYCLOUD_COMPOSE_SCHEDULER_CONTAINER_LIMIT:-100}",
       ]
     environment:
+      LAZYCLOUD_DATABASE_POOL_SIZE: "4"
+      LAZYCLOUD_DATABASE_MAX_OVERFLOW: "1"
+      <<:
+        [
+          *process-env,
+          *database-env,
+          *redis-env,
+          *telemetry-env,
+          *gateway-env,
+          *object-store-env,
+          *release-env,
+          *scheduler-env,
+          *container-service-credentials,
+        ]
+    depends_on: *lazycloud-role-depends
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-m",
+          "scheduler_app.health",
+          "--max-age-seconds",
+          "${LAZYCLOUD_COMPOSE_SCHEDULER_LIVENESS_MAX_AGE_SECONDS:-300}",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 120s
+    volumes:
+      - lazycloud-files:/var/lib/lazycloud
+      - "./.lazycloud-release:/run/lazycloud/release:ro"
+
+  fleet-controller:
+    image: "scheduler:${LAZYCLOUD_COMPOSE_IMAGE_TAG:-local}"
+    extra_hosts: *local-hosts
+    deploy:
+      replicas: 2
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.control-plane
+      target: scheduler
+      args: *lazycloud-build-args
+    command:
+      [
+        "lazycloud-fleet-controller",
+        "--container-limit",
+        "${LAZYCLOUD_COMPOSE_SCHEDULER_CONTAINER_LIMIT:-100}",
+      ]
+    environment:
+      LAZYCLOUD_DATABASE_POOL_SIZE: "2"
+      LAZYCLOUD_DATABASE_MAX_OVERFLOW: "1"
       <<:
         [
           *process-env,
@@ -791,7 +897,7 @@ services:
           "CMD",
           "python",
           "-m",
-          "scheduler_app.health",
+          "scheduler_app.fleet_health",
           "--max-age-seconds",
           "${LAZYCLOUD_COMPOSE_SCHEDULER_LIVENESS_MAX_AGE_SECONDS:-300}",
         ]

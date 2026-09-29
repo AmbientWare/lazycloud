@@ -84,6 +84,7 @@ def scheduling_request_from_row(
     return SchedulerWorkerRequest.model_validate(
         {
             "workspace_id": row.workspace_id,
+            "fairness_account_id": row.scheduling_fairness_account_id,
             "stub_id": row.scheduling_stub_id,
             "deployment_id": row.scheduling_deployment_id,
             "container_id": row.id,
@@ -116,6 +117,7 @@ def scheduling_request_from_row(
 
 
 def write_scheduling_request(row: ContainerTable, request: SchedulerWorkerRequest) -> None:
+    row.scheduling_fairness_account_id = request.fairness_account_id
     row.scheduling_stub_id = request.stub_id
     row.scheduling_deployment_id = request.deployment_id
     row.scheduling_cpu_millicores = request.cpu_millicores

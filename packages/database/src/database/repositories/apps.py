@@ -158,6 +158,22 @@ class AppExecutionSummary(BaseModel):
 class AppRepository:
     session: Session
 
+    def lock_name(self, *, workspace_id: str, name: str) -> None:
+        # A row lock cannot serialize concurrent creation before the app exists.
+        self.session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
+            {"lock_key": f"app-name:{workspace_id}:{name}"},
+        )
+
+    def latest_by_name_across_workspaces(self, name: str) -> AppRecord | None:
+        row = self.session.scalars(
+            select(AppTable)
+            .where(AppTable.name == name, AppTable.deleted_at.is_(None))
+            .order_by(AppTable.version.desc(), AppTable.updated_at.desc())
+            .limit(1)
+        ).first()
+        return app_record_from_table(row) if row is not None else None
+
     def upsert(self, app: AppRecord) -> AppRecord:
         row = self.session.get(AppTable, app.id)
         if row is None:
@@ -244,6 +260,18 @@ class AppRepository:
             statement = statement.with_for_update()
         row = self.session.scalars(statement).first()
         return app_record_from_table(row) if row is not None else None
+
+    def lock_lifecycle_state(self, app_id: str, *, workspace_id: str) -> AppLifecycleState | None:
+        state = self.session.scalar(
+            select(AppTable.lifecycle_state)
+            .where(
+                AppTable.id == app_id,
+                AppTable.workspace_id == workspace_id,
+                AppTable.deleted_at.is_(None),
+            )
+            .with_for_update(read=True)
+        )
+        return AppLifecycleState(state) if state is not None else None
 
     def get_for_update(
         self,
@@ -1036,6 +1064,15 @@ class StubRepository:
 class DeploymentRepository:
     session: Session
 
+    def latest_by_name_across_workspaces(self, name: str) -> Deployment | None:
+        row = self.session.scalars(
+            select(DeploymentTable)
+            .where(DeploymentTable.name == name, DeploymentTable.deleted_at.is_(None))
+            .order_by(DeploymentTable.version.desc())
+            .limit(1)
+        ).first()
+        return deployment_from_table(row) if row is not None else None
+
     def name_live_in_other_app(
         self, name: str, *, kind: DeploymentKind, app_id: str, workspace_id: str
     ) -> bool:
@@ -1079,6 +1116,20 @@ class DeploymentRepository:
                 DeploymentTable.workspace_id == workspace_id,
             )
             .with_for_update(read=True, of=DeploymentTable)
+        )
+
+    def lock_invocation_active(
+        self, deployment_id: str, *, workspace_id: str, stub_id: str
+    ) -> bool | None:
+        return self.session.scalar(
+            select(DeploymentTable.active)
+            .where(
+                DeploymentTable.id == deployment_id,
+                DeploymentTable.workspace_id == workspace_id,
+                DeploymentTable.stub_id == stub_id,
+                DeploymentTable.deleted_at.is_(None),
+            )
+            .with_for_update(read=True)
         )
 
     def workspaces_pinned_to(

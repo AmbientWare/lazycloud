@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
+from gateway.containers import GatewayContainerService
 from gateway.service import GatewayControlService
 from shared.errors import InvalidInputError, NotFoundError
 from shared.http.functions import FunctionRetireRequest, FunctionRetireResponse
@@ -32,14 +33,19 @@ from starlette.concurrency import run_in_threadpool
 from api.server.async_io import ApiAsyncIo
 from api.server.auth import read_workspace, write_workspace
 from api.server.dependencies import current_services
-from api.server.service_dependencies import function_service, gateway_service
-from api.server.services import ApiServices, FunctionApiService
+from api.server.service_dependencies import (
+    function_service,
+    gateway_container_service,
+    gateway_service,
+)
+from api.server.services import ApiServiceCore, FunctionApiService
 from api.server.sse import sse_event
 
 router = APIRouter(prefix="/gateway", tags=["gateway"])
+runtime_router = APIRouter(prefix="/gateway", tags=["gateway"])
 
 
-@router.post(
+@runtime_router.post(
     "/functions/retire",
     response_model=FunctionRetireResponse,
     operation_id="retireIdleFunctionContainer",
@@ -56,7 +62,7 @@ def retire_function_container(
 def checkpoint_container(
     request: CheckpointContainerRequest,
     workspace_id: write_workspace,
-    service: GatewayControlService = Depends(gateway_service),
+    service: GatewayContainerService = Depends(gateway_container_service),
 ) -> CheckpointContainerResponse:
     return service.checkpoint_container(request, workspace_id=workspace_id)
 
@@ -65,8 +71,8 @@ def checkpoint_container(
 async def attach_to_container(
     request: AttachToContainerRequest,
     workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
-    service: GatewayControlService = Depends(gateway_service),
+    services: ApiServiceCore = Depends(current_services),
+    service: GatewayContainerService = Depends(gateway_container_service),
 ) -> AttachToContainerResponse:
     async_io = services.require_async_io()
     return await service.attach_to_container(
@@ -81,7 +87,7 @@ async def attach_to_container(
 async def sync_container_workspace(
     request: Request,
     workspace_id: write_workspace,
-    service: GatewayControlService = Depends(gateway_service),
+    service: GatewayContainerService = Depends(gateway_container_service),
 ) -> WorkspaceSyncResponse:
     if request.headers.get("content-type") != WORKSPACE_SYNC_CONTENT_TYPE:
         raise InvalidInputError("workspace sync requires a binary batch")
@@ -102,8 +108,8 @@ def attach_to_container_stream(
     poll_interval_seconds: float = Query(0.25, ge=0.05, le=30),
     *,
     workspace_id: read_workspace,
-    services: ApiServices = Depends(current_services),
-    service: GatewayControlService = Depends(gateway_service),
+    services: ApiServiceCore = Depends(current_services),
+    service: GatewayContainerService = Depends(gateway_container_service),
 ) -> StreamingResponse:
     return StreamingResponse(
         _attach_events(
@@ -119,7 +125,7 @@ def attach_to_container_stream(
     )
 
 
-@router.post("/tasks/start", response_model=StartTaskResponse)
+@runtime_router.post("/tasks/start", response_model=StartTaskResponse)
 def start_task(
     request: StartTaskRequest,
     workspace_id: write_workspace,
@@ -128,7 +134,7 @@ def start_task(
     return service.start_task(request, workspace_id=workspace_id)
 
 
-@router.post("/tasks/log", response_model=AppendTaskLogResponse)
+@runtime_router.post("/tasks/log", response_model=AppendTaskLogResponse)
 def append_task_log(
     request: AppendTaskLogRequest,
     workspace_id: write_workspace,
@@ -137,7 +143,7 @@ def append_task_log(
     return service.append_task_log(request, workspace_id=workspace_id)
 
 
-@router.post("/tasks/end", response_model=EndTaskResponse)
+@runtime_router.post("/tasks/end", response_model=EndTaskResponse)
 def end_task(
     request: EndTaskRequest,
     workspace_id: write_workspace,
@@ -147,7 +153,7 @@ def end_task(
 
 
 async def _attach_events(
-    service: GatewayControlService,
+    service: GatewayContainerService,
     async_io: ApiAsyncIo,
     container_id: str,
     poll_interval_seconds: float,

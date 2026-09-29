@@ -85,7 +85,11 @@ def test_forecast_reads_recent_arrivals_and_unassigned_backlog_without_retained_
                 status=ContainerStatus.Exited,
                 env={"retained": "x" * 16_384},
             )
-            row = ContainerTable(id=record.id, scheduling_requested_at=old)
+            row = ContainerTable(
+                id=record.id,
+                scheduling_requested_at=old,
+                scheduling_fairness_account_id=workspace_id,
+            )
             write_container(row, record)
             row.scheduling_placement = Placement.platform().key
             session.add(row)
@@ -116,7 +120,11 @@ def test_forecast_reads_recent_arrivals_and_unassigned_backlog_without_retained_
                 status=status,
                 runtime_worker_id=worker,
             )
-            row = ContainerTable(id=record.id, scheduling_requested_at=at)
+            row = ContainerTable(
+                id=record.id,
+                scheduling_requested_at=at,
+                scheduling_fairness_account_id=workspace_id,
+            )
             write_container(row, record)
             row.scheduling_placement = placement.key
             row.scheduling_cpu_millicores = 2000

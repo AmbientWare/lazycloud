@@ -28,7 +28,6 @@ from shared.function_payloads import (
 )
 from shared.http.functions import (
     FunctionClaimRequest,
-    FunctionExecutionEntryRequest,
     FunctionInvokeBody,
     FunctionInvokeResponse,
     FunctionRetireRequest,
@@ -269,12 +268,6 @@ class _FunctionRunnerServiceChannel:
         if path == "/api/v1/functions/claim":
             response = self.function_service.function_claim(
                 FunctionClaimRequest.model_validate(payload)
-            )
-            return _JSON_OBJECT_ADAPTER.validate_json(response.model_dump_json())
-        if path == "/api/v1/functions/execution-entry":
-            response = self.function_service.function_execution_entry(
-                FunctionExecutionEntryRequest.model_validate(payload),
-                workspace_id=self._task_workspace_id(payload),
             )
             return _JSON_OBJECT_ADAPTER.validate_json(response.model_dump_json())
         if path == "/gateway/functions/retire":

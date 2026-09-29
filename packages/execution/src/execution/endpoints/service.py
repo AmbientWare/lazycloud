@@ -5,6 +5,7 @@ import json
 import logging
 import socket
 import time
+from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass, field
 from datetime import timedelta
 
@@ -18,8 +19,10 @@ from database.repositories.endpoint_dispatch import EndpointDispatchRepository
 from database.repositories.orchestration import ContainerRepository
 from database.types import DatabaseSession
 from networking.async_http import AsyncBackendTimeoutError
+from observability.workspace_changes import AsyncWorkloadChangeReader
 from pydantic import JsonValue
 from shared.app_identity import ENDPOINT_IMAGE
+from shared.autoscaler_state import AutoscalerTargetKind
 from shared.container_requests import (
     CONTAINER_INNER_PORT,
     WORKER_USER_CODE_VOLUME,
@@ -147,6 +150,7 @@ class EndpointControlService:
     services: ExecutionServices
     async_database: AsyncDatabaseClient | None = None
     async_dispatcher: AsyncEndpointRequestDispatcher | None = None
+    workload_changes: AsyncWorkloadChangeReader | None = None
     control_plane: ControlPlaneService = field(init=False)
 
     def __post_init__(self) -> None:
@@ -158,12 +162,22 @@ class EndpointControlService:
         *,
         hot_reload: bool = False,
     ) -> StartEndpointServeResponse:
+        return next(self.start_endpoint_containers(request, count=1, hot_reload=hot_reload))
+
+    def start_endpoint_containers(
+        self,
+        request: StartEndpointServeRequest,
+        *,
+        count: int,
+        hot_reload: bool = False,
+    ) -> Iterator[StartEndpointServeResponse]:
+        if count <= 0:
+            return
         stub = self.control_plane.get_stub(request.stub_id)
         if stub.kind not in {StubKind.Endpoint, StubKind.Asgi}:
             raise InvalidInputError(f"stub is not an endpoint: {stub.id}")
         workspace = self.control_plane.get_workspace(stub.workspace_id)
         config = EndpointStubConfig.model_validate(stub.config, from_attributes=True)
-        created_at = utc_now()
         entrypoint = [config.image.python_executable, "-m", "runner.serve"]
         image_id = config.effective_image_id or ENDPOINT_IMAGE
         startup_kind = (
@@ -188,51 +202,6 @@ class EndpointControlService:
                 stub=stub,
                 workspace=workspace,
             )
-            containers = ContainerRepository(session)
-            containers.lock_stub_capacity(stub.id)
-            live = containers.count_live_for_stub(stub.id)
-            if live >= config.autoscaler.max_containers:
-                raise EndpointReplicaLimitReachedError(
-                    f"endpoint {stub.id} holds {live} containers; "
-                    f"its replica limit is {config.autoscaler.max_containers}"
-                )
-            container = self.services.containers.reserve_pending(
-                session,
-                PendingContainerReservation(
-                    name=f"endpoint-{stub.name}",
-                    image=image_id,
-                    command=entrypoint,
-                    workspace_id=stub.workspace_id,
-                    stub_id=stub.id,
-                    app_id=stub.app_id,
-                    env=env,
-                    gpu=list(config.runtime.gpu),
-                    gpu_count=config.runtime.gpu_count,
-                    region=config.runtime.region,
-                    availability_zone=config.runtime.availability_zone,
-                    timeout_seconds=request.timeout,
-                    expires_at=(
-                        created_at + timedelta(seconds=request.timeout)
-                        if request.timeout > 0
-                        else None
-                    ),
-                    created_at=created_at,
-                ),
-            )
-        self.services.containers.publish_lifecycle_change(
-            container,
-            WorkspaceChangeType.Created,
-        )
-        resource_mounts = container_resource_mounts(
-            context=self.services.context,
-            object_storage=self.services.object_storage,
-            workspace_id=stub.workspace_id,
-            workspace_name=workspace.name,
-            object_id=config.object_id,
-            stub_id=stub.id,
-            container_id=container.id,
-            volumes=config.volume_inputs,
-        )
         checkpoint = (
             latest_available_checkpoint(
                 self.services.context,
@@ -242,78 +211,125 @@ class EndpointControlService:
             if config.runtime.checkpoint_enabled
             else None
         )
-        scheduled = self.services.containers.submit_scheduler_request(
-            container,
-            ContainerSchedulingOptions(
-                workspace_name=workspace.name,
-                stub_type=stub.kind.value,
-                startup_kind=startup_kind,
-                entrypoint=entrypoint,
-                cwd=WORKER_USER_CODE_VOLUME,
-                env_list=[f"{key}={value}" for key, value in env.items()],
-                image_id=image_id,
-                app_id=stub.app_id or "",
-                deployment_id=stub.deployment_id or "",
-                ports=[CONTAINER_INNER_PORT],
-                requested_ports=[CONTAINER_INNER_PORT],
-                checkpoint_exposed_ports=(
-                    checkpoint.exposed_ports if checkpoint is not None else []
-                ),
-                checkpoint_id=checkpoint.checkpoint_id if checkpoint is not None else "",
-                checkpoint_enabled=config.runtime.checkpoint_enabled,
-                cpu_millicores=config.runtime.requested_cpu_millicores,
-                cpu_limit_millicores=config.runtime.limit_cpu_millicores,
-                memory_mib=config.runtime.requested_memory_mib,
-                memory_limit_mib=config.runtime.limit_memory_mib,
-                disk_mib=config.runtime.requested_disk_mib,
-                gpu=list(container.gpu),
-                gpu_count=container.gpu_count,
-                placement=placement,
-                region=config.runtime.region,
-                availability_zone=config.runtime.availability_zone,
-                runtime=config.runtime.runtime,
-                runtime_class=config.runtime.runtime_class or "",
-                docker_enabled=config.runtime.docker_enabled,
-                preemptible=config.runtime.preemptible,
-                workspace_gpu_quota=config.runtime.workspace_gpu_quota,
-                workspace_cpu_quota_millicores=config.runtime.workspace_cpu_quota_millicores,
-                secret_names=config.secrets,
-                workspace_storage_required=(
-                    container_resource_mounts_require_workspace_storage(
-                        context=self.services.context,
-                        workspace_id=stub.workspace_id,
-                        mounts=resource_mounts,
-                    )
-                ),
-                mounts=resource_mounts,
-                gateway_token_required=True,
-            ),
-        )
-        if not scheduled.accepted:
+        for _ in range(count):
+            created_at = utc_now()
             with self.services.context.database.session() as session:
-                container.status = ContainerStatus.Failed
-                container.finished_at = utc_now()
-                ContainerRepository(session).upsert(container)
+                containers = ContainerRepository(session)
+                containers.lock_stub_capacity(stub.id)
+                live = containers.count_live_for_stub(stub.id)
+                if live >= config.autoscaler.max_containers:
+                    raise EndpointReplicaLimitReachedError(
+                        f"endpoint {stub.id} holds {live} containers; "
+                        f"its replica limit is {config.autoscaler.max_containers}"
+                    )
+                container = self.services.containers.reserve_pending(
+                    session,
+                    PendingContainerReservation(
+                        name=f"endpoint-{stub.name}",
+                        image=image_id,
+                        command=entrypoint,
+                        workspace_id=stub.workspace_id,
+                        stub_id=stub.id,
+                        app_id=stub.app_id,
+                        env=env,
+                        gpu=list(config.runtime.gpu),
+                        gpu_count=config.runtime.gpu_count,
+                        region=config.runtime.region,
+                        availability_zone=config.runtime.availability_zone,
+                        timeout_seconds=request.timeout,
+                        expires_at=(
+                            created_at + timedelta(seconds=request.timeout)
+                            if request.timeout > 0
+                            else None
+                        ),
+                        created_at=created_at,
+                    ),
+                )
             self.services.containers.publish_lifecycle_change(
                 container,
-                WorkspaceChangeType.Updated,
+                WorkspaceChangeType.Created,
             )
-            raise UpstreamUnavailableError(
-                scheduled.reason or "endpoint container scheduling failed"
+            resource_mounts = container_resource_mounts(
+                context=self.services.context,
+                object_storage=self.services.object_storage,
+                workspace_id=stub.workspace_id,
+                workspace_name=workspace.name,
+                object_id=config.object_id,
+                stub_id=stub.id,
+                container_id=container.id,
+                volumes=config.volume_inputs,
             )
-        self.services.events.emit(
-            "endpoint.serve.started",
-            level=EventLevel.Info,
-            resource_type="container",
-            resource_id=container.id,
-            message=f"started endpoint serve container for {stub.name}",
-            data={
-                "stub_id": stub.id,
-                "timeout_seconds": request.timeout,
-            },
-            workspace_id=stub.workspace_id,
-        )
-        return StartEndpointServeResponse(container_id=container.id)
+            scheduled = self.services.containers.submit_scheduler_request(
+                container,
+                ContainerSchedulingOptions(
+                    workspace_name=workspace.name,
+                    stub_type=stub.kind.value,
+                    startup_kind=startup_kind,
+                    entrypoint=entrypoint,
+                    cwd=WORKER_USER_CODE_VOLUME,
+                    env_list=[f"{key}={value}" for key, value in env.items()],
+                    image_id=image_id,
+                    app_id=stub.app_id or "",
+                    deployment_id=stub.deployment_id or "",
+                    ports=[CONTAINER_INNER_PORT],
+                    requested_ports=[CONTAINER_INNER_PORT],
+                    checkpoint_exposed_ports=(
+                        checkpoint.exposed_ports if checkpoint is not None else []
+                    ),
+                    checkpoint_id=checkpoint.checkpoint_id if checkpoint is not None else "",
+                    checkpoint_enabled=config.runtime.checkpoint_enabled,
+                    cpu_millicores=config.runtime.requested_cpu_millicores,
+                    cpu_limit_millicores=config.runtime.limit_cpu_millicores,
+                    memory_mib=config.runtime.requested_memory_mib,
+                    memory_limit_mib=config.runtime.limit_memory_mib,
+                    disk_mib=config.runtime.requested_disk_mib,
+                    gpu=list(container.gpu),
+                    gpu_count=container.gpu_count,
+                    placement=placement,
+                    region=config.runtime.region,
+                    availability_zone=config.runtime.availability_zone,
+                    runtime=config.runtime.runtime,
+                    runtime_class=config.runtime.runtime_class or "",
+                    docker_enabled=config.runtime.docker_enabled,
+                    preemptible=config.runtime.preemptible,
+                    workspace_gpu_quota=config.runtime.workspace_gpu_quota,
+                    workspace_cpu_quota_millicores=config.runtime.workspace_cpu_quota_millicores,
+                    secret_names=config.secrets,
+                    workspace_storage_required=(
+                        container_resource_mounts_require_workspace_storage(
+                            workspace=workspace,
+                            mounts=resource_mounts,
+                        )
+                    ),
+                    mounts=resource_mounts,
+                    gateway_token_required=True,
+                ),
+            )
+            if not scheduled.accepted:
+                with self.services.context.database.session() as session:
+                    container.status = ContainerStatus.Failed
+                    container.finished_at = utc_now()
+                    ContainerRepository(session).upsert(container)
+                self.services.containers.publish_lifecycle_change(
+                    container,
+                    WorkspaceChangeType.Updated,
+                )
+                raise UpstreamUnavailableError(
+                    scheduled.reason or "endpoint container scheduling failed"
+                )
+            self.services.events.emit(
+                "endpoint.serve.started",
+                level=EventLevel.Info,
+                resource_type="container",
+                resource_id=container.id,
+                message=f"started endpoint serve container for {stub.name}",
+                data={
+                    "stub_id": stub.id,
+                    "timeout_seconds": request.timeout,
+                },
+                workspace_id=stub.workspace_id,
+            )
+            yield StartEndpointServeResponse(container_id=container.id)
 
     async def forward_endpoint_request(
         self,
@@ -689,6 +705,7 @@ class EndpointControlService:
             )
         )
         if admission is not None:
+            await asyncio.to_thread(self.services.execution_demand.notify)
             await self.services.tasks.publish_created_async(admission.task)
         return admission
 
@@ -739,6 +756,12 @@ class EndpointControlService:
             expires_at=now + timedelta(seconds=max(settings.wait_timeout_seconds, 1.0)),
         )
         persisted = _dispatch_record(dispatches.create(_dispatch_state(record)))
+        self.services.execution_demand.activate_in_transaction(
+            session,
+            stub_id=locked_stub.id,
+            workspace_id=locked_stub.workspace_id,
+            kind=AutoscalerTargetKind.Endpoint,
+        )
         return EndpointDispatchAdmission(
             stub=locked_stub,
             task=task,
@@ -875,6 +898,40 @@ class EndpointControlService:
         max_inflight_per_container: int,
         container_id: str | None,
     ) -> tuple[EndpointDispatchTarget, EndpointDispatchRecord]:
+        if self.workload_changes is None:
+            raise RuntimeError("endpoint workload notifications are not configured")
+        try:
+            async with (
+                self.workload_changes.follow(
+                    workspace_id=stub.workspace_id, stub_id=stub.id
+                ) as updates,
+                asyncio.timeout(max(wait.remaining(), 0.0)),
+            ):
+                return await self._claim_target_on_changes(
+                    dispatcher,
+                    repository,
+                    stub,
+                    task,
+                    wait,
+                    updates,
+                    max_inflight_per_container=max_inflight_per_container,
+                    container_id=container_id,
+                )
+        except TimeoutError as exc:
+            raise EndpointDispatchTimedOut("Timed out waiting for a backend container") from exc
+
+    async def _claim_target_on_changes(
+        self,
+        dispatcher: AsyncEndpointRequestDispatcher,
+        repository: AsyncEndpointDispatchStateRepository,
+        stub: StubRecord,
+        task: Task,
+        wait: _CapacityWait,
+        updates: AsyncIterator[None],
+        *,
+        max_inflight_per_container: int,
+        container_id: str | None,
+    ) -> tuple[EndpointDispatchTarget, EndpointDispatchRecord]:
         outdated_containers: set[str] = set()
         while True:
             await self._raise_if_cancelled(task.id)
@@ -898,12 +955,13 @@ class EndpointControlService:
             )
             if target is None:
                 if container_id is not None:
-                    await asyncio.sleep(wait.poll_delay())
+                    await anext(updates)
                     continue
                 if not wait.warmup_attempted:
                     await self._request_capacity(stub, task)
                     wait.warmup_attempted = True
-                await asyncio.sleep(wait.poll_delay())
+                    continue
+                await anext(updates)
                 continue
 
             if not await asyncio.to_thread(
@@ -917,7 +975,7 @@ class EndpointControlService:
                 max_inflight_per_container=max_inflight_per_container,
             )
             if record is None:
-                await asyncio.sleep(wait.poll_delay())
+                await anext(updates)
                 continue
             await self._emit_dispatch_lifecycle(stub, record)
             # Bind the task to the container that will serve it, so its record

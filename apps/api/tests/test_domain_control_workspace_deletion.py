@@ -11,10 +11,10 @@ from uuid import uuid4
 import pytest
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
-from api.server.worker_repository_service import WorkerRepositoryService
 from apps.api.tests.runtime import services_with_object_storage
 from compute.state import RedisComputeStateRepository
 from control.service import ControlPlaneService
+from coordination.event_bus import EventBusEvent, RedisEventBus
 from database.repositories.aws_connections import AwsAccountConnectionRepository
 from database.repositories.identity import (
     WorkspaceAuditRepository,
@@ -247,11 +247,11 @@ def test_workspace_deletion_keeps_durable_source_cleanup_when_wake_delivery_fail
                 now=utc_now(),
             )
 
-        def fail_wake(repository: WorkerRepositoryService, workspace_id: str) -> Never:
-            del repository, workspace_id
+        def fail_wake(events: RedisEventBus, event: EventBusEvent) -> Never:
+            del events, event
             raise OSError("redis unavailable")
 
-        monkeypatch.setattr(WorkerRepositoryService, "wake_source_cache_cleanup", fail_wake)
+        monkeypatch.setattr(RedisEventBus, "send", fail_wake)
         client = client_stack.enter_context(TestClient(create_app(isolated_services)))
 
         response = client.delete(

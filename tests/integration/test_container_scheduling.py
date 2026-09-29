@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime
+from uuid import uuid4
 
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
@@ -119,9 +120,11 @@ def test_function_dependency_waits_then_schedules_materialized_args(
         isolated_services.scheduler_workers,
         scheduler.requests[0].container_id,
     )
+    claim_id = str(uuid4())
     claimed = service.function_claim(
         FunctionClaimRequest(
             stub_id=stub.id,
+            claim_id=claim_id,
             container_id=scheduler.requests[0].container_id,
         )
     )
@@ -132,6 +135,7 @@ def test_function_dependency_waits_then_schedules_materialized_args(
     service.function_set_result(
         FunctionSetResultBody(
             task_id=upstream.task_id,
+            claim_id=claim_id,
             container_id=scheduler.requests[0].container_id,
             result=cloudpickle_result,
         )
@@ -209,6 +213,7 @@ def test_function_result_and_completion_reject_stale_container_attempt(
         FunctionSetResultBody(
             task_id=task.id,
             container_id="stale-container",
+            claim_id=str(uuid4()),
             result=FunctionCloudpickleResult.from_bytes(cloudpickle_bytes(4)),
         )
     )
@@ -262,9 +267,11 @@ def test_function_cancel_stops_container_and_rejects_terminal_writes(
     assign_runtime(
         services.containers, services.scheduler_workers, scheduler.requests[0].container_id
     )
+    claim_id = str(uuid4())
     claimed = service.function_claim(
         FunctionClaimRequest(
             stub_id=stub.id,
+            claim_id=claim_id,
             container_id=scheduler.requests[0].container_id,
         )
     )
@@ -281,6 +288,7 @@ def test_function_cancel_stops_container_and_rejects_terminal_writes(
             task_id=task.id,
             container_id=task.container_id,
             result=FunctionCloudpickleResult.from_bytes(cloudpickle_bytes(9)),
+            claim_id=claim_id,
         )
     )
     finished = service.finish_function_task(

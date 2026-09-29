@@ -19,6 +19,18 @@ cache server is a local directory behind a ReadWriteOnce volume; it gains nothin
 from a budget, and a budget on a workload that cannot use one is a drain that
 fails for no benefit.
 */}}
+{{- range $name := list "execution-api" "runtime-api" "fleet-controller" }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $name }}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: {{ $name }}
+---
+{{- end }}
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:

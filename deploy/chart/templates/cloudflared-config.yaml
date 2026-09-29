@@ -15,6 +15,8 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: cloudflared
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
 data:
   config.yaml: |
     tunnel: {{ required "cloudflared.tunnelId is required" .Values.cloudflared.tunnelId }}
@@ -39,13 +41,19 @@ data:
         path: ^/worker-repository(/|$)
         service: http_status:404
       - hostname: {{ .Values.cloudflared.apex }}
+        path: ^(/api/v1/functions/(claim|set-result|monitor)$|/gateway/(agents|connections/certificate|provider-nodes|tasks|functions/retire)(/|$))
+        service: http://runtime-api:9000
+      - hostname: {{ .Values.cloudflared.apex }}
+        path: ^(/api/v1/(functions|endpoints|asgi|pods|shells|ssh|artifacts|maps|simplequeues|volumes|tasks)(/|$)|/gateway/containers(/|$)|/(pod|sandbox)(/|$))
+        service: http://execution-api:9000
+      - hostname: {{ .Values.cloudflared.apex }}
         service: http://control-plane:9000
-      # Generated invoke hosts. Every path forwards: the control plane's
+      # Generated invoke hosts. Every path forwards: the execution API's
       # host-routing middleware rewrites them to the stub's handler path, so a
       # path filter here would break user applications.
       - hostname: "*.{{ .Values.cloudflared.apex }}"
-        service: http://control-plane:9000
+        service: http://execution-api:9000
       # Hostnames a customer owns, proxied here carrying their own Host header.
       # The origin resolves it against the domains a workspace registered and
       # refuses every name it does not know.
-      - service: http://control-plane:9000
+      - service: http://execution-api:9000

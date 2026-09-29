@@ -20,6 +20,7 @@ from database.repositories.execution import PodUrlRepository
 from database.repositories.images import CheckpointRepository
 from database.repositories.orchestration import AutoscalingTargetRepository, ContainerRepository
 from database.types import DatabaseSession
+from observability.workspace_changes import AsyncWorkloadChangeReader, SyncWorkloadChangeReader
 from shared.app_identity import POD_IMAGE
 from shared.autoscaler_state import AutoscalerTargetKind
 from shared.autoscaling import PodStubType
@@ -117,7 +118,6 @@ from execution.placement import workload_placement
 from execution.pods.config import PodStubConfig
 from execution.pods.planning import (
     DEFAULT_POD_CONNECTION_TIMEOUT_SECONDS,
-    POD_CONTAINER_DISCOVERY_INTERVAL_MS,
     PodBackendContainer,
     PodContainerStartRequest,
     PodProxyFailureReason,
@@ -197,9 +197,10 @@ class PodControlService:
     pod_proxy_socket_client: PodProxySocketClient | None = None
     pod_proxy_connections: PodProxyConnectionRepository | None = None
     container_readiness_probe: AsyncContainerReadiness | None = None
+    workload_changes: AsyncWorkloadChangeReader | None = None
+    sync_workload_changes: SyncWorkloadChangeReader | None = None
     container_connect_timeout_seconds: float = DEFAULT_POD_CONNECTION_TIMEOUT_SECONDS
     pod_proxy_start_timeout_seconds: float = DEFAULT_POD_PROXY_TIMEOUT_SECONDS
-    poll_interval_seconds: float = POD_CONTAINER_DISCOVERY_INTERVAL_MS / 1000
     control_plane: ControlPlaneService = field(init=False)
 
     def __post_init__(self) -> None:
@@ -441,8 +442,7 @@ class PodControlService:
                     gateway_token_required=True,
                     workspace_storage_required=(
                         container_resource_mounts_require_workspace_storage(
-                            context=self.services.context,
-                            workspace_id=stub.workspace_id,
+                            workspace=workspace,
                             mounts=resource_mounts,
                         )
                     ),
@@ -970,6 +970,7 @@ class PodControlService:
                 await self._async_database().run_transaction(
                     lambda session: wake_pod(session, stub_id=stub_id, workspace_id=workspace_id)
                 )
+                await asyncio.to_thread(self.services.execution_demand.notify)
                 target = await self._wait_for_pod_proxy_target(
                     stub,
                     request,
@@ -1025,20 +1026,25 @@ class PodControlService:
     ) -> PodProxyTarget:
         loop = asyncio.get_running_loop()
         deadline = loop.time() + max(self.pod_proxy_start_timeout_seconds, 0.0)
-        while True:
-            try:
-                return await self._pod_proxy_target(
-                    stub,
-                    request,
-                    health_path=health_path,
-                    health_port=health_port,
-                )
-            except PodProxyPortUnavailable:
-                raise
-            except PodProxyUnavailable:
-                if loop.time() >= deadline:
+        if self.workload_changes is None:
+            raise RuntimeError("pod workload notifications are not configured")
+        async with self.workload_changes.follow(
+            workspace_id=stub.workspace_id, stub_id=stub.id
+        ) as updates:
+            while True:
+                try:
+                    return await self._pod_proxy_target(
+                        stub,
+                        request,
+                        health_path=health_path,
+                        health_port=health_port,
+                    )
+                except PodProxyPortUnavailable:
                     raise
-                await asyncio.sleep(max(self.poll_interval_seconds, 0.0))
+                except PodProxyUnavailable:
+                    if loop.time() >= deadline:
+                        raise
+                    await anext(updates)
 
     def _container(self, container_id: str) -> ContainerRecord:
         try:
@@ -1093,68 +1099,58 @@ class PodControlService:
             self.container_connect_timeout_seconds if timeout_seconds is None else timeout_seconds
         )
         deadline = time.monotonic() + max(wait_seconds, 0.0)
-        last_reason = "container is not ready"
-        while True:
-            container = self._container(container.id)
-            if container.status in TERMINAL_CONTAINER_STATUSES:
-                reason = container.startup_error or (
-                    f"container {container.id} is {container.status.value}"
-                )
-                raise ConflictError(reason)
-            state = self.scheduler_containers.get_container_state(container.id)
-            if state is None:
-                last_reason = f"scheduler state not found for container {container.id}"
-            elif state.workspace_id != container.workspace_id:
-                msg = "container scheduler state workspace mismatch"
-                raise RuntimeError(msg)
-            elif state.status in {
-                SchedulerContainerStatus.Complete,
-                SchedulerContainerStatus.Failed,
-                SchedulerContainerStatus.Stopping,
-            }:
-                msg = f"container {container.id} is {state.status.value}"
-                raise ConflictError(msg)
-            elif state.status is SchedulerContainerStatus.Running:
-                self._mark_container_running(container, state)
-                worker_address = self.scheduler_containers.get_worker_address(container.id)
-                if worker_address is not None and worker_address.address:
-                    try:
-                        ready_client = self._container_client_factory().client_for(container)
-                        status = ready_client.client.status(container.id)
-                    except Exception as exc:
-                        last_reason = f"container service not ready: {type(exc).__name__}: {exc}"
-                        if time.monotonic() >= deadline:
-                            msg = last_reason
-                            raise RuntimeError(msg) from exc
-                        time.sleep(max(self.poll_interval_seconds, 0.0))
-                        continue
-                    if status.ok and status.status == RuntimeContainerStatus.Running.value:
-                        return ready_client
-                    if status.status in {
-                        RuntimeContainerStatus.Stopped.value,
-                        RuntimeContainerStatus.Unknown.value,
-                    }:
-                        last_reason = (
-                            status.error_msg
-                            or f"container {container.id} runtime is {status.status}"
-                        )
-                    else:
-                        last_reason = f"container {container.id} runtime is {status.status}"
-                    if not status.ok and status.error_msg:
-                        last_reason = status.error_msg
-                    if time.monotonic() >= deadline:
-                        msg = last_reason
-                        raise RuntimeError(msg)
-                    time.sleep(max(self.poll_interval_seconds, 0.0))
-                    continue
-                last_reason = f"worker address not published for container {container.id}"
-            else:
-                last_reason = f"container {container.id} is {state.status.value}"
+        ready, reason = self._container_client_readiness(container.id)
+        if ready is not None:
+            return ready
+        if time.monotonic() >= deadline:
+            raise RuntimeError(reason)
+        if self.sync_workload_changes is None:
+            raise RuntimeError("pod workload notifications are not configured")
+        with self.sync_workload_changes.follow(
+            workspace_id=container.workspace_id, stub_id=container.stub_id or ""
+        ) as changes:
+            while True:
+                ready, reason = self._container_client_readiness(container.id)
+                if ready is not None:
+                    return ready
+                if not changes.wait(deadline - time.monotonic()):
+                    raise RuntimeError(reason)
 
-            if time.monotonic() >= deadline:
-                msg = last_reason
-                raise RuntimeError(msg)
-            time.sleep(max(self.poll_interval_seconds, 0.0))
+    def _container_client_readiness(
+        self, container_id: str
+    ) -> tuple[ContainerClientHandle[PodContainerControlClient] | None, str]:
+        if self.scheduler_containers is None:
+            raise RuntimeError("pod scheduler directory is unavailable")
+        container = self._container(container_id)
+        if container.status in TERMINAL_CONTAINER_STATUSES:
+            raise ConflictError(
+                container.startup_error or f"container {container.id} is {container.status.value}"
+            )
+        state = self.scheduler_containers.get_container_state(container.id)
+        if state is None:
+            return None, f"scheduler state not found for container {container.id}"
+        if state.workspace_id != container.workspace_id:
+            raise RuntimeError("container scheduler state workspace mismatch")
+        if state.status in {
+            SchedulerContainerStatus.Complete,
+            SchedulerContainerStatus.Failed,
+            SchedulerContainerStatus.Stopping,
+        }:
+            raise ConflictError(f"container {container.id} is {state.status.value}")
+        if state.status is not SchedulerContainerStatus.Running:
+            return None, f"container {container.id} is {state.status.value}"
+        self._mark_container_running(container, state)
+        worker_address = self.scheduler_containers.get_worker_address(container.id)
+        if worker_address is None or not worker_address.address:
+            return None, f"worker address not published for container {container.id}"
+        try:
+            ready = self._container_client_factory().client_for(container)
+            status = ready.client.status(container.id)
+        except Exception as exc:
+            return None, f"container service not ready: {type(exc).__name__}: {exc}"
+        if status.ok and status.status == RuntimeContainerStatus.Running.value:
+            return ready, ""
+        return None, status.error_msg or f"container {container.id} runtime is {status.status}"
 
     def _mark_container_running(
         self,

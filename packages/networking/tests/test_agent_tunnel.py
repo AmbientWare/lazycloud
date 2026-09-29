@@ -31,6 +31,12 @@ from identity.tunnel_certificates import (
     create_tunnel_certificate_authority,
     csr_public_key_sha256,
 )
+from networking.async_http import (
+    AsyncBackendConnectError,
+    AsyncBackendHttpClient,
+    AsyncBackendHttpResponse,
+    AsyncBackendResponseError,
+)
 from networking.dialer import BackendRouteDialer
 from networking.tunnel_agent import AgentTunnelClient
 from networking.tunnel_client import TunnelRouteClient
@@ -44,7 +50,7 @@ from shared.compute_fleet import Machine, ResourceStatus, Worker
 from shared.compute_policy import ComputeUnitRecord, UnitName
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.http.agent_identity import TunnelServiceRole
-from shared.http.agent_tunnel import TunnelRouteRequest
+from shared.http.agent_tunnel import TUNNEL_MAX_ROUTE_STREAMS, TunnelRouteRequest
 from shared.placement import Placement
 from shared.routing import AgentBackendRoute, BackendRouteKind, BackendRouteState
 from shared.timestamps import utc_now
@@ -155,11 +161,41 @@ def test_real_agent_tunnel_preserves_half_close_and_revokes_open_streams(
     )
 
     async def run() -> None:
+        http_connections = 0
+        http_requests = 0
+
         async def respond_after_eof(
             reader: asyncio.StreamReader, writer: asyncio.StreamWriter
         ) -> None:
+            nonlocal http_connections, http_requests
             digest = hashlib.sha256()
             try:
+                initial = await reader.read(65536)
+                if initial.startswith(b"GET "):
+                    http_connections += 1
+                    connection_id = str(http_connections).encode()
+                    buffered = initial
+                    while buffered:
+                        while b"\r\n\r\n" not in buffered:
+                            chunk = await reader.read(65536)
+                            if not chunk:
+                                return
+                            buffered += chunk
+                        head, buffered = buffered.split(b"\r\n\r\n", 1)
+                        http_requests += 1
+                        if head.startswith(b"GET /disconnect "):
+                            return
+                        writer.write(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: "
+                            + str(len(connection_id)).encode()
+                            + b"\r\n\r\n"
+                            + connection_id
+                        )
+                        await writer.drain()
+                        if not buffered:
+                            buffered = await reader.read(65536)
+                    return
+                digest.update(initial)
                 while chunk := await reader.read(65536):
                     digest.update(chunk)
                 if digest.digest() == hashlib.sha256(b"slow-reader").digest():
@@ -210,6 +246,7 @@ def test_real_agent_tunnel_preserves_half_close_and_revokes_open_streams(
         containers = RedisSchedulerContainerRepository(redis)
         containers.set_worker_address(container_id, route.local_target, route=route)
         dialer = BackendRouteDialer(client, SchedulerBackendRouteResolver(containers))
+        http = AsyncBackendHttpClient(dialer)
         replacement: AgentTunnelClient | None = None
         expiring: AgentTunnelClient | None = None
         renewed: AgentTunnelClient | None = None
@@ -258,7 +295,9 @@ def test_real_agent_tunnel_preserves_half_close_and_revokes_open_streams(
             payload = b"request-before-half-close" * 16000
 
             def exchange() -> None:
-                with dialer.dial_backend_route(route.route_id, timeout_seconds=5) as connection:
+                with dialer.dial_backend_route(
+                    route.route_id, timeout_seconds=5
+                ).socket as connection:
                     connection.settimeout(5)
                     connection.sendall(payload)
                     connection.shutdown(socket.SHUT_WR)
@@ -268,7 +307,84 @@ def test_real_agent_tunnel_preserves_half_close_and_revokes_open_streams(
                 assert bytes(response) == hashlib.sha256(payload).hexdigest().encode()
 
             await asyncio.to_thread(exchange)
+            try:
+
+                async def get(path: str = "/") -> AsyncBackendHttpResponse:
+                    return await http.open_stream(
+                        address=route.local_target,
+                        route_id=route.route_id,
+                        method="GET",
+                        path=path,
+                        headers={},
+                        body=b"",
+                        timeout_seconds=5,
+                        resource="test workload",
+                    )
+
+                assert await (await get()).read() == b"1"
+                assert await (await get()).read() == b"1"
+                changed = route.model_copy(update={"updated_at": 1})
+                states.save_agent_route_state(changed)
+                containers.set_worker_address(container_id, route.local_target, route=changed)
+                assert await (await get()).read() == b"2"
+                with pytest.raises(AsyncBackendResponseError):
+                    await get("/disconnect")
+                assert http_requests == 4
+                unread = await get()
+                await unread.close()
+                with pytest.raises(AsyncBackendResponseError, match="closed"):
+                    await unread.read()
+                assert await (await get()).read() == b"4"
+                closing = route.model_copy(update={"state": BackendRouteState.Closing})
+                states.save_agent_route_state(closing)
+                containers.set_worker_address(container_id, route.local_target, route=closing)
+                with pytest.raises(AsyncBackendConnectError):
+                    await get()
+                assert http_requests == 6
+            finally:
+                states.save_agent_route_state(route)
+                containers.set_worker_address(container_id, route.local_target, route=route)
             listener = await asyncio.start_server(agent.forward_control, "127.0.0.1", 0)
+            occupied: list[socket.socket] = []
+            try:
+                for _ in range(TUNNEL_MAX_ROUTE_STREAMS + 1):
+                    try:
+                        opened = await asyncio.to_thread(client.connect, request, 5)
+                    except grpc.aio.AioRpcError as exc:
+                        assert exc.code() is grpc.StatusCode.RESOURCE_EXHAUSTED
+                        break
+                    occupied.append(opened.socket)
+                else:
+                    pytest.fail("route saturation did not preserve control capacity")
+                control_reader, control_writer = await asyncio.open_connection(
+                    "127.0.0.1", listener.sockets[0].getsockname()[1]
+                )
+                try:
+                    control_writer.write(b"control-under-load")
+                    await control_writer.drain()
+                    control_writer.write_eof()
+                    async with asyncio.timeout(5):
+                        assert (
+                            await control_reader.read()
+                            == hashlib.sha256(b"control-under-load").hexdigest().encode()
+                        )
+                finally:
+                    control_writer.close()
+                    await control_writer.wait_closed()
+            finally:
+
+                def finish_connection(connection: socket.socket) -> None:
+                    try:
+                        connection.settimeout(5)
+                        connection.shutdown(socket.SHUT_WR)
+                        while connection.recv(65536):
+                            pass
+                    finally:
+                        connection.close()
+
+                await asyncio.gather(
+                    *(asyncio.to_thread(finish_connection, connection) for connection in occupied)
+                )
             reader, writer = await asyncio.open_connection(
                 "127.0.0.1", listener.sockets[0].getsockname()[1]
             )
@@ -280,8 +396,9 @@ def test_real_agent_tunnel_preserves_half_close_and_revokes_open_streams(
             writer.close()
             await writer.wait_closed()
 
-            old_connection = await asyncio.to_thread(client.connect, request, 5)
+            old_connection = (await asyncio.to_thread(client.connect, request, 5)).socket
             try:
+                assert await (await get()).read() == b"5"
                 await gateway.drain()
                 async with asyncio.timeout(5):
                     await agent.wait_disconnected()
@@ -314,6 +431,7 @@ def test_real_agent_tunnel_preserves_half_close_and_revokes_open_streams(
                     agent.resolve_route,
                 )
                 await replacement.start()
+                assert await (await get()).read() == b"6"
                 await during_replacement
                 await asyncio.to_thread(exchange)
 
@@ -373,7 +491,7 @@ def test_real_agent_tunnel_preserves_half_close_and_revokes_open_streams(
                 await replacement.wait_disconnected()
             await replacement.retire()
             expiring_client = TunnelRouteClient(directory, expiring_control, "localhost")
-            long_lived = await asyncio.to_thread(expiring_client.connect, request, 5)
+            long_lived = (await asyncio.to_thread(expiring_client.connect, request, 5)).socket
             renewed = AgentTunnelClient(
                 replacement.address,
                 agent_credentials,
@@ -405,7 +523,7 @@ def test_real_agent_tunnel_preserves_half_close_and_revokes_open_streams(
             async with asyncio.timeout(5):
                 await retiring_expired
 
-            connection = await asyncio.to_thread(client.connect, request, 5)
+            connection = (await asyncio.to_thread(client.connect, request, 5)).socket
             try:
                 connection.settimeout(2)
                 connection.sendall(b"slow-reader")
@@ -443,6 +561,7 @@ def test_real_agent_tunnel_preserves_half_close_and_revokes_open_streams(
             finally:
                 connection.close()
         finally:
+            await http.close()
             if listener is not None:
                 listener.close()
                 await listener.wait_closed()

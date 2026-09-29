@@ -6,8 +6,10 @@ and inspect gateway updates. For routine application releases, follow the
 
 Agents connect to `tunnels.<public API hostname>:443`. The public NLB forwards TCP
 to gateway port 8443 and preserves TLS end to end. The gateway verifies client
-certificates and reaches the API at `control-plane:9000`. API and gateway pods have
-separate Deployments. Two gateway replicas share one Service and load balancer.
+certificates and forwards HTTP streams to its local HAProxy sidecar on port 9001.
+The router selects management, execution or runtime by request path. API and
+gateway pods have separate Deployments. Two gateway replicas share one Service
+and load balancer.
 
 The gateway generates its private key locally and obtains a one-hour certificate
 through the public API. Renewal starts 20 minutes before expiry. Gateway pods hold
@@ -20,6 +22,10 @@ readiness, asks agents to reconnect, and allows accepted streams 60 seconds. Pod
 termination permits 90 seconds. NLB deregistration lasts 75 seconds and does not
 force-close existing connections. API releases do not change the gateway image
 when its installed source and dependencies are unchanged.
+
+The native router sidecar starts before the gateway and remains available during
+its drain. It binds only to loopback and requests 50m CPU and 32Mi memory, with a
+256Mi memory limit. Its configuration is shared with local Compose ingress.
 
 ## Bootstrap credentials once
 

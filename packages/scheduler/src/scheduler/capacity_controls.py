@@ -24,7 +24,7 @@ from scheduler.pool_drain import (
     WorkerPoolDrainWorkerRepository,
     managed_compute_drain_controllers,
 )
-from scheduler.services import SchedulerServices
+from scheduler.services import FleetServices
 
 
 class SchedulerCapacityWorkerRepository(
@@ -37,7 +37,7 @@ class SchedulerCapacityWorkerRepository(
 
 @dataclass(frozen=True, slots=True)
 class SchedulerCapacityControllerProvider:
-    services: SchedulerServices
+    services: FleetServices
     compute_states: RedisComputeStateRepository
     workers: SchedulerCapacityWorkerRepository
     containers: WorkerPoolDrainContainerRepository

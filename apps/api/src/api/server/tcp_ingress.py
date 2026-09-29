@@ -27,7 +27,7 @@ from shared.errors import NotFoundError
 from shared.urls import tcp_ingress_hostname
 from sqlalchemy.orm import Session
 
-from api.server.services import ApiServices
+from api.server.services import ApiServiceCore
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +59,7 @@ class TcpIngressRouteResolver(Protocol):
 
 @dataclass(slots=True)
 class RedisTcpIngressRouteResolver:
-    services: ApiServices
+    services: ApiServiceCore
     redis: AsyncRedisClient
     external_host: str
     cache_ttl_seconds: int = 300
@@ -314,6 +314,7 @@ class TcpIngressServer:
             self._handle_connection,
             host=self.host,
             port=self.port,
+            reuse_port=True,
             ssl=self.tls.server_context,
             ssl_handshake_timeout=self.tls_handshake_timeout_seconds,
         )
@@ -461,7 +462,7 @@ async def _close_writer(writer: asyncio.StreamWriter) -> None:
 
 
 async def tcp_ingress_server_from_settings(
-    services: ApiServices,
+    services: ApiServiceCore,
     pod_service: PodControlService,
     settings: TcpIngressSettings,
 ) -> TcpIngressServer | None:

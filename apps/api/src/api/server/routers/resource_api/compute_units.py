@@ -19,9 +19,9 @@ from shared.http.compute import (
 )
 
 from api.server.auth import admin_access, write_token
-from api.server.dependencies import current_services, current_workspace_id
+from api.server.dependencies import current_workspace_id, management_services
 from api.server.service_dependencies import gateway_service
-from api.server.services import ApiServices
+from api.server.services import ManagementServiceCore
 
 router = APIRouter()
 
@@ -43,7 +43,7 @@ def _unit_state_response(pool: ComputeUnitRecord) -> UnitScaleResponse:
 def list_units(
     _auth: admin_access,
     workspace_id: Annotated[str, Depends(current_workspace_id)],
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> UnitListResponse:
     return UnitListResponse(
         pools=[
@@ -63,7 +63,7 @@ def create_unit(
     request: UnitCreateRequest,
     _auth: admin_access,
     workspace_id: Annotated[str, Depends(current_workspace_id)],
-    services: ApiServices = Depends(current_services),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> UnitResponse:
     return UnitResponse.model_validate(
         services.compute.create_unit(

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
-from gateway.service import GatewayControlService
+from gateway.deployments import GatewayDeploymentService
 from shared.http.client_manifests import ClientManifestRequest, ClientManifestResponse
 from shared.http.gateway import (
     DeployStubRequest,
@@ -15,7 +15,7 @@ from shared.http.gateway import (
 )
 
 from api.server.auth import read_workspace, write_workspace
-from api.server.service_dependencies import gateway_service
+from api.server.service_dependencies import gateway_deployment_service
 
 router = APIRouter(prefix="/gateway", tags=["gateway"])
 
@@ -24,7 +24,7 @@ router = APIRouter(prefix="/gateway", tags=["gateway"])
 def get_or_create_stub(
     request: GetOrCreateStubRequest,
     workspace_id: write_workspace,
-    service: GatewayControlService = Depends(gateway_service),
+    service: GatewayDeploymentService = Depends(gateway_deployment_service),
 ) -> GetOrCreateStubResponse:
     return service.get_or_create_stub(request.model_copy(update={"workspace": workspace_id}))
 
@@ -33,7 +33,7 @@ def get_or_create_stub(
 def deploy_stub(
     request: DeployStubRequest,
     workspace_id: write_workspace,
-    service: GatewayControlService = Depends(gateway_service),
+    service: GatewayDeploymentService = Depends(gateway_deployment_service),
 ) -> DeployStubResponse:
     return service.deploy_stub(request.model_copy(update={"workspace": workspace_id}))
 
@@ -42,7 +42,7 @@ def deploy_stub(
 def get_url(
     request: GetUrlRequest,
     workspace_id: read_workspace,
-    service: GatewayControlService = Depends(gateway_service),
+    service: GatewayDeploymentService = Depends(gateway_deployment_service),
 ) -> GetUrlResponse:
     return service.get_url(request.model_copy(update={"workspace": workspace_id}))
 
@@ -51,7 +51,7 @@ def get_url(
 def resolve_deployment_target(
     request: ResolveDeploymentTargetRequest,
     workspace_id: read_workspace,
-    service: GatewayControlService = Depends(gateway_service),
+    service: GatewayDeploymentService = Depends(gateway_deployment_service),
 ) -> ResolveDeploymentTargetResponse:
     return service.resolve_deployment_target(request.model_copy(update={"workspace": workspace_id}))
 
@@ -60,6 +60,6 @@ def resolve_deployment_target(
 def client_manifest(
     request: ClientManifestRequest,
     workspace_id: read_workspace,
-    service: GatewayControlService = Depends(gateway_service),
+    service: GatewayDeploymentService = Depends(gateway_deployment_service),
 ) -> ClientManifestResponse:
     return service.client_manifest(request.model_copy(update={"workspace": workspace_id}))

@@ -1,35 +1,47 @@
 {{- include "lazycloud.databaseBudget" . -}}
+{{- range $api := list
+    (dict "name" "control-plane" "settings" .Values.controlPlane "binding" "controlPlane" "command" "lazycloud-api" "tcp" false "agentArtifact" true "wave" 2)
+    (dict "name" "execution-api" "settings" .Values.executionApi "binding" "executionApi" "command" "lazycloud-execution-api" "tcp" true "agentArtifact" false "wave" 0)
+    (dict "name" "runtime-api" "settings" .Values.runtimeApi "binding" "runtimeApi" "command" "lazycloud-runtime-api" "tcp" false "agentArtifact" true "wave" 0)
+}}
+{{- with $ }}
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: control-plane
+  name: {{ $api.name }}
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ $api.wave | quote }}
 spec:
   strategy:
     type: RollingUpdate
     rollingUpdate:
-      maxSurge: 1
-      maxUnavailable: 0
-  replicas: {{ .Values.controlPlane.replicas }}
+      maxSurge: 0
+      maxUnavailable: 1
+  replicas: {{ $api.settings.replicas }}
+  minReadySeconds: 155
   selector:
     matchLabels:
-      app: control-plane
+      app: {{ $api.name }}
   template:
     metadata:
       annotations:
         checksum/aws-chain: {{ include (print $.Template.BasePath "/aws-chain.yaml") . | sha256sum }}
-        lazycloud.dev/secret-revision: {{ .Values.secretRevisions.controlPlane | quote }}
+        lazycloud.dev/secret-revision: {{ (index .Values.secretRevisions $api.binding) | quote }}
       labels:
-        app: control-plane
+        app: {{ $api.name }}
     spec:
       terminationGracePeriodSeconds: 150
       serviceAccountName: {{ .Values.serviceAccounts.controlPlane }}
       topologySpreadConstraints:
-        {{- include "lazycloud.spreadAcrossNodes" "control-plane" | nindent 8 }}
+        {{- include "lazycloud.spreadAcrossNodes" $api.name | nindent 8 }}
       volumes:
+        {{- if $api.tcp }}
         - name: tcp-certificate
           secret:
             secretName: tcp-ingress-tls
             defaultMode: 0600
+        {{- end }}
         - name: active-release
           configMap:
             name: active-release
@@ -43,19 +55,17 @@ spec:
                 path: certificate.pem
               - key: LAZYCLOUD_TUNNEL_ISSUER_PRIVATE_KEY_PEM
                 path: private-key.pem
-        # Per pod, because the artifact is immutable and 48MB: a shared volume
-        # would tie replicas to one zone to save a fetch that costs seconds.
+        {{- if $api.agentArtifact }}
+        # A shared volume would tie replicas to one zone.
         - name: agent-binarys
           emptyDir: {}
+        {{- end }}
         - name: aws-chain
           configMap:
             name: aws-chain
+      {{- if $api.agentArtifact }}
       initContainers:
-        # The release publishes the agent binary; the deployment says where it
-        # keeps one. Neither holds the whole path, so it is assembled here, and
-        # the artifact is fetched before the process that serves it starts:
-        # `AgentBinarySettings` refuses to build without a directory, so a
-        # download after startup would be after the refusal.
+        # AgentBinarySettings requires the artifact directory at startup.
         - name: agent-artifact
           image: {{ include "lazycloud.image" (list . "database-bootstrap") }}
           command:
@@ -71,20 +81,25 @@ spec:
             - name: agent-binarys
               mountPath: /var/lib/lazycloud/agent-binarys
           resources:
-            {{- toYaml .Values.controlPlane.initResources | nindent 12 }}
+            {{- toYaml $api.settings.initResources | nindent 12 }}
+      {{- end }}
       containers:
-        - name: control-plane
+        - name: {{ $api.name }}
           image: {{ include "lazycloud.image" (list . "api") }}
+          command: [{{ $api.command | quote }}, "--host", "0.0.0.0", "--port", "9000"]
           ports:
             - name: http
               containerPort: 9000
+            {{- if $api.tcp }}
             - name: tcp-ingress
               containerPort: {{ .Values.tcpIngress.port }}
+            {{- end }}
           env:
-            {{- include "lazycloud.env" (list . "controlPlane") | nindent 12 }}
-            {{- include "lazycloud.databaseEnv" .Values.controlPlane.database | nindent 12 }}
+            {{- include "lazycloud.env" (list . $api.binding) | nindent 12 }}
+            {{- include "lazycloud.databaseEnv" $api.settings.database | nindent 12 }}
             - name: LAZYCLOUD_TCP_INGRESS_ENABLED
-              value: "true"
+              value: {{ $api.tcp | quote }}
+            {{- if $api.tcp }}
             - name: LAZYCLOUD_TCP_INGRESS_PORT
               value: {{ .Values.tcpIngress.port | quote }}
             - name: LAZYCLOUD_TCP_INGRESS_EXTERNAL_HOST
@@ -93,8 +108,11 @@ spec:
               value: /run/lazycloud/tcp-ingress/tls.crt
             - name: LAZYCLOUD_TCP_INGRESS_KEY_FILE
               value: /run/lazycloud/tcp-ingress/tls.key
+            {{- end }}
+            {{- if $api.agentArtifact }}
             - name: LAZYCLOUD_AGENT_BINARY_DIR
               value: /var/lib/lazycloud/agent-binarys
+            {{- end }}
             - name: LAZYCLOUD_TUNNEL_ISSUER_CERTIFICATE_FILE
               value: /run/lazycloud/tunnel-issuer/certificate.pem
             - name: LAZYCLOUD_TUNNEL_ISSUER_PRIVATE_KEY_FILE
@@ -110,18 +128,22 @@ spec:
             - name: tunnel-issuer
               mountPath: /run/lazycloud/tunnel-issuer
               readOnly: true
+            {{- if $api.tcp }}
             - name: tcp-certificate
               mountPath: /run/lazycloud/tcp-ingress
               readOnly: true
+            {{- end }}
+            {{- if $api.agentArtifact }}
             - name: agent-binarys
               mountPath: /var/lib/lazycloud/agent-binarys
+            {{- end }}
             - name: aws-chain
               mountPath: /run/lazycloud/aws
             - name: active-release
               mountPath: /run/lazycloud/release
               readOnly: true
           resources:
-            {{- toYaml .Values.controlPlane.resources | nindent 12 }}
+            {{- toYaml $api.settings.resources | nindent 12 }}
           # Startup completes API composition before dependency probes begin.
           startupProbe:
             httpGet:
@@ -157,11 +179,16 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: control-plane
+  name: {{ $api.name }}
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ $api.wave | quote }}
 spec:
   selector:
-    app: control-plane
+    app: {{ $api.name }}
   ports:
     - name: http
       port: 9000
       targetPort: http
+
+{{- end }}
+{{- end }}

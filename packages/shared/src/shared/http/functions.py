@@ -13,6 +13,7 @@ from shared.function_payloads import (
     validate_function_dependency_bindings,
 )
 from shared.http.base import HttpModel
+from shared.http.execution_entry import ExecutionEntryEvidence
 from shared.http.task_progress import TaskPendingProgress
 from shared.tasks import TaskStatus
 
@@ -95,7 +96,7 @@ class FunctionClaimRequest(HttpModel):
 
     stub_id: str
     container_id: str
-    claim_id: str | None = None
+    claim_id: str = Field(min_length=1)
     wait_seconds: float = Field(default=0, ge=0, le=20)
 
 
@@ -141,23 +142,14 @@ class FunctionRetireResponse(HttpModel):
 class FunctionSetResultBody(HttpModel):
     task_id: str
     container_id: str
+    claim_id: str = Field(min_length=1)
     result: FunctionResultPayload
+    execution_entry: ExecutionEntryEvidence | None = None
 
 
 class FunctionSetResultResponse(HttpModel):
     stored: bool = True
     status: TaskStatus = TaskStatus.Complete
-
-
-class FunctionExecutionEntryRequest(HttpModel):
-    task_id: str
-    container_id: str
-    claim_id: str
-    elapsed_since_entry_seconds: float = Field(ge=0, allow_inf_nan=False)
-
-
-class FunctionExecutionEntryResponse(HttpModel):
-    recorded: bool
 
 
 class FunctionCallGraphNode(HttpModel):
@@ -204,8 +196,6 @@ __all__ = [
     "FunctionClaimRequest",
     "FunctionClaimResponse",
     "FunctionClaimedTask",
-    "FunctionExecutionEntryRequest",
-    "FunctionExecutionEntryResponse",
     "FunctionInvokeBody",
     "FunctionInvokeResponse",
     "FunctionMonitorRequest",

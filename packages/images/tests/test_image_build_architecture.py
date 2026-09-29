@@ -40,7 +40,10 @@ def test_image_architecture_changes_cache_identity_and_scheduler_contract(
     )
 
     scheduled = plan_image_build_container_request(
-        request, workspace_id="workspace-1", placement=Placement.platform()
+        request,
+        fairness_account_id="test-account",
+        workspace_id="workspace-1",
+        placement=Placement.platform(),
     )
 
     assert scheduled.scheduler_request.architecture == "amd64"
