@@ -44,6 +44,15 @@ class BillingAccountRepository:
         row = self.session.scalars(statement).first()
         return _account(row) if row is not None else None
 
+    def get_for_shared_admission(self, user_id: str) -> BillingAccount | None:
+        row = self.session.scalars(
+            select(BillingAccountTable)
+            .where(BillingAccountTable.user_id == user_id)
+            .with_for_update(read=True)
+            .execution_options(populate_existing=True)
+        ).first()
+        return _account(row) if row is not None else None
+
     def lock_for_registration(self, user_id: str) -> BillingAccount:
         """The account row for a payer, created if it is missing and locked either way.
 

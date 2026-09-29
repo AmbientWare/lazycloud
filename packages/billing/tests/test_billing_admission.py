@@ -31,7 +31,8 @@ from shared.errors import CapacityLimitReachedError, ConflictError, PaymentRequi
 from shared.gpu import GPU_ANY, SUPPORTED_GPU_TYPES
 from shared.http.volumes import GetOrCreateVolumeRequest
 from shared.timestamps import utc_now
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
+from sqlalchemy.exc import OperationalError
 from storage.disks import get_or_create_disks
 from tests.workspaces import (
     on_team_plan,
@@ -43,6 +44,58 @@ from tests.workspaces import (
 from billing import DatabaseBillingAdmission
 
 FUNCTION_IMAGE = "python:3.12-slim"
+
+
+def test_warm_paid_admissions_share_reads_and_fence_billing_writers(
+    committed_service_context: ServiceContext,
+) -> None:
+    context = committed_service_context
+    now = utc_now()
+    user_id, workspace_id = unfunded_billing_account(
+        context, period_started_at=now, period_ended_at=now + timedelta(days=30)
+    )
+    with context.database.session() as session:
+        credit_lot_id = BillingCreditRepository(session).issue(
+            user_id=user_id,
+            grant=CreditGrant("funded-admission", CreditKind.Purchased, 100, now),
+        )
+    admission = DatabaseBillingAdmission()
+    with context.database.session() as first:
+        admission.assert_workload_eligible(first, workspace_id=workspace_id, gpu=[], gpu_count=0)
+        with context.database.session() as second:
+            second.execute(text("SET LOCAL lock_timeout = '250ms'"))
+            admission.assert_workload_eligible(
+                second, workspace_id=workspace_id, gpu=[], gpu_count=0
+            )
+        with (
+            pytest.raises(OperationalError, match="lock timeout"),
+            context.database.session() as writer,
+        ):
+            writer.execute(text("SET LOCAL lock_timeout = '250ms'"))
+            BillingAccountRepository(writer).get_by_user(user_id, for_update=True)
+    with context.database.session() as first:
+        admission.admit_container_start(first, workspace_id=workspace_id, gpu=[], gpu_count=0)
+        with (
+            pytest.raises(OperationalError, match="lock timeout"),
+            context.database.session() as second,
+        ):
+            second.execute(text("SET LOCAL lock_timeout = '250ms'"))
+            admission.assert_workload_eligible(
+                second, workspace_id=workspace_id, gpu=[], gpu_count=0
+            )
+    with context.database.session() as session:
+        BillingCreditRepository(session).adjust(
+            user_id=user_id,
+            credit_lot_id=credit_lot_id,
+            source_id="refunded-admission",
+            amount_nanos=-110,
+            effective_at=now,
+        )
+    with (
+        pytest.raises(PaymentRequiredError, match="add credit"),
+        context.database.session() as session,
+    ):
+        admission.assert_workload_eligible(session, workspace_id=workspace_id, gpu=[], gpu_count=0)
 
 
 def test_compute_requires_a_workspace_billing_owner(isolated_services: ApiServices) -> None:

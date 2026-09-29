@@ -3,10 +3,12 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from threading import Barrier
 from uuid import uuid4
 
 import httpx
 import pytest
+from billing.admission import DatabaseBillingAdmission
 from billing.credits import fund_subscription_credits, recover_subscription_credits
 from billing.rate_publication import publish_metered_rate_history
 from database.context import ServiceContext
@@ -40,14 +42,15 @@ from shared.usage import (
     UsageRecord,
     UsageUnit,
 )
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from tests.workspaces import unfunded_billing_account
 
 
 def test_late_expired_credit_pays_only_debt_inside_its_eligible_window(
-    service_context: ServiceContext,
+    committed_service_context: ServiceContext,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    service_context = committed_service_context
     end = datetime(2027, 1, 1, tzinfo=UTC)
     now = end + timedelta(days=1)
     monkeypatch.setattr(billing_credits, "utc_now", lambda: now)
@@ -87,6 +90,36 @@ def test_late_expired_credit_pays_only_debt_inside_its_eligible_window(
         assert settlement is not None
         assert (settlement.credited_nanos, settlement.payable_nanos) == (10, 10)
         assert session.scalar(select(func.count()).select_from(BillingMeterOutboxTable)) == 0
+        credits.issue(
+            user_id=user_id,
+            grant=CreditGrant(
+                "future-funding", CreditKind.Purchased, 100, now + timedelta(seconds=1)
+            ),
+        )
+
+    now += timedelta(seconds=1)
+    monkeypatch.setattr("billing.admission.utc_now", lambda: now)
+    admission = DatabaseBillingAdmission()
+    starting = Barrier(2)
+
+    def admit() -> None:
+        starting.wait(timeout=2)
+        with service_context.database.session() as session:
+            session.execute(text("SET LOCAL lock_timeout = '2s'"))
+            admission.assert_workload_eligible(
+                session, workspace_id=workspace_id, gpu=[], gpu_count=0
+            )
+
+    with ThreadPoolExecutor(max_workers=2) as callers:
+        futures = [callers.submit(admit) for _ in range(2)]
+        for future in futures:
+            future.result(timeout=5)
+    with service_context.database.session() as session:
+        credits = BillingCreditRepository(session)
+        assert credits.balance(user_id=user_id, at=now) == 90
+        settlement = session.get(BillingCreditSettlementTable, record.id)
+        assert settlement is not None
+        assert (settlement.credited_nanos, settlement.payable_nanos) == (20, 0)
 
 
 @pytest.mark.parametrize(
