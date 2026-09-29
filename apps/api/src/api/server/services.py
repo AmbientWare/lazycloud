@@ -38,7 +38,7 @@ from control.deployment_resources import DeploymentResourceService
 from control.deployments import CronJobService, DeploymentService
 from control.placement import PlacementResolver
 from control.readers import DatabaseAppReader, DatabaseDeploymentReader
-from control.service import ControlPlaneService, StubRecord, WorkspaceBucketClient
+from control.service import ControlPlaneService, WorkspaceBucketClient
 from control.tcp_ingress import TcpIngressSettings
 from coordination.agent_connections import RedisAgentConnectionDirectory
 from coordination.event_bus import RedisEventBus
@@ -46,6 +46,7 @@ from coordination.process_presence import RedisProcessPresence
 from coordination.redis_client import RedisClient
 from coordination.wake_signal import RedisWakeSignal
 from database.context import ServiceContext
+from database.records.apps import StubRecord
 from execution.artifacts.service import ArtifactStorageService
 from execution.collections.redis import RedisMapService, RedisSimpleQueueService
 from execution.containers.preemption import PreemptedContainerService
@@ -73,7 +74,10 @@ from execution.tasks import TaskService
 from execution.volumes.control import VolumeControlService
 from execution.volumes.records import VolumeService
 from gateway.container_readiness import AsyncRedisContainerReadiness
-from gateway.container_transport import HttpContainerServiceTransportFactory
+from gateway.container_transport import (
+    AsyncSandboxResultHttpClient,
+    HttpContainerServiceTransportFactory,
+)
 from gateway.containers import GatewayContainerService
 from gateway.deployments import GatewayDeploymentService
 from gateway.machine_lifecycle import MachineLifecycleService
@@ -1967,6 +1971,13 @@ def _pod_control_service(
         async_scheduler_containers=async_scheduler_containers,
         async_pod_proxy_http_client=(
             AsyncPodProxyHttpClient(async_http) if async_http is not None else None
+        ),
+        async_sandbox_results=(
+            AsyncSandboxResultHttpClient(
+                async_http, core.container_service_settings.token.get_secret_value()
+            )
+            if async_http is not None
+            else None
         ),
         pod_proxy_socket_client=proxy_client,
         pod_proxy_connections=(

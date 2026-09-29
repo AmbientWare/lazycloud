@@ -101,6 +101,7 @@ from storage.disks import get_or_create_disks
 from database import AsyncDatabaseClient
 from execution.checkpoints import latest_available_checkpoint
 from execution.container_clients import (
+    AsyncSandboxResultClient,
     ContainerClientHandle,
     ContainerOperationResponse,
     ContainerSandboxFileInfo,
@@ -194,6 +195,7 @@ class PodControlService:
     async_database: AsyncDatabaseClient | None = None
     async_scheduler_containers: AsyncPodSchedulerContainerDirectory | None = None
     async_pod_proxy_http_client: AsyncPodProxyForwardClient | None = None
+    async_sandbox_results: AsyncSandboxResultClient | None = None
     pod_proxy_socket_client: PodProxySocketClient | None = None
     pod_proxy_connections: PodProxyConnectionRepository | None = None
     container_readiness_probe: AsyncContainerReadiness | None = None
@@ -573,14 +575,17 @@ class PodControlService:
         )
         return PodSandboxExecResponse(pid=response.pid, process_id=response.process_id)
 
-    def sandbox_result(
+    async def sandbox_result(
         self, container: ContainerRecord, process_id: str, wait_seconds: float
     ) -> PodSandboxResultResponse:
-        response = self._client(container).sandbox_result(container.id, process_id, wait_seconds)
-        _raise_container_response_error(response)
-        if response.result is None:
-            raise UpstreamUnavailableError("sandbox supervisor returned no process result")
-        return response.result
+        if self.async_sandbox_results is None:
+            raise RuntimeError("sandbox result transport is not configured")
+        ready, reason = await asyncio.to_thread(self._container_client_readiness, container)
+        if ready is None:
+            raise UpstreamUnavailableError(reason)
+        return await self.async_sandbox_results.sandbox_result(
+            ready.worker_address, container.id, process_id, wait_seconds
+        )
 
     def sandbox_status(self, container_id: str, pid: int) -> PodSandboxStatusResponse:
         if pid == 0:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import shutil
 import time
 from collections.abc import Iterable
@@ -306,15 +307,15 @@ class WorkerContainerService:
             error_msg="sandbox exec stream closed before process start",
         )
 
-    def sandbox_result(
+    async def sandbox_result(
         self, request: ContainerSandboxResultRequest
     ) -> ContainerSandboxResultResponse:
-        manager = self._ready_manager_response(request.container_id)
+        manager = await asyncio.to_thread(self._ready_manager_response, request.container_id)
         if isinstance(manager, str):
             return ContainerSandboxResultResponse(ok=False, error_msg=manager)
         try:
             return ContainerSandboxResultResponse(
-                result=manager.result(request.process_id, request.wait_seconds)
+                result=await manager.result(request.process_id, request.wait_seconds)
             )
         except Exception as exc:
             return ContainerSandboxResultResponse(ok=False, error_msg=str(exc))

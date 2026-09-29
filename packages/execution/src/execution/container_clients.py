@@ -73,9 +73,14 @@ class ContainerSandboxExecResponse(ContainerOperationResponse, Protocol):
     def pid(self) -> int: ...
 
 
-class ContainerSandboxResultResponse(ContainerOperationResponse, Protocol):
-    @property
-    def result(self) -> PodSandboxResultResponse | None: ...
+class AsyncSandboxResultClient(Protocol):
+    async def sandbox_result(
+        self,
+        address: SchedulerContainerAddress,
+        container_id: str,
+        process_id: str,
+        wait_seconds: float,
+    ) -> PodSandboxResultResponse: ...
 
 
 class ContainerStatusResponse(ContainerOperationResponse, Protocol):
@@ -156,9 +161,6 @@ class PodContainerControlClient(Protocol):
         cwd: str = ".",
         timeout_seconds: float = ...,
     ) -> ContainerSandboxExecResponse: ...
-    def sandbox_result(
-        self, container_id: str, process_id: str, wait_seconds: float
-    ) -> ContainerSandboxResultResponse: ...
     def sandbox_status(
         self, container_id: str, pid: int, *, timeout_seconds: float = ...
     ) -> ContainerStatusResponse: ...

@@ -24,6 +24,8 @@ _JSON_VALUE: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
 
 
 class ContainerServiceRequestHandler(Protocol):
+    async def sandbox_result(self, request: ContainerServicePayload) -> ContainerServicePayload: ...
+
     def unary(
         self,
         method: ContainerServiceMethod,
@@ -79,7 +81,11 @@ def create_container_service_app(
             payload = decode_container_service_wire_value(
                 _JSON_VALUE.validate_json(await request.body())
             )
-        result = await run_in_threadpool(transport.unary, method, payload)
+        result = (
+            await transport.sandbox_result(payload)
+            if method is ContainerServiceMethod.ContainerSandboxResult
+            else await run_in_threadpool(transport.unary, method, payload)
+        )
         return JSONResponse(content=encode_container_service_wire_value(result))
 
     @app.post(f"{CONTAINER_SERVICE_HTTP_PREFIX}/{{method_name}}/stream")

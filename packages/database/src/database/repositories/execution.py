@@ -1218,16 +1218,6 @@ class TaskAttemptRepository:
             )
         )
 
-    def create(self, attempt: TaskAttempt, *, claim_id: str | None = None) -> TaskAttempt:
-        """System-authority write; ownership comes from the attempt record."""
-        if attempt.workspace_id is not None:
-            WorkspaceRepository(self.session).lock_active_owner(attempt.workspace_id)
-        values = task_attempt_row_values(attempt)
-        self.session.execute(
-            postgresql_insert(TaskAttemptTable).values({**values, "claim_id": claim_id})
-        )
-        return task_attempt_from_table(TaskAttemptTable(**values))
-
     def upsert(self, attempt: TaskAttempt, *, claim_id: str | None = None) -> TaskAttempt:
         """System-authority write keyed by attempt id; ownership comes from the record."""
         return self.upsert_many([(attempt, claim_id)])[0]

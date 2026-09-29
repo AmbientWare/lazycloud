@@ -44,13 +44,13 @@ def sandbox_exec(
 @router.get(
     "/{container_id}/processes/{process_id}/result", response_model=PodSandboxResultResponse
 )
-def sandbox_result(
+async def sandbox_result(
     process_id: str,
     container: read_container,
     wait_seconds: float = Query(default=5.0, ge=0, le=5),
     service: PodControlService = Depends(pod_service),
 ) -> PodSandboxResultResponse:
-    return service.sandbox_result(container, process_id, wait_seconds)
+    return await service.sandbox_result(container, process_id, wait_seconds)
 
 
 @router.get("/{container_id}/status", response_model=PodSandboxStatusResponse)

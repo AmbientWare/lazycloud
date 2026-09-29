@@ -4,10 +4,12 @@ import asyncio
 import logging
 import time
 from collections.abc import AsyncGenerator, AsyncIterator, Iterator, Sequence
+from contextlib import aclosing
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
+from anyio import CancelScope
 from control.apps import DatabaseAppExecutionAdmission
 from control.service import ControlPlaneService, StubKind, StubRecord
 from database.repositories.apps import DeploymentRepository
@@ -652,12 +654,10 @@ class FunctionControlService:
         preview_timeout: int | None = None,
         placement: Placement | None = None,
     ) -> Iterator[SchedulerSubmissionResult]:
-        """Share preparation while each reservation retains its admission fences.
+        """Prepare inputs, then reserve containers under the admission fences.
 
-        The container is the stub's, not the task's. A task is passed when one
-        prompted the start, and it is read only to decide whether starting
-        anything is warranted — a finished or not-yet-due task warrants nothing.
-        A warm floor is its own warrant and passes none.
+        A task-triggered start rechecks that its task still needs capacity.
+        A warm floor passes no task.
         """
 
         workspace = self.control_plane.get_workspace(stub.workspace_id)
@@ -1252,12 +1252,17 @@ class FunctionControlService:
             raise RuntimeError("function invocation has no workspace")
         # Subscribe before the snapshot: a commit during subscription is read from
         # PostgreSQL, and a later commit wakes the stream through Redis.
-        async with self.task_changes.follow(
-            workspace_id=task.workspace_id, stub_id=task.stub_id or "", task_id=task.id
-        ) as updates:
-            async for response in self._function_invoke_updates(
-                initial, updates, keepalive_interval_seconds=keepalive_interval_seconds
-            ):
+        async with (
+            self.task_changes.follow(
+                workspace_id=task.workspace_id, stub_id=task.stub_id or "", task_id=task.id
+            ) as updates,
+            aclosing(
+                self._function_invoke_updates(
+                    initial, updates, keepalive_interval_seconds=keepalive_interval_seconds
+                )
+            ) as responses,
+        ):
+            async for response in responses:
                 yield response
 
     async def _function_invoke_updates(
@@ -1381,10 +1386,13 @@ class FunctionControlService:
             reads = [read for read in (progress_read, update_read) if read is not None]
             for read in reads:
                 read.cancel()
-            if progress_read is not None:
-                await asyncio.gather(progress_read, return_exceptions=True)
-            if update_read is not None:
-                await asyncio.gather(update_read, return_exceptions=True)
+            # Join the notification reader before its subscription closes, even
+            # when the response's cancellation scope has already been cancelled.
+            with CancelScope(shield=True):
+                if progress_read is not None:
+                    await asyncio.gather(progress_read, return_exceptions=True)
+                if update_read is not None:
+                    await asyncio.gather(update_read, return_exceptions=True)
 
     def _async_database(self) -> AsyncDatabaseClient:
         if self.async_database is None:

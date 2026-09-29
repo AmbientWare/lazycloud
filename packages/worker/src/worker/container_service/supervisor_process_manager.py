@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import socket
@@ -255,11 +256,40 @@ class SupervisorSandboxProcessManager:
         response = self._request(SupervisorRequest(op="status", pid=pid))
         return None if response.running else response.exit_code
 
-    def result(self, process_id: str, wait_seconds: float) -> PodSandboxResultResponse:
-        response = self._request(
-            SupervisorRequest(op="result", process_id=process_id, wait_seconds=wait_seconds),
-            timeout_seconds=wait_seconds + 2,
-        )
+    async def result(self, process_id: str, wait_seconds: float) -> PodSandboxResultResponse:
+        async with asyncio.timeout(wait_seconds + 2):
+            while True:
+                await self.connections.wait_until_active_async(self.host)
+                # Both retained streams can expand sixfold when JSON escapes control bytes.
+                reader, writer = await asyncio.open_connection(
+                    self.host, self.port, limit=4 * 1024 * 1024
+                )
+                connection = _AsyncSupervisorConnection(asyncio.get_running_loop(), writer)
+                registered = self.connections.register(self.host, connection)
+                try:
+                    if not registered:
+                        continue
+                    request = SupervisorRequest(
+                        op="result",
+                        process_id=process_id,
+                        wait_seconds=wait_seconds,
+                        token=self.token,
+                    )
+                    writer.write(request.model_dump_json().encode() + b"\n")
+                    await writer.drain()
+                    line = await reader.readline()
+                    if not line:
+                        raise SandboxSupervisorError("sandbox supervisor returned no response")
+                    response = SupervisorResponse.model_validate_json(line)
+                    self._validate(response)
+                    if response.type == "error":
+                        raise SandboxSupervisorError(response.error or "sandbox result unavailable")
+                    break
+                finally:
+                    self.connections.unregister(self.host, connection)
+                    writer.close()
+                    with suppress(OSError):
+                        await writer.wait_closed()
         if response.type != "result" or response.process_id != process_id:
             raise SandboxSupervisorError("supervisor returned a different command result")
         return PodSandboxResultResponse(
@@ -421,25 +451,54 @@ class _SupervisorTransport:
             self.connection.close()
 
 
+@dataclass(slots=True, eq=False)
+class _AsyncSupervisorConnection:
+    loop: asyncio.AbstractEventLoop
+    writer: asyncio.StreamWriter
+
+    def close(self) -> None:
+        self.loop.call_soon_threadsafe(self.writer.close)
+
+
 @dataclass(slots=True)
 class _SupervisorConnectionCoordinator:
     _condition: threading.Condition = field(default_factory=threading.Condition)
     _suspension_counts: dict[str, int] = field(default_factory=dict)
-    _connections: dict[str, set[socket.socket]] = field(default_factory=dict)
+    _connections: dict[str, set[socket.socket | _AsyncSupervisorConnection]] = field(
+        default_factory=dict
+    )
+    _async_waiters: dict[str, set[asyncio.Future[None]]] = field(default_factory=dict)
 
     def wait_until_active(self, host: str) -> None:
         with self._condition:
             while self._suspension_counts.get(host, 0) > 0:
                 self._condition.wait()
 
-    def register(self, host: str, connection: socket.socket) -> bool:
+    async def wait_until_active_async(self, host: str) -> None:
+        while True:
+            with self._condition:
+                if self._suspension_counts.get(host, 0) == 0:
+                    return
+                waiter = asyncio.get_running_loop().create_future()
+                self._async_waiters.setdefault(host, set()).add(waiter)
+            try:
+                await waiter
+            finally:
+                with self._condition:
+                    waiters = self._async_waiters.get(host)
+                    if waiters is not None:
+                        waiters.discard(waiter)
+                        if not waiters:
+                            del self._async_waiters[host]
+
+    def register(self, host: str, connection: socket.socket | _AsyncSupervisorConnection) -> bool:
         with self._condition:
             if self._suspension_counts.get(host, 0) > 0:
                 return False
             self._connections.setdefault(host, set()).add(connection)
             return True
 
-    def unregister(self, host: str, connection: socket.socket) -> None:
+    def unregister(self, host: str, connection: socket.socket | _AsyncSupervisorConnection) -> None:
         with self._condition:
             connections = self._connections.get(host)
             if connections is None:
@@ -453,8 +512,9 @@ class _SupervisorConnectionCoordinator:
             self._suspension_counts[host] = self._suspension_counts.get(host, 0) + 1
             connections = tuple(self._connections.pop(host, set()))
         for connection in connections:
-            with suppress(OSError):
-                connection.shutdown(socket.SHUT_RDWR)
+            if isinstance(connection, socket.socket):
+                with suppress(OSError):
+                    connection.shutdown(socket.SHUT_RDWR)
             with suppress(OSError):
                 connection.close()
 
@@ -466,6 +526,13 @@ class _SupervisorConnectionCoordinator:
                 return
             self._suspension_counts.pop(host, None)
             self._condition.notify_all()
+            for waiter in self._async_waiters.pop(host, ()):
+                waiter.get_loop().call_soon_threadsafe(_resume_supervisor_waiter, waiter)
+
+
+def _resume_supervisor_waiter(waiter: asyncio.Future[None]) -> None:
+    if not waiter.done():
+        waiter.set_result(None)
 
 
 def _drain_supervisor_connections(

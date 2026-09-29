@@ -4,7 +4,7 @@ import asyncio
 from collections.abc import Sequence
 
 import pytest
-from execution.endpoints.batching import EndpointBatch
+from execution.batching import RequestBatch
 
 
 @pytest.mark.anyio
@@ -21,7 +21,7 @@ async def test_disconnecting_twice_settles_accepted_work_without_losing_another_
     async def abandon(result: str) -> None:
         abandoned.append(result)
 
-    batch = EndpointBatch(execute, abandon, lambda: None)
+    batch = RequestBatch(execute, abandon, lambda: None)
     disconnected = asyncio.create_task(batch.submit("disconnected"))
     neighbour = asyncio.create_task(batch.submit("neighbour"))
     await started.wait()

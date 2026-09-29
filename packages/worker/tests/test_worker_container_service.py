@@ -103,7 +103,7 @@ class ProcessManager:
     def status(self, pid: int) -> int | None:
         return self.statuses.get(pid)
 
-    def result(self, process_id: str, wait_seconds: float) -> PodSandboxResultResponse:
+    async def result(self, process_id: str, wait_seconds: float) -> PodSandboxResultResponse:
         raise AssertionError(f"unexpected result request: {process_id}")
 
     def stdout(self, pid: int) -> str:

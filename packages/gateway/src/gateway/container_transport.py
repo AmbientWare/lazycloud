@@ -6,6 +6,11 @@ from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 
+from networking.async_http import (
+    AsyncBackendHttpClient,
+    AsyncBackendHttpError,
+    AsyncBackendTimeoutError,
+)
 from networking.dialer import (
     BackendRouteDialer,
 )
@@ -13,10 +18,14 @@ from networking.sync_http import BackendHttpConnectionPool
 from pydantic import JsonValue, TypeAdapter
 from shared.contracts import ContractModel
 from shared.errors import UpstreamTimeoutError, UpstreamUnavailableError
+from shared.http.pods import PodSandboxResultResponse
 from shared.http.workspace_sync import WORKSPACE_SYNC_CONTENT_TYPE, WorkspaceSyncBatch
+from shared.scheduling import SchedulerContainerAddress
 from worker.container_client.control import ContainerServiceTransport
 from worker.container_client.models import (
     ContainerClientConnectionOptions,
+    ContainerSandboxResultRequest,
+    ContainerSandboxResultResponse,
     ContainerServiceMethod,
     ContainerServiceWireValue,
 )
@@ -31,6 +40,57 @@ from worker.container_client.wire import (
 )
 
 _JSON_VALUE: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
+
+
+@dataclass(slots=True)
+class AsyncSandboxResultHttpClient:
+    http: AsyncBackendHttpClient
+    token: str = field(repr=False)
+
+    async def sandbox_result(
+        self,
+        address: SchedulerContainerAddress,
+        container_id: str,
+        process_id: str,
+        wait_seconds: float,
+    ) -> PodSandboxResultResponse:
+        if address.route is None:
+            raise UpstreamUnavailableError("Container control requires an authorized backend route")
+        request = ContainerSandboxResultRequest(
+            container_id=container_id, process_id=process_id, wait_seconds=wait_seconds
+        )
+        try:
+            response = await self.http.open_stream(
+                address=address.address,
+                route_id=address.route.route_id,
+                method="POST",
+                path=f"{_CONTAINER_SERVICE_HTTP_PREFIX}/{ContainerServiceMethod.ContainerSandboxResult.value}",
+                headers={
+                    "content-type": "application/json",
+                    "authorization": f"Bearer {self.token}",
+                },
+                body=request.model_dump_json().encode(),
+                timeout_seconds=wait_seconds + 3,
+                resource=f"container {container_id} process result",
+            )
+            try:
+                body = await response.read()
+                if response.status_code >= 400:
+                    raise UpstreamUnavailableError(
+                        f"Container result returned HTTP {response.status_code}"
+                    )
+            finally:
+                await response.close()
+        except AsyncBackendTimeoutError as exc:
+            raise UpstreamTimeoutError("Container service exceeded its request deadline") from exc
+        except AsyncBackendHttpError as exc:
+            raise UpstreamUnavailableError("Container service connection failed") from exc
+        result = ContainerSandboxResultResponse.model_validate_json(body)
+        if not result.ok:
+            raise UpstreamUnavailableError(result.error_msg or "sandbox result unavailable")
+        if result.result is None or result.result.process_id != process_id:
+            raise UpstreamUnavailableError("sandbox supervisor returned no matching process result")
+        return result.result
 
 
 @dataclass(slots=True)
@@ -171,6 +231,7 @@ class HttpContainerServiceTransport:
 
 
 __all__ = [
+    "AsyncSandboxResultHttpClient",
     "HttpContainerServiceTransport",
     "HttpContainerServiceTransportFactory",
 ]

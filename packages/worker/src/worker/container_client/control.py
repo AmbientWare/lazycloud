@@ -49,8 +49,6 @@ from .models import (
     ContainerSandboxListProcessesResponse,
     ContainerSandboxReplaceInFilesRequest,
     ContainerSandboxReplaceInFilesResponse,
-    ContainerSandboxResultRequest,
-    ContainerSandboxResultResponse,
     ContainerSandboxStatFileRequest,
     ContainerSandboxStatFileResponse,
     ContainerSandboxStatusRequest,
@@ -142,18 +140,6 @@ class ContainerServiceClient:
             ),
             ContainerSandboxExecResponse,
             timeout_seconds=timeout_seconds,
-        )
-
-    def sandbox_result(
-        self, container_id: str, process_id: str, wait_seconds: float
-    ) -> ContainerSandboxResultResponse:
-        return self._unary(
-            ContainerServiceMethod.ContainerSandboxResult,
-            ContainerSandboxResultRequest(
-                container_id=container_id, process_id=process_id, wait_seconds=wait_seconds
-            ),
-            ContainerSandboxResultResponse,
-            timeout_seconds=wait_seconds + 3,
         )
 
     def sandbox_status(
