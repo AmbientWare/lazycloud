@@ -67,7 +67,7 @@ class AsyncSandboxResultHttpClient:
                 path=f"{_CONTAINER_SERVICE_HTTP_PREFIX}/{ContainerServiceMethod.ContainerSandboxResult.value}",
                 headers={
                     "content-type": "application/json",
-                    "authorization": f"Bearer {self.token}",
+                    **({"authorization": f"Bearer {self.token}"} if self.token else {}),
                 },
                 body=request.model_dump_json().encode(),
                 timeout_seconds=wait_seconds + 3,
