@@ -4,6 +4,7 @@
 package apitypes
 
 import (
+	"encoding/json"
 	"time"
 
 	openapi_types "github.com/oapi-codegen/runtime/types"
@@ -322,9 +323,9 @@ type Name = string
 
 // Payload A task argument or return value. `json` carries `value`; `cloudpickle` carries base64 `data`. Arguments encode `{"args": [...], "kwargs": {...}}`.
 type Payload struct {
-	Data     *[]byte         `json:"data,omitempty"`
-	Encoding PayloadEncoding `json:"encoding"`
-	Value    interface{}     `json:"value,omitempty"`
+	Data     *[]byte          `json:"data,omitempty"`
+	Encoding PayloadEncoding  `json:"encoding"`
+	Value    *json.RawMessage `json:"value,omitempty"`
 }
 
 // PayloadEncoding defines model for Payload.Encoding.
