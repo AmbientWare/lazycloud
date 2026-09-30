@@ -485,7 +485,9 @@ class EndpointControlService:
             )
             self._observe_dispatch_latencies(stub, record)
         except Exception as exc:
-            await self._record_dispatch_failure(task, exc)
+            failure = await self._record_dispatch_failure(task, exc)
+            if failure is not exc:
+                raise failure from exc
             raise
         except asyncio.CancelledError:
             with CancelScope(shield=True):
@@ -849,8 +851,10 @@ class EndpointControlService:
                 max_inflight_per_container=settings.max_inflight_per_container,
             )
         except Exception as exc:
-            status_code = await self._record_dispatch_failure(task, exc)
-            response = error_response(status_code, _dispatch_error_message(exc))
+            failure = await self._record_dispatch_failure(task, exc)
+            response = error_response(
+                _dispatch_failure(failure)[2], _dispatch_error_message(failure)
+            )
             _add_task_headers(response.headers, task.id)
             return response
         except asyncio.CancelledError:
@@ -1283,18 +1287,20 @@ class EndpointControlService:
         self,
         task: Task,
         exc: Exception,
-    ) -> int:
-        """Settle both records for a dispatch that raised; returns the HTTP status."""
-        _, task_status, status_code = _dispatch_failure(exc)
+    ) -> Exception:
+        """Settle the dispatch and preserve cancellation that committed before failure."""
+        _, task_status, _ = _dispatch_failure(exc)
         message = _dispatch_error_message(exc)
-        LOGGER.error("Endpoint task %s failed: %s", task.id, type(exc).__name__)
-        await self._finish_dispatch(
+        outcome = await self._finish_dispatch(
             task,
             task_status,
             error=message,
             exit_code=1,
         )
-        return status_code
+        if outcome.task.status is TaskStatus.Cancelled:
+            return EndpointDispatchCancelled("endpoint request cancelled")
+        LOGGER.error("Endpoint task %s failed: %s", task.id, type(exc).__name__)
+        return exc
 
     def _observe_dispatch_lifecycle(
         self,

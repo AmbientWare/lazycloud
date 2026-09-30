@@ -30,6 +30,7 @@ from execution.endpoints.dispatch import (
 from execution.endpoints.service import (
     AsyncEndpointDispatchStateRepository,
     EndpointControlService,
+    EndpointDispatchTimedOut,
     EndpointWebSocketDispatchRejected,
 )
 from fastapi.testclient import TestClient
@@ -587,7 +588,7 @@ async def test_endpoint_service_ignores_stale_dispatch_records_for_backpressure(
 
 
 @pytest.mark.anyio
-async def test_endpoint_service_cancelled_request_stops_waiting_for_capacity(
+async def test_endpoint_dispatch_timeout_preserves_committed_cancellation(
     async_services: ApiServices,
 ) -> None:
     services = async_services
@@ -599,7 +600,6 @@ async def test_endpoint_service_cancelled_request_stops_waiting_for_capacity(
         )
     )
     stub = _stub_for_deployment(services, deployment.id)
-    _set_endpoint_dispatch_limits(services, stub, timeout_seconds=1)
     containers = _EndpointContainers()
     dispatcher = _CancellingEndpointDispatcher(containers, services)
     service = _endpoint_service(
@@ -882,14 +882,7 @@ class _CancellingEndpointDispatcher(AsyncEndpointInstanceDispatcher):
                 self.cancelled_task,
                 TaskStatus.Cancelled,
             )
-        return await super().ready_targets(
-            stub_id,
-            container_loads=container_loads,
-            max_inflight_per_container=max_inflight_per_container,
-            excluded_container_ids=excluded_container_ids,
-            admit=admit,
-            container_id=container_id,
-        )
+        raise EndpointDispatchTimedOut("Timed out waiting for a backend container")
 
 
 @dataclass
