@@ -22,8 +22,17 @@ def handle(action, *args):
         print("crashing", flush=True)
         os.kill(os.getpid(), signal.SIGKILL)
     if action == "orphan":
-        # The child outlives this call in its own session, so the supervisor
-        # must reap it when it exits.
-        subprocess.Popen(["sleep", "0.2"], start_new_session=True)
+        # The shell exits at once, so its background sleep is re-parented to
+        # PID 1, which must reap it.
+        subprocess.run(["sh", "-c", "sleep 0.2 &"], check=True)
         return "spawned"
+    if action == "zombies":
+        zombies = 0
+        for pid in filter(str.isdigit, os.listdir("/proc")):
+            try:
+                with open(f"/proc/{pid}/stat") as stat:
+                    zombies += stat.read().rsplit(")", 1)[1].split()[0] == "Z"
+            except OSError:
+                pass
+        return zombies
     raise ValueError(f"unknown action {action}")
