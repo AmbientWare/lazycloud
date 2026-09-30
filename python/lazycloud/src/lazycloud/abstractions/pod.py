@@ -2,9 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from datetime import datetime
-from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol, TypedDict
+from typing import TYPE_CHECKING, Any, NoReturn, Protocol, TypedDict
 
 from shared.deployment_records import (
     DEFAULT_DISK,
@@ -20,38 +18,19 @@ from shared.disks import DiskMount
 from shared.gpu import GpuInput, gpu_preference
 from shared.http.gateway import (
     AttachToContainerResponse,
-    DeployStubResponse,
 )
-from shared.http.pods import CreatePodRequest, CreatePodResponse
 from shared.placement import ProductRegion
 
 from lazycloud.abstractions.disk import disk_mounts
 from lazycloud.abstractions.image import Image
 from lazycloud.abstractions.metadata import MachineInput, build_resource_metadata
 from lazycloud.abstractions.volume import volume_mounts
-from lazycloud.control import ControlClientConfigMixin, resolve_control_client_config
-from lazycloud.session.deployment import (
-    DeploymentClient,
-    DeploymentControlClient,
-    DeploymentResourceClient,
-)
+from lazycloud.control import resolve_control_client_config
+from lazycloud.exceptions import UnsupportedFeatureError
 from lazycloud.terminal import Terminal
 
 if TYPE_CHECKING:
-    from shared.http.compute import ContainerResponse
-    from shared.http.deployments import DeploymentResponse
     from shared.http.workspace_sync import WorkspaceSyncBatch, WorkspaceSyncResponse
-
-    from lazycloud.abstractions.shell import ShellSession
-    from lazycloud.session.preparation import DeploymentPreparation
-
-
-class PodClient(Protocol):
-    def create_pod(self, request: CreatePodRequest) -> CreatePodResponse: ...
-
-
-class PodContainerClient(Protocol):
-    def stop_container(self, container_id: str) -> ContainerResponse: ...
 
 
 class ContainerAttachClient(Protocol):
@@ -110,26 +89,6 @@ class PodOptions(TypedDict, total=False):
 
 
 @dataclass(slots=True)
-class PodInstance:
-    container_id: str
-    stub_id: str = ""
-    url: str = ""
-    timeout_seconds: int = 0
-    expires_at: datetime | None = None
-    _container_client: PodContainerClient | None = field(default=None, repr=False)
-
-    def terminate(self) -> bool:
-        if self._container_client is None:
-            msg = "container lifecycle client is required to terminate a pod instance"
-            raise PodOperationError(msg)
-        try:
-            self._container_client.stop_container(self.container_id)
-        except RuntimeError as exc:
-            raise PodOperationError(str(exc)) from exc
-        return True
-
-
-@dataclass(slots=True)
 class Container:
     container_id: str
     client: ContainerAttachClient | None = None
@@ -158,7 +117,7 @@ class Container:
         sync_dir: str | None = None,
         hide_logs: bool = False,
     ) -> AttachToContainerResponse:
-        from lazycloud.abstractions.serve import ContainerWorkspaceSyncer
+        from lazycloud.abstractions.workspace_sync import ContainerWorkspaceSyncer
 
         selected_container_id = container_id or self.container_id
         syncer = (
@@ -206,7 +165,7 @@ class Container:
 
 
 @dataclass(slots=True)
-class Pod(ControlClientConfigMixin):
+class Pod:
     _app_slug: str = field(repr=False)
     name: str = "pod"
     image: Image = field(default_factory=Image)
@@ -242,26 +201,7 @@ class Pod(ControlClientConfigMixin):
     availability_zone: str = ""
     machine: MachineInput = None
     metadata: dict[str, Any] = field(default_factory=dict)
-    stub_id: str = field(default="", init=False)
-    deployment_id: str = field(default="", init=False)
-    image_id: str | None = field(default=None, init=False)
-    checkpoint_id: str | None = field(default=None, init=False)
-    client: PodClient | None = field(default=None, init=False, repr=False)
-    container_client: PodContainerClient | None = field(default=None, init=False, repr=False)
-    deployment_client: DeploymentControlClient | None = field(
-        default=None,
-        init=False,
-        repr=False,
-    )
-    deployment_resource_client: DeploymentResourceClient | None = field(
-        default=None,
-        init=False,
-        repr=False,
-    )
     workspace: str | None = field(default=None, init=False)
-    endpoint: str | None = field(default=None, init=False)
-    token: str | None = field(default=None, init=False, repr=False)
-    timeout_seconds: float = field(default=10.0, init=False)
     terminal: Terminal | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -280,27 +220,6 @@ class Pod(ControlClientConfigMixin):
             raise ValueError("health_check_port needs a health_check_path to request")
         if self.health_check_path and not self.health_check_path.startswith("/"):
             raise ValueError("health_check_path must be absolute")
-
-    @property
-    def control_client(self) -> PodClient:
-        from lazycloud.control_clients import pod_control_client
-
-        if self.client is None:
-            config = resolve_control_client_config(
-                endpoint=self.endpoint,
-                token=self.token,
-                timeout_seconds=self.timeout_seconds,
-            )
-            self.client = pod_control_client(config)
-        return self.client
-
-    @property
-    def lifecycle_client(self) -> PodContainerClient:
-        from lazycloud.control_clients import resource_control_client
-
-        if self.container_client is None:
-            self.container_client = resource_control_client(self._config())
-        return self.container_client
 
     def spec(self) -> DeploymentSpec:
         return DeploymentSpec(
@@ -352,253 +271,27 @@ class Pod(ControlClientConfigMixin):
             ),
         )
 
-    def prepare(self, *, workspace: str | None = None) -> str:
-        try:
-            response = DeploymentClient(
-                client=self.deployment_client,
-                resource_client=self.deployment_resource_client,
-                workspace=workspace or self.workspace,
-                endpoint=self.endpoint,
-                token=self.token,
-                timeout_seconds=self.timeout_seconds,
-                sync_source=True,
-                terminal=self.terminal,
-            ).prepare(self.spec(), workspace=workspace or self.workspace, image=self.image)
-        except RuntimeError as exc:
-            raise PodOperationError(str(exc)) from exc
-        if not response.stub_id:
-            msg = "deployment prepare did not return a pod stub_id"
-            raise PodOperationError(msg)
-        self.stub_id = response.stub_id
-        return self.stub_id
+    def deploy(self, **_: object) -> NoReturn:
+        raise self._unsupported()
 
-    def create(
-        self,
-        command: list[str] | None = None,
-        *,
-        stub_id: str | None = None,
-        workspace: str | None = None,
-        timeout_seconds: int | None = None,
-    ) -> PodInstance:
-        selected_stub_id = stub_id or self.stub_id or self.prepare(workspace=workspace)
-        return _create_pod_instance(
-            self.control_client,
-            stub_id=selected_stub_id,
-            image_id=self.image_id,
-            checkpoint_id=self.checkpoint_id,
-            command=command,
-            timeout_seconds=(self.keep_warm if timeout_seconds is None else timeout_seconds),
-            external_url=self._config().endpoint,
-            container_client=self.lifecycle_client,
-        )
+    def create(self, *_: object, **__: object) -> NoReturn:
+        raise self._unsupported()
 
-    def run(
-        self,
-        *command: str,
-        workspace: str | None = None,
-        timeout_seconds: int | None = None,
-    ) -> PodInstance:
-        return self.create(
-            list(command) or None,
-            workspace=workspace,
-            timeout_seconds=timeout_seconds,
-        )
+    def run(self, *_: object, **__: object) -> NoReturn:
+        raise self._unsupported()
 
-    def shell(
-        self,
-        *,
-        workspace: str | None = None,
-        container_id: str | None = None,
-        sync_dir: str | None = None,
-    ) -> ShellSession:
-        from lazycloud.abstractions.shell import Shell
+    def shell(self, **_: object) -> NoReturn:
+        raise self._unsupported()
 
-        shell = Shell(
-            workspace=workspace or self.workspace,
-            endpoint=self.endpoint,
-            token=self.token,
-            timeout_seconds=self.timeout_seconds,
-        )
-        if container_id:
-            return shell.create_existing(container_id, sync_dir=sync_dir)
-        return shell.create_standalone(
-            self.stub_id or self.prepare(workspace=workspace), sync_dir=sync_dir
-        )
-
-    def deploy(
-        self,
-        *,
-        workspace: str | None = None,
-        external_url: str | None = None,
-        source_root: str | Path | None = None,
-        _preparation: DeploymentPreparation | None = None,
-    ) -> DeployStubResponse:
-        try:
-            response = DeploymentClient(
-                client=self.deployment_client,
-                workspace=workspace or self.workspace,
-                endpoint=self.endpoint,
-                token=self.token,
-                timeout_seconds=self.timeout_seconds,
-                sync_source=True,
-                terminal=self.terminal,
-                preparation=_preparation,
-            ).create(
-                self.spec(),
-                workspace=workspace or self.workspace,
-                external_url=external_url,
-                image=self.image,
-                source_root=source_root,
-            )
-        except RuntimeError as exc:
-            raise PodOperationError(str(exc)) from exc
-        self.stub_id = response.stub_id or self.stub_id
-        self.deployment_id = response.deployment_id or self.deployment_id
-        return response
-
-    def pause(
-        self,
-        *,
-        version: int | None = None,
-        workspace: str | None = None,
-    ) -> DeploymentResponse:
-        deployment, selected_workspace = self._deployment_target(
-            version=version,
-            workspace=workspace,
-        )
-        try:
-            return deployment.stop(self.deployment_id, workspace=selected_workspace)
-        except RuntimeError as exc:
-            raise PodOperationError(str(exc)) from exc
-
-    def resume(
-        self,
-        *,
-        version: int | None = None,
-        workspace: str | None = None,
-    ) -> DeploymentResponse:
-        deployment, selected_workspace = self._deployment_target(
-            version=version,
-            workspace=workspace,
-        )
-        try:
-            return deployment.start(self.deployment_id, workspace=selected_workspace)
-        except RuntimeError as exc:
-            raise PodOperationError(str(exc)) from exc
-
-    def scale(
-        self,
-        containers: int,
-        *,
-        version: int | None = None,
-        workspace: str | None = None,
-    ) -> DeploymentResponse:
-        deployment, selected_workspace = self._deployment_target(
-            version=version,
-            workspace=workspace,
-        )
-        try:
-            return deployment.scale(
-                self.deployment_id,
-                containers,
-                workspace=selected_workspace,
-            )
-        except RuntimeError as exc:
-            raise PodOperationError(str(exc)) from exc
-
-    def delete(
-        self,
-        *,
-        version: int | None = None,
-        workspace: str | None = None,
-    ) -> None:
-        deployment, selected_workspace = self._deployment_target(
-            version=version,
-            workspace=workspace,
-        )
-        try:
-            deployment.delete(self.deployment_id, workspace=selected_workspace)
-        except RuntimeError as exc:
-            raise PodOperationError(str(exc)) from exc
-
-    def _deployment_target(
-        self,
-        *,
-        version: int | None,
-        workspace: str | None,
-    ) -> tuple[DeploymentClient, str]:
-        selected_workspace = workspace or self.workspace or self._config().workspace
-        deployment = DeploymentClient(
-            client=self.deployment_client,
-            resource_client=self.deployment_resource_client,
-            workspace=selected_workspace,
-            endpoint=self.endpoint,
-            token=self.token,
-            timeout_seconds=self.timeout_seconds,
-        )
-        if self.deployment_id and version is None:
-            return deployment, selected_workspace
-        try:
-            target = deployment.resolve_target(
-                kind=DeploymentKind.Pod,
-                name=self.name,
-                app=self._app_slug,
-                deployment_version=version,
-                workspace=selected_workspace,
-            )
-        except RuntimeError as exc:
-            raise PodOperationError(str(exc)) from exc
-        if not target.deployment_id:
-            msg = f"pod deployment target did not return an id: {self.name}"
-            raise PodOperationError(msg)
-        self.stub_id = target.stub_id or self.stub_id
-        self.deployment_id = target.deployment_id
-        return deployment, selected_workspace
-
-
-def _create_pod_instance(
-    client: PodClient,
-    *,
-    stub_id: str,
-    image_id: str | None = None,
-    checkpoint_id: str | None = None,
-    command: list[str] | None = None,
-    timeout_seconds: int | None = None,
-    external_url: str = "",
-    container_client: PodContainerClient | None = None,
-) -> PodInstance:
-    if not stub_id:
-        msg = "stub_id is required to create a pod through the control API"
-        raise PodOperationError(msg)
-    try:
-        response = client.create_pod(
-            CreatePodRequest(
-                stub_id=stub_id,
-                image_id=image_id,
-                checkpoint_id=checkpoint_id,
-                command=command,
-                timeout_seconds=timeout_seconds,
-                external_url=external_url,
-            )
-        )
-    except RuntimeError as exc:
-        raise PodOperationError(str(exc)) from exc
-    return PodInstance(
-        container_id=response.container_id,
-        stub_id=response.stub_id or stub_id,
-        url=response.url,
-        timeout_seconds=response.timeout_seconds,
-        expires_at=response.expires_at,
-        _container_client=container_client,
-    )
+    def _unsupported(self) -> UnsupportedFeatureError:
+        if self.role is PodRole.Devbox:
+            return UnsupportedFeatureError(f"devbox {self.name}", ["devboxes"])
+        return UnsupportedFeatureError(f"pod {self.name}", ["pods"])
 
 
 __all__ = [
     "Container",
     "Pod",
-    "PodClient",
-    "PodContainerClient",
-    "PodInstance",
     "PodOperationError",
     "PodOptions",
 ]

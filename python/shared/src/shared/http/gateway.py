@@ -1,66 +1,17 @@
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Literal
 
 from pydantic import Field, JsonValue, field_validator, model_validator
 
-from shared.app_slug import validate_app_slug
-from shared.compute_enrollment import AgentCapacityState
 from shared.deployment_records import CpuRequest, MemoryRequest, validate_pod_role
 from shared.deployments import DeploymentKind, PodRole
 from shared.disks import DiskMount, parse_disk_size_bytes, validate_disk_mounts
-from shared.enums import StringEnum
 from shared.http.base import HttpModel
 from shared.http.client_manifests import ClientContract
 from shared.lifecycle import LifecycleHooks
 from shared.placement import AvailabilityZone, ProductRegion, validate_placement_machine
 from shared.tasks import RetryPolicy
-
-
-class GatewayUrlKind(StringEnum):
-    Stub = "stub"
-    Deployment = "deployment"
-    Shell = "shell"
-
-
-class AgentCapacityInterruptionRequest(HttpModel):
-    agent_token: str = Field(min_length=1, repr=False)
-    machine_id: str = Field(min_length=1)
-    credential_id: str = Field(min_length=1)
-    credential_generation: int = Field(ge=1)
-    state: AgentCapacityState
-    reason: str = Field(min_length=1, max_length=240)
-    observed_at: datetime
-    notice_at: datetime | None = None
-
-    @field_validator("state")
-    @classmethod
-    def state_must_interrupt_capacity(cls, value: AgentCapacityState) -> AgentCapacityState:
-        if value is AgentCapacityState.Available:
-            msg = "capacity interruption state must be preempting or cordoned"
-            raise ValueError(msg)
-        return value
-
-    @field_validator("reason")
-    @classmethod
-    def reason_must_be_normalized(cls, value: str) -> str:
-        normalized = value.strip()
-        if not normalized:
-            msg = "capacity interruption reason is required"
-            raise ValueError(msg)
-        return normalized
-
-
-class AgentCapacityInterruptionResponse(HttpModel):
-    machine_id: str
-    credential_id: str
-    credential_generation: int = Field(ge=1)
-    state: AgentCapacityState
-    reason: str
-    observed_at: datetime
-    notice_at: datetime | None = None
-    changed: bool = False
 
 
 class CheckpointContainerRequest(HttpModel):
@@ -250,91 +201,14 @@ class GetOrCreateStubRequest(HttpModel):
         return self
 
 
-class GetOrCreateStubResponse(HttpModel):
-    stub_id: str
-
-
-class DeployStubRequest(HttpModel):
-    stub_id: str
-    name: str = ""
-    workspace: str | None = None
-    external_url: str = "http://127.0.0.1:9000"
-
-
-class DeployStubResponse(HttpModel):
-    stub_id: str = ""
-    deployment_id: str = ""
-    app_id: str | None = None
-    version: int = 0
-    invoke_url: str = ""
-    name: str = ""
-    role: PodRole | None = None
-    """The pod's resolved role; unset for every other kind."""
-
-    keep_warm_seconds: int | None = None
-    """The idle window the deployment resolved to; -1 keeps a container running."""
-
-    preemptible: bool | None = None
-    """Whether the deployment resolved to reclaimable capacity."""
-
-
-class GetUrlRequest(HttpModel):
-    stub_id: str
-    container_id: str | None = None
-    deployment_id: str = ""
-    url_type: GatewayUrlKind = GatewayUrlKind.Stub
-    is_shell: bool = False
-    workspace: str | None = None
-    external_url: str = "http://127.0.0.1:9000"
-    port: int | None = None
-
-
-class GetUrlResponse(HttpModel):
-    url: str = ""
-
-
-class ResolveDeploymentTargetRequest(HttpModel):
-    kind: DeploymentKind
-    name: str
-    app: str = ""
-    workspace: str = "default"
-    deployment_version: int | None = None
-    external_url: str = "http://127.0.0.1:9000"
-    mode: str = "path"
-
-    @field_validator("app")
-    @classmethod
-    def validate_app(cls, value: str) -> str:
-        return validate_app_slug(value) if value else ""
-
-
-class ResolveDeploymentTargetResponse(HttpModel):
-    kind: DeploymentKind
-    stub_id: str = ""
-    deployment_id: str = ""
-    deployment_name: str = ""
-    deployment_version: int = 0
-    url: str = ""
-
-
 __all__ = [
-    "AgentCapacityInterruptionRequest",
-    "AgentCapacityInterruptionResponse",
     "AttachToContainerRequest",
     "AttachToContainerResponse",
     "CheckpointContainerRequest",
     "CheckpointContainerResponse",
-    "DeployStubRequest",
-    "DeployStubResponse",
     "GatewayAutoscaler",
     "GatewayTaskPolicy",
-    "GatewayUrlKind",
     "GetOrCreateStubRequest",
-    "GetOrCreateStubResponse",
-    "GetUrlRequest",
-    "GetUrlResponse",
-    "ResolveDeploymentTargetRequest",
-    "ResolveDeploymentTargetResponse",
     "Schema",
     "SchemaField",
     "SecretVar",

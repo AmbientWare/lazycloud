@@ -9,21 +9,12 @@ from urllib.parse import urlencode
 from pydantic import ValidationError
 from shared.checkpoints import CHECKPOINT_REQUEST_TIMEOUT_SECONDS
 from shared.contracts import ContractModel
-from shared.http.client_manifests import ClientManifestRequest, ClientManifestResponse
 from shared.http.errors import HttpResponseDecodeError
 from shared.http.gateway import (
     AttachToContainerRequest,
     AttachToContainerResponse,
     CheckpointContainerRequest,
     CheckpointContainerResponse,
-    DeployStubRequest,
-    DeployStubResponse,
-    GetOrCreateStubRequest,
-    GetOrCreateStubResponse,
-    GetUrlRequest,
-    GetUrlResponse,
-    ResolveDeploymentTargetRequest,
-    ResolveDeploymentTargetResponse,
 )
 from shared.http.workspace_sync import (
     SYNC_TIMEOUT_SECONDS,
@@ -147,40 +138,6 @@ class GatewayControlClient:
             )
         except ValidationError as exc:
             raise HttpResponseDecodeError("workspace sync response contained invalid JSON") from exc
-
-    def get_or_create_stub(
-        self,
-        request: GetOrCreateStubRequest,
-    ) -> GetOrCreateStubResponse:
-        return GetOrCreateStubResponse.model_validate(
-            self.channel.post(self._scoped("/gateway/stubs/get-or-create"), _payload(request))
-        )
-
-    def deploy_stub(self, request: DeployStubRequest) -> DeployStubResponse:
-        return DeployStubResponse.model_validate(
-            self.channel.post(self._scoped("/gateway/stubs/deploy"), _payload(request))
-        )
-
-    def get_url(self, request: GetUrlRequest) -> GetUrlResponse:
-        return GetUrlResponse.model_validate(
-            self.channel.post(self._scoped("/gateway/stubs/url"), _payload(request))
-        )
-
-    def resolve_deployment_target(
-        self,
-        request: ResolveDeploymentTargetRequest,
-    ) -> ResolveDeploymentTargetResponse:
-        return ResolveDeploymentTargetResponse.model_validate(
-            self.channel.post(
-                self._scoped("/gateway/deployments/resolve-target"),
-                _payload(request),
-            )
-        )
-
-    def client_manifest(self, request: ClientManifestRequest) -> ClientManifestResponse:
-        return ClientManifestResponse.model_validate(
-            self.channel.post(self._scoped("/gateway/client-manifests"), _payload(request))
-        )
 
 
 def _payload(request: ContractModel) -> dict[str, Any]:

@@ -9,7 +9,6 @@ import typer
 from shared.client_version import observe_client_versions, release_is_newer
 
 from lazycloud._terminal.streams import error_console, json_output_active, set_json_output
-from lazycloud.cli.apps import app_app
 from lazycloud.cli.artifacts import artifact_app
 from lazycloud.cli.components.errors import (
     CLIENT_ERROR_POLICY,
@@ -21,19 +20,18 @@ from lazycloud.cli.development import dev
 from lazycloud.cli.disks import disk_app
 from lazycloud.cli.domains import domain_app
 from lazycloud.cli.examples import example_app
-from lazycloud.cli.execution import deploy, deployment_app, run, shell
+from lazycloud.cli.execution import deploy, run, shell
 from lazycloud.cli.identity import login, profile_app, token_app
-from lazycloud.cli.logs import logs
 from lazycloud.cli.resources import (
     cloud_app,
     compute_app,
     container_app,
     machine_app,
-    task_app,
 )
 from lazycloud.cli.secrets import secret_app
 from lazycloud.cli.serve import serve
 from lazycloud.cli.ssh import ssh, ssh_cert, ssh_config, ssh_proxy
+from lazycloud.cli.tasks import task_app
 from lazycloud.cli.update import update
 from lazycloud.cli.volumes import volume_app, volume_cp, volume_ls, volume_mv, volume_rm
 from lazycloud.cli.workspaces import workspace_app
@@ -217,7 +215,6 @@ def _register_public_commands(registry: PublicCliRegistry) -> None:
     registry.add_root_command("serve", _register_serve)
     registry.add_root_command("login", _register_login)
     registry.add_root_command("dev", _register_dev)
-    registry.add_root_command("logs", _register_logs)
     registry.add_root_command("update", _register_update)
     registry.add_root_command("ls", _register_volume_ls)
     registry.add_root_command("cp", _register_volume_cp)
@@ -234,7 +231,7 @@ def _register_deploy(application: typer.Typer) -> None:
 def _register_run(application: typer.Typer) -> None:
     application.command(
         "run",
-        help="Run a handler locally or remotely.",
+        help="Run a function remotely with JSON arguments.",
         context_settings={"ignore_unknown_options": True, "allow_extra_args": True},
     )(run)
 
@@ -283,7 +280,7 @@ def _register_serve(application: typer.Typer) -> None:
 
 
 def _register_login(application: typer.Typer) -> None:
-    application.command("login", help="Authenticate the CLI profile.")(login)
+    application.command("login", help="Store an access token and verify it.")(login)
 
 
 def _register_update(application: typer.Typer) -> None:
@@ -292,10 +289,6 @@ def _register_update(application: typer.Typer) -> None:
 
 def _register_dev(application: typer.Typer) -> None:
     application.command("dev", help="Run local development helpers.")(dev)
-
-
-def _register_logs(application: typer.Typer) -> None:
-    application.command("logs", help="Inspect task and container logs.")(logs)
 
 
 def _register_volume_ls(application: typer.Typer) -> None:
@@ -319,7 +312,6 @@ def _register_public_groups(registry: PublicCliRegistry) -> None:
     registry.add_group("profile", profile_app)
     registry.add_group("token", token_app)
     registry.add_group("task", task_app)
-    registry.add_group("deployment", deployment_app)
     registry.add_group("container", container_app)
     registry.add_group("machine", machine_app)
     registry.add_group("secret", secret_app)
@@ -331,7 +323,6 @@ def _register_public_groups(registry: PublicCliRegistry) -> None:
     registry.add_group("workspace", workspace_app)
     registry.add_group("cloud", cloud_app)
     registry.add_group("compute", compute_app)
-    registry.add_group("app", app_app)
 
 
 if __name__ == "__main__":

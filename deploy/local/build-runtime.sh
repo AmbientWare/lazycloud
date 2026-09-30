@@ -24,8 +24,11 @@ trap 'rm -rf "$work"' EXIT
 
 # The workspace packages are pure Python source trees; building their wheels
 # lets every install below keep --only-binary for all packages.
+# setuptools leaves build/ in the package directory; it is removed so the
+# source tree stays as it was.
 for package in shared lazycloud runner; do
   "$uv" build --quiet --wheel --out-dir "$work/wheels" "$root/python/$package"
+  rm -rf "$root/python/$package/build"
 done
 
 failed=()

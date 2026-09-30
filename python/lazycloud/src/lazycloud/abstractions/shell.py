@@ -9,7 +9,7 @@ from shared.http.shells import (
     ShellConnectPlanResponse,
 )
 
-from lazycloud.abstractions.serve import ContainerWorkspaceSyncer, sync_local_workspace
+from lazycloud.abstractions.workspace_sync import ContainerWorkspaceSyncer, sync_local_workspace
 from lazycloud.control import ControlClientConfig, resolve_control_client_config
 from lazycloud.control_clients import gateway_control_client
 from lazycloud.terminal_shell import InteractiveShell

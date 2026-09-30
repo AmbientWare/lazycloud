@@ -16,7 +16,6 @@ from lazycloud.control_clients import (
     observability_control_client,
     resource_control_client,
 )
-from lazycloud.session.task import TaskClient
 
 
 def control_config(
@@ -151,20 +150,6 @@ def workspace_client(
     )
 
 
-def task_client(
-    *,
-    workspace: str | None = None,
-    timeout_seconds: float = 10.0,
-) -> TaskClient:
-    config = control_config(workspace=workspace, timeout_seconds=timeout_seconds)
-    return TaskClient(
-        workspace=config.workspace,
-        endpoint=config.endpoint,
-        token=config.token,
-        timeout_seconds=config.timeout_seconds,
-    )
-
-
 __all__ = [
     "compute_client",
     "control_config",
@@ -172,7 +157,6 @@ __all__ = [
     "observability_client",
     "secret_client",
     "ssh_client",
-    "task_client",
     "volume_client",
     "workspace_client",
 ]

@@ -7,12 +7,12 @@ from pathlib import Path
 from typing import Literal, TypedDict
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
-from shared.function_payloads import FunctionPayloadEncoding
 from shared.http.base import HttpModel
 from shared.http.errors import ErrorResponse
-from shared.http.functions import FunctionInvokeResponse
 from shared.http.shells import CreateShellInExistingContainerResponse
 
+# contracts/http_contract_cases.json still carries function_invoke_response
+# cases for web; the SDK no longer generates or decodes them.
 ContractName = Literal[
     "create_shell_in_existing_container_response",
     "error_response",
@@ -49,10 +49,9 @@ class _Arguments(argparse.Namespace):
     output: Path = CORPUS_PATH
 
 
-_MODEL_BY_CONTRACT: dict[ContractName, type[HttpModel]] = {
+_MODEL_BY_CONTRACT: dict[str, type[HttpModel]] = {
     "create_shell_in_existing_container_response": CreateShellInExistingContainerResponse,
     "error_response": ErrorResponse,
-    "function_invoke_response": FunctionInvokeResponse,
 }
 _JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, JsonValue])
 _CORPUS_ADAPTER = TypeAdapter(ContractCorpusPayload)
@@ -175,94 +174,8 @@ def _input_cases() -> list[_InputCase]:
             accepted=False,
             input={"detail": "workspace access denied", "message": "duplicate owner"},
         ),
-        _InputCase(
-            contract="function_invoke_response",
-            name="omitted_defaults",
-            accepted=True,
-            input={},
-        ),
-        _InputCase(
-            contract="function_invoke_response",
-            name="nullable_result",
-            accepted=True,
-            input={"task_id": "task-null", "result": None, "stream": "stderr"},
-        ),
-        _InputCase(
-            contract="function_invoke_response",
-            name="invalid_stream",
-            accepted=False,
-            input={"task_id": "task-invalid-stream", "stream": "debug"},
-        ),
-        _InputCase(
-            contract="function_invoke_response",
-            name="null_non_nullable_task_id",
-            accepted=False,
-            input={"task_id": None},
-        ),
-        _InputCase(
-            contract="function_invoke_response",
-            name="missing_result_discriminator",
-            accepted=False,
-            input={"task_id": "task-missing-tag", "result": {"value": {"ok": True}}},
-        ),
-        _InputCase(
-            contract="function_invoke_response",
-            name="invalid_result_encoding",
-            accepted=False,
-            input={"task_id": "task-invalid-tag", "result": {"encoding": "yaml"}},
-        ),
-        _InputCase(
-            contract="function_invoke_response",
-            name="unknown_top_level_field",
-            accepted=False,
-            input={"task_id": "task-extra", "operation": "invoke"},
-        ),
-        _InputCase(
-            contract="function_invoke_response",
-            name="unknown_nested_field",
-            accepted=False,
-            input={
-                "task_id": "task-extra-result",
-                "result": {"encoding": "json", "value": None, "schema": "hidden"},
-            },
-        ),
     ]
-    cases.extend(_function_result_encoding_cases())
     return cases
-
-
-def _function_result_encoding_cases() -> list[_InputCase]:
-    result_by_encoding: dict[FunctionPayloadEncoding, dict[str, JsonValue]] = {
-        FunctionPayloadEncoding.Json: {
-            "version": 1,
-            "encoding": FunctionPayloadEncoding.Json.value,
-            "value": {"answer": 42, "ready": True},
-        },
-        FunctionPayloadEncoding.Cloudpickle: {
-            "version": 1,
-            "encoding": FunctionPayloadEncoding.Cloudpickle.value,
-            "value_base64": "gASVCgAAAAAAAAB9lIwCb2uUiHMu",
-            "size_bytes": 21,
-            "sha256": "2bee21166d3fcc8ca23b9e3a80c18dc6ab281d3e49b920d18bcf2771672a0a69",
-        },
-    }
-    if set(result_by_encoding) != set(FunctionPayloadEncoding):
-        raise AssertionError("function result encoding cases must be exhaustive")
-    return [
-        _InputCase(
-            contract="function_invoke_response",
-            name=f"result_encoding_{encoding.value}",
-            accepted=True,
-            input={
-                "task_id": f"task-{encoding.value}",
-                "output": "complete\n",
-                "done": True,
-                "exit_code": 0,
-                "result": result,
-            },
-        )
-        for encoding, result in result_by_encoding.items()
-    ]
 
 
 def _main() -> None:

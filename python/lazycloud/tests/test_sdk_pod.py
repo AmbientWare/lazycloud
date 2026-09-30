@@ -3,21 +3,17 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import TypeVar
 
 import pytest
-from lazycloud.abstractions.pod import Container, Pod, PodOperationError
-from shared.deployments import DeploymentKind
+from lazycloud.abstractions.pod import Container
+from lazycloud.exceptions import UnsupportedFeatureError
 from shared.http.compute import ContainerResponse
-from shared.http.deployments import DeploymentListResponse, DeploymentResponse
 from shared.http.gateway import (
     AttachToContainerResponse,
 )
 from shared.http.workspace_sync import WorkspaceSyncBatch, WorkspaceSyncResponse
 
-from tests.fakes import FakeDeploymentClient
-
-T = TypeVar("T")
+from lazycloud import App, Image
 
 
 @dataclass
@@ -58,76 +54,14 @@ class FakeGatewayClient:
         return WorkspaceSyncResponse(applied=len(body.manifest.entries))
 
 
-@dataclass
-class FakePodDeploymentClient(FakeDeploymentClient):
-    stopped: list[str] = field(default_factory=list)
-    started: list[str] = field(default_factory=list)
-    scaled: list[tuple[str, int]] = field(default_factory=list)
-    deleted: list[str] = field(default_factory=list)
-
-    def _response(self, deployment_id: str) -> DeploymentResponse:
-        created_at = datetime(2026, 1, 1, tzinfo=UTC)
-        return DeploymentResponse(
-            id=deployment_id,
-            name="worker",
-            kind=DeploymentKind.Pod,
-            stub_id=self.stub_id,
-            created_at=created_at,
-            updated_at=created_at,
-        )
-
-    def list_deployments(
-        self,
-        *,
-        active: bool | None = None,
-        app_id: str | None = None,
-        name: str | None = None,
-        latest: bool = False,
-        limit: int = 100,
-        cursor: str | None = None,
-    ) -> DeploymentListResponse:
-        del active, app_id, latest, limit, cursor
-        deployment_id = self.deployment_id
-        if deployment_id is None:
-            raise AssertionError("fake pod deployment client has no configured deployment ID")
-        response = self._response(deployment_id)
-        return DeploymentListResponse(data=[response] if name in {None, response.name} else [])
-
-    def deployment(self, deployment_id: str) -> DeploymentResponse:
-        return self._response(deployment_id)
-
-    def stop_deployment(self, deployment_id: str) -> DeploymentResponse:
-        self.stopped.append(deployment_id)
-        return self._response(deployment_id)
-
-    def start_deployment(self, deployment_id: str) -> DeploymentResponse:
-        self.started.append(deployment_id)
-        return self._response(deployment_id)
-
-    def scale_deployment(self, deployment_id: str, replicas: int) -> DeploymentResponse:
-        self.scaled.append((deployment_id, replicas))
-        return self._response(deployment_id)
-
-    def delete_deployment(self, deployment_id: str) -> None:
-        self.deleted.append(deployment_id)
-
-
-def _bind_internal_state(resource: T, /, **values: object) -> T:
-    for name, value in values.items():
-        setattr(resource, name, value)
-    return resource
-
-
-def test_pod_lifecycle_resolution_raises_typed_error() -> None:
-    pod = Pod(_app_slug="billing", name="worker")
-    _bind_internal_state(
-        pod,
-        deployment_client=FakePodDeploymentClient(fail_resolve=True),
-        deployment_resource_client=FakePodDeploymentClient(),
+@pytest.mark.parametrize("method", ["deploy", "create", "run", "shell"])
+def test_pod_operations_name_the_unsupported_resource(method: str) -> None:
+    devbox = App("billing").devbox(
+        name="workbench", image=Image(), disk="10Gi", cpu=1, memory="1Gi"
     )
 
-    with pytest.raises(PodOperationError, match="target not found"):
-        pod.pause(version=4)
+    with pytest.raises(UnsupportedFeatureError, match=r"devbox workbench.*devboxes"):
+        getattr(devbox, method)()
 
 
 def test_container_attaches_to_existing_container(

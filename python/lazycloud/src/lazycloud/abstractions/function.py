@@ -1,12 +1,8 @@
 from __future__ import annotations
 
-import inspect
-import io
-import pickle
+import base64
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager, nullcontext
-from contextvars import copy_context
 from dataclasses import dataclass, field
 from functools import update_wrapper
 from pathlib import Path
@@ -15,15 +11,22 @@ from typing import (
     Any,
     Generic,
     ParamSpec,
-    Protocol,
     TypedDict,
     TypeGuard,
     TypeVar,
     overload,
 )
 
-import cloudpickle
 from pydantic import ValidationError
+from shared.api import (
+    Encoding,
+    ErrorCode,
+    LogEntry,
+    Payload,
+    Stream,
+    SubmitTasksRequest,
+)
+from shared.api import FunctionSpec as ApiFunctionSpec
 from shared.autoscaling import Autoscaler
 from shared.deployment_records import (
     DEFAULT_DISK,
@@ -40,24 +43,13 @@ from shared.deployment_records import (
     VolumeMount,
 )
 from shared.deployments import DeploymentKind
-from shared.env import HOT_RELOAD_ENV
-from shared.execution_entry import record_execution_entry
-from shared.function_payloads import (
-    FunctionCallPersistentId,
-    FunctionCloudpickleInvocation,
-    FunctionInvocationArguments,
-    FunctionInvocationPayload,
-    FunctionPayloadEncoding,
-)
+from shared.function_payloads import FunctionPayloadEncoding
 from shared.gpu import GpuInput, gpu_preference
-from shared.http.functions import (
-    FunctionCallDependency,
-    FunctionInvokeResponse,
-    FunctionServeResponse,
-)
+from shared.image_building.python import python_minor_version
 from shared.placement import ProductRegion
-from shared.task_context import current_root_task_id, current_task_id
-from shared.tasks import RetryPolicy, TaskPolicy, TaskStatus
+from shared.resources import parse_memory_mib
+from shared.serialization import to_json_value
+from shared.tasks import DEFAULT_RETRYABLE_TASK_STATUS_SEQUENCE, RetryPolicy, TaskPolicy
 
 from lazycloud._invocation import encode_arguments, prepare_arguments, serialize_result
 from lazycloud.abstractions.image import Image
@@ -77,47 +69,33 @@ from lazycloud.client_contracts import (
     schema_from_contract_parameters,
     schema_from_contract_return,
 )
-from lazycloud.control import ControlClientConfig, resolve_control_client_config, workspace_path
+from lazycloud.clients.api import ApiClient, ApiError
+from lazycloud.control import api_client, require_workspace, resolve_control_client_config
 from lazycloud.env import called_on_import, is_local
-from lazycloud.progress import PendingProgressReporter
+from lazycloud.exceptions import (
+    FunctionNotDeployedError,
+    MapSubmissionError,
+    SdkError,
+    UnsupportedFeatureError,
+)
 from lazycloud.references import dotted_reference
+from lazycloud.session.task import FunctionCall, Task
 from lazycloud.terminal import Terminal, TerminalStep
+from lazycloud.values import cloudpickle_bytes
 
 if TYPE_CHECKING:
-    from shared.http.gateway import DeployStubResponse
+    from shared.api import Deployment
 
-    from lazycloud.abstractions.shell import ShellSession
-    from lazycloud.clients.function.control import FunctionControlClient
-    from lazycloud.session.deployment import DeploymentControlClient
-    from lazycloud.session.preparation import DeploymentPreparation
-    from lazycloud.session.task import FunctionCall
 
+# Inputs per submit request; the API rejects larger batches.
+MAX_SUBMIT_BATCH = 1000
 
 P = ParamSpec("P")
 R = TypeVar("R")
 
 
-class _FunctionClient(Protocol):
-    def invoke(
-        self,
-        stub_id: str,
-        invocation: FunctionInvocationPayload,
-        *,
-        detached: bool = False,
-        parent_task_id: str = "",
-        root_task_id: str = "",
-        dependencies: list[FunctionCallDependency] | None = None,
-    ) -> Iterator[FunctionInvokeResponse]: ...
-
-
-class FunctionOperationError(RuntimeError):
+class FunctionOperationError(SdkError):
     pass
-
-
-@dataclass(frozen=True, slots=True)
-class SerializedFunctionInvocation:
-    payload: FunctionInvocationPayload
-    dependencies: list[FunctionCallDependency]
 
 
 class FunctionOptions(TypedDict, total=False):
@@ -203,16 +181,8 @@ class Function(Generic[P, R]):
     availability_zone: str = ""
     machine: MachineInput = None
     metadata: dict[str, Any] = field(default_factory=dict)
-    stub_id: str = field(default="", init=False)
-    client: _FunctionClient | None = field(default=None, init=False, repr=False)
-    deployment_client: DeploymentControlClient | None = field(
-        default=None,
-        init=False,
-        repr=False,
-    )
-    endpoint: str | None = field(default=None, init=False)
-    token: str | None = field(default=None, init=False, repr=False)
-    timeout: float = field(default=10.0, init=False)
+    client: ApiClient | None = field(default=None, init=False, repr=False)
+    workspace: str | None = field(default=None, init=False)
     terminal: Terminal | None = field(
         default_factory=lambda: Terminal(default_enabled=is_local()), init=False, repr=False
     )
@@ -223,19 +193,6 @@ class Function(Generic[P, R]):
     @property
     def resource_name(self) -> str:
         return self.name or self.func.__name__
-
-    @property
-    def control_client(self) -> _FunctionClient:
-        if self.client is None:
-            self.client = _default_function_client(self._config())
-        return self.client
-
-    def _config(self) -> ControlClientConfig:
-        return resolve_control_client_config(
-            endpoint=self.endpoint,
-            token=self.token,
-            timeout_seconds=self.timeout,
-        )
 
     def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R:
         return self.local(*args, **kwargs)
@@ -255,8 +212,6 @@ class Function(Generic[P, R]):
         prepared_args, prepared_kwargs = prepare_arguments(
             self.func, args, kwargs, self.inputs, encoding=encoding
         )
-        if not inspect.iscoroutinefunction(self.func):
-            record_execution_entry()
         return serialize_result(
             self.func, self.func(*prepared_args, **prepared_kwargs), self.outputs
         )
@@ -330,183 +285,123 @@ class Function(Generic[P, R]):
             client_contract=client_contract,
         )
 
-    def prepare(
-        self,
-        *,
-        workspace: str | None = None,
-        source_root: str | Path | None = None,
-    ) -> str:
-        from lazycloud.session.deployment import DeploymentClient
+    def unsupported_options(self) -> list[str]:
+        """Declared options the platform cannot run yet, by name."""
+        found: list[str] = []
+        if self.gpu is not None or self.gpu_count:
+            found.append("gpu")
+        declared = {
+            "disk": self.disk is not None,
+            "secrets": bool(self.secrets),
+            "volumes": bool(self.volumes),
+            "cron": bool(self.cron),
+            "callback_url": bool(self.callback_url),
+            "authorized": self.authorized is not DEFAULT_FUNCTION_AUTHORIZED,
+            "in_process": self.in_process,
+            "docker_enabled": self.docker_enabled,
+            "preemptible": self.preemptible is not DEFAULT_WORKLOAD_PREEMPTIBLE,
+            "region": self.region is not None,
+            "availability_zone": bool(self.availability_zone),
+            "machine": self.machine is not None,
+            "metadata": bool(self.metadata),
+            "cpu range": isinstance(self.cpu, tuple | list),
+            "memory range": isinstance(self.memory, tuple | list),
+            "keep_warm=-1": self.keep_warm is not None and self.keep_warm < 0,
+        }
+        found.extend(name for name, present in declared.items() if present)
+        hooks = {
+            "on_start": self.on_start,
+            "on_running": self.on_running,
+            "on_success": self.on_success,
+            "on_error": self.on_error,
+            "on_retry": self.on_retry,
+            "on_failure": self.on_failure,
+            "on_finish": self.on_finish,
+        }
+        found.extend(name for name, hook in hooks.items() if hook is not None)
+        policy = self._retry_policy()
+        if policy.retry_on_statuses != DEFAULT_RETRYABLE_TASK_STATUS_SEQUENCE:
+            found.append("retry_policy.retry_on_statuses")
+        found.extend(f"image {name}" for name in _unsupported_image_options(self.image))
+        return found
 
-        try:
-            response = DeploymentClient(
-                client=self.deployment_client,
-                workspace=workspace,
-                endpoint=self.endpoint,
-                token=self.token,
-                timeout_seconds=self.timeout,
-                sync_source=True,
-                terminal=self.terminal,
-            ).prepare(
-                self.spec(),
-                workspace=workspace,
-                image=self.image,
-                source_root=source_root,
+    def require_supported(self) -> None:
+        unsupported = self.unsupported_options()
+        if unsupported:
+            raise UnsupportedFeatureError(f"function {self.resource_name}", unsupported)
+
+    def function_spec(self, *, handler: str, source_sha256: str) -> ApiFunctionSpec:
+        """The API definition of this function for one uploaded source archive."""
+        self.require_supported()
+        policy = self._retry_policy()
+        spec: dict[str, Any] = {
+            "name": self.resource_name,
+            "handler": handler,
+            "source": {"sha256": source_sha256},
+            "image": {"python_version": python_minor_version(self.image.python_version)},
+            "resources": {
+                "cpu_millis": round(float(_scalar(self.cpu, DEFAULT_FUNCTION_CPU)) * 1000),
+                "memory_mib": parse_memory_mib(_scalar(self.memory, DEFAULT_FUNCTION_MEMORY)),
+            },
+            "retry_policy": policy.model_dump(
+                mode="json",
+                include={"max_attempts", "delay_seconds", "backoff", "max_delay_seconds"},
+                exclude_none=True,
+            ),
+            "concurrency": self.concurrency,
+        }
+        timeout_seconds = self._effective_timeout_seconds()
+        if timeout_seconds is not None:
+            spec["timeout_seconds"] = timeout_seconds
+        if self.keep_warm is not None:
+            spec["keep_warm_seconds"] = self.keep_warm
+        if self.autoscaler is not None:
+            spec["autoscaler"] = Autoscaler.model_validate(self.autoscaler).model_dump(
+                include={"min_containers", "max_containers", "tasks_per_container"}
             )
-        except RuntimeError as exc:
-            raise FunctionOperationError(str(exc)) from exc
-        if not response.stub_id:
-            msg = "deployment prepare did not return a function stub_id"
-            raise FunctionOperationError(msg)
-        self.stub_id = response.stub_id
-        return self.stub_id
+        if self.max_pending_tasks is not None:
+            spec["max_pending_tasks"] = self.max_pending_tasks
+        if self.env:
+            spec["environment"] = dict(self.env)
+        try:
+            return ApiFunctionSpec.model_validate(spec)
+        except ValidationError as exc:
+            msg = f"function {self.resource_name} has invalid options: {exc}"
+            raise FunctionOperationError(msg) from exc
 
     def deploy(
         self,
         *,
         workspace: str | None = None,
         source_root: str | Path | None = None,
-        _preparation: DeploymentPreparation | None = None,
-    ) -> DeployStubResponse:
-        from lazycloud.session.deployment import DeploymentClient
+    ) -> Deployment:
+        """Deploy this function into its app without touching the app's other functions."""
+        from lazycloud.session.deployment import AppFunctions, deploy_functions
 
-        try:
-            response = DeploymentClient(
-                client=self.deployment_client,
-                workspace=workspace,
-                endpoint=self.endpoint,
-                token=self.token,
-                timeout_seconds=self.timeout,
-                sync_source=True,
-                terminal=self.terminal,
-                preparation=_preparation,
-            ).create(
-                self.spec(),
-                workspace=workspace,
-                image=self.image,
-                source_root=source_root,
-            )
-        except RuntimeError as exc:
-            raise FunctionOperationError(str(exc)) from exc
-        self.stub_id = response.stub_id or self.stub_id
-        return response
-
-    def serve(
-        self,
-        *,
-        timeout: int = 0,
-        workspace: str | None = None,
-        sync_dir: str | None = None,
-    ) -> FunctionServeResponse:
-        from lazycloud.abstractions.serve import ServePreviewSession, write_serve_preview
-        from lazycloud.clients.function.control import FunctionControlClient
-        from lazycloud.clients.gateway.control import GatewayControlClient
-        from lazycloud.clients.resource.control import ResourceControlClient
-
-        sync_dir = sync_dir or "."
-        self.env[HOT_RELOAD_ENV] = "true"
-        self.keep_warm = 0
-        self.autoscaler = Autoscaler(min_containers=0, max_containers=1)
-        self.terminal = self.terminal or Terminal()
-        stub_id = self.prepare(workspace=workspace, source_root=sync_dir)
-        config = self._config()
-        if workspace is not None:
-            config = resolve_control_client_config(
-                endpoint=config.endpoint,
-                token=config.token,
-                workspace=workspace,
-                timeout_seconds=config.timeout_seconds,
-            )
-        resource_client = ResourceControlClient.from_endpoint(
-            config.endpoint,
-            token=config.token,
-            workspace=config.workspace,
-            timeout_seconds=config.timeout_seconds,
-        )
-        gateway_client = GatewayControlClient.from_endpoint(
-            config.endpoint,
-            token=config.token,
-            workspace=config.workspace,
-            timeout_seconds=config.timeout_seconds,
-        )
-        response = FunctionControlClient.from_endpoint(
-            config.endpoint,
-            token=config.token,
-            workspace=config.workspace,
-            timeout_seconds=config.timeout_seconds,
-        ).start_serve(stub_id, timeout=timeout)
-        try:
-            record = write_serve_preview(
-                kind=DeploymentKind.Function,
-                name=self.resource_name,
-                app=self._app_slug,
-                workspace=config.workspace,
-                endpoint=config.endpoint,
-                stub_id=stub_id,
-                container_id=response.container_id,
-                url=config.endpoint.rstrip("/")
-                + workspace_path(f"/api/v1/functions/id/{stub_id}", config.workspace),
-            )
-        except BaseException:
-            resource_client.stop_container(response.container_id)
-            raise
-        ServePreviewSession(
-            stub_id=stub_id,
-            container_id=response.container_id,
-            url=record.url,
-            gateway_client=gateway_client,
-            resource_client=resource_client,
+        client, selected_workspace = self._session(workspace)
+        return deploy_functions(
+            [AppFunctions(app=self._app_slug, functions=(self,))],
+            client=client,
+            workspace=selected_workspace,
+            source_root=source_root,
             terminal=self.terminal,
-            sync_dir=sync_dir,
-            token=config.token,
-            authorized=True,
-            preview_record=record,
-        ).run()
-        return response
+        )[0]
 
-    def shell(
-        self,
-        *,
-        workspace: str | None = None,
-        container_id: str | None = None,
-        sync_dir: str | None = None,
-    ) -> ShellSession:
-        from lazycloud.abstractions.shell import Shell
+    def serve(self, **_: object) -> None:
+        raise UnsupportedFeatureError(f"function {self.resource_name}", ["serve"])
 
-        shell = Shell(
-            workspace=workspace,
-            endpoint=self.endpoint,
-            token=self.token,
-            timeout_seconds=self.timeout,
-        )
-        if container_id:
-            return shell.create_existing(container_id, sync_dir=sync_dir)
-        return shell.create_standalone(
-            self.stub_id or self.prepare(workspace=workspace), sync_dir=sync_dir
-        )
+    def shell(self, **_: object) -> None:
+        raise UnsupportedFeatureError(f"function {self.resource_name}", ["shell"])
 
     def remote(self, *args: P.args, **kwargs: P.kwargs) -> R:
-        self._reject_import_invocation()
-        return self._remote_call(*args, **kwargs)
+        """Run one task remotely, print its output as it arrives and return its value.
 
-    def _remote_call(self, *args: P.args, **kwargs: P.kwargs) -> R:
-        from lazycloud.session.task import TaskOperationError
+        A dropped connection never cancels the task; the call resumes following it.
+        """
+        return self._remote_call(args, kwargs)
 
-        self._ensure_invokable()
-        with self._task_step() as step:
-            response = self._invoke_serialized(
-                self.control_client, detached=False, args=args, kwargs=kwargs, step=step
-            )
-            if not response.task_id:
-                raise FunctionOperationError(response.output or "function invocation failed")
-            if not response.done:
-                msg = f"function invocation ended before task {response.task_id} completed"
-                raise FunctionOperationError(msg)
-            call = self._call_from_response(response)
-            try:
-                return call.get(timeout_seconds=self._effective_timeout_seconds())
-            except TaskOperationError as exc:
-                raise FunctionOperationError(str(exc)) from exc
+    async def async_remote(self, *args: P.args, **kwargs: P.kwargs) -> R:
+        return await to_thread(self._remote_call, args, kwargs)
 
     @overload
     def spawn(self, *args: P.args, **kwargs: P.kwargs) -> FunctionCall[R]: ...
@@ -515,55 +410,7 @@ class Function(Generic[P, R]):
     def spawn(self, *args: Any, **kwargs: Any) -> FunctionCall[R]: ...
 
     def spawn(self, *args: Any, **kwargs: Any) -> FunctionCall[R]:
-        self._reject_import_invocation()
-        self._ensure_invokable()
-        response = self._invoke(True, *args, **kwargs)
-        if not response.task_id:
-            raise FunctionOperationError(response.output or "function invocation failed")
-        return self._call_from_response(response)
-
-    def spawn_map(self, inputs: Sequence[Any]) -> list[FunctionCall[R]]:
-        self._reject_import_invocation()
-        if not inputs:
-            return []
-        self._ensure_invokable()
-        client = self.control_client
-        with ThreadPoolExecutor(max_workers=min(len(inputs), 8)) as executor:
-            submitted = [
-                executor.submit(copy_context().run, self._spawn_dynamic, _map_args(value), client)
-                for value in inputs
-            ]
-            return [future.result() for future in submitted]
-
-    def _spawn_dynamic(self, args: tuple[Any, ...], client: _FunctionClient) -> FunctionCall[R]:
-        response = self._invoke_serialized(client, detached=True, args=args, kwargs={})
-        if not response.task_id:
-            raise FunctionOperationError(response.output or "function invocation failed")
-        return self._call_from_response(response)
-
-    def _call_from_response(self, response: FunctionInvokeResponse) -> FunctionCall[R]:
-        from lazycloud.session.task import FunctionCall, TaskClient
-
-        config = self._config()
-        return FunctionCall(
-            task_id=response.task_id,
-            client=TaskClient(
-                workspace=config.workspace,
-                endpoint=config.endpoint,
-                token=config.token,
-                timeout_seconds=config.timeout_seconds,
-            ),
-            result_payload=response.result,
-            complete=response.done,
-            exit_code=response.exit_code,
-            error=response.output,
-            workspace_id=config.workspace,
-            status=TaskStatus(response.status) if response.status else None,
-        )
-
-    async def async_remote(self, *args: P.args, **kwargs: P.kwargs) -> R:
-        self._reject_import_invocation()
-        return await to_thread(self._remote_call, *args, **kwargs)
+        return FunctionCall(self._submit([self._input(args, kwargs)])[0])
 
     @overload
     async def async_spawn(self, *args: P.args, **kwargs: P.kwargs) -> FunctionCall[R]: ...
@@ -572,163 +419,101 @@ class Function(Generic[P, R]):
     async def async_spawn(self, *args: Any, **kwargs: Any) -> FunctionCall[R]: ...
 
     async def async_spawn(self, *args: Any, **kwargs: Any) -> FunctionCall[R]:
-        self._reject_import_invocation()
         return await to_thread(self.spawn, *args, **kwargs)
 
-    def map(self, inputs: Sequence[Any]) -> Iterator[R | None]:
-        from lazycloud.session.task import TaskOperationError
+    def spawn_map(self, inputs: Sequence[Any]) -> list[FunctionCall[R]]:
+        """Submit one task per input, in batches, and return the calls in input order."""
+        if not inputs:
+            return []
+        payloads = [self._input(_map_args(value), {}) for value in inputs]
+        return [FunctionCall(task) for task in self._submit(payloads)]
 
-        calls = self.spawn_map(inputs)
-        if not calls:
-            return
-        for call in calls:
+    def map(self, inputs: Sequence[Any]) -> Iterator[R | None]:
+        """Yield each input's value in input order; a failed task yields None."""
+        for call in self.spawn_map(inputs):
             try:
-                yield call.get(timeout_seconds=self._effective_timeout_seconds())
-            except TaskOperationError as exc:
-                self._error(f"Task failed during map: {exc}")
+                yield call.get()
+            except Exception as exc:
+                self._error(f"Task {call.task_id} failed during map: {exc}")
                 yield None
 
-    def _ensure_prepared(self) -> None:
-        if not self.stub_id:
-            self.prepare()
+    def submit_json(self, args: Sequence[Any], kwargs: Mapping[str, Any]) -> Task:
+        """Submit one task with JSON arguments; its result comes back as JSON."""
+        payload = Payload(
+            encoding=Encoding.json,
+            value={"args": to_json_value(list(args)), "kwargs": to_json_value(dict(kwargs))},
+        )
+        return self._submit([payload])[0]
 
-    @staticmethod
-    def _reject_import_invocation() -> None:
+    def run_task(self, task: Task) -> Any:
+        """Follow a submitted task's output until it finishes, then return its outcome."""
+        with self._task_step() as step:
+            step.update(f"{task.task_id[:8]} submitted")
+            try:
+                task.follow_logs(self._print_log)
+            except SdkError as exc:
+                self._warn(f"output of task {task.task_id} is unavailable: {exc}")
+            if self.terminal is not None:
+                self.terminal.flush_remote_output()
+            view = task.wait()
+            step.update(f"{task.task_id[:8]} {view.status.value}")
+        return task.outcome(view)
+
+    def _remote_call(self, args: tuple[Any, ...], kwargs: Mapping[str, Any]) -> R:
+        return self.run_task(self._submit([self._input(args, kwargs)])[0])
+
+    def _input(self, args: tuple[Any, ...], kwargs: Mapping[str, Any]) -> Payload:
+        encoded_args, encoded_kwargs = encode_arguments(self.func, args, kwargs, self.inputs)
+        data = cloudpickle_bytes({"args": list(encoded_args), "kwargs": encoded_kwargs})
+        return Payload.model_validate(
+            {"encoding": Encoding.cloudpickle, "data": base64.b64encode(data)}
+        )
+
+    def _submit(self, inputs: list[Payload]) -> list[Task]:
         if called_on_import():
             msg = "remote function invocation is unavailable while importing user code"
             raise FunctionOperationError(msg)
+        self.require_supported()
+        client, workspace = self._session()
+        tasks: list[Task] = []
+        for start in range(0, len(inputs), MAX_SUBMIT_BATCH):
+            request = SubmitTasksRequest(inputs=inputs[start : start + MAX_SUBMIT_BATCH])
+            try:
+                response = client.submit_tasks(
+                    workspace, self._app_slug, self.resource_name, request
+                )
+            except ApiError as exc:
+                error: SdkError = exc
+                if exc.code is ErrorCode.not_found:
+                    error = FunctionNotDeployedError(self._app_slug, self.resource_name, workspace)
+                if not tasks:
+                    raise error from exc
+                raise MapSubmissionError(
+                    [FunctionCall(task) for task in tasks], len(inputs), error
+                ) from exc
+            tasks.extend(Task(str(item.id), workspace, client) for item in response.tasks)
+        return tasks
 
-    def _ensure_invokable(self) -> None:
-        if self.stub_id:
-            return
-        if is_local():
-            from lazycloud.abstractions.serve import read_serve_preview
-            from lazycloud.clients.resource.control import ResourceControlClient
+    def _session(self, workspace: str | None = None) -> tuple[ApiClient, str]:
+        config = resolve_control_client_config(workspace=workspace or self.workspace)
+        if self.client is None:
+            self.client = api_client(config)
+        return self.client, require_workspace(config)
 
-            config = self._config()
-            preview = read_serve_preview(
-                kind=DeploymentKind.Function,
-                name=self.resource_name,
-                app=self._app_slug,
-                workspace=config.workspace,
-                endpoint=config.endpoint,
-                client=ResourceControlClient.from_endpoint(
-                    config.endpoint,
-                    token=config.token,
-                    workspace=config.workspace,
-                    timeout_seconds=config.timeout_seconds,
-                ),
-            )
-            if preview is not None:
-                self.stub_id = preview.stub_id
-                return
-            self._ensure_prepared()
-            return
-        self._resolve_deployed_stub_id()
-
-    def _resolve_deployed_stub_id(self) -> None:
-        from lazycloud.session.deployment import DeploymentClient
-
-        try:
-            response = DeploymentClient(
-                client=self.deployment_client,
-                workspace=self._config().workspace,
-                endpoint=self.endpoint,
-                token=self.token,
-                timeout_seconds=self.timeout,
-            ).resolve_target(
-                kind=DeploymentKind.Function,
-                name=self.resource_name,
-                app=self._app_slug,
-            )
-        except RuntimeError as exc:
-            raise FunctionOperationError(str(exc)) from exc
-        if not response.stub_id:
-            msg = f"deployed function target not found: {self.resource_name}"
-            raise FunctionOperationError(msg)
-        self.stub_id = response.stub_id
-
-    def _invoke(
-        self,
-        detached: bool,
-        *args: Any,
-        **kwargs: Any,
-    ) -> FunctionInvokeResponse:
-        return self._invoke_serialized(
-            self.control_client, detached=detached, args=args, kwargs=kwargs
+    def _retry_policy(self) -> RetryPolicy:
+        policy = retry_policy_config(
+            self.retry_policy,
+            retries=self.retries,
+            retry_delay_seconds=self.retry_delay_seconds,
         )
+        return policy if policy is not None else RetryPolicy(max_attempts=1)
 
-    def _invoke_serialized(
-        self,
-        client: _FunctionClient,
-        *,
-        detached: bool,
-        args: tuple[Any, ...],
-        kwargs: Mapping[str, Any],
-        step: TerminalStep | None = None,
-    ) -> FunctionInvokeResponse:
-        if not self.stub_id:
-            msg = "stub_id is required to invoke a remote function"
-            raise FunctionOperationError(msg)
-        last_response: FunctionInvokeResponse | None = None
-        encoded_args, encoded_kwargs = encode_arguments(self.func, args, kwargs, self.inputs)
-        serialized = _serialize_invocation(encoded_args, encoded_kwargs)
-        parent_task_id, root_task_id = _current_task_context()
-        reported_task_id = ""
-        reported_status = ""
-        pending_reporter = PendingProgressReporter(terminal=self.terminal, step=step)
-        try:
-            for response in client.invoke(
-                self.stub_id,
-                serialized.payload,
-                detached=detached,
-                parent_task_id=parent_task_id,
-                root_task_id=root_task_id,
-                dependencies=serialized.dependencies,
-            ):
-                last_response = response
-                if response.task_id and response.task_id != reported_task_id:
-                    reported_task_id = response.task_id
-                    if step is not None:
-                        step.update(f"{response.task_id[:8]} submitted")
-                if response.status and response.status != reported_status:
-                    reported_status = response.status
-                    if step is not None:
-                        step.update(f"{response.task_id[:8]} {response.status}")
-                if response.status or response.done:
-                    pending_reporter.update(response.task_id, response.pending_progress)
-                if response.output and not response.done:
-                    self._progress(
-                        response.output,
-                        stream="stderr" if response.exit_code else response.stream,
-                    )
-                if response.done or response.exit_code != 0:
-                    break
-        except RuntimeError as exc:
-            raise FunctionOperationError(str(exc)) from exc
-        finally:
-            if (
-                not detached
-                and last_response is not None
-                and last_response.task_id
-                and not last_response.done
-                and last_response.exit_code == 0
-            ):
-                try:
-                    self._call_from_response(last_response).cancel()
-                except RuntimeError as exc:
-                    raise FunctionOperationError(
-                        f"Connection ended; cancellation of task {last_response.task_id} "
-                        f"could not be confirmed: {exc}"
-                    ) from exc
-        if last_response is None:
-            msg = "function invocation returned no responses"
-            raise FunctionOperationError(msg)
-        return last_response.model_copy(update={"status": reported_status})
-
-    def _progress(self, message: str, *, stream: str) -> None:
-        if self.terminal is not None and message:
-            self.terminal.remote_output(message, stream=stream)
+    def _print_log(self, entry: LogEntry) -> None:
+        if self.terminal is None:
+            return
+        data = entry.data if entry.data.endswith("\n") else entry.data + "\n"
+        stream = "stdout" if entry.stream is Stream.stdout else "stderr"
+        self.terminal.remote_output(data, stream=stream)
 
     def _task_step(self) -> AbstractContextManager[TerminalStep]:
         if self.terminal is None:
@@ -738,6 +523,10 @@ class Function(Generic[P, R]):
     def _error(self, message: str) -> None:
         terminal = self.terminal or Terminal()
         terminal.error(message)
+
+    def _warn(self, message: str) -> None:
+        if self.terminal is not None:
+            self.terminal.warn(message)
 
     def _effective_timeout_seconds(self) -> int | None:
         if self.task_policy is not None and self.task_policy.timeout_seconds is not None:
@@ -751,56 +540,17 @@ def _map_args(input_value: Any) -> tuple[Any, ...]:
     return (input_value,)
 
 
-def _serialize_invocation(
-    args: tuple[Any, ...], kwargs: Mapping[str, Any]
-) -> SerializedFunctionInvocation:
-    payload: dict[str, object] = {
-        "args": args,
-        "kwargs": dict(kwargs),
-    }
-    stream = io.BytesIO()
-    references = _FunctionCallReferences()
-    pickler: pickle.Pickler = cloudpickle.CloudPickler(stream)
-    pickler.persistent_id = references.persistent_id
-    pickle.Pickler.dump(pickler, payload)
-    try:
-        public_arguments = FunctionInvocationArguments.model_validate(
-            {
-                "args": list(args),
-                "kwargs": dict(kwargs),
-            },
-            strict=True,
-        )
-    except ValidationError:
-        public_arguments = None
-    return SerializedFunctionInvocation(
-        payload=FunctionCloudpickleInvocation.from_bytes(
-            stream.getvalue(),
-            arguments=public_arguments,
-        ),
-        dependencies=list(references.dependencies.values()),
-    )
+def _scalar(value: Any, default: Any) -> Any:
+    return default if value is None else value
 
 
-@dataclass
-class _FunctionCallReferences:
-    dependencies: dict[str, FunctionCallDependency] = field(default_factory=dict)
-
-    def persistent_id(self, value: object) -> FunctionCallPersistentId | None:
-        from lazycloud.session.task import FunctionCall
-
-        if not isinstance(value, FunctionCall):
-            return None
-        previous = self.dependencies.get(value.task_id)
-        if previous is not None and previous.workspace_id != value.workspace_id:
-            raise FunctionOperationError(
-                f"function dependency {value.task_id} names conflicting workspaces"
-            )
-        self.dependencies[value.task_id] = FunctionCallDependency(
-            task_id=value.task_id,
-            workspace_id=value.workspace_id,
-        )
-        return ("function_call", value.task_id)
+def _unsupported_image_options(image: Image) -> list[str]:
+    declared = image.spec().model_dump()
+    baseline = Image(python_version=image.python_version).spec().model_dump()
+    found = [name for name, value in declared.items() if baseline.get(name) != value]
+    if image.python_version.startswith("micromamba"):
+        found.append("micromamba python")
+    return found
 
 
 def _is_invocation_list(value: object) -> TypeGuard[list[object]]:
@@ -809,11 +559,6 @@ def _is_invocation_list(value: object) -> TypeGuard[list[object]]:
 
 def _is_invocation_tuple(value: object) -> TypeGuard[tuple[object, ...]]:
     return isinstance(value, tuple)
-
-
-def _current_task_context() -> tuple[str, str]:
-    parent_task_id = current_task_id()
-    return parent_task_id, current_root_task_id()
 
 
 @overload
@@ -1006,17 +751,6 @@ def _normalized_task_policy(
     if value is None:
         return None
     return TaskPolicy.model_validate(value)
-
-
-def _default_function_client(config: ControlClientConfig) -> FunctionControlClient:
-    from lazycloud.clients.function.control import FunctionControlClient
-
-    return FunctionControlClient.from_endpoint(
-        config.endpoint,
-        token=config.token,
-        workspace=config.workspace,
-        timeout_seconds=config.timeout_seconds,
-    )
 
 
 __all__ = [

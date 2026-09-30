@@ -39,20 +39,6 @@ class DeploymentPlanRequest(HttpModel):
         return self
 
 
-class DeploymentPlanItem(WorkloadIdentity):
-    action: DeploymentPlanAction
-    versions: int = Field(ge=0)
-
-
-class DeploymentPlanResponse(HttpModel):
-    app: str
-    app_id: str | None
-    snapshot: str
-    prune: bool
-    data: list[DeploymentPlanItem]
-    next: str = ""
-
-
 class DeploymentPruneRequest(DeploymentPlanRequest):
     operation_id: UUID
     app_id: str | None
@@ -67,10 +53,3 @@ class DeploymentPruneRequest(DeploymentPlanRequest):
         if len(set(self.deployment_ids)) != len(self.deployment_ids):
             raise ValueError("deployment IDs must be unique")
         return self
-
-
-class DeploymentPruneResponse(HttpModel):
-    operation_id: UUID
-    app: str
-    removed_versions: int = Field(ge=0)
-    complete: bool

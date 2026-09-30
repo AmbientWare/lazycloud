@@ -12,67 +12,10 @@ from lazycloud.cli.main import build_public_cli
 from lazycloud.cli.main import start as client_start
 from lazycloud.cli.volumes import parse_remote_path, parse_remote_path_if_schemed
 from shared.http.secrets import GetSecretResponse, SecretWireRecord
-from shared.http.tasks import TaskPageResponse, TaskResponse
 from shared.http.volumes import DeleteVolumeResponse
 from typer.testing import CliRunner
 
 client_cli = build_public_cli()
-
-
-@dataclass
-class FakeTaskResourceClient:
-    app_ids: list[str | None] = field(default_factory=list)
-
-    def list_tasks(
-        self,
-        *,
-        limit: int = 100,
-        app_id: str | None = None,
-    ) -> TaskPageResponse:
-        assert limit == 100
-        self.app_ids.append(app_id)
-        return TaskPageResponse(
-            data=[
-                TaskResponse(
-                    id="task-1",
-                    name="probe",
-                    app_id=app_id,
-                    created_at=datetime(2026, 7, 12, tzinfo=UTC),
-                )
-            ]
-        )
-
-
-def test_task_list_filters_by_exact_app_id(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    resources = FakeTaskResourceClient()
-
-    def fake_resource_client(
-        *,
-        workspace: str | None = None,
-    ) -> FakeTaskResourceClient:
-        assert workspace == "team"
-        return resources
-
-    monkeypatch.setattr("lazycloud.cli.resources.resource_client", fake_resource_client)
-
-    result = CliRunner().invoke(
-        client_cli,
-        [
-            "--json",
-            "task",
-            "list",
-            "--app",
-            "11111111-1111-4111-8111-111111111111",
-            "--workspace",
-            "team",
-        ],
-    )
-
-    assert result.exit_code == 0, result.output
-    assert json.loads(result.output)[0]["id"] == "task-1"
-    assert resources.app_ids == ["11111111-1111-4111-8111-111111111111"]
 
 
 def test_public_cli_opens_an_existing_container_shell_without_a_handler(

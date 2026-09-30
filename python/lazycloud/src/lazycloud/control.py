@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -8,13 +7,10 @@ from dataclasses import dataclass
 from typing import Generic, TypeVar
 from urllib.parse import urlencode
 
-from shared.env import (
-    GATEWAY_HTTP_URL_ENV,
-    GATEWAY_TOKEN_ENV,
-    WORKSPACE_ID_ENV,
-    WORKSPACE_NAME_ENV,
-)
 from typing_extensions import Self
+
+from lazycloud.clients.api import ApiClient
+from lazycloud.exceptions import ConfigurationError
 
 _CONTROL_WORKSPACE: ContextVar[str | None] = ContextVar(
     "lazycloud_control_workspace",
@@ -83,37 +79,50 @@ def resolve_control_client_config(
     workspace: str | None = None,
     timeout_seconds: float = 10.0,
 ) -> ControlClientConfig:
+    """Explicit arguments, then the workspace scope, then the profile and its env overrides."""
     from lazycloud.config import get_profile
 
-    gateway_endpoint = os.environ.get(GATEWAY_HTTP_URL_ENV, "").strip()
-    # Resolution order: explicit argument (CLI flag) > in-container gateway env >
-    # LAZYCLOUD_ENDPOINT env / stored profile (merged by get_profile) > packaged
-    # default. `resolved_endpoint` supplies the packaged default when blank.
-    selected_endpoint = (endpoint or "").strip() or gateway_endpoint
-    gateway_token = os.environ.get(GATEWAY_TOKEN_ENV, "").strip()
-    gateway_workspace = (
-        os.environ.get(WORKSPACE_ID_ENV, "").strip()
-        or os.environ.get(WORKSPACE_NAME_ENV, "").strip()
-    )
-    selected_token = token if token is not None else gateway_token or None
-    selected_workspace = (
-        workspace
-        if workspace is not None
-        else _CONTROL_WORKSPACE.get() or gateway_workspace or None
-    )
-    if not selected_endpoint or selected_token is None or selected_workspace is None:
-        profile = get_profile()
-        selected_endpoint = selected_endpoint or profile.resolved_endpoint()
-        selected_token = selected_token if selected_token is not None else profile.token or None
-        selected_workspace = (
-            selected_workspace if selected_workspace is not None else profile.workspace
-        )
+    profile = get_profile()
+    selected_workspace = workspace if workspace is not None else _CONTROL_WORKSPACE.get()
     return ControlClientConfig(
-        endpoint=selected_endpoint,
-        token=selected_token,
-        workspace=selected_workspace,
+        endpoint=endpoint_url(
+            (endpoint or "").strip() or profile.resolved_endpoint(), tls=profile.tls
+        ),
+        token=token if token is not None else profile.token or None,
+        workspace=(selected_workspace if selected_workspace is not None else profile.workspace),
         timeout_seconds=timeout_seconds,
     )
+
+
+def endpoint_url(endpoint: str, *, tls: bool) -> str:
+    """The endpoint as a base URL; a bare host takes its scheme from `tls`."""
+    selected = endpoint.strip()
+    if not selected:
+        raise ConfigurationError("the control plane endpoint cannot be empty")
+    if "://" in selected:
+        return selected.rstrip("/")
+    scheme = "https" if tls else "http"
+    return f"{scheme}://{selected}".rstrip("/")
+
+
+def api_client(config: ControlClientConfig) -> ApiClient:
+    if not config.token:
+        raise ConfigurationError(
+            "no access token is configured; run `lazycloud login --token <token>`"
+        )
+    return ApiClient(
+        endpoint=config.endpoint, token=config.token, timeout_seconds=config.timeout_seconds
+    )
+
+
+def require_workspace(config: ControlClientConfig) -> str:
+    workspace = config.workspace.strip()
+    if not workspace:
+        raise ConfigurationError(
+            "no workspace is selected; pass --workspace or run "
+            "`lazycloud login --token <token> --workspace <name>`"
+        )
+    return workspace
 
 
 def workspace_query(workspace: str) -> dict[str, str]:
@@ -158,7 +167,10 @@ def control_workspace_scope(workspace: str) -> Iterator[None]:
 __all__ = [
     "ControlClientConfig",
     "ControlClientConfigMixin",
+    "api_client",
     "control_workspace_scope",
+    "endpoint_url",
+    "require_workspace",
     "resolve_control_client_config",
     "workspace_path",
     "workspace_query",

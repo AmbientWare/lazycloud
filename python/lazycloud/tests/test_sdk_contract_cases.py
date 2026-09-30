@@ -1,14 +1,11 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
 from dataclasses import dataclass
 
 import pytest
-from lazycloud.clients.function.control import FunctionControlClient
 from lazycloud.clients.shell.control import ShellControlClient
 from pydantic import JsonValue, TypeAdapter, ValidationError
-from shared.function_payloads import FunctionJsonInvocation
-from shared.http.errors import HttpResponseDecodeError, http_api_error_from_body
+from shared.http.errors import http_api_error_from_body
 
 from tests.contracts.http_contract_cases import load_contract_corpus
 
@@ -31,26 +28,6 @@ class _FakeShellChannel:
         return self.response
 
 
-@dataclass
-class _FakeFunctionChannel:
-    response: dict[str, JsonValue]
-
-    def post(
-        self,
-        path: str,
-        payload: dict[str, JsonValue] | None = None,
-    ) -> JsonValue:
-        raise AssertionError((path, payload))
-
-    def stream_post(
-        self,
-        path: str,
-        payload: dict[str, JsonValue] | None = None,
-    ) -> Iterator[dict[str, JsonValue]]:
-        _ = path, payload
-        yield self.response
-
-
 def test_sdk_decoders_consume_python_owned_contract_cases() -> None:
     corpus = load_contract_corpus()
 
@@ -58,7 +35,8 @@ def test_sdk_decoders_consume_python_owned_contract_cases() -> None:
         if case["contract"] == "create_shell_in_existing_container_response":
             _assert_shell_case(case["input"], case["accepted"], case["normalized"])
         elif case["contract"] == "function_invoke_response":
-            _assert_function_case(case["input"], case["accepted"], case["normalized"])
+            # The SDK no longer calls the old invoke endpoint; web still reads these cases.
+            continue
         else:
             _assert_error_case(case["input"], case["accepted"], case["normalized"])
 
@@ -74,20 +52,6 @@ def _assert_shell_case(
             client.create_existing("container-contract")
         return
     response = client.create_existing("container-contract")
-    assert _JSON_OBJECT_ADAPTER.validate_python(response.model_dump(mode="json")) == normalized
-
-
-def _assert_function_case(
-    payload: dict[str, JsonValue],
-    accepted: bool,
-    normalized: dict[str, JsonValue] | None,
-) -> None:
-    client = FunctionControlClient(channel=_FakeFunctionChannel(response=payload))
-    if not accepted:
-        with pytest.raises(HttpResponseDecodeError):
-            next(client.invoke("stub-contract", FunctionJsonInvocation()))
-        return
-    response = next(client.invoke("stub-contract", FunctionJsonInvocation()))
     assert _JSON_OBJECT_ADAPTER.validate_python(response.model_dump(mode="json")) == normalized
 
 
