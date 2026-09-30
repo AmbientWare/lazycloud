@@ -140,6 +140,11 @@ Owner package conventions:
   `github.com/oapi-codegen/nethttp-middleware`, so handlers do not restate
   schema limits.
 - Tests use `dbtest.New(t)` for an isolated migrated database.
+- An owner's type is named after its package and built by `New<Owner>`
+  (`execution.NewExecution`), because sqlc's `New` builds `Queries`.
+- `Execution.finishAttempt` is the single transition from a running attempt to
+  a task outcome. Completion, timeouts, container exits and host loss all call
+  it. Lock order is task, then attempt, then container.
 
 ```yaml
 version: "2"
