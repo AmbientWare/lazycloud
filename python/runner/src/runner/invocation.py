@@ -2,22 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import io
-import pickle
 from collections.abc import Callable
 from typing import Any
 
-import cloudpickle
 from shared.callables import InvocationHandler, prepare_callable_arguments
-from shared.execution_entry import record_execution_entry
 from shared.function_payloads import FunctionPayloadEncoding
 
-
-def cloudpickle_bytes(value: Any) -> bytes:
-    stream = io.BytesIO()
-    pickler = cloudpickle.CloudPickler(stream)
-    pickle.Pickler.dump(pickler, value)
-    return stream.getvalue()
+from runner.protocol_models import Encoding
 
 
 def invoke_handler(
@@ -25,23 +16,27 @@ def invoke_handler(
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
     *,
-    encoding: FunctionPayloadEncoding = FunctionPayloadEncoding.Json,
+    encoding: Encoding,
 ) -> Any:
+    """Call the handler and run a returned awaitable to completion.
+
+    JSON arguments are coerced to the handler's annotations; cloudpickle
+    arguments are already Python objects and pass through.
+    """
+
+    payload_encoding = FunctionPayloadEncoding(encoding.value)
     if isinstance(handler, InvocationHandler):
-        result = handler.invoke_arguments(args, kwargs, encoding=encoding)
+        result = handler.invoke_arguments(args, kwargs, encoding=payload_encoding)
     else:
-        args, kwargs = prepare_callable_arguments(handler, args, kwargs, encoding=encoding)
-        if not inspect.iscoroutinefunction(handler):
-            record_execution_entry()
+        args, kwargs = prepare_callable_arguments(handler, args, kwargs, encoding=payload_encoding)
         result = handler(*args, **kwargs)
     if inspect.isawaitable(result):
-        return asyncio.run(_await_any(result))
+        return asyncio.run(_await(result))
     return result
 
 
-async def _await_any(value: Any) -> Any:
-    record_execution_entry()
+async def _await(value: Any) -> Any:
     return await value
 
 
-__all__ = ["cloudpickle_bytes", "invoke_handler"]
+__all__ = ["invoke_handler"]
