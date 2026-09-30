@@ -9,10 +9,10 @@ guidance file. These files contain development standards and constraints.
 
 ## Ownership and implementation
 
-- Build backend and host runtime code in Rust. Keep the public SDK, CLI and
+- Build backend and host runtime code in Go. Keep the public SDK, CLI and
   Python runner in Python, and the frontend in TypeScript.
-- Name code for its responsibility: execution, scheduler, agent. No RustRuntime,
-  rust_backend, new_api, V2 or legacy wrappers in product code. Actual public
+- Name code for its responsibility: execution, scheduler, agent. No GoRuntime,
+  go_backend, new_api, V2 or legacy wrappers in product code. Actual public
   protocol versions are distinct from implementation migration labels.
 - Domain modules own decisions, workflows and transitions. Repositories own
   queries. Binaries own composition and process lifetime. Transports validate,
@@ -20,10 +20,11 @@ guidance file. These files contain development standards and constraints.
 - Execution owns admission, workload scaling and container lifecycle; scheduling
   owns placement; compute owns machine capacity. Give each decision and state
   one owner. Keep cross-owner coordination explicit and small.
-- Start with modules. Add a crate or process only for a concrete dependency,
-  security, scaling, reuse or lifetime boundary. No crate or service per entity.
-- Prefer concrete dependencies. Use traits for actual substitution or external
-  boundaries. Avoid service locators, giant dependency bundles, forwarding
+- Start with one package per owner. Add a package or process only for a concrete
+  dependency, security, scaling, reuse or lifetime boundary. No package or service
+  per entity.
+- Prefer concrete dependencies. Define interfaces at the consumer, and only for
+  actual substitution or external boundaries. Avoid service locators, giant dependency bundles, forwarding
   layers, speculative frameworks and abstractions used only by tests.
 - PostgreSQL owns durable state; Redis owns transient coordination and rebuildable
   projections; object stores and filesystems own bytes. No duplicate authorities.
@@ -34,21 +35,26 @@ guidance file. These files contain development standards and constraints.
 
 ## Development
 
-- Use stable Rust, a pinned toolchain and a root Cargo workspace when Rust code
-  is introduced. Commit Cargo.lock for deployable applications. Keep dependencies
-  small and justified. Use Cargo formatting, Clippy and focused tests.
-- Use typed identifiers, enums and results. Preserve omitted versus explicit zero.
+- Use one root Go module with a pinned `toolchain` directive, added with the
+  first Go code. Pin code generators and linters as `tool` dependencies in
+  go.mod. Keep dependencies small and justified. Use gofmt, go vet,
+  golangci-lint and focused tests.
+- Use typed identifiers and typed string constants for enums, checked for
+  exhaustive switches. Never let a Go zero value stand for "omitted"; use
+  pointers or explicit optional types where absence differs from zero.
   Distinguish absence, rejection and failure. Do not replace domain types with
-  untyped JSON maps or stringify errors before transport boundaries.
-- Prefer ownership and borrowing to shared mutable state. Introduce reference
-  counting, locks, trait objects and cloning for concrete needs. Keep lock scopes
-  narrow; never hold synchronous locks across awaits.
-- Bound queues, in-flight work and blocking operations. Keep blocking I/O and CPU
-  work off async executor threads. Supervise tasks and propagate cancellation
-  and deadlines. Account for partial completion during shutdown and retries.
-- Return contextual errors. Do not suppress errors or panic for expected failure.
-  Unsafe code needs a demonstrated need and documented safety argument. Rust
-  memory safety does not prove authorization or distributed concurrency.
+  untyped maps or stringify errors before transport boundaries.
+- Pass dependencies explicitly from main. No package-level mutable state and no
+  init side effects. Share memory only behind a named owner; keep mutex scopes
+  narrow and never hold one across network, disk or channel waits.
+- Every goroutine has an owner that waits for it and a context that stops it.
+  Bound queues, in-flight work and concurrency. Propagate cancellation and
+  deadlines. Account for partial completion during shutdown and retries. Run
+  tests with the race detector.
+- Wrap errors with context (`%w`); match them with errors.Is/As, not strings. Do
+  not ignore returned errors or panic for expected failure. Avoid unsafe and cgo
+  unless a demonstrated need is documented. Memory safety does not prove
+  authorization or distributed concurrency.
 - Use uv from the root for Python, Ruff for formatting/imports and Bun for web.
   Preserve declared Python support, including Python 3.10+ for SDK and runner.
   Use Pydantic at Python wire boundaries.
@@ -88,8 +94,8 @@ guidance file. These files contain development standards and constraints.
   mock call order, wiring, snapshots or behavior already proven elsewhere.
 - Owner tests live beside code; root tests cover cross-owner behavior. Do not
   import old backend code or E2E internals to make replacement tests pass.
-- Run focused checks with visible output. Use cargo fmt, Clippy and targeted Rust
-  tests once Rust code exists; use pytest -x for Python. Broad gates support
+- Run focused checks with visible output. Use gofmt, go vet, golangci-lint and
+  targeted `go test -race` once Go code exists; use pytest -x for Python. Broad gates support
   releases or changes that span those owners.
 - Measure admission/placement separately from capacity wait and user execution.
   Record affected latency, queries, bytes, round trips and contention with idle,

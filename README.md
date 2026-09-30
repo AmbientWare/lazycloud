@@ -1,6 +1,6 @@
 # LazyCloud
 
-This branch is the starting point for the Rust backend and host runtime.
+This branch is the starting point for the Go backend and host runtime.
 The replacement backend is not implemented yet.
 
 Read [update.md](update.md) for the architecture, reference implementation,
@@ -29,5 +29,5 @@ need an API implementing their contracts. The new backend may use fresh contract
 and a fresh schema; update these consumers together. Old migration history remains
 in the pinned reference, without requiring a data migration or compatibility layer.
 
-Introduce the Cargo workspace with the first implemented Rust workflow. Do not
-add empty crates or placeholder services to represent unchecked capabilities.
+Add the Go module with the first implemented workflow. Do not add empty packages
+or placeholder services to represent unchecked capabilities.

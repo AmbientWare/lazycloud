@@ -2,10 +2,11 @@
 
 ## Purpose
 
-Rebuild the backend and host runtime in Rust using the current application as the
+Rebuild the backend and host runtime in Go using the current application as the
 product reference. Keep the Python SDK, public CLI and Python runner, and the
-TypeScript frontend as language choices; their implementations can change. Make ownership clearer, remove unnecessary work and reduce
-the code and operational machinery needed for equivalent capabilities.
+TypeScript frontend as language choices; their implementations can change. Make
+ownership clearer, remove unnecessary work and reduce the code and operational
+machinery needed for equivalent capabilities.
 
 This document defines the target architecture and the prompt for an agent assigned
 one area. The checklist tracks separate capabilities, not an implementation order.
@@ -17,7 +18,7 @@ change, smaller source tree or passing tests alone does not establish success.
 
 ## Reference and branch state
 
-- Branch: rust-rewrite, created from local main.
+- Branch: rust-rewrite, created from local main. The name predates choosing Go.
 - Pinned baseline: 9e259ce7545d620435dfaa572e63631834c7401e.
 - Main reference checkout: /home/cmclean/.t3/worktrees/lazycloud/t3code-9782b237.
 - Rewrite checkout: /home/cmclean/.t3/worktrees/lazycloud/rust-rewrite.
@@ -34,11 +35,15 @@ queries, locks, intermediate states and algorithms are not requirements.
 Later fixes on main need explicit evaluation; do not silently mix baselines.
 
 The initial tree retains the Python client, runner, shared contracts, frontend
-and public docs. Old backend
-code, database migrations, Go platform helpers, admin CLI, deployment automation
-and backend-specific tests remain in the reference and Git history. The backend is not implemented here
-yet. Removing its files is preparation, not a completed capability or a performance
-improvement. Existing client tests are not replacement-backend acceptance.
+and public docs. Old backend code, database migrations, Go host helpers, admin
+CLI, deployment automation and backend-specific tests remain in the reference and
+Git history. The backend is not implemented here yet. Removing its files is
+preparation, not a completed capability or a performance improvement. Existing
+client tests are not replacement-backend acceptance.
+
+The reference Go helpers (apps/disk-engine, apps/sandbox-supervisor and
+apps/image-runtime) already run on hosts. Evaluate them against the host runtime
+design and bring over what fits; they are evidence, not code to copy unchanged.
 
 ## Fresh implementation, without backward compatibility
 
@@ -60,7 +65,7 @@ requiring explicit scope and authorization.
 
 ## Languages, layout and naming
 
-- Rust owns platform backend decisions, orchestration and host runtime.
+- Go owns platform backend decisions, orchestration and host runtime.
 - Python owns deployment authoring, SDK/CLI workflows and execution of Python user
   code. The public CLI is in python/lazycloud. The former apps/cli was the internal
   admin CLI; rebuild its supported operations through administration contracts.
@@ -70,15 +75,25 @@ requiring explicit scope and authorization.
   and consumers change; never turn it into a second backend.
 
 Use ordinary domain names such as control, execution, scheduler, compute, agent
-and storage. Do not add Rust, New, Next, V2 or rewrite prefixes/suffixes to product
+and storage. Do not add Go, New, Next, V2 or rewrite prefixes/suffixes to product
 types, modules, binaries or configuration. Preserve genuine public API versions.
 
-Introduce a root Cargo workspace with the first real Rust implementation. Put
-reusable Rust code under crates and binary composition under apps where useful.
-Start with modules; crate and process boundaries must justify themselves. Do not
-pre-create empty packages for this ownership map. External container, networking
-and image tools can remain external dependencies with explicit contracts; do not
-reimplement them merely to make every dependency Rust.
+Repository layout:
+
+- `go.mod` at the root: one Go module, added with the first implemented workflow.
+- `cmd/server`, `cmd/scheduler`, `cmd/agent`: binaries that own composition and
+  process lifetime.
+- `internal/<owner>`: one package per owner, such as `internal/execution`. Split
+  a package only for a concrete dependency, security or reuse boundary.
+- `migrations/`: the single ordered SQL migration chain.
+- `contracts/`: language-neutral OpenAPI, Protobuf and contract cases. Go, Python
+  and TypeScript bindings are generated from here.
+- `python/`: SDK/CLI, runner and shared Python contracts. `web/`: the frontend.
+
+Host runtime packages must not import persistence or backend owner packages. An
+import lint enforces this. Do not pre-create empty packages for this ownership
+map. External container, networking and image tools can remain external
+dependencies with explicit contracts.
 
 ## Ownership
 
@@ -99,8 +114,8 @@ reimplement them merely to make every dependency Rust.
 | Host runtime | Local containers, processes, mounts, networking, source/image caches and supervision | Reports observed state under assignment authority; no backend database access |
 | SDK/CLI/runner/web | Their respective user workflows and presentation | Consume public contracts; do not reproduce backend policy |
 
-These are logical owners, not required crates or deployed services. Closely related
-owners can be modules in one crate. Storage policy and host disk I/O are distinct
+These are logical owners, not required packages or deployed services. Closely
+related owners can share a package. Storage policy and host disk I/O are distinct
 responsibilities, as are host identity verification and local identity proof.
 
 Execution decides how many containers a workload needs. Scheduling decides where
@@ -143,28 +158,27 @@ RPC calls. Later external effects use durable intent and idempotent delivery whe
 necessary. Reuse actual recovery mechanisms rather than adding a universal bus,
 outbox or workflow framework to every operation.
 
-## Rust communication and implementation choices
+## Communication and implementation choices
 
 These are the starting choices. A task may propose a change with a concrete
 simplification, operational or performance reason before introducing a second path.
 
 | Boundary | Choice | Reason |
 | --- | --- | --- |
-| Modules in one process | Typed Rust calls and explicit borrowed dependencies | No serialization, RPC or remote repository façade |
-| Local asynchronous work | Supervised Tokio tasks with bounded channels where ownership requires a queue | Backpressure and cancellation without a broker for in-process work |
-| Public control API | Axum HTTP/JSON with OpenAPI contracts | Browser and multi-language SDK access through resource operations |
-| Control plane to host | Tonic gRPC/Protobuf with an authenticated outbound bidirectional host session | Typed commands, observations and resumable delivery over a real network boundary |
+| Modules in one process | Direct Go calls with dependencies passed explicitly from main | No serialization, RPC or remote repository façade |
+| Local asynchronous work | Goroutines owned by an errgroup, cancelled through context, with bounded channels where ownership requires a queue | Backpressure and cancellation without a broker for in-process work |
+| Public control API | net/http JSON from an OpenAPI spec in contracts/, with generated Go server types | Browser and multi-language SDK access through resource operations |
+| Control plane to host | grpc-go/Protobuf with an authenticated outbound bidirectional host session | Typed commands, observations and resumable delivery over a real network boundary |
 | User HTTP/WebSocket traffic | Streaming HTTP/WebSocket forwarding | Preserve streaming and avoid buffering bodies or wrapping every chunk in control messages |
-| Database | SQLx with PostgreSQL and explicit SQL migrations | Typed results, visible query cost and explicit transactions |
+| Database | pgx with sqlc-generated queries and plain SQL migrations | Typed results, visible query cost and explicit transactions |
 | Artifacts and bulk bytes | Authorized object-store transfers and host caches | Keep large payloads off control streams |
-| Telemetry | Structured tracing with task/request/assignment correlation | Observe the same workflow across processes without owning its state |
+| Telemetry | slog and OpenTelemetry with task/request/assignment correlation | Observe the same workflow across processes without owning its state |
 
-Axum composes with Tower middleware; Tonic supports bidirectional streaming and
-generated Protobuf bindings; SQLx supports checked queries and SQL migrations.
-See [Axum](https://docs.rs/axum/latest/axum/),
-[Tonic](https://docs.rs/tonic/latest/tonic/) and
-[SQLx](https://docs.rs/sqlx/latest/sqlx/). These capabilities support the choices;
-they do not establish LazyCloud performance without measurements.
+The OpenAPI spec is the source for the public API. Go server types and the Python
+and TypeScript client models are generated from it. grpc-go supports bidirectional
+streaming with generated Protobuf bindings. sqlc generates typed Go from SQL, and
+pgx gives explicit transactions, batching and COPY. These capabilities support the
+choices; they do not establish LazyCloud performance without measurements.
 
 The host session carries semantic commands such as start, stop, drain and report
 exit. Include command identity, assignment generation, deadline and acknowledgement
@@ -307,11 +321,11 @@ the new definitions; their old models are references, not permanent constraints.
 Use HTTP/JSON with OpenAPI for public administration and SDK operations, ordinary
 HTTP/WebSocket forwarding for workload traffic, and a typed internal host protocol.
 Each wire contract has one source. Generate bindings at actual language boundaries
-rather than copying schemas manually. Do not expose internal Rust types directly.
+rather than copying schemas manually. Do not expose internal Go types directly.
 
 Domain types are not automatically HTTP DTOs or database rows. Share representations
 where meanings match; introduce conversion only for a real boundary. Keep typed
-contract examples that both Rust and retained consumers can validate.
+contract examples that both Go and retained consumers can validate.
 
 JSON and ordinary platform operations must be usable without Python. Python source,
 handler references and cloudpickle payloads remain explicit Python capabilities.
@@ -319,19 +333,19 @@ Do not require future SDKs to deserialize Python objects, or silently weaken cur
 Python execution semantics. Python user code continues to run in Python.
 
 User code reaches the platform through a local runner protocol, a language-neutral
-contract between the host runtime and a per-language runner in the container. Rust
+contract between the host runtime and a per-language runner in the container. Go
 implements the work shared by every language: input delivery, result and log
 transfer, heartbeats, process slots, cancellation, draining and endpoint
 forwarding. A runner loads user handlers, invokes them, serializes values in its
 language and reports user failures. The Python runner is the first implementation.
 Go and TypeScript SDKs can serve the same protocol with a small runner or from the
 user's program without backend changes. The first execution slice decides whether
-the shared work runs in the agent or in a Rust supervisor inside the container.
+the shared work runs in the agent or in a Go supervisor inside the container.
 
 ## Development and acceptance
 
-Follow AGENTS.md for Rust ownership, error handling, async lifetimes, bounded work,
-tooling and test standards. Pin concrete library/toolchain versions with the
+Follow AGENTS.md for Go package boundaries, error handling, goroutine lifetimes,
+bounded work, tooling and test standards. Pin concrete library/toolchain versions with the
 first implemented workflow; document changes to the choices below in its task.
 
 Before implementing an assigned area, trace it in the reference through clients,
@@ -341,7 +355,7 @@ RPCs, branches and abstractions that the replacement eliminates.
 
 Implement a complete public outcome. Remove superseded machinery in the same task.
 A renamed service, ported class hierarchy or extra coordination layer is not the
-requested result. Do not carry an oversized framework into Rust behind traits.
+requested result. Do not carry an oversized framework into Go behind interfaces.
 
 Reuse existing acceptance evidence where it tests public outcomes. Rewrite tests
 that depend on old implementation shape. Test transaction/concurrency guarantees

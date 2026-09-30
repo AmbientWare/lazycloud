@@ -9,8 +9,8 @@
   variable. Never silently select localhost or another datastore.
 - Follow the new language-neutral wire contracts as they are implemented. Old
   Python models may change or disappear with their consumers; backward
-  compatibility is not required. Do not maintain competing Python/Rust schemas.
+  compatibility is not required. Do not maintain competing Python/Go schemas.
 - Fetch pricing and policy from backend owners. Keep client defaults limited to
   authoring concerns and preserve omitted versus explicit values.
 - Existing scheduling and resource helpers are reference code to retire as their
-  consumers change, not a second implementation for the new Rust backend.
+  consumers change, not a second implementation for the new Go backend.
