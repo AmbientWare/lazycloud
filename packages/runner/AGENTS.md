@@ -1,8 +1,9 @@
 # Runner
 
 - Execute inside user containers with shared contracts, small foundation loading
-  helpers and user code only. No backend dependencies. Coordinate new execution
-  contracts with the Rust host runtime; keep module entrypoints importable.
+  helpers and user code only. No backend dependencies. Serve the local runner
+  protocol; transport, heartbeats, result transfer and draining belong to the
+  Rust host runtime. Keep module entrypoints importable.
 - Report guarded user imports as user failures. Ship the read-only content-addressed
   runner artifact with its worker image.
 - Keep invocation identity/output in context variables, not process globals.

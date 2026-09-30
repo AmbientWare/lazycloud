@@ -124,7 +124,7 @@ Begin with the smallest deployable set justified by workloads:
 - Server: public/admin APIs and necessary ingress, composed from domain owners.
 - Scheduler: durable due-work processing, scaling, placement and fleet loops.
 - Agent: machine connection and local runtime supervision.
-- Python runner: user execution inside its container.
+- Python runner: user execution inside its container over the local runner protocol.
 - Web: the existing frontend.
 
 Separate ingress, connection gateways or worker processes when independent scaling,
@@ -318,6 +318,16 @@ handler references and cloudpickle payloads remain explicit Python capabilities.
 Do not require future SDKs to deserialize Python objects, or silently weaken current
 Python execution semantics. Python user code continues to run in Python.
 
+User code reaches the platform through a local runner protocol, a language-neutral
+contract between the host runtime and a per-language runner in the container. Rust
+implements the work shared by every language: input delivery, result and log
+transfer, heartbeats, process slots, cancellation, draining and endpoint
+forwarding. A runner loads user handlers, invokes them, serializes values in its
+language and reports user failures. The Python runner is the first implementation.
+Go and TypeScript SDKs can serve the same protocol with a small runner or from the
+user's program without backend changes. The first execution slice decides whether
+the shared work runs in the agent or in a Rust supervisor inside the container.
+
 ## Development and acceptance
 
 Follow AGENTS.md for Rust ownership, error handling, async lifetimes, bounded work,
@@ -406,7 +416,7 @@ Update the assigned checklist item only when its completion requirements are met
 - [ ] Users, workspaces and invitations
 - [ ] Apps, deployments, releases and desired configuration
 - [ ] Task admission, lifecycle, retries and cancellation
-- [ ] Function execution and Python runner integration
+- [ ] Function execution, local runner protocol and Python runner integration
 - [ ] Container lifecycle, assignment and draining
 - [ ] Workload autoscaling
 - [ ] Scheduling, placement and fairness
