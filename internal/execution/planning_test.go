@@ -76,7 +76,7 @@ func newHost(t *testing.T, pool *pgxpool.Pool) uuid.UUID {
 	var id uuid.UUID
 	err := pool.QueryRow(t.Context(), `
 insert into hosts (name, token_hash, state, cpu_millis, memory_bytes, last_seen_at)
-values ('h', sha256(random()::text::bytea), 'online', 64000, 1 << 36, now()) returning id`).Scan(&id)
+values ('h', sha256(random()::text::bytea), 'online', 64000, 1::bigint << 36, now()) returning id`).Scan(&id)
 	if err != nil {
 		t.Fatalf("insert host: %v", err)
 	}
