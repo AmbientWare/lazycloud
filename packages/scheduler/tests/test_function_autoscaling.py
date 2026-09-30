@@ -243,17 +243,19 @@ def test_function_scale_down_preserves_assigned_startup_until_inactive(
     _function_autoscaler(services, redis).reconcile()
     pending = _pending_containers(services, stub)
     assert len(pending) == 2
+    with services.context.database.session() as session:
+        snapshot = ContainerRepository(session).autoscaling_candidates(
+            stub_ids=[stub.id], failed_since=utc_now()
+        )
     assigned = pending[0].model_copy(update={"runtime_worker_id": "worker-1"})
     with services.context.database.session() as session:
         ContainerRepository(session).upsert(assigned)
-    current_stub = next(
-        item for item in services.scheduler_workloads.list_autoscaling_stubs() if item.id == stub.id
-    )
+    [current_stub] = services.control_plane_service.list_autoscaling_stubs([stub.id])
     autoscaler = FunctionAutoscaler(services, functions=FunctionControlService(services))
     # Assignment landed after the scheduler's snapshot. Stop checks its current owner.
     actions = autoscaler.scale_down(
         current_stub,
-        pending,
+        snapshot,
         2,
         scheduler_statuses={},
         active_instance=True,
@@ -262,9 +264,13 @@ def test_function_scale_down_preserves_assigned_startup_until_inactive(
     )
     assert [action.container_id for action in actions] == [pending[1].id]
     assert services.containers.get(assigned.id).status is ContainerStatus.Pending
+    with services.context.database.session() as session:
+        snapshot = ContainerRepository(session).autoscaling_candidates(
+            stub_ids=[stub.id], failed_since=utc_now()
+        )
     actions = autoscaler.scale_down(
         current_stub,
-        [assigned],
+        snapshot,
         1,
         scheduler_statuses={},
         active_instance=False,

@@ -8,6 +8,8 @@ from api.server.services import ApiServices
 from cli.api_client import AdminApiClient
 from cli.main import build_admin_cli
 from control.service import ControlPlaneService, StubKind, StubRecord
+from coordination.token_lock import release_token_lock
+from database.repositories.orchestration import AutoscalerStateRepository
 from fastapi.testclient import TestClient
 from identity.auth import AuthService
 from pydantic import BaseModel, JsonValue, TypeAdapter
@@ -147,6 +149,26 @@ def test_autoscaler_cli_controls_real_api_and_persists_owner_state(
     assert persisted_metadata == {"autoscaling_enabled": True}
     assert history_actions == ["endpoint.autoscaler.scale_decision"]
 
+    redis = isolated_services.redis_client
+    lock = redis.key("autoscaling", "endpoints", stub.workspace_id, stub.id, "lock")
+    assert redis.set(lock, "concurrent-scheduler", ex=10, nx=True)
+    try:
+        result = isolated_services.autoscaler_operations_service.reconcile(
+            stub_id_or_name=stub.id, workspace="default"
+        )
+        assert result.results[0]["lock_acquired"] is False
+        assert result.results[0]["actions"] == []
+        assert (
+            len(
+                isolated_services.autoscaler_operations_service.history(
+                    workspace="default", target_id=stub.id
+                ).events
+            )
+            == 1
+        )
+    finally:
+        release_token_lock(redis, lock, "concurrent-scheduler")
+
 
 def _create_endpoint_stub(
     services: ApiServices,
@@ -181,4 +203,5 @@ def _record_state(services: ApiServices, stub: StubRecord) -> AutoscalerStateRec
         decision="scale-up",
         reason="queue-pending",
     )
-    return services.autoscaler_states.upsert(state)
+    with services.context.database.session() as session:
+        return AutoscalerStateRepository(session).upsert(state)

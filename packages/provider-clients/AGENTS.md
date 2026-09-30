@@ -1,30 +1,13 @@
-# Provider client composition
+# Provider composition
 
-The mapping from persisted provider configuration and process settings to
-concrete adapter instances.
-
-This package owns construction and nothing else: not provider workflows, billing,
-capacity reconciliation, API or CLI behavior, persistence tables, or process
-entrypoints.
-
-Provider definitions, purchase permission and supported types are defined in code.
-Provider packages own reviewed supplier prices and live quote retrieval.
-Deployment settings carry image catalogs and infrastructure identities; separate
-secret settings carry credentials. The registry constructs disabled providers
-when their resources still require management. Resolve bootstrap-created workspace
-identities when capacity is used, not while composing bootstrap services.
-
-Where that configuration comes from is part of the mapping, so this package also
-owns the published release manifest contract and the resolution of a deployment's
-settings from it. One complete manifest names the platform images, worker image,
-agent executable, authorization template, and CPU and GPU AMIs. Unchanged artifacts
-retain their original identity. Docker Bake owns the platform build inventory.
-The local artifact mount and control principal belong to deployment configuration.
-A deployment with no manifest has no managed capacity. Terraform owns infrastructure
-identities, Helm owns runtime settings, and processes read environment variables.
-
-The production registry admits only providers with live evidence behind them. A
-persisted kind that is not supported fails explicitly and by name; it never
-resolves to a stand-in that appears to work. Keep exports explicit, and let
-credential and construction failures propagate rather than collapsing into a null
-adapter that fails later somewhere less informative.
+- Map persisted configuration and process settings to adapters; no workflows.
+  Domains own purchase policy, providers own offers, deployments own infrastructure
+  and releases, and secret settings own credentials.
+- Disabled providers remain constructible for cleanup. Unsupported kinds fail by
+  name; never substitute null or stand-in adapters. Resolve bootstrap identities
+  when capacity is used, not during bootstrap composition.
+- Own release manifest contracts and settings resolution. A complete manifest
+  identifies platform/worker images, agent, authorization template and CPU/GPU AMIs.
+  Preserve unchanged artifact identities; Docker Bake owns build inventory.
+- A deployment without a manifest has no managed capacity. Terraform owns
+  infrastructure, Helm runtime settings, and processes consume environment values.

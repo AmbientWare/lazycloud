@@ -3,8 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from database.records.apps import StubKind, StubRecord
+from database.records.autoscaling import AutoscalerStatus
+from database.repositories.orchestration import AutoscalerStateRepository
 from pydantic import Field, JsonValue
-from shared.autoscaler_state import AutoscalerStateRecord, AutoscalerTargetKind
+from shared.autoscaler_state import AutoscalerTargetKind
 from shared.contracts import ContractModel
 from shared.events import Event, EventLevel
 from shared.worker_events import AUTOSCALER_SCALE_DECISION_ACTIONS
@@ -18,15 +20,8 @@ from scheduler.autoscaling import (
 )
 
 
-class AutoscalerStatusItem(ContractModel):
-    state: AutoscalerStateRecord
-    stub_name: str = ""
-    stub_kind: str = ""
-    autoscaling_enabled: bool = True
-
-
 class AutoscalerStatusResponse(ContractModel):
-    items: list[AutoscalerStatusItem] = Field(default_factory=list)
+    items: list[AutoscalerStatus] = Field(default_factory=list)
 
 
 class AutoscalerHistoryResponse(ContractModel):
@@ -59,24 +54,11 @@ class AutoscalerOperationsService:
     ) -> AutoscalerStatusResponse:
         workspace_id = self._workspace_id(workspace)
         source = _source_for_kind(target_kind) if target_kind is not None else None
-        states = self.services.autoscaler_states.list(workspace_id=workspace_id, source=source)
-        if target_id:
-            states = [state for state in states if state.target_id == target_id]
-        stubs = {
-            stub.id: stub
-            for stub in self.services.scheduler_workloads.list_stubs(workspace=workspace_id)
-        }
-        return AutoscalerStatusResponse(
-            items=[
-                AutoscalerStatusItem(
-                    state=state,
-                    stub_name=stubs[state.target_id].name if state.target_id in stubs else "",
-                    stub_kind=stubs[state.target_id].kind.value if state.target_id in stubs else "",
-                    autoscaling_enabled=_autoscaling_enabled(stubs.get(state.target_id)),
-                )
-                for state in states
-            ]
-        )
+        with self.services.context.database.session() as session:
+            items = AutoscalerStateRepository(session).status(
+                workspace_id=workspace_id, source=source, target_id=target_id
+            )
+        return AutoscalerStatusResponse(items=items)
 
     def history(
         self,
@@ -118,17 +100,16 @@ class AutoscalerOperationsService:
         workspace: str = "default",
     ) -> AutoscalerReconcileResponse:
         if stub_id_or_name is not None:
-            stub = self.services.scheduler_workloads.get_stub(
+            stub = self.services.control_plane_service.get_stub(
                 stub_id_or_name,
                 workspace=workspace,
             )
             kind = target_kind or _target_kind_for_stub(stub)
-            # The loop's own record, so a reconcile asked for by hand sees what
-            # the loop sees, the stub's power state included.
-            [record] = self.services.scheduler_workloads.list_autoscaling_stubs([stub.id])
+            records = self.services.control_plane_service.list_autoscaling_stubs([stub.id])
             return AutoscalerReconcileResponse(
                 results=[
-                    _dump_result(self._service_for_kind(kind).reconcile_stub(record)),
+                    _dump_result(result)
+                    for result in self._service_for_kind(kind).reconcile(records)
                 ]
             )
         if target_kind is not None:
@@ -148,11 +129,11 @@ class AutoscalerOperationsService:
         workspace: str,
         enabled: bool,
     ) -> AutoscalerControlResponse:
-        stub = self.services.scheduler_workloads.set_autoscaling_enabled(
+        stub = self.services.control_plane_service.update_stub_config(
             stub_id_or_name,
             workspace=workspace,
-            enabled=enabled,
-        )
+            fields={"metadata.autoscaling_enabled": enabled},
+        ).stub
         target_kind = _target_kind_for_stub(stub)
         self.services.events.emit(
             "autoscaler.resumed" if enabled else "autoscaler.paused",
@@ -186,7 +167,7 @@ class AutoscalerOperationsService:
     def _workspace_id(self, workspace: str | None) -> str | None:
         if workspace is None:
             return None
-        return self.services.scheduler_workloads.get_workspace(workspace).id
+        return self.services.control_plane_service.get_workspace(workspace).id
 
 
 def _source_for_kind(target_kind: AutoscalerTargetKind) -> str:
@@ -207,13 +188,6 @@ def _target_kind_for_stub(stub: StubRecord) -> AutoscalerTargetKind:
         return AutoscalerTargetKind.Pod
     msg = f"stub is not autoscaled: {stub.id}"
     raise ValueError(msg)
-
-
-def _autoscaling_enabled(stub: StubRecord | None) -> bool:
-    if stub is None:
-        return False
-    raw = stub.config.metadata.get("autoscaling_enabled", True)
-    return raw is not False
 
 
 def _dump_result(result: ContractModel) -> dict[str, JsonValue]:

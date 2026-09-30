@@ -1,57 +1,14 @@
-# Observability package
+# Observability
 
-Durable events, usage and accounting, metrics, log and event streams, telemetry
-setup, and the evidence billing is built on.
-
-No rate card lives here. A quote comes from a published rate row; the placement
-the control plane recorded supplies the quantity floor rather than the rate. This
-package applies one and holds none.
-
-A window is billed `max(reserved, measured)` per resource, reached without ever
-pairing two records. The reservation is the floor because capacity held is
-capacity nobody else can schedule onto, and it rides on the duration record, the
-one a metering window guarantees. The measured records add only what the same
-window used above the same floor, so the two sum to the greater of them whatever
-order they arrive in, and a missing measurement costs the burst rather than the
-charge. Nothing joins on time, looks a sibling window up, or derives a quantity
-from another record: a stale window can only ever be priced against the capacity
-that window held.
-
-The sentry's and gofer's own resident memory is inside the measured memory
-figure, and the platform charges for it. It exists because the container runs,
-it is small against a gibibyte-second, and netting it out would put a per-runtime
-correction inside a price.
-
-A window without a measured record is billed at its reservation floor. The
-`basis` column distinguishes reserved and measured charges. Containers and image
-builds both report measured usage above their reservations.
-
-Pricing runs where metering commits. `MeteredUsagePricer` is built on the
-caller's session so a priced segment lands in the transaction that wrote the
-record it prices. A crash between the two loses money or bills it twice, and the
-usage row alone cannot say which happened.
-
-Metering is never refused. A window no published rate covers still commits its
-usage record, writes no ledger row, invents no zero, and leaves a durable
-`billing.span.unpriced` error naming the dimension, the gap and the reason. That
-event is cluster-scoped. An explicit zero rate writes a priced segment at $0.00
-and consumes no credit. New usage settles against the local wallet. Historical
-provider meter exports remain immutable and cannot debit the wallet on replay.
-
-A record the ledger has already priced keeps the cost it froze. Re-recording a
-quantity under an id that was already priced leaves the segments, the allowance
-and the outbox where they are and raises a durable
-`billing.span.reprice_refused` error naming both figures; a correction is a new
-record, never an edit to a frozen one.
-
-SQL access stays repository-backed, hot streams use the coordination package, and
-optional exporters initialize lazily so an unconfigured one costs nothing. Apps,
-SDK, worker and scheduler loops, and providers stay outside.
-
-Accounting, ordering, cursor semantics, and workspace isolation are correctness
-properties here rather than conveniences: a dropped or misattributed event is a
-billing defect.
-
-A broad exception handler on a capacity, enrollment, or billing path either
-records a durable error event or re-raises. It never swallows. Wrap the recording
-itself, so that failing to record can never replace the failure being recorded.
+- Own events, metering, telemetry and streams. Apply published rates; do not
+  maintain another rate card or derive reservation floors from current capacity.
+- Bill each resource window at max(reserved, measured), independent of arrival
+  order. Missing measurements retain the reservation floor.
+- Price in the transaction that commits metering. Missing rates still commit usage
+  and a durable unpriced error, never fabricated zero cost. Explicit zero is valid.
+- Keep priced segments immutable; corrections use new records. Replays cannot
+  reprice usage or debit historical provider exports against the wallet.
+- Preserve workspace attribution, ordering and cursors. Use repositories for SQL,
+  coordination for hot streams and lazy initialization for optional exporters.
+- Broad error handlers on capacity, enrollment or billing paths must re-raise or
+  record durable errors. Recording failures must not replace the original error.

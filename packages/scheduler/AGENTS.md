@@ -1,248 +1,32 @@
-# Scheduler package
+# Scheduler
 
-Queueing, assignment, autoscaling, capacity decisions, worker and fleet hot
-state, route publication, retries, and cancellation, behind typed Redis
-repositories.
-
-Durable history belongs to explicit database owners. Endpoint, pod, gateway,
-worker, and process composition belongs to apps.
-
-PostgreSQL owns the scheduling request, its capacity retry generation, and the
-worker assignment. Redis publishes and leases that work. Dispatch records unmet
-demand and wakes the acquisition loop, which performs the provider calls. Recovery republishes only
-unassigned requests, preserving their original timestamp and executable payload.
-
-An uncertain queue commit retains its PostgreSQL assignment. Clearing it requires
-the assignment token and proof that delivery did not occur. The same transaction
-may clear provisional billing placement only before usage or ledger facts exist.
-Missing Redis state never authorizes a second worker to execute the container.
-Stop confirmed orphans through the container service, which notifies their
-assigned worker and releases invocation claims under the scheduler retry policy.
-Pending assignments retain delivery and startup deadlines even when their
-worker is healthy and their Redis state survives.
-
-Everything here is concurrent by nature. Leases, assignment, retries, and
-terminal cancellation have to hold when two schedulers race, when a worker dies
-mid-task, and when a lease expires under work that is still running. Prefer a
-design where losing a race is safe over one where losing it is merely unlikely.
-
-## One autoscaler, three workloads
-
-`AutoscalingDriver` runs the reconcile pass and a `WorkloadAutoscaler` supplies
-what is genuinely per kind: which stubs it selects, the signal it samples, the
-count that signal argues for, how it starts one container, and which containers
-it may stop. A function scales on backlog depth, an endpoint on in-flight
-dispatches, a pod on connections. That difference is the strategy, and nothing
-above it is.
-
-This was three separate services, on the argument that a spine over three
-unrelated samples would hide the per-kind content and that the safety could be
-shared by being the same code rather than the same abstraction. Written out
-three times it stopped being the same code. The function autoscaler, the third
-copy, never read the pause flag an operator sets, never recorded a metric,
-never emitted an event the history endpoint could return, and wrote a state row
-that said no actions were taken however many it took. Each omission was
-invisible in the diff that made it, because the copy it was missing from was
-complete on its own terms.
-
-So the safety is now unreachable from a workload rather than repeated in each:
-stub selection including the pause, the stub lock, the contention metric, the
-failed-container threshold and its window, the inactive deployment, the
-workspace guardrail, and the metrics, event, and state row a lock-holding tick
-leaves behind. A workload cannot skip one of those, because it is never handed
-them.
-
-Composition, not inheritance. A base class with abstract hooks would reuse the
-same code, but it would also put the pass in the subclass's reach, which is the
-door the three copies walked through. A strategy is handed a stub, a signal, and
-a count, and hands back a plan.
-
-The kinds differ in what they scale on, not in what an operator can ask about
-them. One `AutoscaleResult` carries `kind`, `signal_name` and `signal_value`
-instead of a field per kind, so the state row, the metrics, the history, and the
-reconcile output have one shape and no per-kind branch to forget.
-
-A scale-down is the platform's decision, so it stops containers with
-`StopContainerReason.Scheduler`. The `User` default would settle the claims a
-container holds as cancellations, which tells callers their work was cancelled
-when what happened is that capacity moved.
-
-Capacity for a function is owned here. An invocation may start the first
-container for an idle stub so a cold call does not wait for a tick, and nothing
-else may start one. The ceiling is enforced where the container is reserved, in
-the transaction that both counts what is live and inserts the row that adds to
-it.
-
-A fired schedule invokes the stub its deployment published, read off the
-deployment the tick just resolved rather than off anything the schedule row
-carries: the deployment is what a redeploy updates, so it is the only one of the
-two that cannot be stale.
-
-## A record the scheduler no longer backs
-
-Worker keepalive proves process liveness, not request intake. Only an
-authenticated request poll that passes release and source-cache validation
-renews `request_poll_expires_at`. Placement, reservation reuse and pool headroom
-read the same admission decision. Dispatch checks the sampled worker version
-and lease expiry against Redis time in the atomic queue commit. Registration
-has a bounded pending window; a worker that stops polling contributes no usable
-headroom. A leased in-place update has its own finite pending headroom.
-
-Capacity acquisition has a retry deadline separate from dispatch readiness.
-Pending requests keep checking usable workers every dispatch interval while
-`capacity_retry_at` prevents another purchase attempt before its cooldown ends.
-A worker returning during that cooldown can accept work immediately.
-
-Capacity is counted from the durable container rows, so a row that says
-`pending` or `running` while nothing is going to make it true is a ceiling slot
-held against a workload that cannot use it. At `max_containers = 1` that is not
-a degradation but a stop: desired equals current on every tick, and a scheduled
-function grows its backlog by one task per fire with nothing able to start.
-
-The shared driver counts running containers during Redis recovery. Missing
-cache state does not authorize a stop. The orphan reconciler confirms loss of
-the container and worker intake before stopping it; authenticated worker
-admission restores live assignments from PostgreSQL.
-
-A pending request in the global backlog belongs to the dispatcher,
-which bounds capacity acquisition. Once assigned, the worker must acknowledge
-delivery within `CONTAINER_DELIVERY_DEADLINE_SECONDS`. Its queued and in-flight
-payloads retain the dispatch timestamp until acknowledgement. A healthy
-keepalive does not extend that deadline. An acknowledged start has
-`CONTAINER_START_DEADLINE_SECONDS` from assignment to finish preparation.
-
-Deadlines use recorded timestamps rather than Redis expiry. Worker heartbeats
-cannot extend them. If assignment state is gone, the durable creation time
-bounds recovery. Cancellation distinguishes queued requests from deliveries:
-only a request proven never delivered may skip the worker stop event.
-Pending recovery checks status under the same container lock as the Running
-transition. If startup won, cancellation writes no fence and recovery keeps the
-container in the capacity count.
-
-Reclaiming stops the container with `StopContainerReason.Scheduler`, the same
-settlement every platform-owned stop takes, so an invocation the container had
-claimed is released back to the queue rather than reported to its caller as
-cancelled. The stub lock serializes ticks, and where two overlap anyway the
-second finds the row already terminal and settles nothing twice.
-
-## A function's warm floor
-
-`min_containers` is held with nothing queued, and it is the only way to ask this
-platform for interpreters that are already warm: a model resident in VRAM, a
-handler already imported. `@app.function` is the one task execution model here,
-so a user who needs that has nowhere else to express it. A platform with several
-task-driven kinds can refuse a floor on one of them and let another carry the
-warm capacity; with one kind there is nowhere else for it to go.
-
-A floor and a finite idle window contradict each other: a function container
-retires itself when the window passes with no work, so the floor would start,
-idle out, and start again on the next tick, a count that is right whenever it
-is read and warm at no point. Declaring a floor therefore makes the window
-infinite, which is the same coupling pods take from the other end, and it moves
-removal to the autoscaler because nothing else will do it.
-
-Scale-down stops only containers holding no invocation. That is what makes a
-drain unnecessary rather than deferred: a stop settles claims by releasing them,
-so no invocation would be lost, but the part of one that had already run would
-be, and a handler that is not idempotent would run it twice. Skipping busy
-containers means the count stays above the floor while work is in flight, which
-is the honest answer. Those containers are doing the thing they exist for.
-
-Where there is an idle window, running containers retire themselves. Assigned
-startups finish preparation and then use that window. Scale-down removes excess
-unassigned pending containers, checking both state and assignment under the
-container lock. Inactive workloads stop assigned pending containers immediately;
-startup recovery still removes assigned containers whose preparation has stalled.
-
-The floor is held per stub and every deployed version keeps its own, so a
-redeploy releases the floor the version before it held. An author asking for two
-resident interpreters wants two, not two more each time they ship, and prior
-versions stay invocable by number. Nothing else would ever remove those
-containers, since a floor is what makes their window infinite. The release sets
-the floor to zero and leaves the window infinite, which reads backwards and is
-the only thing that works: a container took its keep-warm seconds from the
-environment it started with, so a finite window written to the config would
-reach the config and not them. A zero floor with no window is what hands them to
-scale-down.
-
-Every function stub is selected, bound to a deployment or not. A stub reached
-through `.remote()`, `.map()` or `lazycloud run` before anything is deployed has
-a backlog like any other, and it is the one case where the first container came
-from an invocation rather than from here, so refusing it leaves a fan-out being
-served one container at a time.
-
-## Priority ranks capacity, and higher wins
-
-One number, one direction, in both places that read it: the order capacity is
-acquired in and the choice of which existing worker a request lands on. It was
-briefly opposite in two sorts ten lines apart, one ascending and one negated,
-which is the shape of a value whose polarity nobody wrote down.
-
-It is a tier, not a weight. Work fills the highest tier that fits before any of
-the next, and inside a tier placement is exactly what it was. A weighted score
-would make preference and free CPU commensurable, which needs a ratio nobody can
-justify, and it would put the packing that lets an idle pool drain at the mercy
-of whatever number an operator typed. A tier cannot be tuned into breaking it.
-
-Below liveness, though. A worker that has not registered yet is not a better
-choice than one that can run the request now, however it is ranked.
-
-The unit owns it and the worker is told, like tenancy and billing owner beside
-it. A machine its customer holds root on could otherwise register the largest
-integer there is and pull every one of that account's requests onto itself,
-starving the cloud pool that account is paying for.
-
-It is a property of capacity rather than of work, so there is no per-request
-priority. Ready requests share service across admission accounts, weighted by
-requested CPU, memory and GPU count. Workspaces owned by the same account share
-one queue. Within that queue, requests retain their readiness order. A request
-retains its service charge across claim expiry, placement retries and undelivered
-worker recovery; retrying does not charge the account again. A retry moves behind
-the currently ready accounts, with selection order retained across claim batches,
-so continuously due retries cannot starve another account.
-
-The admission account is a fairness snapshot, never placement authority. Dispatch
-reads current workspace owners before selecting private capacity. Redis keeps
-account readiness and compact scheduling facts separate from executable payloads,
-so claiming a batch reads account heads and only the selected payloads. Enqueue,
-return, cancellation, acknowledgement and dispatch update those indexes atomically.
-
-A worker fits a request only when the two placements are equal. A placement is
-an identity: the platform, one connected account by connection id, or one joined
-machine by machine id. Platform work never lands on a connection or machine
-worker because the kinds differ, and one account's connection never serves
-another's because the id differs, so no owner comparison sits beside it. The
-placement is never chosen by the caller; the control plane resolves it once when
-a stub is created, from the workspace's location or the machine its config
-names, and the request carries it from there.
-
-## Placement packs, and consolidation moves only what may move
-
-Below liveness, priority, the preferred worker and the preferred zone, a request
-lands on a busy machine before an empty one: the one reserving the most CPU, then
-memory, then the largest. Among empty machines the smallest that fits goes first,
-so large machines stay free for large requests. A machine the reserve planner is
-watching to consolidate takes work only when nothing else fits. In a quiet market,
-work that cannot be moved later goes to the smallest machine, because it would
-otherwise pin a large one the drain could release.
-
-A workload may be moved if and only if it is preemptible, whatever its kind:
-accepting interruption is accepting a stop and a reschedule elsewhere. Functions,
-endpoints, image builds, pods, devboxes and sandboxes on those terms may move;
-work that did not accept interruption, or that must run on one named worker, is
-never stopped to consolidate. The container row's `scheduling_preemptible` is the
-durable record of that consent.
-
-Consolidation empties a machine the planner has watched at 30 percent use or less
-for ten minutes, whose work may all move, while the market's other machines keep
-its running target. One machine per market at a time, then a cooldown. Under the
-unit's dispatch lease the durable rows are read again, each movable container is
-placed on a specific other host the way placement would place it, CPU, memory,
-cards and disks included, and only then is the machine cordoned through the
-durable drain path; a drain that finds the machine already draining ends the
-attempt. Movable containers stop with `StopContainerReason.Preempted`, so retries
-and billing treat the stop as the preemption it is, and a devbox's disks save on
-stop as usual. A stop not acted on within five minutes is sent again. Image
-builds finish where they are. After an hour the attempt is given up and the
-cordoned machine drains on its own; the Redis record expires after twice that.
-The idle drain then retires the empty machine or returns it to the stopped reserve.
+- Own queueing, assignment, autoscaling and placement through typed repositories.
+  Compute owns provider acquisition; apps own wakes, cadence and process lifetime.
+- PostgreSQL owns requests, retry generations and assignments; Redis publishes and
+  leases them. Recover only unassigned work with its original time and payload.
+- Uncertain delivery retains assignment. Clearing requires its token and proof of
+  non-delivery; missing Redis state never authorizes another executor or a stop.
+  Billing placement cannot be cleared after usage or ledger facts exist.
+- Request polling proves intake; keepalive proves only liveness. Use the same
+  admission decision for placement/headroom and validate version/lease atomically.
+- Delivery/start deadlines use recorded timestamps, independent of heartbeats.
+  Recovery shares the container transition lock and respects a completed startup.
+  Stop confirmed orphans through the container service to release claims.
+- Autoscaling shares one driver and per-workload decisions. Repositories own
+  claims/state; avoid services that only forward repository calls.
+- Take stub ownership before shared snapshots and revalidate queued leases.
+  Manual and scheduled reconciliation share locks and execution. Database
+  admission and conditional stops remain authoritative after lease expiry.
+- Platform scale-down uses `StopContainerReason.Scheduler`. Enforce function
+  ceilings transactionally at reservation; include undeployed function backlogs.
+- Warm floors disable idle retirement. Scale down only idle function containers;
+  release older deployment floors without interrupting in-flight work.
+- Cron invokes the deployment's current published stub, not a stale schedule copy.
+- Higher capacity priority wins after liveness. Requests share service across
+  admission accounts; retries retain their charge and cannot starve other accounts.
+  Fairness snapshots do not establish current placement authority.
+- Require matching placement identities supplied by their domain owner. Never
+  widen platform/private tenancy or substitute capacity for a named machine.
+- Pack compatible resources while preserving large hosts for shapes needing them.
+  Consolidation rechecks named destinations under leases and moves only work whose
+  durable preemption policy permits it; pinned/non-preemptible work stays.

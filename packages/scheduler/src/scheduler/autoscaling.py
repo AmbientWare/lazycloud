@@ -2,17 +2,18 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from contextlib import ExitStack
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from secrets import token_urlsafe
 from typing import Protocol
 
 from coordination.redis_client import RedisClient
-from coordination.token_lock import release_token_lock
+from coordination.token_lock import release_token_lock, renew_token_lock
 from database.records.apps import AutoscalingStubConfig, AutoscalingStubRecord, StubKind
+from database.records.autoscaling import AutoscalingContainer
 from database.repositories.apps import AppRepository, DeploymentRepository, StubRepository
-from database.repositories.container_rollouts import ContainerRolloutRepository
-from database.repositories.orchestration import ContainerRepository
+from database.repositories.orchestration import AutoscalerStateRepository, ContainerRepository
 from pydantic import Field, JsonValue
 from shared.autoscaler_state import (
     SCALE_UP_FAILED_ACTION,
@@ -37,10 +38,10 @@ from shared.autoscaling import (
     select_stoppable_pod_containers,
 )
 from shared.container_requests import StopContainerReason
-from shared.containers import ContainerRecord, ContainerStatus
+from shared.containers import ContainerStatus
 from shared.contracts import ContractModel
 from shared.deployment_records import DEFAULT_DEVBOX_KEEP_WARM_SECONDS
-from shared.env import HOT_RELOAD_ENV, truthy_env_value
+from shared.env import truthy_env_value
 from shared.errors import DomainError, EndpointReplicaLimitReachedError, InvalidInputError
 from shared.http.endpoints import StartEndpointServeRequest, StartEndpointServeResponse
 from shared.http.pods import CreatePodRequest, CreatePodResponse
@@ -159,7 +160,7 @@ class EndpointAutoscalingDispatchReader(Protocol):
 class StaleContainer:
     """A record holding a ceiling slot, and the finding that says it should not."""
 
-    record: ContainerRecord
+    record: AutoscalingContainer
     reason: str
 
 
@@ -254,10 +255,10 @@ class AutoscalingSignal:
 
 @dataclass(frozen=True, slots=True)
 class AutoscalingPlacementSnapshot:
-    stubs: tuple[AutoscalingStubRecord, ...]
     active_by_stub: Mapping[str, bool]
-    containers_by_stub: Mapping[str, tuple[ContainerRecord, ...]]
+    containers_by_stub: Mapping[str, tuple[AutoscalingContainer, ...]]
     scheduler_statuses: Mapping[str, SchedulerContainerStatus]
+    previous_states: Mapping[str, AutoscalerStateRecord]
 
 
 class WorkloadAutoscaler(Protocol):
@@ -296,13 +297,13 @@ class WorkloadAutoscaler(Protocol):
     def handle_failure_threshold(
         self,
         stub: AutoscalingStubRecord,
-        failed_containers: Sequence[ContainerRecord],
+        failed_containers: Sequence[AutoscalingContainer],
     ) -> list[AutoscaleAction]: ...
 
     def scale_down(
         self,
         stub: AutoscalingStubRecord,
-        containers: list[ContainerRecord],
+        containers: list[AutoscalingContainer],
         count: int,
         *,
         scheduler_statuses: Mapping[str, SchedulerContainerStatus],
@@ -334,84 +335,83 @@ class AutoscalingDriver:
 
     def reconcile(
         self,
-        *,
-        now: datetime | None = None,
-        limit: int = 100,
-    ) -> list[AutoscaleResult]:
-        stubs = tuple(
-            stub
-            for stub in self.services.scheduler_workloads.list_autoscaling_stubs()
-            if self.selects(stub)
-        )
-        snapshot = load_autoscaling_placement_snapshot(
-            self.services,
-            self.container_states,
-            stubs,
-            now=now,
-        )
-        return self.reconcile_snapshot(snapshot, now=now, limit=limit)
-
-    def reconcile_snapshot(
-        self,
-        snapshot: AutoscalingPlacementSnapshot,
+        stubs: Sequence[AutoscalingStubRecord] | None = None,
         *,
         now: datetime | None = None,
         limit: int = 100,
     ) -> list[AutoscaleResult]:
         current_time = now or utc_now()
-        stubs = [stub for stub in snapshot.stubs if self.selects(stub)][: max(limit, 0)]
-        signals = self.workload.samples(stubs)
+        selected = (
+            list(stubs)
+            if stubs is not None
+            else [
+                stub
+                for stub in self.services.control_plane_service.list_autoscaling_stubs()
+                if self.selects(stub)
+            ]
+        )
+        selected = selected[: max(limit, 0)]
+        results: dict[str, AutoscaleResult] = {}
+        with ExitStack() as locks:
+            owned: list[AutoscalingStubRecord] = []
+            tokens: dict[str, str] = {}
+            for stub in selected:
+                token = token_urlsafe(16)
+                key = self._lock_key(stub)
+                if not self.redis.set(key, token, nx=True, ex=AUTOSCALER_LOCK_TTL_SECONDS):
+                    results[stub.id] = self._record_lock_contention(stub)
+                    continue
+                locks.callback(release_token_lock, self.redis, key, token)
+                owned.append(stub)
+                tokens[stub.id] = token
+            if not owned:
+                return list(results.values())
+            # Read after acquiring ownership so an operator and a scheduled pass
+            # cannot both decide from the state preceding the other's work.
+            snapshot = load_autoscaling_placement_snapshot(
+                self.services,
+                self.container_states,
+                owned,
+                target_kind=self.workload.identity.kind,
+                now=current_time,
+            )
+            signals = self.workload.samples(owned)
 
-        def reconcile(stub: AutoscalingStubRecord) -> AutoscaleResult:
-            token = token_urlsafe(16)
-            lock_key = self._lock_key(stub)
-            if not self._acquire_lock(lock_key, token):
-                return self._record_lock_contention(stub)
-            try:
+            def reconcile(stub: AutoscalingStubRecord) -> AutoscaleResult:
+                if not renew_token_lock(
+                    self.redis,
+                    self._lock_key(stub),
+                    tokens[stub.id],
+                    ttl_seconds=AUTOSCALER_LOCK_TTL_SECONDS,
+                ):
+                    return self._record_lock_contention(
+                        stub, reason="autoscaler ownership expired before execution"
+                    )
                 return self._reconcile_stub(
                     stub,
                     active=snapshot.active_by_stub.get(stub.id, False),
                     containers=list(snapshot.containers_by_stub.get(stub.id, ())),
                     scheduler_statuses=snapshot.scheduler_statuses,
                     signal=signals.get(stub.id, AutoscalingSignal(value=0)),
+                    previous=snapshot.previous_states.get(stub.id),
                     now=current_time,
                 )
-            finally:
-                self._release_lock(lock_key, token)
 
-        with ThreadPoolExecutor(max_workers=4, thread_name_prefix="autoscaling") as executor:
-            return list(executor.map(reconcile, stubs))
-
-    def reconcile_stub(
-        self,
-        stub: AutoscalingStubRecord,
-        *,
-        now: datetime | None = None,
-    ) -> AutoscaleResult:
-        snapshot = load_autoscaling_placement_snapshot(
-            self.services,
-            self.container_states,
-            (stub,),
-            now=now,
-        )
-        signals = self.workload.samples((stub,))
-        return self._reconcile_stub(
-            stub,
-            active=snapshot.active_by_stub.get(stub.id, False),
-            containers=list(snapshot.containers_by_stub.get(stub.id, ())),
-            scheduler_statuses=snapshot.scheduler_statuses,
-            signal=signals.get(stub.id, AutoscalingSignal(value=0)),
-            now=now or utc_now(),
-        )
+            with ThreadPoolExecutor(max_workers=4, thread_name_prefix="autoscaling") as executor:
+                results.update(
+                    (result.stub_id, result) for result in executor.map(reconcile, owned)
+                )
+        return [results[stub.id] for stub in selected]
 
     def _reconcile_stub(
         self,
         stub: AutoscalingStubRecord,
         *,
         active: bool,
-        containers: list[ContainerRecord],
+        containers: list[AutoscalingContainer],
         scheduler_statuses: Mapping[str, SchedulerContainerStatus],
         signal: AutoscalingSignal,
+        previous: AutoscalerStateRecord | None,
         now: datetime,
     ) -> AutoscaleResult:
         current_time = now
@@ -425,11 +425,10 @@ class AutoscalingDriver:
         )
         actions, still_live = self._recover(stale)
         holding.extend(still_live)
-        with self.services.context.database.session() as session:
-            rollouts = ContainerRolloutRepository(session)
-            draining_ids = rollouts.draining_ids([container.id for container in holding])
-            rollout_floor = rollouts.serving_floor(stub.id)
-        holding = [container for container in holding if container.id not in draining_ids]
+        rollout_floor = max(
+            (container.rollout_serving_floor or 0 for container in holding), default=0
+        )
+        holding = [container for container in holding if container.rollout_serving_floor is None]
         current = len(holding)
         pending = _pending_container_count(holding)
         plan = self.workload.plan(stub, signal=signal.value, current=current, now=current_time)
@@ -506,12 +505,12 @@ class AutoscalingDriver:
             actions=actions,
             guardrails=guardrail.payload(),
         )
-        self._record(stub, result, plan)
+        self._record(stub, result, plan, previous)
         return result
 
     def _recover(
         self, stale: list[StaleContainer]
-    ) -> tuple[list[AutoscaleAction], list[ContainerRecord]]:
+    ) -> tuple[list[AutoscaleAction], list[AutoscalingContainer]]:
         """Give back the ceiling slots that records nothing backs are holding.
 
         Stopped rather than deleted, and stopped through the one settlement path
@@ -526,7 +525,7 @@ class AutoscalingDriver:
         """
 
         actions: list[AutoscaleAction] = []
-        still_live: list[ContainerRecord] = []
+        still_live: list[AutoscalingContainer] = []
         for container in stale:
             stopped = self.services.containers.stop(
                 container.record.id,
@@ -534,7 +533,14 @@ class AutoscalingDriver:
                 only_if_pending=container.record.status is ContainerStatus.Pending,
             )
             if stopped.status in {ContainerStatus.Pending, ContainerStatus.Running}:
-                still_live.append(stopped)
+                still_live.append(
+                    replace(
+                        container.record,
+                        status=stopped.status,
+                        runtime_worker_id=stopped.runtime_worker_id,
+                        started_at=stopped.started_at,
+                    )
+                )
                 continue
             actions.append(
                 AutoscaleAction(
@@ -565,14 +571,21 @@ class AutoscalingDriver:
         return actions
 
     def _record(
-        self, stub: AutoscalingStubRecord, result: AutoscaleResult, plan: ScalePlan
+        self,
+        stub: AutoscalingStubRecord,
+        result: AutoscaleResult,
+        plan: ScalePlan,
+        previous: AutoscalerStateRecord | None,
     ) -> None:
         identity = self.workload.identity
-        action_payloads = _autoscale_action_payloads(result.actions)
-        state = _autoscaler_state(
+        state = AutoscalerStateRecord(
+            name=autoscaler_state_name(identity.kind, stub.id),
+            workspace_id=stub.workspace_id,
+            target_id=stub.id,
+            deployment_id=stub.deployment_id or "",
+            app_id=stub.app_id or "",
             source=identity.source,
             target_kind=identity.kind,
-            stub=stub,
             current_count=result.current_containers,
             desired_count=result.desired_containers,
             signal_name=result.signal_name,
@@ -588,18 +601,11 @@ class AutoscalingDriver:
             guardrails=result.guardrails,
             last_actions=result.actions,
         )
-        previous = self.services.autoscaler_states.get(
-            workspace_id=stub.workspace_id,
-            target_kind=identity.kind,
-            target_id=stub.id,
-        )
-        if _should_persist_scale_event(
-            previous,
-            decision=result.decision.value,
-            desired_count=result.desired_containers,
-            reason=result.reason,
-            valid=result.valid,
-            actions_taken=bool(result.actions),
+        if (
+            previous is None
+            or result.actions
+            or (previous.decision, previous.desired_count, previous.reason, previous.valid)
+            != (state.decision, state.desired_count, state.reason, state.valid)
         ):
             event_data: dict[str, JsonValue] = {
                 "source": identity.source,
@@ -619,7 +625,7 @@ class AutoscalingDriver:
                 "min_containers": plan.min_containers,
                 "tasks_per_container": plan.tasks_per_container,
                 "guardrails": result.guardrails,
-                "actions": [*action_payloads],
+                "actions": [action.model_dump(mode="json") for action in result.actions],
             }
             self.services.events.emit(
                 identity.scale_decision_action,
@@ -629,28 +635,14 @@ class AutoscalingDriver:
                 data=event_data,
                 workspace_id=stub.workspace_id,
             )
-        _record_autoscaler_metrics(
-            self.services,
-            source=identity.source,
-            stub=stub,
-            kind=stub.kind.value,
-            current_containers=result.current_containers,
-            pending_containers=result.pending_containers,
-            desired_containers=result.desired_containers,
-            signal_name=result.signal_name,
-            signal_value=result.signal_value,
-            max_containers=plan.max_containers,
-            pressure_saturated=_pressure_saturated(result.signal_value, plan),
-            failed_container_count=len(result.failed_containers),
-            decision=result.decision.value,
-            reason=result.reason,
-            guardrails=result.guardrails,
-            actions=action_payloads,
-        )
+        _record_autoscaler_metrics(self.services, stub, result, plan, source=identity.source)
         if _autoscaler_state_changed(previous, state):
-            self.services.autoscaler_states.upsert(state)
+            with self.services.context.database.session() as session:
+                AutoscalerStateRepository(session).upsert(state)
 
-    def _record_lock_contention(self, stub: AutoscalingStubRecord) -> AutoscaleResult:
+    def _record_lock_contention(
+        self, stub: AutoscalingStubRecord, *, reason: str = "autoscaler lock already held"
+    ) -> AutoscaleResult:
         identity = self.workload.identity
         result = AutoscaleResult(
             kind=identity.kind,
@@ -658,7 +650,7 @@ class AutoscalingDriver:
             workspace_id=stub.workspace_id,
             signal_name=identity.signal_name,
             decision=ScaleDecisionKind.Hold,
-            reason="autoscaler lock already held",
+            reason=reason,
             lock_acquired=False,
         )
         self.services.metrics.increment(
@@ -680,12 +672,6 @@ class AutoscalingDriver:
             stub.id,
             "lock",
         )
-
-    def _acquire_lock(self, key: str, token: str) -> bool:
-        return bool(self.redis.set(key, token, nx=True, ex=AUTOSCALER_LOCK_TTL_SECONDS))
-
-    def _release_lock(self, key: str, token: str) -> None:
-        release_token_lock(self.redis, key, token)
 
 
 @dataclass(slots=True)
@@ -754,7 +740,7 @@ class FunctionAutoscaler:
     def handle_failure_threshold(
         self,
         stub: AutoscalingStubRecord,
-        failed_containers: Sequence[ContainerRecord],
+        failed_containers: Sequence[AutoscalingContainer],
     ) -> list[AutoscaleAction]:
         error = next(
             (container.startup_error for container in failed_containers if container.startup_error),
@@ -773,7 +759,7 @@ class FunctionAutoscaler:
     def scale_down(
         self,
         stub: AutoscalingStubRecord,
-        containers: list[ContainerRecord],
+        containers: list[AutoscalingContainer],
         count: int,
         *,
         scheduler_statuses: Mapping[str, SchedulerContainerStatus],
@@ -798,7 +784,7 @@ class FunctionAutoscaler:
             if container.id not in busy
             and (not pending_only or container.status is ContainerStatus.Pending)
             and (not preserve_assigned_startup or not container.runtime_worker_id)
-            and not truthy_env_value(container.env.get(HOT_RELOAD_ENV))
+            and not truthy_env_value(container.hot_reload)
         ]
         idle.sort(key=lambda container: container.created_at, reverse=True)
         actions: list[AutoscaleAction] = []
@@ -885,7 +871,7 @@ class EndpointAutoscaler:
     def handle_failure_threshold(
         self,
         stub: AutoscalingStubRecord,
-        failed_containers: Sequence[ContainerRecord],
+        failed_containers: Sequence[AutoscalingContainer],
     ) -> list[AutoscaleAction]:
         del stub, failed_containers
         return []
@@ -893,7 +879,7 @@ class EndpointAutoscaler:
     def scale_down(
         self,
         stub: AutoscalingStubRecord,
-        containers: list[ContainerRecord],
+        containers: list[AutoscalingContainer],
         count: int,
         *,
         scheduler_statuses: Mapping[str, SchedulerContainerStatus],
@@ -986,7 +972,7 @@ class PodAutoscaler:
     def handle_failure_threshold(
         self,
         stub: AutoscalingStubRecord,
-        failed_containers: Sequence[ContainerRecord],
+        failed_containers: Sequence[AutoscalingContainer],
     ) -> list[AutoscaleAction]:
         """End the start that asked for these containers.
 
@@ -1006,7 +992,7 @@ class PodAutoscaler:
     def scale_down(
         self,
         stub: AutoscalingStubRecord,
-        containers: list[ContainerRecord],
+        containers: list[AutoscalingContainer],
         count: int,
         *,
         scheduler_statuses: Mapping[str, SchedulerContainerStatus],
@@ -1093,227 +1079,67 @@ class EndpointAutoscalerConfig(ContractModel):
 
 def _record_autoscaler_metrics(
     services: SchedulerServices,
+    stub: AutoscalingStubRecord,
+    result: AutoscaleResult,
+    plan: ScalePlan,
     *,
     source: str,
-    stub: AutoscalingStubRecord,
-    kind: str,
-    current_containers: int,
-    pending_containers: int,
-    desired_containers: int,
-    signal_name: str,
-    signal_value: int,
-    max_containers: int,
-    pressure_saturated: bool,
-    failed_container_count: int,
-    decision: str,
-    reason: str,
-    guardrails: dict[str, JsonValue],
-    actions: list[dict[str, JsonValue]],
 ) -> None:
-    base_labels = {
+    labels = {
         "source": source,
         "workspace_id": stub.workspace_id,
         "stub_id": stub.id,
-        "kind": kind,
+        "kind": stub.kind.value,
     }
     services.metrics.increment(
         "autoscaler_decisions_total",
-        labels={**base_labels, "decision": decision, "reason": reason},
+        labels={**labels, "decision": result.decision.value, "reason": result.reason},
     )
-    services.metrics.set_gauge(
-        "autoscaler_current_containers",
-        current_containers,
-        labels=base_labels,
-    )
-    services.metrics.set_gauge(
-        "autoscaler_desired_containers",
-        desired_containers,
-        labels=base_labels,
-    )
-    services.metrics.set_gauge(
-        "autoscaler_pending_containers",
-        pending_containers,
-        labels=base_labels,
-    )
-    services.metrics.set_gauge(
-        "autoscaler_idle_containers",
-        max(current_containers - desired_containers, 0),
-        labels=base_labels,
-    )
-    services.metrics.set_gauge(
-        "autoscaler_failed_containers",
-        failed_container_count,
-        labels=base_labels,
-    )
-    services.metrics.set_gauge(
-        "autoscaler_failed_container_threshold_reached",
-        1 if reason == "failed container threshold reached" else 0,
-        labels=base_labels,
-    )
-    services.metrics.set_gauge(
-        "autoscaler_signal",
-        signal_value,
-        labels={**base_labels, "signal": signal_name},
-    )
-    services.metrics.set_gauge(
-        "autoscaler_max_containers",
-        max_containers,
-        labels=base_labels,
-    )
+    throttled = result.guardrails.get("limited") is True
+    for name, value in {
+        "current_containers": result.current_containers,
+        "desired_containers": result.desired_containers,
+        "pending_containers": result.pending_containers,
+        "idle_containers": max(result.current_containers - result.desired_containers, 0),
+        "failed_containers": len(result.failed_containers),
+        "failed_container_threshold_reached": int(
+            result.reason == "failed container threshold reached"
+        ),
+        "max_containers": plan.max_containers,
+        "guardrail_throttled": int(throttled),
+    }.items():
+        services.metrics.set_gauge(f"autoscaler_{name}", value, labels=labels)
+    signal_labels = {**labels, "signal": result.signal_name}
+    services.metrics.set_gauge("autoscaler_signal", result.signal_value, labels=signal_labels)
     services.metrics.set_gauge(
         "autoscaler_pressure_saturated",
-        1 if pressure_saturated else 0,
-        labels={**base_labels, "signal": signal_name},
-    )
-    throttled = _guardrail_limited(guardrails)
-    services.metrics.set_gauge(
-        "autoscaler_guardrail_throttled",
-        1 if throttled else 0,
-        labels=base_labels,
+        int(_pressure_saturated(result.signal_value, plan)),
+        labels=signal_labels,
     )
     if throttled:
+        reason = result.guardrails.get("reason")
         services.metrics.increment(
             "autoscaler_throttled_total",
-            labels={**base_labels, "reason": _guardrail_reason(guardrails)},
+            labels={
+                **labels,
+                "reason": reason if isinstance(reason, str) and reason else "guardrail-limited",
+            },
         )
     no_worker_capacity = False
-    for action in actions:
-        action_name = _action_name(action)
-        if not action_name:
+    for action in result.actions:
+        if not action.action:
             continue
-        services.metrics.increment(
-            "autoscaler_actions_total",
-            labels={**base_labels, "action": action_name},
-        )
-        if "failed" in action_name:
-            services.metrics.increment(
-                "autoscaler_scale_failures_total",
-                labels={**base_labels, "action": action_name},
-            )
-            if _is_no_worker_capacity(_action_reason(action)):
+        action_labels = {**labels, "action": action.action}
+        services.metrics.increment("autoscaler_actions_total", labels=action_labels)
+        if "failed" in action.action:
+            services.metrics.increment("autoscaler_scale_failures_total", labels=action_labels)
+            if "worker capacity" in action.reason.lower():
                 no_worker_capacity = True
-                services.metrics.increment(
-                    "autoscaler_no_worker_capacity_total",
-                    labels=base_labels,
-                )
+                services.metrics.increment("autoscaler_no_worker_capacity_total", labels=labels)
     services.metrics.set_gauge(
         "autoscaler_no_worker_capacity",
-        1 if no_worker_capacity else 0,
-        labels=base_labels,
-    )
-
-
-def _autoscale_action_payloads(
-    actions: Sequence[AutoscaleAction],
-) -> list[dict[str, JsonValue]]:
-    return [
-        {
-            "container_id": action.container_id,
-            "action": action.action,
-            "reason": action.reason,
-        }
-        for action in actions
-    ]
-
-
-def _guardrail_limited(guardrails: dict[str, JsonValue]) -> bool:
-    return guardrails.get("limited") is True
-
-
-def _guardrail_reason(guardrails: dict[str, JsonValue]) -> str:
-    reason = guardrails.get("reason")
-    return reason if isinstance(reason, str) and reason else "guardrail-limited"
-
-
-def _action_name(action: dict[str, JsonValue]) -> str:
-    value = action.get("action")
-    return value if isinstance(value, str) else ""
-
-
-def _action_reason(action: dict[str, JsonValue]) -> str:
-    value = action.get("reason")
-    return value if isinstance(value, str) else ""
-
-
-def _is_no_worker_capacity(reason: str) -> bool:
-    normalized = reason.lower()
-    return "no worker capacity" in normalized or "worker capacity" in normalized
-
-
-def _should_persist_scale_event(
-    previous: AutoscalerStateRecord | None,
-    *,
-    decision: str,
-    desired_count: int,
-    reason: str,
-    valid: bool,
-    actions_taken: bool,
-) -> bool:
-    """Persist scale decisions only on transitions.
-
-    The autoscalers run every tick; steady-state repeats of the same decision
-    are represented by the durable autoscaler state record and the decision
-    metrics, so only ticks that acted or changed the decision produce an event
-    row.
-    """
-    if actions_taken:
-        return True
-    if previous is None:
-        return True
-    return (
-        previous.decision != decision
-        or previous.desired_count != desired_count
-        or previous.reason != reason
-        or previous.valid != valid
-    )
-
-
-def _autoscaler_state(
-    *,
-    source: str,
-    target_kind: AutoscalerTargetKind,
-    stub: AutoscalingStubRecord,
-    decision: str,
-    reason: str,
-    current_count: int = 0,
-    desired_count: int = 0,
-    signal_name: str = "",
-    signal_value: int = 0,
-    active: bool = True,
-    valid: bool = True,
-    lock_acquired: bool = True,
-    owner_lock_key: str = "",
-    failed_container_count: int = 0,
-    pending_count: int = 0,
-    guardrails: dict[str, JsonValue] | None = None,
-    last_actions: list[AutoscaleAction] | None = None,
-    cooldown_until: datetime | None = None,
-) -> AutoscalerStateRecord:
-    actions = last_actions or []
-    return AutoscalerStateRecord(
-        name=autoscaler_state_name(target_kind, stub.id),
-        workspace_id=stub.workspace_id,
-        source=source,
-        target_kind=target_kind,
-        target_id=stub.id,
-        deployment_id=stub.deployment_id or "",
-        app_id=stub.app_id or "",
-        current_count=current_count,
-        desired_count=desired_count,
-        signal_name=signal_name,
-        signal_value=signal_value,
-        decision=decision,
-        reason=reason,
-        active=active,
-        valid=valid,
-        lock_acquired=lock_acquired,
-        owner_lock_key=owner_lock_key,
-        cooldown_until=cooldown_until,
-        failed_container_count=failed_container_count,
-        pending_count=pending_count,
-        guardrails=guardrails or {},
-        last_actions=actions,
-        updated_at=utc_now(),
+        int(no_worker_capacity),
+        labels=labels,
     )
 
 
@@ -1331,15 +1157,16 @@ def load_autoscaling_placement_snapshot(
     container_states: SchedulerContainerStateReader,
     stubs: Sequence[AutoscalingStubRecord],
     *,
+    target_kind: AutoscalerTargetKind,
     now: datetime | None = None,
 ) -> AutoscalingPlacementSnapshot:
     selected = tuple(stubs)
     if not selected:
         return AutoscalingPlacementSnapshot(
-            stubs=(),
             active_by_stub={},
             containers_by_stub={},
             scheduler_statuses={},
+            previous_states={},
         )
     current_time = now or utc_now()
     failed_window_seconds = max(
@@ -1356,7 +1183,10 @@ def load_autoscaling_placement_snapshot(
         )
         active_apps = AppRepository(session).active_by_ids(app_ids)
         active_deployments = DeploymentRepository(session).active_by_ids(deployment_ids)
-    grouped: dict[str, list[ContainerRecord]] = {stub_id: [] for stub_id in stub_ids}
+        previous_states = AutoscalerStateRepository(session).get_many(
+            [(stub.workspace_id, target_kind, stub.id) for stub in selected]
+        )
+    grouped: dict[str, list[AutoscalingContainer]] = {stub_id: [] for stub_id in stub_ids}
     for container in containers:
         if container.stub_id in grouped:
             grouped[container.stub_id].append(container)
@@ -1369,25 +1199,29 @@ def load_autoscaling_placement_snapshot(
         [container.id for container in containers if container.status in _LIVE_CONTAINER_STATUSES]
     )
     return AutoscalingPlacementSnapshot(
-        stubs=selected,
         active_by_stub=active_by_stub,
         containers_by_stub={key: tuple(value) for key, value in grouped.items()},
         scheduler_statuses=scheduler_statuses,
+        previous_states={
+            stub.id: previous_states[(stub.workspace_id, target_kind, stub.id)]
+            for stub in selected
+            if (stub.workspace_id, target_kind, stub.id) in previous_states
+        },
     )
 
 
-def _active_containers(containers: list[ContainerRecord]) -> list[ContainerRecord]:
+def _active_containers(containers: list[AutoscalingContainer]) -> list[AutoscalingContainer]:
     return [container for container in containers if container.status in _LIVE_CONTAINER_STATUSES]
 
 
 def _partition_backed_containers(
-    containers: list[ContainerRecord],
+    containers: list[AutoscalingContainer],
     scheduler_statuses: Mapping[str, SchedulerContainerStatus],
     requests: ContainerRequestReader,
     states: SchedulerContainerStateReader,
     *,
     now: datetime,
-) -> tuple[list[ContainerRecord], list[StaleContainer]]:
+) -> tuple[list[AutoscalingContainer], list[StaleContainer]]:
     """Split records the scheduler still backs from records that only look live.
 
     The durable row is what the ceiling is counted from, so a row that says
@@ -1397,7 +1231,7 @@ def _partition_backed_containers(
     grows one entry per fire.
     """
 
-    live: list[ContainerRecord] = []
+    live: list[AutoscalingContainer] = []
     stale: list[StaleContainer] = []
     for container in _active_containers(containers):
         reason = _stale_reason(
@@ -1415,7 +1249,7 @@ def _partition_backed_containers(
 
 
 def _stale_reason(
-    container: ContainerRecord,
+    container: AutoscalingContainer,
     scheduler_status: SchedulerContainerStatus | None,
     requests: ContainerRequestReader,
     states: SchedulerContainerStateReader,
@@ -1465,22 +1299,22 @@ def _stale_reason(
     return "container never started within the start deadline"
 
 
-def _pending_container_count(containers: list[ContainerRecord]) -> int:
+def _pending_container_count(containers: list[AutoscalingContainer]) -> int:
     return sum(1 for container in containers if container.status is ContainerStatus.Pending)
 
 
 def _recent_failed_containers(
-    containers: list[ContainerRecord],
+    containers: list[AutoscalingContainer],
     *,
     now: datetime,
     window_seconds: int,
     started_at: datetime | None,
-) -> list[ContainerRecord]:
+) -> list[AutoscalingContainer]:
     cutoff = now - timedelta(seconds=max(window_seconds, 0))
     # An explicit start asks for a fresh attempt, so failures before it do not count.
     if started_at is not None:
         cutoff = max(cutoff, started_at)
-    failed: list[ContainerRecord] = []
+    failed: list[AutoscalingContainer] = []
     for container in containers:
         if container.status is not ContainerStatus.Failed:
             continue
@@ -1497,12 +1331,12 @@ def _recent_failed_containers(
 
 def _stoppable_endpoint_containers(
     dispatch_records: list[EndpointAutoscalingDispatchObservation],
-    containers: list[ContainerRecord],
+    containers: list[AutoscalingContainer],
     scheduler_statuses: Mapping[str, SchedulerContainerStatus],
     *,
     keep_warm_seconds: int,
     now: datetime,
-) -> list[ContainerRecord]:
+) -> list[AutoscalingContainer]:
     candidates = [
         container
         for container in containers
@@ -1534,7 +1368,7 @@ def _endpoint_container_has_active_dispatch(
 
 def _endpoint_container_keep_warm_elapsed(
     dispatch_records: list[EndpointAutoscalingDispatchObservation],
-    container: ContainerRecord,
+    container: AutoscalingContainer,
     *,
     keep_warm_seconds: int,
     now: datetime,
@@ -1555,7 +1389,7 @@ def _pod_container_states(
     redis: RedisClient,
     workspace_id: str,
     stub: AutoscalingStubRecord,
-    containers: list[ContainerRecord],
+    containers: list[AutoscalingContainer],
 ) -> list[PodContainerState]:
     states: list[PodContainerState] = []
     for container in sorted(containers, key=lambda item: item.created_at, reverse=True):

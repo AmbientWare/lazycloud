@@ -2,12 +2,9 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
-from control.service import ControlPlaneService
-from database.records.apps import AutoscalingStubRecord, StubRecord
 from database.repositories.endpoint_dispatch import EndpointDispatchRepository
 from database.repositories.orchestration import ContainerRepository, MachineContainer
 from shared.containers import ContainerStatus
-from shared.identity import WorkspaceRecord
 from shared.timestamps import utc_now
 
 from database import DatabaseClient
@@ -59,44 +56,6 @@ class DatabaseCapacityAllocationOwners:
             ContainerStatus.Pending,
             ContainerStatus.Running,
         }
-
-
-@dataclass(frozen=True, slots=True)
-class SchedulerWorkloadDirectoryAdapter:
-    control_plane: ControlPlaneService
-
-    def list_stubs(self, *, workspace: str | None = None) -> list[StubRecord]:
-        return self.control_plane.list_stubs(workspace=workspace)
-
-    def list_autoscaling_stubs(
-        self,
-        stub_ids: Sequence[str] | None = None,
-    ) -> list[AutoscalingStubRecord]:
-        return self.control_plane.list_autoscaling_stubs(stub_ids)
-
-    def get_stub(
-        self,
-        stub_id_or_name: str,
-        *,
-        workspace: str | None = None,
-    ) -> StubRecord:
-        return self.control_plane.get_stub(stub_id_or_name, workspace=workspace)
-
-    def get_workspace(self, workspace: str = "default") -> WorkspaceRecord:
-        return self.control_plane.get_workspace(workspace)
-
-    def set_autoscaling_enabled(
-        self,
-        stub_id_or_name: str,
-        *,
-        workspace: str,
-        enabled: bool,
-    ) -> StubRecord:
-        return self.control_plane.update_stub_config(
-            stub_id_or_name,
-            workspace=workspace,
-            fields={"metadata.autoscaling_enabled": enabled},
-        ).stub
 
 
 @dataclass(frozen=True, slots=True)

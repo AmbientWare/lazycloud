@@ -32,15 +32,12 @@ from operations.container_shutdown import (
     DatabaseContainerStorageRelease,
     DatabaseDurableWorkerAbsence,
 )
-from scheduler.adapters import SchedulerWorkloadDirectoryAdapter
-from scheduler.autoscaler_states import AutoscalerStateService
 from scheduler.containers import (
     CONTAINER_DISPATCH_WAKE_SCOPE,
     SchedulerContainerRequestService,
 )
 from scheduler.disk_volume_attachments import DatabaseDiskVolumeAttachments
 from scheduler.preemption import SchedulerGpuBackfillPreemptionService
-from scheduler.services import SchedulerWorkloadDirectory
 from scheduler.state import (
     RedisSchedulerContainerRepository,
     RedisSchedulerWorkerRepository,
@@ -66,13 +63,12 @@ class SchedulerAppServices:
     events: EventService
     workspace_changes: WorkspaceChangeService
     metrics: MetricsService
-    autoscaler_states: AutoscalerStateService
     apps: DatabaseAppReader
     deployments: DatabaseDeploymentReader
     cron_jobs: CronJobService
     containers: ContainerService
     container_shutdowns: ContainerShutdownService
-    scheduler_workloads: SchedulerWorkloadDirectory
+    control_plane_service: ControlPlaneService
     compute_policies: WorkspaceComputePolicyService
     tasks: TaskService
     execution_demand: ExecutionDemandService
@@ -120,8 +116,6 @@ class SchedulerAppServices:
             public_http_origin=gateway_origin,
             workspace_changes=workspace_changes,
         )
-
-        scheduler_workloads = SchedulerWorkloadDirectoryAdapter(control_plane)
 
         container_repository = RedisSchedulerContainerRepository(redis)
 
@@ -210,13 +204,12 @@ class SchedulerAppServices:
             events=events,
             workspace_changes=workspace_changes,
             metrics=MetricsService(),
-            autoscaler_states=AutoscalerStateService(context),
             apps=DatabaseAppReader(context),
             deployments=DatabaseDeploymentReader(context),
             cron_jobs=cron_jobs,
             containers=containers,
             container_shutdowns=container_shutdowns,
-            scheduler_workloads=scheduler_workloads,
+            control_plane_service=control_plane,
             compute_policies=compute_policies,
             tasks=tasks,
             execution_demand=ExecutionDemandService(RedisWakeSignal(redis, PLACEMENT_WAKE_SCOPE)),

@@ -97,6 +97,8 @@ def run_scheduler(
         with scheduler_shutdown_handlers(stop):
             supervisor = start_scheduler_loops(
                 runtime.scheduler,
+                dispatch_wake=runtime.dispatch_wake,
+                placement_wake=runtime.placement_wake,
                 include_cron_jobs=include_cron_jobs,
                 include_containers=include_containers,
                 container_limit=container_limit,
