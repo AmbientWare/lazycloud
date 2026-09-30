@@ -13,7 +13,7 @@ import uvicorn
 from api.fastapi_app import create_app
 from api.server.routers.ssh import pod_ssh_tunnel_service
 from api.server.services import ApiServices
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from database.repositories.identity import WorkspaceRepository
@@ -55,7 +55,7 @@ def _credential_secret(services: ApiServices, workspace_id: str) -> str:
 
 
 def _fixture(services: ApiServices) -> _Fixture:
-    control = ControlPlaneService(services.context)
+    control = ControlServices.create(services.context)
     workspace = owned_workspace(control, "ssh-owner")
     outsider_workspace = owned_workspace(control, "ssh-outsider")
     for app, name, ssh in (("dev", "box", True), ("dev", "web", False), ("ci", "box", True)):

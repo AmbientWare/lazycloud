@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
-from control.service import ControlPlaneService, WorkspaceStorageError
+from control.service import ControlServices
 from database.context import ServiceContext
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.images import ImageArchiveRepository, ImageRepository
@@ -22,6 +22,7 @@ from shared.identity import (
 )
 from shared.image_building.records import ImageRecord
 from storage.service import OBJECT_SHA256_METADATA_KEY, ObjectStorage
+from storage.workspace_provisioning import WorkspaceStorageError
 from storage_client.s3 import S3ObjectInfo, S3ObjectStoreSettings
 from tests.fakes import FakeObjectClient
 from tests.workspaces import owned_workspace
@@ -123,15 +124,15 @@ def test_workspace_create_sets_up_default_storage_and_primary_token(
     service_context: ServiceContext,
 ) -> None:
     bucket_client = BucketClient()
-    service = ControlPlaneService(
+    service = ControlServices.create(
         service_context,
         workspace_storage_client=bucket_client,
     )
 
     owner = UserService(service_context).create(display_name="tenant-owner")
 
-    created = service.create_workspace("tenant", owner_user_id=owner.id)
-    workspace = service.get_workspace(created.workspace_id)
+    created = service.workspaces.create_workspace("tenant", owner_user_id=owner.id)
+    workspace = service.workspaces.get_workspace(created.workspace_id)
 
     assert created.workspace.storage.bucket == f"workspace-{created.workspace_id}"
     assert workspace.storage.bucket == f"workspace-{created.workspace_id}"
@@ -150,16 +151,16 @@ def test_workspace_storage_creation_validates_before_persisting(
     service_context: ServiceContext,
 ) -> None:
     bucket_client = BucketClient(fail_validate=True)
-    service = ControlPlaneService(
+    service = ControlServices.create(
         service_context,
         workspace_storage_client=bucket_client,
     )
     workspace = owned_workspace(service, "broken")
 
     with pytest.raises(WorkspaceStorageError, match="unable to create workspace storage bucket"):
-        service.create_workspace_storage(workspace.id)
+        service.workspaces.create_workspace_storage(workspace.id)
 
-    stored = service.get_workspace(workspace.id)
+    stored = service.workspaces.get_workspace(workspace.id)
     assert stored.storage.bucket is None
     assert bucket_client.created == [f"workspace-{workspace.id}"]
     assert bucket_client.validated == [f"workspace-{workspace.id}"]
@@ -174,7 +175,7 @@ def test_workspace_objects_with_same_logical_location_are_physically_isolated(
         object_client=client,
         default_bucket="physical-objects",
     )
-    control = ControlPlaneService(service_context)
+    control = ControlServices.create(service_context)
     first = owned_workspace(control, "first-object-owner")
     second = owned_workspace(control, "second-object-owner")
 
@@ -227,7 +228,7 @@ def test_logical_object_purposes_share_one_physical_bucket_with_distinct_prefixe
         default_bucket="physical-objects",
     )
     workspace = owned_workspace(
-        ControlPlaneService(service_context),
+        ControlServices.create(service_context),
         "logical-object-purpose-owner",
     )
 
@@ -270,7 +271,7 @@ def test_immutable_file_replay_reuses_complete_object_and_repairs_missing_bytes(
         default_bucket="physical-objects",
     )
     workspace = owned_workspace(
-        ControlPlaneService(service_context),
+        ControlServices.create(service_context),
         "immutable-object-owner",
     )
     source = tmp_path / "artifact.bin"
@@ -331,7 +332,7 @@ def test_object_completeness_requires_exact_metadata_and_maps_store_outages(
         default_bucket="physical-objects",
     )
     workspace = owned_workspace(
-        ControlPlaneService(service_context),
+        ControlServices.create(service_context),
         "object-completeness-owner",
     )
     record = storage.put_bytes_for_workspace(
@@ -370,7 +371,7 @@ def test_workspace_deletion_preserves_a_published_archive_a_sibling_still_uses(
         object_client=client,
         default_bucket="physical-objects",
     )
-    control = ControlPlaneService(service_context)
+    control = ControlServices.create(service_context)
     leaving = owned_workspace(control, "archive-leaving-owner")
     staying = owned_workspace(control, "archive-staying-owner")
     image_id = "shared-image"

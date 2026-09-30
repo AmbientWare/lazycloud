@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 from uuid import NAMESPACE_URL, uuid5
 
 from api.server.services import ApiServices
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from database.repositories.orchestration import ContainerRepository
 from database.tables.orchestration import ContainerTable
 from fastapi.testclient import TestClient
@@ -26,7 +26,7 @@ def test_canonical_container_pages_are_bounded_stable_and_secret_free(
         str(uuid5(NAMESPACE_URL, f"lazycloud:gateway-container:{index}")) for index in range(5)
     ]
     foreign_workspace = owned_workspace(
-        ControlPlaneService(services.context),
+        ControlServices.create(services.context),
         "container-inspection-foreign",
     )
     with services.context.database.session() as session:

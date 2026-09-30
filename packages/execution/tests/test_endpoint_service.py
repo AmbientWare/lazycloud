@@ -5,7 +5,8 @@ from datetime import datetime
 
 import pytest
 from api.server.services import ApiServices
-from control.service import ControlPlaneService, StubKind
+from control.service import ControlServices
+from database.records.apps import StubKind
 from database.repositories.images import CheckpointRepository
 from database.repositories.orchestration import ContainerRepository
 from execution.endpoints.service import EndpointControlService
@@ -66,9 +67,9 @@ def test_endpoint_uses_latest_available_workspace_checkpoint(
         isolated_services,
         containers=replace(isolated_services.containers, scheduler=scheduler),
     )
-    stub = ControlPlaneService(
+    stub = ControlServices.create(
         isolated_services.context,
-    ).create_stub(
+    ).stubs.create_stub(
         "checkpoint-endpoint",
         kind=StubKind.Endpoint,
         handler="pkg.web:app",
@@ -113,9 +114,9 @@ def test_endpoint_uses_latest_available_workspace_checkpoint(
 async def test_dispatch_names_dead_capacity_instead_of_waiting_out_its_deadline(
     isolated_services: ApiServices,
 ) -> None:
-    stub = ControlPlaneService(
+    stub = ControlServices.create(
         isolated_services.context,
-    ).create_stub(
+    ).stubs.create_stub(
         "dead-capacity-endpoint",
         kind=StubKind.Endpoint,
         handler="pkg.web:app",

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 from api.server.services import ApiServices
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from database.records.apps import StubRecord
 from database.repositories.execution import TaskDependencyRepository
 from pydantic import JsonValue
@@ -39,10 +39,10 @@ def _finished_function_task(
 def test_rerun_preserves_original_opaque_function_invocation(
     isolated_services: ApiServices,
 ) -> None:
-    control = ControlPlaneService(
+    control = ControlServices.create(
         isolated_services.context,
     )
-    stub = control.create_stub("rerun-fn", kind=StubKind.Function)
+    stub = control.stubs.create_stub("rerun-fn", kind=StubKind.Function)
     original_body = b"opaque-python-invocation"
     invocation = FunctionCloudpickleInvocation.from_bytes(original_body)
     source = _finished_function_task(
@@ -66,10 +66,10 @@ def test_rerun_preserves_original_opaque_function_invocation(
 
 
 def test_rerun_copies_declared_dependency_edges(isolated_services: ApiServices) -> None:
-    control = ControlPlaneService(
+    control = ControlServices.create(
         isolated_services.context,
     )
-    stub = control.create_stub("rerun-dependency", kind=StubKind.Function)
+    stub = control.stubs.create_stub("rerun-dependency", kind=StubKind.Function)
     upstream = _finished_function_task(
         isolated_services,
         stub,
@@ -105,10 +105,10 @@ def test_rerun_copies_declared_dependency_edges(isolated_services: ApiServices) 
 
 
 def test_rerun_rejects_live_tasks(isolated_services: ApiServices) -> None:
-    control = ControlPlaneService(
+    control = ControlServices.create(
         isolated_services.context,
     )
-    stub = control.create_stub("rerun-live", kind=StubKind.Function)
+    stub = control.stubs.create_stub("rerun-live", kind=StubKind.Function)
     task = isolated_services.tasks.create(
         "function-live",
         workspace_id=stub.workspace_id,
@@ -123,10 +123,10 @@ def test_rerun_rejects_live_tasks(isolated_services: ApiServices) -> None:
 
 
 def test_rerun_scopes_to_workspace(isolated_services: ApiServices) -> None:
-    control = ControlPlaneService(
+    control = ControlServices.create(
         isolated_services.context,
     )
-    stub = control.create_stub("rerun-scope", kind=StubKind.Function)
+    stub = control.stubs.create_stub("rerun-scope", kind=StubKind.Function)
     source = _finished_function_task(isolated_services, stub, args=[], kwargs={})
 
     with pytest.raises(NotFoundError):

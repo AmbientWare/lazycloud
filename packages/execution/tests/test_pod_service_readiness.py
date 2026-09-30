@@ -6,8 +6,9 @@ from uuid import uuid4
 
 import pytest
 from api.server.services import ApiServices
-from control.service import ControlPlaneService, StubKind
+from control.service import ControlServices
 from coordination.redis_client import RedisClient
+from database.records.apps import StubKind
 from database.repositories.execution import PodUrlRepository
 from database.repositories.orchestration import (
     ContainerRepository,
@@ -63,9 +64,9 @@ async def test_wait_for_container_client_reloads_durable_terminal_state(
 ) -> None:
     with async_services.context.database.session() as session:
         workspace_id = async_services.context.default_workspace_id(session)
-    stub = ControlPlaneService(
+    stub = ControlServices.create(
         async_services.context,
-    ).create_stub("sandbox-stub", workspace=workspace_id, kind=StubKind.Sandbox)
+    ).stubs.create_stub("sandbox-stub", workspace=workspace_id, kind=StubKind.Sandbox)
     container = ContainerRecord(
         id=CONTAINER_ID,
         name="sandbox-failed",
@@ -141,11 +142,11 @@ def test_sandbox_exposure_rejects_cross_workspace_stub_before_worker_callback(
     isolated_services: ApiServices,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    control = ControlPlaneService(
+    control = ControlServices.create(
         isolated_services.context,
     )
     owned_workspace(control, "other-workspace")
-    foreign_stub = control.create_stub(
+    foreign_stub = control.stubs.create_stub(
         "foreign-sandbox",
         workspace="other-workspace",
         kind=StubKind.Sandbox,

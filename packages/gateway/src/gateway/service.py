@@ -64,11 +64,12 @@ from compute.telemetry import AgentMetricSnapshot as AgentMetricSnapshotProtocol
 from compute.tunnel_authority import AgentTunnelAuthority
 from control.placement import PlacementResolver
 from control.releases import DeploymentReleaseService
-from control.service import ControlPlaneService, StubKind
+from control.service import ControlServices
 from coordination.agent_connections import RedisAgentConnectionDirectory
 from coordination.redis_client import AsyncRedisClient
 from coordination.wake_signal import WakeSignalPublisher
 from database.context import ServiceContext
+from database.records.apps import StubKind
 from database.repositories.apps import DeploymentRepository
 from database.repositories.compute import (
     ComputeJoinCredentialRecord,
@@ -301,7 +302,7 @@ def _domain_error(exc: KeyError | ValueError) -> DomainError:
 @dataclass(frozen=True, slots=True)
 class GatewayControlService:
     services: GatewayServices
-    control_plane: ControlPlaneService
+    control_plane: ControlServices
     function_tasks: FunctionControlService
     compute_state: RedisComputeStateRepository
     scheduler_workers: SchedulerWorkerAdminRepository
@@ -359,7 +360,7 @@ class GatewayControlService:
 
     def sign_payload(self, request: SignPayloadRequest) -> SignPayloadResponse:
         try:
-            secret_key = self.control_plane.workspace_signing_key(request.workspace)
+            secret_key = self.control_plane.workspaces.get_workspace(request.workspace).signing_key
             timestamp = request.timestamp or int(time.time())
             signature = sign_payload(request.payload_bytes(), secret_key, timestamp=timestamp)
         except (KeyError, ValueError) as exc:

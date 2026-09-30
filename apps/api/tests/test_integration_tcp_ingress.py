@@ -11,7 +11,8 @@ from api.server.tcp_ingress import (
     TcpIngressRouteNotFound,
 )
 from api.tcp_certificate import ensure_local_tcp_certificate
-from control.service import ControlPlaneService, StubKind
+from control.service import ControlServices
+from database.records.apps import StubKind
 from shared.deployment_records import DeploymentSpec
 from shared.deployments import DeploymentKind
 from shared.urls import tcp_ingress_hostname
@@ -71,7 +72,7 @@ async def test_tcp_route_resolver_rejects_private_non_tcp_and_unexposed_pods(
     async_services: ApiServices,
 ) -> None:
     async_io = async_services.require_async_io()
-    control = ControlPlaneService(
+    control = ControlServices.create(
         async_services.context,
     )
     resolver = RedisTcpIngressRouteResolver(
@@ -79,19 +80,19 @@ async def test_tcp_route_resolver_rejects_private_non_tcp_and_unexposed_pods(
         redis=async_io.redis,
         external_host="tcp.example.test",
     )
-    private = control.create_stub(
+    private = control.stubs.create_stub(
         "private",
         kind=StubKind.Pod,
         public=False,
         config={"ports": {"tcp": 9090}, "tcp": True},
     )
-    not_tcp = control.create_stub(
+    not_tcp = control.stubs.create_stub(
         "not-tcp",
         kind=StubKind.Pod,
         public=True,
         config={"ports": {"tcp": 9090}, "tcp": False},
     )
-    wrong_port = control.create_stub(
+    wrong_port = control.stubs.create_stub(
         "wrong-port",
         kind=StubKind.Pod,
         public=True,

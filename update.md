@@ -3,6 +3,7 @@ Goal: Fully rewrite the services to make LazyCloud simpler, faster and more scal
 Refactor rules:
 
 - Treat each service as a full rewrite. Reconsider responsibilities, state, workflows, queries, dependencies and composition together; existing implementations are not constraints.
+- Improve the service's logic, not only its execution cost. Simplify decision paths and state transitions, fix incorrect behavior, and redesign retry, failure and recovery flows where needed. Preserve intended functionality and guarantees without treating existing algorithms or workflow steps as requirements.
 - Preserve supported workflows, public contracts, security, durability, concurrency, failure handling, recovery and cleanup. Removing capabilities or weakening guarantees is not optimization; intentional behavior changes require owner direction.
 - Reduce total complexity and production code. Delete redundant logic, unnecessary abstractions and superseded implementations. Small patches, file moves, cosmetic cleanup and added layers alone do not meet the goal.
 - Separate cross-service coordination from domain decisions. Keep each responsibility with its canonical owner and dependencies explicit.

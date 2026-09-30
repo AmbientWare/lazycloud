@@ -9,7 +9,7 @@ from uuid import uuid4
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from compute.state import RedisComputeStateRepository
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from coordination.redis_client import RedisClient
 from database.repositories.orchestration import MachineRepository
 from fastapi.testclient import TestClient
@@ -137,7 +137,7 @@ def test_compute_gateway_projections_honor_admin_workspace_override(
         client = client_stack.enter_context(TestClient(create_app(isolated_services)))
         admin_token = _offline_admin_token(isolated_services, "compute-projection")
         workspace = owned_workspace(
-            ControlPlaneService(
+            ControlServices.create(
                 isolated_services.context,
             ),
             "compute-team",
@@ -195,7 +195,7 @@ def test_object_upload_authorizes_before_creating_or_completing_a_claim(
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
     other = owned_workspace(
-        ControlPlaneService(
+        ControlServices.create(
             isolated_services.context,
         ),
         "other-upload-owner",
@@ -281,7 +281,7 @@ def test_gateway_task_routes_do_not_cross_workspace_boundaries(
     api_runtime: tuple[ApiServices, TestClient],
 ) -> None:
     services, client = api_runtime
-    control = ControlPlaneService(services.context)
+    control = ControlServices.create(services.context)
     workspace_a = owned_workspace(control, "workspace-a")
     workspace_b = owned_workspace(control, "workspace-b")
     token_a, _ = AuthService(services.context).create_token(

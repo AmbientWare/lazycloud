@@ -12,9 +12,10 @@ from ipaddress import IPv4Address, IPv6Address
 from pathlib import Path
 from typing import Protocol
 
-from control.service import ControlPlaneService, StubKind, StubRecord
+from control.service import ControlServices
 from control.tcp_ingress import TcpIngressSettings
 from coordination.redis_client import AsyncRedisClient, redis_text
+from database.records.apps import StubKind, StubRecord
 from execution.pods.config import PodStubConfig
 from execution.pods.planning import PodProxyProtocol
 from execution.pods.proxy import PodProxySession
@@ -63,11 +64,11 @@ class RedisTcpIngressRouteResolver:
     redis: AsyncRedisClient
     external_host: str
     cache_ttl_seconds: int = 300
-    control_plane: ControlPlaneService = field(init=False)
+    control_plane: ControlServices = field(init=False)
 
     def __post_init__(self) -> None:
         self.external_host = self.external_host.strip(".").lower()
-        self.control_plane = ControlPlaneService(self.services.context)
+        self.control_plane = ControlServices.create(self.services.context)
 
     async def resolve(self, sni: str) -> TcpIngressRoute:
         normalized = sni.strip(".").lower()
@@ -116,7 +117,7 @@ class RedisTcpIngressRouteResolver:
         port: int,
     ) -> TcpIngressRoute:
         try:
-            stub = self.control_plane.get_stub_in_session(session, stub_id)
+            stub = self.control_plane.stubs.get_stub_in_session(session, stub_id)
         except NotFoundError as exc:
             raise TcpIngressRouteNotFound("TCP workload was not found") from exc
         self._validate_stub(stub, port)
@@ -159,7 +160,7 @@ class RedisTcpIngressRouteResolver:
         route: TcpIngressRoute,
     ) -> TcpIngressRoute:
         try:
-            stub = self.control_plane.get_stub_in_session(session, route.stub_id)
+            stub = self.control_plane.stubs.get_stub_in_session(session, route.stub_id)
         except NotFoundError as exc:
             raise TcpIngressRouteNotFound("cached TCP workload was deleted") from exc
         self._validate_stub(stub, route.port)

@@ -9,9 +9,11 @@ from uuid import uuid4
 import pytest
 from api.server.services import ApiServices
 from compute.capacity_recovery import CAPACITY_WAKE_SCOPE
-from control.service import ControlPlaneService, StubConfigUpdateValue, StubKind, StubRecord
+from control.service import ControlServices
+from control.stub_config import StubConfigUpdateValue
 from coordination.redis_client import RedisClient
 from coordination.wake_signal import RedisWakeSignal
+from database.records.apps import StubKind, StubRecord
 from database.repositories.apps import StubRepository
 from database.repositories.orchestration import AutoscalerStateRepository, ContainerRepository
 from execution.containers.scheduling import ContainerSchedulingPersistenceService
@@ -183,10 +185,10 @@ def test_pod_keep_warm_minus_one_is_durable_never_scale_to_zero(
             resources=Resources(keep_warm=-1),
         )
     )
-    control = ControlPlaneService(
+    control = ControlServices.create(
         isolated_services.context,
     )
-    stub = next(item for item in control.list_stubs() if item.deployment_id == deployment.id)
+    stub = next(item for item in control.stubs.list_stubs() if item.deployment_id == deployment.id)
 
     assert stub.config.runtime.keep_warm == -1
     assert stub.config.autoscaler.min_containers == 1
@@ -465,9 +467,9 @@ def test_pod_deployment_explicit_zero_scale_remains_zero_with_connections(
         containers=0,
     )
 
-    updated = ControlPlaneService(
+    updated = ControlServices.create(
         isolated_services.context,
-    ).get_stub(stub.id)
+    ).stubs.get_stub(stub.id)
     assert updated.config.autoscaler.model_fields_set >= {"min_containers", "max_containers"}
     assert updated.config.autoscaler.min_containers == 0
     assert updated.config.autoscaler.max_containers == 0
@@ -614,10 +616,10 @@ def _create_pod_stub(
             ports={"8080": 8080},
         )
     )
-    control = ControlPlaneService(services.context)
+    control = ControlServices.create(services.context)
     stub = next(
         item
-        for item in control.list_stubs()
+        for item in control.stubs.list_stubs()
         if item.deployment_id == deployment.id and item.kind is StubKind.Pod
     )
     runtime_config: dict[str, JsonValue] = {"keep_warm": keep_warm_seconds}
@@ -630,7 +632,7 @@ def _create_pod_stub(
         "ports": {"8080": 8080},
         "autoscaler": autoscaler or {},
     }
-    return control.update_stub_config(
+    return control.stubs.update_stub_config(
         stub.id,
         fields=fields,
     ).stub

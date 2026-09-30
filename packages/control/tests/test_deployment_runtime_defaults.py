@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from api.server.services import ApiServices
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from shared.deployment_records import (
     DEFAULT_HTTP_CPU,
     DEFAULT_HTTP_KEEP_WARM_SECONDS,
@@ -23,10 +23,10 @@ def test_raw_deployment_persists_canonical_runtime_defaults(
             route="/raw",
         )
     )
-    control = ControlPlaneService(
+    control = ControlServices.create(
         isolated_services.context,
     )
-    stub = control.get_stub(deployment.stub_id or "")
+    stub = control.stubs.get_stub(deployment.stub_id or "")
     runtime = stub.config.runtime
 
     assert deployment.spec.resources.cpu == DEFAULT_HTTP_CPU

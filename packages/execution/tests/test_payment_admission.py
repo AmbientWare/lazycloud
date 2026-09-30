@@ -5,7 +5,8 @@ from uuid import uuid4
 
 import pytest
 from api.server.services import ApiServices
-from control.service import ControlPlaneService, StubKind
+from control.service import ControlServices
+from database.records.apps import StubKind
 from database.repositories.billing import BillingAccountRepository
 from database.repositories.orchestration import ContainerRepository
 from database.tables.execution import TaskTable
@@ -27,7 +28,7 @@ from tests.workspaces import workspace_owner_user_id
 async def test_concurrent_function_admission_consumes_each_pending_slot(
     async_services: ApiServices,
 ) -> None:
-    stub = ControlPlaneService(async_services.context).create_stub(
+    stub = ControlServices.create(async_services.context).stubs.create_stub(
         "bounded-admission",
         kind=StubKind.Function,
         handler="main:hello",
@@ -89,9 +90,9 @@ def test_invoking_a_function_past_due_refuses_and_queues_nothing(
     there is no task for the answer to live on.
     """
 
-    stub = ControlPlaneService(
+    stub = ControlServices.create(
         isolated_services.context,
-    ).create_stub(
+    ).stubs.create_stub(
         "past-due-function",
         kind=StubKind.Function,
         handler="pkg.workloads:handler",
@@ -116,9 +117,9 @@ def test_free_function_pinned_placement_refuses_before_creating_work(
     isolated_services: ApiServices,
     placement: dict[str, JsonValue],
 ) -> None:
-    stub = ControlPlaneService(
+    stub = ControlServices.create(
         isolated_services.context,
-    ).create_stub(
+    ).stubs.create_stub(
         "regional-function",
         kind=StubKind.Function,
         handler="pkg.workloads:handler",
@@ -136,11 +137,11 @@ def test_free_function_pinned_placement_refuses_before_creating_work(
 def test_capacity_limit_allows_warm_invocation_but_refuses_cold_without_a_task(
     isolated_services: ApiServices,
 ) -> None:
-    control = ControlPlaneService(isolated_services.context)
-    warm = control.create_stub(
+    control = ControlServices.create(isolated_services.context)
+    warm = control.stubs.create_stub(
         "warm-at-limit", kind=StubKind.Function, handler="pkg.workloads:handler"
     )
-    cold = control.create_stub(
+    cold = control.stubs.create_stub(
         "cold-at-limit", kind=StubKind.Function, handler="pkg.workloads:handler"
     )
     user_id = workspace_owner_user_id(isolated_services.context, warm.workspace_id)

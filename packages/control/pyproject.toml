@@ -9,6 +9,7 @@ dependencies = [
     "database",
     "foundation",
     "identity",
+    "storage",
     "pydantic>=2,<3",
     "pydantic-settings>=2.4,<3",
 ]

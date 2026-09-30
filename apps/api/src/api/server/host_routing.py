@@ -5,7 +5,8 @@ from dataclasses import dataclass
 from ipaddress import ip_address
 from typing import Protocol
 
-from control.service import ControlPlaneService, StubKind, StubRecord
+from control.service import ControlServices
+from database.records.apps import StubKind, StubRecord
 from database.types import DatabaseSession
 from shared.deployment_subdomains import parse_deployment_host
 from shared.errors import NotFoundError
@@ -179,9 +180,9 @@ def _resolve_host_target(
     if not label:
         return _custom_hostname_target(services, session, host)
 
-    control_plane = ControlPlaneService(services.context)
+    control_plane = ControlServices.create(services.context)
     try:
-        stub = control_plane.get_stub_in_session(session, label)
+        stub = control_plane.stubs.get_stub_in_session(session, label)
     except NotFoundError:
         stub = None
     if stub is not None:
@@ -193,7 +194,7 @@ def _resolve_host_target(
         container = None
     if container is not None and container.stub_id is not None:
         try:
-            stub = control_plane.get_stub_in_session(
+            stub = control_plane.stubs.get_stub_in_session(
                 session, container.stub_id, workspace=container.workspace_id
             )
         except NotFoundError:
@@ -222,7 +223,7 @@ def _custom_hostname_target(
 def _port_host_target(
     services: ApiServiceCore,
     session: DatabaseSession,
-    control_plane: ControlPlaneService,
+    control_plane: ControlServices,
     label: str,
 ) -> _HostTarget | None:
     """Resolve `<container-or-stub>-<port>`, whose ids are already globally unique."""
@@ -240,7 +241,7 @@ def _port_host_target(
         container = None
     if container is not None and container.stub_id is not None:
         try:
-            stub = control_plane.get_stub_in_session(
+            stub = control_plane.stubs.get_stub_in_session(
                 session,
                 container.stub_id,
                 workspace=container.workspace_id,
@@ -259,7 +260,7 @@ def _port_host_target(
                 stub_id_route=True,
             )
     try:
-        stub = control_plane.get_stub_in_session(session, routed_name)
+        stub = control_plane.stubs.get_stub_in_session(session, routed_name)
     except NotFoundError:
         stub = None
     if stub is not None and stub.kind is StubKind.Pod:

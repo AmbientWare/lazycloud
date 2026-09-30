@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from control.service import ControlPlaneService, StubKind, StubRecord
+from control.service import ControlServices
+from database.records.apps import StubKind, StubRecord
 from fastapi import HTTPException, status
 from shared.errors import NotFoundError
 from shared.tasks import Task
@@ -13,7 +14,7 @@ ENDPOINT_STUB_KINDS = frozenset({StubKind.Endpoint, StubKind.Asgi})
 
 
 def require_stub_workspace(
-    control_plane: ControlPlaneService,
+    control_plane: ControlServices,
     stub_id: str,
     workspace_id: str,
     *,
@@ -21,7 +22,7 @@ def require_stub_workspace(
     expected_kinds: StubKind | Iterable[StubKind] | None = None,
 ) -> StubRecord:
     try:
-        stub = control_plane.get_stub(stub_id, workspace=workspace_id)
+        stub = control_plane.stubs.get_stub(stub_id, workspace=workspace_id)
     except NotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"{resource_name} not found") from exc
 
@@ -32,7 +33,7 @@ def require_stub_workspace(
 
 
 def require_function_stub_workspace(
-    control_plane: ControlPlaneService,
+    control_plane: ControlServices,
     stub_id: str,
     workspace_id: str,
 ) -> StubRecord:
@@ -46,7 +47,7 @@ def require_function_stub_workspace(
 
 
 def require_endpoint_stub_workspace(
-    control_plane: ControlPlaneService,
+    control_plane: ControlServices,
     stub_id: str,
     workspace_id: str,
 ) -> StubRecord:

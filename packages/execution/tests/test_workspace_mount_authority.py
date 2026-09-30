@@ -3,7 +3,7 @@ from __future__ import annotations
 from urllib.parse import urlsplit
 
 import pytest
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from database.context import ServiceContext
 from execution.mounts import (
     container_resource_mounts,
@@ -26,7 +26,7 @@ def test_source_code_mounts_presign_for_the_source_workspace(
     object_client = FakeObjectClient()
     object_storage = ObjectStorage(service_context, object_client=object_client)
     workspace = owned_workspace(
-        ControlPlaneService(service_context),
+        ControlServices.create(service_context),
         "source-owner",
     )
     record = object_storage.put_bytes_for_workspace(
@@ -51,7 +51,7 @@ def test_source_code_mounts_presign_for_the_source_workspace(
     assert selected.netloc == physical_bucket
     assert selected.path == f"/{physical_key}"
     foreign = owned_workspace(
-        ControlPlaneService(service_context),
+        ControlServices.create(service_context),
         "other-source-owner",
     )
     assert (
@@ -69,7 +69,7 @@ def test_source_code_mounts_presign_for_the_source_workspace(
 def test_container_resource_mounts_require_workspace_storage_when_workspace_has_bucket(
     service_context: ServiceContext,
 ) -> None:
-    control = ControlPlaneService(service_context)
+    control = ControlServices.create(service_context)
     unprovisioned = owned_workspace(control, "mount-storage-unprovisioned")
     mounts = container_resource_mounts(
         context=service_context,
@@ -91,7 +91,7 @@ def test_container_resource_mounts_require_workspace_storage_when_workspace_has_
             mounts=mounts,
         )
 
-    control.set_workspace_storage(
+    control.workspaces.set_workspace_storage(
         unprovisioned.id,
         WorkspaceStorageConfig(
             backend="s3",
@@ -102,7 +102,7 @@ def test_container_resource_mounts_require_workspace_storage_when_workspace_has_
     )
 
     assert container_resource_mounts_require_workspace_storage(
-        workspace=control.get_workspace(unprovisioned.id),
+        workspace=control.workspaces.get_workspace(unprovisioned.id),
         mounts=mounts,
     )
 
@@ -116,7 +116,7 @@ def test_container_resource_mounts_require_workspace_storage_when_workspace_has_
         volumes=[{"id": "canonical", "mount_path": "/volumes/canonical"}],
     )
     assert container_resource_mounts_require_workspace_storage(
-        workspace=control.get_workspace(unprovisioned.id),
+        workspace=control.workspaces.get_workspace(unprovisioned.id),
         mounts=volume_only_mounts,
     )
 

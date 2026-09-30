@@ -573,6 +573,25 @@ class ObjectRepository:
         )
         return [object_from_table(row) for row in self.session.scalars(statement)]
 
+    def for_stub(
+        self, *, workspace_id: str, stub_id: str, referenced_ids: set[str]
+    ) -> list[ObjectRecord]:
+        statement = (
+            select(ObjectTable)
+            .where(
+                ObjectTable.workspace_id == workspace_id,
+                ObjectTable.write_claimed_at.is_(None),
+                ObjectTable.cleanup_claimed_at.is_(None),
+                or_(
+                    ObjectTable.id.in_(referenced_ids),
+                    ObjectTable.metadata_json["stub_id"].as_string() == stub_id,
+                    ObjectTable.key.endswith(stub_id),
+                ),
+            )
+            .order_by(ObjectTable.created_at.desc(), ObjectTable.id)
+        )
+        return [object_from_table(row) for row in self.session.scalars(statement)]
+
     def list_for_workspace_deletion(self, workspace_id: str) -> list[ObjectRecord]:
         """System cleanup listing that retains active operation records."""
         statement = (
@@ -908,6 +927,14 @@ class ObjectReferenceRepository:
 @dataclass(slots=True)
 class VolumeRepository:
     session: Session
+
+    def for_names(self, names: set[str], *, workspace_id: str) -> dict[str, VolumeRecord]:
+        rows = self.session.scalars(
+            select(VolumeTable).where(
+                VolumeTable.workspace_id == workspace_id, VolumeTable.name.in_(names)
+            )
+        )
+        return {row.name: volume_from_table(row) for row in rows}
 
     def create(self, name: str, *, workspace_id: str) -> tuple[VolumeRecord, bool]:
         """Return the named volume and whether this transaction created it."""

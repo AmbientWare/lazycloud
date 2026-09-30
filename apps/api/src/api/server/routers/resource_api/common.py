@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from datetime import datetime
 
 from billing.costs import UsageCostPage
-from control.service import StubKind
+from database.records.apps import StubKind
 from database.repositories.billing_costs import LedgerComponentTotal
 from operations.management import ManagementService
 from shared.billing_quotes import LedgerComponent

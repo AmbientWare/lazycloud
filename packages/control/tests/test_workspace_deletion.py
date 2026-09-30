@@ -7,7 +7,7 @@ from uuid import uuid4
 
 import pytest
 from api.server.services import ApiServices
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from database.context import ServiceContext
 from database.repositories.identity import (
     DeviceAuthorizationRepository,
@@ -54,7 +54,7 @@ _JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, JsonValue])
 def test_workspace_deletion_tombstones_identity_and_invalidates_tokens(
     isolated_services: ApiServices,
 ) -> None:
-    control = ControlPlaneService(
+    control = ControlServices.create(
         isolated_services.context,
     )
     owned_workspace(control, "default")
@@ -87,10 +87,13 @@ def test_workspace_deletion_tombstones_identity_and_invalidates_tokens(
     assert deleted.storage.bucket is None
     assert deleted.labels == {}
     assert deleted.metadata == {}
-    assert [item.name for item in control.list_workspaces()] == ["default"]
-    assert control.list_workspaces(include_deleted=True)[1].status is WorkspaceStatus.Deleted
+    assert [item.name for item in control.workspaces.list_workspaces()] == ["default"]
+    assert (
+        control.workspaces.list_workspaces(include_deleted=True)[1].status
+        is WorkspaceStatus.Deleted
+    )
     with pytest.raises(NotFoundError, match="workspace not found"):
-        control.get_workspace(workspace.id)
+        control.workspaces.get_workspace(workspace.id)
     with pytest.raises(AuthError, match="invalid token"):
         AuthService(isolated_services.context).authenticate(raw_token)
     with pytest.raises(NotFoundError, match="workspace not found"):
@@ -146,7 +149,7 @@ def test_workspace_deleting_transition_atomically_revokes_workspace_credentials(
     isolated_services: ApiServices,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    control = ControlPlaneService(
+    control = ControlServices.create(
         isolated_services.context,
     )
     owned_workspace(control, "default")
@@ -229,7 +232,7 @@ def test_workspace_deletion_rolls_back_when_audit_append_fails(
     isolated_services: ApiServices,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    control = ControlPlaneService(
+    control = ControlServices.create(
         isolated_services.context,
     )
     owned_workspace(control, "default")
@@ -307,7 +310,7 @@ def test_workspace_deletion_rolls_back_when_audit_append_fails(
 def test_workspace_deletion_purges_owned_resources_and_protects_identity_scopes(
     isolated_services: ApiServices,
 ) -> None:
-    control = ControlPlaneService(
+    control = ControlServices.create(
         isolated_services.context,
     )
     default = owned_workspace(control, "default")
@@ -371,7 +374,7 @@ def test_workspace_deletion_keeps_the_priced_ledger_and_the_unsent_meter_events(
     were not, so a deletion used to leave a customer's bill unprovable and the
     provider's meter permanently short.
     """
-    control = ControlPlaneService(
+    control = ControlServices.create(
         isolated_services.context,
     )
     owned_workspace(control, "default")
@@ -480,7 +483,7 @@ def test_workspace_deletion_keeps_the_priced_ledger_and_the_unsent_meter_events(
 def test_workspace_deletion_purges_autoscaler_state_and_fences_stale_reconciliation(
     isolated_services: ApiServices,
 ) -> None:
-    control = ControlPlaneService(
+    control = ControlServices.create(
         isolated_services.context,
     )
     owned_workspace(control, "default")
@@ -525,7 +528,7 @@ def test_workspace_deletion_purges_autoscaler_state_and_fences_stale_reconciliat
 def test_autoscaler_state_write_requires_active_workspace(
     service_context: ServiceContext,
 ) -> None:
-    control = ControlPlaneService(service_context)
+    control = ControlServices.create(service_context)
     workspace = owned_workspace(control, "disabled-tenant")
     workspace.status = WorkspaceStatus.Disabled
     with service_context.database.session() as session:
@@ -543,7 +546,7 @@ def test_autoscaler_state_write_requires_active_workspace(
 def test_workspace_deletion_preserves_historical_events_after_resource_cleanup(
     isolated_services: ApiServices,
 ) -> None:
-    control = ControlPlaneService(
+    control = ControlServices.create(
         isolated_services.context,
     )
     owned_workspace(control, "default")

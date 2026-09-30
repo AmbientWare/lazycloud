@@ -3,11 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from urllib.parse import urlparse
 
-from control.service import (
-    ControlPlaneService,
-    WorkspaceStorageAlreadyExistsError,
-    WorkspaceStorageError,
-)
+from control.service import ControlServices
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import Response
 from gateway.service import GatewayControlService
@@ -24,6 +20,7 @@ from shared.http.workspaces import (
     workspace_response,
 )
 from shared.identity import PlatformRole, WorkspaceRecord
+from storage.workspace_provisioning import WorkspaceStorageAlreadyExistsError, WorkspaceStorageError
 
 from api.server.auth import admin_access, read_token, read_workspace, write_token, write_workspace
 from api.server.dependencies import management_services, require_user_principal
@@ -59,7 +56,7 @@ def api_v1_create_workspace(
     _auth: admin_access,
     token: write_token,
     services: ManagementServiceCore = Depends(management_services),
-    service: ControlPlaneService = Depends(control_plane_service),
+    service: ControlServices = Depends(control_plane_service),
 ) -> WorkspaceResponse:
     """Create a workspace owned by the account that asked for it.
 
@@ -70,7 +67,7 @@ def api_v1_create_workspace(
     authority over any account, so there would be nobody to own what it created.
     """
     try:
-        result = service.create_workspace(
+        result = service.workspaces.create_workspace(
             request.name,
             owner_user_id=require_user_principal(token),
             connection_id=request.connection_id,
@@ -91,7 +88,7 @@ def api_v1_list_workspaces(
     *,
     token: read_token,
     services: ManagementServiceCore = Depends(management_services),
-    service: ControlPlaneService = Depends(control_plane_service),
+    service: ControlServices = Depends(control_plane_service),
 ) -> WorkspaceListResponse:
     """The workspaces this caller may act on.
 
@@ -101,14 +98,14 @@ def api_v1_list_workspaces(
     """
     if services.auth.platform_role(token) is PlatformRole.Administrator:
         return _workspace_list_response(
-            service.list_workspaces(
+            service.workspaces.list_workspaces(
                 include_deleted=include_deleted,
                 include_deleting=include_deleting,
             )
         )
     if token.names_user and token.user_id:
         return _workspace_list_response(services.users.workspaces(token.user_id))
-    return _workspace_list_response([service.get_workspace(token.workspace_id)])
+    return _workspace_list_response([service.workspaces.get_workspace(token.workspace_id)])
 
 
 @router.put(
@@ -122,11 +119,11 @@ def upsert_workspace(
     _auth: admin_access,
     token: write_token,
     services: ManagementServiceCore = Depends(management_services),
-    service: ControlPlaneService = Depends(control_plane_service),
+    service: ControlServices = Depends(control_plane_service),
 ) -> WorkspaceResponse:
     """Write a workspace's settings, creating it owned by the caller if it is new."""
     return workspace_response(
-        service.set_workspace(
+        service.workspaces.set_workspace(
             name,
             owner_user_id=require_user_principal(token),
             signing_key_prefix=request.signing_key_prefix,
@@ -144,9 +141,9 @@ def upsert_workspace(
 )
 def api_v1_current_workspace(
     workspace_id: read_workspace,
-    service: ControlPlaneService = Depends(control_plane_service),
+    service: ControlServices = Depends(control_plane_service),
 ) -> WorkspaceResponse:
-    return workspace_response(service.get_workspace(workspace_id))
+    return workspace_response(service.workspaces.get_workspace(workspace_id))
 
 
 @router.patch(
@@ -202,23 +199,20 @@ def api_v1_workspace_audit_history(
 )
 def api_v1_export_workspace_config(
     workspace_id: read_workspace,
-    service: ControlPlaneService = Depends(control_plane_service),
     services: ManagementServiceCore = Depends(management_services),
 ) -> WorkspaceConfigExportResponse:
     parsed = urlparse(services.gateway_settings.public_http_url)
     scheme = parsed.scheme or "http"
     host = parsed.hostname or "127.0.0.1"
     port = parsed.port or (443 if scheme == "https" else 9000)
-    return WorkspaceConfigExportResponse.model_validate(
-        service.export_workspace_config(
-            workspace_id,
-            http_host=host,
-            http_port=port,
-            http_tls=scheme == "https",
-            grpc_host=host,
-            grpc_port=port + 1,
-            grpc_tls=scheme == "https",
-        )
+    return WorkspaceConfigExportResponse(
+        workspace_id=workspace_id,
+        gateway_http_host=host,
+        gateway_http_port=port,
+        gateway_http_tls=scheme == "https",
+        gateway_grpc_host=host,
+        gateway_grpc_port=port + 1,
+        gateway_grpc_tls=scheme == "https",
     )
 
 
@@ -230,9 +224,9 @@ def api_v1_export_workspace_config(
 def get_workspace(
     workspace_id_or_name: str,
     _auth: admin_access,
-    service: ControlPlaneService = Depends(control_plane_service),
+    service: ControlServices = Depends(control_plane_service),
 ) -> WorkspaceResponse:
-    return workspace_response(service.get_workspace(workspace_id_or_name))
+    return workspace_response(service.workspaces.get_workspace(workspace_id_or_name))
 
 
 @router.delete(
@@ -263,9 +257,9 @@ def delete_workspace(
 def api_v1_create_workspace_storage(
     workspace_id: write_workspace,
     token: write_token,
-    service: ControlPlaneService = Depends(control_plane_service),
+    service: ControlServices = Depends(control_plane_service),
 ) -> WorkspaceResponse:
     try:
-        return workspace_response(service.create_workspace_storage(workspace_id))
+        return workspace_response(service.workspaces.create_workspace_storage(workspace_id))
     except (KeyError, WorkspaceStorageAlreadyExistsError, WorkspaceStorageError) as exc:
         raise _storage_http_error(exc) from exc

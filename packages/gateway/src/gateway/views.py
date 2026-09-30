@@ -11,7 +11,8 @@ from compute.telemetry import (
     agent_machine_last_seen,
     agent_telemetry_state,
 )
-from control.service import ControlPlaneService, StubRecord
+from control.service import ControlServices
+from database.records.apps import StubRecord
 from pydantic import JsonValue, TypeAdapter
 from shared.compute_enrollment import (
     AgentCapacityState,
@@ -205,15 +206,15 @@ def agent_worker_slot_view(slot: ComputeAgentWorkerSlotState) -> AgentWorkerSlot
     )
 
 
-def stub_for_task(control_plane: ControlPlaneService, task: Task) -> StubRecord | None:
+def stub_for_task(control_plane: ControlServices, task: Task) -> StubRecord | None:
     if task.stub_id:
         try:
-            return control_plane.get_stub(task.stub_id, workspace=task.workspace_id)
+            return control_plane.stubs.get_stub(task.stub_id, workspace=task.workspace_id)
         except NotFoundError:
             pass
     if task.deployment_id is None:
         return None
-    return control_plane.get_deployment_stub(task.deployment_id, workspace=task.workspace_id)
+    return control_plane.stubs.get_deployment_stub(task.deployment_id, workspace=task.workspace_id)
 
 
 def _memory_mb(value: str | None) -> int:

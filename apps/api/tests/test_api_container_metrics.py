@@ -8,7 +8,7 @@ from uuid import uuid4
 import pytest
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from database.repositories.billing_ledger import ContainerBillingShapeRepository
 from database.repositories.billing_rates import ComputeRateRepository
 from database.repositories.identity import WorkspaceMemberRepository
@@ -44,7 +44,9 @@ def _seed_container(services: ApiServices, workspace_id: str) -> ContainerRecord
     )
     stub = next(
         item
-        for item in ControlPlaneService(services.context).list_stubs(workspace=workspace_id)
+        for item in ControlServices.create(services.context).stubs.list_stubs(
+            workspace=workspace_id
+        )
         if item.deployment_id == deployment.id
     )
     container = ContainerRecord(
@@ -116,7 +118,7 @@ def test_account_metrics_stop_at_membership_and_keep_two_workspaces_apart(
     api_workspace: WorkspaceRecord,
 ) -> None:
     services, client = api_runtime
-    control = ControlPlaneService(services.context)
+    control = ControlServices.create(services.context)
     held = api_workspace
     owner_user_id = workspace_owner_user_id(services.context, held.id)
     second = owned_workspace(control, f"second-{uuid4().hex[:8]}")
@@ -222,10 +224,10 @@ def test_account_activity_reads_held_resources_from_the_priced_ledger(
     with ExitStack() as client_stack:
         started_at = utc_now() - _HELD_WINDOW_AGO
         ended_at = started_at + timedelta(seconds=_HELD_SECONDS)
-        control = ControlPlaneService(
+        control = ControlServices.create(
             unpriced_services.context,
         )
-        held = control.get_workspace("default")
+        held = control.workspaces.get_workspace("default")
         owner_user_id = workspace_owner_user_id(unpriced_services.context, held.id)
         app_id = unpriced_services.apps.create("held_app", workspace=held.name).id
 

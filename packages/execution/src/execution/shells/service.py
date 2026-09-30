@@ -11,7 +11,8 @@ from enum import StrEnum
 from typing import Protocol
 from uuid import uuid4
 
-from control.service import ControlPlaneService, StubRecord
+from control.stubs import StubService
+from database.records.apps import StubRecord
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.orchestration import ContainerRepository
 from database.types import DatabaseSession
@@ -124,7 +125,7 @@ class ShellControlService:
         sync_workload_changes: SyncWorkloadChangeReader | None = None,
     ) -> None:
         self.services = services
-        self.control_plane = ControlPlaneService(services.context)
+        self.stubs = StubService(services.context)
         candidate = getattr(services.containers, "scheduler_containers", None)
         self.scheduler_containers = scheduler_containers or (
             candidate if isinstance(candidate, ContainerSchedulingDirectory) else None
@@ -142,7 +143,7 @@ class ShellControlService:
         workspace_id: str,
         stub_id: str,
     ) -> StandaloneShellSession:
-        stub = self.control_plane.get_stub(stub_id, workspace=workspace_id)
+        stub = self.stubs.get_stub(stub_id, workspace=workspace_id)
 
         token_key = secrets.token_urlsafe(24)
         container_id = str(uuid4())
@@ -154,7 +155,8 @@ class ShellControlService:
         runtime = config.runtime
         env = parse_environment(config.env_list) | parse_environment(plan.env)
         env["SHELL_CONTAINER_ID"] = plan.container_id
-        workspace = self.control_plane.get_workspace(stub.workspace_id)
+        with self.services.context.database.session() as workspace_session:
+            workspace = self.services.context.workspace(workspace_session, stub.workspace_id)
         with self.services.context.database.session() as session:
             placement = workload_placement(
                 session,
@@ -286,7 +288,8 @@ class ShellControlService:
         container_id: str,
     ) -> ExistingContainerShellSession:
         container = self._container(container_id)
-        workspace = self.control_plane.get_workspace(workspace_id)
+        with self.services.context.database.session() as workspace_session:
+            workspace = self.services.context.workspace(workspace_session, workspace_id)
         with self.services.context.database.session() as session:
             credential_secret = WorkspaceRepository(session).credential_secret(workspace.id) or ""
         container_workspace_id = container.workspace_id if container is not None else ""
@@ -659,7 +662,7 @@ class ShellControlService:
         workspace_id: str | None,
     ) -> tuple[StubRecord, ContainerRecord]:
         try:
-            stub = self.control_plane.get_stub_in_session(
+            stub = self.stubs.get_stub_in_session(
                 session,
                 stub_id,
                 workspace=workspace_id,

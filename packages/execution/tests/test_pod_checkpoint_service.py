@@ -5,8 +5,9 @@ from datetime import datetime
 from uuid import uuid4
 
 from api.server.services import ApiServices
-from control.service import ControlPlaneService, StubKind
+from control.service import ControlServices
 from coordination.redis_client import RedisClient
+from database.records.apps import StubKind
 from database.repositories.images import CheckpointRepository
 from database.repositories.storage import ObjectRepository
 from execution.pods.service import PodControlService
@@ -48,9 +49,9 @@ def test_checkpoint_enabled_pod_uses_latest_available_checkpoint(
         isolated_services,
         containers=replace(isolated_services.containers, scheduler=scheduler),
     )
-    stub = ControlPlaneService(
+    stub = ControlServices.create(
         isolated_services.context,
-    ).create_stub(
+    ).stubs.create_stub(
         "checkpoint-pod",
         kind=StubKind.Pod,
         config={
@@ -104,17 +105,17 @@ def test_a_devbox_starts_on_its_disk_without_the_uploaded_source(
         isolated_services,
         containers=replace(isolated_services.containers, scheduler=scheduler),
     )
-    control = ControlPlaneService(isolated_services.context)
+    control = ControlServices.create(isolated_services.context)
     source = ObjectRecord(
         id=str(uuid4()), bucket="default", key="source", path="/objects/source", size=1, sha256="0"
     )
     with isolated_services.context.database.session() as session:
-        ObjectRepository(session).upsert(source, workspace_id=control.get_workspace().id)
-    on_team_plan(isolated_services.database, control.get_workspace().id)
+        ObjectRepository(session).upsert(source, workspace_id=control.workspaces.get_workspace().id)
+    on_team_plan(isolated_services.database, control.workspaces.get_workspace().id)
     deployment = isolated_services.deployments.deploy(
         DeploymentSpec(name="box", kind=DeploymentKind.Pod)
     )
-    stub = control.create_stub(
+    stub = control.stubs.create_stub(
         "box",
         kind=StubKind.Pod,
         deployment_id=deployment.id,

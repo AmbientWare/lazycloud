@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 from api.server.services import ApiServices
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from coordination.redis_client import redis_text
 from execution.functions.service import FunctionControlService
 from scheduler.cron import CronScheduler
@@ -20,9 +20,9 @@ from shared.usage import UsageMetric, UsageUnit
 def test_hot_updates_do_not_publish_workspace_change_noise(
     isolated_services: ApiServices,
 ) -> None:
-    workspace = ControlPlaneService(
+    workspace = ControlServices.create(
         isolated_services.context,
-    ).get_workspace("default")
+    ).workspaces.get_workspace("default")
 
     task = isolated_services.tasks.create("noisy-save", workspace_id=workspace.id)
     volume = isolated_services.volumes.get_or_create(
@@ -59,9 +59,9 @@ def test_hot_updates_do_not_publish_workspace_change_noise(
 def test_cron_execution_publishes_after_last_and_next_run_persist(
     isolated_services: ApiServices,
 ) -> None:
-    workspace = ControlPlaneService(
+    workspace = ControlServices.create(
         isolated_services.context,
-    ).get_workspace("default")
+    ).workspaces.get_workspace("default")
     deployment = isolated_services.deployments.deploy(
         DeploymentSpec(name="live-cron", handler="package:function", cron="every 1m"),
         workspace=workspace.id,
@@ -100,24 +100,30 @@ def test_cron_execution_publishes_after_last_and_next_run_persist(
 def test_concurrency_counter_publishes_only_committed_changes(
     isolated_services: ApiServices,
 ) -> None:
-    workspace = ControlPlaneService(
+    workspace = ControlServices.create(
         isolated_services.context,
-    ).get_workspace("default")
-    service = ControlPlaneService(
+    ).workspaces.get_workspace("default")
+    service = ControlServices.create(
         isolated_services.context,
         workspace_changes=isolated_services.workspace_changes,
     )
-    limit = service.upsert_concurrency_limit(
+    limit = service.concurrency.upsert_concurrency_limit(
         "live-counter",
         limit=1,
         workspace=workspace.id,
     )
     cursor = _current_cursor(isolated_services, workspace.id)
 
-    assert service.acquire_concurrency(limit.id, workspace=workspace.id).acquired
-    assert not service.acquire_concurrency(limit.id, workspace=workspace.id).acquired
-    assert service.release_concurrency(limit.id, workspace=workspace.id).record.in_flight == 0
-    assert service.release_concurrency(limit.id, workspace=workspace.id).record.in_flight == 0
+    assert service.concurrency.acquire_concurrency(limit.id, workspace=workspace.id).acquired
+    assert not service.concurrency.acquire_concurrency(limit.id, workspace=workspace.id).acquired
+    assert (
+        service.concurrency.release_concurrency(limit.id, workspace=workspace.id).record.in_flight
+        == 0
+    )
+    assert (
+        service.concurrency.release_concurrency(limit.id, workspace=workspace.id).record.in_flight
+        == 0
+    )
 
     events = [
         event

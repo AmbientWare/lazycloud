@@ -775,8 +775,12 @@ class StubRepository:
         row = self.session.scalar(statement)
         return stub_from_table(row) if row is not None else None
 
-    def list(self, *, workspace_id: str, app_id: str | None = None) -> list[StubRecord]:
+    def list(
+        self, *, workspace_id: str, app_id: str | None = None, deployed_only: bool = False
+    ) -> list[StubRecord]:
         statement = select(StubTable).where(StubTable.workspace_id == workspace_id)
+        if deployed_only:
+            statement = statement.where(StubTable.deployment_id.is_not(None))
         if app_id is not None:
             statement = statement.where(StubTable.app_id == app_id)
         return [
@@ -786,8 +790,12 @@ class StubRepository:
             )
         ]
 
-    def list_across_workspaces(self, *, app_id: str | None = None) -> list[StubRecord]:
+    def list_across_workspaces(
+        self, *, app_id: str | None = None, deployed_only: bool = False
+    ) -> list[StubRecord]:
         statement = select(StubTable)
+        if deployed_only:
+            statement = statement.where(StubTable.deployment_id.is_not(None))
         if app_id is not None:
             statement = statement.where(StubTable.app_id == app_id)
         return [
@@ -1046,6 +1054,7 @@ class StubRepository:
             select(StubTable)
             .where(StubTable.id == stub_id, StubTable.workspace_id == workspace_id)
             .with_for_update(key_share=True)
+            .execution_options(populate_existing=True)
         ).first()
         return stub_from_table(row) if row is not None else None
 
@@ -1092,12 +1101,18 @@ class StubRepository:
 class DeploymentRepository:
     session: Session
 
-    def latest_by_name_across_workspaces(self, name: str) -> Deployment | None:
+    def latest_by_name(
+        self, name: str, *, workspace_id: str | None, active: bool | None = None
+    ) -> Deployment | None:
+        statement = select(DeploymentTable).where(
+            DeploymentTable.name == name, DeploymentTable.deleted_at.is_(None)
+        )
+        if workspace_id is not None:
+            statement = statement.where(DeploymentTable.workspace_id == workspace_id)
+        if active is not None:
+            statement = statement.where(DeploymentTable.active.is_(active))
         row = self.session.scalars(
-            select(DeploymentTable)
-            .where(DeploymentTable.name == name, DeploymentTable.deleted_at.is_(None))
-            .order_by(DeploymentTable.version.desc())
-            .limit(1)
+            statement.order_by(DeploymentTable.version.desc()).limit(1)
         ).first()
         return deployment_from_table(row) if row is not None else None
 

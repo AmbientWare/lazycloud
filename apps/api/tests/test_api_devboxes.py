@@ -4,7 +4,7 @@ from uuid import uuid4
 
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from database.records.apps import StubPower
 from database.repositories.apps import StubRepository
 from database.repositories.orchestration import ContainerRepository
@@ -33,7 +33,7 @@ GIB = 1024**3
 def test_a_devbox_detail_carries_its_role_connection_and_disk(
     isolated_services: ApiServices,
 ) -> None:
-    workspace = owned_workspace(ControlPlaneService(isolated_services.context), "devbox-owner")
+    workspace = owned_workspace(ControlServices.create(isolated_services.context), "devbox-owner")
     devbox = isolated_services.deployments.deploy(
         DeploymentSpec(
             name="box",
@@ -132,7 +132,7 @@ def test_a_devbox_detail_carries_its_role_connection_and_disk(
 def test_start_asks_for_a_devbox_at_once_and_stop_parks_it_with_its_deployment_on(
     isolated_services: ApiServices,
 ) -> None:
-    workspace = owned_workspace(ControlPlaneService(isolated_services.context), "devbox-starter")
+    workspace = owned_workspace(ControlServices.create(isolated_services.context), "devbox-starter")
     devbox = isolated_services.deployments.deploy(
         DeploymentSpec(
             name="box",

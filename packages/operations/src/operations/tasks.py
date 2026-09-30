@@ -4,8 +4,9 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from control.service import ControlPlaneService, StubKind, StubRecord
+from control.service import ControlServices
 from database.context import ServiceContext
+from database.records.apps import StubKind, StubRecord
 from database.repositories.execution import DetailedTaskRecord, RelatedTaskRecord, TaskRepository
 from execution.functions.service import FunctionControlService
 from execution.tasks import TaskService
@@ -111,8 +112,8 @@ class TaskManagementService:
     functions: FunctionControlService
 
     @property
-    def control_plane(self) -> ControlPlaneService:
-        return ControlPlaneService(self.context)
+    def control_plane(self) -> ControlServices:
+        return ControlServices.create(self.context)
 
     def task_page(
         self,
@@ -131,7 +132,7 @@ class TaskManagementService:
         limit: int = 50,
         cursor: str | None = None,
     ) -> CursorPage[TaskView[TaskProgressSnapshot]]:
-        workspace_record = self.control_plane.get_workspace(workspace)
+        workspace_record = self.control_plane.workspaces.get_workspace(workspace)
         offset = _parse_cursor(cursor)
         with self.context.database.session() as session:
             page = TaskRepository(session).page_with_related(
@@ -166,7 +167,7 @@ class TaskManagementService:
         *,
         can_write: bool = False,
     ) -> TaskDetailView:
-        workspace_record = self.control_plane.get_workspace(workspace)
+        workspace_record = self.control_plane.workspaces.get_workspace(workspace)
         with self.context.database.session() as session:
             related = TaskRepository(session).get_with_related(
                 task_id,
@@ -184,7 +185,7 @@ class TaskManagementService:
         return self.task_detail(workspace, task_id).task
 
     def task_counts_by_deployment(self, workspace: str) -> tuple[TaskCountByDeployment, ...]:
-        workspace_record = self.control_plane.get_workspace(workspace)
+        workspace_record = self.control_plane.workspaces.get_workspace(workspace)
         with self.context.database.session() as session:
             tallies = TaskRepository(session).status_tallies_by_deployment(
                 workspace_id=workspace_record.id
@@ -217,7 +218,7 @@ class TaskManagementService:
             raise InvalidInputError(msg)
         end = ended_at or utc_now()
         start = started_at or end - timedelta(seconds=window_seconds * DEFAULT_TASK_WINDOW_BUCKETS)
-        workspace_record = self.control_plane.get_workspace(workspace)
+        workspace_record = self.control_plane.workspaces.get_workspace(workspace)
         with self.context.database.session() as session:
             samples = TaskRepository(session).creation_samples(
                 workspace_id=workspace_record.id,
@@ -240,7 +241,7 @@ class TaskManagementService:
         )
 
     def stop_tasks(self, workspace: str, task_ids: list[str]) -> TaskStopResult:
-        workspace_record = self.control_plane.get_workspace(workspace)
+        workspace_record = self.control_plane.workspaces.get_workspace(workspace)
         with self.context.database.session() as session:
             workspace_task_ids = TaskRepository(session).existing_ids(
                 workspace_id=workspace_record.id,
@@ -273,7 +274,7 @@ class TaskManagementService:
         if not task.stub_id:
             return None
         try:
-            return self.control_plane.get_stub(task.stub_id)
+            return self.control_plane.stubs.get_stub(task.stub_id)
         except NotFoundError:
             return None
 
@@ -285,7 +286,7 @@ class TaskManagementService:
         ended_at: datetime,
         app_id: str | None = None,
     ) -> TaskMetricsSummary:
-        workspace_record = self.control_plane.get_workspace(workspace)
+        workspace_record = self.control_plane.workspaces.get_workspace(workspace)
         with self.context.database.session() as session:
             repository = TaskRepository(session)
             tallies = repository.status_tallies(

@@ -6,7 +6,8 @@ from typing import Annotated
 from urllib.parse import urlencode
 
 import websockets.asyncio.client
-from control.service import ControlPlaneService, StubKind, StubRecord
+from control.service import ControlServices
+from database.records.apps import StubKind, StubRecord
 from execution.pods.planning import PodProxyProtocol
 from execution.pods.proxy import (
     PINNED_CONTAINER_CONNECT_TIMEOUT_SECONDS,
@@ -86,7 +87,7 @@ async def deployed_pod_proxy_by_id(
     *,
     workspace_id: write_workspace,
     service: PodControlService = Depends(pod_service),
-    control_plane: ControlPlaneService = Depends(control_plane_service),
+    control_plane: ControlServices = Depends(control_plane_service),
     services: ApiServiceCore = Depends(current_services),
 ) -> Response:
     stub = await resolve_deployed_stub_id_async(
@@ -116,7 +117,7 @@ async def deployed_public_pod_proxy_by_id(
     request: Request,
     subpath: str = "",
     service: PodControlService = Depends(pod_service),
-    control_plane: ControlPlaneService = Depends(control_plane_service),
+    control_plane: ControlServices = Depends(control_plane_service),
     services: ApiServiceCore = Depends(current_services),
 ) -> Response:
     stub = await resolve_deployed_stub_id_async(
@@ -145,7 +146,7 @@ async def pod_container_proxy(
     *,
     workspace_id: write_workspace,
     service: PodControlService = Depends(pod_service),
-    control_plane: ControlPlaneService = Depends(control_plane_service),
+    control_plane: ControlServices = Depends(control_plane_service),
     services: ApiServiceCore = Depends(current_services),
 ) -> Response:
     container, stub = await _resolve_proxy_container(
@@ -180,7 +181,7 @@ async def public_pod_container_proxy(
     request: Request,
     subpath: str = "",
     service: PodControlService = Depends(pod_service),
-    control_plane: ControlPlaneService = Depends(control_plane_service),
+    control_plane: ControlServices = Depends(control_plane_service),
     services: ApiServiceCore = Depends(current_services),
 ) -> Response:
     container, stub = await _resolve_proxy_container(
@@ -209,7 +210,7 @@ async def pod_container_websocket(
     port: PortPath,
     subpath: str = "",
     service: PodControlService = Depends(pod_service),
-    control_plane: ControlPlaneService = Depends(control_plane_service),
+    control_plane: ControlServices = Depends(control_plane_service),
     services: ApiServiceCore = Depends(current_websocket_services),
 ) -> None:
     workspace_id = await authorize_websocket_workspace(services, websocket)
@@ -232,7 +233,7 @@ async def public_pod_container_websocket(
     port: PortPath,
     subpath: str = "",
     service: PodControlService = Depends(pod_service),
-    control_plane: ControlPlaneService = Depends(control_plane_service),
+    control_plane: ControlServices = Depends(control_plane_service),
     services: ApiServiceCore = Depends(current_websocket_services),
 ) -> None:
     container, stub = await _resolve_proxy_container(
@@ -315,7 +316,7 @@ async def deployed_pod_websocket_by_id(
     port: PortPath,
     subpath: str = "",
     service: PodControlService = Depends(pod_service),
-    control_plane: ControlPlaneService = Depends(control_plane_service),
+    control_plane: ControlServices = Depends(control_plane_service),
     services: ApiServiceCore = Depends(current_websocket_services),
 ) -> None:
     workspace_id = await authorize_websocket_workspace(services, websocket)
@@ -338,7 +339,7 @@ async def deployed_public_pod_websocket_by_id(
     port: PortPath,
     subpath: str = "",
     service: PodControlService = Depends(pod_service),
-    control_plane: ControlPlaneService = Depends(control_plane_service),
+    control_plane: ControlServices = Depends(control_plane_service),
     services: ApiServiceCore = Depends(current_websocket_services),
 ) -> None:
     stub = await resolve_deployed_stub_id_async(
@@ -412,7 +413,7 @@ async def deployed_sandbox_proxy_by_id(
     *,
     workspace_id: write_workspace,
     service: PodControlService = Depends(pod_service),
-    control_plane: ControlPlaneService = Depends(control_plane_service),
+    control_plane: ControlServices = Depends(control_plane_service),
     services: ApiServiceCore = Depends(current_services),
 ) -> Response:
     container, stub = await _resolve_proxy_container(
@@ -449,7 +450,7 @@ async def deployed_public_sandbox_proxy_by_id(
     request: Request,
     subpath: str = "",
     service: PodControlService = Depends(pod_service),
-    control_plane: ControlPlaneService = Depends(control_plane_service),
+    control_plane: ControlServices = Depends(control_plane_service),
     services: ApiServiceCore = Depends(current_services),
 ) -> Response:
     container, stub = await _resolve_proxy_container(
@@ -478,7 +479,7 @@ async def deployed_sandbox_websocket_by_id(
     port: PortPath,
     subpath: str = "",
     service: PodControlService = Depends(pod_service),
-    control_plane: ControlPlaneService = Depends(control_plane_service),
+    control_plane: ControlServices = Depends(control_plane_service),
     services: ApiServiceCore = Depends(current_websocket_services),
 ) -> None:
     workspace_id = await authorize_websocket_workspace(services, websocket)
@@ -508,7 +509,7 @@ async def deployed_public_sandbox_websocket_by_id(
     port: PortPath,
     subpath: str = "",
     service: PodControlService = Depends(pod_service),
-    control_plane: ControlPlaneService = Depends(control_plane_service),
+    control_plane: ControlServices = Depends(control_plane_service),
     services: ApiServiceCore = Depends(current_websocket_services),
 ) -> None:
     container, stub = await _resolve_proxy_container(
@@ -723,7 +724,7 @@ async def _resolve_proxy_container(
     kind: StubKind,
     workspace: str | None,
     public: bool,
-    control_plane: ControlPlaneService,
+    control_plane: ControlServices,
     services: ApiServiceCore,
 ) -> tuple[ContainerRecord, StubRecord]:
     try:

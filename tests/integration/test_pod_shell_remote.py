@@ -15,7 +15,8 @@ import pytest
 from anyio.from_thread import start_blocking_portal
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
-from control.service import ControlPlaneService, StubKind
+from control.service import ControlServices
+from database.records.apps import StubKind
 from database.repositories.orchestration import ContainerRepository
 from execution.containers.service import ContainerService
 from execution.pods.service import PodControlService
@@ -97,8 +98,8 @@ def test_ephemeral_pod_create_overrides_command_returns_url_and_expires(
             real_services,
             containers=replace(real_services.containers, scheduler=scheduler),
         )
-        control = ControlPlaneService(services.context)
-        stub = control.create_stub(
+        control = ControlServices.create(services.context)
+        stub = control.stubs.create_stub(
             "ephemeral-web",
             kind=StubKind.Pod,
             public=True,
@@ -178,10 +179,10 @@ def test_pod_api_schedules_container_and_routes_exec_and_files_to_worker(
     with ExitStack() as client_stack:
         scheduler = _RecordingScheduler()
         isolated_services.containers.scheduler = scheduler
-        control = ControlPlaneService(
+        control = ControlServices.create(
             isolated_services.context,
         )
-        stub = control.create_stub(
+        stub = control.stubs.create_stub(
             "remote-sandbox",
             kind=StubKind.Sandbox,
             config={
@@ -340,10 +341,10 @@ def test_existing_container_shell_reuses_credentials_through_worker_client(
     tmp_path: Path,
 ) -> None:
     with ExitStack() as resources:
-        control = ControlPlaneService(
+        control = ControlServices.create(
             isolated_services.context,
         )
-        stub = control.create_stub("shell-target", kind=StubKind.Pod)
+        stub = control.stubs.create_stub("shell-target", kind=StubKind.Pod)
         container_id = str(uuid4())
         listener = _EchoServer(response=encode_shell_frame(ShellFrameType.Ready.value))
         listener.start()
@@ -416,10 +417,10 @@ def test_existing_container_shell_rejects_unrelated_listener_and_rolls_back_port
     tmp_path: Path,
 ) -> None:
     with ExitStack() as resources:
-        control = ControlPlaneService(
+        control = ControlServices.create(
             isolated_services.context,
         )
-        stub = control.create_stub("shell-target", kind=StubKind.Pod)
+        stub = control.stubs.create_stub("shell-target", kind=StubKind.Pod)
         container_id = str(uuid4())
         listener = _EchoServer(response=b"HTTP/1.1 200 OK\r\n\r\n")
         listener.start()
@@ -487,10 +488,10 @@ def test_existing_container_shell_rejects_unrelated_listener_and_rolls_back_port
 def test_existing_container_ticket_failure_unpublishes_listener_idempotently(
     isolated_services: ApiServices,
 ) -> None:
-    control = ControlPlaneService(
+    control = ControlServices.create(
         isolated_services.context,
     )
-    stub = control.create_stub("shell-cleanup", kind=StubKind.Pod)
+    stub = control.stubs.create_stub("shell-cleanup", kind=StubKind.Pod)
     container = _create_running_container(isolated_services, stub.id, stub.workspace_id)
     scheduler_containers = _FakeSchedulerContainers(
         state=SchedulerContainerState(
@@ -541,10 +542,10 @@ def test_existing_container_ticket_failure_unpublishes_listener_idempotently(
 def test_standalone_ticket_failure_stops_once_and_terminal_retry_is_idempotent(
     isolated_services: ApiServices,
 ) -> None:
-    control = ControlPlaneService(
+    control = ControlServices.create(
         isolated_services.context,
     )
-    stub = control.create_stub("standalone-cleanup", kind=StubKind.Pod)
+    stub = control.stubs.create_stub("standalone-cleanup", kind=StubKind.Pod)
     container = _create_running_container(isolated_services, stub.id, stub.workspace_id)
     service = isolated_services.shell_service
 
@@ -567,10 +568,10 @@ def test_standalone_ticket_cleanup_failure_preserves_truth_and_records_safe_even
     isolated_services: ApiServices,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    control = ControlPlaneService(
+    control = ControlServices.create(
         isolated_services.context,
     )
-    stub = control.create_stub("standalone-cleanup-failure", kind=StubKind.Pod)
+    stub = control.stubs.create_stub("standalone-cleanup-failure", kind=StubKind.Pod)
     container = _create_running_container(isolated_services, stub.id, stub.workspace_id)
 
     def fail_stop(_container_service: ContainerService, _container_id: str) -> ContainerRecord:
@@ -603,10 +604,10 @@ def test_standalone_ticket_cleanup_failure_preserves_truth_and_records_safe_even
 async def test_sandbox_exec_waits_for_worker_address_before_dial(
     async_services: ApiServices,
 ) -> None:
-    control = ControlPlaneService(
+    control = ControlServices.create(
         async_services.context,
     )
-    stub = control.create_stub("delayed-sandbox", kind=StubKind.Sandbox)
+    stub = control.stubs.create_stub("delayed-sandbox", kind=StubKind.Sandbox)
     container = _create_running_container(async_services, stub.id, stub.workspace_id)
     scheduler_containers = _FakeSchedulerContainers(
         state=SchedulerContainerState(
@@ -663,10 +664,10 @@ async def test_sandbox_exec_waits_for_worker_address_before_dial(
 def test_sandbox_connect_surfaces_terminal_scheduler_state_as_conflict(
     isolated_services: ApiServices,
 ) -> None:
-    control = ControlPlaneService(
+    control = ControlServices.create(
         isolated_services.context,
     )
-    stub = control.create_stub("stopped-sandbox", kind=StubKind.Sandbox)
+    stub = control.stubs.create_stub("stopped-sandbox", kind=StubKind.Sandbox)
     container = _create_running_container(isolated_services, stub.id, stub.workspace_id)
     scheduler_containers = _FakeSchedulerContainers(
         state=SchedulerContainerState(
@@ -693,10 +694,10 @@ def test_shell_websocket_proxies_bidirectional_terminal_bytes(
     tmp_path: Path,
 ) -> None:
     with ExitStack() as client_stack:
-        control = ControlPlaneService(
+        control = ControlServices.create(
             isolated_services.context,
         )
-        stub = control.create_stub("interactive-shell", kind=StubKind.Pod)
+        stub = control.stubs.create_stub("interactive-shell", kind=StubKind.Pod)
         container_id = str(uuid4())
         echo_server = _EchoServer()
         echo_server.start()
@@ -761,7 +762,7 @@ def test_shell_websocket_counts_as_a_devbox_connection_while_open(
     tmp_path: Path,
 ) -> None:
     with ExitStack() as client_stack:
-        stub = ControlPlaneService(isolated_services.context).create_stub(
+        stub = ControlServices.create(isolated_services.context).stubs.create_stub(
             "devbox-shell",
             kind=StubKind.Pod,
             config=StubConfig(

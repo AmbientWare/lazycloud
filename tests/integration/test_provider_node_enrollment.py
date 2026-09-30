@@ -29,7 +29,7 @@ from compute.providers import (
 )
 from compute.service import ComputeServices
 from compute.state import RedisComputeStateRepository
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from database.repositories.aws_connections import AwsAccountConnectionRepository
 from database.repositories.compute import (
     ComputeProviderInstanceRecord,
@@ -273,7 +273,7 @@ def test_provider_node_enrollment_rejects_cross_workspace_connection(
 ) -> None:
     default_pool = _seed_connection_and_pool(isolated_services)
     other_workspace = owned_workspace(
-        ControlPlaneService(
+        ControlServices.create(
             isolated_services.context,
         ),
         "other",

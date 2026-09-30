@@ -5,7 +5,7 @@ from typing import Protocol
 
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from fastapi.testclient import TestClient
 from identity.auth import AuthService
 from pydantic import JsonValue, TypeAdapter
@@ -32,9 +32,9 @@ def test_app_and_deployment_http_actions_follow_authorization_and_lifecycle_stat
                 metadata={"app": app.name, "app_id": app.id},
             )
         )
-        workspace = ControlPlaneService(
+        workspace = ControlServices.create(
             isolated_services.context,
-        ).get_workspace(app.workspace_id)
+        ).workspaces.get_workspace(app.workspace_id)
         auth = AuthService(isolated_services.context)
         writer_token, _ = auth.create_token(
             "lifecycle-writer",

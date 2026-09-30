@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from api.server.services import ApiServices
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from fastapi.testclient import TestClient
 from shared.identity import WorkspaceRecord
 from tests.workspaces import administrator_credential, owned_workspace
@@ -20,7 +20,7 @@ def test_workspace_deletion_removes_only_its_ephemeral_workload_state(
     api_workspace: WorkspaceRecord,
 ) -> None:
     services, client = api_runtime
-    control = ControlPlaneService(services.context)
+    control = ControlServices.create(services.context)
     deleted_workspace = api_workspace
     peer_workspace = owned_workspace(control, f"ephemeral-cleanup-peer-{api_workspace.id}")
     redis = services.redis()

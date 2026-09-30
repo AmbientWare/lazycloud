@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
-from control.service import ControlPlaneService
+from control.stubs import StubService
 from database.repositories.identity import WorkspaceRepository
 from database.types import DatabaseSession
 from execution.mounts import volume_container_mount_paths
@@ -276,7 +276,7 @@ class WorkerCredentialService:
         self,
         request: ContainerCredentialRequest,
     ) -> list[ContainerMountCredentials]:
-        stub = ControlPlaneService(self._services().context).get_stub(
+        stub = StubService(self._services().context).get_stub(
             request.stub_id,
             workspace=request.workspace_id,
         )

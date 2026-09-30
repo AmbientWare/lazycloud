@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Protocol
 
 from database.records.apps import StubKind, StubRecord
 from pydantic import JsonValue, TypeAdapter
@@ -28,54 +27,16 @@ from shared.workload_config import StubConfig
 
 from control.apps import AppRegistry
 from control.deployments import DeploymentAppResolution, DeploymentRegistration
+from control.stubs import StubService
 
 _JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, JsonValue])
 _JSON_VALUE_ADAPTER: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
 
 
-class DeploymentStubRegistry(Protocol):
-    def create_stub(
-        self,
-        name: str,
-        *,
-        workspace: str = "default",
-        kind: StubKind = StubKind.Function,
-        handler: str | None = None,
-        deployment_id: str | None = None,
-        app_id: str | None = None,
-        public: bool = False,
-        config: StubConfig | Mapping[str, JsonValue] | None = None,
-        metadata: Mapping[str, JsonValue] | None = None,
-        reuse_existing: bool = True,
-    ) -> StubRecord: ...
-
-    def get_stub(
-        self,
-        stub_id_or_name: str,
-        *,
-        workspace: str | None = None,
-    ) -> StubRecord: ...
-
-    def discard_deployment_registration_stub(
-        self,
-        stub_id: str,
-        *,
-        deployment_id: str,
-        workspace: str = "default",
-    ) -> None: ...
-
-    def discard_registration_source_stub(
-        self,
-        stub_id: str,
-        *,
-        workspace: str = "default",
-    ) -> bool: ...
-
-
 @dataclass(frozen=True, slots=True)
 class DeploymentRegistrationService:
     apps: AppRegistry
-    stubs: DeploymentStubRegistry
+    stubs: StubService
 
     def resolve_deployment_app(
         self,

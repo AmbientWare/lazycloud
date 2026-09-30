@@ -6,7 +6,7 @@ from uuid import uuid4
 
 import pytest
 from api.server.services import ApiServices
-from control.service import ControlPlaneService, StubKind
+from control.service import ControlServices
 from coordination.event_bus import (
     EventBusEvent,
     EventBusSendResult,
@@ -15,6 +15,7 @@ from coordination.event_bus import (
     event_id_for_event,
     event_key,
 )
+from database.records.apps import StubKind
 from database.repositories.billing_ledger import ContainerBillingShapeRepository
 from database.repositories.identity import WorkspaceMemberRepository, WorkspaceRepository
 from database.repositories.observability import UsageRepository
@@ -495,9 +496,9 @@ def test_stopping_a_container_gives_up_the_redis_state_it_held(
         ),
     )
     app = isolated_services.apps.create("released_on_stop_app")
-    stub = ControlPlaneService(
+    stub = ControlServices.create(
         isolated_services.context,
-    ).create_stub(
+    ).stubs.create_stub(
         "released_on_stop_pod",
         kind=StubKind.Pod,
         handler="pkg.workloads:handler",

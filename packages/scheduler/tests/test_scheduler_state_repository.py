@@ -12,7 +12,7 @@ from uuid import uuid4
 import pytest
 from api.server.services import ApiServices
 from compute.state import ComputeAgentTokenState, RedisComputeStateRepository
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from coordination.event_bus import EventBusEvent, EventBusEventType, event_id_for_event, event_key
 from coordination.redis_client import AsyncRedisClient, RedisClient, redis_text
 from database.records.apps import StubRecord
@@ -425,9 +425,9 @@ def _create_cron_function(
     )
     stub = next(
         item
-        for item in ControlPlaneService(
+        for item in ControlServices.create(
             isolated_services.context,
-        ).list_stubs()
+        ).stubs.list_stubs()
         if item.deployment_id == deployment.id
     )
     # Declaring the schedule is what creates it; there is no second call.
@@ -738,9 +738,9 @@ def test_new_cron_version_takes_over_the_prior_schedule(
     )
     second_stub = next(
         item
-        for item in ControlPlaneService(
+        for item in ControlServices.create(
             isolated_services.context,
-        ).list_stubs()
+        ).stubs.list_stubs()
         if item.deployment_id == second.id
     )
 
@@ -759,10 +759,10 @@ def test_inactive_cron_deployment_never_enqueues(
     deployment, _stub, cron_job = _create_cron_function(isolated_services)
     deployment.active = False
     workspace_id = (
-        ControlPlaneService(
+        ControlServices.create(
             isolated_services.context,
         )
-        .get_workspace("default")
+        .workspaces.get_workspace("default")
         .id
     )
     with isolated_services.context.database.session() as session:
@@ -2602,11 +2602,11 @@ def test_scheduler_orphan_reconciliation_restores_pod_desired_capacity(
             ports={"8080": 8080},
         )
     )
-    control = ControlPlaneService(
+    control = ControlServices.create(
         isolated_services.context,
     )
-    stub = next(item for item in control.list_stubs() if item.deployment_id == deployment.id)
-    stub = control.update_stub_config(
+    stub = next(item for item in control.stubs.list_stubs() if item.deployment_id == deployment.id)
+    stub = control.stubs.update_stub_config(
         stub.id,
         fields={"image": {"image_id": "img-pod"}},
     ).stub
@@ -3428,9 +3428,9 @@ def test_orphan_sweep_settles_the_claims_a_pooled_container_was_holding(
             isolated_services.workspace_changes,
         ),
     )
-    stub = ControlPlaneService(
+    stub = ControlServices.create(
         isolated_services.context,
-    ).create_stub(
+    ).stubs.create_stub(
         "orphan-claim",
         kind=StubKind.Function,
         handler="pkg.jobs:handler",
