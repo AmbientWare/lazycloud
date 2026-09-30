@@ -73,12 +73,7 @@ func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostprot
 				{Type: mount.TypeBind, Source: c.workspaceDir(), Target: containerWorkspace},
 				{Type: mount.TypeBind, Source: c.linkDir(), Target: containerLinkDir},
 			},
-			Resources: containertypes.Resources{
-				NanoCPUs:   resources.GetCpuMillis() * 1_000_000,
-				Memory:     resources.GetMemoryBytes(),
-				MemorySwap: resources.GetMemoryBytes(),
-				PidsLimit:  &limit,
-			},
+			Resources: containerResources(resources, a.capacity, limit),
 		},
 	}
 	_, err := a.docker.ContainerCreate(ctx, options)
@@ -201,4 +196,26 @@ func containerUser() string {
 		return fmt.Sprintf("%d:%d", uid, os.Getegid())
 	}
 	return ""
+}
+
+// containerResources turns reservations into cgroup settings. CPU shares are
+// proportional to the reservation, so under contention a container keeps what
+// it reserved; the CPU quota is the burst ceiling, capped at the host. Memory
+// reserves the request (memory.low) and kills at the limit, with swap the size
+// of the reservation so reclaim can slow a container before the wall.
+func containerResources(r *hostproto.Resources, host *hostproto.Capacity, pids int64) containertypes.Resources {
+	cpuLimit := r.GetCpuLimitMillis()
+	if cpuLimit <= 0 || cpuLimit > host.GetCpuMillis() {
+		cpuLimit = host.GetCpuMillis()
+	}
+	cpuLimit = max(cpuLimit, r.GetCpuMillis())
+	memoryLimit := max(r.GetMemoryLimitBytes(), r.GetMemoryBytes())
+	return containertypes.Resources{
+		CPUShares:         max(r.GetCpuMillis()*1024/1000, 2),
+		NanoCPUs:          cpuLimit * 1_000_000,
+		MemoryReservation: r.GetMemoryBytes(),
+		Memory:            memoryLimit,
+		MemorySwap:        memoryLimit + r.GetMemoryBytes(),
+		PidsLimit:         &pids,
+	}
 }

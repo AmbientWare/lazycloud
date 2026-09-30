@@ -304,8 +304,6 @@ class Function(Generic[P, R]):
             "availability_zone": bool(self.availability_zone),
             "machine": self.machine is not None,
             "metadata": bool(self.metadata),
-            "cpu range": isinstance(self.cpu, tuple | list),
-            "memory range": isinstance(self.memory, tuple | list),
             "keep_warm=-1": self.keep_warm is not None and self.keep_warm < 0,
         }
         found.extend(name for name, present in declared.items() if present)
@@ -339,10 +337,7 @@ class Function(Generic[P, R]):
             "handler": handler,
             "source": {"sha256": source_sha256},
             "image": {"python_version": python_minor_version(self.image.python_version)},
-            "resources": {
-                "cpu_millis": round(float(_scalar(self.cpu, DEFAULT_FUNCTION_CPU)) * 1000),
-                "memory_mib": parse_memory_mib(_scalar(self.memory, DEFAULT_FUNCTION_MEMORY)),
-            },
+            "resources": _resources(self.cpu, self.memory),
             "retry_policy": policy.model_dump(
                 mode="json",
                 include={"max_attempts", "delay_seconds", "backoff", "max_delay_seconds"},
@@ -540,8 +535,22 @@ def _map_args(input_value: Any) -> tuple[Any, ...]:
     return (input_value,)
 
 
-def _scalar(value: Any, default: Any) -> Any:
-    return default if value is None else value
+def _resources(cpu: Any, memory: Any) -> dict[str, int]:
+    """Reservations, plus ceilings when `cpu` or `memory` is a `(reserve, limit)` pair."""
+    cpu = DEFAULT_FUNCTION_CPU if cpu is None else cpu
+    memory = DEFAULT_FUNCTION_MEMORY if memory is None else memory
+    resources: dict[str, int] = {}
+    if isinstance(cpu, tuple | list):
+        resources["cpu_millis"] = round(float(cpu[0]) * 1000)
+        resources["cpu_limit_millis"] = round(float(cpu[1]) * 1000)
+    else:
+        resources["cpu_millis"] = round(float(cpu) * 1000)
+    if isinstance(memory, tuple | list):
+        resources["memory_mib"] = parse_memory_mib(memory[0])
+        resources["memory_limit_mib"] = parse_memory_mib(memory[1])
+    else:
+        resources["memory_mib"] = parse_memory_mib(memory)
+    return resources
 
 
 def _unsupported_image_options(image: Image) -> list[str]:

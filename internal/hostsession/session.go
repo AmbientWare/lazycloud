@@ -242,7 +242,10 @@ func (s *Server) startMessage(ctx context.Context, id string, start execution.St
 		Image:         strings.ReplaceAll(s.config.ImageTemplate, "{version}", version),
 		PythonVersion: version,
 		Source:        &hostproto.Source{Sha256: start.Source.String(), Url: url, UrlExpiresAt: timestamppb.New(expires)},
-		Resources:     &hostproto.Resources{CpuMillis: start.CPUMillis, MemoryBytes: start.MemoryBytes},
+		Resources: &hostproto.Resources{
+			CpuMillis: start.CPUMillis, MemoryBytes: start.MemoryBytes,
+			CpuLimitMillis: start.CPULimitMillis, MemoryLimitBytes: start.MemoryLimitBytes,
+		},
 		Function: &hostproto.FunctionWorkload{
 			Handler: start.Spec.Handler,
 			Slots:   int32(start.Slots), //nolint:gosec // The schema caps concurrency at 256.

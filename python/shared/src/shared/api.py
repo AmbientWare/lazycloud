@@ -81,7 +81,9 @@ class ImageSpec(BaseModel):
 
 class Resources(BaseModel):
     cpu_millis: Annotated[int, Field(ge=125, le=192000)]
+    cpu_limit_millis: Annotated[int | None, Field(ge=125, le=192000)] = None
     memory_mib: Annotated[int, Field(ge=128, le=1572864)]
+    memory_limit_mib: Annotated[int | None, Field(ge=128, le=1572864)] = None
 
 
 class Backoff(str, Enum):

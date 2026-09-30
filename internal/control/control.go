@@ -66,6 +66,13 @@ func Resolve(spec apitypes.FunctionSpec) (apitypes.FunctionSpec, error) {
 	out.KeepWarmSeconds = orDefault(spec.KeepWarmSeconds, 10)
 	out.MaxPendingTasks = orDefault(spec.MaxPendingTasks, 100)
 
+	if r := spec.Resources; r.CpuLimitMillis != nil && *r.CpuLimitMillis < r.CpuMillis {
+		return out, &InvalidSpecError{Function: spec.Name, Reason: "resources.cpu_limit_millis is below cpu_millis"}
+	}
+	if r := spec.Resources; r.MemoryLimitMib != nil && *r.MemoryLimitMib < r.MemoryMib {
+		return out, &InvalidSpecError{Function: spec.Name, Reason: "resources.memory_limit_mib is below memory_mib"}
+	}
+
 	scaler := apitypes.Autoscaler{}
 	if spec.Autoscaler != nil {
 		scaler = *spec.Autoscaler

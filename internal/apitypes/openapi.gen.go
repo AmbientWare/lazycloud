@@ -319,10 +319,12 @@ type FunctionSpec struct {
 	KeepWarmSeconds *int         `json:"keep_warm_seconds,omitempty"`
 	MaxPendingTasks *int         `json:"max_pending_tasks,omitempty"`
 	Name            WorkloadName `json:"name"`
-	Resources       Resources    `json:"resources"`
-	RetryPolicy     *RetryPolicy `json:"retry_policy,omitempty"`
-	Source          SourceRef    `json:"source"`
-	TimeoutSeconds  *int         `json:"timeout_seconds,omitempty"`
+
+	// Resources Reservations the container always keeps. CPU above the reservation is shared up to `cpu_limit_millis`, by default the reservation plus 16 cores. Memory above the reservation is allowed up to `memory_limit_mib`, by default four times the reservation, at least 1 GiB and at most 8 GiB above it; the container is killed beyond it.
+	Resources      Resources    `json:"resources"`
+	RetryPolicy    *RetryPolicy `json:"retry_policy,omitempty"`
+	Source         SourceRef    `json:"source"`
+	TimeoutSeconds *int         `json:"timeout_seconds,omitempty"`
 }
 
 // ImageSpec defines model for ImageSpec.
@@ -375,10 +377,12 @@ type Release struct {
 	Version   int                `json:"version"`
 }
 
-// Resources defines model for Resources.
+// Resources Reservations the container always keeps. CPU above the reservation is shared up to `cpu_limit_millis`, by default the reservation plus 16 cores. Memory above the reservation is allowed up to `memory_limit_mib`, by default four times the reservation, at least 1 GiB and at most 8 GiB above it; the container is killed beyond it.
 type Resources struct {
-	CpuMillis int `json:"cpu_millis"`
-	MemoryMib int `json:"memory_mib"`
+	CpuLimitMillis *int `json:"cpu_limit_millis,omitempty"`
+	CpuMillis      int  `json:"cpu_millis"`
+	MemoryLimitMib *int `json:"memory_limit_mib,omitempty"`
+	MemoryMib      int  `json:"memory_mib"`
 }
 
 // RetryPolicy defines model for RetryPolicy.
