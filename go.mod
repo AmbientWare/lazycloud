@@ -14,11 +14,15 @@ tool (
 )
 
 require (
+	github.com/containerd/errdefs v1.0.0
 	github.com/getkin/kin-openapi v0.142.0
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.11.0
+	github.com/moby/moby/api v1.56.0
+	github.com/moby/moby/client v0.6.0
 	github.com/oapi-codegen/runtime v1.7.0
 	golang.org/x/sync v0.23.0
+	golang.org/x/sys v0.48.0
 	google.golang.org/grpc v1.84.0
 	google.golang.org/protobuf v1.36.12
 )
@@ -102,7 +106,6 @@ require (
 	github.com/cli/browser v1.3.0 // indirect
 	github.com/clipperhouse/displaywidth v0.11.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
-	github.com/containerd/errdefs v1.0.0 // indirect
 	github.com/containerd/errdefs/pkg v0.3.0 // indirect
 	github.com/coreos/go-semver v0.3.1 // indirect
 	github.com/cpuguy83/go-md2man/v2 v2.0.7 // indirect
@@ -211,8 +214,6 @@ require (
 	github.com/mitchellh/go-homedir v1.1.0 // indirect
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
-	github.com/moby/moby/api v1.56.0 // indirect
-	github.com/moby/moby/client v0.6.0 // indirect
 	github.com/moricho/tparallel v0.3.2 // indirect
 	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/nakabonne/nestif v0.3.1 // indirect
@@ -322,7 +323,6 @@ require (
 	golang.org/x/exp/typeparams v0.0.0-20260811152304-ee035b5b010f // indirect
 	golang.org/x/mod v0.41.0 // indirect
 	golang.org/x/net v0.59.0 // indirect
-	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/term v0.46.0 // indirect
 	golang.org/x/text v0.42.0 // indirect
 	golang.org/x/tools v0.50.0 // indirect
