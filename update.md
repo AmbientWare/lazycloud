@@ -14,10 +14,10 @@ Refactor rules:
 
 Services:
 
-- [x] Scheduling and autoscaling
-- [x] Compute capacity and fleet management
-- [x] Control plane
-- [ ] Apps, deployments, and releases ([rewrite plan](apps-deployments-plan.md))
+- [ ] Scheduling and autoscaling
+- [ ] Compute capacity and fleet management
+- [ ] Control plane
+- [ ] Apps, deployments, and releases
 - [ ] Cron jobs
 - [ ] Container lifecycle
 - [ ] Task lifecycle
