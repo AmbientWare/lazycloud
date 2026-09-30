@@ -1,0 +1,11 @@
+package: api
+output: openapi.gen.go
+generate:
+  std-http-server: true
+  strict-server: true
+  embedded-spec: true
+additional-imports:
+  - package: github.com/AmbientWare/lazycloud/internal/apitypes
+    alias: .
+output-options:
+  nullable-type: true

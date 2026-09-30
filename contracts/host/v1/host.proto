@@ -1,0 +1,249 @@
+syntax = "proto3";
+
+package lazycloud.host.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/AmbientWare/lazycloud/internal/hostproto";
+
+// HostService is the connection a host agent opens to the control plane. The
+// agent dials out; every call except Enroll carries `authorization: Bearer
+// <host token>` metadata. Session carries control messages only. Task inputs,
+// results and logs travel on their own calls so large payloads never delay
+// commands or presence.
+service HostService {
+  // Enroll exchanges a single-use join token for a host identity.
+  rpc Enroll(EnrollRequest) returns (EnrollResponse);
+  // Session is the host's control stream. The first HostMessage is Hello.
+  // Commands are derived from durable state and resent after reconnect, so
+  // hosts treat them as idempotent by container id.
+  rpc Session(stream HostMessage) returns (stream ServerMessage);
+  // ClaimTasks waits up to wait_seconds for queued tasks of a ready container.
+  rpc ClaimTasks(ClaimTasksRequest) returns (ClaimTasksResponse);
+  // CompleteTask records an attempt's outcome. A stale attempt returns
+  // FAILED_PRECONDITION and the host discards the outcome.
+  rpc CompleteTask(CompleteTaskRequest) returns (CompleteTaskResponse);
+  // AppendLogs stores output lines in order per attempt.
+  rpc AppendLogs(AppendLogsRequest) returns (AppendLogsResponse);
+}
+
+message EnrollRequest {
+  string join_token = 1;
+  string hostname = 2;
+  Capacity capacity = 3;
+}
+
+message EnrollResponse {
+  string host_id = 1;
+  string host_token = 2;
+}
+
+message Capacity {
+  int64 cpu_millis = 1;
+  int64 memory_bytes = 2;
+}
+
+message HostMessage {
+  oneof body {
+    Hello hello = 1;
+    ContainerReport container = 2;
+    Ack ack = 3;
+  }
+}
+
+// Hello opens a session. It lists every container the host runs so the server
+// can stop containers it no longer assigns and resend missing starts.
+message Hello {
+  string boot_id = 1;
+  Capacity capacity = 2;
+  repeated ContainerReport containers = 3;
+  string agent_version = 4;
+}
+
+enum ContainerPhase {
+  CONTAINER_PHASE_UNSPECIFIED = 0;
+  // Fetching the image, source and runtime.
+  CONTAINER_PHASE_PREPARING = 1;
+  // The container process runs; runner slots are loading.
+  CONTAINER_PHASE_STARTING = 2;
+  // Every slot loaded its handler; the container can claim tasks.
+  CONTAINER_PHASE_READY = 3;
+  // The container is gone. exit carries the reason.
+  CONTAINER_PHASE_EXITED = 4;
+}
+
+enum ExitReason {
+  EXIT_REASON_UNSPECIFIED = 0;
+  // A StopContainer command finished.
+  EXIT_REASON_STOPPED = 1;
+  // The handler failed to import or initialize.
+  EXIT_REASON_LOAD_ERROR = 2;
+  // Image, source or runtime preparation failed.
+  EXIT_REASON_START_FAILED = 3;
+  // The container or supervisor died unexpectedly.
+  EXIT_REASON_CRASHED = 4;
+  EXIT_REASON_OUT_OF_MEMORY = 5;
+}
+
+message ContainerReport {
+  string container_id = 1;
+  ContainerPhase phase = 2;
+  ContainerExit exit = 3;
+  google.protobuf.Timestamp observed_at = 4;
+  // Attempts the container is running. The server cancels any whose durable
+  // state is no longer running, which covers cancels lost in a disconnect.
+  repeated string running_attempts = 5;
+}
+
+message ContainerExit {
+  ExitReason reason = 1;
+  int32 exit_code = 2;
+  string message = 3;
+  // For EXIT_REASON_LOAD_ERROR: the exception the runner reported.
+  RunnerError error = 4;
+}
+
+message RunnerError {
+  string type = 1;
+  string message = 2;
+  string traceback = 3;
+}
+
+// Ack confirms receipt of a command. It is not completion; completion is the
+// container report that follows.
+message Ack {
+  string command_id = 1;
+}
+
+message ServerMessage {
+  string command_id = 1;
+  oneof body {
+    StartContainer start = 2;
+    StopContainer stop = 3;
+    CancelAttempt cancel = 4;
+  }
+}
+
+message StartContainer {
+  string container_id = 1;
+  // An OCI image reference the host can pull.
+  string image = 2;
+  string python_version = 3;
+  Source source = 4;
+  Resources resources = 5;
+  FunctionWorkload function = 6;
+  map<string, string> environment = 7;
+}
+
+message Source {
+  string sha256 = 1;
+  // A presigned GET URL for the source zip.
+  string url = 2;
+  google.protobuf.Timestamp url_expires_at = 3;
+}
+
+message Resources {
+  int64 cpu_millis = 1;
+  int64 memory_bytes = 2;
+}
+
+message FunctionWorkload {
+  string handler = 1;
+  int32 slots = 2;
+}
+
+message StopContainer {
+  string container_id = 1;
+  int32 grace_seconds = 2;
+}
+
+enum CancelReason {
+  CANCEL_REASON_UNSPECIFIED = 0;
+  CANCEL_REASON_CANCELLED = 1;
+  CANCEL_REASON_TIMED_OUT = 2;
+}
+
+// CancelAttempt kills the slot running the attempt. The server has already
+// recorded the outcome.
+message CancelAttempt {
+  string container_id = 1;
+  string attempt_id = 2;
+  CancelReason reason = 3;
+}
+
+message ClaimTasksRequest {
+  string container_id = 1;
+  int32 max_tasks = 2;
+  int32 wait_seconds = 3;
+}
+
+message ClaimTasksResponse {
+  repeated ClaimedTask tasks = 1;
+}
+
+enum PayloadEncoding {
+  PAYLOAD_ENCODING_UNSPECIFIED = 0;
+  PAYLOAD_ENCODING_JSON = 1;
+  PAYLOAD_ENCODING_CLOUDPICKLE = 2;
+}
+
+message ClaimedTask {
+  string task_id = 1;
+  string attempt_id = 2;
+  int32 attempt_number = 3;
+  PayloadEncoding input_encoding = 4;
+  bytes input = 5;
+  google.protobuf.Timestamp deadline = 6;
+}
+
+message CompleteTaskRequest {
+  string container_id = 1;
+  string attempt_id = 2;
+  oneof outcome {
+    TaskSuccess success = 3;
+    TaskFailure failure = 4;
+  }
+}
+
+message TaskSuccess {
+  PayloadEncoding encoding = 1;
+  bytes result = 2;
+}
+
+enum AttemptFailureKind {
+  ATTEMPT_FAILURE_KIND_UNSPECIFIED = 0;
+  // The handler raised.
+  ATTEMPT_FAILURE_KIND_USER_ERROR = 1;
+  // The slot process died while running the attempt.
+  ATTEMPT_FAILURE_KIND_CRASHED = 2;
+}
+
+message TaskFailure {
+  AttemptFailureKind kind = 1;
+  RunnerError error = 2;
+  // The cloudpickled exception, when the runner could serialize it.
+  bytes exception = 3;
+}
+
+message CompleteTaskResponse {}
+
+enum LogStream {
+  LOG_STREAM_UNSPECIFIED = 0;
+  LOG_STREAM_STDOUT = 1;
+  LOG_STREAM_STDERR = 2;
+  LOG_STREAM_SYSTEM = 3;
+}
+
+message AppendLogsRequest {
+  string container_id = 1;
+  repeated LogLine lines = 2;
+}
+
+message LogLine {
+  string attempt_id = 1;
+  LogStream stream = 2;
+  string data = 3;
+  google.protobuf.Timestamp time = 4;
+}
+
+message AppendLogsResponse {}

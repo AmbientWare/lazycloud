@@ -1,0 +1,55 @@
+# Local services for development. Run the server, scheduler and agent as host
+# processes against them; see deploy/local/README.md.
+name: lazycloud-local
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: lazycloud
+      POSTGRES_PASSWORD: lazycloud
+      POSTGRES_DB: lazycloud
+    ports:
+      - "127.0.0.1:25432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lazycloud -d lazycloud"]
+      interval: 1s
+      timeout: 3s
+      retries: 20
+
+  object-store:
+    image: dxflrs/garage:v2.3.0
+    environment:
+      GARAGE_RPC_SECRET: 4c0cd1d2c1f1a6c5b0e7e9f1b3f6a2d8c4e5f7a9b1c3d5e7f9a1b3c5d7e9f1a3
+      GARAGE_ADMIN_TOKEN: local-garage-admin
+    volumes:
+      - ./deploy/local/garage.toml:/etc/garage.toml:ro
+      - garage-data:/var/lib/garage
+    ports:
+      - "127.0.0.1:23900:3900"
+    healthcheck:
+      test: ["CMD", "/garage", "status"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  object-store-bootstrap:
+    image: curlimages/curl:8.16.0
+    entrypoint: ["sh", "/bootstrap.sh"]
+    environment:
+      GARAGE_ADMIN_URL: http://object-store:3903
+      GARAGE_ADMIN_TOKEN: local-garage-admin
+      ACCESS_KEY_ID: GK1a2b3c4d5e6f708192a3b4c5
+      SECRET_ACCESS_KEY: 6c6f63616c2d6c617a79636c6f75642d6465762d7365637265742d6b65792d31
+      BUCKET: lazycloud
+    volumes:
+      - ./deploy/local/garage-bootstrap.sh:/bootstrap.sh:ro
+    depends_on:
+      object-store:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
+  garage-data:

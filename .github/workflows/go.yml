@@ -1,0 +1,49 @@
+name: Go backend and host runtime
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/go.yml"
+      - "go.mod"
+      - "go.sum"
+      - "**/*.go"
+      - "contracts/**"
+      - "migrations/**"
+      - "buf.yaml"
+      - "buf.gen.yaml"
+      - ".golangci.yml"
+      - "**/sqlc.yaml"
+  push:
+    branches: [main, go-rewrite]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-26.04
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: lazycloud
+          POSTGRES_PASSWORD: lazycloud
+          POSTGRES_DB: postgres
+        ports:
+          - 15442:5432
+        options: >-
+          --health-cmd "pg_isready -U lazycloud -d postgres"
+          --health-interval 1s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Generated code is current
+        run: |
+          go generate ./...
+          git diff --exit-code
+      - run: go vet ./...
+      - run: go tool golangci-lint run ./...
+      - run: go test -race ./...

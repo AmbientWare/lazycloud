@@ -1,0 +1,87 @@
+openapi: 3.0.3
+info:
+  title: LazyCloud local runner protocol
+  version: "1"
+  description: |
+    The protocol between the supervisor and a language runner inside one
+    container. The supervisor starts one runner process per slot and passes a
+    connected stream socket as the file descriptor named by
+    LAZYCLOUD_RUNNER_FD. The runner's stdout and stderr are its task output.
+
+    Each frame is a 4-byte big-endian header length, a UTF-8 JSON header, a
+    4-byte big-endian payload length and the raw payload bytes. Headers are at
+    most 1 MiB and payloads at most 64 MiB. The header's `type` selects the
+    schema below; frames without a payload carry a zero payload length.
+
+    1. The supervisor sends `load`. The runner imports the handler and replies
+       `loaded`, or `load_failed` and exits.
+    2. The supervisor sends `invoke` with the input as payload. The runner
+       replies `succeeded` with the result as payload, or `failed` with an
+       optional serialized exception as payload. One attempt runs at a time.
+    3. Closing the socket asks the runner to exit. The supervisor kills the
+       process group to cancel an attempt.
+paths: {}
+components:
+  schemas:
+    Encoding:
+      type: string
+      enum: [json, cloudpickle]
+
+    RunnerError:
+      type: object
+      required: [type, message]
+      properties:
+        type: { type: string }
+        message: { type: string }
+        traceback: { type: string }
+
+    Load:
+      type: object
+      required: [type, protocol_version, handler]
+      properties:
+        type: { type: string, enum: [load] }
+        protocol_version: { type: integer, enum: [1] }
+        handler:
+          description: "module:qualname importable from the working directory"
+          type: string
+
+    Loaded:
+      type: object
+      required: [type]
+      properties:
+        type: { type: string, enum: [loaded] }
+
+    LoadFailed:
+      type: object
+      required: [type, error]
+      properties:
+        type: { type: string, enum: [load_failed] }
+        error: { $ref: "#/components/schemas/RunnerError" }
+
+    Invoke:
+      description: The payload is the encoded arguments.
+      type: object
+      required: [type, task_id, attempt_id, input_encoding]
+      properties:
+        type: { type: string, enum: [invoke] }
+        task_id: { type: string }
+        attempt_id: { type: string }
+        input_encoding: { $ref: "#/components/schemas/Encoding" }
+
+    Succeeded:
+      description: The payload is the encoded return value.
+      type: object
+      required: [type, attempt_id, result_encoding]
+      properties:
+        type: { type: string, enum: [succeeded] }
+        attempt_id: { type: string }
+        result_encoding: { $ref: "#/components/schemas/Encoding" }
+
+    Failed:
+      description: The payload is the cloudpickled exception, or empty.
+      type: object
+      required: [type, attempt_id, error]
+      properties:
+        type: { type: string, enum: [failed] }
+        attempt_id: { type: string }
+        error: { $ref: "#/components/schemas/RunnerError" }

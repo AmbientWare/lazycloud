@@ -1,0 +1,559 @@
+openapi: 3.0.3
+info:
+  title: LazyCloud API
+  version: "1"
+servers:
+  - url: /
+security:
+  - bearer: []
+paths:
+  /v1/me:
+    get:
+      operationId: getMe
+      summary: The authenticated user and the workspaces the token reaches
+      responses:
+        "200":
+          description: Caller identity
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Me" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/sources:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+    post:
+      operationId: createSourceUpload
+      summary: Register a source archive by digest and get an upload URL when it is missing
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SourceUploadRequest" }
+      responses:
+        "200":
+          description: Source state
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SourceUpload" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/apps/{app}/deployments:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/AppPath"
+    post:
+      operationId: deployApp
+      summary: Make the app's deployed workloads match the given definitions
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DeploymentRequest" }
+      responses:
+        "200":
+          description: Resulting releases
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Deployment" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/apps/{app}/functions/{function}:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/AppPath"
+      - $ref: "#/components/parameters/FunctionPath"
+    get:
+      operationId: getFunction
+      responses:
+        "200":
+          description: The function and its active release
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Function" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/apps/{app}/functions/{function}/tasks:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/AppPath"
+      - $ref: "#/components/parameters/FunctionPath"
+    post:
+      operationId: submitTasks
+      summary: Admit one task per input against the function's active release
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SubmitTasksRequest" }
+      responses:
+        "201":
+          description: Admitted tasks, in input order
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SubmitTasksResponse" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/tasks/{task}:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/TaskPath"
+    get:
+      operationId: getTask
+      summary: Read a task, optionally waiting until it finishes
+      parameters:
+        - name: wait_seconds
+          in: query
+          description: Hold the request until the task finishes or this many seconds pass.
+          schema: { type: integer, minimum: 0, maximum: 60, default: 0 }
+      responses:
+        "200":
+          description: The task
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Task" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/tasks/{task}/result:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/TaskPath"
+    get:
+      operationId: getTaskResult
+      summary: The value a succeeded task returned
+      responses:
+        "200":
+          description: The result
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Payload" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/tasks/{task}/logs:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/TaskPath"
+    get:
+      operationId: streamTaskLogs
+      summary: Log lines after a cursor, one JSON LogEntry per line
+      parameters:
+        - name: after
+          in: query
+          description: Return entries with an id greater than this.
+          schema: { type: integer, format: int64, minimum: 0, default: 0 }
+        - name: follow
+          in: query
+          description: Keep the stream open until the task finishes.
+          schema: { type: boolean, default: false }
+      responses:
+        "200":
+          description: Newline-delimited LogEntry objects
+          content:
+            application/x-ndjson:
+              schema: { type: string, format: binary }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/tasks/{task}/cancel:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/TaskPath"
+    post:
+      operationId: cancelTask
+      summary: Cancel a queued or running task
+      responses:
+        "200":
+          description: The task after cancellation
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Task" }
+        default: { $ref: "#/components/responses/Error" }
+
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+
+  parameters:
+    WorkspacePath:
+      name: workspace
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/Name" }
+    AppPath:
+      name: app
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/AppName" }
+    FunctionPath:
+      name: function
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/WorkloadName" }
+    TaskPath:
+      name: task
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+
+  responses:
+    Error:
+      description: A typed error
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+  schemas:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code: { $ref: "#/components/schemas/ErrorCode" }
+        message: { type: string }
+
+    ErrorCode:
+      type: string
+      enum:
+        - invalid_request
+        - unauthenticated
+        - forbidden
+        - not_found
+        - conflict
+        - payload_too_large
+        - unsupported
+        - too_many_pending_tasks
+        - task_not_finished
+        - internal
+
+    Name:
+      type: string
+      pattern: "^[a-z][a-z0-9-]{0,62}$"
+
+    AppName:
+      type: string
+      pattern: "^[a-z][a-z0-9_]{0,62}$"
+
+    WorkloadName:
+      type: string
+      pattern: "^[A-Za-z_][A-Za-z0-9_-]{0,62}$"
+
+    Sha256:
+      description: Lowercase hex SHA-256 digest
+      type: string
+      pattern: "^[0-9a-f]{64}$"
+
+    Me:
+      type: object
+      required: [user, workspaces]
+      properties:
+        user: { $ref: "#/components/schemas/User" }
+        workspaces:
+          type: array
+          items: { $ref: "#/components/schemas/Workspace" }
+
+    User:
+      type: object
+      required: [id, email]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string }
+
+    Workspace:
+      type: object
+      required: [id, name]
+      properties:
+        id: { type: string, format: uuid }
+        name: { $ref: "#/components/schemas/Name" }
+
+    SourceUploadRequest:
+      type: object
+      required: [sha256, size_bytes]
+      properties:
+        sha256: { $ref: "#/components/schemas/Sha256" }
+        size_bytes:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 536870912
+
+    SourceUpload:
+      type: object
+      required: [sha256, present]
+      properties:
+        sha256: { $ref: "#/components/schemas/Sha256" }
+        present:
+          description: The archive is stored and can be deployed.
+          type: boolean
+        upload:
+          $ref: "#/components/schemas/UploadTarget"
+
+    UploadTarget:
+      description: Send the archive bytes with this request, then register the digest again.
+      type: object
+      required: [url, method, headers, expires_at]
+      properties:
+        url: { type: string }
+        method:
+          type: string
+          enum: [PUT]
+        headers:
+          type: object
+          additionalProperties: { type: string }
+        expires_at: { type: string, format: date-time }
+
+    DeploymentRequest:
+      type: object
+      required: [functions]
+      properties:
+        functions:
+          type: array
+          minItems: 1
+          maxItems: 200
+          items: { $ref: "#/components/schemas/FunctionSpec" }
+        prune:
+          description: Stop every function of the app that is not listed.
+          type: boolean
+          default: false
+
+    Deployment:
+      type: object
+      required: [app, releases, pruned]
+      properties:
+        app: { $ref: "#/components/schemas/App" }
+        releases:
+          type: array
+          items: { $ref: "#/components/schemas/Release" }
+        pruned:
+          type: array
+          items: { $ref: "#/components/schemas/WorkloadName" }
+
+    App:
+      type: object
+      required: [id, name, state, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        name: { $ref: "#/components/schemas/AppName" }
+        state:
+          type: string
+          enum: [active, paused]
+        created_at: { type: string, format: date-time }
+
+    FunctionSpec:
+      type: object
+      required: [name, handler, source, image, resources]
+      properties:
+        name: { $ref: "#/components/schemas/WorkloadName" }
+        handler:
+          description: "module:qualname within the source archive"
+          type: string
+          pattern: "^[A-Za-z_][A-Za-z0-9_.]*:[A-Za-z_][A-Za-z0-9_.]*$"
+        source:
+          $ref: "#/components/schemas/SourceRef"
+        image:
+          $ref: "#/components/schemas/ImageSpec"
+        resources:
+          $ref: "#/components/schemas/Resources"
+        timeout_seconds:
+          type: integer
+          minimum: 1
+          maximum: 86400
+          default: 3600
+        retry_policy:
+          $ref: "#/components/schemas/RetryPolicy"
+        concurrency:
+          description: Tasks one container runs at once, one process per slot.
+          type: integer
+          minimum: 1
+          maximum: 256
+          default: 1
+        keep_warm_seconds:
+          description: Idle time before a container above the minimum stops.
+          type: integer
+          minimum: 0
+          maximum: 86400
+          default: 10
+        autoscaler:
+          $ref: "#/components/schemas/Autoscaler"
+        max_pending_tasks:
+          type: integer
+          minimum: 1
+          maximum: 1000000
+          default: 100
+        environment:
+          type: object
+          additionalProperties: { type: string }
+
+    SourceRef:
+      type: object
+      required: [sha256]
+      properties:
+        sha256: { $ref: "#/components/schemas/Sha256" }
+
+    ImageSpec:
+      type: object
+      required: [python_version]
+      properties:
+        python_version:
+          type: string
+          enum: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+
+    Resources:
+      type: object
+      required: [cpu_millis, memory_mib]
+      properties:
+        cpu_millis:
+          type: integer
+          minimum: 125
+          maximum: 192000
+        memory_mib:
+          type: integer
+          minimum: 128
+          maximum: 1572864
+
+    RetryPolicy:
+      type: object
+      required: [max_attempts]
+      properties:
+        max_attempts:
+          description: Attempts including the first.
+          type: integer
+          minimum: 1
+          maximum: 100
+        delay_seconds:
+          type: number
+          minimum: 0
+          maximum: 3600
+          default: 0
+        backoff:
+          type: string
+          enum: [fixed, exponential]
+          default: fixed
+        max_delay_seconds:
+          type: number
+          minimum: 0
+          maximum: 86400
+
+    Autoscaler:
+      type: object
+      properties:
+        min_containers:
+          type: integer
+          minimum: 0
+          maximum: 1000
+          default: 0
+        max_containers:
+          type: integer
+          minimum: 1
+          maximum: 1000
+          default: 1
+        tasks_per_container:
+          type: integer
+          minimum: 1
+          maximum: 10000
+          default: 1
+
+    Release:
+      type: object
+      required: [id, function, version, created_at, spec]
+      properties:
+        id: { type: string, format: uuid }
+        function: { $ref: "#/components/schemas/WorkloadName" }
+        version: { type: integer }
+        created_at: { type: string, format: date-time }
+        spec: { $ref: "#/components/schemas/FunctionSpec" }
+
+    Function:
+      type: object
+      required: [name, app, state, active_release]
+      properties:
+        name: { $ref: "#/components/schemas/WorkloadName" }
+        app: { $ref: "#/components/schemas/AppName" }
+        state:
+          type: string
+          enum: [active, stopped]
+        active_release: { $ref: "#/components/schemas/Release" }
+
+    Payload:
+      description: >-
+        A task argument or return value. `json` carries `value`; `cloudpickle`
+        carries base64 `data`. Arguments encode `{"args": [...], "kwargs": {...}}`.
+      type: object
+      required: [encoding]
+      properties:
+        encoding:
+          type: string
+          enum: [json, cloudpickle]
+        value: {}
+        data:
+          type: string
+          format: byte
+
+    SubmitTasksRequest:
+      type: object
+      required: [inputs]
+      properties:
+        inputs:
+          type: array
+          minItems: 1
+          maxItems: 1000
+          items: { $ref: "#/components/schemas/Payload" }
+
+    SubmitTasksResponse:
+      type: object
+      required: [tasks]
+      properties:
+        tasks:
+          type: array
+          items: { $ref: "#/components/schemas/Task" }
+
+    TaskStatus:
+      type: string
+      enum: [queued, running, succeeded, failed, cancelled]
+
+    Task:
+      type: object
+      required: [id, app, function, release_id, status, attempts, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        app: { $ref: "#/components/schemas/AppName" }
+        function: { $ref: "#/components/schemas/WorkloadName" }
+        release_id: { type: string, format: uuid }
+        status: { $ref: "#/components/schemas/TaskStatus" }
+        attempts:
+          description: Attempts started so far.
+          type: integer
+        created_at: { type: string, format: date-time }
+        started_at: { type: string, format: date-time }
+        finished_at: { type: string, format: date-time }
+        failure: { $ref: "#/components/schemas/TaskFailure" }
+
+    FailureKind:
+      type: string
+      enum: [user_error, load_error, timeout, lost, start_failed, system]
+
+    TaskFailure:
+      type: object
+      required: [kind, message]
+      properties:
+        kind: { $ref: "#/components/schemas/FailureKind" }
+        type:
+          description: The exception type the handler raised.
+          type: string
+        message: { type: string }
+        traceback: { type: string }
+        exception:
+          description: The cloudpickled exception, when the runner could serialize it.
+          type: string
+          format: byte
+
+    LogEntry:
+      type: object
+      required: [id, attempt, stream, data, time]
+      properties:
+        id: { type: integer, format: int64 }
+        attempt: { type: integer }
+        stream:
+          type: string
+          enum: [stdout, stderr, system]
+        data: { type: string }
+        time: { type: string, format: date-time }
