@@ -1,657 +1,469 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+import logging
 from dataclasses import dataclass
-from typing import Protocol
 from uuid import uuid4
 
-from database.repositories.apps import (
-    AppRepository,
-    CronJobRepository,
-    DeploymentRepository,
-    StubRepository,
+from database.records.apps import StubRecord
+from database.repositories.apps import AppRepository, StubRepository
+from database.repositories.cron_jobs import CronJobRepository
+from database.repositories.deployment_effects import (
+    DeploymentAction,
+    DeploymentEffect,
+    DeploymentEffectRepository,
 )
-from database.repositories.custom_domains import CustomDomainRepository
-from database.repositories.identity import WorkspaceMemberRepository
-from observability.workspace_changes import WorkspaceChangePublisher
-from pydantic import JsonValue
-from shared.cron import CronJobRecord, next_cron_run, normalize_cron_expression
+from database.repositories.deployments import DeploymentRepository
+from database.repositories.identity import WorkspaceRepository
+from database.repositories.orchestration import AutoscalingTargetRepository
+from shared.app_lifecycle import UNFINISHED_APP_LIFECYCLE_STATES
+from shared.app_slug import app_slug_or_default
+from shared.autoscaler_state import autoscaler_target_kind
 from shared.deployment_records import (
     Deployment,
     DeploymentSpec,
-    declared_min_containers,
     keeps_one_active_version,
     resolve_authorized,
-    resolve_cpu,
-    resolve_keep_warm_seconds,
-    resolve_max_pending_tasks,
-    resolve_memory,
-    resolve_pod_command,
-    resolve_pod_disks,
-    resolve_pod_role,
-    resolve_pod_ssh,
-    resolve_preemptible,
-    resolve_retries,
-    resolve_timeout_seconds,
 )
 from shared.deployment_subdomains import deployment_subdomain
-from shared.deployments import DeploymentKind
+from shared.deployments import DeploymentKind, StubKind
 from shared.errors import ConflictError, InvalidInputError, NotFoundError
-from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
-from shared.tasks import RetryPolicy
+from shared.http.workspace_changes import WorkspaceChangeType
 from shared.timestamps import utc_now
 from sqlalchemy.orm import Session
 
+from control.apps import AppService
 from control.context import ControlContext
-from control.deployment_cleanup import (
-    DeploymentPlacementResourceManager,
-    delete_deployment_cron_jobs,
+from control.cron_jobs import CronJobService
+from control.deployment_config import (
+    deployment_spec_from_stub,
+    deployment_stub_config,
+    normalize_deployment_spec,
 )
-from control.events import ControlEventEmitter
+from control.deployment_domains import CustomDomainUseAdmission, claimed_hostname
+from control.deployment_effects import DeploymentEffects
+from control.deployment_resources import DeploymentResource
 from control.placement import PlacementResolver
 from control.readers import DatabaseDeploymentReader
-from control.tcp_ingress import require_tcp_ingress
+from control.stubs import StubService
 
-
-@dataclass(frozen=True, slots=True)
-class DeploymentRegistration:
-    app_id: str
-    stub_id: str
-
-
-@dataclass(frozen=True, slots=True)
-class DeploymentAppResolution:
-    app_id: str | None
-    app_name: str
-    """Name the deployment's app has or will be created under.
-
-    Known even when `app_id` is not, which is what lets the subdomain be minted on the
-    same deploy that creates the app.
-    """
-
-
-class DeploymentRegistrar(Protocol):
-    def resolve_deployment_app(
-        self,
-        spec: DeploymentSpec,
-        *,
-        workspace: str = "default",
-    ) -> DeploymentAppResolution: ...
-
-    def register_deployment(
-        self,
-        deployment: Deployment,
-        *,
-        workspace: str = "default",
-    ) -> DeploymentRegistration: ...
-
-
-class DeploymentScheduleWriter(Protocol):
-    """What deploying needs from schedules: make this one's match, and pause a stopped one's."""
-
-    def set_for_deployment(
-        self,
-        deployment: Deployment,
-        *,
-        cron: str | None,
-        workspace: str,
-    ) -> CronJobRecord | None: ...
-
-    def set_deployment_enabled(
-        self,
-        deployment_id: str,
-        *,
-        enabled: bool,
-        workspace: str = "default",
-    ) -> list[CronJobRecord]: ...
-
-
-class DeploymentContainerStopper(Protocol):
-    def stop_deployment_containers(self, *, workspace_id: str, deployment_id: str) -> None: ...
-
-
-class CustomDomainUseAdmission(Protocol):
-    def assert_may_use_custom_domains(
-        self,
-        session: Session,
-        *,
-        user_id: str,
-    ) -> None: ...
-
-
-def deployment_machine(spec: DeploymentSpec) -> str:
-    """The joined machine a spec pins to, from its metadata, or empty."""
-    machine = spec.metadata.get("machine")
-    return machine.strip() if isinstance(machine, str) else ""
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
 class DeploymentService:
     context: ControlContext
-    events: ControlEventEmitter
     placement: PlacementResolver
-    registrar: DeploymentRegistrar
-    schedules: DeploymentScheduleWriter
+    apps: AppService
+    stubs: StubService
+    schedules: CronJobService
     custom_domain_admission: CustomDomainUseAdmission
-    containers: DeploymentContainerStopper
-    workspace_changes: WorkspaceChangePublisher | None = None
-    placement_resources: DeploymentPlacementResourceManager | None = None
+    effects: DeploymentEffects
 
     def deploy(self, spec: DeploymentSpec, *, workspace: str = "default") -> Deployment:
-        normalized_spec = _normalize_runtime_spec(spec)
-        machine = deployment_machine(normalized_spec)
-        with self.context.database.session() as session:
-            workspace_record = self.context.workspace(session, workspace)
-            resolved_placement = self.placement.resolve_placement(
-                session, workspace_record, machine
-            )
-        app_resolution = self.registrar.resolve_deployment_app(
-            normalized_spec,
-            workspace=workspace_record.id,
+        return self._publish(spec, workspace=workspace).deployment
+
+    def deploy_prepared(
+        self, stub_id: str, *, name: str = "", workspace: str | None = "default"
+    ) -> DeploymentResource:
+        source = self.stubs.get_stub(stub_id, workspace=workspace)
+        return self._publish(
+            deployment_spec_from_stub(source, name=name or source.name),
+            workspace=source.workspace_id,
+            source=source,
         )
-        app_id = app_resolution.app_id
+
+    def _publish(
+        self, spec: DeploymentSpec, *, workspace: str, source: StubRecord | None = None
+    ) -> DeploymentResource:
+        spec = normalize_deployment_spec(spec)
+        machine = spec.metadata.get("machine")
+        machine = machine.strip() if isinstance(machine, str) else ""
         with self.context.database.session() as session:
-            repository = DeploymentRepository(session)
-            app = (
-                AppRepository(session).get_for_update(app_id, workspace_id=workspace_record.id)
-                if app_id is not None
-                else None
-            )
-            deployment_active = app.active if app is not None else True
-            version = repository.next_version(
-                workspace_id=workspace_record.id,
-                app_id=app_id,
-                name=normalized_spec.name,
-                kind=normalized_spec.kind,
-            )
-            if normalized_spec.kind is DeploymentKind.Function:
-                _release_superseded_warm_floors(
-                    session,
-                    repository.live_stub_ids(
-                        workspace_id=workspace_record.id,
-                        app_id=app_id,
-                        name=normalized_spec.name,
-                        kind=normalized_spec.kind,
-                    ),
-                    workspace_id=workspace_record.id,
-                )
-            subdomain = deployment_subdomain(
-                workspace_id=workspace_record.id,
-                app_name=app_resolution.app_name,
-                name=normalized_spec.name,
-                kind=normalized_spec.kind,
-            )
-            repository.assert_subdomain_unclaimed(
-                subdomain,
-                workspace_id=workspace_record.id,
-                app_id=app_id,
-                name=normalized_spec.name,
-                kind=normalized_spec.kind,
-            )
-            custom_hostname = _claimed_hostname(
-                session,
-                normalized_spec.domain,
-                workspace_id=workspace_record.id,
-                admission=self.custom_domain_admission,
-            )
-            deployment = repository.upsert(
-                Deployment(
-                    id=str(uuid4()),
-                    name=normalized_spec.name,
-                    kind=normalized_spec.kind,
-                    app_id=app_id,
-                    version=version,
-                    spec=normalized_spec,
-                    subdomain=subdomain,
-                    custom_hostname=custom_hostname,
-                    placement=resolved_placement,
-                    machine=machine,
-                    active=deployment_active,
-                ),
-                workspace_id=workspace_record.id,
-            )
+            owner = self.context.workspace(session, workspace)
+            placement = self.placement.resolve_placement(session, owner, machine)
+        draft = Deployment(
+            id=str(uuid4()),
+            name=spec.name,
+            kind=spec.kind,
+            spec=spec,
+            subdomain="",
+            placement=placement,
+            machine=machine,
+        )
         try:
-            if self.placement_resources is not None and deployment.active:
-                self.placement_resources.reconcile_deployments(
-                    workspace=workspace_record.id,
-                )
-            registration = self.registrar.register_deployment(
-                deployment,
-                workspace=workspace_record.id,
-            )
-            deployment = deployment.model_copy(
-                update={
-                    "app_id": registration.app_id or deployment.app_id,
-                    "stub_id": registration.stub_id,
-                }
-            )
-            with self.context.database.session() as session:
-                deployment = DeploymentRepository(session).upsert(
-                    deployment,
-                    workspace_id=workspace_record.id,
-                )
-            # Register the stub before its schedule can fire. Keep schedule writes
-            # inside the compensation block so a failed deploy leaves no schedule.
-            self.schedules.set_for_deployment(
-                deployment,
-                cron=normalized_spec.cron,
-                workspace=workspace_record.id,
-            )
-        except Exception as deployment_failure:
-            compensation_failures: list[Exception] = []
-            try:
-                self._discard_failed_deployment(
-                    deployment,
-                    workspace_id=workspace_record.id,
-                )
-            except Exception as cleanup_failure:
-                compensation_failures.append(cleanup_failure)
-            if self.placement_resources is not None:
-                try:
-                    self.placement_resources.reconcile_deployments(
-                        workspace=workspace_record.id,
-                        required=False,
+            if self.effects.placement_resources is not None:
+                with self.context.database.session() as session:
+                    DeploymentEffectRepository(session).prepare(
+                        draft, workspace_id=owner.id, now=utc_now()
                     )
-                except Exception as cleanup_failure:
-                    compensation_failures.append(cleanup_failure)
-            if compensation_failures:
-                raise ExceptionGroup(
-                    "deployment failed and compensation was incomplete",
-                    [deployment_failure, *compensation_failures],
-                ) from None
+                self.effects.placement_resources.reconcile_deployments(workspace=owner.id)
+            with self.context.database.session() as session:
+                if self.effects.placement_resources is not None and not DeploymentEffectRepository(
+                    session
+                ).finish_preparation(draft.id, now=utc_now()):
+                    raise ConflictError("deployment preparation expired; deploy again")
+                WorkspaceRepository(session).lock_active_owner(owner.id)
+                current_owner = self.context.workspace(session, owner.id)
+                if self.placement.resolve_placement(session, current_owner, machine) != placement:
+                    raise ConflictError("workspace placement changed during deployment")
+                if source is not None:
+                    current_source = StubRepository(session).get_for_update(
+                        source.id, workspace_id=owner.id
+                    )
+                    if current_source != source:
+                        raise ConflictError("prepared workload changed; prepare and deploy again")
+                source_id = spec.metadata.get("stub_id")
+                if source is None and isinstance(source_id, str) and source_id:
+                    source = StubRepository(session).get(source_id, workspace_id=owner.id)
+                app_name = self._app_name(session, spec, source, workspace_id=owner.id)
+                app, app_change, _ = self.apps.create_in_session(
+                    session, app_name, workspace=owner.id
+                )
+                repository = DeploymentRepository(session)
+                version = repository.next_version(
+                    workspace_id=owner.id, app_id=app.id, name=spec.name, kind=spec.kind
+                )
+                subdomain = deployment_subdomain(
+                    workspace_id=owner.id, app_name=app.name, name=spec.name, kind=spec.kind
+                )
+                repository.assert_subdomain_unclaimed(
+                    subdomain, workspace_id=owner.id, app_id=app.id, name=spec.name, kind=spec.kind
+                )
+                deployment = repository.upsert(
+                    draft.model_copy(
+                        update={
+                            "app_id": app.id,
+                            "version": version,
+                            "subdomain": subdomain,
+                            "active": app.active,
+                            "custom_hostname": claimed_hostname(
+                                session,
+                                spec.domain,
+                                workspace_id=owner.id,
+                                admission=self.custom_domain_admission,
+                            ),
+                        }
+                    ),
+                    workspace_id=owner.id,
+                )
+                authorized = spec.metadata.get("authorized")
+                stub, _ = self.stubs.save(
+                    session,
+                    StubRecord(
+                        id=str(uuid4()),
+                        workspace_id=owner.id,
+                        name=spec.name,
+                        kind=StubKind(spec.kind.value),
+                        handler=spec.handler,
+                        app_id=app.id,
+                        deployment_id=deployment.id,
+                        public=source.public
+                        if source
+                        else not resolve_authorized(
+                            spec.kind, authorized if isinstance(authorized, bool) else None
+                        ),
+                        config=(
+                            source.config.model_copy(deep=True)
+                            if source
+                            else deployment_stub_config(spec)
+                        ).model_copy(update={"machine": machine}),
+                        metadata={
+                            **(source.metadata if source else {}),
+                            "deployment_id": deployment.id,
+                        },
+                    ),
+                    reuse_existing=False,
+                )
+                deployment = repository.upsert(
+                    deployment.model_copy(update={"stub_id": stub.id}), workspace_id=owner.id
+                )
+                app = AppRepository(session).upsert(
+                    app.model_copy(
+                        update={
+                            "stub_id": stub.id,
+                            "version": version,
+                            "updated_at": deployment.updated_at,
+                            "metadata": {
+                                **app.metadata,
+                                "deployment_id": deployment.id,
+                                "deployment_kind": deployment.kind.value,
+                            },
+                        }
+                    )
+                )
+                self.schedules.set_in_session(
+                    session, deployment, cron=spec.cron, workspace_id=owner.id
+                )
+                if spec.kind is DeploymentKind.Function:
+                    self._release_floors(session, deployment, workspace_id=owner.id)
+                source_change = (
+                    self.stubs.discard_source_in_session(session, source.id, workspace_id=owner.id)
+                    if source is not None
+                    else None
+                )
+                effects = self._supersede(session, deployment, workspace_id=owner.id)
+                effects.append(
+                    DeploymentEffectRepository(session).record(
+                        deployment,
+                        workspace_id=owner.id,
+                        action=DeploymentAction.Created,
+                        app_created=app_change is WorkspaceChangeType.Created,
+                        source_stub_id=source_change[0].id if source_change else None,
+                        source_deleted=source_change is not None
+                        and source_change[1] is WorkspaceChangeType.Deleted,
+                    )
+                )
+        except Exception:
+            # The provider owner retains reconciliation intent if this cleanup fails.
+            if self.effects.placement_resources is not None:
+                try:
+                    with self.context.database.session() as session:
+                        DeploymentEffectRepository(session).finish_preparation(
+                            draft.id, now=utc_now()
+                        )
+                    self.effects.placement_resources.reconcile_deployments(
+                        workspace=owner.id, required=False
+                    )
+                except Exception:
+                    LOGGER.exception("deployment placement cleanup remains pending")
             raise
-        # After registration, so a failed deploy leaves the prior version on.
-        self.stop_superseded_versions(deployment, workspace_id=workspace_record.id)
-        self.events.emit(
-            "deployment.created",
-            resource_type="deployment",
-            resource_id=deployment.id,
-            message=f"deployed {deployment.name}",
-            workspace_id=workspace_record.id,
+        self.effects.finish(effects)
+        return DeploymentResource(app=app, deployment=deployment, stub=stub)
+
+    def _app_name(
+        self,
+        session: Session,
+        spec: DeploymentSpec,
+        source: StubRecord | None,
+        *,
+        workspace_id: str,
+    ) -> str:
+        app_id = (
+            source.app_id if source is not None and source.app_id else spec.metadata.get("app_id")
         )
-        self._publish_change(
-            deployment,
-            workspace_id=workspace_record.id,
-            change=WorkspaceChangeType.Created,
+        if isinstance(app_id, str) and app_id:
+            return self.apps.get_in_session(session, app_id, workspace=workspace_id).name
+        name = spec.metadata.get("app")
+        return app_slug_or_default(name if isinstance(name, str) else None, default=spec.name)
+
+    def _release_floors(
+        self, session: Session, deployment: Deployment, *, workspace_id: str
+    ) -> None:
+        repository = StubRepository(session)
+        for stub in repository.list_for_deployments(
+            DeploymentRepository(session).older_active_ids(deployment, workspace_id=workspace_id),
+            workspace_id=workspace_id,
+            for_update=True,
+        ):
+            if stub.config.autoscaler.min_containers:
+                stub.config.autoscaler.min_containers = 0
+                repository.upsert(stub)
+
+    def _supersede(
+        self, session: Session, deployment: Deployment, *, workspace_id: str
+    ) -> list[DeploymentEffect]:
+        if not deployment.active or not keeps_one_active_version(
+            deployment.kind, deployment.spec.role
+        ):
+            return []
+        previous = DeploymentRepository(session).deactivate_superseded_versions(
+            workspace_id=workspace_id,
+            app_id=deployment.app_id,
+            name=deployment.name,
+            kind=deployment.kind,
+            now=utc_now(),
         )
+        return [
+            self._record_change(
+                session, item, workspace_id=workspace_id, action=DeploymentAction.Stopped
+            )
+            for item in previous
+        ]
+
+    def _record_change(
+        self,
+        session: Session,
+        deployment: Deployment,
+        *,
+        workspace_id: str,
+        action: DeploymentAction,
+    ) -> DeploymentEffect:
+        schedules = CronJobRepository(session)
+        if action is DeploymentAction.Deleted:
+            schedules.delete_for_deployments({deployment.id}, workspace_id=workspace_id)
+        elif action in {DeploymentAction.Started, DeploymentAction.Stopped}:
+            self.schedules.set_enabled_in_session(
+                session, deployment.id, workspace_id=workspace_id, enabled=deployment.active
+            )
+        return DeploymentEffectRepository(session).record(
+            deployment, workspace_id=workspace_id, action=action
+        )
+
+    def _locked(
+        self, session: Session, identifier: str, *, workspace: str
+    ) -> tuple[str, Deployment]:
+        workspace_id = self.context.workspace(session, workspace).id
+        WorkspaceRepository(session).lock_active_owner(workspace_id)
+        repository = DeploymentRepository(session)
+        deployment = repository.resolve(identifier, workspace_id=workspace_id)
+        if deployment is None:
+            raise NotFoundError(f"deployment not found in workspace: {identifier}")
+        if deployment.app_id is not None:
+            app = AppRepository(session).get_for_update(
+                deployment.app_id, workspace_id=workspace_id
+            )
+            if app is None or app.lifecycle_state in UNFINISHED_APP_LIFECYCLE_STATES:
+                raise ConflictError("app lifecycle operation is in progress")
+        current = repository.get_for_update(deployment.id, workspace_id=workspace_id)
+        if current is None:
+            raise NotFoundError(f"deployment not found: {identifier}")
+        return workspace_id, current
+
+    def set_deployment_active(
+        self,
+        workspace: str,
+        deployment_id_or_name: str,
+        *,
+        active: bool,
+        allow_paused_app: bool = False,
+    ) -> Deployment:
+        with self.context.database.session() as session:
+            workspace_id, deployment = self._locked(
+                session, deployment_id_or_name, workspace=workspace
+            )
+            repository = DeploymentRepository(session)
+            if active and deployment.app_id and not allow_paused_app:
+                app = AppRepository(session).get(deployment.app_id, workspace_id=workspace_id)
+                if app is None or not app.active:
+                    raise ConflictError("cannot start deployment while app is paused")
+            if active and keeps_one_active_version(deployment.kind, deployment.spec.role):
+                newest = repository.newest_active_version(
+                    workspace_id=workspace_id,
+                    app_id=deployment.app_id,
+                    name=deployment.name,
+                    kind=deployment.kind,
+                )
+                if newest is not None and newest > deployment.version:
+                    raise ConflictError(
+                        f"{deployment.name} v{deployment.version} is replaced by v{newest}; "
+                        f"stop v{newest} before starting an older version"
+                    )
+            deployment = repository.upsert(
+                deployment.model_copy(update={"active": active, "updated_at": utc_now()}),
+                workspace_id=workspace_id,
+            )
+            target_kind = autoscaler_target_kind(StubKind(deployment.kind.value))
+            if active and deployment.stub_id and target_kind is not None:
+                AutoscalingTargetRepository(session).activate(
+                    stub_id=deployment.stub_id, workspace_id=workspace_id, target_kind=target_kind
+                )
+            effects = self._supersede(session, deployment, workspace_id=workspace_id)
+            effects.append(
+                self._record_change(
+                    session,
+                    deployment,
+                    workspace_id=workspace_id,
+                    action=DeploymentAction.Started if active else DeploymentAction.Stopped,
+                )
+            )
+        self.effects.finish(effects)
         return deployment
 
-    def stop_superseded_versions(self, deployment: Deployment, *, workspace_id: str) -> None:
-        """Stop the versions a single-version workload no longer runs, as a stop would.
-
-        Every version of a devbox mounts one root disk that one container holds
-        at a time, so only its newest active version may stay on. The others are
-        switched off, their schedules paused and their containers stopped now
-        rather than on the autoscaler's next pass, which releases the disk to the
-        version that replaced them.
-        """
-        if not keeps_one_active_version(deployment.kind, deployment.spec.role):
-            return
+    def delete(self, identifier: str, *, workspace: str = "default") -> Deployment:
         with self.context.database.session() as session:
-            superseded = DeploymentRepository(session).deactivate_superseded_versions(
-                workspace_id=workspace_id,
-                app_id=deployment.app_id,
-                name=deployment.name,
-                kind=deployment.kind,
-                now=utc_now(),
-            )
-        for previous in superseded:
-            self._publish_change(
-                previous, workspace_id=workspace_id, change=WorkspaceChangeType.Updated
-            )
-            self.schedules.set_deployment_enabled(
-                previous.id, enabled=False, workspace=workspace_id
-            )
-            self.containers.stop_deployment_containers(
-                workspace_id=workspace_id, deployment_id=previous.id
-            )
-            self.events.emit(
-                "deployment.stopped",
-                resource_type="deployment",
-                resource_id=previous.id,
-                message=f"stopped deployment {previous.name} v{previous.version}, "
-                f"replaced by a newer version",
-                workspace_id=workspace_id,
-            )
-
-    def list(
-        self,
-        *,
-        active: bool | None = None,
-        workspace: str | None = None,
-        app_id: str | None = None,
-    ) -> list[Deployment]:
-        with self.context.database.session() as session:
-            workspace_id = (
-                self.context.workspace(session, workspace).id if workspace is not None else None
-            )
-            repository = DeploymentRepository(session)
-            deployments = (
-                repository.list(workspace_id=workspace_id, app_id=app_id, active=active)
-                if workspace_id is not None
-                else repository.list_across_workspaces(app_id=app_id, active=active)
-            )
-        deployments.sort(key=lambda item: (item.name, item.version))
-        return deployments
-
-    def get(self, deployment_id_or_name: str) -> Deployment:
-        return DatabaseDeploymentReader(self.context).get(deployment_id_or_name)
-
-    def delete(self, deployment_id: str, *, workspace: str = "default") -> Deployment:
-        """Delete the workload this deployment is a version of, every version at once."""
-        now = utc_now()
-        with self.context.database.session() as session:
-            workspace_id = self.context.workspace(session, workspace).id
-            repository = DeploymentRepository(session)
-            target = repository.get(deployment_id, workspace_id=workspace_id)
-            if target is None:
-                msg = f"deployment not found: {deployment_id}"
-                raise NotFoundError(msg)
-            deleted = repository.delete_versions(
+            workspace_id, target = self._locked(session, identifier, workspace=workspace)
+            deleted = DeploymentRepository(session).delete_versions(
                 workspace_id=workspace_id,
                 app_id=target.app_id,
                 name=target.name,
                 kind=target.kind,
-                now=now,
+                now=utc_now(),
             )
-            deleted_target = next(
-                (deployment for deployment in deleted if deployment.id == target.id), None
+            effects = [
+                self._record_change(
+                    session, item, workspace_id=workspace_id, action=DeploymentAction.Deleted
+                )
+                for item in deleted
+            ]
+        self.effects.finish(effects)
+        return next(item for item in deleted if item.id == target.id)
+
+    def retrieve_deployment(self, workspace: str, identifier: str) -> Deployment:
+        with self.context.database.session() as session:
+            workspace_id = self.context.workspace(session, workspace).id
+            deployment = DeploymentRepository(session).resolve(
+                identifier, workspace_id=workspace_id
             )
-            if deleted_target is None:
-                # Another delete got there between the read and the update.
-                msg = f"deployment not found: {deployment_id}"
-                raise NotFoundError(msg)
-            delete_deployment_cron_jobs(
-                session,
-                deployment_ids={deployment.id for deployment in deleted},
+        if deployment is None:
+            raise NotFoundError(f"deployment not found in workspace: {identifier}")
+        return deployment
+
+    def stop_all_active_deployments(self, workspace: str) -> tuple[Deployment, ...]:
+        return tuple(
+            self.set_deployment_active(workspace, deployment.id, active=False)
+            for deployment in self.list(workspace=workspace, active=True)
+        )
+
+    def scale_deployment(self, workspace: str, identifier: str, *, containers: int) -> Deployment:
+        if containers < 0:
+            raise InvalidInputError("replicas cannot be negative")
+        with self.context.database.session() as session:
+            workspace_id, deployment = self._locked(session, identifier, workspace=workspace)
+            if deployment.kind is not DeploymentKind.Pod:
+                raise InvalidInputError("only pod deployments can be scaled directly")
+            app = (
+                AppRepository(session).get(deployment.app_id, workspace_id=workspace_id)
+                if deployment.app_id
+                else None
             )
-        for deployment in deleted:
-            self.events.emit(
-                "deployment.deleted",
-                resource_type="deployment",
-                resource_id=deployment.id,
-                message=f"deleted deployment {deployment.name} version {deployment.version}",
-                workspace_id=workspace_id,
+            if not deployment.active:
+                raise ConflictError(f"cannot scale inactive deployment: {deployment.name}")
+            if app is not None and not app.active:
+                raise ConflictError(f"cannot scale deployment while app is paused: {app.name}")
+            stubs = StubRepository(session).list_for_deployments(
+                [deployment.id], workspace_id=workspace_id, for_update=True
             )
-            self._publish_change(
+            if not stubs:
+                raise ConflictError("pod deployment has no scalable workload")
+            for stub in stubs:
+                if containers == 0 and stub.config.runtime.keep_warm == -1:
+                    raise InvalidInputError("always-on pod deployments cannot be scaled to zero")
+                if containers > 1 and stub.config.disks:
+                    raise InvalidInputError(
+                        "a pod with a disk runs one container; scale it to 0 or 1"
+                    )
+                if containers > 0:
+                    self.effects.containers.validate_pod_activation(stub.config.runtime)
+                stub.config.autoscaler = stub.config.autoscaler.model_copy(
+                    update={"min_containers": containers, "max_containers": containers}
+                )
+                stub.updated_at = utc_now()
+                self.stubs.save(session, stub, reuse_existing=False)
+            deployment = DeploymentRepository(session).upsert(
+                deployment.model_copy(update={"updated_at": utc_now()}), workspace_id=workspace_id
+            )
+            effect = DeploymentEffectRepository(session).record(
                 deployment,
                 workspace_id=workspace_id,
-                change=WorkspaceChangeType.Deleted,
+                action=DeploymentAction.Scaled,
+                message=f"scaled deployment {deployment.name} to {containers} containers",
+                data={"containers": containers, "stub_ids": [stub.id for stub in stubs]},
             )
-        if self.placement_resources is not None:
-            self.placement_resources.reconcile_deployments(
-                workspace=workspace_id,
-                required=False,
-            )
-        return deleted_target
+        self.effects.finish([effect])
+        return deployment
 
-    def _discard_failed_deployment(
-        self,
-        deployment: Deployment,
-        *,
-        workspace_id: str,
-    ) -> None:
-        now = utc_now()
-        failed = deployment.model_copy(
-            update={"active": False, "deleted_at": now, "updated_at": now}
-        )
+    def list(
+        self, *, active: bool | None = None, workspace: str | None = None, app_id: str | None = None
+    ) -> list[Deployment]:
         with self.context.database.session() as session:
-            DeploymentRepository(session).upsert(
-                failed,
-                workspace_id=workspace_id,
+            repository = DeploymentRepository(session)
+            if workspace is None:
+                return repository.list_across_workspaces(app_id=app_id, active=active)
+            return repository.list(
+                workspace_id=self.context.workspace(session, workspace).id,
+                app_id=app_id,
+                active=active,
             )
 
-    def _publish_change(
-        self,
-        deployment: Deployment,
-        *,
-        workspace_id: str,
-        change: WorkspaceChangeType,
-    ) -> None:
-        if self.workspace_changes is None:
-            return
-        self.workspace_changes.emit_change(
-            workspace_id=workspace_id,
-            topic=WorkspaceChangeTopic.Deployments,
-            change=change,
-            resource_id=deployment.id,
-            app_id=deployment.app_id,
-            deployment_id=deployment.id,
-            stub_id=deployment.stub_id,
-        )
-
-
-def _claimed_hostname(
-    session: Session,
-    domain: str | None,
-    *,
-    workspace_id: str,
-    admission: CustomDomainUseAdmission,
-) -> str | None:
-    """Resolve the hostname a spec claims, refusing one the deployer cannot serve.
-
-    Checked against the registrations held by the account that owns this workspace,
-    so a spec cannot claim a name under a domain another tenant proved it owns, and a
-    domain registered once serves deployments in any workspace that account owns. A
-    registration still short of `ready` is accepted: the certificate arrives on the
-    provider's schedule, and a deploy that failed until it did would make an ordinary
-    redeploy depend on DNS propagation.
-    """
-
-    if domain is None:
-        return None
-    owner = WorkspaceMemberRepository(session).owner(workspace_id)
-    if owner is not None:
-        admission.assert_may_use_custom_domains(session, user_id=owner.user_id)
-    registered = (
-        CustomDomainRepository(session).get_by_hostname(domain, user_id=owner.user_id)
-        if owner is not None
-        else None
-    )
-    if registered is None:
-        raise InvalidInputError(
-            f"{domain} is not registered to this account; "
-            f"register it before a deployment can serve it"
-        )
-    return domain
-
-
-def _normalize_runtime_spec(spec: DeploymentSpec) -> DeploymentSpec:
-    default_retries = resolve_retries(spec.kind, None)
-    metadata = dict(spec.metadata)
-    role = resolve_pod_role(spec.kind, spec.role)
-    if role is not None:
-        ssh = metadata.get("ssh")
-        metadata["ssh"] = resolve_pod_ssh(role, ssh if isinstance(ssh, bool) else None)
-    if "authorized" not in metadata:
-        metadata["authorized"] = resolve_authorized(spec.kind, None)
-    if metadata.get("tcp") is True:
-        if spec.kind is not DeploymentKind.Pod or not spec.ports:
-            raise InvalidInputError("raw TCP ingress requires a Pod with an exposed port")
-        require_tcp_ingress(public=metadata["authorized"] is False)
-    if "max_pending_tasks" not in metadata:
-        max_pending_tasks = resolve_max_pending_tasks(spec.kind, None)
-        if max_pending_tasks is not None:
-            metadata["max_pending_tasks"] = max_pending_tasks
-    return spec.model_copy(
-        update={
-            "resources": spec.resources.model_copy(
-                update={
-                    "cpu": resolve_cpu(spec.kind, spec.resources.cpu),
-                    "memory": resolve_memory(spec.kind, spec.resources.memory),
-                    "timeout_seconds": resolve_timeout_seconds(
-                        spec.kind,
-                        spec.resources.timeout_seconds,
-                    ),
-                    "keep_warm": resolve_keep_warm_seconds(
-                        spec.kind,
-                        spec.resources.keep_warm,
-                        min_containers=declared_min_containers(spec.metadata),
-                        scheduled=bool(spec.cron),
-                        role=role,
-                    ),
-                    "preemptible": resolve_preemptible(role, spec.resources.preemptible),
-                }
-            ),
-            "role": role,
-            "command": resolve_pod_command(role, spec.command),
-            "disks": resolve_pod_disks(
-                role,
-                name=spec.name,
-                disks=spec.disks,
-                root_disk_bytes=spec.root_disk_bytes,
-            ),
-            "root_disk_bytes": None,
-            "retry_policy": (
-                spec.retry_policy
-                if spec.retry_policy is not None
-                else RetryPolicy.from_retries(default_retries)
-                if default_retries > 0
-                else None
-            ),
-            "metadata": metadata,
-        }
-    )
-
-
-def _metadata_str(metadata: Mapping[str, JsonValue], key: str) -> str:
-    value = metadata.get(key)
-    return value if isinstance(value, str) else ""
-
-
-def _release_superseded_warm_floors(
-    session: Session,
-    stub_ids: list[str],
-    *,
-    workspace_id: str,
-) -> None:
-    """Release prior versions' warm containers while keeping those versions invocable.
-
-    Leave the idle window infinite. Running containers read it from their startup
-    environment and would not see a shorter window written here. A zero floor
-    lets the autoscaler stop idle containers without interrupting busy ones.
-    """
-
-    repository = StubRepository(session)
-    for stub_id in stub_ids:
-        stub = repository.get(stub_id, workspace_id=workspace_id)
-        if stub is None or stub.config.autoscaler.min_containers == 0:
-            continue
-        config = stub.config.model_copy(deep=True)
-        config.autoscaler.min_containers = 0
-        stub.config = config
-        repository.upsert(stub)
-
-
-@dataclass(slots=True)
-class CronJobService:
-    context: ControlContext
-    workspace_changes: WorkspaceChangePublisher | None = None
-
-    def set_for_deployment(
-        self,
-        deployment: Deployment,
-        *,
-        cron: str | None,
-        workspace: str,
-    ) -> CronJobRecord | None:
-        """Replace or remove the workload's schedule under a deployment row lock.
-
-        The subdomain identifies the schedule across deployment versions. Check
-        that this deployment still exists before either write, so a registration
-        delayed past pruning cannot change a replacement workload's schedule.
-        """
-        try:
-            normalized_cron = normalize_cron_expression(cron) if cron else None
-            next_run_at = next_cron_run(normalized_cron) if normalized_cron else None
-        except ValueError as exc:
-            raise InvalidInputError(str(exc)) from exc
-        with self.context.database.session() as session:
-            workspace_id = self.context.workspace(session, workspace).id
-            repository = CronJobRepository(session)
-            if normalized_cron is None:
-                if not DeploymentRepository(session).lock_live(
-                    deployment.id, workspace_id=workspace_id
-                ):
-                    raise ConflictError("cannot change the schedule of a deleted deployment")
-                record = repository.get(deployment.subdomain, workspace_id=workspace_id)
-                repository.delete(deployment.subdomain, workspace_id=workspace_id)
-            else:
-                record = repository.upsert(
-                    CronJobRecord(
-                        workspace_id=workspace_id,
-                        name=deployment.subdomain,
-                        cron=normalized_cron,
-                        deployment_id=deployment.id,
-                        next_run_at=next_run_at,
-                    ),
-                    workspace_id=workspace_id,
-                )
-        if record is not None:
-            self.publish_change(
-                record,
-                WorkspaceChangeType.Created if normalized_cron else WorkspaceChangeType.Deleted,
-            )
-        return record if normalized_cron else None
-
-    def list(self, *, workspace: str = "default") -> list[CronJobRecord]:
-        with self.context.database.session() as session:
-            workspace_id = self.context.workspace(session, workspace).id
-            records = CronJobRepository(session).list(workspace_id=workspace_id)
-        records.sort(key=lambda item: item.name)
-        return records
-
-    def list_all(self) -> list[CronJobRecord]:
-        """Scheduler/operator listing over every workspace's cron jobs."""
-        with self.context.database.session() as session:
-            records = CronJobRepository(session).list_across_workspaces()
-        records.sort(key=lambda item: (item.workspace_id, item.name))
-        return records
-
-    def delete(self, name: str, *, workspace: str = "default") -> None:
-        with self.context.database.session() as session:
-            workspace_id = self.context.workspace(session, workspace).id
-            repository = CronJobRepository(session)
-            record = repository.get(name, workspace_id=workspace_id)
-            repository.delete(name, workspace_id=workspace_id)
-        if record is not None:
-            self.publish_change(record, WorkspaceChangeType.Deleted)
-
-    def set_deployment_enabled(
-        self,
-        deployment_id: str,
-        *,
-        enabled: bool,
-        workspace: str = "default",
-    ) -> list[CronJobRecord]:
-        now = utc_now()
-        with self.context.database.session() as session:
-            workspace_id = self.context.workspace(session, workspace).id
-            repository = CronJobRepository(session)
-            updated: list[CronJobRecord] = []
-            for record in repository.list(workspace_id=workspace_id):
-                if record.deployment_id != deployment_id:
-                    continue
-                record.enabled = enabled
-                if enabled:
-                    record.next_run_at = next_cron_run(record.cron, now)
-                record.updated_at = now
-                updated.append(repository.upsert(record, workspace_id=workspace_id))
-        for record in updated:
-            self.publish_change(record, WorkspaceChangeType.Updated)
-        return updated
-
-    def publish_change(
-        self,
-        record: CronJobRecord,
-        change: WorkspaceChangeType,
-    ) -> None:
-        if self.workspace_changes is None:
-            return
-        self.workspace_changes.emit_change(
-            workspace_id=record.workspace_id,
-            topic=WorkspaceChangeTopic.Deployments,
-            change=change,
-            resource_id=record.name,
-            deployment_id=record.deployment_id,
-        )
+    def get(self, deployment_id_or_name: str) -> Deployment:
+        return DatabaseDeploymentReader(self.context).get(deployment_id_or_name)

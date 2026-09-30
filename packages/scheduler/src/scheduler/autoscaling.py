@@ -12,7 +12,8 @@ from coordination.redis_client import RedisClient
 from coordination.token_lock import release_token_lock, renew_token_lock
 from database.records.apps import AutoscalingStubConfig, AutoscalingStubRecord, StubKind
 from database.records.autoscaling import AutoscalingContainer
-from database.repositories.apps import AppRepository, DeploymentRepository, StubRepository
+from database.repositories.apps import AppRepository, StubRepository
+from database.repositories.deployments import DeploymentRepository
 from database.repositories.orchestration import AutoscalerStateRepository, ContainerRepository
 from pydantic import Field, JsonValue
 from shared.autoscaler_state import (

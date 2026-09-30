@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from control.placement import PlacementResolver
 from database.records.apps import StubRecord
-from database.repositories.apps import DeploymentRepository
+from database.repositories.deployments import DeploymentRepository
 from database.repositories.identity import WorkspaceRecord
 from database.types import DatabaseSession
 from shared.errors import NotFoundError

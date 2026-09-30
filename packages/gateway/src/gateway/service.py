@@ -70,7 +70,6 @@ from coordination.redis_client import AsyncRedisClient
 from coordination.wake_signal import WakeSignalPublisher
 from database.context import ServiceContext
 from database.records.apps import StubKind
-from database.repositories.apps import DeploymentRepository
 from database.repositories.compute import (
     ComputeJoinCredentialRecord,
     ComputeJoinCredentialRepository,
@@ -79,6 +78,7 @@ from database.repositories.compute import (
     ComputeMachineEnrollmentRepository,
     ComputeUnitRepository,
 )
+from database.repositories.deployments import DeploymentRepository
 from database.repositories.identity import WorkspaceMemberRepository, WorkspaceRepository
 from database.repositories.orchestration import (
     ContainerRepository,
@@ -315,6 +315,7 @@ class GatewayControlService:
     container_stopper: GatewayContainerStopper
     connections: RedisAgentConnectionDirectory
     tunnel_authority: AgentTunnelAuthority
+    releases: DeploymentReleaseService = field(default_factory=DeploymentReleaseService)
     capacity_interruption_sink: AgentCapacityInterruptionSink | None = None
     capacity_recovery_wake: WakeSignalPublisher | None = None
     scheduler_maintenance: SchedulerWorkerMaintenance | None = None
@@ -1859,7 +1860,7 @@ class GatewayControlService:
         state = self._agent_state_for_token(request.agent_token)
         if state is None:
             raise AuthorizationDeniedError("agent credential is no longer current")
-        releases = DeploymentReleaseService()
+        releases = self.releases
         release = releases.active()
         if release is None or not releases.controls(release):
             return AgentReleaseResponse(generation=request.generation)
@@ -1907,7 +1908,7 @@ class GatewayControlService:
             raise UpstreamUnavailableError(f"agent stream will be retried: {exc}") from exc
 
     def _stream_agent(self, request: StreamAgentRequest) -> StreamAgentResponse:
-        releases = DeploymentReleaseService()
+        releases = self.releases
         release = releases.active()
         if release is None:
             return StreamAgentResponse(

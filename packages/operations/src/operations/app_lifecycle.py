@@ -6,14 +6,16 @@ from dataclasses import dataclass
 from coordination.redis_client import RedisClient
 from database.context import ServiceContext
 from database.records.apps import StubRecord
-from database.repositories.apps import DeploymentRepository, StubRepository
+from database.repositories.apps import StubRepository
 from database.repositories.deployment_plans import DeploymentPlanRepository
 from database.repositories.execution import TaskRepository
+from execution.containers.planning import validate_checkpoint_activation
 from execution.containers.service import ContainerService
 from execution.pods.planning import pod_instance_lock_key
 from execution.tasks import TaskService
-from shared.container_requests import ContainerShutdownTarget
+from shared.container_requests import ContainerShutdownTarget, WorkerStartupKind
 from shared.deployments import StubKind
+from shared.workload_config import StubRuntimeConfig
 
 from operations.container_shutdown import ContainerShutdownService
 
@@ -28,6 +30,9 @@ class ProductionAppExecutionLifecycleEffects:
     redis: RedisClient
     shutdowns: ContainerShutdownService
     shutdown_timeout_seconds: float = 30.0
+
+    def validate_pod_activation(self, runtime: StubRuntimeConfig) -> None:
+        validate_checkpoint_activation(startup_kind=WorkerStartupKind.Pod, runtime=runtime)
 
     def delete_deployment_execution(self, *, workspace_id: str, deployment_ids: list[str]) -> None:
         with self.context.database.session() as session:
@@ -52,28 +57,13 @@ class ProductionAppExecutionLifecycleEffects:
                 )
         self._delete_app_ephemeral_state(workspace_id=workspace_id, stubs=stubs)
 
-    def stop_deployment_containers(self, *, workspace_id: str, deployment_id: str) -> None:
-        with self.context.database.session() as session:
-            container_ids = DeploymentRepository(session).live_container_ids(
-                workspace_id=workspace_id, deployment_id=deployment_id
-            )
-        for container_id in container_ids:
-            self.containers.stop(container_id)
-
-    def stop_app_containers(
-        self,
-        *,
-        workspace_id: str,
-        app_id: str,
-        container_targets: list[ContainerShutdownTarget],
+    def stop_containers(
+        self, targets: list[ContainerShutdownTarget], *, confirm: bool = True
     ) -> None:
-        del workspace_id, app_id
-        for target in container_targets:
+        for target in targets:
             self.containers.stop(target.container_id)
-        self.shutdowns.confirm(
-            container_targets,
-            timeout_seconds=self.shutdown_timeout_seconds,
-        )
+        if targets and confirm:
+            self.shutdowns.confirm(targets, timeout_seconds=self.shutdown_timeout_seconds)
 
     def delete_app_execution(self, *, workspace_id: str, app_id: str) -> None:
         with self.context.database.session() as session:

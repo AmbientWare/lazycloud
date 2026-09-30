@@ -2832,6 +2832,10 @@ def test_worker_update_fences_previous_runtime_after_activation_and_redis_loss(
         monkeypatch.setenv(
             "LAZYCLOUD_RELEASE_MANIFEST_URL", "https://releases.example.test/new/manifest.json"
         )
+        # A new replica receives its selected manifest when its services are composed.
+        releases = DeploymentReleaseService()
+        gateway = replace(gateway, releases=releases)
+        service = replace(service, releases=releases)
         during_sync = gateway.stream_agent(StreamAgentRequest(agent_token=agent_token))
         assert during_sync.ok and during_sync.slots == observed.slots
         assert during_sync.bootstrap is None

@@ -7,13 +7,12 @@ import pytest
 from api.server.services import ApiServices
 from coordination.event_bus import event_key
 from coordination.redis_client import RedisClient
-from database.repositories.apps import (
-    AppContainerShutdownIntentRepository,
-    DeploymentRepository,
-)
+from database.repositories.apps import AppContainerShutdownIntentRepository
+from database.repositories.deployments import DeploymentRepository
 from database.repositories.orchestration import ContainerRepository
 from operations.app_lifecycle import ProductionAppExecutionLifecycleEffects
 from operations.container_shutdown import ContainerShutdownService
+from operations.deployment_effects import DeploymentEffects
 from operations.management import ManagementService
 from pydantic import JsonValue, TypeAdapter
 from shared.app_identity import FUNCTION_IMAGE
@@ -113,7 +112,7 @@ def test_app_pause_resume_preserves_explicitly_stopped_deployments_and_delete_cl
         )
     )
     management = ManagementService(services)
-    management.set_deployment_active(app.workspace_id, first.id, active=False)
+    management.services.deployments.set_deployment_active(app.workspace_id, first.id, active=False)
     container = services.containers.run(
         "live-app-container",
         FUNCTION_IMAGE,
@@ -147,7 +146,7 @@ def test_app_pause_resume_preserves_explicitly_stopped_deployments_and_delete_cl
     )
     assert not deployment_while_paused.active
     with pytest.raises(ConflictError, match="app is paused"):
-        management.set_deployment_active(
+        management.services.deployments.set_deployment_active(
             app.workspace_id,
             deployment_while_paused.id,
             active=True,
@@ -204,7 +203,11 @@ def test_app_terminal_publication_replays_one_durable_event_with_deterministic_i
         isolated_services.apps,
         deployment_lifecycle=replace(
             isolated_services.apps.deployment_lifecycle,
-            workspace_changes=publisher,
+            effects=DeploymentEffects(
+                isolated_services.context,
+                isolated_services.deployments.effects.containers,
+                workspace_changes=publisher,
+            ),
         ),
         workspace_changes=publisher,
     )
@@ -277,7 +280,11 @@ def test_app_multi_deployment_publication_resumes_after_mid_batch_crash(
         isolated_services.apps,
         deployment_lifecycle=replace(
             isolated_services.apps.deployment_lifecycle,
-            workspace_changes=publisher,
+            effects=DeploymentEffects(
+                isolated_services.context,
+                isolated_services.deployments.effects.containers,
+                workspace_changes=publisher,
+            ),
         ),
         workspace_changes=publisher,
     )
@@ -324,7 +331,11 @@ def test_scheduler_reconciles_unfinished_app_from_durable_state_after_restart(
         isolated_services.apps,
         deployment_lifecycle=replace(
             isolated_services.apps.deployment_lifecycle,
-            workspace_changes=publisher,
+            effects=DeploymentEffects(
+                isolated_services.context,
+                isolated_services.deployments.effects.containers,
+                workspace_changes=publisher,
+            ),
         ),
         workspace_changes=publisher,
     )
@@ -335,7 +346,7 @@ def test_scheduler_reconciles_unfinished_app_from_durable_state_after_restart(
         isolated_services.apps,
         deployment_lifecycle=replace(
             isolated_services.apps.deployment_lifecycle,
-            workspace_changes=isolated_services.workspace_changes,
+            effects=isolated_services.deployments.effects,
         ),
         workspace_changes=isolated_services.workspace_changes,
     )

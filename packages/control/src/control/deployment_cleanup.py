@@ -1,236 +1,119 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Protocol
 from uuid import NAMESPACE_URL, uuid5
 
-from database.records.apps import AppDeploymentIntentRecord
-from database.repositories.apps import (
-    AppDeploymentIntentRepository,
-    CronJobRepository,
-    DeploymentRepository,
+from database.repositories.apps import AppDeploymentIntentRepository, AppRepository
+from database.repositories.cron_jobs import CronJobRepository
+from database.repositories.deployment_effects import (
+    DeploymentAction,
+    DeploymentEffect,
+    DeploymentEffectRepository,
 )
-from database.repositories.execution import EventRepository
-from observability.workspace_changes import WorkspaceChangePublisher
+from database.repositories.deployments import DeploymentRepository
 from shared.app_lifecycle import AppDeploymentIntentTarget
-from shared.deployment_records import Deployment
-from shared.errors import ConflictError, UpstreamUnavailableError
-from shared.events import Event
-from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
+from shared.errors import ConflictError
 from shared.timestamps import utc_now
-from sqlalchemy.orm import Session
 
 from control.context import ControlContext
-
-
-class DeploymentPlacementResourceManager(Protocol):
-    def reconcile_deployments(
-        self,
-        *,
-        workspace: str,
-        required: bool = True,
-    ) -> None: ...
+from control.deployment_effects import DeploymentEffects
 
 
 @dataclass(frozen=True, slots=True)
 class AppDeploymentLifecycleService:
     context: ControlContext
-    workspace_changes: WorkspaceChangePublisher | None = None
-    placement_resources: DeploymentPlacementResourceManager | None = None
+    effects: DeploymentEffects
 
     def apply_intents(
-        self,
-        *,
-        app_id: str,
-        workspace_id: str,
-        intents: list[AppDeploymentIntentRecord],
-    ) -> None:
+        self, *, app_id: str, workspace_id: str, revision: int, claim_id: str
+    ) -> bool:
         now = utc_now()
         with self.context.database.session() as session:
+            app = AppRepository(session).get_for_update(
+                app_id, workspace_id=workspace_id, include_deleted=True
+            )
+            if (
+                app is None
+                or app.lifecycle_revision != revision
+                or app.reconcile_claim_id != claim_id
+            ):
+                return False
             deployments = DeploymentRepository(session)
-            cron_jobs = CronJobRepository(session)
             publications = AppDeploymentIntentRepository(session)
-            events = EventRepository(session)
+            intents = publications.list(app_id=app_id)
+            schedules = CronJobRepository(session)
             cron_by_deployment = {
-                cron.deployment_id: cron
-                for cron in cron_jobs.list(workspace_id=workspace_id)
-                if cron.deployment_id
-            }
-            for intent in intents:
-                deployment = deployments.get(
-                    intent.deployment_id,
+                record.deployment_id: record
+                for record in schedules.list(
                     workspace_id=workspace_id,
-                    include_deleted=True,
+                    deployment_ids=[intent.deployment_id for intent in intents],
                 )
-                if deployment is None:
-                    publications.update_publication(
-                        intent.model_copy(
+            }
+            pending: list[DeploymentEffect] = []
+            for intent in intents:
+                if intent.workspace_change_published_at is not None:
+                    continue
+                deployment = deployments.get(
+                    intent.deployment_id, workspace_id=workspace_id, include_deleted=True
+                )
+                if deployment is None or deployment.app_id != app_id:
+                    raise ConflictError("app lifecycle deployment ownership changed")
+                deleted = intent.target is AppDeploymentIntentTarget.Deleted
+                active = intent.target is AppDeploymentIntentTarget.Active
+                if deployment.deleted_at is None and (deleted or deployment.active != active):
+                    deployment = deployments.upsert(
+                        deployment.model_copy(
                             update={
-                                "workspace_change_published_at": now,
+                                "active": active,
+                                "deleted_at": now if deleted else None,
                                 "updated_at": now,
                             }
-                        )
-                    )
-                    continue
-                if deployment.app_id != app_id:
-                    raise ConflictError("app lifecycle intent deployment ownership changed")
-                change = _apply_deployment_target(deployment, intent.target, now=now)
-                if change is not None:
-                    deployment = deployments.upsert(
-                        deployment,
+                        ),
                         workspace_id=workspace_id,
                     )
-                action = _deployment_action(intent.target)
-                event_id = intent.event_id or str(
-                    uuid5(
-                        NAMESPACE_URL,
-                        "lazycloud:app-lifecycle:deployment:"
-                        f"{app_id}:{intent.operation_revision}:"
-                        f"{deployment.id}:{intent.target.value}",
-                    )
-                )
-                event_created_at = intent.event_created_at or now
-                events.append(
-                    Event(
-                        id=event_id,
-                        action=action,
-                        resource_type="deployment",
-                        resource_id=deployment.id,
-                        message=(
-                            f"{action.removeprefix('deployment.')} deployment {deployment.name}"
-                        ),
-                        created_at=event_created_at,
-                    ),
+                schedule = cron_by_deployment.get(deployment.id)
+                if schedule is not None:
+                    if deleted:
+                        schedules.delete(schedule.name, workspace_id=workspace_id)
+                    elif schedule.enabled != active:
+                        schedules.upsert(
+                            schedule.model_copy(update={"enabled": active, "updated_at": now}),
+                            workspace_id=workspace_id,
+                        )
+                effect = DeploymentEffectRepository(session).record(
+                    deployment,
                     workspace_id=workspace_id,
+                    action=DeploymentAction.Deleted
+                    if deleted
+                    else DeploymentAction.Started
+                    if active
+                    else DeploymentAction.Stopped,
+                    app_revision=revision,
+                    event_id=intent.event_id
+                    or str(
+                        uuid5(
+                            NAMESPACE_URL,
+                            f"lazycloud:app-lifecycle:deployment:{app_id}:{revision}:"
+                            f"{deployment.id}:{intent.target.value}",
+                        )
+                    ),
+                    created_at=intent.event_created_at or now,
                 )
                 publications.update_publication(
                     intent.model_copy(
                         update={
-                            "event_id": event_id,
-                            "event_created_at": event_created_at,
+                            "event_id": effect.id,
+                            "event_created_at": effect.created_at,
                             "updated_at": now,
                         }
                     )
                 )
-                cron_job = cron_by_deployment.get(deployment.id)
-                if cron_job is None:
-                    continue
-                if intent.target is AppDeploymentIntentTarget.Deleted:
-                    cron_jobs.delete(cron_job.name, workspace_id=workspace_id)
-                    continue
-                enabled = intent.target is AppDeploymentIntentTarget.Active
-                if cron_job.enabled is enabled:
-                    continue
-                cron_job.enabled = enabled
-                cron_job.updated_at = now
-                cron_jobs.upsert(cron_job, workspace_id=workspace_id)
-        self._publish_pending_changes(app_id=app_id, workspace_id=workspace_id)
+                pending.append(effect)
+        self.effects.finish(pending)
+        return True
 
-    def _publish_pending_changes(self, *, app_id: str, workspace_id: str) -> None:
-        with self.context.database.session() as session:
-            intents = AppDeploymentIntentRepository(session).list(app_id=app_id)
-        for intent in intents:
-            if intent.workspace_change_published_at is not None:
-                continue
-            if intent.event_id is None or intent.event_created_at is None:
-                raise ConflictError("app deployment lifecycle publication is incomplete")
-            if self.workspace_changes is not None:
-                published = self.workspace_changes.emit_change(
-                    workspace_id=workspace_id,
-                    topic=WorkspaceChangeTopic.Deployments,
-                    change=_workspace_change(intent.target),
-                    resource_id=intent.deployment_id,
-                    app_id=app_id,
-                    deployment_id=intent.deployment_id,
-                    occurred_at=intent.event_created_at,
-                    event_id=intent.event_id,
-                )
-                if published is None:
-                    raise UpstreamUnavailableError(
-                        "deployment lifecycle change publication is unavailable"
-                    )
-            with self.context.database.session() as session:
-                repository = AppDeploymentIntentRepository(session)
-                current = repository.get_for_update(
-                    app_id=app_id,
-                    deployment_id=intent.deployment_id,
-                )
-                if current is None or current.event_id != intent.event_id:
-                    continue
-                repository.update_publication(
-                    current.model_copy(
-                        update={
-                            "workspace_change_published_at": utc_now(),
-                            "updated_at": utc_now(),
-                        }
-                    )
-                )
-
-    def reconcile_placement_and_routes(
-        self,
-        *,
-        workspace_id: str,
-        required: bool,
-    ) -> None:
-        if self.placement_resources is None:
-            return
-        self.placement_resources.reconcile_deployments(
-            workspace=workspace_id,
-            required=required,
-        )
-
-
-def _apply_deployment_target(
-    deployment: Deployment,
-    target: AppDeploymentIntentTarget,
-    *,
-    now: datetime,
-) -> WorkspaceChangeType | None:
-    if target is AppDeploymentIntentTarget.Deleted:
-        if deployment.deleted_at is not None:
-            return None
-        deployment.active = False
-        deployment.deleted_at = now
-        deployment.updated_at = now
-        return WorkspaceChangeType.Deleted
-    active = target is AppDeploymentIntentTarget.Active
-    if deployment.deleted_at is not None or deployment.active is active:
-        return None
-    deployment.active = active
-    deployment.updated_at = now
-    return WorkspaceChangeType.Updated
-
-
-def _deployment_action(target: AppDeploymentIntentTarget) -> str:
-    if target is AppDeploymentIntentTarget.Active:
-        return "deployment.started"
-    if target is AppDeploymentIntentTarget.Inactive:
-        return "deployment.stopped"
-    return "deployment.deleted"
-
-
-def _workspace_change(target: AppDeploymentIntentTarget) -> WorkspaceChangeType:
-    return (
-        WorkspaceChangeType.Deleted
-        if target is AppDeploymentIntentTarget.Deleted
-        else WorkspaceChangeType.Updated
-    )
-
-
-def delete_deployment_cron_jobs(
-    session: Session,
-    *,
-    deployment_ids: set[str],
-    workspace_id: str | None = None,
-) -> None:
-    if not deployment_ids:
-        return
-    CronJobRepository(session).delete_for_deployments(deployment_ids, workspace_id=workspace_id)
-
-
-__all__ = [
-    "AppDeploymentLifecycleService",
-    "DeploymentPlacementResourceManager",
-    "delete_deployment_cron_jobs",
-]
+    def reconcile_placement_and_routes(self, *, workspace_id: str, required: bool) -> None:
+        if self.effects.placement_resources is not None:
+            self.effects.placement_resources.reconcile_deployments(
+                workspace=workspace_id, required=required
+            )

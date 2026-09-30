@@ -3,7 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from database.records.apps import AppRecord
-from database.repositories.apps import AppRepository, DeploymentRepository
+from database.repositories.apps import AppRepository
+from database.repositories.deployments import DeploymentRepository
 from foundation.ids import try_uuid
 from shared.deployment_records import Deployment
 from shared.errors import NotFoundError

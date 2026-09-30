@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from control.deployment_resources import DeploymentResource
+from control.deployment_resources import DeploymentResource, client_manifest_resource
 from fastapi import APIRouter, Depends, status
 from fastapi.responses import FileResponse, RedirectResponse, Response
 from identity.authz import token_has_scope
@@ -114,9 +114,10 @@ def _deployment_list_response(
     can_write: bool,
     services: ManagementServiceCore,
 ) -> DeploymentListResponse:
-    app_states = {
-        app.id: app.active for app in services.apps.list(workspace=workspace, active=None)
-    }
+    app_states = services.apps.active_by_ids(
+        [deployment.app_id for deployment in deployments if deployment.app_id],
+        workspace=workspace,
+    )
     scaling = _deployment_scaling_responses(deployments, workspace=workspace, services=services)
     return DeploymentListResponse(
         data=[
@@ -217,7 +218,7 @@ def stop_all_active_deployments(
     workspace_id: write_workspace,
     services: ManagementServiceCore = Depends(management_services),
 ) -> DeploymentStopAllResponse:
-    stopped = _management(services).stop_all_active_deployments(workspace_id)
+    stopped = services.deployments.stop_all_active_deployments(workspace_id)
     return DeploymentStopAllResponse(
         stopped=_deployment_list_response(
             stopped,
@@ -248,12 +249,15 @@ def deployment_url_by_name(
         msg = f"invalid stub type: {stub_type}"
         raise InvalidInputError(msg)
     parsed_version = _parsed_deployment_version(version)
-    result = _management(services).deployment_url_by_name(
-        workspace_id,
-        STUB_TYPE_ALIASES[stub_type],
+    try:
+        kind = DeploymentKind(STUB_TYPE_ALIASES[stub_type].value)
+    except ValueError as exc:
+        raise InvalidInputError(f"deployment kind is not invokable: {stub_type}") from exc
+    result = services.deployment_resources.resolve_target(
         deployment_name,
-        parsed_version,
-        external_url=external_url,
+        kind,
+        workspace=workspace_id,
+        version=parsed_version,
     )
     return DeploymentUrlResponse(
         deployment=actionable_deployment_response(
@@ -265,7 +269,7 @@ def deployment_url_by_name(
             ).get(result.deployment.id),
         ),
         stub=StubResponse.model_validate(result.stub) if result.stub is not None else None,
-        url=result.url,
+        url=result.invoke_url(external_url, pin_version=parsed_version is not None),
     )
 
 
@@ -304,10 +308,9 @@ def deployment_url(
     token: read_token,
     services: ManagementServiceCore = Depends(management_services),
 ) -> DeploymentUrlResponse:
-    result = _management(services).deployment_url(
+    result = services.deployment_resources.resolve(
         deployment_id,
         workspace=workspace_id,
-        external_url=external_url,
     )
     return DeploymentUrlResponse(
         deployment=actionable_deployment_response(
@@ -319,7 +322,7 @@ def deployment_url(
             ).get(result.deployment.id),
         ),
         stub=StubResponse.model_validate(result.stub) if result.stub is not None else None,
-        url=result.url,
+        url=result.invoke_url(external_url),
     )
 
 
@@ -335,9 +338,8 @@ def deployment_manifest(
     workspace_id: read_workspace,
     services: ManagementServiceCore = Depends(management_services),
 ) -> ClientManifestResource:
-    return _management(services).deployment_manifest(
-        deployment_id,
-        workspace=workspace_id,
+    return client_manifest_resource(
+        services.deployment_resources.resolve(deployment_id, workspace=workspace_id),
         external_url=external_url,
     )
 
@@ -352,7 +354,7 @@ def stop_deployment(
     workspace_id: write_workspace,
     services: ManagementServiceCore = Depends(management_services),
 ) -> DeploymentResponse:
-    deployment = _management(services).set_deployment_active(
+    deployment = services.deployments.set_deployment_active(
         workspace_id,
         deployment_id,
         active=False,
@@ -377,7 +379,7 @@ def start_deployment(
     workspace_id: write_workspace,
     services: ManagementServiceCore = Depends(management_services),
 ) -> DeploymentResponse:
-    deployment = _management(services).set_deployment_active(
+    deployment = services.deployments.set_deployment_active(
         workspace_id,
         deployment_id,
         active=True,
@@ -403,7 +405,7 @@ def scale_deployment(
     workspace_id: write_workspace,
     services: ManagementServiceCore = Depends(management_services),
 ) -> DeploymentResponse:
-    deployment = _management(services).scale_deployment(
+    deployment = services.deployments.scale_deployment(
         workspace_id,
         deployment_id,
         containers=request.replicas,
@@ -429,7 +431,7 @@ def get_deployment(
     token: read_token,
     services: ManagementServiceCore = Depends(management_services),
 ) -> DeploymentDetailResponse:
-    deployment = _management(services).retrieve_deployment(workspace_id, deployment_id)
+    deployment = services.deployments.retrieve_deployment(workspace_id, deployment_id)
     response = actionable_deployment_response(
         deployment,
         can_write=token_has_scope(token, AuthScope.Write),
@@ -484,7 +486,7 @@ def start_devbox(
     """Ask a devbox to start; answers at once, and the status shows it starting."""
     return services.devboxes.start(
         _deployment_resource(services, deployment_id, workspace_id),
-        deployments=_management(services),
+        deployments=services.deployments,
     )
 
 
@@ -527,4 +529,4 @@ def delete_deployment(
     workspace_id: write_workspace,
     services: ManagementServiceCore = Depends(management_services),
 ) -> None:
-    _management(services).delete_deployment(workspace_id, deployment_id)
+    services.deployments.delete(deployment_id, workspace=workspace_id)

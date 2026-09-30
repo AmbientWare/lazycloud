@@ -24,6 +24,6 @@ def test_deleting_a_deployment_removes_every_version_from_the_workload_listing(
     newest = isolated_services.deployments.deploy(spec)
     management = ManagementService(isolated_services)
 
-    management.delete_deployment("default", newest.id)
+    management.services.deployments.delete(newest.id, workspace="default")
 
     assert list(management.list_deployments("default", app_id=app.id).data) == []

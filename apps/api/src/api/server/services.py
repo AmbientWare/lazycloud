@@ -25,17 +25,16 @@ from control.apps import (
     AppReader,
     AppService,
     DatabaseAppExecutionAdmission,
-    DatabaseAppImageAvailability,
 )
+from control.cron_jobs import CronJobService
 from control.custom_domains import CustomDomainService
 from control.deployment_cleanup import (
     AppDeploymentLifecycleService,
-    DeploymentPlacementResourceManager,
 )
+from control.deployment_effects import DeploymentPlacementResourceManager
 from control.deployment_plans import DeploymentPlanService
-from control.deployment_registration import DeploymentRegistrationService
 from control.deployment_resources import DeploymentResourceService
-from control.deployments import CronJobService, DeploymentService
+from control.deployments import DeploymentService
 from control.placement import PlacementResolver
 from control.readers import DatabaseAppReader, DatabaseDeploymentReader
 from control.service import ControlServices
@@ -141,7 +140,7 @@ from operations.container_shutdown import (
     DatabaseContainerStorageRelease,
     DatabaseDurableWorkerAbsence,
 )
-from operations.management import ManagementService
+from operations.deployment_effects import DeploymentEffects
 from operations.tasks import TaskManagementService
 from provider_aws.provider import AwsProvider, AwsProviderSettings
 from provider_clients import (
@@ -1192,7 +1191,6 @@ def create_runtime_core(
 def create_management_core(core: RuntimeServiceCore) -> ManagementServiceCore:
     context = core.context
     gateway_config = core.gateway_settings
-    events = core.events
     workspace_changes = core.workspace_changes
     resolved_volume_filesystem = core.volume_filesystem
     redis = core.redis_client
@@ -1233,11 +1231,6 @@ def create_management_core(core: RuntimeServiceCore) -> ManagementServiceCore:
         objects=resolved_volume_filesystem,
         metering=volume_metering_service,
     )
-    deployment_lifecycle = AppDeploymentLifecycleService(
-        context,
-        workspace_changes=workspace_changes,
-        placement_resources=placement_resources,
-    )
     execution_lifecycle = ProductionAppExecutionLifecycleEffects(
         context,
         containers,
@@ -1245,6 +1238,10 @@ def create_management_core(core: RuntimeServiceCore) -> ManagementServiceCore:
         redis,
         container_shutdowns,
     )
+    deployment_effects = DeploymentEffects(
+        context, execution_lifecycle, workspace_changes, placement_resources
+    )
+    deployment_lifecycle = AppDeploymentLifecycleService(context, deployment_effects)
     deployment_plans = DeploymentPlanService(
         context,
         execution_lifecycle,
@@ -1255,7 +1252,6 @@ def create_management_core(core: RuntimeServiceCore) -> ManagementServiceCore:
         context,
         deployment_lifecycle,
         execution_lifecycle,
-        DatabaseAppImageAvailability(),
         workspace_changes=workspace_changes,
     )
     cron_jobs = CronJobService(
@@ -1264,14 +1260,12 @@ def create_management_core(core: RuntimeServiceCore) -> ManagementServiceCore:
     )
     deployments = DeploymentService(
         context,
-        events,
         compute_policies,
-        DeploymentRegistrationService(apps, control_plane.stubs),
+        apps,
+        control_plane.stubs,
         cron_jobs,
         payment_admission,
-        execution_lifecycle,
-        workspace_changes=workspace_changes,
-        placement_resources=placement_resources,
+        deployment_effects,
     )
     custom_domains = CustomDomainService(
         context=context,
@@ -1751,7 +1745,6 @@ def compose_management_routes(
             apps=core.apps,
             deployments=core.deployments,
             deployment_resources=core.deployment_resources,
-            management=ManagementService(core),
         ),
         image_service=image,
         task_rerun_service=TaskRerunService(core, function_invoker=function),
@@ -1887,6 +1880,7 @@ def _gateway_control_service(
     compute_states = RedisComputeStateRepository(core.redis())
     return GatewayControlService(
         core,
+        releases=core.containers.releases,
         stubs=core.control_plane_service.stubs,
         function_tasks=FunctionControlService(core),
         compute_state=compute_states,
@@ -1975,6 +1969,7 @@ def _worker_repository_service(
 ) -> WorkerRepositoryService:
     redis = core.redis()
     return WorkerRepositoryService(
+        releases=core.containers.releases,
         workers=scheduler_workers,
         containers=scheduler_containers,
         runtime_state=RedisContainerRuntimeStateRepository(redis),

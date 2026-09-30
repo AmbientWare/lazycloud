@@ -10,7 +10,7 @@ from uuid import uuid4
 from coordination.redis_client import RedisClient
 from coordination.token_lock import release_token_lock, try_acquire_token_lock
 from database.records.apps import StubRecord
-from database.repositories.apps import CronJobRepository
+from database.repositories.cron_jobs import CronJobRepository
 from database.repositories.execution import CronJobRunCursor, CronJobRunRepository
 from shared.contracts import ContractModel
 from shared.cron import CronJobRecord, CronJobRun, next_cron_run

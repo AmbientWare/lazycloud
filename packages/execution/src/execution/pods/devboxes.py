@@ -10,7 +10,8 @@ from typing import Protocol
 
 from control.deployment_resources import DeploymentResource
 from database.records.apps import StubRecord
-from database.repositories.apps import DeploymentRepository, StubRepository
+from database.repositories.apps import StubRepository
+from database.repositories.deployments import DeploymentRepository
 from database.repositories.disks import DiskRepository
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.orchestration import (
@@ -55,6 +56,8 @@ class DevboxDeployments(Protocol):
         self, workspace: str, deployment_id_or_name: str, *, active: bool
     ) -> Deployment: ...
 
+
+class DevboxContainerStopper(Protocol):
     def stop_deployment_containers(
         self, workspace: str, deployment: Deployment, *, reason: StopContainerReason | None
     ) -> None: ...
@@ -172,7 +175,7 @@ class DevboxService:
         return self._describe(resource)
 
     def stop(
-        self, resource: DeploymentResource, *, deployments: DevboxDeployments
+        self, resource: DeploymentResource, *, deployments: DevboxContainerStopper
     ) -> DevboxResponse:
         """Park the devbox and stop its container; the deployment stays on.
 
