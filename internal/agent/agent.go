@@ -31,6 +31,9 @@ const (
 	linkSocketName      = "agent.sock"
 )
 
+// maxSocketPath is the longest Unix socket path Linux accepts.
+const maxSocketPath = 107
+
 // maxMessageBytes bounds host connection messages. A claim can carry several
 // 16 MiB inputs; the server limits how many it returns.
 const maxMessageBytes = 512 << 20
@@ -46,6 +49,9 @@ type Config struct {
 	// StateDir holds the host identity, the source cache and per-container
 	// workspaces and sockets.
 	StateDir string
+	// SocketDir holds one directory per container with its link socket. Unix
+	// socket paths are limited to 107 bytes, so it must be short.
+	SocketDir string
 	// JoinToken enrolls the host on first start.
 	JoinToken string
 	// RuntimeDir holds managed Python runtimes at <dir>/<python_version>.
@@ -98,6 +104,13 @@ func Run(ctx context.Context, cfg Config) error {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return fmt.Errorf("create state directory: %w", err)
 		}
+	}
+	// A container id is 36 bytes; the socket path must fit sun_path.
+	if n := len(filepath.Join(cfg.SocketDir, "01234567-89ab-cdef-0123-456789abcdef", linkSocketName)); n > maxSocketPath {
+		return fmt.Errorf("socket directory %q gives %d-byte socket paths; the limit is %d", cfg.SocketDir, n, maxSocketPath)
+	}
+	if err := os.MkdirAll(cfg.SocketDir, 0o700); err != nil {
+		return fmt.Errorf("create socket directory: %w", err)
 	}
 	if _, err := os.Stat(cfg.SupervisorPath); err != nil {
 		return fmt.Errorf("supervisor binary: %w", err)

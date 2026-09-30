@@ -2,11 +2,15 @@
 
 ## Purpose
 
-Rebuild the backend and host runtime in Go using the current application as the
-product reference. Keep the Python SDK, public CLI and Python runner, and the
-TypeScript frontend as language choices; their implementations can change. Make
-ownership clearer, remove unnecessary work and reduce the code and operational
-machinery needed for equivalent capabilities.
+Rebuild the backend and host runtime in Go, with the current application as the
+1:1 product example. The rewrite is the same product done better. Every
+capability, workflow, SDK and CLI command, dashboard feature and documented
+behavior of the reference exists in the rewrite and works the same way for
+users. The implementation is simpler, faster and more reliable. Keep the Python
+SDK, public CLI and Python runner, and the TypeScript frontend as language
+choices; their implementations can change. Make ownership clearer, remove
+unnecessary work and reduce the code and operational machinery needed for
+equivalent capabilities.
 
 This document defines the target architecture and the prompt for an agent assigned
 one area. The checklist tracks separate capabilities, not an implementation order.
@@ -45,18 +49,27 @@ The reference Go helpers (apps/disk-engine, apps/sandbox-supervisor and
 apps/image-runtime) already run on hosts. Evaluate them against the host runtime
 design and bring over what fits; they are evidence, not code to copy unchanged.
 
-## Fresh implementation, without backward compatibility
+## Same product, better implementation
 
-Backward compatibility with the Python backend is not required. Design new public
-APIs, host protocols, schemas, configuration and deployment topology where they
-make the platform simpler. Update SDK, CLI, runner and web consumers together.
-Do not build adapters, dual schemas, old endpoints or data migration bridges just
-to support the old implementation.
+The reference is the specification of what users get, one to one. Its public
+docs, SDK API, CLI commands and flags, dashboard pages, deployed endpoint URLs and
+error behavior define the target. An area is done when it matches the reference
+for users and beats it on correctness, simplicity or performance. A missing
+command, option or page is a parity gap, never a simplification. Record every
+intentional user-visible difference with its reason in the area's task file.
+Differences are limited to fixing defects and making a behavior clearer or
+faster.
 
-The reference defines product capabilities to understand, not interfaces to copy.
-Preserve required user outcomes, isolation, durability and recovery; identify
-intentional product behavior changes separately. This freedom includes removing
-bad old behavior and choosing clearer resource models.
+Internals are free. Backward compatibility with the Python backend's internal
+interfaces is not required. Design new management APIs, host protocols,
+schemas, configuration and deployment topology where they make the platform
+simpler, and update SDK, CLI, runner and web consumers together so users see
+the same product. Do not build adapters, dual schemas, old endpoints or data
+migration bridges just to support the old implementation.
+
+Preserve required user outcomes, isolation, durability and recovery. Existing
+package names, service topology, queries, locks and algorithms are evidence of
+what the product needs, not structure to copy.
 
 New local installations use a fresh PostgreSQL schema and native SQL migrations.
 Old revisions remain immutable in the pinned reference. Importing old production
@@ -403,17 +416,19 @@ before cutover. Any data import needs a separate explicit design. Deployment aut
 isolated from production until authorized. CI must never imply missing backend
 acceptance passed.
 
-Completion requires working behavior, preserved guarantees, simpler implementation,
-measured performance and removal of superseded paths. Record gaps and leave the
+Completion requires user-visible parity with the reference, preserved guarantees,
+simpler implementation, measured performance and removal of superseded paths. Record gaps and leave the
 area unchecked until its acceptance is complete. All items below concern the new
 implementation; previous Python rewrite checkmarks do not carry over.
 
 ## Agent prompt
 
 Read this document and applicable AGENTS.md files. Investigate the assigned area
-against the pinned reference and its current consumers. Propose the simplest
-workflow consistent with these owners, identify what disappears, and resolve
-material contract/architecture conflicts before implementation.
+against the pinned reference and its current consumers. List the reference's
+user-visible behavior for the area, since the rewrite matches it one to one.
+Propose the simplest workflow consistent with these owners, identify what
+disappears, and resolve material contract/architecture conflicts before
+implementation.
 
 When implementation is requested, complete the owner and necessary cross-owner
 changes, coordinated client updates, real acceptance and before/after evidence. Keep

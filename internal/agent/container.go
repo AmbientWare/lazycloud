@@ -92,7 +92,7 @@ func (a *Agent) newContainer(id, handler string, slots int, phase hostproto.Cont
 }
 
 func (c *container) workspaceDir() string { return filepath.Join(c.dir, "workspace") }
-func (c *container) linkDir() string      { return filepath.Join(c.dir, "link") }
+func (c *container) linkDir() string      { return filepath.Join(c.a.cfg.SocketDir, c.id) }
 func (c *container) dockerName() string   { return "lazycloud-" + c.id }
 
 func (c *container) configure() *hostproto.Configure {
@@ -309,8 +309,10 @@ func (c *container) cleanup(ctx context.Context) {
 	if err := c.a.removeContainer(ctx, c.dockerName()); err != nil {
 		c.log.Warn("removing docker container failed", "error", err)
 	}
-	if err := os.RemoveAll(c.dir); err != nil {
-		c.log.Warn("removing container directory failed", "error", err)
+	for _, dir := range []string{c.dir, c.linkDir()} {
+		if err := os.RemoveAll(dir); err != nil {
+			c.log.Warn("removing container directory failed", "dir", dir, "error", err)
+		}
 	}
 }
 
@@ -526,17 +528,19 @@ func (c *container) cancelAttempt(attempt string) {
 	}
 }
 
-// onFinished frees the slot and completes the attempt after its output.
+// onFinished completes the attempt after its output, then frees the slot.
+// The server counts the attempt against the container's slots until the
+// completion commits, so claiming earlier would find no free slot and wait.
 func (c *container) onFinished(finished *hostproto.AttemptFinished) {
-	c.mu.Lock()
-	delete(c.running, finished.GetAttemptId())
-	c.mu.Unlock()
-	c.signalSlotFree()
 	seq := c.logs.mark()
 	c.completions.Add(1)
 	c.a.goOwned(func(ctx context.Context) {
 		defer c.completions.Done()
 		c.complete(ctx, seq, finished)
+		c.mu.Lock()
+		delete(c.running, finished.GetAttemptId())
+		c.mu.Unlock()
+		c.signalSlotFree()
 	})
 }
 

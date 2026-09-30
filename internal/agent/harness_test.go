@@ -282,6 +282,7 @@ func (e *env) startAgent() *runningAgent {
 	cfg := Config{
 		Server:         e.address,
 		StateDir:       e.stateDir,
+		SocketDir:      filepath.Join(e.stateDir, "s"),
 		JoinToken:      e.server.joinToken,
 		RuntimeDir:     runtimeDir,
 		SupervisorPath: supervisorBinary,

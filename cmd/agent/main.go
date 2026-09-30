@@ -47,6 +47,7 @@ func parseConfig(args []string) (agent.Config, error) {
 	executable, _ := os.Executable()
 	flags.StringVar(&cfg.Server, "server", os.Getenv("LAZYCLOUD_SERVER"), "control plane gRPC address, host:port")
 	flags.StringVar(&cfg.StateDir, "state-dir", envOr("LAZYCLOUD_AGENT_STATE_DIR", "/var/lib/lazycloud-agent"), "host identity, source cache and container state")
+	flags.StringVar(&cfg.SocketDir, "socket-dir", envOr("LAZYCLOUD_AGENT_SOCKET_DIR", defaultSocketDir()), "short directory for per-container link sockets")
 	flags.StringVar(&cfg.JoinToken, "join-token", os.Getenv("LAZYCLOUD_JOIN_TOKEN"), "single-use token that enrolls the host on first start")
 	flags.StringVar(&cfg.RuntimeDir, "runtime-dir", envOr("LAZYCLOUD_RUNTIME_DIR", "/opt/lazycloud/runtimes"), "managed Python runtimes, one directory per version")
 	flags.StringVar(&cfg.SupervisorPath, "supervisor", envOr("LAZYCLOUD_SUPERVISOR", filepath.Join(filepath.Dir(executable), "supervisor")), "static supervisor binary mounted into containers")
@@ -106,4 +107,16 @@ func version() string {
 		}
 	}
 	return info.Main.Version
+}
+
+// defaultSocketDir is /run/lazycloud-agent for root and the user's runtime
+// directory otherwise, both short enough for Unix socket paths.
+func defaultSocketDir() string {
+	if os.Geteuid() == 0 {
+		return "/run/lazycloud-agent"
+	}
+	if dir := os.Getenv("XDG_RUNTIME_DIR"); dir != "" {
+		return filepath.Join(dir, "lazycloud-agent")
+	}
+	return filepath.Join(os.TempDir(), fmt.Sprintf("lazycloud-agent-%d", os.Getuid()))
 }

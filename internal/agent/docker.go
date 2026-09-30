@@ -63,6 +63,7 @@ func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostprot
 			Env:        env,
 			Labels:     labels,
 			WorkingDir: containerWorkspace,
+			User:       containerUser(),
 		},
 		HostConfig: &containertypes.HostConfig{
 			Runtime: a.cfg.OCIRuntime,
@@ -190,4 +191,14 @@ func (a *Agent) adopt(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// containerUser runs workloads as the agent's own user when the agent is not
+// root, so it can remove the files they leave in the workspace. A root agent
+// runs them as the image's user.
+func containerUser() string {
+	if uid := os.Geteuid(); uid != 0 {
+		return fmt.Sprintf("%d:%d", uid, os.Getegid())
+	}
+	return ""
 }
