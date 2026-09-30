@@ -1859,6 +1859,8 @@ class Sandbox(ControlClientConfigMixin):
             ready_stub_id = self._ready_stub_id(container_id, timeout_seconds=timeout_seconds)
         except SandboxConnectionError as exc:
             self._raise_failed_create(container_id, exc)
+        except (KeyboardInterrupt, SystemExit) as exc:
+            self._raise_interrupted_create(container_id, exc)
         instance = SandboxInstance(
             container_id=container_id,
             stub_id=ready_stub_id or response.stub_id or fallback_stub_id,
@@ -1876,6 +1878,8 @@ class Sandbox(ControlClientConfigMixin):
                     state=str(exc),
                 ),
             )
+        except (KeyboardInterrupt, SystemExit) as exc:
+            self._raise_interrupted_create(container_id, exc)
         return instance
 
     def _ready_stub_id(
@@ -1926,6 +1930,13 @@ class Sandbox(ControlClientConfigMixin):
                     state=state,
                 )
             return response.stub_id
+
+    def _raise_interrupted_create(self, container_id: str, interruption: BaseException) -> Never:
+        try:
+            self.control_client.sandbox_terminate(container_id)
+        except Exception as cleanup_error:
+            raise interruption from cleanup_error
+        raise interruption
 
     def _raise_failed_create(
         self,

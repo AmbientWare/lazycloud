@@ -2576,8 +2576,16 @@ class ComputeService:
                     raise ConflictError("maintenance has observed a newer release")
                 self._require_release_headroom(session, unit, worker, release, fleet)
             elif worker.admitted_release_generation > 0:
-                operation = self._prepare_worker_release(session, unit, worker, release, fleet)
-                if unit.capacity_mode is ComputeCapacityMode.Pooled:
+                replacement_required = self._worker_release_needs_replacement(session, unit, worker)
+                operation = self._prepare_worker_release(
+                    session,
+                    unit,
+                    worker,
+                    release,
+                    fleet,
+                    replacement_required=replacement_required,
+                )
+                if replacement_required:
                     from compute.release_rollout import release_replacement
 
                     replacement = release_replacement(
@@ -2621,7 +2629,33 @@ class ComputeService:
             unit = ComputeUnitRepository(session).get_by_capacity_owner_id(worker.capacity_owner_id)
             if unit is None:
                 raise NotFoundError("worker capacity owner is missing")
-            return self._prepare_worker_release(session, unit, worker, release, fleet)
+            return self._prepare_worker_release(
+                session,
+                unit,
+                worker,
+                release,
+                fleet,
+                replacement_required=self._worker_release_needs_replacement(session, unit, worker),
+            )
+
+    @staticmethod
+    def _worker_release_needs_replacement(
+        session: DatabaseSession, unit: ComputeUnitRecord, worker: SchedulerWorkerRecord
+    ) -> bool:
+        if unit.capacity_mode is not ComputeCapacityMode.Pooled:
+            return False
+        if not unit.platform_fleet or any(
+            free < total
+            for free, total in (
+                (worker.free_cpu_millicores, worker.total_cpu_millicores),
+                (worker.free_memory_mib, worker.total_memory_mib),
+                (worker.free_gpu_count, worker.total_gpu_count),
+                (worker.free_disk_bytes, worker.total_disk_bytes),
+                (worker.free_disk_volumes, worker.total_disk_volumes),
+            )
+        ):
+            return True
+        return ContainerRepository(session).count_live_for_machine(worker.machine_id) > 0
 
     def begin_idle_agent_release(
         self,
@@ -2693,6 +2727,8 @@ class ComputeService:
         worker: SchedulerWorkerRecord,
         release: ActiveRelease,
         fleet: list[SchedulerWorkerRecord],
+        *,
+        replacement_required: bool,
     ) -> CapacityMaintenanceRecord:
         from compute.release_rollout import release_replacement
 
@@ -2722,10 +2758,7 @@ class ComputeService:
                 ):
                     current = repository.release_deleted_replacement(current, now=utc_now())
                     active = [current if item.id == current.id else item for item in active]
-            if (
-                current.replacement_machine_id is None
-                and unit.capacity_mode is ComputeCapacityMode.Pooled
-            ):
+            if current.replacement_machine_id is None and replacement_required:
                 reserved = {
                     machine_id
                     for item in active
@@ -2747,6 +2780,16 @@ class ComputeService:
                         replacement_machine_id=replacement.machine_id,
                         now=utc_now(),
                     )
+                elif not current.surge_machines:
+                    cost = self._require_release_surge(session, unit, worker)
+                    current = repository.reserve_surge(
+                        current,
+                        running_cpu_millicores=unit.worker_cpu_millicores
+                        if not unit.worker_gpu_count
+                        else 0,
+                        hourly_cost_micros=cost,
+                        now=utc_now(),
+                    )
             repository.reserve_allocations(current, worker)
             return current
         reserved = {
@@ -2762,32 +2805,11 @@ class ComputeService:
                 release,
                 now=utc_now(),
             )
-            if unit.capacity_mode is ComputeCapacityMode.Pooled
+            if replacement_required
             else None
         )
-        surge = int(unit.capacity_mode is ComputeCapacityMode.Pooled and replacement is None)
-        cost = (
-            unit.offer_cost_terms.complete_hourly_cost_micros
-            if surge and unit.offer_cost_terms is not None
-            else None
-            if surge
-            else 0
-        )
-        if surge:
-            provider, _offer = self._resolved_internal_unit_provider(unit)
-            if (
-                provider.pooled is None
-                or provider.policy is None
-                or not provider.policy.can_purchase
-            ):
-                raise ConflictError("provider policy does not permit replacement capacity")
-            instance = ComputeProviderInstanceRepository(session).get_by_machine(worker.machine_id)
-            if (
-                instance is None
-                or instance.pool_id != unit.id
-                or not _provider_machine_can_be_replaced(instance)
-            ):
-                raise ConflictError("source machine cannot receive replacement capacity")
+        surge = int(replacement_required and replacement is None)
+        cost = self._require_release_surge(session, unit, worker) if surge else 0
         operation = self._start_maintenance(
             session,
             unit,
@@ -2809,6 +2831,30 @@ class ComputeService:
         )
         repository.reserve_allocations(operation, worker)
         return operation
+
+    def _require_release_surge(
+        self, session: DatabaseSession, unit: ComputeUnitRecord, worker: SchedulerWorkerRecord
+    ) -> int | None:
+        provider, _offer = self._resolved_internal_unit_provider(unit)
+        if (
+            provider.pooled is None
+            or provider.policy is None
+            or not provider.policy.can_purchase
+            or unit.provider_state.degraded_reason
+        ):
+            raise ConflictError("provider policy does not permit replacement capacity")
+        instance = ComputeProviderInstanceRepository(session).get_by_machine(worker.machine_id)
+        if (
+            instance is None
+            or instance.pool_id != unit.id
+            or not _provider_machine_can_be_replaced(instance)
+        ):
+            raise ConflictError("source machine cannot receive replacement capacity")
+        return (
+            unit.offer_cost_terms.complete_hourly_cost_micros
+            if unit.offer_cost_terms is not None
+            else None
+        )
 
     def _start_maintenance(
         self,
@@ -4744,11 +4790,7 @@ class ComputeService:
                 units = ComputeUnitRepository(session)
                 units.lock_platform_capacity()
                 unit = units.get(candidate.pool_id, for_update=True)
-                if (
-                    unit is None
-                    or unit.phase in ENDED_UNIT_PHASES
-                    or unit.provider_state.degraded_reason
-                ):
+                if unit is None or unit.phase in ENDED_UNIT_PHASES:
                     return False
                 repository = CapacityMaintenanceRepository(session)
                 existing = next(

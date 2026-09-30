@@ -41,16 +41,6 @@ def managed_runtime_catalog_root(
     }
     locked_versions = locked_distributions or {"packaging": "25.0"}
     dependency_requirements = requirements or ["packaging>=24,<27"]
-    catalog_requirements = sorted(
-        {
-            *dependency_requirements,
-            *(
-                requirement
-                for values in (locked_requirements or {}).values()
-                for requirement in values
-            ),
-        }
-    )
     artifacts: dict[str, dict[str, ManagedRuntimeManifest]] = {}
     for python_version in MANAGED_RUNTIME_PYTHON_VERSIONS:
         version_artifacts: dict[str, ManagedRuntimeManifest] = {}
@@ -118,7 +108,14 @@ def managed_runtime_catalog_root(
                 locked_distributions={
                     _canonical_name(name): version for name, version in locked_versions.items()
                 },
-                requirements=catalog_requirements,
+                managed_requirements={
+                    _canonical_name(name): sorted(dependency_requirements)
+                    for name in managed_versions
+                },
+                locked_requirements={
+                    _canonical_name(name): sorted((locked_requirements or {}).get(name, []))
+                    for name in locked_versions
+                },
             )
         artifacts[python_version] = version_artifacts
     launcher_source = (

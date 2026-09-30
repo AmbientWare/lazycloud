@@ -49,7 +49,9 @@ def test_network_assignments_overlap_and_close_preserves_transferred_resources(
                 timeout=5,
             )
 
-    pool = DirectoryPool(worker_id="worker", bridge_name="bridge", host_netns_path=str(slots))
+    pool = DirectoryPool(
+        worker_id="worker", bridge_name="bridge", host_netns_path=str(slots), capacity=2
+    )
     try:
         pool.initialize()
         with ThreadPoolExecutor(max_workers=5) as executor:

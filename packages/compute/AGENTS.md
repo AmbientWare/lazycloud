@@ -48,6 +48,12 @@ under the fleet transaction lock. Failed operations retain their commitments
 until cleanup is observed. Host-template replacement keeps its separate provider
 pair because it replaces the host itself. Attached machines update in place.
 
+An idle platform worker may update without replacement capacity when fleet
+headroom permits. Both its resource card and durable live containers must be
+empty. If work arrives before admission, reserve replacement capacity before
+draining. Provider acquisition failure blocks new purchases, but does not block
+updating an owned worker or refreshing an owned stopped reserve.
+
 The maintenance planner admits concurrent operations from ready headroom and
 exclusive source and replacement ownership. Replacements must accept
 requests on the target release and satisfy the source's placement, runtime,

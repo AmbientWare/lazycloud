@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import ipaddress
+import logging
 import shutil
 import threading
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Protocol
 
 from foundation.process import ProcessResult, run_process
@@ -19,6 +21,7 @@ from shared.scheduling import (
     WorkerRepositoryLockRecord,
     WorkerRepositoryLockRelease,
 )
+from shared.step_timings import StepTimings
 
 from worker.container_execution import (
     ContainerExecutionContext,
@@ -58,6 +61,7 @@ from worker.network_slots import (
 )
 
 DEFAULT_HOST_NETNS_PATH = "/var/run/netns"
+LOGGER = logging.getLogger(__name__)
 DEFAULT_NETNS_CONFIG_ROOT = "/etc/netns"
 DEFAULT_GATEWAY_EGRESS_TIMEOUT_SECONDS = 10
 DEFAULT_NETWORK_LOCK_TTL_SECONDS = 30
@@ -478,6 +482,7 @@ class AgentBridgeNetworkBackend:
     system: CommandNetworkSystem = field(default_factory=CommandNetworkSystem)
     assigned_ips: dict[str, str] = field(default_factory=dict)
     egress_counters: WorkerNetworkEgressCounters | None = None
+    startup_concurrency: int = 1
     _capabilities: HostNetworkCapabilities | None = None
     _bridge_ready: bool = False
     _bridge_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
@@ -489,6 +494,7 @@ class AgentBridgeNetworkBackend:
             worker_id=self.ip_allocator.worker_id,
             bridge_name=self.config.bridge_name,
             host_netns_path=self.config.host_netns_path,
+            capacity=self.startup_concurrency,
             ip_binary=self.config.ip_binary,
         )
 
@@ -591,21 +597,27 @@ class AgentBridgeNetworkBackend:
         port_bindings: list[PortBinding],
     ) -> ContainerNetworkSetupResult:
         container_id = context.request.container_id
-        self._remove_container_resources(container_id, release_ip=False)
-        ip_address = self.ip_allocator.reserve_container_ip(container_id)
-        self.assigned_ips[container_id] = ip_address
+        timings = StepTimings()
         try:
-            self._prepared_networks.assign(container_id)
-            result = self._setup_assigned_network(
-                context,
-                ip_address,
-            )
-            if self.egress_counters is not None:
-                self.egress_counters.ensure(
-                    container_id,
-                    ipv4_interface=self.capabilities.ipv4_interface,
-                    ipv6_interface=self.capabilities.ipv6_interface,
+            with timings.step("cleanup"):
+                self._remove_container_resources(container_id, release_ip=False)
+            with timings.step("reserve-address"):
+                ip_address = self.ip_allocator.reserve_container_ip(container_id)
+                self.assigned_ips[container_id] = ip_address
+            with timings.step("assign-namespace"):
+                self._prepared_networks.assign(container_id)
+            with timings.step("configure"):
+                result = self._setup_assigned_network(
+                    context,
+                    ip_address,
                 )
+            with timings.step("egress"):
+                if self.egress_counters is not None:
+                    self.egress_counters.ensure(
+                        container_id,
+                        ipv4_interface=self.capabilities.ipv4_interface,
+                        ipv6_interface=self.capabilities.ipv6_interface,
+                    )
             return result
         except Exception as setup_error:
             try:
@@ -616,6 +628,13 @@ class AgentBridgeNetworkBackend:
                     [setup_error, cleanup_error],
                 ) from cleanup_error
             raise
+        finally:
+            timings.log(
+                LOGGER,
+                "container network startup %s",
+                container_id,
+                extra={"container_id": container_id},
+            )
 
     def _setup_assigned_network(
         self,
@@ -645,13 +664,7 @@ class AgentBridgeNetworkBackend:
             )
             self.system.run(command)
             commands.append(command)
-        setup_commands = self._container_setup_commands(
-            container_id,
-            ip_address,
-        )
-        for command in setup_commands:
-            self.system.run(command)
-        commands.extend(setup_commands)
+        commands.extend(self._configure_container_namespace(container_id, ip_address))
         if context.startup_kind is WorkerStartupKind.Sandbox or context.supervised:
             isolation_commands = self._sandbox_control_isolation_commands(
                 container_id,
@@ -801,19 +814,30 @@ class AgentBridgeNetworkBackend:
             finally:
                 self.ip_allocator.release_network_lock(token)
 
-    def _container_setup_commands(
+    def _configure_container_namespace(
         self,
         container_id: str,
         ip_address: str,
     ) -> list[NetworkCommand]:
         veth_host, veth_container = container_veth_names(container_id)
-        return [
-            NetworkCommand(
-                operation=AgentBridgeNetworkOperation.AttachHostVeth,
-                argv=[self.config.ip_binary, "link", "set", veth_host, "up"],
-            ),
-            *self._namespace_commands(container_id, veth_container, ip_address),
-        ]
+        host = NetworkCommand(
+            operation=AgentBridgeNetworkOperation.AttachHostVeth,
+            argv=[self.config.ip_binary, "link", "set", veth_host, "up"],
+        )
+        self.system.run(host)
+        commands = [host]
+        for family, operations in self._namespace_commands(veth_container, ip_address).items():
+            with NamedTemporaryFile(mode="w", prefix="lazycloud-network-", suffix=".ip") as batch:
+                for operation in operations:
+                    batch.write(" ".join(operation) + "\n")
+                batch.flush()
+                command = NetworkCommand(
+                    operation=AgentBridgeNetworkOperation.ConfigureNamespace,
+                    argv=[self.config.ip_binary, family, "-n", container_id, "-batch", batch.name],
+                )
+                self.system.run(command)
+                commands.append(command)
+        return commands
 
     def _container_creation_commands(self, container_id: str) -> list[NetworkCommand]:
         veth_host, veth_container = container_veth_names(container_id)
@@ -1146,109 +1170,27 @@ class AgentBridgeNetworkBackend:
         return commands
 
     def _namespace_commands(
-        self,
-        container_id: str,
-        veth_container: str,
-        ip_address: str,
-    ) -> list[NetworkCommand]:
-        capabilities = self.capabilities
-        commands = [
-            NetworkCommand(
-                operation=AgentBridgeNetworkOperation.ConfigureNamespace,
-                argv=[
-                    self.config.ip_binary,
-                    "netns",
-                    "exec",
-                    container_id,
-                    self.config.ip_binary,
-                    "link",
-                    "set",
-                    "lo",
-                    "up",
-                ],
-            ),
-            NetworkCommand(
-                operation=AgentBridgeNetworkOperation.ConfigureNamespace,
-                argv=[
-                    self.config.ip_binary,
-                    "netns",
-                    "exec",
-                    container_id,
-                    self.config.ip_binary,
+        self, veth_container: str, ip_address: str
+    ) -> dict[str, list[list[str]]]:
+        commands = {
+            "-4": [
+                ["link", "set", "lo", "up"],
+                ["addr", "add", self.config.container_cidr(ip_address), "dev", veth_container],
+                ["link", "set", veth_container, "up"],
+                ["route", "add", "default", "via", self.config.gateway],
+            ],
+        }
+        if self.capabilities.ipv6_enabled:
+            commands["-6"] = [
+                [
                     "addr",
-                    "add",
-                    self.config.container_cidr(ip_address),
+                    "replace",
+                    f"{self._container_ipv6(ip_address)}/64",
                     "dev",
                     veth_container,
                 ],
-            ),
-            NetworkCommand(
-                operation=AgentBridgeNetworkOperation.ConfigureNamespace,
-                argv=[
-                    self.config.ip_binary,
-                    "netns",
-                    "exec",
-                    container_id,
-                    self.config.ip_binary,
-                    "link",
-                    "set",
-                    veth_container,
-                    "up",
-                ],
-            ),
-            NetworkCommand(
-                operation=AgentBridgeNetworkOperation.ConfigureNamespace,
-                argv=[
-                    self.config.ip_binary,
-                    "netns",
-                    "exec",
-                    container_id,
-                    self.config.ip_binary,
-                    "route",
-                    "add",
-                    "default",
-                    "via",
-                    self.config.gateway,
-                ],
-            ),
-        ]
-        if capabilities.ipv6_enabled:
-            commands.extend(
-                [
-                    NetworkCommand(
-                        operation=AgentBridgeNetworkOperation.ConfigureNamespace,
-                        argv=[
-                            self.config.ip_binary,
-                            "netns",
-                            "exec",
-                            container_id,
-                            self.config.ip_binary,
-                            "-6",
-                            "addr",
-                            "replace",
-                            f"{self._container_ipv6(ip_address)}/64",
-                            "dev",
-                            veth_container,
-                        ],
-                    ),
-                    NetworkCommand(
-                        operation=AgentBridgeNetworkOperation.ConfigureNamespace,
-                        argv=[
-                            self.config.ip_binary,
-                            "netns",
-                            "exec",
-                            container_id,
-                            self.config.ip_binary,
-                            "-6",
-                            "route",
-                            "replace",
-                            "default",
-                            "via",
-                            self.config.gateway_ipv6,
-                        ],
-                    ),
-                ]
-            )
+                ["route", "replace", "default", "via", self.config.gateway_ipv6],
+            ]
         return commands
 
     def _sandbox_control_isolation_commands(

@@ -41,7 +41,6 @@ from shared.function_payloads import FunctionPayloadEncoding
 from shared.gpu import GpuInput, gpu_preference
 from shared.http.endpoints import StartEndpointServeResponse
 from shared.http.errors import HttpTransportError
-from shared.http.gateway import DeployStubResponse
 from shared.placement import ProductRegion
 from shared.serialization import to_json_value
 from shared.tasks import RetryPolicy, TaskPolicy
@@ -76,14 +75,15 @@ from lazycloud.control import ControlClientConfig, resolve_control_client_config
 from lazycloud.env import is_local
 from lazycloud.json_contracts import parse_json_value
 from lazycloud.references import dotted_reference
-from lazycloud.session.deployment import DeploymentClient, DeploymentControlClient
 from lazycloud.terminal import Terminal
 
 if TYPE_CHECKING:
+    from shared.http.gateway import DeployStubResponse
     from shared.http_transport import HttpChannel
 
     from lazycloud.abstractions.serve import ServeGatewayClient, ServeResourceClient
     from lazycloud.abstractions.shell import ShellSession
+    from lazycloud.session.deployment import DeploymentControlClient
     from lazycloud.session.preparation import DeploymentPreparation
 
 
@@ -1192,6 +1192,8 @@ def _deploy_endpoint(
     source_root: str | Path | None = None,
     preparation: DeploymentPreparation | None = None,
 ) -> DeployStubResponse:
+    from lazycloud.session.deployment import DeploymentClient
+
     try:
         response = DeploymentClient(
             client=owner.deployment_client,
@@ -1221,6 +1223,8 @@ def _prepare_endpoint(
     label: str,
     source_root: str | None = None,
 ) -> str:
+    from lazycloud.session.deployment import DeploymentClient
+
     try:
         response = DeploymentClient(
             client=owner.deployment_client,

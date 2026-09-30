@@ -119,7 +119,10 @@ from worker.runtime_config import (
     RuntimeAvailabilityStatus,
     RuntimeBinaryConfig,
     RuntimeUnavailableError,
+    read_worker_cpu_millicores,
+    read_worker_memory_mib,
     runtime_availability,
+    worker_startup_concurrency,
 )
 from worker.sandbox_docker import WorkerSandboxDockerService
 from worker.source_cache_cleanup import WorkerSourceCacheIdentity
@@ -726,6 +729,9 @@ def _client_network_backend(
             worker_id=config.worker_id,
         ),
         config=bridge,
+        startup_concurrency=worker_startup_concurrency(
+            read_worker_cpu_millicores(), read_worker_memory_mib()
+        ),
         egress_counters=WorkerNetworkEgressCounters(
             load_policy=client.egress_policy,
             worker_id=config.worker_id,

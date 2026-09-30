@@ -19,7 +19,7 @@ from shared.managed_runtime_integrity import (
 MANAGED_DISTRIBUTIONS = ("foundation", "runner", "lazycloud-client", "lazycloud-shared")
 SUPPORTED_PYTHON_VERSIONS = ("3.10", "3.11", "3.12", "3.13", "3.14")
 SUPPORTED_ARCHITECTURES = ("amd64", "arm64")
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 JsonScalar: TypeAlias = bool | int | float | str | None
 JsonValue: TypeAlias = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
 
@@ -89,8 +89,9 @@ def build_artifact(
     locked_distributions = _installed_distributions(dependency_root)
     if not locked_distributions:
         raise RuntimeError("locked managed runtime dependencies are missing")
-    requirements = _distribution_requirements(managed_root, dependency_root)
-    if not requirements:
+    managed_requirements = _distribution_requirements(managed_root)
+    locked_requirements = _distribution_requirements(dependency_root)
+    if not any(managed_requirements.values()):
         raise RuntimeError("managed runtime dependency contract is empty")
     lock_digest = _requirements_digest(requirements_files)
     _compile_python_sources(managed_root, dependency_root)
@@ -116,7 +117,8 @@ def build_artifact(
             "lock_digest": lock_digest,
             "managed_distributions": managed_distributions,
             "locked_distributions": locked_distributions,
-            "requirements": requirements,
+            "managed_requirements": managed_requirements,
+            "locked_requirements": locked_requirements,
         },
         "managed runtime entry",
     )
@@ -216,12 +218,12 @@ def _installed_distributions(root: Path) -> dict[str, str]:
     )
 
 
-def _distribution_requirements(*roots: Path) -> list[str]:
-    requirements: set[str] = set()
-    for root in roots:
-        for distribution in importlib.metadata.distributions(path=[str(root)]):
-            requirements.update(distribution.requires or [])
-    return sorted(requirements)
+def _distribution_requirements(root: Path) -> dict[str, list[str]]:
+    return {
+        _canonical_name(name): sorted(distribution.requires or [])
+        for distribution in importlib.metadata.distributions(path=[str(root)])
+        if (name := distribution.metadata["Name"])
+    }
 
 
 def _requirements_digest(paths: list[Path]) -> str:

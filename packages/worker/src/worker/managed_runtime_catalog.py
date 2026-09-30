@@ -17,7 +17,7 @@ from shared.managed_runtime_integrity import (
 
 from worker.readiness import run_readiness_checks
 
-MANAGED_RUNTIME_SCHEMA_VERSION = 4
+MANAGED_RUNTIME_SCHEMA_VERSION = 5
 MANAGED_RUNTIME_PYTHON_VERSIONS = tuple(version.value for version in PythonVersion)
 MANAGED_RUNTIME_ARCHITECTURES = (
     LinuxArchitecture.Amd64,
@@ -40,7 +40,8 @@ class ManagedRuntimeManifest(ContractModel):
     lock_digest: str
     managed_distributions: dict[str, str] = Field(default_factory=dict)
     locked_distributions: dict[str, str] = Field(default_factory=dict)
-    requirements: list[str] = Field(default_factory=list)
+    managed_requirements: dict[str, list[str]]
+    locked_requirements: dict[str, list[str]]
 
 
 class ManagedRuntimeCatalogManifest(ContractModel):
@@ -241,8 +242,21 @@ def _validate_artifact(
         raise RuntimeError(
             f"managed runtime artifact {version} locked distribution metadata mismatch"
         )
-    if not artifact.requirements:
+    if not any(artifact.managed_requirements.values()):
         raise RuntimeError(f"managed runtime artifact {version} has no dependency contract")
+    for directory, requirements in (
+        ("managed", artifact.managed_requirements),
+        ("dependencies", artifact.locked_requirements),
+    ):
+        installed_requirements = {
+            _canonical_name(name): sorted(distribution.requires or [])
+            for distribution in distributions(path=[str(artifact_path / directory)])
+            if (name := distribution.metadata["Name"])
+        }
+        if installed_requirements != requirements:
+            raise RuntimeError(
+                f"managed runtime artifact {version} {directory} dependency metadata mismatch"
+            )
 
 
 def _normalized_distributions(values: dict[str, str]) -> dict[str, str]:

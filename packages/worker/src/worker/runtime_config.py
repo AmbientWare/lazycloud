@@ -632,6 +632,10 @@ def _zram_reserved_mib(*, root: str = "/sys/block") -> int:
     return reserved // MIB
 
 
+def worker_startup_concurrency(cpu_millicores: int, memory_mib: int) -> int:
+    return max(1, min(cpu_millicores // 1000, memory_mib // 512))
+
+
 def read_worker_cpu_millicores() -> int:
     """What this worker may use, from its own cgroup quota or the machine."""
     quota = _read_cgroup_cpu_quota_millicores()
