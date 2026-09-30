@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query, Response, status
 from scheduler.autoscaler_operations import AutoscalerOperationsService
-from scheduler.reconciliation import SchedulerWorkloadControls
-from scheduler.service import Scheduler
+from scheduler.cron import CronScheduler
 from shared.autoscaler_state import AutoscalerTargetKind
 from shared.http.operations import (
     AgentLeaseListResponse,
@@ -47,7 +46,7 @@ from api.server.dependencies import (
     management_services,
 )
 from api.server.identifiers import identifier_filter
-from api.server.service_dependencies import autoscaler_operations_service
+from api.server.service_dependencies import autoscaler_operations_service, cron_scheduler
 from api.server.services import ManagementServiceCore
 
 router = APIRouter()
@@ -90,9 +89,9 @@ def list_cron_job_runs(
     workspace_id: read_workspace,
     limit: int = Query(100, gt=0, le=1_000),
     cursor: str | None = None,
-    services: ManagementServiceCore = Depends(management_services),
+    service: CronScheduler = Depends(cron_scheduler),
 ) -> CronJobRunListResponse:
-    page = Scheduler(services).list_cron_job_runs(
+    page = service.list_cron_job_runs(
         workspace_id=workspace_id,
         limit=limit,
         cursor=cursor,
@@ -111,10 +110,10 @@ def list_cron_job_runs(
 )
 def tick_scheduler(
     _auth: admin_access,
-    services: ManagementServiceCore = Depends(management_services),
+    service: CronScheduler = Depends(cron_scheduler),
 ) -> CronJobRunListResponse:
     return CronJobRunListResponse(
-        data=[CronJobRunResponse.model_validate(item) for item in Scheduler(services).tick()]
+        data=[CronJobRunResponse.model_validate(item) for item in service.tick()]
     )
 
 
@@ -130,14 +129,10 @@ def dispatch_scheduler_containers(
     _auth: admin_access,
     services: ManagementServiceCore = Depends(management_services),
 ) -> SchedulerContainerDispatchListResponse:
-    scheduler = Scheduler(
-        services,
-        workloads=SchedulerWorkloadControls(containers=services.scheduler_container_requests),
-    )
     return SchedulerContainerDispatchListResponse(
         dispatches=[
             SchedulerContainerDispatchResponse.model_validate(item)
-            for item in scheduler.dispatch_containers(limit=limit)
+            for item in services.scheduler_container_requests.dispatch_ready(limit=limit)
         ]
     )
 

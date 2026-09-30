@@ -63,7 +63,6 @@ from provider_clients.workspace_storage import workspace_storage_router
 from provider_cloudflare import CloudflareSettings
 from provider_resend import ResendSettings
 from provider_stripe import StripeSettings
-from scheduler.adapters import SchedulerWorkloadDirectoryAdapter
 from scheduler.capacity_reservations import RedisCapacityReservationRepository
 from scheduler.compute_hooks import SchedulerComputeHooks
 from scheduler.compute_placement import SchedulerComputePlacement
@@ -73,7 +72,6 @@ from scheduler.containers import (
 )
 from scheduler.disk_volume_attachments import DatabaseDiskVolumeAttachments
 from scheduler.preemption import SchedulerGpuBackfillPreemptionService
-from scheduler.services import SchedulerWorkloadDirectory
 from scheduler.state import (
     RedisSchedulerContainerRepository,
     RedisSchedulerWorkerRepository,
@@ -129,7 +127,7 @@ class FleetAppServices:
     deployment_plans: DeploymentPlanService
     containers: ContainerService
     container_shutdowns: ContainerShutdownService
-    scheduler_workloads: SchedulerWorkloadDirectory
+    control_plane_service: ControlPlaneService
     compute: ComputeService
     custom_domains: CustomDomainService
     tasks: TaskService
@@ -181,7 +179,6 @@ class FleetAppServices:
             public_http_origin=gateway_origin,
             workspace_changes=workspace_changes,
         )
-        scheduler_workloads = SchedulerWorkloadDirectoryAdapter(control_plane)
         container_repository = RedisSchedulerContainerRepository(redis)
         worker_repository = RedisSchedulerWorkerRepository(redis)
         tasks = TaskService(
@@ -426,7 +423,7 @@ class FleetAppServices:
             deployment_plans=deployment_plans,
             containers=containers,
             container_shutdowns=container_shutdowns,
-            scheduler_workloads=scheduler_workloads,
+            control_plane_service=control_plane,
             compute=compute,
             custom_domains=CustomDomainService(
                 context=context,

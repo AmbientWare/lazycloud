@@ -45,6 +45,7 @@ from scheduler.containers import (
     SchedulerContainerSubmitStatus,
     SchedulerContainerWorkerRepository,
 )
+from scheduler.cron import CronScheduler
 from scheduler.fleet import (
     DEFAULT_MAX_SCHEDULE_RETRY_COUNT,
     SchedulerContainerStatus,
@@ -54,7 +55,6 @@ from scheduler.fleet import (
 from scheduler.fleet_controller import FleetController
 from scheduler.pool_state import SchedulerPoolStateService
 from scheduler.reconciliation import SchedulerStateStores, SchedulerWorkloadControls
-from scheduler.service import Scheduler
 from scheduler.state import (
     DEFAULT_CONTAINER_REQUEST_CLAIM_LEASE_SECONDS,
     AgentBackendRoute,
@@ -440,12 +440,8 @@ def _create_cron_function(
     return deployment, stub, cron_job
 
 
-def _cron_scheduler(services: ApiServices, redis: RedisClient) -> Scheduler:
-    return Scheduler(
-        services,
-        workloads=SchedulerWorkloadControls(functions=FunctionControlService(services)),
-        states=SchedulerStateStores(cron_job_locks=redis),
-    )
+def _cron_scheduler(services: ApiServices, redis: RedisClient) -> CronScheduler:
+    return CronScheduler(services, redis, FunctionControlService(services))
 
 
 def test_cron_failure_retries_same_run_then_persists_terminal_failure(

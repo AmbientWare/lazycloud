@@ -28,34 +28,21 @@ design where losing a race is safe over one where losing it is merely unlikely.
 
 ## One autoscaler, three workloads
 
-`AutoscalingDriver` runs the reconcile pass and a `WorkloadAutoscaler` supplies
-what is genuinely per kind: which stubs it selects, the signal it samples, the
-count that signal argues for, how it starts one container, and which containers
-it may stop. A function scales on backlog depth, an endpoint on in-flight
-dispatches, a pod on connections. That difference is the strategy, and nothing
-above it is.
+`Scheduler` coordinates due autoscaling, execution recovery, cron and build
+submission through required dependencies. `CronScheduler` owns scheduled
+invocation and run history. Application loops own wakes, polling intervals,
+heartbeats and shutdown. Repositories own target claims and state persistence; do not wrap them
+in services that only forward calls.
 
-This was three separate services, on the argument that a spine over three
-unrelated samples would hide the per-kind content and that the safety could be
-shared by being the same code rather than the same abstraction. Written out
-three times it stopped being the same code. The function autoscaler, the third
-copy, never read the pause flag an operator sets, never recorded a metric,
-never emitted an event the history endpoint could return, and wrote a state row
-that said no actions were taken however many it took. Each omission was
-invisible in the diff that made it, because the copy it was missing from was
-complete on its own terms.
+`AutoscalingDriver` owns selection, pause handling, locks, recovery, limits and
+telemetry. Each `WorkloadAutoscaler` supplies its signal, desired count, start
+operation and scale-down eligibility. Functions scale on unfinished tasks,
+endpoints on dispatch pressure, and pods on connections.
 
-So the safety is now unreachable from a workload rather than repeated in each:
-stub selection including the pause, the stub lock, the contention metric, the
-failed-container threshold and its window, the inactive deployment, the
-workspace guardrail, and the metrics, event, and state row a lock-holding tick
-leaves behind. A workload cannot skip one of those, because it is never handed
-them.
-
-Composition, not inheritance. A base class with abstract hooks would reuse the
-same code, but it would also put the pass in the subclass's reach, which is the
-door the three copies walked through. A strategy is handed a stub, a signal, and
-a count, and hands back a plan.
+Acquire stub ownership before reading the shared placement snapshot. A queued
+reconcile must confirm its lease before using that snapshot. Manual reconciliation
+uses the same lock and execution path as scheduled work. Database admission and
+conditional container stops remain authoritative when a lease expires mid-pass.
 
 The kinds differ in what they scale on, not in what an operator can ask about
 them. One `AutoscaleResult` carries `kind`, `signal_name` and `signal_value`

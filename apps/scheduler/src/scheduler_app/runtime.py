@@ -5,7 +5,7 @@ from types import TracebackType
 
 from control.placement import PlacementResolver
 from coordination.redis_client import RedisClient
-from coordination.wake_signal import RedisWakeSignal
+from coordination.wake_signal import RedisWakeSignal, WakeSignalWaiter
 from execution.demand import PLACEMENT_WAKE_SCOPE
 from execution.endpoints.service import EndpointControlService
 from execution.functions.service import FunctionControlService
@@ -21,13 +21,12 @@ from scheduler.autoscaling import (
     FunctionAutoscaler,
     PodAutoscaler,
 )
-from scheduler.autoscaling_targets import AutoscalingTargetService
 from scheduler.capacity_reservations import (
     CapacityReservationService,
     RedisCapacityReservationRepository,
 )
 from scheduler.containers import CONTAINER_DISPATCH_WAKE_SCOPE, SchedulerContainerRequestService
-from scheduler.reconciliation import SchedulerStateStores, SchedulerWorkloadControls
+from scheduler.cron import CronScheduler
 from scheduler.service import Scheduler
 from scheduler.services import SchedulerServices
 from scheduler.state import RedisSchedulerContainerRepository, RedisSchedulerWorkerRepository
@@ -44,6 +43,8 @@ from scheduler_app.services import SchedulerAppServices
 @dataclass(slots=True)
 class SchedulerRuntime:
     scheduler: Scheduler
+    dispatch_wake: WakeSignalWaiter
+    placement_wake: WakeSignalWaiter
     owned_services: SchedulerAppServices | None = None
 
     @classmethod
@@ -115,60 +116,51 @@ class SchedulerRuntime:
         )
         functions = FunctionControlService(execution_services)
         return cls(
-            Scheduler(
+            scheduler=Scheduler(
                 services=scheduler_services,
-                states=SchedulerStateStores(cron_job_locks=redis_client),
-                workloads=SchedulerWorkloadControls(
-                    containers=requests,
-                    dispatch_wake=RedisWakeSignal(redis_client, CONTAINER_DISPATCH_WAKE_SCOPE),
-                    placement_wake=RedisWakeSignal(redis_client, PLACEMENT_WAKE_SCOPE),
-                    image_builds=ImageBuildSubmissionService(
+                redis=redis_client,
+                containers=requests,
+                functions=functions,
+                cron=CronScheduler(scheduler_services, redis_client, functions),
+                image_builds=ImageBuildSubmissionService(
+                    scheduler_services.context.database,
+                    DurableImageBuildDispatch(
                         scheduler_services.context.database,
-                        DurableImageBuildDispatch(
-                            scheduler_services.context.database,
-                            requests,
-                            execution_services.containers,
-                            image_build_container_settings,
-                            placement_resolver,
-                        ),
-                        execution_services.object_storage.object_client,
-                        ImageBuildChanges(redis_client),
+                        requests,
+                        execution_services.containers,
+                        image_build_container_settings,
+                        placement_resolver,
                     ),
-                    autoscaling_targets=AutoscalingTargetService(scheduler_services.context),
-                    functions=functions,
-                    function_autoscaler=AutoscalingDriver(
+                    execution_services.object_storage.object_client,
+                    ImageBuildChanges(redis_client),
+                ),
+                autoscalers=tuple(
+                    AutoscalingDriver(
                         scheduler_services,
                         redis=redis_client,
-                        workload=FunctionAutoscaler(scheduler_services, functions=functions),
+                        workload=workload,
                         container_states=containers,
                         container_requests=workers,
-                    ),
-                    endpoints=AutoscalingDriver(
-                        scheduler_services,
-                        redis=redis_client,
-                        workload=EndpointAutoscaler(
+                    )
+                    for workload in (
+                        FunctionAutoscaler(scheduler_services, functions=functions),
+                        EndpointAutoscaler(
                             scheduler_services,
                             endpoints=EndpointControlService(execution_services),
                             dispatches=EndpointDispatchAutoscalingReader(
                                 scheduler_services.context.database
                             ),
                         ),
-                        container_states=containers,
-                        container_requests=workers,
-                    ),
-                    pods=AutoscalingDriver(
-                        scheduler_services,
-                        redis=redis_client,
-                        workload=PodAutoscaler(
+                        PodAutoscaler(
                             scheduler_services,
                             redis=redis_client,
                             pods=PodControlService(execution_services, redis=redis_client),
                         ),
-                        container_states=containers,
-                        container_requests=workers,
-                    ),
+                    )
                 ),
-            )
+            ),
+            dispatch_wake=RedisWakeSignal(redis_client, CONTAINER_DISPATCH_WAKE_SCOPE),
+            placement_wake=RedisWakeSignal(redis_client, PLACEMENT_WAKE_SCOPE),
         )
 
     def close(self) -> None:

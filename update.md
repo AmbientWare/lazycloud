@@ -1,0 +1,32 @@
+Goal: Make LazyCloud simpler, faster, and more scalable through a full rewrite of each service's design, with substantial net production code reduction and measurable performance improvements. Reconsider responsibilities, state handling, workflows, queries, dependencies, and composition together. Separate domain decisions from cross-service coordination. Remove redundant logic, unnecessary abstractions, and superseded implementations. Apply the same simplification and refactoring to tests, removing obsolete cases, duplicate coverage, and unnecessary test machinery while preserving proof of material behavior and guarantees. Every rewrite must retain the same underlying functionality, including supported workflows, public contracts, security, durability, concurrency, failure handling, recovery, and cleanup. Existing implementations are not constraints. Removing capabilities, weakening guarantees, small patches, file moves, cosmetic cleanup, or simply adding more code do not satisfy this goal.
+
+- [ ] Scheduling and autoscaling
+- [ ] Compute capacity and fleet management
+- [ ] Control plane
+- [ ] Apps, deployments, and releases
+- [ ] Cron jobs
+- [ ] Container lifecycle
+- [ ] Task lifecycle
+- [ ] Function execution
+- [ ] Endpoint execution
+- [ ] Pods and devboxes
+- [ ] Shells and SSH
+- [ ] Image builds and distribution
+- [ ] Worker runtime
+- [ ] Worker repository and credentials
+- [ ] Agents and machine lifecycle
+- [ ] Gateway, routing, and tunnels
+- [ ] Authentication and authorization
+- [ ] Users, workspaces, and invitations
+- [ ] Billing and payments
+- [ ] Usage and metering
+- [ ] Object storage and artifacts
+- [ ] Volumes and disks
+- [ ] Checkpoints, retention, and cleanup
+- [ ] Cache and source cache
+- [ ] Maps and queues
+- [ ] Secrets
+- [ ] Custom domains
+- [ ] Events, logs, and metrics
+- [ ] Notifications
+- [ ] Operations and administration

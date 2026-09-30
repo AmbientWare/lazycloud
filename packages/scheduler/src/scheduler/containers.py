@@ -586,12 +586,16 @@ class SchedulerContainerRequestService:
         if not claims:
             return []
 
-        cancelled = [
-            claim
-            for claim in claims
-            if self.containers.is_container_cancelled(claim.request.container_id)
-        ]
-        claims = [claim for claim in claims if claim not in cancelled]
+        cancelled: list[SchedulerContainerRequestClaim] = []
+        live: list[SchedulerContainerRequestClaim] = []
+        for claim in claims:
+            destination = (
+                cancelled
+                if self.containers.is_container_cancelled(claim.request.container_id)
+                else live
+            )
+            destination.append(claim)
+        claims = live
         for claim in cancelled:
             self._acknowledge(claim)
             self._release_capacity_reservation(claim.request.container_id)
@@ -614,8 +618,10 @@ class SchedulerContainerRequestService:
         owners_by_workspace_id = {
             workspace_id: owners.get(workspace_id, "") for workspace_id in workspace_ids
         }
+        worker_snapshot = _schedulable_workers(self.workers, now=current_time)
         claims, reserved_dispatches = self._dispatch_registered_reservations(
             claims,
+            workers={worker.worker_id: worker for worker in worker_snapshot},
             owners_by_workspace_id=owners_by_workspace_id,
             now=current_time,
         )
@@ -626,6 +632,8 @@ class SchedulerContainerRequestService:
         claims_by_request_id = {claim.request.container_id: claim for claim in claims}
         schedulable_workers = DeploymentReleaseService().admitted_workers(
             _schedulable_workers(self.workers, now=current_time)
+            if reserved_dispatches
+            else worker_snapshot
         )
         workers_by_id = {worker.worker_id: worker for worker in schedulable_workers}
         reserved_by_worker = (
@@ -859,14 +867,12 @@ class SchedulerContainerRequestService:
         self,
         claims: list[SchedulerContainerRequestClaim],
         *,
+        workers: Mapping[str, SchedulerWorkerRecord],
         owners_by_workspace_id: Mapping[str, str],
         now: datetime,
     ) -> tuple[list[SchedulerContainerRequestClaim], list[SchedulerContainerDispatchResult]]:
         if self.capacity_reservations is None:
             return claims, []
-        workers = {
-            worker.worker_id: worker for worker in _schedulable_workers(self.workers, now=now)
-        }
         remaining: list[SchedulerContainerRequestClaim] = []
         results: list[SchedulerContainerDispatchResult] = []
         for claim in claims:

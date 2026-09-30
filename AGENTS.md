@@ -51,6 +51,20 @@ Answer condensed. This is a must-follow rule, not a preference.
 
 ## Ownership and architecture
 
+- Treat service optimization work as a full rewrite of the service's design.
+  Reconsider its responsibilities, state model, workflows, queries, dependencies,
+  and composition together. Existing implementations are not constraints.
+  Small patches, file moves, and cosmetic cleanup alone do not complete this work.
+- Require substantial net production code reduction and measured performance
+  improvements. Remove redundant workflows, unnecessary abstractions, and
+  superseded implementations in the same change.
+- A full rewrite must retain the same underlying functionality. Preserve
+  supported workflows, public contracts, authorization and tenant isolation,
+  durable state, concurrency guarantees, failure handling, recovery, and cleanup.
+  Change how the service works internally, not what users can do with it.
+  Removing capabilities, weakening guarantees, or skipping work does not count
+  as optimization. Any intended behavior change needs explicit owner direction.
+
 - `packages/shared` owns backend-free boundary contracts and protocol-neutral
   types and helpers. JSON contracts live under `shared.http.*`.
 - `packages/lazycloud` owns the backend-free public SDK and `lazycloud` CLI.
@@ -59,6 +73,10 @@ Answer condensed. This is a must-follow rule, not a preference.
 - Domain packages own reusable decisions and services. Repositories map/query
   persistence; services decide workflows; handlers, commands, schedulers,
   workers, and process entrypoints stay thin.
+- Separate cross-service logic by responsibility. Each service owns its domain
+  decisions; a workflow spanning services has one explicit coordinating owner
+  and calls their typed contracts. Move misplaced decisions to their owner and
+  remove duplicate logic. Do not add forwarding layers solely to separate files.
 - `apps/*` owns deployable composition and process lifetime. `apps/api` owns
   FastAPI composition, `apps/cli` owns internal `lazycloud-admin`, and
   `apps/web` owns the dashboard.
@@ -142,6 +160,13 @@ https://github.com/cursor/plugins/blob/main/pstack/skills/unslop/SKILL.md
   progress, and never present polling or fabricated output as logs.
 
 ## Acceptance and tests
+
+Tests are part of every service rewrite. Update, simplify, refactor, and rewrite
+them alongside production code. Remove obsolete tests, duplicate coverage,
+implementation-shape assertions, and unnecessary fixtures, mocks, helpers, and
+test frameworks. Keep the smallest clear evidence for each material behavior
+or guarantee. Do not preserve old test structure to constrain a better design,
+or weaken assertions and remove unique coverage merely to make checks pass.
 
 Define the user-visible outcome and cheapest authoritative evidence before
 implementation. Complete the coherent owner or cross-owner slice before
