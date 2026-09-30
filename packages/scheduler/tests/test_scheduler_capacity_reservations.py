@@ -1272,20 +1272,17 @@ async def test_final_dispatch_rechecks_owner_worker_after_scale_zero_mutation(
     workers.toggle_worker_available(worker.worker_id, now=now)
     assert requests.submit(request, ready_at=now).accepted
 
-    stale_snapshot_read = Barrier(2)
-    scale_zero_complete = Barrier(2)
+    stale_snapshot_read = Event()
+    scale_zero_complete = Event()
     original_list_workers = RedisSchedulerWorkerRepository.list_workers
-    list_count = 0
 
     def list_workers_after_scale_zero(
         repository: RedisSchedulerWorkerRepository,
     ) -> list[SchedulerWorkerRecord]:
-        nonlocal list_count
         current = original_list_workers(repository)
-        list_count += 1
-        if list_count == 2:
-            stale_snapshot_read.wait()
-            scale_zero_complete.wait()
+        if not stale_snapshot_read.is_set():
+            stale_snapshot_read.set()
+            assert scale_zero_complete.wait(timeout=5)
         return current
 
     monkeypatch.setattr(
@@ -1295,14 +1292,16 @@ async def test_final_dispatch_rechecks_owner_worker_after_scale_zero_mutation(
     )
 
     def scale_zero() -> None:
-        stale_snapshot_read.wait()
-        with capacity.mutation_lock(OWNER_ID), capacity.dispatch_lock(OWNER_ID):
-            workers.disable_worker(
-                worker.worker_id,
-                reason=WorkerUnavailableReason.MachineRetired,
-                now=now + timedelta(milliseconds=1),
-            )
-        scale_zero_complete.wait()
+        assert stale_snapshot_read.wait(timeout=5)
+        try:
+            with capacity.mutation_lock(OWNER_ID), capacity.dispatch_lock(OWNER_ID):
+                workers.disable_worker(
+                    worker.worker_id,
+                    reason=WorkerUnavailableReason.MachineRetired,
+                    now=now + timedelta(milliseconds=1),
+                )
+        finally:
+            scale_zero_complete.set()
 
     with ThreadPoolExecutor(max_workers=1) as executor:
         scaling = executor.submit(scale_zero)

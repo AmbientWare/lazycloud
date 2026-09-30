@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import base64
-import binascii
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -12,17 +10,12 @@ from compute.projection import PrivateUnitState
 from compute.state import RedisComputeStateRepository
 from coordination.redis_client import RedisClient
 from coordination.wake_signal import WakeSignalWaiter
-from database.records.apps import AppRecord, StubRecord
-from database.repositories.execution import (
-    CronJobRunCursor,
-)
+from database.records.apps import AppRecord
 from pydantic import Field, JsonValue
 from shared.containers import ContainerRecord
 from shared.contracts import ContractModel
-from shared.cron import CronJobRun, next_cron_run
-from shared.errors import InvalidInputError
+from shared.cron import CronJobRun
 from shared.events import EventLevel
-from shared.http.functions import FunctionInvokeBody, FunctionInvokeResponse
 from shared.scheduling import WorkerRemovalResult
 from shared.tasks import Task
 from shared.worker_events import (
@@ -36,7 +29,6 @@ from scheduler.agent_pool import (
 )
 from scheduler.autoscaling import (
     AutoscaleResult,
-    AutoscalingDriver,
 )
 from scheduler.capacity_reservations import (
     CapacityProvisioningReservation,
@@ -58,15 +50,12 @@ from scheduler.preemption import (
     WorkerPreemptionResult,
 )
 from scheduler.reserves import FleetConsolidationService
-from scheduler.services import FleetServices, SchedulerAutoscalingTargetService
+from scheduler.services import FleetServices
 
 LOGGER = logging.getLogger(__name__)
 
 
 WORKER_POOL_DRAIN_SOURCE = "worker_pool.drain"
-
-
-CRON_JOB_LOCK_TTL_SECONDS = 10
 
 
 CONTAINER_EXPIRY_LOCK_TTL_SECONDS = 30
@@ -86,9 +75,6 @@ AUTOSCALING_TARGET_RECONCILE_INTERVAL_SECONDS = 1.0
 
 
 DEFAULT_AUTOSCALING_RECONCILE_LIMIT = 500
-
-
-CONTAINER_DISPATCH_SWEEP_INTERVAL_SECONDS = 1.0
 
 
 MANAGED_COMPUTE_RECONCILE_INTERVAL_SECONDS = 60.0
@@ -128,10 +114,6 @@ def _next_autoscaling_target_reconcile(
     ):
         return now + timedelta(seconds=AUTOSCALING_TARGET_RECONCILE_INTERVAL_SECONDS)
     return None
-
-
-def _function_cron_job_lock_key(stub_id: str) -> str:
-    return f"function:cron_jobs_lock:{stub_id}"
 
 
 @runtime_checkable
@@ -377,92 +359,15 @@ class SchedulerCustomDomainService(Protocol):
     ) -> int: ...
 
 
-class ScheduledFunctionControl(Protocol):
-    def expire_timed_out_tasks(self, *, now: datetime, limit: int = 100) -> None: ...
-
-    def schedule_due_retries(
-        self,
-        *,
-        now: datetime | None = None,
-        limit: int = 100,
-    ) -> list[Task]: ...
-
-    def function_invoke(
-        self, request: FunctionInvokeBody, *, stub: StubRecord
-    ) -> FunctionInvokeResponse: ...
-
-
 class SchedulerPreemptionRecovery(Protocol):
     def recover_unsettled(self, *, limit: int = 100) -> list[str]: ...
 
 
-def next_run_after(expression: str, now: datetime | None = None) -> datetime:
-    return next_cron_run(expression, now)
-
-
-class CronJobRunDraft(ContractModel):
-    workspace_id: str
-    cron_job: str
-    enqueued: bool
-    task_id: str | None = None
-    reason: str | None = None
-
-
-class CronJobRunCursorPayload(ContractModel):
-    created_at: datetime
-    id: str
-
-
-@dataclass(frozen=True, slots=True)
-class SchedulerCronJobRunPage:
-    data: tuple[CronJobRun, ...]
-    next: str = ""
-
-
-def _encode_cron_job_run_cursor(cursor: CronJobRunCursor | None) -> str:
-    if cursor is None:
-        return ""
-    payload = CronJobRunCursorPayload(
-        created_at=cursor.created_at,
-        id=cursor.id,
-    ).model_dump_json()
-    return base64.urlsafe_b64encode(payload.encode()).decode().rstrip("=")
-
-
-def _decode_cron_job_run_cursor(value: str | None) -> CronJobRunCursor | None:
-    if not value:
-        return None
-    try:
-        padded = value + "=" * (-len(value) % 4)
-        payload = CronJobRunCursorPayload.model_validate_json(
-            base64.urlsafe_b64decode(padded.encode())
-        )
-    except (ValueError, UnicodeDecodeError, binascii.Error) as exc:
-        raise InvalidInputError("invalid cron job run cursor") from exc
-    return CronJobRunCursor(created_at=payload.created_at, id=payload.id)
-
-
-class SchedulerBuildSubmissions(Protocol):
-    def drain(self, *, limit: int = 16) -> int: ...
-
-    def recover(self, *, limit: int = 100) -> int: ...
-
-    def cleanup(self, *, limit: int = 16) -> None: ...
-
-
 @dataclass(frozen=True, slots=True)
 class SchedulerWorkloadControls:
-    image_builds: SchedulerBuildSubmissions | None = None
     containers: SchedulerContainerRequestService | None = None
-    dispatch_wake: WakeSignalWaiter | None = None
-    placement_wake: WakeSignalWaiter | None = None
     capacity_wake: WakeSignalWaiter | None = None
-    function_autoscaler: AutoscalingDriver | None = None
-    endpoints: AutoscalingDriver | None = None
-    pods: AutoscalingDriver | None = None
-    functions: ScheduledFunctionControl | None = None
     preemption_recovery: SchedulerPreemptionRecovery | None = None
-    autoscaling_targets: SchedulerAutoscalingTargetService | None = None
 
 
 @dataclass(frozen=True, slots=True)

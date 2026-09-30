@@ -6,12 +6,11 @@ from typing import Protocol
 
 from compute.service import ComputeService
 from control.apps import AppReader
-from database.records.apps import AppRecord, AutoscalingStubRecord, StubRecord
-from database.records.autoscaling import AutoscalingTargetClaim
+from control.service import ControlPlaneService
+from database.records.apps import AppRecord
 from database.types import DatabaseSession
 from observability.workspace_changes import WorkspaceChangePublisher
 from pydantic import JsonValue
-from shared.autoscaler_state import AutoscalerStateRecord, AutoscalerTargetKind
 from shared.container_requests import StopContainerReason
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.cron import CronJobRecord
@@ -85,42 +84,6 @@ class SchedulerMetricsService(Protocol):
     ) -> None: ...
 
 
-class SchedulerAutoscalerStateService(Protocol):
-    def upsert(self, state: AutoscalerStateRecord) -> AutoscalerStateRecord: ...
-
-    def get(
-        self,
-        *,
-        workspace_id: str,
-        target_kind: AutoscalerTargetKind,
-        target_id: str,
-    ) -> AutoscalerStateRecord | None: ...
-
-    def list(
-        self,
-        *,
-        workspace_id: str | None = None,
-        source: str | None = None,
-    ) -> list[AutoscalerStateRecord]: ...
-
-
-class SchedulerAutoscalingTargetService(Protocol):
-    def claim_due(
-        self,
-        *,
-        now: datetime,
-        limit: int,
-        lease_seconds: float,
-    ) -> list[AutoscalingTargetClaim]: ...
-
-    def complete_many(
-        self,
-        completions: Sequence[tuple[AutoscalingTargetClaim, datetime | None]],
-        *,
-        now: datetime,
-    ) -> int: ...
-
-
 class SchedulerDeploymentService(Protocol):
     def get(self, deployment_id_or_name: str) -> Deployment: ...
 
@@ -169,32 +132,6 @@ class SchedulerContainerService(Protocol):
     ) -> ContainerRecord: ...
 
 
-class SchedulerWorkloadDirectory(Protocol):
-    def list_stubs(self, *, workspace: str | None = None) -> list[StubRecord]: ...
-
-    def list_autoscaling_stubs(
-        self,
-        stub_ids: Sequence[str] | None = None,
-    ) -> list[AutoscalingStubRecord]: ...
-
-    def get_stub(
-        self,
-        stub_id_or_name: str,
-        *,
-        workspace: str | None = None,
-    ) -> StubRecord: ...
-
-    def get_workspace(self, workspace: str = "default") -> WorkspaceRecord: ...
-
-    def set_autoscaling_enabled(
-        self,
-        stub_id_or_name: str,
-        *,
-        workspace: str,
-        enabled: bool,
-    ) -> StubRecord: ...
-
-
 class SchedulerServices(Protocol):
     @property
     def context(self) -> SchedulerContext: ...
@@ -204,9 +141,6 @@ class SchedulerServices(Protocol):
 
     @property
     def metrics(self) -> SchedulerMetricsService: ...
-
-    @property
-    def autoscaler_states(self) -> SchedulerAutoscalerStateService: ...
 
     @property
     def apps(self) -> AppReader: ...
@@ -221,7 +155,7 @@ class SchedulerServices(Protocol):
     def containers(self) -> SchedulerContainerService: ...
 
     @property
-    def scheduler_workloads(self) -> SchedulerWorkloadDirectory: ...
+    def control_plane_service(self) -> ControlPlaneService: ...
 
     @property
     def workspace_changes(self) -> WorkspaceChangePublisher: ...
@@ -229,7 +163,7 @@ class SchedulerServices(Protocol):
 
 class FleetServices(Protocol):
     @property
-    def scheduler_workloads(self) -> SchedulerWorkloadDirectory: ...
+    def control_plane_service(self) -> ControlPlaneService: ...
 
     @property
     def context(self) -> SchedulerContext: ...

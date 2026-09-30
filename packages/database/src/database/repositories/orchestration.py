@@ -21,10 +21,15 @@ from database.mappers.fleet import (
     write_machine,
     write_worker,
 )
-from database.records.autoscaling import AutoscalingTargetClaim
+from database.records.autoscaling import (
+    AutoscalerStatus,
+    AutoscalingContainer,
+    AutoscalingTargetClaim,
+)
 from database.repositories.cleanup import CleanupRepository
 from database.repositories.container_scheduling import scheduling_request_statement
 from database.repositories.identity import WorkspaceRepository
+from database.tables.apps import StubTable
 from database.tables.container_rollouts import ContainerRolloutDrainTable
 from database.tables.identity import WorkspaceMemberTable
 from database.tables.images import ImageBuildAttemptTable
@@ -56,6 +61,7 @@ from shared.container_requests import (
     StopContainerReason,
 )
 from shared.containers import LIVE_CONTAINER_STATUSES, ContainerRecord, ContainerStatus
+from shared.env import HOT_RELOAD_ENV
 from shared.errors import ConflictError
 from shared.identity import WorkspaceRole, WorkspaceStatus
 from shared.placement import Placement, PlacementKind
@@ -63,6 +69,7 @@ from shared.scheduling import SchedulerWorkerRequest
 from shared.timestamps import utc_now
 from sqlalchemy import (
     Select,
+    String,
     and_,
     case,
     delete,
@@ -284,6 +291,27 @@ class AutoscalingTargetRepository:
 class AutoscalerStateRepository:
     session: Session
 
+    def get_many(
+        self, keys: Sequence[tuple[str, AutoscalerTargetKind, str]]
+    ) -> dict[tuple[str, AutoscalerTargetKind, str], AutoscalerStateRecord]:
+        if not keys:
+            return {}
+        statement = select(AutoscalerStateTable).where(
+            tuple_(
+                AutoscalerStateTable.workspace_id,
+                AutoscalerStateTable.target_kind,
+                AutoscalerStateTable.target_id,
+            ).in_([(workspace_id, kind.value, target_id) for workspace_id, kind, target_id in keys])
+        )
+        return {
+            (
+                row.workspace_id,
+                AutoscalerTargetKind(row.target_kind),
+                row.target_id,
+            ): autoscaler_state_from_row(row)
+            for row in self.session.scalars(statement)
+        }
+
     def upsert(self, state: AutoscalerStateRecord) -> AutoscalerStateRecord:
         state = AutoscalerStateRecord.model_validate(dict(state))
         WorkspaceRepository(self.session).lock_active_owner(state.workspace_id)
@@ -364,13 +392,39 @@ class AutoscalerStateRepository:
             )
         ]
 
-    def list_across_workspaces(self, *, source: str | None = None) -> list[AutoscalerStateRecord]:
-        statement = select(AutoscalerStateTable)
+    def status(
+        self,
+        *,
+        workspace_id: str | None = None,
+        source: str | None = None,
+        target_id: str | None = None,
+    ) -> list[AutoscalerStatus]:
+        statement = select(
+            AutoscalerStateTable,
+            StubTable.name,
+            StubTable.type,
+            StubTable.autoscaling_enabled,
+        ).outerjoin(
+            StubTable,
+            and_(
+                StubTable.id.cast(String) == AutoscalerStateTable.target_id,
+                StubTable.workspace_id == AutoscalerStateTable.workspace_id,
+            ),
+        )
+        if workspace_id is not None:
+            statement = statement.where(AutoscalerStateTable.workspace_id == workspace_id)
         if source is not None:
             statement = statement.where(AutoscalerStateTable.source == source)
+        if target_id:
+            statement = statement.where(AutoscalerStateTable.target_id == target_id)
         return [
-            autoscaler_state_from_row(row)
-            for row in self.session.scalars(
+            AutoscalerStatus(
+                state=autoscaler_state_from_row(state),
+                stub_name=name or "",
+                stub_kind=kind or "",
+                autoscaling_enabled=name is not None and enabled is not False,
+            )
+            for state, name, kind, enabled in self.session.execute(
                 statement.order_by(
                     AutoscalerStateTable.workspace_id,
                     AutoscalerStateTable.target_kind,
@@ -1355,16 +1409,27 @@ class ContainerRepository:
         *,
         stub_ids: Sequence[str],
         failed_since: datetime,
-    ) -> list[ContainerRecord]:
+    ) -> list[AutoscalingContainer]:
         """Live containers and recent startup failures for these stubs."""
         wanted = tuple(dict.fromkeys(stub_ids))
         if not wanted:
             return []
-        live = select(ContainerTable).where(
+        columns = (
+            ContainerTable.id,
+            ContainerTable.stub_id,
+            ContainerTable.status,
+            ContainerTable.runtime_worker_id,
+            ContainerTable.created_at,
+            ContainerTable.started_at,
+            ContainerTable.finished_at,
+            ContainerTable.startup_error,
+        )
+        projection = select(*columns, ContainerTable.env[HOT_RELOAD_ENV].astext.label("hot_reload"))
+        live = projection.where(
             ContainerTable.stub_id.in_(wanted),
             ContainerTable.status.in_([status.value for status in LIVE_CONTAINER_STATUSES]),
         )
-        failed = select(ContainerTable).where(
+        failed = projection.where(
             ContainerTable.stub_id.in_(wanted),
             ContainerTable.status == ContainerStatus.Failed.value,
             or_(
@@ -1374,12 +1439,39 @@ class ContainerRepository:
         )
         candidates = union_all(live, failed).subquery()
         candidate = aliased(ContainerTable, candidates)
-        statement = select(candidate).order_by(
-            candidate.stub_id.asc(),
-            candidate.created_at.desc(),
-            candidate.id.desc(),
+        statement = (
+            select(
+                candidate.id,
+                candidate.stub_id,
+                candidate.status,
+                candidate.runtime_worker_id,
+                candidate.created_at,
+                candidate.started_at,
+                candidate.finished_at,
+                candidate.startup_error,
+                candidates.c.hot_reload,
+                ContainerRolloutDrainTable.serving_floor,
+            )
+            .outerjoin(
+                ContainerRolloutDrainTable, ContainerRolloutDrainTable.container_id == candidate.id
+            )
+            .order_by(candidate.stub_id.asc(), candidate.created_at.desc(), candidate.id.desc())
         )
-        return [container_from_row(row) for row in self.session.scalars(statement)]
+        return [
+            AutoscalingContainer(
+                id=row.id,
+                stub_id=row.stub_id,
+                status=ContainerStatus(row.status),
+                runtime_worker_id=row.runtime_worker_id,
+                created_at=row.created_at,
+                started_at=row.started_at,
+                finished_at=row.finished_at,
+                startup_error=row.startup_error,
+                hot_reload=row.hot_reload,
+                rollout_serving_floor=row.serving_floor,
+            )
+            for row in self.session.execute(statement)
+        ]
 
     def live_container_ids_for_owner(self, *, owner_user_id: str, limit: int) -> list[str]:
         """Which containers this account is holding capacity for, oldest first.

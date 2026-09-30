@@ -1,11 +1,6 @@
-# Operator CLI implementation
+# CLI commands
 
-Typer and Rich command implementations for the operator CLI.
-
-A command validates input, calls a typed client or service, formats the result,
-and returns a stable exit code. Public command implementations are reused from
-the public CLI package; only internal composition lives here.
-
-Map typed transport and operation errors through the shared error components so
-that every command fails the same way, mask secrets in every rendering, and do
-not add compatibility commands or per-command parsing of error payloads.
+- Keep Typer/Rich commands thin: validate, call a typed client, format output.
+- Preserve exit codes, machine-readable output and genuine progress.
+- Use shared typed errors and redact secrets; avoid command-specific transport
+  parsing and compatibility commands.

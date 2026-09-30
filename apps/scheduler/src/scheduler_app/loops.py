@@ -100,6 +100,8 @@ def run_loop(
 def start_scheduler_loops(
     scheduler: Scheduler,
     *,
+    dispatch_wake: WakeSignalWaiter,
+    placement_wake: WakeSignalWaiter,
     include_cron_jobs: bool = True,
     include_containers: bool = True,
     container_limit: int = 100,
@@ -113,10 +115,7 @@ def start_scheduler_loops(
     resolved_beats = beats or {}
     loops: list[SchedulerLoop] = []
 
-    def wait_for_wake(wake: WakeSignalWaiter | None, timeout: float) -> bool:
-        if wake is None:
-            resolved_stop.wait(timeout)
-            return False
+    def wait_for_wake(wake: WakeSignalWaiter, timeout: float) -> bool:
         try:
             deadline = monotonic() + timeout
             while not resolved_stop.is_set():
@@ -170,7 +169,7 @@ def start_scheduler_loops(
 
     def wait_for_placement(timeout: float) -> None:
         nonlocal demand_pending
-        demand_pending = wait_for_wake(scheduler.workloads.placement_wake, timeout)
+        demand_pending = wait_for_wake(placement_wake, timeout)
         remaining = PLACEMENT_MIN_INTERVAL_SECONDS - (monotonic() - last_placement_started)
         if remaining > 0:
             resolved_stop.wait(remaining)
@@ -209,23 +208,31 @@ def start_scheduler_loops(
         ),
     )
     if include_containers:
-        dispatch = threading.Thread(
-            target=scheduler.run_container_dispatch_loop,
-            kwargs={
-                "stop": resolved_stop,
-                "container_limit": container_limit,
-                "beat": resolved_beats.get(SchedulerLoopName.Dispatch),
-            },
-            name="scheduler-container-dispatch",
-            daemon=True,
-        )
-        dispatch.start()
-        loops.append(
-            SchedulerLoop(
-                name=SchedulerLoopName.Dispatch,
-                thread=dispatch,
-                beat=resolved_beats.get(SchedulerLoopName.Dispatch),
-            )
+
+        def dispatch() -> SchedulerRunResult:
+            batch_limit = max(container_limit, 1)
+            while not resolved_stop.is_set():
+                batch = scheduler.containers.dispatch_ready(limit=batch_limit)
+                for result in batch:
+                    LOGGER.info(
+                        "container dispatch %s: status=%s reason=%s",
+                        result.container_id,
+                        result.status.value,
+                        result.reason,
+                        extra={"container_id": result.container_id, "worker_id": result.worker_id},
+                    )
+                if len(batch) < batch_limit:
+                    break
+            return SchedulerRunResult()
+
+        def wait_for_dispatch(timeout: float) -> None:
+            wait_for_wake(dispatch_wake, timeout)
+
+        spawn(
+            SchedulerLoopName.Dispatch,
+            1.0,
+            dispatch,
+            wait=wait_for_dispatch,
         )
     return SchedulerLoopSupervisor(stop=resolved_stop, loops=loops)
 

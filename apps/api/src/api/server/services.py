@@ -167,9 +167,8 @@ from provider_cloudflare import CloudflareSettings
 from provider_github import GitHubAppSettings
 from provider_resend import ResendSettings
 from provider_stripe import StripeSettings
-from scheduler.adapters import EndpointDispatchAutoscalingReader, SchedulerWorkloadDirectoryAdapter
+from scheduler.adapters import EndpointDispatchAutoscalingReader
 from scheduler.autoscaler_operations import AutoscalerOperationsService
-from scheduler.autoscaler_states import AutoscalerStateService
 from scheduler.autoscaling import (
     AutoscalingDriver,
     EndpointAutoscaler,
@@ -195,7 +194,6 @@ from scheduler.preemption import (
     SchedulerWorkerPreemptionService,
 )
 from scheduler.routes import SchedulerBackendRouteResolver
-from scheduler.services import SchedulerWorkloadDirectory
 from scheduler.state import (
     AsyncRedisSchedulerContainerReader,
     RedisSchedulerContainerRepository,
@@ -561,7 +559,6 @@ class ApiServiceCore(ApiInfrastructure):
     containers: ContainerService
     container_shutdowns: ContainerShutdownService
     scheduler_container_requests: SchedulerContainerRequestService
-    scheduler_workloads: SchedulerWorkloadDirectory
     images: ImageBuildService
     metrics: MetricsService
     payment_admission: DatabaseBillingAdmission
@@ -601,7 +598,6 @@ class ManagementServiceCore(RuntimeServiceCore):
     custom_domains: CustomDomainService
     cron_jobs: CronJobService
     agents: AgentService
-    autoscaler_states: AutoscalerStateService
     devboxes: DevboxService
     disk_deletion: DiskDeletionService
     apps: AppService
@@ -944,7 +940,6 @@ def create_workload_core(
         scheduling_persistence, images
     )
     volumes = VolumeService(context, workspace_changes=workspace_changes)
-    scheduler_workloads = SchedulerWorkloadDirectoryAdapter(control_plane)
     metrics = MetricsService()
     users = UserService(context)
     deployment_resources = DeploymentResourceService(context)
@@ -1001,7 +996,6 @@ def create_workload_core(
         containers=containers,
         container_shutdowns=container_shutdowns,
         scheduler_container_requests=container_scheduler,
-        scheduler_workloads=scheduler_workloads,
         images=images,
         metrics=metrics,
         payment_admission=payment_admission,
@@ -1180,7 +1174,6 @@ def create_runtime_core(
         containers=core.containers,
         container_shutdowns=core.container_shutdowns,
         scheduler_container_requests=core.scheduler_container_requests,
-        scheduler_workloads=core.scheduler_workloads,
         images=core.images,
         metrics=core.metrics,
         payment_admission=core.payment_admission,
@@ -1296,7 +1289,6 @@ def create_management_core(core: RuntimeServiceCore) -> ManagementServiceCore:
         admission=DatabaseBillingAdmission(),
     )
     agents = AgentService(context, workspace_changes=workspace_changes)
-    autoscaler_states = AutoscalerStateService(context)
     return ManagementServiceCore(
         workspace_bucket_client=core.workspace_bucket_client,
         context=core.context,
@@ -1339,7 +1331,6 @@ def create_management_core(core: RuntimeServiceCore) -> ManagementServiceCore:
         containers=core.containers,
         container_shutdowns=core.container_shutdowns,
         scheduler_container_requests=core.scheduler_container_requests,
-        scheduler_workloads=core.scheduler_workloads,
         images=core.images,
         metrics=core.metrics,
         payment_admission=core.payment_admission,
@@ -1366,7 +1357,6 @@ def create_management_core(core: RuntimeServiceCore) -> ManagementServiceCore:
         custom_domains=custom_domains,
         cron_jobs=cron_jobs,
         agents=agents,
-        autoscaler_states=autoscaler_states,
         devboxes=DevboxService(
             context.database,
             keep_alive=container_runtime_state,
@@ -1844,7 +1834,6 @@ def compose_api_services(core: ManagementServiceCore) -> ApiServices:
         scheduler_container_requests=core.scheduler_container_requests,
         scheduler_pool_states=core.scheduler_pool_states,
         capacity_reservation_repository=core.capacity_reservation_repository,
-        scheduler_workloads=core.scheduler_workloads,
         images=core.images,
         agents=core.agents,
         object_storage=core.object_storage,
@@ -1853,7 +1842,6 @@ def compose_api_services(core: ManagementServiceCore) -> ApiServices:
         worker_events=core.worker_events,
         usage=core.usage,
         checkpoints=core.checkpoints,
-        autoscaler_states=core.autoscaler_states,
         volume_metering=core.volume_metering,
         payment_admission=core.payment_admission,
         volume_filesystem=core.volume_filesystem,

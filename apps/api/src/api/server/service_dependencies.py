@@ -30,12 +30,14 @@ from provider_clients.settings import (
     RELEASE_MANIFEST_URL_ENV,
 )
 from scheduler.autoscaler_operations import AutoscalerOperationsService
+from scheduler.cron import CronScheduler
 from scheduler.routes import SchedulerBackendRouteResolver
 from scheduler.workers import SchedulerWorkerAdminService
 from shared.errors import UpstreamUnavailableError
 
 from api.server.dependencies import (
     api_services,
+    management_services,
     route_services,
     runtime_services,
 )
@@ -47,6 +49,7 @@ from api.server.services import (
     ExecutionRoutes,
     FunctionApiService,
     ManagementRoutes,
+    ManagementServiceCore,
     RuntimeRoutes,
     RuntimeServiceCore,
 )
@@ -268,3 +271,10 @@ def task_management_service(
     if not isinstance(services, (ExecutionRoutes, ApiServices)):
         raise RuntimeError("task management is not owned by this API")
     return services.task_management_service
+
+
+def cron_scheduler(
+    services: Annotated[ManagementServiceCore, Depends(management_services)],
+    functions: Annotated[FunctionApiService, Depends(function_service)],
+) -> CronScheduler:
+    return CronScheduler(services, services.redis(), functions)
