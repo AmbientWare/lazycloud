@@ -19,9 +19,10 @@ T = TypeVar("T")
 
 # The API holds a status read for at most this long.
 WAIT_SECONDS = 30
-# Consecutive transient failures tolerated while following one task. A task
-# keeps running when the client gives up; only the caller's wait ends.
-_TRANSIENT_ATTEMPTS = 6
+# How long transient failures may continue, counted from the first one,
+# before a wait gives up. A task keeps running when the client gives up, so a
+# server restart or network blip must not end a caller's wait.
+_TRANSIENT_BUDGET_SECONDS = 600.0
 _TERMINAL_STATUSES = frozenset({TaskStatus.succeeded, TaskStatus.failed, TaskStatus.cancelled})
 
 
@@ -101,7 +102,9 @@ class Task:
                 return
             except Exception as exc:
                 failures += 1
-                if not is_transient(exc) or failures >= _TRANSIENT_ATTEMPTS:
+                if failures == 1:
+                    failing_since = time.monotonic()
+                if not is_transient(exc) or _budget_spent(failing_since):
                     raise
                 _backoff(failures)
 
@@ -114,7 +117,9 @@ class Task:
                 if isinstance(exc, ApiError) and exc.status_code == 404:
                     raise TaskNotFoundError(self.task_id) from exc
                 failures += 1
-                if not is_transient(exc) or failures >= _TRANSIENT_ATTEMPTS:
+                if failures == 1:
+                    failing_since = time.monotonic()
+                if not is_transient(exc) or _budget_spent(failing_since):
                     raise
             _backoff(failures)
 
@@ -193,6 +198,10 @@ def raise_task_failure(view: TaskView) -> None:
         if isinstance(restored, BaseException):
             raise restored from remote
     raise remote
+
+
+def _budget_spent(failing_since: float) -> bool:
+    return time.monotonic() - failing_since >= _TRANSIENT_BUDGET_SECONDS
 
 
 def _backoff(failures: int) -> None:

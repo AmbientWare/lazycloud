@@ -38,6 +38,9 @@ _SOURCE_UPLOAD_TIMEOUT_SECONDS = 600.0
 _UPLOAD_CHUNK_BYTES = 1024 * 1024
 
 
+# Longer than the server's 15-second follow heartbeat.
+_LOG_HEARTBEAT_WINDOW_SECONDS = 45.0
+
 class ApiError(SdkError):
     """The API answered with a typed error."""
 
@@ -186,15 +189,17 @@ class ApiClient:
     ) -> Iterator[LogEntry]:
         """Yield log entries with ids above `after`.
 
-        With `follow` the server holds the stream open until the task finishes,
-        so there is no read deadline.
+        With `follow` the server holds the stream open until the task finishes
+        and writes a blank line at least every 15 seconds, so a read that waits
+        longer than the heartbeat window means the connection is gone.
         """
 
         path = _path("v1", "workspaces", workspace, "tasks", str(task_id), "logs")
         params: dict[str, str | int] = {"after": after}
         if follow:
             params["follow"] = "true"
-        timeout = httpx.Timeout(self.timeout_seconds, read=None if follow else self.timeout_seconds)
+        read = max(self.timeout_seconds, _LOG_HEARTBEAT_WINDOW_SECONDS) if follow else self.timeout_seconds
+        timeout = httpx.Timeout(self.timeout_seconds, read=read)
         try:
             with self._client().stream("GET", path, params=params, timeout=timeout) as response:
                 if response.status_code >= 300:

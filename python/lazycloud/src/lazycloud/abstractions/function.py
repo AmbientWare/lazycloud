@@ -477,9 +477,9 @@ class Function(Generic[P, R]):
                 response = client.submit_tasks(
                     workspace, self._app_slug, self.resource_name, request
                 )
-            except ApiError as exc:
+            except SdkError as exc:
                 error: SdkError = exc
-                if exc.code is ErrorCode.not_found:
+                if isinstance(exc, ApiError) and exc.code is ErrorCode.not_found:
                     error = FunctionNotDeployedError(self._app_slug, self.resource_name, workspace)
                 if not tasks:
                     raise error from exc
