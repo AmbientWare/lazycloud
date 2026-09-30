@@ -88,12 +88,6 @@ class TaskNotFoundError(SdkError):
         super().__init__(f"task not found: {task_id}")
 
 
-class DeploymentNotFoundError(SdkError):
-    def __init__(self, deployment_id: str) -> None:
-        self.deployment_id = deployment_id
-        super().__init__(f"deployment not found: {deployment_id}")
-
-
 class WorkspaceNotFoundError(SdkError):
     def __init__(self, workspace: str) -> None:
         self.workspace = workspace
@@ -140,7 +134,6 @@ class SandboxFileSystemError(SdkError):
 
 __all__ = [
     "ConfigurationError",
-    "DeploymentNotFoundError",
     "FunctionNotDeployedError",
     "InvalidFunctionArgumentsError",
     "MapSubmissionError",

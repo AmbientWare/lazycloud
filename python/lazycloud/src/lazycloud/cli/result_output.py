@@ -27,10 +27,6 @@ _RICH_EXTENSIONS = {
 }
 
 
-def display_text(display: FunctionResultDisplay) -> Text:
-    return _HIGHLIGHT(Text(display.text))
-
-
 def rich_display_hint(rich: FunctionResultRichDisplay) -> Text:
     extension = _RICH_EXTENSIONS[rich.kind]
     what = "an image" if rich.kind is FunctionResultDisplayKind.Image else "HTML"
@@ -121,6 +117,5 @@ def _unavailable(extension: str, reason: str) -> ClientError:
 
 __all__ = [
     "ResultExport",
-    "display_text",
     "rich_display_hint",
 ]

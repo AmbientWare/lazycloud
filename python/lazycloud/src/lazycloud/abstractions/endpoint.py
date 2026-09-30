@@ -19,7 +19,6 @@ from typing import (
     runtime_checkable,
 )
 
-from pydantic import JsonValue
 from shared.autoscaling import Autoscaler
 from shared.deployment_records import (
     DEFAULT_DISK,
@@ -59,7 +58,6 @@ from lazycloud.client_contracts import (
 )
 from lazycloud.env import is_local
 from lazycloud.exceptions import UnsupportedFeatureError
-from lazycloud.json_contracts import parse_json_value
 from lazycloud.references import dotted_reference
 from lazycloud.terminal import Terminal
 
@@ -157,21 +155,6 @@ class ASGIOptions(TypedDict, total=False):
     region: str | None
     availability_zone: str
     machine: MachineInput
-
-
-@dataclass(frozen=True, slots=True)
-class EndpointResponse:
-    status_code: int
-    headers: Mapping[str, list[str]]
-    content: bytes
-    url: str
-
-    @property
-    def text(self) -> str:
-        return self.content.decode("utf-8")
-
-    def json(self) -> JsonValue:
-        return parse_json_value(self.text)
 
 
 @dataclass
@@ -865,7 +848,6 @@ __all__ = [
     "Endpoint",
     "EndpointOperationError",
     "EndpointOptions",
-    "EndpointResponse",
     "RealtimeASGI",
     "_asgi",
     "_endpoint",

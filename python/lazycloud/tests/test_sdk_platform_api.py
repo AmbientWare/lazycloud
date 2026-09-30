@@ -443,3 +443,18 @@ def test_cli_run_json_and_task_commands_use_the_task_api(
     assert cancelled.exit_code == 0, cancelled.output
     assert json.loads(cancelled.stdout)["status"] == "cancelled"
     assert fake_api.calls("POST", f"/v1/workspaces/{WORKSPACE}/tasks/{task_id}/cancel")
+
+
+def test_cli_deploy_of_a_file_deploys_its_app(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_api: FakeApi
+) -> None:
+    (tmp_path / "reports.py").write_text(REPORTS, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    _serve_deployment(fake_api, stored=set())
+
+    result = CliRunner().invoke(build_public_cli(), ["--json", "deploy", "reports.py"])
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["releases"][0]["function"] == "summarize_sales"
+    (request,) = fake_api.calls("POST", "/v1/workspaces/team/apps/reports/deployments")
+    assert request.json()["functions"][0]["handler"] == "reports:summarize_sales"
