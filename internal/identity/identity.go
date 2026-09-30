@@ -177,7 +177,10 @@ func (i *Identity) CreateWorkspace(ctx context.Context, name, ownerEmail string)
 		ws = Workspace{ID: WorkspaceID(id), Name: name}
 		return nil
 	})
-	return ws, err
+	if err != nil {
+		return Workspace{}, fmt.Errorf("create workspace: %w", err)
+	}
+	return ws, nil
 }
 
 // CreateToken issues an API token for the user with email, restricted to

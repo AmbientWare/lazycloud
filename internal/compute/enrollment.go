@@ -65,7 +65,7 @@ func (c *Compute) Enroll(ctx context.Context, joinToken, name string, capacity C
 		return nil
 	})
 	if err != nil {
-		return HostID{}, "", err
+		return HostID{}, "", fmt.Errorf("enroll: %w", err)
 	}
 	return HostID(id), hostToken, nil
 }

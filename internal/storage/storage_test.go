@@ -40,7 +40,7 @@ func put(t *testing.T, target *UploadTarget, body []byte) int {
 	if err != nil {
 		t.Fatalf("upload: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	_, _ = io.Copy(io.Discard, resp.Body)
 	return resp.StatusCode
 }
@@ -97,7 +97,7 @@ func TestSourceRegistration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	got, err := io.ReadAll(resp.Body)
 	if err != nil || !bytes.Equal(got, archive) {
 		t.Fatalf("download: status %d, %d bytes, err %v", resp.StatusCode, len(got), err)

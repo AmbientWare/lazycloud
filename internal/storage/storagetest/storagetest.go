@@ -16,11 +16,11 @@ func Config() storage.Config {
 	if endpoint == "" {
 		endpoint = "http://127.0.0.1:23900"
 	}
-	return storage.Config{
+	return storage.Config{ //nolint:gosec // Development credentials.
 		Endpoint:        endpoint,
 		Region:          "garage",
 		Bucket:          "lazycloud",
 		AccessKeyID:     "GK1a2b3c4d5e6f708192a3b4c5",
-		SecretAccessKey: "6c6f63616c2d6c617a79636c6f75642d6465762d7365637265742d6b65792d31", //nolint:gosec // Development credentials.
+		SecretAccessKey: "6c6f63616c2d6c617a79636c6f75642d6465762d7365637265742d6b65792d31",
 	}
 }

@@ -219,7 +219,7 @@ func (c *Control) Deploy(ctx context.Context, workspace identity.WorkspaceID, ap
 		return nil
 	})
 	if err != nil {
-		return apitypes.Deployment{}, err
+		return apitypes.Deployment{}, fmt.Errorf("deploy %s: %w", app, err)
 	}
 	return out, nil
 }
