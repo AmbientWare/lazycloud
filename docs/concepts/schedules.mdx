@@ -76,6 +76,15 @@ soon as a run finishes. See [Warm containers](/concepts/scaling#warm-containers)
 Editing `cron` and deploying again replaces the schedule. Removing `cron` and
 redeploying keeps the function callable without automatic runs.
 
+Stopping a deployment or pausing its app disables the schedule. Starting or
+resuming it schedules the next future occurrence; time spent paused is not
+replayed. If the scheduler is unavailable, it admits one overdue occurrence
+when it recovers, then continues with the next future occurrence.
+
+Each occurrence creates one durable task. A scheduler restart cannot create a
+second task for that occurrence. The function's retry policy still applies to
+task execution, so handlers should tolerate retries of their side effects.
+
 To stop it now:
 
 ```bash

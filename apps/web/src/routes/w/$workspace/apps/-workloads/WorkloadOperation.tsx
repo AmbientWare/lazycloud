@@ -104,11 +104,8 @@ function PodFacts({ deployment }: { deployment: Deployment }) {
 }
 
 function ScheduleFacts({ workspaceId, group }: { workspaceId: string; group: WorkloadGroup }) {
-  const cronJobs = useQuery(cronJobsQueryOptions(workspaceId));
-  const deploymentIds = new Set(group.deployments.map((deployment) => deployment.id));
-  const job: CronJob | undefined = (cronJobs.data?.cron_jobs ?? []).find((item) =>
-    deploymentIds.has(item.deployment_id),
-  );
+  const cronJobs = useQuery(cronJobsQueryOptions(workspaceId, group.latest.id));
+  const job: CronJob | undefined = cronJobs.data?.cron_jobs[0];
 
   if (cronJobs.isPending) return <Skeleton className="h-12 w-full" />;
   if (cronJobs.isError) return <PanelError message={cronJobs.error.message} />;

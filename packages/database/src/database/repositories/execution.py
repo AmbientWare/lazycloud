@@ -1989,19 +1989,12 @@ class CronJobRunRepository:
     session: Session
 
     def append(self, run: CronJobRun) -> CronJobRun:
-        WorkspaceRepository(self.session).lock_active_owner(run.workspace_id)
-        row = CronJobRunTable(
-            id=run.id,
-            workspace_id=run.workspace_id,
-            cron_job=run.cron_job,
-            enqueued=run.enqueued,
-            task_id=run.task_id,
-            reason=run.reason,
-            created_at=run.created_at,
+        statement = workspace_fenced_insert(
+            CronJobRunTable, [run.model_dump()], workspace_ids=[run.workspace_id]
         )
-        self.session.add(row)
-        self.session.flush()
-        return cron_job_run_from_table(row)
+        if self.session.scalar(statement.returning(CronJobRunTable.id)) is None:
+            raise ConflictError("cron run workspace is not active")
+        return run
 
     def page(
         self,

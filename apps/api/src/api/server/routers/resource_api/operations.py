@@ -56,11 +56,12 @@ router = APIRouter()
 def list_cron_jobs(
     workspace_id: read_workspace,
     services: ManagementServiceCore = Depends(management_services),
+    deployment_id: identifier_filter = None,
 ) -> CronJobListResponse:
     return CronJobListResponse(
         cron_jobs=[
             CronJobResponse.model_validate(item)
-            for item in services.cron_jobs.list(workspace=workspace_id)
+            for item in services.cron_jobs.list(workspace=workspace_id, deployment_id=deployment_id)
         ]
     )
 
@@ -89,9 +90,9 @@ def list_cron_job_runs(
     workspace_id: read_workspace,
     limit: int = Query(100, gt=0, le=1_000),
     cursor: str | None = None,
-    service: CronScheduler = Depends(cron_scheduler),
+    services: ManagementServiceCore = Depends(management_services),
 ) -> CronJobRunListResponse:
-    page = service.list_cron_job_runs(
+    page = services.cron_jobs.list_cron_job_runs(
         workspace_id=workspace_id,
         limit=limit,
         cursor=cursor,

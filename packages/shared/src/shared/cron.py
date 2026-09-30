@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
+from uuid import uuid4
 
 from croniter import croniter
 from pydantic import Field
@@ -68,10 +69,13 @@ class CronJobRun(ContractModel):
     enqueued: bool
     task_id: str | None = None
     reason: str | None = None
+    schedule_revision: str | None = None
+    scheduled_at: datetime | None = None
     created_at: datetime = Field(default_factory=utc_now)
 
 
 class CronJobRecord(ContractModel):
+    revision: str = Field(default_factory=lambda: str(uuid4()))
     workspace_id: str
     name: str
     cron: str

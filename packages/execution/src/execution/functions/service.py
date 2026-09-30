@@ -84,6 +84,7 @@ from shared.tasks import (
     is_terminal_task_status,
 )
 from shared.timestamps import utc_now
+from shared.usage import UsageRecord
 
 from database import AsyncDatabaseClient
 from execution.batching import RequestBatch
@@ -118,6 +119,15 @@ LOGGER = logging.getLogger(__name__)
 class _InvocationResult:
     response: FunctionInvokeResponse
     headless: bool
+
+
+@dataclass(slots=True)
+class FunctionAdmission:
+    stub: StubRecord
+    prepared: list[tuple[int, FunctionInvokeBody, Task]]
+    results: list[_InvocationResult | Exception]
+    needs_container: bool = False
+    placement: Placement | None = None
 
 
 @dataclass(slots=True)
@@ -205,6 +215,47 @@ class FunctionControlService:
     def _admit_invocations(
         self, requests: Sequence[FunctionInvokeBody], *, stub: StubRecord
     ) -> list[_InvocationResult | Exception]:
+        admission = self.prepare_admission(requests, stub=stub)
+        if not admission.prepared:
+            return admission.results
+        with self.services.context.database.session() as session:
+            self.lock_admission(session, admission)
+            tasks, usage = self.persist_admission(session, admission)
+        self.services.execution_demand.notify()
+        for (index, request, _), task, record in zip(admission.prepared, tasks, usage, strict=True):
+            response = FunctionInvokeResponse.from_result(task_id=task.id)
+            try:
+                self.services.tasks.publish_created(task)
+                self.services.usage.publish_change(record)
+                scheduled = None
+                if task.claimable_at is None:
+                    scheduled = self._try_schedule_waiting_task(
+                        task.id, placement=admission.placement
+                    )
+                elif admission.needs_container:
+                    scheduled = self._schedule_function_task(task, placement=admission.placement)
+                if scheduled is not None and not scheduled.accepted:
+                    response = FunctionInvokeResponse.from_result(
+                        task_id=task.id,
+                        output=scheduled.reason or "function container scheduling failed",
+                        done=True,
+                        exit_code=1,
+                    )
+            except Exception as exc:
+                LOGGER.exception("post-commit function admission failed for task %s", task.id)
+                try:
+                    self.cancel_task(task.id)
+                except Exception:
+                    LOGGER.exception("failed to cancel admitted task %s", task.id)
+                response = FunctionInvokeResponse.from_result(
+                    task_id=task.id, output=str(exc), done=True, exit_code=1
+                )
+            admission.results[index] = _InvocationResult(response, request.headless)
+        return admission.results
+
+    def prepare_admission(
+        self, requests: Sequence[FunctionInvokeBody], *, stub: StubRecord
+    ) -> FunctionAdmission:
         if stub.kind is not StubKind.Function:
             raise InvalidInputError(f"stub is not a function: {stub.id}")
         config = FunctionStubConfig.model_validate(stub.config, from_attributes=True)
@@ -255,7 +306,7 @@ class FunctionControlService:
             except DomainError as exc:
                 results[index] = exc
         if not prepared:
-            return results
+            return FunctionAdmission(stub, prepared, results)
 
         # Cold eligibility can lock billing accounts. Commit before acquiring
         # artifact and workspace fences in the task creation transaction.
@@ -293,96 +344,86 @@ class FunctionControlService:
                         f"it accepts ({limit}); raise max_pending_tasks to queue more"
                     )
         prepared = prepared[:available]
-        if not prepared:
-            return results
+        return FunctionAdmission(stub, prepared, results, needs_container, placement)
 
-        with self.services.context.database.session() as session:
-            if stub.app_id:
-                DatabaseAppExecutionAdmission().assert_active(
-                    session, app_id=stub.app_id, workspace_id=stub.workspace_id
-                )
-            if stub.deployment_id:
-                active = DeploymentRepository(session).lock_invocation_active(
-                    stub.deployment_id, workspace_id=stub.workspace_id, stub_id=stub.id
-                )
-                if active is None:
-                    raise NotFoundError(f"deployment not found for function: {stub.deployment_id}")
-                if not active:
-                    raise ConflictError(f"deployment is not active: {stub.deployment_id}")
-            tasks = self.services.tasks.create_batch_in_transaction(
-                session, [task for _, _, task in prepared]
+    def lock_admission(self, session: DatabaseSession, admission: FunctionAdmission) -> None:
+        stub = admission.stub
+        if stub.app_id:
+            DatabaseAppExecutionAdmission().assert_active(
+                session, app_id=stub.app_id, workspace_id=stub.workspace_id
             )
-            usage = self.services.usage.record_task_counts_in_session(
+        if stub.deployment_id:
+            active = DeploymentRepository(session).lock_invocation_active(
+                stub.deployment_id, workspace_id=stub.workspace_id, stub_id=stub.id
+            )
+            if active is None:
+                raise NotFoundError(f"deployment not found for function: {stub.deployment_id}")
+            if not active:
+                raise ConflictError(f"deployment is not active: {stub.deployment_id}")
+
+    def persist_admission(
+        self, session: DatabaseSession, admission: FunctionAdmission
+    ) -> tuple[list[Task], list[UsageRecord]]:
+        """Persist under the caller's app/deployment admission locks."""
+        stub = admission.stub
+        prepared = admission.prepared
+        tasks = self.services.tasks.create_batch_in_transaction(
+            session, [task for _, _, task in prepared]
+        )
+        usage = self.services.usage.record_task_counts_in_session(
+            session,
+            workspace_id=stub.workspace_id,
+            resource_type="function",
+            resource_id=stub.id,
+            task_ids=[task.id for task in tasks],
+            kind=stub.kind.value,
+            app_id=stub.app_id or "",
+            deployment_id=stub.deployment_id or "",
+        )
+        events: list[tuple[Event, str | None]] = []
+        for (_, request, _), task in zip(prepared, tasks, strict=True):
+            dependencies = self._create_task_dependencies(session, task, request)
+            events.append(
+                (
+                    Event(
+                        id=str(uuid4()),
+                        action="function.invoked",
+                        level=EventLevel.Info,
+                        resource_type="task",
+                        resource_id=task.id,
+                        message=f"invoked function {stub.name}",
+                        data={
+                            "stub_id": stub.id,
+                            "parent_task_id": task.parent_task_id or "",
+                            "root_task_id": task.root_task_id or task.id,
+                            "dependency_count": len(dependencies),
+                            "headless": request.headless,
+                        },
+                    ),
+                    stub.workspace_id,
+                )
+            )
+        self.services.events.emit_many_in_session(session, events)
+        # This is the only shared write across independent invocations.
+        if any(task.claimable_at is not None for task in tasks):
+            self.services.execution_demand.activate_in_transaction(
                 session,
+                stub_id=stub.id,
                 workspace_id=stub.workspace_id,
-                resource_type="function",
-                resource_id=stub.id,
-                task_ids=[task.id for task in tasks],
-                kind=stub.kind.value,
-                app_id=stub.app_id or "",
-                deployment_id=stub.deployment_id or "",
+                kind=AutoscalerTargetKind.Function,
             )
-            events: list[tuple[Event, str | None]] = []
-            for (_, request, _), task in zip(prepared, tasks, strict=True):
-                dependencies = self._create_task_dependencies(session, task, request)
-                events.append(
-                    (
-                        Event(
-                            id=str(uuid4()),
-                            action="function.invoked",
-                            level=EventLevel.Info,
-                            resource_type="task",
-                            resource_id=task.id,
-                            message=f"invoked function {stub.name}",
-                            data={
-                                "stub_id": stub.id,
-                                "parent_task_id": task.parent_task_id or "",
-                                "root_task_id": task.root_task_id or task.id,
-                                "dependency_count": len(dependencies),
-                                "headless": request.headless,
-                            },
-                        ),
-                        stub.workspace_id,
-                    )
-                )
-            self.services.events.emit_many_in_session(session, events)
-            # This is the only shared write across independent invocations.
-            if any(task.claimable_at is not None for task in tasks):
-                self.services.execution_demand.activate_in_transaction(
-                    session,
-                    stub_id=stub.id,
-                    workspace_id=stub.workspace_id,
-                    kind=AutoscalerTargetKind.Function,
-                )
+        return tasks, usage
+
+    def publish_admission(self, tasks: Sequence[Task], usage: Sequence[UsageRecord]) -> None:
         self.services.execution_demand.notify()
-        for (index, request, _), task, record in zip(prepared, tasks, usage, strict=True):
-            response = FunctionInvokeResponse.from_result(task_id=task.id)
+        for task, record in zip(tasks, usage, strict=True):
             try:
                 self.services.tasks.publish_created(task)
                 self.services.usage.publish_change(record)
-                scheduled = None
-                if task.claimable_at is None:
-                    scheduled = self._try_schedule_waiting_task(task.id, placement=placement)
-                elif needs_container:
-                    scheduled = self._schedule_function_task(task, placement=placement)
-                if scheduled is not None and not scheduled.accepted:
-                    response = FunctionInvokeResponse.from_result(
-                        task_id=task.id,
-                        output=scheduled.reason or "function container scheduling failed",
-                        done=True,
-                        exit_code=1,
-                    )
-            except Exception as exc:
-                LOGGER.exception("post-commit function admission failed for task %s", task.id)
-                try:
-                    self.cancel_task(task.id)
-                except Exception:
-                    LOGGER.exception("failed to cancel admitted task %s", task.id)
-                response = FunctionInvokeResponse.from_result(
-                    task_id=task.id, output=str(exc), done=True, exit_code=1
+            except Exception:
+                LOGGER.exception(
+                    "function admission committed; notification failed for task %s", task.id
                 )
-            results[index] = _InvocationResult(response, request.headless)
-        return results
 
     def _task_graph_context(
         self,

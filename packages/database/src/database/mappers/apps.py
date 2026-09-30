@@ -128,6 +128,7 @@ def write_deployment_row(row: DeploymentTable, deployment: Deployment) -> None:
 
 def cron_job_from_table(row: CronJobTable) -> CronJobRecord:
     return CronJobRecord(
+        revision=str(row.revision),
         workspace_id=str(row.workspace_id),
         name=row.name,
         cron=row.cron,
@@ -138,17 +139,6 @@ def cron_job_from_table(row: CronJobTable) -> CronJobRecord:
         created_at=to_utc(row.created_at),
         updated_at=to_utc(row.updated_at),
     )
-
-
-def write_cron_job_row(row: CronJobTable, cron_job: CronJobRecord) -> None:
-    row.name = cron_job.name
-    row.cron = cron_job.cron
-    row.deployment_id = cron_job.deployment_id
-    row.enabled = cron_job.enabled
-    row.last_run_at = cron_job.last_run_at
-    row.next_run_at = cron_job.next_run_at
-    row.created_at = cron_job.created_at
-    row.updated_at = cron_job.updated_at
 
 
 def app_deployment_intent_from_table(

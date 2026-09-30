@@ -190,15 +190,11 @@ def test_interrupted_prune_resumes_exact_targets_without_deleting_redeployment(
             str(request.operation_id), workspace_id=app.workspace_id
         )
         assert pending is not None and not pending.complete
-        assert not CronJobRepository(session).record_run(
-            old_schedule, workspace_id=app.workspace_id
-        )
+        assert not services.cron_jobs.advance_in_session(session, old_schedule, now=utc_now())
     assert services.cron_jobs.list() == []
     replacement = services.deployments.deploy(old.spec.model_copy(update={"cron": "0 * * * *"}))
     with services.context.database.session() as session:
-        assert not CronJobRepository(session).record_run(
-            old_schedule, workspace_id=app.workspace_id
-        )
+        assert not services.cron_jobs.advance_in_session(session, old_schedule, now=utc_now())
         with pytest.raises(ConflictError, match="deleted deployment"):
             CronJobRepository(session).upsert(old_schedule, workspace_id=app.workspace_id)
     services.deployment_plans.reconcile_pending()

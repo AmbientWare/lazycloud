@@ -595,6 +595,7 @@ class ManagementServiceCore(RuntimeServiceCore):
 
 @dataclass(frozen=True, slots=True)
 class ApiServices(ManagementServiceCore):
+    function_admission: FunctionControlService
     task_management_service: TaskManagementService
     gateway_container_service: GatewayContainerService
     transport: ApiTransport
@@ -1241,7 +1242,8 @@ def create_management_core(core: RuntimeServiceCore) -> ManagementServiceCore:
     deployment_effects = DeploymentEffects(
         context, execution_lifecycle, workspace_changes, placement_resources
     )
-    deployment_lifecycle = AppDeploymentLifecycleService(context, deployment_effects)
+    cron_jobs = CronJobService(context, workspace_changes=workspace_changes)
+    deployment_lifecycle = AppDeploymentLifecycleService(context, deployment_effects, cron_jobs)
     deployment_plans = DeploymentPlanService(
         context,
         execution_lifecycle,
@@ -1252,10 +1254,6 @@ def create_management_core(core: RuntimeServiceCore) -> ManagementServiceCore:
         context,
         deployment_lifecycle,
         execution_lifecycle,
-        workspace_changes=workspace_changes,
-    )
-    cron_jobs = CronJobService(
-        context,
         workspace_changes=workspace_changes,
     )
     deployments = DeploymentService(
@@ -1503,6 +1501,7 @@ def compose_api_transport(core: ApiServiceCore) -> ApiTransport:
 class TaskControlRoutes:
     transport: ApiTransport
     function_service: FunctionApiService
+    function_admission: FunctionControlService
 
 
 @dataclass(frozen=True, slots=True)
@@ -1557,7 +1556,7 @@ def compose_task_routes(core: ApiServiceCore) -> TaskControlRoutes:
         async_database=transport.async_database,
         task_changes=AsyncTaskChangeReader(async_io.realtime) if async_io is not None else None,
     )
-    return TaskControlRoutes(transport, function)
+    return TaskControlRoutes(transport, function, function)
 
 
 def compose_execution_routes(core: ApiServiceCore, tasks: TaskControlRoutes) -> ExecutionRoutes:
@@ -1597,6 +1596,7 @@ def compose_execution_routes(core: ApiServiceCore, tasks: TaskControlRoutes) -> 
         ),
     )
     return ExecutionRoutes(
+        function_admission=tasks.function_admission,
         task_management_service=TaskManagementService(
             core.context, core.tasks, FunctionControlService(core)
         ),
@@ -1649,6 +1649,7 @@ def compose_runtime_routes(core: RuntimeServiceCore, tasks: TaskControlRoutes) -
         else None
     )
     return RuntimeRoutes(
+        function_admission=tasks.function_admission,
         transport=tasks.transport,
         function_service=tasks.function_service,
         gateway_service=gateway,
@@ -1737,6 +1738,7 @@ def compose_management_routes(
         ),
     )
     return ManagementRoutes(
+        function_admission=tasks.function_admission,
         transport=transport,
         function_service=function,
         gateway_service=gateway,
@@ -1846,6 +1848,7 @@ def compose_api_services(core: ManagementServiceCore) -> ApiServices:
         endpoint_service=execution.endpoint_service,
         function_service=tasks.function_service,
         gateway_service=runtime.gateway_service,
+        function_admission=tasks.function_admission,
         gateway_container_service=execution.gateway_container_service,
         image_service=management.image_service,
         pod_service=execution.pod_service,

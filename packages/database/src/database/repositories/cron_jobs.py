@@ -3,24 +3,28 @@ from __future__ import annotations
 from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import datetime
+from uuid import uuid4
 
 from database.mappers.apps import (
     cron_job_from_table,
-    write_cron_job_row,
+    stub_from_table,
 )
+from database.records.apps import StubRecord
 from database.repositories.deployments import DeploymentRepository
 from database.repositories.identity import WorkspaceRepository
 from database.tables.apps import (
     CronJobTable,
+    DeploymentTable,
+    StubTable,
 )
 from shared.cron import CronJobRecord
 from shared.errors import ConflictError
 from sqlalchemy import (
     delete,
     select,
-    text,
     update,
 )
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 
@@ -44,39 +48,34 @@ class CronJobRepository:
             cron_job.deployment_id, workspace_id=workspace_id
         ):
             raise ConflictError("cannot change the schedule of a deleted deployment")
-        self.session.execute(
-            text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
-            {"lock_key": f"cron-job:{workspace_id}:{cron_job.name}"},
-        )
+        values = cron_job.model_dump() | {"revision": str(uuid4())}
+        statement = insert(CronJobTable).values(**values)
         row = self.session.scalar(
-            select(CronJobTable).where(
-                CronJobTable.workspace_id == workspace_id,
-                CronJobTable.name == cron_job.name,
-            )
+            statement.on_conflict_do_update(
+                index_elements=[CronJobTable.workspace_id, CronJobTable.name],
+                set_={key: value for key, value in values.items() if key != "workspace_id"},
+            ).returning(CronJobTable)
         )
         if row is None:
-            row = CronJobTable(workspace_id=workspace_id)
-            self.session.add(row)
-        write_cron_job_row(row, cron_job)
-        self.session.flush()
+            raise RuntimeError("schedule upsert returned no row")
         return cron_job_from_table(row)
 
-    def record_run(self, cron_job: CronJobRecord, *, workspace_id: str) -> bool:
-        if cron_job.workspace_id != workspace_id:
-            raise ConflictError("cron job ownership cannot change")
+    def advance(self, cron_job: CronJobRecord, *, now: datetime, next_run_at: datetime) -> bool:
         return (
             self.session.scalar(
                 update(CronJobTable)
                 .where(
-                    CronJobTable.workspace_id == workspace_id,
+                    CronJobTable.workspace_id == cron_job.workspace_id,
                     CronJobTable.name == cron_job.name,
-                    CronJobTable.deployment_id == cron_job.deployment_id,
-                    CronJobTable.cron == cron_job.cron,
+                    CronJobTable.revision == cron_job.revision,
+                    CronJobTable.enabled.is_(True),
+                    CronJobTable.next_run_at == cron_job.next_run_at,
+                    CronJobTable.next_run_at <= now,
                 )
                 .values(
-                    last_run_at=cron_job.last_run_at,
-                    next_run_at=cron_job.next_run_at,
-                    updated_at=cron_job.updated_at,
+                    last_run_at=now,
+                    next_run_at=next_run_at,
+                    updated_at=now,
                 )
                 .returning(CronJobTable.name)
             )
@@ -92,6 +91,20 @@ class CronJobRepository:
         )
         return cron_job_from_table(row) if row is not None else None
 
+    def set_enabled(
+        self, job: CronJobRecord, *, enabled: bool, next_run_at: datetime | None, now: datetime
+    ) -> None:
+        self.session.execute(
+            update(CronJobTable)
+            .where(
+                CronJobTable.workspace_id == job.workspace_id,
+                CronJobTable.name == job.name,
+                CronJobTable.revision == job.revision,
+                CronJobTable.enabled != enabled,
+            )
+            .values(enabled=enabled, next_run_at=next_run_at, updated_at=now, revision=str(uuid4()))
+        )
+
     def list(
         self, *, workspace_id: str, deployment_ids: Collection[str] | None = None
     ) -> list[CronJobRecord]:
@@ -100,18 +113,7 @@ class CronJobRepository:
             statement = statement.where(CronJobTable.deployment_id.in_(deployment_ids))
         return [
             cron_job_from_table(row)
-            for row in self.session.scalars(
-                statement.order_by(CronJobTable.created_at.desc(), CronJobTable.id)
-            )
-        ]
-
-    def list_across_workspaces(self) -> list[CronJobRecord]:
-        """Scheduler-owned listing over every workspace's cron jobs."""
-        return [
-            cron_job_from_table(row)
-            for row in self.session.scalars(
-                select(CronJobTable).order_by(CronJobTable.created_at.desc(), CronJobTable.id)
-            )
+            for row in self.session.scalars(statement.order_by(CronJobTable.name))
         ]
 
     def delete(self, name: str, *, workspace_id: str) -> None:
@@ -127,11 +129,13 @@ class CronJobRepository:
         *,
         now: datetime,
         limit: int,
-    ) -> list[CronJobRecord]:
+    ) -> list[tuple[CronJobRecord, StubRecord | None]]:
         if limit <= 0:
             return []
         statement = (
-            select(CronJobTable)
+            select(CronJobTable, StubTable)
+            .join(DeploymentTable, DeploymentTable.id == CronJobTable.deployment_id)
+            .outerjoin(StubTable, StubTable.id == DeploymentTable.stub_id)
             .where(
                 CronJobTable.enabled.is_(True),
                 CronJobTable.next_run_at.is_not(None),
@@ -143,4 +147,7 @@ class CronJobRepository:
             )
             .limit(limit)
         )
-        return [cron_job_from_table(row) for row in self.session.scalars(statement)]
+        return [
+            (cron_job_from_table(job), stub_from_table(stub) if stub is not None else None)
+            for job, stub in self.session.execute(statement)
+        ]

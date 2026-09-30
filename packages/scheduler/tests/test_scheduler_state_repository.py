@@ -439,8 +439,8 @@ def _create_cron_function(
     return deployment, stub, cron_job
 
 
-def _cron_scheduler(services: ApiServices, redis: RedisClient) -> CronScheduler:
-    return CronScheduler(services, redis, FunctionControlService(services))
+def _cron_scheduler(services: ApiServices) -> CronScheduler:
+    return CronScheduler(services.cron_jobs, FunctionControlService(services))
 
 
 def test_cron_failure_retries_same_run_then_persists_terminal_failure(
@@ -466,15 +466,15 @@ def test_cron_failure_retries_same_run_then_persists_terminal_failure(
     cron_job = schedules[0]
     assert cron_job.next_run_at is not None
 
-    runs = _cron_scheduler(isolated_services, real_redis_actors.client()).tick(
-        now=cron_job.next_run_at
-    )
+    runs = _cron_scheduler(isolated_services).tick(now=cron_job.next_run_at)
     assert len(runs) == 1
     assert runs[0].task_id is not None
     task_id = runs[0].task_id
     functions = FunctionControlService(isolated_services)
 
     initial = isolated_services.tasks.get(task_id)
+    assert initial.stub_id is not None
+    list(functions.start_function_containers(initial.stub_id, desired_count=1))
     assign_runtime(
         isolated_services.containers,
         isolated_services.scheduler_workers,
@@ -623,13 +623,13 @@ def test_stopped_cron_deployment_cancels_due_retry_and_never_revives_it(
     cron_job = schedules[0]
     assert cron_job.next_run_at is not None
 
-    runs = _cron_scheduler(isolated_services, real_redis_actors.client()).tick(
-        now=cron_job.next_run_at
-    )
+    runs = _cron_scheduler(isolated_services).tick(now=cron_job.next_run_at)
     assert runs[0].task_id is not None
     task_id = runs[0].task_id
     functions = FunctionControlService(isolated_services)
     initial = isolated_services.tasks.get(task_id)
+    assert initial.stub_id is not None
+    list(functions.start_function_containers(initial.stub_id, desired_count=1))
     assign_runtime(
         isolated_services.containers,
         isolated_services.scheduler_workers,
@@ -689,30 +689,6 @@ def test_stopped_cron_deployment_cancels_due_retry_and_never_revives_it(
     assert len(container_scheduler.requests) == 1
 
 
-def test_scheduler_tick_skips_cron_function_when_lock_is_held(
-    isolated_services: ApiServices,
-) -> None:
-    container_scheduler = RecordingContainerScheduler()
-    isolated_services = replace(
-        isolated_services,
-        containers=replace(isolated_services.containers, scheduler=container_scheduler),
-    )
-    _, stub, cron_job = _create_cron_function(isolated_services)
-    fake = FakeRedis()
-    redis = RedisClient(fake, key_prefix="test")
-    fake.set(redis.key(f"function:cron_jobs_lock:{stub.id}"), "held")
-
-    assert cron_job.next_run_at is not None
-    runs = _cron_scheduler(isolated_services, redis).tick(now=cron_job.next_run_at)
-
-    assert len(runs) == 1
-    assert not runs[0].enqueued
-    assert runs[0].task_id is None
-    assert runs[0].reason == "cron job lock not acquired"
-    assert isolated_services.tasks.list() == []
-    assert container_scheduler.requests == []
-
-
 def test_new_cron_version_takes_over_the_prior_schedule(
     isolated_services: ApiServices,
 ) -> None:
@@ -769,13 +745,11 @@ def test_inactive_cron_deployment_never_enqueues(
         )
     assert cron_job.next_run_at is not None
 
-    runs = _cron_scheduler(isolated_services, real_redis_actors.client()).tick(
-        now=cron_job.next_run_at
-    )
+    runs = _cron_scheduler(isolated_services).tick(now=cron_job.next_run_at)
 
     assert len(runs) == 1
     assert not runs[0].enqueued
-    assert runs[0].reason == "deployment inactive"
+    assert runs[0].reason == f"deployment is not active: {deployment.id}"
 
 
 def test_scheduler_worker_repository_requeues_removed_worker_requests(

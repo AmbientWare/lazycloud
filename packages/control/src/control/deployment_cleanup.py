@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from uuid import NAMESPACE_URL, uuid5
 
 from database.repositories.apps import AppDeploymentIntentRepository, AppRepository
-from database.repositories.cron_jobs import CronJobRepository
 from database.repositories.deployment_effects import (
     DeploymentAction,
     DeploymentEffect,
@@ -12,10 +11,12 @@ from database.repositories.deployment_effects import (
 )
 from database.repositories.deployments import DeploymentRepository
 from shared.app_lifecycle import AppDeploymentIntentTarget
+from shared.deployment_records import Deployment
 from shared.errors import ConflictError
 from shared.timestamps import utc_now
 
 from control.context import ControlContext
+from control.cron_jobs import CronJobService
 from control.deployment_effects import DeploymentEffects
 
 
@@ -23,6 +24,7 @@ from control.deployment_effects import DeploymentEffects
 class AppDeploymentLifecycleService:
     context: ControlContext
     effects: DeploymentEffects
+    schedules: CronJobService
 
     def apply_intents(
         self, *, app_id: str, workspace_id: str, revision: int, claim_id: str
@@ -41,14 +43,7 @@ class AppDeploymentLifecycleService:
             deployments = DeploymentRepository(session)
             publications = AppDeploymentIntentRepository(session)
             intents = publications.list(app_id=app_id)
-            schedules = CronJobRepository(session)
-            cron_by_deployment = {
-                record.deployment_id: record
-                for record in schedules.list(
-                    workspace_id=workspace_id,
-                    deployment_ids=[intent.deployment_id for intent in intents],
-                )
-            }
+            changed: list[Deployment] = []
             pending: list[DeploymentEffect] = []
             for intent in intents:
                 if intent.workspace_change_published_at is not None:
@@ -71,15 +66,7 @@ class AppDeploymentLifecycleService:
                         ),
                         workspace_id=workspace_id,
                     )
-                schedule = cron_by_deployment.get(deployment.id)
-                if schedule is not None:
-                    if deleted:
-                        schedules.delete(schedule.name, workspace_id=workspace_id)
-                    elif schedule.enabled != active:
-                        schedules.upsert(
-                            schedule.model_copy(update={"enabled": active, "updated_at": now}),
-                            workspace_id=workspace_id,
-                        )
+                changed.append(deployment)
                 effect = DeploymentEffectRepository(session).record(
                     deployment,
                     workspace_id=workspace_id,
@@ -109,6 +96,7 @@ class AppDeploymentLifecycleService:
                     )
                 )
                 pending.append(effect)
+            self.schedules.apply_deployments_in_session(session, changed, workspace_id=workspace_id)
         self.effects.finish(pending)
         return True
 

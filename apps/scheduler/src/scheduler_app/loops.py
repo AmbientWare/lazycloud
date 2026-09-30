@@ -6,7 +6,7 @@ import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from time import monotonic
+from time import monotonic, time
 from types import FrameType
 
 from coordination.redis_client import REDIS_UNAVAILABLE_ERRORS
@@ -189,6 +189,10 @@ def start_scheduler_loops(
             autoscaling_limit=autoscaling_limit,
         ),
     )
+
+    def wait_for_cron(interval: float) -> None:
+        resolved_stop.wait(interval - time() % interval)
+
     spawn(
         SchedulerLoopName.Scheduled,
         1.0,
@@ -197,6 +201,7 @@ def start_scheduler_loops(
             if include_cron_jobs
             else SchedulerRunResult()
         ),
+        wait=wait_for_cron,
     )
     spawn(
         SchedulerLoopName.Builds,

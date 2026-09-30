@@ -6,7 +6,6 @@ from uuid import uuid4
 
 from database.records.apps import StubRecord
 from database.repositories.apps import AppRepository, StubRepository
-from database.repositories.cron_jobs import CronJobRepository
 from database.repositories.deployment_effects import (
     DeploymentAction,
     DeploymentEffect,
@@ -288,13 +287,9 @@ class DeploymentService:
         workspace_id: str,
         action: DeploymentAction,
     ) -> DeploymentEffect:
-        schedules = CronJobRepository(session)
-        if action is DeploymentAction.Deleted:
-            schedules.delete_for_deployments({deployment.id}, workspace_id=workspace_id)
-        elif action in {DeploymentAction.Started, DeploymentAction.Stopped}:
-            self.schedules.set_enabled_in_session(
-                session, deployment.id, workspace_id=workspace_id, enabled=deployment.active
-            )
+        self.schedules.apply_deployments_in_session(
+            session, [deployment], workspace_id=workspace_id
+        )
         return DeploymentEffectRepository(session).record(
             deployment, workspace_id=workspace_id, action=action
         )

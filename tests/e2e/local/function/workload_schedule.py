@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import secrets
 
 from lazycloud import App, Image
@@ -14,6 +15,20 @@ app = App(APP_NAME)
     image=Image(python_version="3.12"),
     cpu=0.25,
     memory="128Mi",
+    machine=os.environ.get("LAZYCLOUD_E2E_MACHINE"),
 )
 def scheduled_marker() -> str:
     return "scheduled-marker"
+
+
+@app.function(
+    cron="every 1m",
+    name="warm-marker",
+    image=Image(python_version="3.12"),
+    cpu=0.25,
+    memory="128Mi",
+    keep_warm=120,
+    machine=os.environ.get("LAZYCLOUD_E2E_MACHINE"),
+)
+def warm_marker() -> str:
+    return "warm-marker"

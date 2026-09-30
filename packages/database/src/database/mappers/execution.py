@@ -219,6 +219,8 @@ def event_from_table(row: EventTable) -> Event:
 
 def cron_job_run_from_table(row: CronJobRunTable) -> CronJobRun:
     return CronJobRun(
+        schedule_revision=str(row.schedule_revision) if row.schedule_revision is not None else None,
+        scheduled_at=to_utc_or_none(row.scheduled_at),
         id=str(row.id),
         workspace_id=str(row.workspace_id),
         cron_job=row.cron_job,

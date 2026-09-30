@@ -290,10 +290,17 @@ class CronJobRunTable(IdTable, DatabaseBase):
     __tablename__ = "cron_job_runs"
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     __table_args__: tuple[SchemaItem, ...] = (
+        UniqueConstraint("schedule_revision", "scheduled_at", name="uq_cron_job_runs_occurrence"),
+        CheckConstraint(
+            "(schedule_revision IS NULL) = (scheduled_at IS NULL)",
+            name="ck_cron_job_runs_occurrence",
+        ),
         Index("ix_cron_job_runs_cron_job_created", "cron_job", "created_at", "id"),
         Index("ix_cron_job_runs_workspace_created", "workspace_id", "created_at", "id"),
     )
 
+    schedule_revision: Mapped[str | None] = mapped_column(uuid_type, nullable=True)
+    scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     workspace_id: Mapped[str] = mapped_column(
         uuid_type,
         ForeignKey("workspaces.id", ondelete="CASCADE"),

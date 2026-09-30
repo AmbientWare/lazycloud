@@ -417,9 +417,9 @@ class AdminApiClient:
             self.channel.get(self._workspace_path("/api/v1/image-builds"))
         )
 
-    def list_cron_jobs(self) -> CronJobListResponse:
+    def list_cron_jobs(self, *, deployment_id: str | None = None) -> CronJobListResponse:
         return CronJobListResponse.model_validate(
-            self.channel.get(self._workspace_path("/api/v1/cron-jobs"))
+            self.channel.get(self._workspace_path("/api/v1/cron-jobs", deployment_id=deployment_id))
         )
 
     def delete_cron_job(self, name: str) -> None:

@@ -273,6 +273,6 @@ def task_management_service(
 
 def cron_scheduler(
     services: Annotated[ManagementServiceCore, Depends(management_services)],
-    functions: Annotated[FunctionApiService, Depends(function_service)],
+    routes: Annotated[ApiRoutes, Depends(route_services)],
 ) -> CronScheduler:
-    return CronScheduler(services, services.redis(), functions)
+    return CronScheduler(services.cron_jobs, routes.function_admission)

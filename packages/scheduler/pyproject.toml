@@ -5,6 +5,7 @@ description = "Scheduler state, fleet capacity, worker assignment, pool sizing, 
 requires-python = ">=3.12"
 dependencies = [
     "control",
+    "execution",
     "compute",
     "lazycloud-shared==0.1.0",
     "coordination",

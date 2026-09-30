@@ -18,6 +18,7 @@ from control.apps import (
     AppService,
     DatabaseAppExecutionAdmission,
 )
+from control.cron_jobs import CronJobService
 from control.custom_domains import CustomDomainService
 from control.deployment_cleanup import AppDeploymentLifecycleService
 from control.deployment_plans import DeploymentPlanService
@@ -395,7 +396,9 @@ class FleetAppServices:
         deployment_effects = DeploymentEffects(
             context, execution_lifecycle, workspace_changes, placement_resources
         )
-        deployment_lifecycle = AppDeploymentLifecycleService(context, deployment_effects)
+        deployment_lifecycle = AppDeploymentLifecycleService(
+            context, deployment_effects, CronJobService(context, workspace_changes)
+        )
         deployment_plans = DeploymentPlanService(
             context,
             execution_lifecycle,

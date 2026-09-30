@@ -74,8 +74,7 @@ def test_cron_execution_publishes_after_last_and_next_run_persist(
     cursor = _current_cursor(isolated_services, workspace.id)
 
     CronScheduler(
-        isolated_services,
-        isolated_services.redis(),
+        isolated_services.cron_jobs,
         FunctionControlService(isolated_services),
     ).tick(now=due_at)
 

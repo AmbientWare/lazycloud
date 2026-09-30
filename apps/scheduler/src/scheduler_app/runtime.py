@@ -121,7 +121,7 @@ class SchedulerRuntime:
                 redis=redis_client,
                 containers=requests,
                 functions=functions,
-                cron=CronScheduler(scheduler_services, redis_client, functions),
+                cron=CronScheduler(scheduler_services.cron_jobs, functions),
                 image_builds=ImageBuildSubmissionService(
                     scheduler_services.context.database,
                     DurableImageBuildDispatch(

@@ -428,6 +428,9 @@ class CronJobTable(IdTable, DatabaseBase):
         ),
     )
 
+    revision: Mapped[str] = mapped_column(
+        uuid_type, server_default=text("gen_random_uuid()"), nullable=False
+    )
     workspace_id: Mapped[str] = mapped_column(
         uuid_type,
         ForeignKey("workspaces.id", ondelete="CASCADE"),

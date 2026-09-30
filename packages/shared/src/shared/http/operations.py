@@ -36,6 +36,7 @@ class CronJobRunResponse(HttpModel):
     enqueued: bool
     task_id: str | None = None
     reason: str | None = None
+    scheduled_at: datetime | None = None
     created_at: datetime
 
 

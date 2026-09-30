@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from time import monotonic
 from typing import Protocol
 from uuid import uuid4
 
@@ -163,9 +164,22 @@ class Scheduler:
         now: datetime | None = None,
         limit: int = 100,
     ) -> SchedulerRunResult:
-        if not self._claim_cadence("cron", seconds=1):
+        # UTC expressions become due on minute boundaries. A shared second bucket
+        # lets replicas check that boundary without lease-expiry jitter.
+        if not try_acquire_token_lock(
+            self.redis,
+            self.redis.key("scheduler", f"cron-cadence:{int(utc_now().timestamp())}"),
+            uuid4().hex,
+            ttl_seconds=2,
+        ):
             return SchedulerRunResult()
-        return SchedulerRunResult(cron_job_runs=self.cron.tick(now=now, limit=limit))
+        result = SchedulerRunResult()
+        deadline = monotonic() + 1.0
+        while True:
+            runs = self.cron.tick(now=now, limit=limit)
+            result.cron_job_runs.extend(runs)
+            if len(runs) < max(limit, 1) or monotonic() >= deadline:
+                return result
 
     def _claim_cadence(self, name: str, *, seconds: int) -> bool:
         # Retain the key until expiry so replicas cannot repeat a finished sweep.

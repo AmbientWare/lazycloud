@@ -6,6 +6,7 @@ from typing import Protocol
 
 from compute.service import ComputeServices
 from control.apps import AppReader
+from control.cron_jobs import CronJobService
 from control.service import ControlServices
 from database.records.apps import AppRecord
 from database.types import DatabaseSession
@@ -13,10 +14,8 @@ from observability.workspace_changes import WorkspaceChangePublisher
 from pydantic import JsonValue
 from shared.container_requests import StopContainerReason
 from shared.containers import ContainerRecord, ContainerStatus
-from shared.cron import CronJobRecord
 from shared.deployment_records import Deployment
 from shared.events import Event, EventLevel
-from shared.http.workspace_changes import WorkspaceChangeType
 from shared.identity import WorkspaceRecord
 
 from database import DatabaseClient
@@ -98,14 +97,6 @@ class SchedulerDeploymentPruneService(Protocol):
     def reconcile_pending(self, *, limit: int = 25) -> None: ...
 
 
-class SchedulerCronJobService(Protocol):
-    def publish_change(
-        self,
-        record: CronJobRecord,
-        change: WorkspaceChangeType,
-    ) -> None: ...
-
-
 class SchedulerContainerService(Protocol):
     def expire_containers(self, *, now: datetime | None = None) -> list[ContainerRecord]: ...
 
@@ -145,7 +136,7 @@ class SchedulerServices(Protocol):
     def deployments(self) -> SchedulerDeploymentService: ...
 
     @property
-    def cron_jobs(self) -> SchedulerCronJobService: ...
+    def cron_jobs(self) -> CronJobService: ...
 
     @property
     def containers(self) -> SchedulerContainerService: ...
