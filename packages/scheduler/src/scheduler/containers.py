@@ -1601,6 +1601,13 @@ class SchedulerContainerRequestService:
         request = claim.request
         delay = self.requeue_delay_seconds if delay_seconds is None else delay_seconds
         ready_at = now + timedelta(seconds=max(delay, 0.0))
+        LOGGER.info(
+            "container dispatch retry %s: delay_seconds=%.3f retry_count=%d",
+            request.container_id,
+            max(delay, 0.0),
+            request.retry_count + 1 if retry_count is None else retry_count,
+            extra={"container_id": request.container_id},
+        )
         requeued = self.workers.requeue_container_request(
             claim,
             request.model_copy(

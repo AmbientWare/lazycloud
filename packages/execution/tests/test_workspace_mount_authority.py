@@ -8,6 +8,7 @@ from database.context import ServiceContext
 from execution.mounts import (
     container_resource_mounts,
     container_resource_mounts_require_workspace_storage,
+    devbox_artifact_mount,
     platform_volume_local_path,
     source_code_mounts,
 )
@@ -76,13 +77,14 @@ def test_container_resource_mounts_require_workspace_storage_when_workspace_has_
         workspace_id=unprovisioned.id,
         workspace_name=unprovisioned.name,
         object_id="",
-        stub_id="stub-1",
         container_id="ctr-1",
         volumes=[],
     )
 
-    # The artifact mount always needs workspace storage, and there is no fallback
-    # tier, so an unprovisioned workspace must fail rather than mount local disk.
+    assert not container_resource_mounts_require_workspace_storage(
+        workspace=unprovisioned, mounts=mounts
+    )
+    mounts.append(devbox_artifact_mount(workspace_name=unprovisioned.name, stub_id="stub-1"))
     with pytest.raises(UpstreamUnavailableError, match="no storage provisioned"):
         container_resource_mounts_require_workspace_storage(
             workspace=unprovisioned,
@@ -104,15 +106,12 @@ def test_container_resource_mounts_require_workspace_storage_when_workspace_has_
         mounts=mounts,
     )
 
-    # A platform volume lives in the workspace's own storage, so it needs the
-    # mount the same way an artifact does, even with no artifact mount present.
     volume_only_mounts = container_resource_mounts(
         context=service_context,
         object_storage=ObjectStorage(service_context, object_client=FakeObjectClient()),
         workspace_id=unprovisioned.id,
         workspace_name=unprovisioned.name,
         object_id="",
-        stub_id="",
         container_id="ctr-volume-only",
         volumes=[{"id": "canonical", "mount_path": "/volumes/canonical"}],
     )

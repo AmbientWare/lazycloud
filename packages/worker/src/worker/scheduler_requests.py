@@ -46,7 +46,7 @@ from worker.image_build_resources import ImageBuildResources
 from worker.memory_pressure import ResidentContainer
 from worker.monitoring import WorkerUsageWindowRecorder
 from worker.repository_payloads import ContainerCleanupTarget
-from worker.runtime_config import absolute_container_cgroup_path
+from worker.runtime_config import absolute_container_cgroup_path, worker_startup_concurrency
 from worker.status import (
     WorkerDeliveredRequestPlan,
     WorkerSchedulerRequestAction,
@@ -276,10 +276,7 @@ class WorkerSchedulerRequestProcessor:
         if completed is not None:
             return completed
 
-        startup_limit = max(
-            1,
-            min(self.node_cpu_millicores // 1000, self.node_memory_mib // 512),
-        )
+        startup_limit = worker_startup_concurrency(self.node_cpu_millicores, self.node_memory_mib)
         with self._delivery_lock:
             preparing = len(self._starting)
         if preparing >= startup_limit:

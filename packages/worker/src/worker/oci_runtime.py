@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import platform
 import secrets
 import shutil
@@ -27,6 +28,7 @@ from shared.container_requests import WORKER_USER_CODE_VOLUME, StopContainerReas
 from shared.env import parse_environment
 from shared.image_building.authoring import LinuxArchitecture
 from shared.ssh import SSH_CONTAINER_HOST_KEY_PATH, SSH_CONTAINER_USER_CA_PATH
+from shared.step_timings import StepTimings
 
 import worker.oci_spec
 from worker.configuration import DEFAULT_WORKER_BUNDLE_ROOT, DEFAULT_WORKER_IMAGE_MOUNT_ROOT
@@ -99,6 +101,7 @@ from worker.sandbox_server import (
 )
 
 OCI_HOSTS_PATH = "/etc/hosts"
+LOGGER = logging.getLogger(__name__)
 OCI_RESOLV_CONF_PATH = "/etc/resolv.conf"
 OCI_CONFIG_FILE_NAME = "config.json"
 OCI_PROCESS_SPEC_DIR_NAME = "processes"
@@ -921,12 +924,23 @@ class OciRuntimeCommandController:
                 durable_root=spec.durable_root,
             ),
         )
-        command = self.start_command(plan.argv, output_sink=output_sink)
-        started_pid, completed = self._wait_for_running_container(
-            spec.container_id,
-            command,
-            operation="run",
-        )
+        timings = StepTimings()
+        try:
+            with timings.step("spawn"):
+                command = self.start_command(plan.argv, output_sink=output_sink)
+            with timings.step("running-state"):
+                started_pid, completed = self._wait_for_running_container(
+                    spec.container_id,
+                    command,
+                    operation="run",
+                )
+        finally:
+            timings.log(
+                LOGGER,
+                "container runtime startup %s",
+                spec.container_id,
+                extra={"container_id": spec.container_id},
+            )
         if started_pid is not None:
             try:
                 on_started(started_pid)

@@ -24,14 +24,9 @@ class PreparedNetworkPool:
     worker_id: str
     bridge_name: str
     host_netns_path: str
+    capacity: int
     ip_binary: str = "ip"
-    _executor: ThreadPoolExecutor = field(
-        default_factory=lambda: ThreadPoolExecutor(
-            max_workers=1, thread_name_prefix="network-prepare"
-        ),
-        init=False,
-        repr=False,
-    )
+    _executor: ThreadPoolExecutor = field(init=False, repr=False)
     _slots: deque[tuple[str, Future[None]]] = field(default_factory=deque, init=False)
     _condition: threading.Condition = field(default_factory=threading.Condition, init=False)
     _closed: bool = field(default=False, init=False)
@@ -42,6 +37,11 @@ class PreparedNetworkPool:
     def __post_init__(self) -> None:
         if not self.worker_id:
             raise ValueError("worker identity is required for prepared networks")
+        if self.capacity < 1:
+            raise ValueError("prepared network capacity must be positive")
+        self._executor = ThreadPoolExecutor(
+            max_workers=self.capacity, thread_name_prefix="network-prepare"
+        )
 
     def initialize(self) -> None:
         with self._condition:
@@ -52,7 +52,7 @@ class PreparedNetworkPool:
             if initialization is None:
                 initialization = self._initialization = Future()
                 prefix = hashlib.sha256(self.worker_id.encode()).hexdigest()[:12]
-                for index in range(2):
+                for index in range(self.capacity):
                     name = f"lc-ready-{prefix}-{index}"
                     self._slots.append((name, self._executor.submit(self._prepare, name)))
                 self._condition.notify_all()

@@ -935,7 +935,7 @@ class AwsRetainedPool:
                     slot.phase in {SlotPhase.Resuming, SlotPhase.Refreshing}
                     and instance.state.name == "stopped"
                     and slot.activation_observed_at is None
-                    and self.request.purchases_enabled
+                    and (slot.phase is SlotPhase.Refreshing or self.request.purchases_enabled)
                 ):
                     self._start(slot, instance)
         if retired:

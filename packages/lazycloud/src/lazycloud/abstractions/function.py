@@ -55,7 +55,6 @@ from shared.http.functions import (
     FunctionInvokeResponse,
     FunctionServeResponse,
 )
-from shared.http.gateway import DeployStubResponse
 from shared.placement import ProductRegion
 from shared.task_context import current_root_task_id, current_task_id
 from shared.tasks import RetryPolicy, TaskPolicy, TaskStatus
@@ -82,14 +81,16 @@ from lazycloud.control import ControlClientConfig, resolve_control_client_config
 from lazycloud.env import called_on_import, is_local
 from lazycloud.progress import PendingProgressReporter
 from lazycloud.references import dotted_reference
-from lazycloud.session.deployment import DeploymentClient, DeploymentControlClient
-from lazycloud.session.task import FunctionCall, TaskClient, TaskOperationError
 from lazycloud.terminal import Terminal, TerminalStep
 
 if TYPE_CHECKING:
+    from shared.http.gateway import DeployStubResponse
+
     from lazycloud.abstractions.shell import ShellSession
     from lazycloud.clients.function.control import FunctionControlClient
+    from lazycloud.session.deployment import DeploymentControlClient
     from lazycloud.session.preparation import DeploymentPreparation
+    from lazycloud.session.task import FunctionCall
 
 
 P = ParamSpec("P")
@@ -335,6 +336,8 @@ class Function(Generic[P, R]):
         workspace: str | None = None,
         source_root: str | Path | None = None,
     ) -> str:
+        from lazycloud.session.deployment import DeploymentClient
+
         try:
             response = DeploymentClient(
                 client=self.deployment_client,
@@ -365,6 +368,8 @@ class Function(Generic[P, R]):
         source_root: str | Path | None = None,
         _preparation: DeploymentPreparation | None = None,
     ) -> DeployStubResponse:
+        from lazycloud.session.deployment import DeploymentClient
+
         try:
             response = DeploymentClient(
                 client=self.deployment_client,
@@ -485,6 +490,8 @@ class Function(Generic[P, R]):
         return self._remote_call(*args, **kwargs)
 
     def _remote_call(self, *args: P.args, **kwargs: P.kwargs) -> R:
+        from lazycloud.session.task import TaskOperationError
+
         self._ensure_invokable()
         with self._task_step() as step:
             response = self._invoke_serialized(
@@ -535,6 +542,8 @@ class Function(Generic[P, R]):
         return self._call_from_response(response)
 
     def _call_from_response(self, response: FunctionInvokeResponse) -> FunctionCall[R]:
+        from lazycloud.session.task import FunctionCall, TaskClient
+
         config = self._config()
         return FunctionCall(
             task_id=response.task_id,
@@ -567,6 +576,8 @@ class Function(Generic[P, R]):
         return await to_thread(self.spawn, *args, **kwargs)
 
     def map(self, inputs: Sequence[Any]) -> Iterator[R | None]:
+        from lazycloud.session.task import TaskOperationError
+
         calls = self.spawn_map(inputs)
         if not calls:
             return
@@ -616,6 +627,8 @@ class Function(Generic[P, R]):
         self._resolve_deployed_stub_id()
 
     def _resolve_deployed_stub_id(self) -> None:
+        from lazycloud.session.deployment import DeploymentClient
+
         try:
             response = DeploymentClient(
                 client=self.deployment_client,
@@ -774,6 +787,8 @@ class _FunctionCallReferences:
     dependencies: dict[str, FunctionCallDependency] = field(default_factory=dict)
 
     def persistent_id(self, value: object) -> FunctionCallPersistentId | None:
+        from lazycloud.session.task import FunctionCall
+
         if not isinstance(value, FunctionCall):
             return None
         previous = self.dependencies.get(value.task_id)
@@ -1006,7 +1021,6 @@ def _default_function_client(config: ControlClientConfig) -> FunctionControlClie
 
 __all__ = [
     "Function",
-    "FunctionCall",
     "FunctionOperationError",
     "FunctionOptions",
     "VolumeExport",

@@ -99,6 +99,37 @@ class CapacityMaintenanceRepository:
         if changed is None:
             raise ConflictError("maintenance ownership or phase changed")
 
+    def reserve_surge(
+        self,
+        operation: CapacityMaintenanceRecord,
+        *,
+        running_cpu_millicores: int,
+        hourly_cost_micros: int | None,
+        now: datetime,
+    ) -> CapacityMaintenanceRecord:
+        table = CapacityMaintenanceTable
+        row = self.session.scalar(
+            update(table)
+            .where(
+                table.id == operation.id,
+                table.release_generation == operation.release_generation,
+                table.phase == operation.phase.value,
+                table.completed_at.is_(None),
+                table.surge_machines == 0,
+                table.replacement_machine_id.is_(None),
+            )
+            .values(
+                surge_machines=1,
+                running_cpu_millicores=running_cpu_millicores,
+                hourly_cost_micros=hourly_cost_micros,
+                updated_at=now,
+            )
+            .returning(table)
+        )
+        if row is None:
+            raise ConflictError("maintenance ownership or commitments changed")
+        return _record(row)
+
     def reserved_resources(
         self,
         *,

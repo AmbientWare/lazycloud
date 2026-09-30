@@ -4,6 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from threading import Event
+from time import monotonic
 from uuid import uuid4
 
 from coordination.redis_client import REDIS_UNAVAILABLE_ERRORS, RedisClient
@@ -334,7 +335,7 @@ class Scheduler:
             raise RuntimeError("scheduler dispatch wake waiter was not injected")
         while not stop.is_set():
             try:
-                dispatch_wake.wait(
+                notified = dispatch_wake.wait(
                     timeout_seconds=CONTAINER_DISPATCH_SWEEP_INTERVAL_SECONDS,
                 )
             except REDIS_UNAVAILABLE_ERRORS:
@@ -344,7 +345,19 @@ class Scheduler:
             if stop.is_set():
                 return
             try:
-                self.drain_container_dispatches(limit=container_limit)
+                started = monotonic()
+                results = self.drain_container_dispatches(limit=container_limit)
+                elapsed = monotonic() - started
+                for result in results:
+                    LOGGER.info(
+                        "container dispatch %s: status=%s notified=%s batch_seconds=%.3f reason=%s",
+                        result.container_id,
+                        result.status.value,
+                        notified,
+                        elapsed,
+                        result.reason,
+                        extra={"container_id": result.container_id, "worker_id": result.worker_id},
+                    )
             except Exception:
                 LOGGER.exception("scheduler container dispatch failed; periodic sweep will retry")
                 continue

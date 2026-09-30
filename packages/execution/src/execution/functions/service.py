@@ -770,7 +770,6 @@ class FunctionControlService:
                 workspace_id=stub.workspace_id,
                 workspace_name=workspace.name,
                 object_id=config.object_id,
-                stub_id=stub.id,
                 container_id=container.id,
                 volumes=config.volume_inputs,
             )

@@ -576,10 +576,13 @@ services:
     depends_on:
       control-plane:
         condition: service_healthy
+        restart: true
       execution-api:
         condition: service_healthy
+        restart: true
       runtime-api:
         condition: service_healthy
+        restart: true
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9000/health"]
       interval: 10s

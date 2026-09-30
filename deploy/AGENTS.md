@@ -28,6 +28,9 @@ substitutes, and gives every service an explicit owner and health check.
 - A stack that reports healthy is not a stack that works. A health check
   describes a process, not the path through it. Confirm the boundary you changed
   from end to end rather than trusting aggregate status.
+- Compose restarts API ingress after replacing its API dependencies. Otherwise
+  its failed health checks during replacement can abort dependent service startup
+  before the ingress observes the healthy replacement APIs.
 - Sidecars that share another service's network namespace are destroyed when
   that service is recreated, and the stack will not say so. Treat the lifetime
   relationship as part of the change, not as something to rediscover.

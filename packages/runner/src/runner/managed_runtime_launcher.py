@@ -8,7 +8,7 @@ import platform
 import re
 import runpy
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import NoReturn, TypeAlias, TypeGuard
@@ -68,11 +68,10 @@ def main() -> None:
 
     managed_path = artifact_root / "managed"
     dependency_path = artifact_root / "dependencies"
-    managed_records = _installed_distribution_records([str(managed_path)])
-    managed_distributions = _distribution_versions(managed_records)
-    if managed_distributions != _normalized_versions(artifact.get("managed_distributions")):
-        _fail(f"Python {python_version} managed distribution metadata verification failed")
-    locked_distributions = _normalized_versions(artifact.get("locked_distributions"))
+    # The worker verifies this read-only artifact before admitting containers.
+    # User-selected dependencies still need validation against this interpreter.
+    managed_records = _catalog_distribution_records(artifact, "managed")
+    locked_records = _catalog_distribution_records(artifact, "locked")
 
     original_path = list(sys.path)
     previous_packaging_modules = {
@@ -104,7 +103,6 @@ def main() -> None:
     expanded: set[str] = set()
     resolved_distributions: dict[str, str] = {}
     user_records: dict[str, DistributionRecord | None] = {}
-    locked_records: dict[str, DistributionRecord] | None = None
     while pending:
         requirement = pending.pop()
         if requirement.marker is not None and not requirement.marker.evaluate({"extra": ""}):
@@ -118,14 +116,10 @@ def main() -> None:
             selected = user_records[name]
             source = "user"
         if selected is None:
-            if locked_records is None:
-                locked_records = _installed_distribution_records([str(dependency_path)])
             selected = locked_records.get(name)
             source = "locked fallback"
         if selected is None:
             _fail(f"required dependency {name} is missing")
-        if source == "locked fallback" and locked_distributions.get(name) != selected.version:
-            _fail(f"locked fallback dependency {name} metadata verification failed")
         check_key = (name, selected.version, str(requirement.specifier))
         if check_key in checked:
             continue
@@ -174,20 +168,26 @@ def _json_digest_without_key(payload: Mapping[str, JsonValue], key: str) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _installed_distribution_records(
-    path: Sequence[str] | None = None,
+def _catalog_distribution_records(
+    artifact: dict[str, JsonValue], source: str
 ) -> dict[str, DistributionRecord]:
-    distributions = (
-        importlib.metadata.distributions(path=list(path))
-        if path is not None
-        else importlib.metadata.distributions()
-    )
-    installed: dict[str, DistributionRecord] = {}
-    for distribution in distributions:
-        record = _distribution_record(distribution)
-        if record is not None:
-            installed.setdefault(record.name, record)
-    return installed
+    versions = _object(artifact.get(f"{source}_distributions"), f"{source} distributions")
+    requirements = _object(artifact.get(f"{source}_requirements"), f"{source} requirements")
+    if versions.keys() != requirements.keys():
+        _fail(f"{source} dependency metadata is incomplete")
+    records: dict[str, DistributionRecord] = {}
+    for name, version in versions.items():
+        values = requirements[name]
+        if not isinstance(version, str) or not isinstance(values, list):
+            _fail(f"{source} dependency {name} metadata is invalid")
+        selected: list[str] = []
+        for value in values:
+            if not isinstance(value, str):
+                _fail(f"{source} dependency {name} requirement is invalid")
+            selected.append(value)
+        canonical_name = _canonical_name(name)
+        records[canonical_name] = DistributionRecord(canonical_name, version, tuple(selected))
+    return records
 
 
 def _installed_distribution_record(name: str) -> DistributionRecord | None:
@@ -216,21 +216,6 @@ def _distribution_record(
         version=metadata["Version"],
         requirements=tuple(requirements),
     )
-
-
-def _distribution_versions(
-    records: Mapping[str, DistributionRecord],
-) -> dict[str, str]:
-    return {name: distribution.version for name, distribution in records.items()}
-
-
-def _normalized_versions(value: JsonValue) -> dict[str, str]:
-    versions = _object(value, "managed runtime distribution metadata")
-    return {
-        _canonical_name(name): version
-        for name, version in versions.items()
-        if isinstance(version, str)
-    }
 
 
 def _canonical_name(value: str) -> str:
