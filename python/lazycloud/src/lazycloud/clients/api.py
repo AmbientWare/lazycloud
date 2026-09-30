@@ -41,6 +41,7 @@ _UPLOAD_CHUNK_BYTES = 1024 * 1024
 # Longer than the server's 15-second follow heartbeat.
 _LOG_HEARTBEAT_WINDOW_SECONDS = 45.0
 
+
 class ApiError(SdkError):
     """The API answered with a typed error."""
 
@@ -198,7 +199,9 @@ class ApiClient:
         params: dict[str, str | int] = {"after": after}
         if follow:
             params["follow"] = "true"
-        read = max(self.timeout_seconds, _LOG_HEARTBEAT_WINDOW_SECONDS) if follow else self.timeout_seconds
+        read = self.timeout_seconds
+        if follow:
+            read = max(read, _LOG_HEARTBEAT_WINDOW_SECONDS)
         timeout = httpx.Timeout(self.timeout_seconds, read=read)
         try:
             with self._client().stream("GET", path, params=params, timeout=timeout) as response:
