@@ -42,3 +42,4 @@ secrets-backup/
 *.key
 artifact-changes.md
 /work/
+/target/

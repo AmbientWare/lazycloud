@@ -1,3 +1,0 @@
-webhook_url               = "https://lazycloud.dev/webhooks/stripe"
-confirm_dedicated_account = true
-environment               = "production"

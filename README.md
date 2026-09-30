@@ -1,140 +1,33 @@
 # LazyCloud
 
-Proprietary software. All rights reserved. Use, modification, redistribution,
-and hosting require written permission. See [LICENSE](LICENSE) for the terms
-and third-party exceptions.
+This branch is the starting point for the Rust backend and host runtime.
+The replacement backend is not implemented yet.
 
-LazyCloud runs Python functions, APIs, and containers on remote compute.
-Start with the [quickstart](docs/getting-started/quickstart.mdx) or pick a
-[complete example](examples/README.md).
+Read [update.md](update.md) for the architecture, reference implementation,
+agent instructions and capability checklist. [AGENTS.md](AGENTS.md) contains
+development rules.
 
-## Run a function
+The Python SDK and public CLI live in packages/lazycloud, the Python runner in
+packages/runner, and the frontend in apps/web. Their existing contracts and runner
+helpers remain in packages/shared and packages/foundation. Published product
+documentation and examples describe the reference platform.
 
-Install the public client and sign in:
+The old backend, internal admin CLI, deployment automation and backend-specific
+tests remain available in the pinned reference. The public lazycloud CLI remains;
+lazycloud-admin must be rebuilt against explicit administration contracts.
 
-```bash
-uv tool install lazycloud-client
-lazycloud example download quickstart
-cd quickstart
-uv sync
-uv run lazycloud login
-uv run lazycloud run quickstart:hello LazyCloud
+Python development:
+
+```sh
+uv sync --group dev
+uv run --group dev pytest -x
+uv run --group dev lazycloud --help
 ```
 
-The command shows progress and remote logs, then prints `hello LazyCloud`.
-For Python scripts, install the SDK in your project with `uv add lazycloud-client`.
-See [installation](docs/getting-started/installation.mdx) for environment details.
+Use Bun from apps/web for frontend development. Backend-dependent UI workflows
+need an API implementing their contracts. The new backend may use fresh contracts
+and a fresh schema; update these consumers together. Old migration history remains
+in the pinned reference, without requiring a data migration or compatibility layer.
 
-Define images, compute, volume mounts, secret names, and schedules in Python.
-Mounted volumes are created on first use and reused across runs. Provision secret
-values separately from source control. Use CLI resource commands for inspection
-and one-off changes.
-
-## Work on this repository
-
-Use Python 3.12 and uv from the repository root:
-
-```bash
-uv sync --locked --group dev
-uv run --group workspace lazycloud --help
-```
-
-Public documentation lives in [docs/](docs/index.mdx). Platform operators should
-start with [local deployment](deploy/README.md) or the
-[hosted deployment lifecycle](deploy/platform-deployment/LIFECYCLE.md).
-
-## Development validation
-
-Use Python 3.12, selected by `.python-version`. Start the test services once:
-
-```bash
-docker compose -f compose.test.yaml up -d
-docker compose -f compose.test.yaml ps
-```
-
-Pytest uses this PostgreSQL and Redis stack automatically. The suite migrates
-and seeds its database templates once. Tests acquire a transaction or an
-isolated database clone through fixtures, and those fixtures own cleanup.
-Concurrency tests keep real commits, independent connections, and PostgreSQL constraints.
-The disposable PostgreSQL files live in memory and vanish when its container stops.
-Migration tests receive an empty database. Redis keys use a unique test prefix.
-Tests that need neither service create no database or Redis client.
-
-To reuse another local stack, export `LAZYCLOUD_TEST_POSTGRES_URL` with a direct
-PostgreSQL connection that can create databases, and `LAZYCLOUD_TEST_REDIS_URL`.
-CI supplies those same variables for its service containers. An unavailable
-service fails the tests that need it.
-
-Validate the owner and production boundary changed by the work. During normal
-iteration, run Ruff and formatting on the changed files, type-check the affected
-owner, and run that owner's tests:
-
-```bash
-uv run --group dev ruff check packages/scheduler/src packages/scheduler/tests
-uv run --group dev ruff format --check packages/scheduler/src packages/scheduler/tests
-uv run --group dev basedpyright packages/scheduler
-uv run --group dev pytest -x -q packages/scheduler/tests
-```
-
-Python tests run in one process locally and in CI. To run the same selection as CI,
-including uncommitted changes:
-
-```bash
-uv run --group dev python .github/scripts/validate_changed_scope.py --base origin/main --list
-uv run --group dev python .github/scripts/validate_changed_scope.py --base origin/main
-```
-
-CI runs one Python test job alongside type checks and uploads its test timings.
-Use the fixture contracts in [tests/AGENTS.md](tests/AGENTS.md) when adding or
-changing tests. Owner tests use `service_context` for rollback isolation or
-`committed_service_context` for independent connections. API request tests can
-share `api_runtime` with a separate `api_workspace` per case. Configuration,
-global-state, and lifespan tests use `isolated_services`. Async owner scenarios
-use `async_services` so clients close in the event loop that used them. Redis
-and import cleanup also have shared fixtures; avoid local setup copies.
-
-Both local runs and CI print total setup, call, and teardown times, fixture
-creation counts, and the slowest individual phases. App startup inside a test
-is included in its call time. Add `--junitxml=test-results/python.xml` to retain
-a local report. For detailed profiling, run
-`uv run --group dev python -m cProfile -o /tmp/tests.prof -m pytest -x -q <owner>`;
-profiling adds overhead, so use ordinary runs for wall-clock comparisons.
-
-Web tests use Vitest with shared mock, timer, DOM, and query-client cleanup under
-`apps/web/src/test/`. Keep browser-only checks in the named Playwright scenarios.
-Stop the test-only stack with `docker compose -f compose.test.yaml down -v`.
-
-Run `uv lock --check` only when dependency or workspace metadata changes.
-Pull-request CI derives this scope from the changed files. Web and Compose
-validation run only when their owning paths change. Live Docker, browser, and
-provider workflows are explicit feature or release acceptance, not blanket
-development checks. Release validation is defined by the release
-task and the production boundaries changed since the previous release.
-
-## Local CLI examples
-
-Run `bash deploy/setup-local-env.sh` once per clone, then fill the private `.env`
-in the main checkout using development credentials. Existing and future worktrees
-link to that file; an existing worktree-specific `.env` is preserved. PostgreSQL
-and Redis stay local, Stripe uses test mode, and GitHub uses the development App.
-See [local deployment](deploy/README.md#local-environment) for startup.
-
-```bash
-uv run --group workspace lazycloud-admin login --profile local
-uv run --group workspace lazycloud-admin example download quickstart --output quickstart_project
-uv run --group workspace lazycloud-admin run quickstart_project.quickstart:hello 'LazyCloud'
-uv run lazycloud-admin task list
-uv run lazycloud-admin task result <run-id>
-uv run lazycloud-admin task logs <run-id>
-```
-
-`lazycloud-admin` loads the repository's `.env`. The example configuration points
-it at the Compose control plane, stores its profile under `~/.lazycloud/local`, and
-uses the administrator token that bootstrapped the stack. The command validates
-that token before saving the `local` profile.
-
-The public `lazycloud` command does not read `.env` from the current directory.
-It uses exported `LAZYCLOUD_*` variables and its active profile, so entering a
-repository cannot silently redirect commands to another control plane. Export
-`LAZYCLOUD_HOME`, `LAZYCLOUD_ENDPOINT`, and `LAZYCLOUD_TOKEN` when you need the
-public CLI to use this local stack.
+Introduce the Cargo workspace with the first implemented Rust workflow. Do not
+add empty crates or placeholder services to represent unchecked capabilities.

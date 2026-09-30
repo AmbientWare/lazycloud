@@ -1,16 +1,16 @@
 # Shared contracts
 
-- Own backend-free models, precise types and deterministic helpers. No database/
-  Redis clients, FastAPI state, process entrypoints or SDK session behavior.
+- Own Python consumer contracts, precise types and deterministic helpers. No
+  backend policy, database/Redis clients, server state or SDK session behavior.
 - JSON contracts live by domain under `shared.http` and extend `HttpModel`.
   Use typed payloads and deliberate exports; remove unused models and duplicate
   request/body shapes. Errors have their existing domain/transport owners.
 - Missing deployment coordinates raise `MissingDeploymentSettingError` naming the
   variable. Never silently select localhost or another datastore.
-- Expose published pricing from the canonical rate card; clients keep no copy.
-  Resolve workload defaults centrally, preserving omitted versus explicit values.
-- Reservation and burst ceilings differ. Purchase, reservation and placement use
-  the same fit helpers and observed node memory.
-- Preserve cgroup protection, throttle, hard-limit and swap semantics. Sandbox
-  overhead corrections require live measurements and consistent application;
-  do not invent constants or clamp limits against host-wide values.
+- Follow the new language-neutral wire contracts as they are implemented. Old
+  Python models may change or disappear with their consumers; backward
+  compatibility is not required. Do not maintain competing Python/Rust schemas.
+- Fetch pricing and policy from backend owners. Keep client defaults limited to
+  authoring concerns and preserve omitted versus explicit values.
+- Existing scheduling and resource helpers are reference code to retire as their
+  consumers change, not a second implementation for the new Rust backend.

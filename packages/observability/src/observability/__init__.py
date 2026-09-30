@@ -1,1 +1,0 @@
-"""Observability domain package."""
