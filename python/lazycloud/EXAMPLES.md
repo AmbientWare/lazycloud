@@ -8,7 +8,7 @@ lazycloud example list
 lazycloud example download yolo-training
 cd yolo-training
 uv sync
-uv run lazycloud login
+uv run lazycloud login --token <token>
 uv run lazycloud run app:train_yolo
 ```
 
