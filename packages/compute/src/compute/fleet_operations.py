@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING
 
 from database.repositories.capacity_maintenance import CapacityMaintenanceRepository
 from database.repositories.capacity_recovery import CapacityRecoveryRepository
@@ -27,9 +26,8 @@ from shared.timestamps import utc_now
 
 from compute.machine_lifecycle import write_machine_lifecycle
 from compute.offers import ReservationStatus
-
-if TYPE_CHECKING:
-    from compute.service import ComputeService
+from compute.pool_provider import PoolProviderService
+from compute.unit_scaling import UnitScalingService
 
 
 def request_machine_stop(
@@ -122,18 +120,19 @@ def _platform_unit(session: DatabaseSession, unit_id: str) -> ComputeUnitRecord:
 
 @dataclass(slots=True)
 class FleetOperations:
-    compute: ComputeService
+    providers: PoolProviderService
+    scaling: UnitScalingService
 
     def stop_machine(self, *, unit_id: str, machine_id: str) -> ComputeUnitRecord:
-        mutations = self.compute._required_capacity_owner_mutations()
-        hooks = self.compute.scheduler_hooks
+        mutations = self.providers.required_capacity_owner_mutations()
+        hooks = self.providers.scheduler_hooks
         if hooks is None:
             raise ConflictError("operator stops require scheduler worker state")
         with mutations.mutation_lock(unit_id), mutations.dispatch_lock(unit_id):
-            with self.compute.context.database.session() as session:
+            with self.providers.context.database.session() as session:
                 ComputeUnitRepository(session).lock_platform_capacity()
                 unit = _platform_unit(session, unit_id)
-                provider, offer = self.compute._resolved_internal_unit_provider(unit)
+                provider, offer = self.providers.resolved_internal_unit_provider(unit)
                 if provider.pooled is None or not any(
                     candidate.id == offer.id and candidate.capability_key == offer.capability_key
                     for candidate in provider.pooled.list_reserve_offers(
@@ -176,7 +175,7 @@ class FleetOperations:
                         enrollment=enrollment,
                         desired=max(unit.desired_machines - 1, 0),
                         stopped=unit.stopped_machines + 1,
-                        workspace_changes=self.compute.workspace_changes,
+                        workspace_changes=self.providers.workspace_changes,
                         now=utc_now(),
                     )
             hooks.disable_machine(machine_id, "operator requested machine stop")
@@ -190,13 +189,13 @@ class FleetOperations:
         """
         if desired <= 0:
             raise InvalidInputError("resume target must be positive")
-        mutations = self.compute._required_capacity_owner_mutations()
+        mutations = self.providers.required_capacity_owner_mutations()
         with mutations.mutation_lock(unit_id), mutations.dispatch_lock(unit_id):
-            with self.compute.context.database.session() as session:
+            with self.providers.context.database.session() as session:
                 ComputeUnitRepository(session).lock_platform_capacity()
                 unit = _platform_unit(session, unit_id)
 
-            unit, _snapshot = self.compute.describe_internal_unit(
+            unit, _snapshot = self.scaling.describe_internal_unit(
                 unit.workspace_id, unit.capacity_owner_id
             )
 
@@ -208,7 +207,7 @@ class FleetOperations:
                 needed = desired - current.desired_machines
                 if needed == 0:
                     return
-                with self.compute.context.database.session() as session:
+                with self.providers.context.database.session() as session:
                     records = ComputeProviderInstanceRepository(session).list_for_pool(
                         unit_id, statuses=(ReservationStatus.Stopped.value,)
                     )
@@ -219,7 +218,7 @@ class FleetOperations:
             require_reserves(unit)
             if desired == unit.desired_machines:
                 return unit
-            return self.compute.scale_internal_unit(
+            return self.scaling.scale_internal_unit(
                 unit.workspace_id,
                 unit.capacity_owner_id,
                 desired,

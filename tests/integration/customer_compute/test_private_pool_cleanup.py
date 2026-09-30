@@ -21,7 +21,7 @@ def test_delete_pool_cleans_private_agent_state(
 ) -> None:
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
-    unit = isolated_services.compute.create_unit(UnitName("cleanup-pool"), provider="local")
+    unit = isolated_services.compute.units.create_unit(UnitName("cleanup-pool"), provider="local")
     redis = real_redis_actors.client()
     compute_states = RedisComputeStateRepository(redis)
     scheduler_workers = RedisSchedulerWorkerRepository(redis)

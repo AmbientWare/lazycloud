@@ -49,7 +49,7 @@ class SchedulerCapacityControllerProvider:
         placement, and keying by it would silently drop all but one of them.
         """
         configs: dict[str, AgentPoolConfig] = {}
-        for unit in self.services.compute.list_units_across_workspaces(
+        for unit in self.services.compute.units.list_units_across_workspaces(
             capacity_owner_kind=CapacityOwnerKind.WorkspaceAgent
         ):
             config = agent_pool_config_from_pool(unit)
@@ -67,18 +67,18 @@ class SchedulerCapacityControllerProvider:
         ]
 
     def capacity_acquisition_controllers(self) -> list[CapacityAcquisitionController]:
-        reported = self.services.compute.reported_node_memory()
+        reported = self.services.compute.providers.reported_node_memory()
         controllers: list[CapacityAcquisitionController] = [
             ComputeUnitCapacityController(
                 unit.workspace_id,
                 unit,
-                self.services.compute,
+                self.services.compute.capacity,
                 self.workers,
                 reported.get(
                     (unit.worker_cpu_millicores, unit.worker_memory_mib, unit.worker_gpu_count), 0
                 ),
             )
-            for unit in self.services.compute.list_units_across_workspaces(
+            for unit in self.services.compute.units.list_units_across_workspaces(
                 capacity_owner_kind=CapacityOwnerKind.PooledProvider
             )
         ]
@@ -86,7 +86,7 @@ class SchedulerCapacityControllerProvider:
         return controllers
 
     def worker_pool_drain_controllers(self) -> list[WorkerPoolDrainController]:
-        selected = self.services.compute.claim_reconciliation_batch(
+        selected = self.services.compute.reconciliation.claim_reconciliation_batch(
             ComputeReconciliationKind.Drain, now=utc_now()
         )
         controllers: list[WorkerPoolDrainController] = []

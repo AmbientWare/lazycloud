@@ -9,7 +9,7 @@ from typing import Protocol, runtime_checkable
 
 from compute.provider_machines import provider_unit_operational_capacity
 from compute.providers import ProviderUnitSnapshot, next_billing_renewal
-from compute.service import ComputeService
+from compute.service import ComputeServices
 from compute.state import ComputeUnitState
 from pydantic import Field
 from shared.compute_policy import ComputeUnitPhase, ComputeUnitRecord, UnitName
@@ -197,7 +197,7 @@ class WorkerPoolDrainService:
 @dataclass(slots=True)
 class ManagedComputeWorkerPoolDrainController:
     state: ComputeUnitState
-    compute: ComputeService
+    compute: ComputeServices
     workers: WorkerPoolDrainWorkerRepository
     containers: WorkerPoolDrainContainerRepository
 
@@ -214,7 +214,7 @@ class ManagedComputeWorkerPoolDrainController:
         return _capacity_owner_id_from_state(self.state)
 
     def observe(self) -> WorkerPoolDrainObservation:
-        unit, snapshot = self.compute.inspect_internal_unit(
+        unit, snapshot = self.compute.scaling.inspect_internal_unit(
             self.state.workspace_id,
             self.capacity_owner_id,
         )
@@ -230,7 +230,7 @@ class ManagedComputeWorkerPoolDrainController:
         now: datetime | None = None,
     ) -> WorkerPoolDrainResult:
         current_time = now or utc_now()
-        current_unit = self.compute.get_internal_unit(
+        current_unit = self.compute.providers.get_internal_unit(
             self.state.workspace_id,
             self.capacity_owner_id,
         )
@@ -244,10 +244,12 @@ class ManagedComputeWorkerPoolDrainController:
                 reason="worker-pool capacity changed during provider observation",
             )
         operational_desired, _maximum = provider_unit_operational_capacity(current_unit)
-        recovery_sources = self.compute.recovery_protected_machines(current_unit.id)
-        recovery_sources.update(self.compute.maintenance_protected_machines(current_unit.id))
+        recovery_sources = self.compute.maintenance.recovery_protected_machines(current_unit.id)
+        recovery_sources.update(
+            self.compute.maintenance.maintenance_protected_machines(current_unit.id)
+        )
         if observation.snapshot.observed_machines > operational_desired:
-            machines_by_instance = self.compute.internal_unit_machine_by_instance(
+            machines_by_instance = self.compute.machines.internal_unit_machine_by_instance(
                 self.state.workspace_id, self.capacity_owner_id
             )
             protected_machines = {
@@ -278,7 +280,7 @@ class ManagedComputeWorkerPoolDrainController:
                 reserve_idle_machines=0,
             )
             if candidate is not None:
-                pooled = self.compute.release_internal_unit_machine(
+                pooled = self.compute.reserve_machines.release_internal_unit_machine(
                     self.state.workspace_id, self.capacity_owner_id, candidate.machine_id
                 )
                 return WorkerPoolDrainResult(
@@ -324,7 +326,7 @@ class ManagedComputeWorkerPoolDrainController:
         recovery_sources: set[str],
     ) -> WorkerPoolDrainResult:
         current_time = now
-        sizing_state = self.compute.pool_sizing_snapshot(self.capacity_owner_id)
+        sizing_state = self.compute.capacity.pool_sizing_snapshot(self.capacity_owner_id)
         if sizing_state.pending_operation_id or (
             sizing_state.desired_units > self.state.active_machines
             and current_unit.provider_state.degraded_reason is None
@@ -373,7 +375,7 @@ class ManagedComputeWorkerPoolDrainController:
         workers_by_machine = _workers_by_machine(
             self.workers.list_workers_for_capacity_owner(self.capacity_owner_id)
         )
-        machines_by_instance = self.compute.internal_unit_machine_by_instance(
+        machines_by_instance = self.compute.machines.internal_unit_machine_by_instance(
             self.state.workspace_id,
             self.capacity_owner_id,
         )
@@ -442,7 +444,7 @@ class ManagedComputeWorkerPoolDrainController:
                 for workers in workers_by_machine.values()
             )
         ):
-            pooled = self.compute.scale_internal_unit(
+            pooled = self.compute.scaling.scale_internal_unit(
                 self.state.workspace_id,
                 self.capacity_owner_id,
                 0,
@@ -457,7 +459,7 @@ class ManagedComputeWorkerPoolDrainController:
                 observed_replicas=pooled.observed_machines,
                 reason="released idle capacity and its replacement surge",
             )
-        pooled = self.compute.release_internal_unit_machine(
+        pooled = self.compute.reserve_machines.release_internal_unit_machine(
             self.state.workspace_id,
             self.capacity_owner_id,
             candidate.machine_id,
@@ -486,7 +488,7 @@ class ManagedComputeWorkerPoolDrainController:
     ) -> WorkerPoolDrainResult | None:
         """Replace retiring machines one at a time while preserving the warm floor."""
         current_version = snapshot.current_template_version
-        machines_by_instance = self.compute.internal_unit_machine_by_instance(
+        machines_by_instance = self.compute.machines.internal_unit_machine_by_instance(
             self.state.workspace_id,
             self.capacity_owner_id,
         )
@@ -495,12 +497,12 @@ class ManagedComputeWorkerPoolDrainController:
             for instance in snapshot.instances
             if (machine_id := machines_by_instance.get(instance.provider_instance_id))
         }
-        replaceable_machine_ids = self.compute.internal_unit_replaceable_machines(
+        replaceable_machine_ids = self.compute.maintenance.internal_unit_replaceable_machines(
             self.state.workspace_id, self.capacity_owner_id
         )
         interrupted = {
             machine_id: deadline
-            for machine_id, deadline in self.compute.internal_unit_interrupted_machines(
+            for machine_id, deadline in self.compute.maintenance.internal_unit_interrupted_machines(
                 self.state.workspace_id, self.capacity_owner_id
             ).items()
             if machine_id in snapshot_machine_ids and machine_id in replaceable_machine_ids
@@ -537,7 +539,7 @@ class ManagedComputeWorkerPoolDrainController:
         workers_by_machine = _workers_by_machine(
             self.workers.list_workers_for_capacity_owner(self.capacity_owner_id)
         )
-        draining_since = self.compute.internal_unit_draining_machines(
+        draining_since = self.compute.maintenance.internal_unit_draining_machines(
             self.state.workspace_id,
             self.capacity_owner_id,
         )
@@ -563,7 +565,7 @@ class ManagedComputeWorkerPoolDrainController:
         # One at a time. The durable pair is what distinguishes the operational
         # surge from autoscaled capacity and keeps every release at the logical
         # desired count.
-        sizing_state = self.compute.pool_sizing_snapshot(self.capacity_owner_id)
+        sizing_state = self.compute.capacity.pool_sizing_snapshot(self.capacity_owner_id)
         if sizing_state.pending_operation_id:
             return WorkerPoolDrainResult(
                 capacity_owner_id=self.capacity_owner_id,
@@ -585,7 +587,7 @@ class ManagedComputeWorkerPoolDrainController:
 
         operational_desired = unit.desired_machines + 1
         if snapshot.desired_machines < operational_desired:
-            self.compute.scale_internal_unit(
+            self.compute.scaling.scale_internal_unit(
                 self.state.workspace_id,
                 self.capacity_owner_id,
                 unit.desired_machines,
@@ -657,12 +659,12 @@ class ManagedComputeWorkerPoolDrainController:
         reason: str,
     ) -> WorkerPoolDrainResult:
         machine_id = unit.replacement_machine_id
-        self.compute.clear_internal_unit_replacement(
+        self.compute.maintenance.clear_internal_unit_replacement(
             self.state.workspace_id,
             self.capacity_owner_id,
             machine_id,
         )
-        self.compute.scale_internal_unit(
+        self.compute.scaling.scale_internal_unit(
             self.state.workspace_id,
             self.capacity_owner_id,
             unit.desired_machines,
@@ -687,13 +689,13 @@ class ManagedComputeWorkerPoolDrainController:
         logical_desired: int,
     ) -> WorkerPoolDrainResult:
         """Pair and add one replacement without changing logical desired capacity."""
-        self.compute.begin_internal_unit_replacement(
+        self.compute.maintenance.begin_internal_unit_replacement(
             self.state.workspace_id,
             self.capacity_owner_id,
             machine_id,
             template_version=current_version,
         )
-        self.compute.scale_internal_unit(
+        self.compute.scaling.scale_internal_unit(
             self.state.workspace_id,
             self.capacity_owner_id,
             logical_desired,
@@ -727,7 +729,7 @@ class ManagedComputeWorkerPoolDrainController:
             ),
             "",
         )
-        changed = self.compute.drain_internal_unit_machine(
+        changed = self.compute.maintenance.drain_internal_unit_machine(
             self.state.workspace_id,
             machine_id,
             reason=f"launch template {booted} superseded by {current_version}",
@@ -759,7 +761,7 @@ class ManagedComputeWorkerPoolDrainController:
                 machine_id=machine_id,
                 reason="machine still has running workloads",
             )
-        pooled = self.compute.release_internal_unit_machine(
+        pooled = self.compute.reserve_machines.release_internal_unit_machine(
             self.state.workspace_id,
             self.capacity_owner_id,
             machine_id,
@@ -777,7 +779,7 @@ class ManagedComputeWorkerPoolDrainController:
 
 
 def managed_compute_drain_controllers(
-    compute: ComputeService,
+    compute: ComputeServices,
     compute_states: Sequence[ComputeUnitState],
     workers: WorkerPoolDrainWorkerRepository,
     containers: WorkerPoolDrainContainerRepository,

@@ -17,7 +17,7 @@ from compute.policy import AwsDefaultCapacityBaseline, WorkspaceComputePolicySer
 from compute.provider_state import ProviderUnitStateService
 from compute.providers import ResolvedBlockVolumes
 from compute.reserve_state import RedisFleetReserveState
-from compute.service import ComputeService
+from compute.service import ComputeServices
 from compute.state import ComputeAgentTokenState, RedisComputeStateRepository
 from compute.telemetry import AGENT_INTAKE_PRESENCE_ROLE
 from compute.tunnel_authority import AgentTunnelAuthority
@@ -115,9 +115,7 @@ from images.settings import (
 )
 from images.submission import ImageBuildSubmissionService
 from networking.async_http import AsyncBackendHttpClient
-from networking.dialer import (
-    BackendRouteDialer,
-)
+from networking.dialer import BackendRouteDialer
 from networking.tunnel_client import TunnelRouteClient
 from observability.events import EventService
 from observability.metrics import MetricsService
@@ -578,7 +576,7 @@ class RuntimeServiceCore(ApiServiceCore):
     platform_capacity_settings: PlatformCapacitySettings
     aws_capacity_reconciliation_settings: AwsCapacityReconciliationSettings
     aws_account_connection_directory: AwsAccountConnectionDirectory
-    compute: ComputeService
+    compute: ComputeServices
     worker_events: WorkerEventService
     checkpoints: CheckpointService
     disks: DiskService
@@ -1092,7 +1090,7 @@ def create_runtime_core(
         worker_repository,
         agent_intake=RedisProcessPresence(redis, AGENT_INTAKE_PRESENCE_ROLE),
     )
-    compute = ComputeService(
+    compute = ComputeServices.create(
         context,
         provider_resolver=provider_resolver,
         pool_bootstrap_factory=pool_bootstrap,
@@ -1101,10 +1099,10 @@ def create_runtime_core(
         capacity_owner_mutations=capacity_reservation_repository,
         reserve_state=RedisFleetReserveState(redis),
     )
-    compute_policies.aws_default_capacity = AwsDefaultCapacityBaseline(compute)
+    compute_policies.aws_default_capacity = AwsDefaultCapacityBaseline(compute.provisioning)
     aws_composition = aws_account_connection_composition_from_settings(
         context=context,
-        pool_drainer=compute,
+        pool_drainer=compute.removal,
         connection_settings=aws_account_connection_config,
         capacity_settings=aws_capacity_config,
         gateway_origin=gateway_config.public_http_url,
@@ -1659,8 +1657,8 @@ def compose_runtime_routes(core: RuntimeServiceCore, tasks: TaskControlRoutes) -
                 replay_guard=RedisProviderNodeIdentityReplayGuard(core.redis()),
             ),
         )
-        if core.compute.provider_resolver is not None
-        and core.compute.pool_bootstrap_factory is not None
+        if core.compute.providers.provider_resolver is not None
+        and core.compute.providers.pool_bootstrap_factory is not None
         else None
     )
     return RuntimeRoutes(
@@ -1670,7 +1668,7 @@ def compose_runtime_routes(core: RuntimeServiceCore, tasks: TaskControlRoutes) -
         worker_repository_service=worker_repository,
         provider_node_enrollment_service=provider_node_enrollment,
         machine_lifecycle_service=MachineLifecycleService(
-            gateway=gateway, provider_compute=core.compute
+            gateway=gateway, provider_compute=core.compute.reserve_machines
         ),
     )
 
@@ -1767,7 +1765,7 @@ def compose_management_routes(
         autoscaler_operations_service=autoscaler_operations,
         scheduler_worker_admin_service=scheduler_worker_admin,
         machine_lifecycle_service=MachineLifecycleService(
-            gateway=gateway, provider_compute=core.compute
+            gateway=gateway, provider_compute=core.compute.reserve_machines
         ),
     )
 

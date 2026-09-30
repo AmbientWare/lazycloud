@@ -53,9 +53,7 @@ from api.server.services import (
     RuntimeRoutes,
     RuntimeServiceCore,
 )
-from api.server.worker_repository_service import (
-    WorkerRepositoryService,
-)
+from api.server.worker_repository_service import WorkerRepositoryService
 
 
 def endpoint_service(
@@ -69,9 +67,9 @@ def endpoint_service(
 def fleet_status_service(
     services: Annotated[RuntimeServiceCore, Depends(runtime_services)],
 ) -> FleetStatusService:
-    if services.compute.reserve_state is None:
+    if services.compute.providers.reserve_state is None:
         raise UpstreamUnavailableError("Fleet scheduler state is not configured")
-    return FleetStatusService(services.context.database, services.compute.reserve_state)
+    return FleetStatusService(services.context.database, services.compute.providers.reserve_state)
 
 
 def control_plane_service(

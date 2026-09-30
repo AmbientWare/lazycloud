@@ -39,7 +39,8 @@ from compute.machine_lifecycle import machine_lifecycle_allowed, write_machine_l
 from compute.policy import WorkspaceComputePolicyService
 from compute.projection import PoolConfig
 from compute.providers import joined_unit_identity
-from compute.service import ComputeService, ReserveAgentPreparation, ReservePreparationPhase
+from compute.reserve_machines import ReserveAgentPreparation, ReservePreparationPhase
+from compute.service import ComputeServices
 from compute.state import (
     AsyncRedisComputeStateRepository,
     ComputeAgentTokenState,
@@ -59,9 +60,7 @@ from compute.telemetry import (
     redact_telemetry_line,
     validate_agent_telemetry_token,
 )
-from compute.telemetry import (
-    AgentMetricSnapshot as AgentMetricSnapshotProtocol,
-)
+from compute.telemetry import AgentMetricSnapshot as AgentMetricSnapshotProtocol
 from compute.tunnel_authority import AgentTunnelAuthority
 from control.placement import PlacementResolver
 from control.releases import DeploymentReleaseService
@@ -125,9 +124,7 @@ from shared.compute_enrollment import (
     agent_machine_worker_id,
 )
 from shared.compute_fleet import Machine, MachineLifecycle, ResourceStatus, Worker
-from shared.compute_policy import (
-    ComputeUnitRecord,
-)
+from shared.compute_policy import ComputeUnitRecord
 from shared.container_requests import StopContainerReason
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.errors import (
@@ -194,9 +191,7 @@ from storage.service import ObjectStorage
 
 from database import AsyncDatabaseClient
 from gateway.agent_enrollment import AgentJoinResult, private_unit_for_enrollment
-from gateway.http import (
-    AgentMetricSnapshot as HttpAgentMetricSnapshot,
-)
+from gateway.http import AgentMetricSnapshot as HttpAgentMetricSnapshot
 from gateway.http import (
     AgentRoute,
     AgentTelemetryRequest,
@@ -242,7 +237,7 @@ class GatewayServices(Protocol):
     def auth(self) -> AuthService: ...
 
     @property
-    def compute(self) -> ComputeService: ...
+    def compute(self) -> ComputeServices: ...
 
     @property
     def workspace_compute_policy_service(self) -> WorkspaceComputePolicyService: ...
@@ -338,7 +333,7 @@ class GatewayControlService:
     def unit_state_coordinator(self) -> GatewayUnitStateCoordinator:
         return GatewayUnitStateCoordinator(
             self.services.context,
-            self.services.compute,
+            self.services.compute.units,
             self.compute_states,
         )
 
@@ -642,7 +637,7 @@ class GatewayControlService:
                     require_host_decommission=unit.provider == "agent",
                 )
                 self._delete_pool_workers(unit.capacity_owner_id)
-                self.services.compute.delete_unit(
+                self.services.compute.removal.delete_unit(
                     unit.capacity_owner_id,
                     workspace=workspace_id,
                 )
@@ -696,7 +691,7 @@ class GatewayControlService:
                                 reason=WorkerUnavailableReason.MachineRetired,
                             )
 
-            return self.services.compute.scale_internal_unit(
+            return self.services.compute.scaling.scale_internal_unit(
                 workspace_id,
                 owner.capacity_owner_id,
                 desired_machines,
@@ -707,7 +702,7 @@ class GatewayControlService:
 
     def clear_unit_degradation(self, unit_id: str, *, workspace_id: str) -> ComputeUnitRecord:
         unit = self.unit_state_coordinator.unit_by_id(unit_id, workspace_id=workspace_id)
-        return self.services.compute.clear_capacity_degradation(
+        return self.services.compute.units.clear_capacity_degradation(
             workspace=workspace_id,
             capacity_owner_id=unit.capacity_owner_id,
         )
@@ -721,7 +716,9 @@ class GatewayControlService:
                 workspace_id=workspace_id,
             )
             name = owner.name
-            current = self.services.compute.get_internal_unit(workspace_id, owner.capacity_owner_id)
+            current = self.services.compute.providers.get_internal_unit(
+                workspace_id, owner.capacity_owner_id
+            )
             if current.capacity_owner_id != owner.capacity_owner_id:
                 raise ConflictError(
                     f"compute pool {name!r} capacity ownership does not match durable state"
@@ -760,7 +757,7 @@ class GatewayControlService:
             )
 
     def delete_pool_for_workspace_deletion(self, name: str, *, workspace_id: str) -> None:
-        pools = self.services.compute.list_pools_for_workspace_deletion(workspace_id)
+        pools = self.services.compute.units.list_pools_for_workspace_deletion(workspace_id)
         pool = next((candidate for candidate in pools if candidate.name == name), None)
         if pool is None:
             return
@@ -777,7 +774,7 @@ class GatewayControlService:
                 require_host_decommission=pool.provider == "agent",
             )
             self._delete_pool_workers(pool.capacity_owner_id)
-            self.services.compute.delete_unit_for_workspace_deletion(
+            self.services.compute.removal.delete_unit_for_workspace_deletion(
                 pool.capacity_owner_id,
                 workspace_id=workspace_id,
             )
@@ -879,7 +876,7 @@ class GatewayControlService:
                     session,
                     existing,
                     MachineLifecycle.Deleted,
-                    workspace_changes=self.services.compute.workspace_changes,
+                    workspace_changes=self.services.compute.providers.workspace_changes,
                     workspace_id=existing_workspace_id,
                     message="Name reissued to a new join command",
                     now=now,
@@ -988,7 +985,7 @@ class GatewayControlService:
         )
 
     def machine_responses(self, *, workspace_id: str) -> list[MachineResponse]:
-        machines = self.services.compute.list_machines(workspace=workspace_id)
+        machines = self.services.compute.units.list_machines(workspace=workspace_id)
         names = self._workspace_names(machines)
         return [_machine_response(machine, names) for machine in machines]
 
@@ -1097,7 +1094,7 @@ class GatewayControlService:
         unit = self.unit_state_coordinator.unit_by_id(unit_id, workspace_id=workspace_id)
         owned = {
             machine.id
-            for machine in self.services.compute.list_machines(workspace=workspace_id)
+            for machine in self.services.compute.units.list_machines(workspace=workspace_id)
             if machine.capacity_owner_id == unit.capacity_owner_id
         }
         machines = sorted(
@@ -1129,7 +1126,7 @@ class GatewayControlService:
         return self._machine_views(machines, enrollments)
 
     def machine_views(self, workspace_id: str) -> list[UnitMachineResponse]:
-        machines = self.services.compute.list_machines(workspace=workspace_id)
+        machines = self.services.compute.units.list_machines(workspace=workspace_id)
         with self.services.context.database.session() as session:
             enrollments = ComputeMachineEnrollmentRepository(session).list_by_machine_ids(
                 [machine.id for machine in machines]
@@ -1215,7 +1212,7 @@ class GatewayControlService:
                 # its identity has no other way to give its name back.
                 self._delete_enrolled_machine(enrollment)
             else:
-                self.services.compute.delete_machine(machine_id, workspace=workspace_id)
+                self.services.compute.units.delete_machine(machine_id, workspace=workspace_id)
         except (KeyError, ValueError) as exc:
             raise _domain_error(exc) from exc
 
@@ -1255,7 +1252,7 @@ class GatewayControlService:
                 session,
                 machine,
                 MachineLifecycle.Deleted,
-                workspace_changes=self.services.compute.workspace_changes,
+                workspace_changes=self.services.compute.providers.workspace_changes,
                 workspace_id=enrollment.workspace_id,
                 message="Removed; the host's credential was revoked",
             )
@@ -1271,7 +1268,7 @@ class GatewayControlService:
         if unit is None:
             return
         try:
-            deleted = self.services.compute.delete_empty_joined_unit(unit)
+            deleted = self.services.compute.units.delete_empty_joined_unit(unit)
         except CapacityReservationLockContendedError:
             # Periodic reconciliation retries cleanup after the current mutation finishes.
             return
@@ -1597,7 +1594,7 @@ class GatewayControlService:
                     session,
                     joined_machine,
                     MachineLifecycle.Joining,
-                    workspace_changes=self.services.compute.workspace_changes,
+                    workspace_changes=self.services.compute.providers.workspace_changes,
                     workspace_id=agent_state.workspace_id,
                     now=current_time,
                 )
@@ -1615,7 +1612,7 @@ class GatewayControlService:
                     session,
                     joined_machine,
                     MachineLifecycle.Failed,
-                    workspace_changes=self.services.compute.workspace_changes,
+                    workspace_changes=self.services.compute.providers.workspace_changes,
                     workspace_id=agent_state.workspace_id,
                     message=failed_checks,
                     failure=MachineBootstrapFailureReason.HostPreflightFailed,
@@ -1765,7 +1762,7 @@ class GatewayControlService:
         state: ComputeAgentTokenState,
         request: LeaveAgentRequest,
     ) -> None:
-        self.services.compute.source_cache_lifecycle.acknowledge_machine_cleanup(
+        self.services.compute.providers.source_cache_lifecycle.acknowledge_machine_cleanup(
             machine_id=state.machine_id,
             worker_id=agent_machine_worker_id(state.machine_id),
             generation_id=request.cache_generation_id,
@@ -1980,7 +1977,7 @@ class GatewayControlService:
                 workspace_id=response_state.workspace_id,
             )
             reserve_preparation = (
-                self.services.compute.prepare_reserved_machine(
+                self.services.compute.reserve_machines.prepare_reserved_machine(
                     workspace_id=response_state.workspace_id,
                     machine_id=response_state.machine_id,
                     credential_id=response_state.credential_id,
@@ -2332,7 +2329,7 @@ class GatewayControlService:
                 current = self.scheduler_worker_lookup.get_worker(worker.worker_id)
                 if current is None or current.capacity_owner_id != worker.capacity_owner_id:
                     return worker, False
-                with self.services.compute.worker_release_admission(
+                with self.services.compute.maintenance.worker_release_admission(
                     current, release, self.scheduler_worker_lookup.list_workers()
                 ):
                     if current.status is SchedulerWorkerStatus.Draining:
@@ -2372,7 +2369,7 @@ class GatewayControlService:
             with (
                 self.capacity_reservations.mutation_lock(state.capacity_owner_id),
                 self.capacity_reservations.dispatch_lock(state.capacity_owner_id),
-                self.services.compute.worker_maintenance_admission(
+                self.services.compute.maintenance.worker_maintenance_admission(
                     state.workspace_id, state.capacity_owner_id, state.machine_id
                 ) as session,
             ):
@@ -2380,7 +2377,7 @@ class GatewayControlService:
                     return False
                 if self._worker_has_started_containers(worker_id):
                     return False
-                self.services.compute.begin_idle_agent_release(
+                self.services.compute.maintenance.begin_idle_agent_release(
                     session,
                     capacity_owner_id=state.capacity_owner_id,
                     machine_id=state.machine_id,
@@ -2837,7 +2834,7 @@ class GatewayControlService:
                 session,
                 machine,
                 machine.lifecycle,
-                workspace_changes=self.services.compute.workspace_changes,
+                workspace_changes=self.services.compute.providers.workspace_changes,
                 workspace_id=state.workspace_id,
                 message=f"{quiet}; check the host is powered on and the agent service is running",
                 now=now,
@@ -2974,7 +2971,7 @@ class GatewayControlService:
                     session,
                     machine,
                     MachineLifecycle.Ready,
-                    workspace_changes=self.services.compute.workspace_changes,
+                    workspace_changes=self.services.compute.providers.workspace_changes,
                     workspace_id=state.workspace_id,
                     now=current_time,
                 )

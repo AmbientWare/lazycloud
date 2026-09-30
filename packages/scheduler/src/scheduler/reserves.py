@@ -17,7 +17,7 @@ machine.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import AbstractContextManager, ExitStack, contextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -61,8 +61,6 @@ def reserve_free_capacity(
 
 
 class ConsolidationCompute(Protocol):
-    def provider_machine_unit(self, machine_id: str) -> tuple[str, str] | None: ...
-
     def internal_unit_machine_drain_reason(
         self, workspace_id: str, machine_id: str
     ) -> str | None: ...
@@ -97,6 +95,7 @@ class ConsolidationLeases(Protocol):
 @dataclass(slots=True)
 class FleetConsolidationService:
     compute: ConsolidationCompute
+    machine_units: Callable[[str], tuple[str, str] | None]
     containers: ConsolidationContainers
     workers: ConsolidationWorkers
     stopper: ConsolidationStopper
@@ -139,13 +138,11 @@ class FleetConsolidationService:
         placed after the planner looked is seen, and nothing is placed here once
         the lock is released.
         """
-        owner = self.compute.provider_machine_unit(machine_id)
+        owner = self.machine_units(machine_id)
         if owner is None or not destination_machine_ids or machine_id in destination_machine_ids:
             return False
         unit_id, workspace_id = owner
-        destination_owners = [
-            self.compute.provider_machine_unit(target) for target in destination_machine_ids
-        ]
+        destination_owners = [self.machine_units(target) for target in destination_machine_ids]
         if any(owner is None for owner in destination_owners):
             return False
         destination_units = tuple(

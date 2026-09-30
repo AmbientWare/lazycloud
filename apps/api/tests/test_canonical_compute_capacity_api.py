@@ -46,7 +46,7 @@ def test_self_hosted_collection_is_account_scoped_and_excludes_managed_pools(
             == UnitMachineListResponse()
         )
 
-        isolated_services.compute.create_unit(
+        isolated_services.compute.units.create_unit(
             UnitName("managed-pool"),
             placement=Placement.platform(),
             provider="local",

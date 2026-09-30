@@ -1,11 +1,4 @@
-"""Durable provider-machine records and the provider snapshots they mirror.
-
-This owns the `ComputeProviderInstanceRecord` lifecycle: recording a launch,
-mirroring a pooled provider's snapshot onto durable rows, retiring machines
-whose provider instance is gone, and terminating rows whose machine failed to
-become ready. `ComputeService` orchestrates workflows and calls in; nothing
-here calls back out.
-"""
+"""Persist provider observations and machine lifecycle transitions."""
 
 from __future__ import annotations
 
@@ -1011,11 +1004,11 @@ class ProviderMachineReconciler:
                 now=current_time,
                 destruction_observations=destruction_observations,
             )
-        for machine_id in missing_machine_ids:
-            self.retire_provider_pool_machine(
+        if missing_machine_ids:
+            self.retire_provider_pool_machines(
                 updated.workspace_id,
                 updated.capacity_owner_id,
-                machine_id,
+                machine_ids=set(missing_machine_ids),
                 reason="provider instance storage destroyed",
                 now=current_time,
             )
@@ -1131,7 +1124,7 @@ class ProviderMachineReconciler:
                 )
         return status == ReservationStatus.Deleted.value
 
-    def _retire_provider_pool_machines(
+    def retire_provider_pool_machines(
         self,
         workspace_id: str,
         capacity_owner_id: str,
@@ -1206,23 +1199,6 @@ class ProviderMachineReconciler:
             for token_hash in join_token_hashes:
                 self.scheduler_hooks.revoke_unit_join_token(token_hash)
         return tuple(changed_machine_ids)
-
-    def retire_provider_pool_machine(
-        self,
-        workspace_id: str,
-        capacity_owner_id: str,
-        machine_id: str,
-        *,
-        reason: str,
-        now: datetime | None = None,
-    ) -> tuple[str, ...]:
-        return self._retire_provider_pool_machines(
-            workspace_id,
-            capacity_owner_id,
-            machine_ids={machine_id},
-            reason=reason,
-            now=_utc(now),
-        )
 
     def _observe_provider_service_state(
         self,

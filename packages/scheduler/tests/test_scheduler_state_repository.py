@@ -52,9 +52,8 @@ from scheduler.fleet import (
     SchedulerRetryReason,
     SchedulerWorkerStatus,
 )
-from scheduler.fleet_controller import FleetController
+from scheduler.orphan_recovery import OrphanedContainerRecovery
 from scheduler.pool_state import SchedulerPoolStateService
-from scheduler.reconciliation import SchedulerStateStores, SchedulerWorkloadControls
 from scheduler.state import (
     DEFAULT_CONTAINER_REQUEST_CLAIM_LEASE_SECONDS,
     AgentBackendRoute,
@@ -2559,15 +2558,11 @@ def test_scheduler_reconciles_confirmed_unrecoverable_sql_container(
     assert request_service.submit(recoverable_request).accepted
     container_repo.set_worker_address(orphaned.id, "10.0.0.1:9000")
     network_repo.set_container_ip("test-network", orphaned.id, "10.10.0.8")
-    scheduler = FleetController(
-        services=isolated_services,
-        workloads=SchedulerWorkloadControls(containers=request_service),
-        states=SchedulerStateStores(
-            orphaned_container_networks=network_repo,
-            orphaned_container_confirmations=RedisOrphanedContainerConfirmationRepository(redis),
-        ),
-        orphaned_container_reconcile_interval_seconds=0,
-        orphaned_container_confirmation_seconds=60,
+    scheduler = OrphanedContainerRecovery(
+        containers=isolated_services.containers,
+        requests=request_service,
+        confirmations=RedisOrphanedContainerConfirmationRepository(redis),
+        networks=RedisWorkerNetworkIpRepository(redis),
     )
     now = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -2627,14 +2622,11 @@ def test_scheduler_orphan_reconciliation_restores_pod_desired_capacity(
                 status=ContainerStatus.Pending,
             )
         )
-    scheduler = FleetController(
-        services=isolated_services,
-        workloads=SchedulerWorkloadControls(containers=request_service),
-        states=SchedulerStateStores(
-            orphaned_container_confirmations=RedisOrphanedContainerConfirmationRepository(redis),
-        ),
-        orphaned_container_reconcile_interval_seconds=0,
-        orphaned_container_confirmation_seconds=60,
+    scheduler = OrphanedContainerRecovery(
+        containers=isolated_services.containers,
+        requests=request_service,
+        confirmations=RedisOrphanedContainerConfirmationRepository(redis),
+        networks=RedisWorkerNetworkIpRepository(redis),
     )
     now = datetime(2026, 1, 1, tzinfo=UTC)
     scheduler.reconcile_orphaned_containers(now=now)
@@ -3466,14 +3458,11 @@ def test_orphan_sweep_settles_the_claims_a_pooled_container_was_holding(
     )
     isolated_services.tasks.start(claimed.id, container_id=pooled.id)
 
-    scheduler = FleetController(
-        services=isolated_services,
-        workloads=SchedulerWorkloadControls(containers=request_service),
-        states=SchedulerStateStores(
-            orphaned_container_confirmations=RedisOrphanedContainerConfirmationRepository(redis),
-        ),
-        orphaned_container_reconcile_interval_seconds=0,
-        orphaned_container_confirmation_seconds=60,
+    scheduler = OrphanedContainerRecovery(
+        containers=isolated_services.containers,
+        requests=request_service,
+        confirmations=RedisOrphanedContainerConfirmationRepository(redis),
+        networks=RedisWorkerNetworkIpRepository(redis),
     )
     now = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -3565,10 +3554,11 @@ async def test_assignment_deadline_stops_the_durable_worker_despite_lost_hot_ass
         assert workers.remove_worker(worker_id, now=now).request_ids == [container.id]
         state = service.containers.get_container_state(container.id)
         assert state is not None and state.worker_id == ""
-    scheduler = FleetController(
-        services=isolated_services,
-        workloads=SchedulerWorkloadControls(containers=service),
-        orphaned_container_reconcile_interval_seconds=0,
+    scheduler = OrphanedContainerRecovery(
+        containers=isolated_services.containers,
+        requests=service,
+        confirmations=RedisOrphanedContainerConfirmationRepository(real_redis_actors.client()),
+        networks=RedisWorkerNetworkIpRepository(real_redis_actors.client()),
     )
 
     if worker_removed:

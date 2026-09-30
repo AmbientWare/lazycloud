@@ -6,6 +6,7 @@ Refactor rules:
 - Preserve supported workflows, public contracts, security, durability, concurrency, failure handling, recovery and cleanup. Removing capabilities or weakening guarantees is not optimization; intentional behavior changes require owner direction.
 - Reduce total complexity and production code. Delete redundant logic, unnecessary abstractions and superseded implementations. Small patches, file moves, cosmetic cleanup and added layers alone do not meet the goal.
 - Separate cross-service coordination from domain decisions. Keep each responsibility with its canonical owner and dependencies explicit.
+- Break oversized production and test files into focused modules with clear responsibilities. Reduce the underlying complexity as part of the split; moving the same code into more files alone does not count as simplification.
 - Refactor tests alongside production code. Rewrite and simplify useful tests; remove obsolete cases, duplicate coverage and unnecessary fixtures/helpers/frameworks. Preserve unique proof of material behavior and guarantees without preserving the old implementation's shape.
 - Measure code reduction and performance before and after each rewrite, including database work with representative history, idle load and concurrent activity. Passing tests alone does not prove optimization.
 - Finish the service's coherent change and required acceptance before marking it complete. Keep refactor process rules in this file; AGENTS.md files contain only permanent repository standards.

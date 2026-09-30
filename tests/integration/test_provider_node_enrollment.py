@@ -27,7 +27,7 @@ from compute.providers import (
     ResolvedComputeProvider,
     ResolvedProviderPolicy,
 )
-from compute.service import ComputeService
+from compute.service import ComputeServices
 from compute.state import RedisComputeStateRepository
 from control.service import ControlPlaneService
 from database.repositories.aws_connections import AwsAccountConnectionRepository
@@ -414,12 +414,12 @@ def _service(
     )
 
 
-def _compute(isolated_services: ApiServices, provider: _PooledProvider) -> ComputeService:
+def _compute(isolated_services: ApiServices, provider: _PooledProvider) -> ComputeServices:
     with isolated_services.context.database.session() as session:
         workspace_id = isolated_services.context.default_workspace_id(session)
         connection = AwsAccountConnectionRepository(session).get(_CONNECTION_ID)
     assert connection is not None
-    return ComputeService(
+    return ComputeServices.create(
         isolated_services.context,
         provider_resolver=_Resolver(
             provider,

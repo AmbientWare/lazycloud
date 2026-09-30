@@ -6,9 +6,8 @@ import time
 from typing import Annotated
 
 import typer
-from compute.fleet_operations import FleetOperations
 from compute.reserve_state import RedisFleetReserveState
-from compute.service import ComputeService
+from compute.service import ComputeServices
 from compute.supplier_costs import SupplierCostInspectionService
 from coordination.redis_client import RedisClient, RedisSettings
 from lazycloud._terminal.streams import console
@@ -60,7 +59,7 @@ def fleet_stop_machine(
             "Stop workload admission and schedulers, then pass --confirm-stopped"
         )
     with platform_compute() as compute:
-        unit = FleetOperations(compute).stop_machine(unit_id=unit_id, machine_id=machine_id)
+        unit = compute.operations.stop_machine(unit_id=unit_id, machine_id=machine_id)
     emit_result(
         ctx,
         payload={
@@ -102,7 +101,7 @@ def fleet_resume(
             "Stop workload admission and schedulers, then pass --confirm-stopped"
         )
     with platform_compute() as compute:
-        unit = FleetOperations(compute).resume_unit(unit_id=unit_id, desired=desired)
+        unit = compute.operations.resume_unit(unit_id=unit_id, desired=desired)
     emit_result(
         ctx,
         payload={
@@ -177,7 +176,7 @@ def fleet_destroy(
             "Stop workload admission and schedulers, then pass --confirm-stopped"
         )
     with platform_compute() as compute:
-        units = compute.platform_units()
+        units = compute.units.platform_units()
         for unit in units:
             console.print(
                 f"Platform unit {unit.id}: {unit.name} ({unit.provider_ref}, {unit.region})"
@@ -204,7 +203,7 @@ def fleet_destroy(
 
 
 def _destroy_unit(
-    compute: ComputeService,
+    compute: ComputeServices,
     unit: ComputeUnitRecord,
     *,
     timeout_seconds: float,
@@ -215,7 +214,7 @@ def _destroy_unit(
     while True:
         attempts += 1
         try:
-            compute.delete_platform_unit(unit.capacity_owner_id)
+            compute.removal.delete_platform_unit(unit.capacity_owner_id)
         except DomainError as error:
             reason = error.message
             console.print(f"{unit.name}: {error.code}: {reason}", markup=False)

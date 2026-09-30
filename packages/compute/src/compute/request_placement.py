@@ -5,49 +5,21 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from functools import partial
 from itertools import groupby
-from typing import Protocol
 
-from shared.compute_policy import ComputeResourceRequirements, ComputeUnitRecord
+from shared.compute_policy import ComputeResourceRequirements
 from shared.container_requests import capacity_memory_mib, node_memory, schedulable_capacity
 from shared.contracts import ContractModel
 from shared.errors import UpstreamUnavailableError
 from shared.placement import Placement, ProductRegion, product_region
 
 from compute.capacity_acquisition import plan_request_capacity
-from compute.context import ComputeContext
-from compute.fleet_reserves import ReserveAdmission
 from compute.fleet_resources import Capacity, ReserveMarket, ReserveOffer
 from compute.offers import ComputeOffer, OfferRequest, filter_offers, offer_selection_key
+from compute.pool_provider import PoolProviderService
 from compute.providers import ResolvedComputeProvider
+from compute.unit_provisioning import UnitProvisioningService
 
 LOGGER = logging.getLogger(__name__)
-
-
-class PooledCapacityOwner(Protocol):
-    def reserve_admission(self) -> ReserveAdmission: ...
-    def pooled_providers(self, workspace_id: str) -> tuple[ResolvedComputeProvider, ...]: ...
-
-    def pooled_offer_rejection(
-        self,
-        provider: ResolvedComputeProvider,
-        offer: ComputeOffer,
-        *,
-        preemptible: bool,
-    ) -> str | None: ...
-
-    def pooled_offer_owners(
-        self, provider: ResolvedComputeProvider, offers: list[ComputeOffer]
-    ) -> dict[str, str]: ...
-
-    def reported_node_memory(self) -> dict[tuple[int, int, int], int]: ...
-
-    def prepare_pooled_offer(
-        self,
-        *,
-        provider: ResolvedComputeProvider,
-        offer: ComputeOffer,
-        requirements: ComputeResourceRequirements,
-    ) -> ComputeUnitRecord: ...
 
 
 class ComputeCapacityPlacementRequest(ContractModel):
@@ -72,8 +44,8 @@ class ComputeCapacityPurchase:
 
 @dataclass(slots=True)
 class ComputeCapacityPlacementService:
-    context: ComputeContext
-    compute: PooledCapacityOwner
+    providers: PoolProviderService
+    provisioning: UnitProvisioningService
 
     def purchase_candidates(
         self, request: ComputeCapacityPlacementRequest
@@ -81,7 +53,7 @@ class ComputeCapacityPlacementService:
         """Return approved purchase candidates in GPU-preference and cost order."""
         providers = tuple(
             provider
-            for provider in self.compute.pooled_providers(request.workspace_id)
+            for provider in self.providers.pooled_providers(request.workspace_id)
             if provider.policy is not None and provider.policy.placement == request.placement
         )
         requirements = request.requirements
@@ -98,7 +70,7 @@ class ComputeCapacityPlacementService:
         )
         offers: list[tuple[ResolvedComputeProvider, ComputeOffer, str]] = []
         failures: list[str] = []
-        reported_memory = self.compute.reported_node_memory()
+        reported_memory = self.providers.reported_node_memory()
         for provider in providers:
             policy = provider.policy
             if provider.pooled is None or policy is None or not policy.can_purchase:
@@ -111,7 +83,7 @@ class ComputeCapacityPlacementService:
                             root_volume_gib=policy.root_volume_gib
                         )
                         if offer.provider == provider.ref
-                        and self.compute.pooled_offer_rejection(
+                        and self.providers.pooled_offer_rejection(
                             provider, offer, preemptible=requirements.preemptible
                         )
                         is None
@@ -128,9 +100,9 @@ class ComputeCapacityPlacementService:
                 LOGGER.exception("provider offer discovery failed for %s", provider.ref)
                 failures.append(provider.ref)
                 continue
-            owners = self.compute.pooled_offer_owners(provider, candidates)
+            owners = self.providers.pooled_offer_owners(provider, candidates)
             offers.extend((provider, offer, owners[offer.id]) for offer in candidates)
-        admission = self.compute.reserve_admission()
+        admission = self.providers.reserve_admission()
         purchases: dict[str, ComputeCapacityPurchase] = {}
         ordered = sorted(offers, key=lambda item: offer_selection_key(item[1], purchase))
         packing_order: dict[str, int] = {}
@@ -222,7 +194,9 @@ class ComputeCapacityPlacementService:
         offer: ComputeOffer,
         requirements: ComputeResourceRequirements,
     ) -> None:
-        self.compute.prepare_pooled_offer(provider=provider, offer=offer, requirements=requirements)
+        self.provisioning.prepare_pooled_offer(
+            provider=provider, offer=offer, requirements=requirements
+        )
 
 
 __all__ = [
