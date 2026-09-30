@@ -23,9 +23,12 @@ message SupervisorMessage {
   }
 }
 
-// SlotsReady reports that every slot loaded its handler.
+// SlotsReady reports that every slot loaded its handler. The supervisor sends
+// it again whenever it reconnects, so a restarted agent learns which attempts
+// already occupy slots.
 message SlotsReady {
   int32 slots = 1;
+  repeated string running_attempts = 2;
 }
 
 message LoadFailed {

@@ -136,12 +136,15 @@ func (*SupervisorMessage_Finished) isSupervisorMessage_Body() {}
 
 func (*SupervisorMessage_Output) isSupervisorMessage_Body() {}
 
-// SlotsReady reports that every slot loaded its handler.
+// SlotsReady reports that every slot loaded its handler. The supervisor sends
+// it again whenever it reconnects, so a restarted agent learns which attempts
+// already occupy slots.
 type SlotsReady struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Slots         int32                  `protobuf:"varint,1,opt,name=slots,proto3" json:"slots,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Slots           int32                  `protobuf:"varint,1,opt,name=slots,proto3" json:"slots,omitempty"`
+	RunningAttempts []string               `protobuf:"bytes,2,rep,name=running_attempts,json=runningAttempts,proto3" json:"running_attempts,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *SlotsReady) Reset() {
@@ -179,6 +182,13 @@ func (x *SlotsReady) GetSlots() int32 {
 		return x.Slots
 	}
 	return 0
+}
+
+func (x *SlotsReady) GetRunningAttempts() []string {
+	if x != nil {
+		return x.RunningAttempts
+	}
+	return nil
 }
 
 type LoadFailed struct {
@@ -738,10 +748,11 @@ const file_host_v1_container_proto_rawDesc = "" +
 	"loadFailed\x12@\n" +
 	"\bfinished\x18\x03 \x01(\v2\".lazycloud.host.v1.AttemptFinishedH\x00R\bfinished\x128\n" +
 	"\x06output\x18\x04 \x01(\v2\x1e.lazycloud.host.v1.OutputChunkH\x00R\x06outputB\x06\n" +
-	"\x04body\"\"\n" +
+	"\x04body\"M\n" +
 	"\n" +
 	"SlotsReady\x12\x14\n" +
-	"\x05slots\x18\x01 \x01(\x05R\x05slots\"B\n" +
+	"\x05slots\x18\x01 \x01(\x05R\x05slots\x12)\n" +
+	"\x10running_attempts\x18\x02 \x03(\tR\x0frunningAttempts\"B\n" +
 	"\n" +
 	"LoadFailed\x124\n" +
 	"\x05error\x18\x01 \x01(\v2\x1e.lazycloud.host.v1.RunnerErrorR\x05error\"\xb3\x01\n" +
