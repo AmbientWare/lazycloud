@@ -292,7 +292,9 @@ components:
       type: object
       required: [url, method, headers, expires_at]
       properties:
-        url: { type: string }
+        url:
+          description: Absolute URL; the request carries no bearer token.
+          type: string
         method:
           type: string
           enum: [PUT]
@@ -555,5 +557,7 @@ components:
         stream:
           type: string
           enum: [stdout, stderr, system]
-        data: { type: string }
+        data:
+          description: One line of output without its trailing newline.
+          type: string
         time: { type: string, format: date-time }

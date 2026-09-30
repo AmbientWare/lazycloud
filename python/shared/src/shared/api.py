@@ -43,7 +43,7 @@ class SourceUploadRequest(BaseModel):
 
 
 class UploadTarget(BaseModel):
-    url: str
+    url: Annotated[str, Field(description="Absolute URL; the request carries no bearer token.")]
     method: Literal["PUT"]
     headers: dict[str, str]
     expires_at: AwareDatetime
@@ -160,7 +160,7 @@ class LogEntry(BaseModel):
     id: int
     attempt: int
     stream: Stream
-    data: str
+    data: Annotated[str, Field(description="One line of output without its trailing newline.")]
     time: AwareDatetime
 
 

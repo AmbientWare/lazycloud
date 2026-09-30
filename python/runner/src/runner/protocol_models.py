@@ -3,8 +3,8 @@
 
 from __future__ import annotations
 from enum import Enum
-from pydantic import BaseModel, Field
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class Encoding(str, Enum):
@@ -12,8 +12,21 @@ class Encoding(str, Enum):
     cloudpickle = "cloudpickle"
 
 
+class Arguments(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    args: list[Any] = []
+    kwargs: dict[str, Any] = {}
+
+
 class RunnerError(BaseModel):
-    type: str
+    type: Annotated[
+        str,
+        Field(
+            description="The exception class: `qualname` for builtins, otherwise `module.qualname`."
+        ),
+    ]
     message: str
     traceback: str | None = None
 
