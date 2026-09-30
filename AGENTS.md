@@ -1,8 +1,8 @@
 # Repository rules
 
 Edit `AGENTS.md`, never its `CLAUDE.md` symlink. Add that symlink with any new
-guidance file. Keep permanent rules here; service rewrite goals and process
-rules belong in root `update.md`.
+guidance file. Keep instructions limited to repository standards and constraints;
+exclude feature plans, PR details and progress tracking.
 
 ## Ownership and code
 
