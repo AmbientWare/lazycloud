@@ -60,6 +60,7 @@ from sqlalchemy import (
     BigInteger,
     Select,
     String,
+    Text,
     and_,
     case,
     cast,
@@ -1637,6 +1638,15 @@ def _capacity_operation_record(
 class ComputeCapacityOperationRepository:
     session: Session
 
+    def pending_capacity_floor(self, capacity_owner_id: str) -> int | None:
+        return self.session.scalar(
+            select(func.min(ComputeCapacityOperationTable.previous_desired_unit)).where(
+                ComputeCapacityOperationTable.capacity_owner_id == capacity_owner_id,
+                ComputeCapacityOperationTable.status == CapacityOperationStatus.Intent.value,
+                ComputeCapacityOperationTable.owns_capacity.is_(True),
+            )
+        )
+
     def latest_failures_for_containers(
         self, container_ids: Collection[str]
     ) -> dict[str, CapacityFailureCode]:
@@ -1920,6 +1930,73 @@ def _provider_instance_record(row: ComputeProviderInstanceTable) -> ComputeProvi
 @dataclass(slots=True)
 class ComputeProviderInstanceRepository:
     session: Session
+
+    def count_open_for_pool(self, pool_id: str) -> int:
+        return (
+            self.session.scalar(
+                select(func.count())
+                .select_from(ComputeProviderInstanceTable)
+                .where(
+                    ComputeProviderInstanceTable.pool_id == pool_id,
+                    ComputeProviderInstanceTable.status.not_in(("deleted", "failed")),
+                )
+            )
+            or 0
+        )
+
+    def count_surviving_for_pool(self, pool_id: str) -> int:
+        return (
+            self.session.scalar(
+                select(func.count())
+                .select_from(ComputeProviderInstanceTable)
+                .where(
+                    ComputeProviderInstanceTable.pool_id == pool_id,
+                    ComputeProviderInstanceTable.status.not_in(
+                        ("deleted", "failed", "terminating")
+                    ),
+                    ComputeProviderInstanceTable.instance_id.is_not(None),
+                    ComputeProviderInstanceTable.missing_since.is_(None),
+                )
+            )
+            or 0
+        )
+
+    def count_busy_machines(self, pool_id: str) -> int:
+        instance = ComputeProviderInstanceTable
+        return (
+            self.session.scalar(
+                select(func.count(instance.machine_id.distinct())).where(
+                    instance.pool_id == pool_id,
+                    exists().where(
+                        or_(
+                            ContainerTable.machine_id == instance.machine_id,
+                            ContainerTable.runtime_machine_id == cast(instance.machine_id, Text),
+                        ),
+                        ContainerTable.status.in_(
+                            [status.value for status in LIVE_CONTAINER_STATUSES]
+                        ),
+                    ),
+                )
+            )
+            or 0
+        )
+
+    def destroyed_machine_ids(self, pool_id: str) -> set[str]:
+        instance = ComputeProviderInstanceTable
+        return set(
+            self.session.scalars(
+                select(MachineTable.id)
+                .join(
+                    instance,
+                    instance.machine_id == MachineTable.id,
+                )
+                .where(
+                    instance.pool_id == pool_id,
+                    instance.status == "deleted",
+                    instance.provider_storage_destroyed_at.is_not(None),
+                )
+            )
+        )
 
     def get(self, instance_id: str) -> ComputeProviderInstanceRecord | None:
         row = self.session.get(ComputeProviderInstanceTable, instance_id)

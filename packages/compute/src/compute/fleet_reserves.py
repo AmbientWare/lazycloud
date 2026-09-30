@@ -16,7 +16,7 @@ from database.repositories.compute import (
 from shared.capacity_lifecycle import CapacityImageEvidence, CapacitySleepMode
 from shared.compute_enrollment import AgentCapacityState
 from shared.compute_fleet import MachineLifecycle
-from shared.compute_policy import ComputeUnitPhase
+from shared.compute_policy import ComputeUnitPhase, ComputeUnitRecord
 from shared.container_requests import node_memory, schedulable_capacity
 from shared.fleet_capacity import ReserveMachineState
 from shared.gpu import normalize_gpu_type
@@ -30,6 +30,7 @@ from compute.fleet_policy import (
 )
 from compute.fleet_resources import Capacity, ReserveMarket, ReservePlacement
 from compute.offers import ReservationStatus
+from compute.providers import ProviderMachineStatus, ProviderUnitSnapshot
 
 
 def unit_reserve_market(*, preemptible: bool, gpu_type: str) -> ReserveMarket:
@@ -323,3 +324,45 @@ __all__ = [
     "reserve_admission",
     "unit_reserve_market",
 ]
+
+
+def reserves_resumed(
+    snapshot: ProviderUnitSnapshot, unit: ComputeUnitRecord, *, desired: int
+) -> int:
+    """Resume stopped reserves before buying more capacity. Let the market planner refill them."""
+    if desired <= unit.desired_machines or not unit.stopped_machines:
+        return 0
+    stopped = sum(
+        instance.status == ProviderMachineStatus.Stopped for instance in snapshot.instances
+    )
+    serving = sum(
+        instance.status
+        not in {
+            ProviderMachineStatus.Preparing,
+            ProviderMachineStatus.Stopping,
+            ProviderMachineStatus.Stopped,
+        }
+        for instance in snapshot.instances
+    )
+    return max(
+        min(
+            unit.stopped_machines,
+            stopped,
+            desired - unit.desired_machines,
+            desired - serving,
+        ),
+        0,
+    )
+
+
+def with_retained_machines(unit: ComputeUnitRecord, minimum: int) -> ComputeUnitRecord:
+    """The unit keeping `minimum` serving machines from the idle drain."""
+    return unit.model_copy(
+        update={
+            "initial_machines": minimum,
+            "min_machines": minimum,
+            "min_free_cpu_millicores": 0,
+            "min_free_memory_mib": 0,
+            "min_free_gpu_count": 0,
+        }
+    )

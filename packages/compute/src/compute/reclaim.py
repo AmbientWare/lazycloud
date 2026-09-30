@@ -85,7 +85,7 @@ _DEADLINE_PHASES = frozenset(DEFAULT_BOOTSTRAP_PHASE_DEADLINE_SECONDS)
 
 
 class ComputeReclaimPolicy(ContractModel):
-    """Reclaim windows applied by ``ComputeService`` reconciliation.
+    """Reclaim windows applied by provider reconciliation.
 
     ``provider_*`` maps override the default per configured provider name.
     """

@@ -5,10 +5,9 @@ from types import TracebackType
 
 from compute.capacity_recovery import CAPACITY_WAKE_SCOPE
 from compute.state import RedisComputeStateRepository
-from control.custom_domains import CustomDomainService
 from coordination.redis_client import RedisClient
 from coordination.wake_signal import RedisWakeSignal
-from execution.containers.preemption import PreemptedContainerService, PreemptionServices
+from execution.containers.preemption import PreemptedContainerService
 from identity.token_invalidation import AuthTokenInvalidation, configure_token_invalidation
 from scheduler.adapters import (
     DatabaseCapacityAllocationOwners,
@@ -20,10 +19,8 @@ from scheduler.capacity_reservations import (
     CapacityReservationService,
     RedisCapacityReservationRepository,
 )
-from scheduler.containers import (
-    SchedulerContainerRequestService,
-)
-from scheduler.fleet_controller import FleetController
+from scheduler.containers import SchedulerContainerRequestService
+from scheduler.orphan_recovery import OrphanedContainerRecovery
 from scheduler.pool_drain import WorkerPoolDrainService
 from scheduler.pool_state import SchedulerPoolStateService
 from scheduler.preemption import (
@@ -31,27 +28,8 @@ from scheduler.preemption import (
     SchedulerWorkerMaintenanceService,
     SchedulerWorkerPreemptionService,
 )
-from scheduler.reconciliation import (
-    MANAGED_COMPUTE_RECONCILE_INTERVAL_SECONDS,
-    SchedulerBillingEnforcementService,
-    SchedulerBillingPaymentsService,
-    SchedulerBillingReconciliationService,
-    SchedulerCapacityControls,
-    SchedulerDiskDeletionService,
-    SchedulerDiskVolumeService,
-    SchedulerEmailOutboxService,
-    SchedulerMaintenanceControls,
-    SchedulerMeterOutboxService,
-    SchedulerPlanChangeService,
-    SchedulerRetentionService,
-    SchedulerStateStores,
-    SchedulerStorageAccessService,
-    SchedulerVolumeDeletionService,
-    SchedulerVolumeMeteringService,
-    SchedulerWorkloadControls,
-)
+from scheduler.reconciliation import MANAGED_COMPUTE_RECONCILE_INTERVAL_SECONDS
 from scheduler.reserves import FleetConsolidationService
-from scheduler.services import FleetServices
 from scheduler.state import (
     RedisOrphanedContainerConfirmationRepository,
     RedisSchedulerContainerRepository,
@@ -64,6 +42,8 @@ from storage.retention_settings import RetentionSettings
 
 from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
 from scheduler_app.capacity_interruptions import DatabaseCapacityInterruptionSource
+from scheduler_app.fleet_coordinator import FleetCoordinator
+from scheduler_app.fleet_housekeeping import FleetHousekeeping
 from scheduler_app.fleet_services import (
     FleetAppServices,
     SchedulerCapacitySettings,
@@ -74,7 +54,7 @@ from scheduler_app.fleet_services import (
 
 @dataclass(slots=True)
 class FleetRuntime:
-    controller: FleetController
+    controller: FleetCoordinator
     owned_services: FleetAppServices | None = None
     reset_token_invalidation_on_close: bool = False
 
@@ -106,28 +86,11 @@ class FleetRuntime:
                 capacity=capacity,
             )
             runtime = cls.from_services(
-                scheduler_services=app_services,
-                execution_services=app_services,
-                redis_client=app_services.redis_client,
-                container_requests=_container_requests(app_services),
+                app_services,
                 retention_settings=storage.retention,
-                volume_metering=app_services.volume_metering,
-                storage_access=app_services.storage_access,
-                volume_deletion=app_services.volume_deletion,
-                disk_deletion=app_services.disk_deletion,
-                disk_volumes=app_services.disk_volumes,
-                meter_outbox=app_services.meter_outbox,
-                email_outbox=app_services.email_outbox,
-                plan_changes=app_services.plan_changes,
-                billing_reconciliation=app_services.billing_reconciliation,
-                billing_payments=app_services.billing_payments,
-                billing_enforcement=app_services.billing_enforcement,
-                retention=app_services.retention,
-                custom_domains=app_services.custom_domains,
-                managed_compute_reconcile_interval_seconds=(
-                    managed_compute_reconcile_interval_seconds
-                ),
+                managed_compute_reconcile_interval_seconds=managed_compute_reconcile_interval_seconds,
             )
+
         except BaseException:
             configure_token_invalidation(None)
             if app_services is not None:
@@ -145,39 +108,25 @@ class FleetRuntime:
     @classmethod
     def from_services(
         cls,
+        services: FleetAppServices,
         *,
-        scheduler_services: FleetServices,
-        execution_services: PreemptionServices,
-        redis_client: RedisClient,
-        container_requests: SchedulerContainerRequestService,
         retention_settings: RetentionSettings,
-        volume_metering: SchedulerVolumeMeteringService,
-        storage_access: SchedulerStorageAccessService | None,
-        volume_deletion: SchedulerVolumeDeletionService,
-        disk_deletion: SchedulerDiskDeletionService,
-        disk_volumes: SchedulerDiskVolumeService,
-        meter_outbox: SchedulerMeterOutboxService,
-        email_outbox: SchedulerEmailOutboxService,
-        plan_changes: SchedulerPlanChangeService,
-        billing_reconciliation: SchedulerBillingReconciliationService,
-        billing_payments: SchedulerBillingPaymentsService,
-        billing_enforcement: SchedulerBillingEnforcementService,
-        retention: SchedulerRetentionService | None,
-        custom_domains: CustomDomainService,
         managed_compute_reconcile_interval_seconds: float = (
             MANAGED_COMPUTE_RECONCILE_INTERVAL_SECONDS
         ),
     ) -> FleetRuntime:
+        redis_client = services.redis_client
+        container_requests = _container_requests(services)
         compute_states = RedisComputeStateRepository(redis_client)
         pool_states = RedisWorkerPoolStateRepository(redis_client)
         worker_states = RedisSchedulerWorkerRepository(redis_client)
         container_states = RedisSchedulerContainerRepository(redis_client)
         preemption_recovery = PreemptedContainerService(
-            services=execution_services,
-            stubs=scheduler_services.control_plane_service,
+            services=services,
+            stubs=services.control_plane_service,
         )
         capacity_controllers = SchedulerCapacityControllerProvider(
-            services=scheduler_services,
+            services=services,
             compute_states=compute_states,
             workers=worker_states,
             containers=container_states,
@@ -186,94 +135,60 @@ class FleetRuntime:
         capacity_reservations = CapacityReservationService(
             RedisCapacityReservationRepository(redis_client),
             capacity_controllers.capacity_acquisition_controllers,
-            DatabaseCapacityAllocationOwners(scheduler_services.context.database),
+            DatabaseCapacityAllocationOwners(services.context.database),
         )
         dispatch_requests = replace(
             container_requests,
             capacity_reservations=capacity_reservations,
         )
-        controller = FleetController(
-            services=scheduler_services,
-            managed_compute_reconcile_interval_seconds=(managed_compute_reconcile_interval_seconds),
-            workloads=SchedulerWorkloadControls(
-                containers=dispatch_requests,
-                capacity_wake=RedisWakeSignal(redis_client, CAPACITY_WAKE_SCOPE),
-                preemption_recovery=preemption_recovery,
+        controller = FleetCoordinator(
+            services=services,
+            requests=dispatch_requests,
+            workers=worker_states,
+            wake=RedisWakeSignal(redis_client, CAPACITY_WAKE_SCOPE),
+            preemptions=preemption_recovery,
+            orphans=OrphanedContainerRecovery(
+                services.containers,
+                dispatch_requests,
+                RedisOrphanedContainerConfirmationRepository(redis_client),
+                RedisWorkerNetworkIpRepository(redis_client),
             ),
-            states=SchedulerStateStores(
-                compute=compute_states,
-                pools=SchedulerPoolStateService(
-                    worker_states,
-                    container_states,
-                    pool_states,
-                    compute_states,
-                ),
-                orphaned_container_networks=RedisWorkerNetworkIpRepository(redis_client),
-                orphaned_container_confirmations=(
-                    RedisOrphanedContainerConfirmationRepository(redis_client)
-                ),
-                cron_job_locks=redis_client,
+            compute_states=compute_states,
+            pool_states=SchedulerPoolStateService(
+                worker_states, container_states, pool_states, compute_states
             ),
-            capacity=SchedulerCapacityControls(
-                agent_pools=agent_pool_service,
-                agent_pool_configs=capacity_controllers.agent_pool_configs,
-                capacity_reservations=capacity_reservations,
-                worker_pool_drain=WorkerPoolDrainService(
-                    capacity_controllers.worker_pool_drain_controllers,
-                    capacity_reservations,
+            agent_pools=agent_pool_service,
+            agent_configs=capacity_controllers.agent_pool_configs,
+            reservations=capacity_reservations,
+            drains=WorkerPoolDrainService(
+                capacity_controllers.worker_pool_drain_controllers, capacity_reservations
+            ),
+            consolidation=FleetConsolidationService(
+                compute=services.compute.maintenance,
+                machine_units=services.compute.machines.provider_machine_unit,
+                containers=DatabaseMachineContainers(services.context.database),
+                workers=worker_states,
+                stopper=services.containers,
+                leases=capacity_reservations,
+                state=services.compute.providers.reserve_state,
+                cooldown_seconds=services.compute.providers.fleet_policy.consolidation_cooldown_seconds,
+                deadline_seconds=services.compute.providers.fleet_policy.consolidation_deadline_seconds,
+            )
+            if services.compute.providers.reserve_state is not None
+            else None,
+            interruptions=SchedulerCapacityInterruptionService(
+                SchedulerWorkerPreemptionService(
+                    worker_states, container_states, services.containers
                 ),
-                consolidation=(
-                    FleetConsolidationService(
-                        compute=scheduler_services.compute,
-                        containers=DatabaseMachineContainers(scheduler_services.context.database),
-                        workers=worker_states,
-                        stopper=scheduler_services.containers,
-                        leases=capacity_reservations,
-                        state=scheduler_services.compute.reserve_state,
-                        cooldown_seconds=(
-                            scheduler_services.compute.fleet_policy.consolidation_cooldown_seconds
-                        ),
-                        deadline_seconds=(
-                            scheduler_services.compute.fleet_policy.consolidation_deadline_seconds
-                        ),
-                    )
-                    if scheduler_services.compute.reserve_state is not None
-                    else None
-                ),
-                capacity_interruptions=SchedulerCapacityInterruptionService(
-                    SchedulerWorkerPreemptionService(
-                        worker_states,
-                        container_states,
-                        scheduler_services.containers,
-                    ),
-                    worker_states,
-                    DatabaseCapacityInterruptionSource(
-                        scheduler_services.context.database,
-                    ),
-                    SchedulerWorkerMaintenanceService(worker_states),
-                    workload_drains=WorkerWorkloadDrainService(
-                        scheduler_services.context.database, container_states
-                    ),
+                worker_states,
+                DatabaseCapacityInterruptionSource(services.context.database),
+                SchedulerWorkerMaintenanceService(worker_states),
+                workload_drains=WorkerWorkloadDrainService(
+                    services.context.database, container_states
                 ),
             ),
-            maintenance=SchedulerMaintenanceControls(
-                storage_access=storage_access,
-                volume_metering=volume_metering,
-                volume_deletion=volume_deletion,
-                disk_deletion=disk_deletion,
-                disk_volumes=disk_volumes,
-                meter_outbox=meter_outbox,
-                email_outbox=email_outbox,
-                plan_changes=plan_changes,
-                billing_reconciliation=billing_reconciliation,
-                billing_payments=billing_payments,
-                billing_enforcement=billing_enforcement,
-                retention=retention,
-                custom_domains=custom_domains,
-            ),
-            retention_interval_seconds=retention_settings.interval_seconds,
-            retention_retry_initial_seconds=(retention_settings.retry_initial_seconds),
-            retention_retry_max_seconds=retention_settings.retry_max_seconds,
+            housekeeping=FleetHousekeeping(services, retention_settings),
+            managed_compute_reconcile_interval_seconds=managed_compute_reconcile_interval_seconds,
         )
         return cls(controller=controller)
 

@@ -52,9 +52,7 @@ from shared.compute_enrollment import (
     agent_machine_worker_id,
 )
 from shared.compute_fleet import MachineLifecycle
-from shared.compute_policy import (
-    UnitName,
-)
+from shared.compute_policy import UnitName
 from shared.deployment_records import DeploymentSpec
 from shared.errors import ConflictError, InvalidInputError, NotFoundError
 from shared.http.compute import MachineJoinCommandRequest, UnitMachineResponse
@@ -99,7 +97,7 @@ def _pool_machines(
         return []
     owned = {
         machine.id
-        for machine in gateway.services.compute.list_machines(workspace=workspace_id)
+        for machine in gateway.services.compute.units.list_machines(workspace=workspace_id)
         if machine.capacity_owner_id == unit.capacity_owner_id
     }
     return [machine for machine in gateway.machine_views(workspace_id) if machine.id in owned]
@@ -162,7 +160,7 @@ def test_machine_enrollment_is_durable_rotatable_and_secret_free(
     isolated_services: ApiServices,
 ) -> None:
     workspace_id = _workspace_id(isolated_services)
-    isolated_services.compute.create_unit(
+    isolated_services.compute.units.create_unit(
         UnitName("customer-machines"),
         provider="agent",
         workspace=workspace_id,
@@ -247,7 +245,9 @@ def test_worker_image_update_pulls_then_switches_after_started_work_finishes(
     services = isolated_services
     workspace_id = _workspace_id(services)
     pool = "worker-image-update"
-    unit = services.compute.create_unit(UnitName(pool), provider="agent", workspace=workspace_id)
+    unit = services.compute.units.create_unit(
+        UnitName(pool), provider="agent", workspace=workspace_id
+    )
     gateway = services.gateway_service
     select_worker_release("registry.test/worker@sha256:old")
     assert isinstance(gateway.scheduler_workers, RedisSchedulerWorkerRepository)
@@ -335,7 +335,7 @@ def test_capacity_interruption_is_session_fenced_durable_and_heartbeat_safe(
     isolated_services: ApiServices,
 ) -> None:
     workspace_id = _workspace_id(isolated_services)
-    isolated_services.compute.create_unit(
+    isolated_services.compute.units.create_unit(
         UnitName("preemptible-machines"),
         provider="agent",
         workspace=workspace_id,
@@ -392,7 +392,7 @@ def test_agent_leave_cleans_up_and_public_delete_requires_host_decommission(
     isolated_services: ApiServices,
 ) -> None:
     workspace_id = _workspace_id(isolated_services)
-    isolated_services.compute.create_unit(
+    isolated_services.compute.units.create_unit(
         UnitName("cleanup-machines"),
         provider="agent",
         workspace=workspace_id,
@@ -425,7 +425,7 @@ def test_agent_leave_cleans_up_and_public_delete_requires_host_decommission(
         )
     assert credential is None
 
-    isolated_services.compute.create_unit(
+    isolated_services.compute.units.create_unit(
         UnitName("cleanup-machines"), provider="agent", workspace=workspace_id
     )
     second_token = _create_join_token(gateway, "cleanup-machines", workspace_id)
@@ -452,7 +452,7 @@ def test_agent_leave_requires_current_machine_cache_destruction_session(
     isolated_services: ApiServices,
 ) -> None:
     workspace_id = _workspace_id(isolated_services)
-    isolated_services.compute.create_unit(
+    isolated_services.compute.units.create_unit(
         UnitName("cache-decommission"),
         provider="agent",
         workspace=workspace_id,
@@ -514,7 +514,7 @@ def test_pool_delete_requires_host_decommission_without_mutating_ownership(
     isolated_services: ApiServices,
 ) -> None:
     workspace_id = _workspace_id(isolated_services)
-    unit = isolated_services.compute.create_unit(
+    unit = isolated_services.compute.units.create_unit(
         UnitName("deleted-machine-pool"),
         provider="agent",
         workspace=workspace_id,
@@ -569,7 +569,7 @@ def test_workspace_deletion_preflight_preserves_enrolled_self_hosted_ownership(
         isolated_services.context, "workspace-delete-admin"
     )
     workspace = owned_workspace(control, "enrolled-customer")
-    unit = services.compute.create_unit(
+    unit = services.compute.units.create_unit(
         UnitName("workspace-machine-pool"),
         provider="agent",
         workspace=workspace.id,
@@ -643,7 +643,7 @@ def test_telemetry_usage_failure_does_not_advance_enrollment_cursor(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace_id = _workspace_id(isolated_services)
-    isolated_services.compute.create_unit(
+    isolated_services.compute.units.create_unit(
         UnitName("metered-machines"),
         provider="agent",
         workspace=workspace_id,
@@ -703,7 +703,7 @@ def test_issuing_a_new_join_command_revokes_the_previous_credential(
     isolated_services: ApiServices,
 ) -> None:
     workspace_id = _workspace_id(isolated_services)
-    isolated_services.compute.create_unit(
+    isolated_services.compute.units.create_unit(
         UnitName("rotated-bootstrap"),
         provider="agent",
         workspace=workspace_id,
@@ -762,7 +762,7 @@ def test_machine_join_command_mints_one_named_unit_that_only_serves_by_name(
     placement = Placement.machine(pending[0].id)
     units = [
         unit
-        for unit in isolated_services.compute.list_units(workspace=workspace_id)
+        for unit in isolated_services.compute.units.list_units(workspace=workspace_id)
         if unit.placement == placement
     ]
     assert len(units) == 1 and units[0].provider == "agent"
@@ -844,7 +844,9 @@ async def test_a_machine_that_stops_reporting_is_written_off_once_and_told_to_it
     # truth appears is a view that recomputes it per request and writes nothing.
     workspace_id = _workspace_id(async_services)
     pool = "silent-machines"
-    async_services.compute.create_unit(UnitName(pool), provider="agent", workspace=workspace_id)
+    async_services.compute.units.create_unit(
+        UnitName(pool), provider="agent", workspace=workspace_id
+    )
     gateway = async_services.gateway_service
     bootstrap = _create_join_token(gateway, pool, workspace_id)
     joined = gateway.join_agent(_join_request(bootstrap.token))

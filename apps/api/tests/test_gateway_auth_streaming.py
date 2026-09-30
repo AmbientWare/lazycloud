@@ -17,9 +17,7 @@ from httpx2 import Response
 from identity.auth import AuthService
 from pydantic import JsonValue, TypeAdapter
 from shared.compute_fleet import Machine
-from shared.compute_policy import (
-    UnitName,
-)
+from shared.compute_policy import UnitName
 from shared.errors import ObjectOperationInProgressError, domain_error_code
 from shared.identity import TokenKind
 from shared.placement import Placement
@@ -145,8 +143,8 @@ def test_compute_gateway_projections_honor_admin_workspace_override(
             "compute-team",
         )
 
-        isolated_services.compute.create_unit(UnitName("default-pool"))
-        isolated_services.compute.create_unit(UnitName("team-pool"), workspace=workspace.id)
+        isolated_services.compute.units.create_unit(UnitName("default-pool"))
+        isolated_services.compute.units.create_unit(UnitName("team-pool"), workspace=workspace.id)
         with isolated_services.context.database.session() as session:
             MachineRepository(session).upsert(
                 Machine(id=str(uuid4()), placement=Placement.machine("team-pool")),

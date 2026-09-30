@@ -10,9 +10,8 @@ from compute.capacity_recovery import CAPACITY_WAKE_SCOPE
 from compute.policy import WorkspaceComputePolicyService
 from compute.provider_state import ProviderUnitStateService
 from compute.providers import ResolvedBlockVolumes
-from compute.request_placement import ComputeCapacityPlacementService
 from compute.reserve_state import RedisFleetReserveState
-from compute.service import ComputeService
+from compute.service import ComputeServices
 from compute.state import RedisComputeStateRepository
 from compute.telemetry import AGENT_INTAKE_PRESENCE_ROLE
 from control.apps import (
@@ -51,13 +50,9 @@ from operations.container_shutdown import (
 )
 from provider_aws.provider import AwsEcrImageRegistry
 from provider_aws.storage_access import AwsStorageAccessSettings, AwsStorageAccessSource
-from provider_clients import (
-    workspace_compute_provider_resolver,
-)
+from provider_clients import workspace_compute_provider_resolver
 from provider_clients.aws_connections import configured_aws_account_connection_components
-from provider_clients.settings import (
-    PlatformCapacitySettings,
-)
+from provider_clients.settings import PlatformCapacitySettings
 from provider_clients.workspace_compute import configured_platform_compute_providers
 from provider_clients.workspace_storage import workspace_storage_router
 from provider_cloudflare import CloudflareSettings
@@ -128,7 +123,7 @@ class FleetAppServices:
     containers: ContainerService
     container_shutdowns: ContainerShutdownService
     control_plane_service: ControlPlaneService
-    compute: ComputeService
+    compute: ComputeServices
     custom_domains: CustomDomainService
     tasks: TaskService
     usage: UsageService
@@ -314,7 +309,7 @@ class FleetAppServices:
             agent_intake=RedisProcessPresence(redis, AGENT_INTAKE_PRESENCE_ROLE),
         )
         reserve_state = RedisFleetReserveState(redis)
-        compute = ComputeService(
+        compute = ComputeServices.create(
             context,
             provider_resolver=provider_resolver,
             pool_bootstrap_factory=pool_bootstrap if provider_resolver is not None else None,
@@ -334,7 +329,7 @@ class FleetAppServices:
         container_scheduler = SchedulerContainerRequestService(
             worker_repository,
             container_repository,
-            placement=SchedulerComputePlacement(ComputeCapacityPlacementService(context, compute)),
+            placement=SchedulerComputePlacement(compute.placement),
             failure_handler=scheduling_persistence,
             assignments=scheduling_persistence,
             usage=usage,

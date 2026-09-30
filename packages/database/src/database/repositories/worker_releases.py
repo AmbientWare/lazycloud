@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from database.tables.capacity_maintenance import CapacityMaintenanceTable
@@ -37,6 +38,18 @@ class ReleaseMachineObservation:
 @dataclass(slots=True)
 class WorkerReleaseRepository:
     session: Session
+
+    def pools_have_update(self, pool_ids: Sequence[str], *, excluding_machine_id: str = "") -> bool:
+        instance = ComputeProviderInstanceTable
+        updating = exists().where(
+            instance.pool_id.in_(pool_ids),
+            instance.status.not_in(("deleted", "failed", "terminating", "stopping", "stopped")),
+            WorkerTable.machine_id == instance.machine_id,
+            WorkerTable.update_generation > 0,
+        )
+        if excluding_machine_id:
+            updating = updating.where(instance.machine_id != excluding_machine_id)
+        return bool(self.session.scalar(select(updating)))
 
     def pending_capacity_owners(self) -> list[str]:
         stopped = (

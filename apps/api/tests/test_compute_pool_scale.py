@@ -22,12 +22,11 @@ from compute.providers import (
     ResolvedComputeProvider,
     ResolvedProviderPolicy,
 )
-from compute.service import ComputeService
+from compute.service import ComputeServices
 from control.service import ControlPlaneService
 from database.repositories.aws_connections import AwsAccountConnectionRepository
-from database.repositories.compute import (
-    ComputeUnitRepository,
-)
+from database.repositories.compute import ComputeUnitRepository
+from database.repositories.orchestration import ContainerRepository
 from fastapi.testclient import TestClient
 from shared.aws_connections import (
     AwsAccountAuthorizationGeneration,
@@ -44,9 +43,11 @@ from shared.compute_policy import (
     ComputeUnitProviderState,
     ComputeUnitRecord,
 )
+from shared.containers import ContainerRecord, ContainerStatus
 from shared.http.compute import UnitScaleResponse
 from shared.network_egress import NetworkEgressRouteEvidence
 from shared.placement import Placement
+from shared.scheduling import SchedulerWorkerRecord, SchedulerWorkerStatus
 from shared.supplier_costs import SupplierCostTerms
 from tests.workspaces import administrator_credential, owned_workspace, workspace_owner_user_id
 
@@ -230,7 +231,7 @@ def test_pool_scale_is_workspace_scoped_and_idempotently_returns_durable_capacit
         mutations = _CapacityOwnerMutations()
         with isolated_services.context.database.session() as session:
             workspace_id = isolated_services.context.default_workspace_id(session)
-        compute = ComputeService(
+        compute = ComputeServices.create(
             isolated_services.context,
             provider_resolver=_Resolver(
                 provider,
@@ -255,7 +256,7 @@ def test_pool_scale_is_workspace_scoped_and_idempotently_returns_durable_capacit
         # The graph's warm-baseline owner has to reach the same capacity service the
         # request path uses, or control-plane startup reconciles through a different one.
         services_with_compute.workspace_compute_policy_service.aws_default_capacity = (
-            AwsDefaultCapacityBaseline(compute)
+            AwsDefaultCapacityBaseline(compute.provisioning)
         )
         gateway = replace(
             services_with_compute.gateway_service,
@@ -268,7 +269,7 @@ def test_pool_scale_is_workspace_scoped_and_idempotently_returns_durable_capacit
         _seed_connection(isolated_services)
         # Provisioned after the control plane started, as in production: startup
         # reconciles the baseline every connected account asks for.
-        pool = compute.prepare_pooled_capacity(
+        pool = compute.provisioning.prepare_pooled_capacity(
             workspace="default",
             requirements=ComputeResourceRequirements(cpu_millicores=1_000, memory_mb=1_024),
             region="us-east-1",
@@ -301,6 +302,31 @@ def test_pool_scale_is_workspace_scoped_and_idempotently_returns_durable_capacit
             json={"desired_machines": 0},
         )
         mutations.open_reservations = False
+        with isolated_services.context.database.session() as session:
+            pending = ContainerRepository(session).upsert(
+                ContainerRecord(
+                    id=str(uuid4()),
+                    name="waiting-for-capacity",
+                    image="",
+                    command=[],
+                    workspace_id=workspace_id,
+                    status=ContainerStatus.Pending,
+                )
+            )
+        assert client.put(path, headers=headers, json={"desired_machines": 0}).status_code == 409
+        with isolated_services.context.database.session() as session:
+            ContainerRepository(session).upsert(
+                pending.model_copy(update={"status": ContainerStatus.Stopped})
+            )
+        worker = SchedulerWorkerRecord(
+            worker_id=str(uuid4()),
+            machine_id=str(uuid4()),
+            workspace_id=workspace_id,
+            capacity_owner_id=pool.capacity_owner_id,
+            placement=pool.placement,
+            status=SchedulerWorkerStatus.Available,
+        )
+        isolated_services.scheduler_workers.add_worker(worker)
         first = client.put(
             path,
             headers=headers,
@@ -325,6 +351,11 @@ def test_pool_scale_is_workspace_scoped_and_idempotently_returns_durable_capacit
             "code": "conflict",
         }
         assert first.status_code == 200, first.text
+        stopped_worker = isolated_services.scheduler_workers.get_worker(worker.worker_id)
+        assert (
+            stopped_worker is not None
+            and stopped_worker.status is SchedulerWorkerStatus.Unavailable
+        )
         assert repeated.status_code == 200, repeated.text
         assert state.status_code == 200, state.text
         assert cross_workspace_state.status_code == 404
