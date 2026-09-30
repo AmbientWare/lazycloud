@@ -132,3 +132,31 @@ func TestReportedAttemptThatEndedIsCancelled(t *testing.T) {
 		t.Fatalf("cancel %+v, want the cancelled attempt", actions.Cancel)
 	}
 }
+
+// After an agent restart, Hello lists adopted containers as starting until
+// their slots report ready again, and recently exited ones as exited.
+func TestHelloAdoptsStartingAndAppliesExited(t *testing.T) {
+	pool := dbtest.New(t)
+	e := NewExecution(pool)
+	f := deployedFunction(t, pool, `{"max_pending_tasks": 10}`)
+	host, adopted := placedContainer(t, pool, f, ContainerReady, 1)
+	var exitedID uuid.UUID
+	if err := pool.QueryRow(t.Context(), `
+insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes)
+values ($1, $2, 'ready', $3, 1, 1000, 1 << 28) returning id`, uuid.UUID(f.workspace), f.release, uuid.UUID(host)).Scan(&exitedID); err != nil {
+		t.Fatal(err)
+	}
+	exited := ContainerID(exitedID)
+	for range 2 { // A repeated Hello changes nothing further.
+		actions, err := e.ReconcileHost(t.Context(), host, []ContainerReport{
+			{Container: adopted, Phase: ReportStarting},
+			{Container: exited, Phase: ReportExited, Exit: &ContainerExit{Reason: StopOutOfMemory}},
+		})
+		if err != nil || len(actions.Stop) != 0 {
+			t.Fatalf("reconcile: %+v, %v", actions, err)
+		}
+	}
+	if containerState(t, e, adopted) != ContainerReady || containerState(t, e, exited) != ContainerStopped {
+		t.Fatalf("adopted %s, exited %s; want ready and stopped", containerState(t, e, adopted), containerState(t, e, exited))
+	}
+}
