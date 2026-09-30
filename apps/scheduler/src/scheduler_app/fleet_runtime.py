@@ -123,7 +123,7 @@ class FleetRuntime:
         container_states = RedisSchedulerContainerRepository(redis_client)
         preemption_recovery = PreemptedContainerService(
             services=services,
-            stubs=services.control_plane_service,
+            stubs=services.control_plane_service.stubs,
         )
         capacity_controllers = SchedulerCapacityControllerProvider(
             services=services,

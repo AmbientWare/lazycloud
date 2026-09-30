@@ -1747,7 +1747,7 @@ def compose_management_routes(
         function_service=function,
         gateway_service=gateway,
         gateway_deployment_service=GatewayDeploymentService(
-            control_plane=core.control_plane_service,
+            stubs=core.control_plane_service.stubs,
             apps=core.apps,
             deployments=core.deployments,
             deployment_resources=core.deployment_resources,
@@ -1887,7 +1887,7 @@ def _gateway_control_service(
     compute_states = RedisComputeStateRepository(core.redis())
     return GatewayControlService(
         core,
-        control_plane=core.control_plane_service,
+        stubs=core.control_plane_service.stubs,
         function_tasks=FunctionControlService(core),
         compute_state=compute_states,
         scheduler_workers=scheduler_workers,

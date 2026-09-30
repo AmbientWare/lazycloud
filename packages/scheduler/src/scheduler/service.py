@@ -76,7 +76,7 @@ class Scheduler:
         results_by_kind: dict[AutoscalerTargetKind, list[AutoscaleResult]] = {}
         failed_stub_ids: set[str] = set()
         try:
-            stubs = self.services.control_plane_service.list_autoscaling_stubs(
+            stubs = self.services.control_plane_service.stubs.list_autoscaling_stubs(
                 [claim.stub_id for claim in claims]
             )
         except Exception:

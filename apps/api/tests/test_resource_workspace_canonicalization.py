@@ -18,7 +18,7 @@ def test_resource_routes_canonicalize_workspace_name_and_id(
     api_workspace: WorkspaceRecord,
 ) -> None:
     services, client = api_runtime
-    workspace = services.control_plane_service.ensure_workspace_storage(api_workspace.id)
+    workspace = services.control_plane_service.workspaces.ensure_workspace_storage(api_workspace.id)
     headers = _headers(services, workspace.id)
 
     map_set = client.post(

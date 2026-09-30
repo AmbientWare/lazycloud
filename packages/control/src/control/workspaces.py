@@ -49,10 +49,10 @@ def _upsert_workspace_row(
     repository.lock_name(name)
     existing = repository.by_name(name)
     record = existing or WorkspaceRecord(id=str(uuid4()), name=name, connection_id=connection_id)
-    if existing is not None:
-        record = repository.lock_active_owner(existing.id, exclusive=True)
     if record.status is not WorkspaceStatus.Active:
         raise ConflictError(f"workspace is not active: {name}")
+    if existing is not None:
+        record = repository.lock_active_owner(existing.id, exclusive=True)
     if connection_id is not None and record.connection_id != connection_id:
         raise ConflictError(f"workspace already lives in another location: {name}")
     record.signing_key_prefix = signing_key_prefix or record.signing_key_prefix

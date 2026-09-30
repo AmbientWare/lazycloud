@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from control.apps import AppService
 from control.deployment_resources import DeploymentResourceService, client_manifest_resource
 from control.deployments import DeploymentService
-from control.service import ControlServices
+from control.stubs import StubService
 from database.records.apps import StubKind
 from operations.management import ManagementService
 from pydantic import JsonValue
@@ -39,7 +39,7 @@ from gateway.stub_config import deployment_spec_from_stub, stub_config, stub_kin
 
 @dataclass(frozen=True, slots=True)
 class GatewayDeploymentService:
-    control_plane: ControlServices
+    stubs: StubService
     apps: AppService
     deployments: DeploymentService
     deployment_resources: DeploymentResourceService
@@ -60,7 +60,7 @@ class GatewayDeploymentService:
             config_metadata = dict(config.metadata)
             config_metadata["app"] = app_name
             config.metadata = config_metadata
-            stub = self.control_plane.stubs.create_stub(
+            stub = self.stubs.create_stub(
                 request.name,
                 workspace=request.workspace,
                 kind=kind,
@@ -75,7 +75,7 @@ class GatewayDeploymentService:
 
     def deploy_stub(self, request: DeployStubRequest) -> DeployStubResponse:
         try:
-            stub = self.control_plane.stubs.get_stub(request.stub_id, workspace=request.workspace)
+            stub = self.stubs.get_stub(request.stub_id, workspace=request.workspace)
             workspace = request.workspace or stub.workspace_id
             deployment = self.deployments.deploy(
                 deployment_spec_from_stub(stub, name=request.name or stub.name),
@@ -113,7 +113,7 @@ class GatewayDeploymentService:
                     port=request.port,
                 ).url
             else:
-                url = self.control_plane.stubs.stub_url(
+                url = self.stubs.stub_url(
                     request.stub_id,
                     workspace=request.workspace,
                     deployment_id=request.deployment_id or None,

@@ -64,7 +64,7 @@ from compute.telemetry import AgentMetricSnapshot as AgentMetricSnapshotProtocol
 from compute.tunnel_authority import AgentTunnelAuthority
 from control.placement import PlacementResolver
 from control.releases import DeploymentReleaseService
-from control.service import ControlServices
+from control.stubs import StubService
 from coordination.agent_connections import RedisAgentConnectionDirectory
 from coordination.redis_client import AsyncRedisClient
 from coordination.wake_signal import WakeSignalPublisher
@@ -302,7 +302,7 @@ def _domain_error(exc: KeyError | ValueError) -> DomainError:
 @dataclass(frozen=True, slots=True)
 class GatewayControlService:
     services: GatewayServices
-    control_plane: ControlServices
+    stubs: StubService
     function_tasks: FunctionControlService
     compute_state: RedisComputeStateRepository
     scheduler_workers: SchedulerWorkerAdminRepository
@@ -360,7 +360,8 @@ class GatewayControlService:
 
     def sign_payload(self, request: SignPayloadRequest) -> SignPayloadResponse:
         try:
-            secret_key = self.control_plane.workspaces.get_workspace(request.workspace).signing_key
+            with self.services.context.database.session() as session:
+                secret_key = self.services.context.workspace(session, request.workspace).signing_key
             timestamp = request.timestamp or int(time.time())
             signature = sign_payload(request.payload_bytes(), secret_key, timestamp=timestamp)
         except (KeyError, ValueError) as exc:
@@ -519,7 +520,7 @@ class GatewayControlService:
                 if request.task_status is TaskStatus.Complete
                 else request.error or request.task_status.value
             )
-            stub = stub_for_task(self.control_plane, pending)
+            stub = stub_for_task(self.stubs, pending)
             if stub is not None and stub.kind is StubKind.Function:
                 if request.claim_id is None:
                     raise InvalidInputError("function completion requires a claim ID")
@@ -591,7 +592,7 @@ class GatewayControlService:
                 labels={"status": task.status.value},
             )
         resolved_container_id = container_id or str(task.kwargs.get("container_id") or "")
-        stub = stub_for_task(self.control_plane, task)
+        stub = stub_for_task(self.stubs, task)
         workspace_id = stub.workspace_id if stub else ""
         app_id = stub.app_id if stub and stub.app_id else ""
         data: dict[str, JsonValue] = {
