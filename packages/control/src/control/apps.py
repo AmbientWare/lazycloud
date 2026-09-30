@@ -131,64 +131,87 @@ class AppService:
         public: bool | None = None,
         metadata: Mapping[str, JsonValue] | None = None,
     ) -> AppRecord:
+        with self.context.database.session() as session:
+            record, change, stub = self.create_in_session(
+                session,
+                name,
+                stub_id=stub_id,
+                workspace=workspace,
+                version=version,
+                public=public,
+                metadata=metadata,
+            )
+        self.publish_registration(record, change, stub)
+        return record
+
+    def create_in_session(
+        self,
+        session: Session,
+        name: str,
+        *,
+        stub_id: str | None = None,
+        workspace: str = "default",
+        version: int = 1,
+        public: bool | None = None,
+        metadata: Mapping[str, JsonValue] | None = None,
+    ) -> tuple[AppRecord, WorkspaceChangeType, StubRecord | None]:
         try:
             app_name = validate_app_slug(name)
         except ValueError as exc:
             raise InvalidInputError(str(exc)) from exc
-        with self.context.database.session() as session:
-            workspace_record = self.context.workspace(session, workspace)
-            stub = (
-                _get_stub(session, stub_id, workspace_id=workspace_record.id) if stub_id else None
-            )
-            if stub is not None:
-                self.artifact_availability.assert_available(session, stub.id)
-            repository = AppRepository(session)
-            repository.lock_name(workspace_id=workspace_record.id, name=app_name)
-            existing = repository.get_by_name(
-                app_name,
+        workspace_record = self.context.workspace(session, workspace)
+        stub = _get_stub(session, stub_id, workspace_id=workspace_record.id) if stub_id else None
+        if stub is not None:
+            self.artifact_availability.assert_available(session, stub.id)
+        repository = AppRepository(session)
+        repository.lock_name(workspace_id=workspace_record.id, name=app_name)
+        existing = repository.get_by_name(
+            app_name,
+            workspace_id=workspace_record.id,
+            for_update=True,
+        )
+        change = WorkspaceChangeType.Created if existing is None else WorkspaceChangeType.Updated
+        now = utc_now()
+        if existing is None:
+            record = AppRecord(
+                id=str(uuid4()),
                 workspace_id=workspace_record.id,
-                for_update=True,
+                stub_id=stub.id if stub is not None else None,
+                name=app_name,
+                version=version,
+                public=public if public is not None else False,
+                metadata=dict(metadata or {}),
+                created_at=now,
+                updated_at=now,
             )
-            change = (
-                WorkspaceChangeType.Created if existing is None else WorkspaceChangeType.Updated
+        else:
+            if existing.lifecycle_state in UNFINISHED_APP_LIFECYCLE_STATES:
+                raise ConflictError("app lifecycle operation is in progress")
+            record = existing.model_copy(
+                update={
+                    "stub_id": stub.id if stub is not None else existing.stub_id,
+                    "version": version,
+                    "public": public if public is not None else existing.public,
+                    "metadata": {**existing.metadata, **(metadata or {})},
+                    "updated_at": now,
+                }
             )
-            now = utc_now()
-            if existing is None:
-                record = AppRecord(
-                    id=str(uuid4()),
-                    workspace_id=workspace_record.id,
-                    stub_id=stub.id if stub is not None else None,
-                    name=app_name,
-                    version=version,
-                    public=public if public is not None else False,
-                    metadata=dict(metadata or {}),
-                    created_at=now,
-                    updated_at=now,
-                )
-            else:
-                if existing.lifecycle_state in UNFINISHED_APP_LIFECYCLE_STATES:
-                    raise ConflictError("app lifecycle operation is in progress")
-                record = existing.model_copy(
-                    update={
-                        "stub_id": stub.id if stub is not None else existing.stub_id,
-                        "version": version,
-                        "public": public if public is not None else existing.public,
-                        "metadata": {**existing.metadata, **(metadata or {})},
-                        "updated_at": now,
-                    }
-                )
-            record = repository.upsert(record)
-            stub_repository = StubRepository(session)
-            if stub is not None:
-                stub.app_id = record.id
-                if public is not None:
-                    stub.public = public or stub.public
-                stub.updated_at = now
-                stub_repository.upsert(stub)
+        record = repository.upsert(record)
+        stub_repository = StubRepository(session)
+        if stub is not None:
+            stub.app_id = record.id
+            if public is not None:
+                stub.public = public or stub.public
+            stub.updated_at = now
+            stub_repository.upsert(stub)
+        return record, change, stub
+
+    def publish_registration(
+        self, record: AppRecord, change: WorkspaceChangeType, stub: StubRecord | None
+    ) -> None:
         self._publish_change(record, change)
         if stub is not None:
             publish_workload_change(self.workspace_changes, stub, WorkspaceChangeType.Updated)
-        return record
 
     def get(self, app_id_or_name: str, *, workspace: str | None = None) -> AppRecord:
         return DatabaseAppReader(self.context).get(app_id_or_name, workspace=workspace)

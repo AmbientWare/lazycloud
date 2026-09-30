@@ -9,7 +9,8 @@ from uuid import uuid4
 
 import pytest
 from api.server.services import ApiServices
-from control.service import ControlPlaneService, StubKind
+from control.service import ControlServices
+from database.records.apps import StubKind
 from database.repositories.container_rollouts import ContainerRolloutRepository
 from database.repositories.execution import TaskAttemptRepository, TaskRepository
 from database.repositories.orchestration import ContainerRepository
@@ -38,10 +39,14 @@ from tests.releases import assign_runtime
 
 def test_runtime_function_scope_and_claim_fences(isolated_services: ApiServices) -> None:
     services = isolated_services
-    control = ControlPlaneService(services.context)
-    stub = control.create_stub("scoped-runtime", kind=StubKind.Function, handler="main:hello")
-    other_stub = control.create_stub("other-runtime", kind=StubKind.Function, handler="main:hello")
-    endpoint = control.create_stub("endpoint-runtime", kind=StubKind.Endpoint, handler="main:hello")
+    control = ControlServices.create(services.context)
+    stub = control.stubs.create_stub("scoped-runtime", kind=StubKind.Function, handler="main:hello")
+    other_stub = control.stubs.create_stub(
+        "other-runtime", kind=StubKind.Function, handler="main:hello"
+    )
+    endpoint = control.stubs.create_stub(
+        "endpoint-runtime", kind=StubKind.Endpoint, handler="main:hello"
+    )
     container = ContainerRecord(
         id=str(uuid4()),
         name="scoped-runtime",
@@ -126,7 +131,7 @@ def test_batch_assignment_preserves_attempts_and_rolls_back_terminal_conflicts(
     isolated_services: ApiServices,
 ) -> None:
     services = isolated_services
-    stub = ControlPlaneService(services.context).create_stub(
+    stub = ControlServices.create(services.context).stubs.create_stub(
         "batch-assignment", kind=StubKind.Function, handler="main:hello"
     )
     containers = [
@@ -193,9 +198,9 @@ def test_batch_assignment_preserves_attempts_and_rolls_back_terminal_conflicts(
 def test_claim_commits_one_running_attempt_before_returning_work(
     isolated_services: ApiServices,
 ) -> None:
-    stub = ControlPlaneService(
+    stub = ControlServices.create(
         isolated_services.context,
-    ).create_stub("claim-start", kind=StubKind.Function, handler="main:hello")
+    ).stubs.create_stub("claim-start", kind=StubKind.Function, handler="main:hello")
     containers = [
         ContainerRecord(
             id=str(uuid4()),
@@ -246,7 +251,7 @@ def test_concurrent_retries_of_one_claim_take_only_one_task(
     isolated_services: ApiServices, pending_count: int, initially_ready: bool
 ) -> None:
     services = isolated_services
-    stub = ControlPlaneService(services.context).create_stub(
+    stub = ControlServices.create(services.context).stubs.create_stub(
         "racing-claim", kind=StubKind.Function, handler="main:hello"
     )
     container = ContainerRecord(
@@ -321,7 +326,7 @@ def test_distinct_claims_overlap_while_container_stop_and_retirement_are_fenced(
     isolated_services: ApiServices,
 ) -> None:
     services = isolated_services
-    stub = ControlPlaneService(services.context).create_stub(
+    stub = ControlServices.create(services.context).stubs.create_stub(
         "independent-claims", kind=StubKind.Function, handler="main:hello"
     )
     container = ContainerRecord(
@@ -387,9 +392,9 @@ def test_distinct_claims_overlap_while_container_stop_and_retirement_are_fenced(
 def test_retried_claim_returns_the_task_it_already_took(
     isolated_services: ApiServices,
 ) -> None:
-    stub = ControlPlaneService(
+    stub = ControlServices.create(
         isolated_services.context,
-    ).create_stub("claim-retry", kind=StubKind.Function, handler="main:hello")
+    ).stubs.create_stub("claim-retry", kind=StubKind.Function, handler="main:hello")
     container = ContainerRecord(
         id=str(uuid4()),
         name="claim-retry",
@@ -506,7 +511,7 @@ def test_retried_claim_returns_the_task_it_already_took(
 async def test_long_claim_receives_committed_work_and_preserves_retry_identity(
     async_services: ApiServices,
 ) -> None:
-    stub = ControlPlaneService(async_services.context).create_stub(
+    stub = ControlServices.create(async_services.context).stubs.create_stub(
         "long-claim", kind=StubKind.Function, handler="main:hello"
     )
     container = ContainerRecord(
@@ -573,9 +578,9 @@ async def test_long_claim_receives_committed_work_and_preserves_retry_identity(
 def test_idle_retirement_fences_claims_without_releasing_physical_capacity(
     isolated_services: ApiServices,
 ) -> None:
-    stub = ControlPlaneService(
+    stub = ControlServices.create(
         isolated_services.context,
-    ).create_stub(
+    ).stubs.create_stub(
         "idle-retirement",
         kind=StubKind.Function,
         handler="main:hello",

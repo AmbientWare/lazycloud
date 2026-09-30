@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pytest
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from database.context import ServiceContext
 from database.records.identity import SecretStorageRecord
 from database.repositories.identity import SecretRepository
@@ -157,7 +157,7 @@ def _stored_secret(context: ServiceContext, name: str) -> SecretStorageRecord:
 
 def _workspace(context: ServiceContext, name: str) -> WorkspaceRecord:
     return owned_workspace(
-        ControlPlaneService(context),
+        ControlServices.create(context),
         name,
     )
 

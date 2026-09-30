@@ -11,7 +11,6 @@ from api.server.provider_compute import (
     RedisProviderNodeIdentityReplayGuard,
 )
 from api.server.services import ApiServices
-from control.service import WorkspaceStorageError
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 from gateway.provider_enrollment import ProviderNodeEnrollmentService
@@ -19,6 +18,7 @@ from provider_clients import AwsProviderNodeIdentityAdapter
 from shared.external_identity import ExternalIdentityProfile
 from shared.http.errors import ErrorResponse
 from shared.identity import IdentityProvider, WorkspaceRecord
+from storage.workspace_provisioning import WorkspaceStorageError
 from tests.workspaces import administrator_credential
 
 
@@ -204,14 +204,7 @@ class _StubIdentityProvider:
 def test_a_sign_in_that_cannot_be_provisioned_lands_the_browser_on_the_sign_in_page(
     isolated_services: ApiServices,
 ) -> None:
-    """The one route whose caller is a browser mid-navigation, not a client.
-
-    Provisioning reaches object storage and the payment provider, and neither
-    fails with a domain error — a bucket that cannot be created raises
-    `WorkspaceStorageError`, which is a plain `RuntimeError`. Answered as an
-    `ErrorResponse` it would be rendered to the person as a bare JSON document
-    with no way forward, which is the whole reason this route redirects.
-    """
+    """Provisioning failures redirect browser sign-in instead of rendering an API error."""
 
     with ExitStack() as client_stack:
         identity = _StubIdentityProvider()

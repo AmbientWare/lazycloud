@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pytest
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from database.context import ServiceContext
 from database.repositories.identity import WorkspaceMemberRepository
 from identity.users import UserService
@@ -19,7 +19,7 @@ def test_a_workspace_has_at_most_one_owner(service_context: ServiceContext) -> N
     users = UserService(service_context)
     first = users.create(display_name="first-owner")
     second = users.create(display_name="second-owner")
-    workspace = ControlPlaneService(service_context).set_workspace(
+    workspace = ControlServices.create(service_context).workspaces.set_workspace(
         "sole-owner",
         owner_user_id=first.id,
     )

@@ -17,9 +17,9 @@ from control.deployment_resources import (
     client_manifest_resource,
 )
 from control.deployments import CronJobService, DeploymentService
-from control.service import ControlPlaneService, StubKind, StubRecord
+from control.service import ControlServices
 from database.context import ServiceContext
-from database.records.apps import AppRecord
+from database.records.apps import AppRecord, StubKind, StubRecord
 from database.repositories.apps import (
     ActivityStartSource,
     AppRepository,
@@ -591,8 +591,8 @@ class ManagementService:
     services: ManagementServices
 
     @property
-    def control_plane(self) -> ControlPlaneService:
-        return ControlPlaneService(
+    def control_plane(self) -> ControlServices:
+        return ControlServices.create(
             self.services.context,
             workspace_changes=self.services.deployments.workspace_changes,
         )
@@ -663,7 +663,7 @@ class ManagementService:
         return CursorPage(data=tuple(latest[:limit]))
 
     def app_summaries(self, workspace: str) -> tuple[AppOperationalSummary, ...]:
-        workspace_record = self.control_plane.get_workspace(workspace)
+        workspace_record = self.control_plane.workspaces.get_workspace(workspace)
         apps = self.services.apps.list(workspace=workspace_record.id, active=None)
         resources = self.services.deployment_resources.list(
             workspace=workspace_record.id,
@@ -768,7 +768,7 @@ class ManagementService:
         allow_paused_app: bool = False,
     ) -> Deployment:
         deployment = self.retrieve_deployment(workspace, deployment_id_or_name)
-        workspace_id = self.control_plane.get_workspace(workspace).id
+        workspace_id = self.control_plane.workspaces.get_workspace(workspace).id
         if active and deployment.app_id and not allow_paused_app:
             app = self.services.apps.get(deployment.app_id, workspace=workspace)
             if not app.active:
@@ -883,9 +883,9 @@ class ManagementService:
     ) -> dict[str, PodDeploymentScaling]:
         if not deployment_ids:
             return {}
-        workspace_record = self.control_plane.get_workspace(workspace)
+        workspace_record = self.control_plane.workspaces.get_workspace(workspace)
         grouped: dict[str, list[StubRecord]] = {}
-        for stub in self.control_plane.list_stubs(workspace=workspace_record.id):
+        for stub in self.control_plane.stubs.list_stubs(workspace=workspace_record.id):
             if stub.deployment_id not in deployment_ids:
                 continue
             grouped.setdefault(stub.deployment_id, []).append(stub)
@@ -903,7 +903,7 @@ class ManagementService:
     def delete_deployment(self, workspace: str, deployment_id_or_name: str) -> Deployment:
         """Delete the named workload; every version goes, not only the one named."""
         deployment = self.retrieve_deployment(workspace, deployment_id_or_name)
-        workspace_id = self.control_plane.get_workspace(workspace).id
+        workspace_id = self.control_plane.workspaces.get_workspace(workspace).id
         with self.services.context.database.session() as session:
             container_ids = DeploymentRepository(session).live_container_ids(
                 workspace_id=workspace_id,
@@ -949,7 +949,7 @@ class ManagementService:
     def stop_deployment_containers(
         self, workspace: str, deployment: Deployment, *, reason: StopContainerReason | None
     ) -> None:
-        workspace_id = self.control_plane.get_workspace(workspace).id
+        workspace_id = self.control_plane.workspaces.get_workspace(workspace).id
         with self.services.context.database.session() as session:
             container_ids = DeploymentRepository(session).live_container_ids(
                 workspace_id=workspace_id,
@@ -964,10 +964,10 @@ class ManagementService:
         deployment: Deployment,
         containers: int,
     ) -> list[StubRecord]:
-        workspace_record = self.control_plane.get_workspace(workspace)
+        workspace_record = self.control_plane.workspaces.get_workspace(workspace)
         stubs = [
             stub
-            for stub in self.control_plane.list_stubs(workspace=workspace_record.id)
+            for stub in self.control_plane.stubs.list_stubs(workspace=workspace_record.id)
             if stub.deployment_id == deployment.id
         ]
         if not stubs or any(stub.kind is not StubKind.Pod for stub in stubs):
@@ -990,7 +990,7 @@ class ManagementService:
                     "min_containers": containers,
                 }
             )
-            result = self.control_plane.update_stub_config(
+            result = self.control_plane.stubs.update_stub_config(
                 stub.id,
                 workspace=workspace_record.id,
                 fields={"autoscaler": autoscaler},
@@ -1093,7 +1093,7 @@ class ManagementService:
         )
 
     def deployment_package(self, workspace: str, stub_id: str) -> DeploymentPackagePlan:
-        workspace_record = self.control_plane.get_workspace(workspace)
+        workspace_record = self.control_plane.workspaces.get_workspace(workspace)
         with self.services.context.database.session() as session:
             objects = ObjectRepository(session).list(workspace_id=workspace_record.id)
         chosen = next(
@@ -1307,7 +1307,7 @@ class ManagementService:
         if not stub_ids:
             msg = "at least one stub_id is required"
             raise InvalidInputError(msg)
-        workspace_record = self.control_plane.get_workspace(workspace)
+        workspace_record = self.control_plane.workspaces.get_workspace(workspace)
         resolved_end = end or utc_now()
         resolved_start = start or resolved_end - timedelta(hours=24)
         with self.services.context.database.session() as session:
@@ -1363,7 +1363,7 @@ class ManagementService:
         status: ContainerStatus | None = None,
         page_size: int = 100,
     ) -> Iterator[ContainerRecord]:
-        workspace_record = self.control_plane.get_workspace(workspace)
+        workspace_record = self.control_plane.workspaces.get_workspace(workspace)
         cursor = ""
         seen_cursors: set[str] = set()
         while True:
@@ -1409,7 +1409,7 @@ class ManagementService:
         limit: int = 100,
         cursor: str | None = None,
     ) -> CursorPage[ContainerStateWithApp]:
-        workspace_record = self.control_plane.get_workspace(workspace)
+        workspace_record = self.control_plane.workspaces.get_workspace(workspace)
         page = self.services.containers.page(
             workspace_id=workspace_record.id,
             app_id=app_id,
@@ -1421,7 +1421,7 @@ class ManagementService:
         # One lookup for the page's stubs, not one per row: a hundred containers
         # used to mean a hundred sessions against a connection budget the whole
         # deployment shares, which is how a dashboard left open exhausted it.
-        app_ids = self.control_plane.stub_app_ids(
+        app_ids = self.control_plane.stubs.stub_app_ids(
             [
                 container.stub_id
                 for container in page.data
@@ -1448,7 +1448,7 @@ class ManagementService:
     ) -> ContainerRecord:
         container = self.services.containers.get(container_id)
         if workspace is not None:
-            workspace_record = self.control_plane.get_workspace(workspace)
+            workspace_record = self.control_plane.workspaces.get_workspace(workspace)
             if container.workspace_id != workspace_record.id:
                 msg = f"container not found in workspace: {container_id}"
                 raise NotFoundError(msg)
@@ -1544,7 +1544,7 @@ class ManagementService:
         if container.stub_id is None:
             return None
         try:
-            return self.control_plane.get_stub(container.stub_id, workspace=workspace)
+            return self.control_plane.stubs.get_stub(container.stub_id, workspace=workspace)
         except NotFoundError:
             return None
 
@@ -1588,7 +1588,7 @@ class ManagementService:
     ) -> Task | None:
         if container.task_id is None:
             return None
-        workspace_record = self.control_plane.get_workspace(workspace)
+        workspace_record = self.control_plane.workspaces.get_workspace(workspace)
         try:
             run = self.services.tasks.get(container.task_id)
         except NotFoundError:
@@ -1613,7 +1613,7 @@ class ManagementService:
         cursor: str | None = None,
         after_cursor: bool = False,
     ) -> LogQueryResponse:
-        workspace_record = self.control_plane.get_workspace(workspace)
+        workspace_record = self.control_plane.workspaces.get_workspace(workspace)
         log_query = LogStreamQuery(
             workspace_id=workspace_record.id,
             stub_id=stub_id or "",
@@ -1685,7 +1685,7 @@ class ManagementService:
         limit: int = 100,
         cursor: str | None = None,
     ) -> EventQueryResponse:
-        workspace_record = self.control_plane.get_workspace(workspace)
+        workspace_record = self.control_plane.workspaces.get_workspace(workspace)
         if task_id:
             resource_type = TASK_EVENT_RESOURCE_TYPE
             resource_id = task_id

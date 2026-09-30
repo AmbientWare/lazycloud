@@ -12,7 +12,6 @@ from dataclasses import dataclass, field
 from typing import Protocol
 from urllib.parse import SplitResult, urlsplit
 
-from control.service import ControlPlaneService
 from database.repositories.apps import StubRepository
 from database.types import DatabaseSession
 from identity.signatures import sign_payload
@@ -213,7 +212,8 @@ class TaskCallbackService:
         if not task.workspace_id:
             msg = f"task {task.id} has no workspace"
             raise CallbackDeliveryError(msg, retryable=False)
-        return ControlPlaneService(self.context).workspace_signing_key(task.workspace_id)
+        with self.context.database.session() as session:
+            return self.context.workspace(session, task.workspace_id).signing_key
 
 
 def _callback_body(task: Task) -> TaskCallbackBody:

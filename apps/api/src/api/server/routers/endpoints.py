@@ -6,7 +6,8 @@ from dataclasses import dataclass
 
 import websockets.asyncio.client
 from anyio import CancelScope
-from control.service import ControlPlaneService, StubKind, StubRecord
+from control.service import ControlServices
+from database.records.apps import StubKind, StubRecord
 from execution.endpoints.dispatch import (
     AsyncEndpointResponseStream,
     EndpointBackendProtocol,
@@ -81,7 +82,7 @@ def start_endpoint_serve(
     request: StartEndpointServeRequest,
     workspace_id: write_workspace,
     service: EndpointApiService = Depends(endpoint_service),
-    control_plane: ControlPlaneService = Depends(control_plane_service),
+    control_plane: ControlServices = Depends(control_plane_service),
 ) -> StartEndpointServeResponse:
     require_endpoint_stub_workspace(control_plane, request.stub_id, workspace_id)
     return service.start_endpoint_serve(request, hot_reload=True)
@@ -93,7 +94,7 @@ async def deployed_endpoint_request_by_id(
     request: Request,
     workspace_id: write_workspace,
     service: EndpointApiService = Depends(endpoint_service),
-    control_plane: ControlPlaneService = Depends(control_plane_service),
+    control_plane: ControlServices = Depends(control_plane_service),
     services: ApiServiceCore = Depends(current_services),
 ) -> Response:
     stub = await resolve_deployed_stub_id_async(
@@ -117,7 +118,7 @@ async def deployed_public_endpoint_request_by_id(
     stub_id: str,
     request: Request,
     service: EndpointApiService = Depends(endpoint_service),
-    control_plane: ControlPlaneService = Depends(control_plane_service),
+    control_plane: ControlServices = Depends(control_plane_service),
     services: ApiServiceCore = Depends(current_services),
 ) -> Response:
     stub = await resolve_deployed_stub_id_async(
@@ -140,7 +141,7 @@ def deployed_endpoint_warmup_by_id(
     stub_id: str,
     workspace_id: write_workspace,
     service: EndpointApiService = Depends(endpoint_service),
-    control_plane: ControlPlaneService = Depends(control_plane_service),
+    control_plane: ControlServices = Depends(control_plane_service),
     services: ApiServiceCore = Depends(current_services),
 ) -> StartEndpointServeResponse:
     stub = resolve_deployed_stub_id(
@@ -269,7 +270,7 @@ def deployed_asgi_warmup_by_id(
     stub_id: str,
     workspace_id: write_workspace,
     service: EndpointApiService = Depends(endpoint_service),
-    control_plane: ControlPlaneService = Depends(control_plane_service),
+    control_plane: ControlServices = Depends(control_plane_service),
     services: ApiServiceCore = Depends(current_services),
 ) -> StartEndpointServeResponse:
     stub = resolve_deployed_stub_id(
@@ -334,7 +335,7 @@ async def deployed_asgi_websocket_by_id(
     stub_id: str,
     subpath: str = "",
     service: EndpointApiService = Depends(endpoint_service),
-    control_plane: ControlPlaneService = Depends(control_plane_service),
+    control_plane: ControlServices = Depends(control_plane_service),
     services: ApiServiceCore = Depends(current_websocket_services),
 ) -> None:
     workspace_id = await authorize_websocket_workspace(services, websocket)
@@ -362,7 +363,7 @@ async def deployed_public_asgi_websocket_by_id(
     stub_id: str,
     subpath: str = "",
     service: EndpointApiService = Depends(endpoint_service),
-    control_plane: ControlPlaneService = Depends(control_plane_service),
+    control_plane: ControlServices = Depends(control_plane_service),
     services: ApiServiceCore = Depends(current_websocket_services),
 ) -> None:
     stub = await resolve_deployed_stub_id_async(
@@ -447,7 +448,7 @@ async def deployed_asgi_request_by_id(
     *,
     workspace_id: write_workspace,
     service: EndpointApiService = Depends(endpoint_service),
-    control_plane: ControlPlaneService = Depends(control_plane_service),
+    control_plane: ControlServices = Depends(control_plane_service),
     services: ApiServiceCore = Depends(current_services),
 ) -> Response:
     stub = await resolve_deployed_stub_id_async(
@@ -478,7 +479,7 @@ async def deployed_public_asgi_request_by_id(
     request: Request,
     subpath: str = "",
     service: EndpointApiService = Depends(endpoint_service),
-    control_plane: ControlPlaneService = Depends(control_plane_service),
+    control_plane: ControlServices = Depends(control_plane_service),
     services: ApiServiceCore = Depends(current_services),
 ) -> Response:
     stub = await resolve_deployed_stub_id_async(

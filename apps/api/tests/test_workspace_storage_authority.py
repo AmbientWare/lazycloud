@@ -1,5 +1,5 @@
 from api.server.services import ApiServices
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from fastapi.testclient import TestClient
 from identity.auth import AuthService
 from shared.identity import TokenKind, WorkspaceRecord
@@ -19,7 +19,7 @@ def test_workspace_storage_creation_preserves_credential_authority(
     created = client.post("/api/v1/workspaces/create-storage", headers=headers)
 
     assert created.status_code == 201
-    workspace = ControlPlaneService(services.context).get_workspace(api_workspace.id)
+    workspace = ControlServices.create(services.context).workspaces.get_workspace(api_workspace.id)
     assert workspace.storage.bucket
     assert created.json()["storage"]["bucket"] == workspace.storage.bucket
     assert client.get("/api/v1/workspaces", headers=headers).status_code == 200

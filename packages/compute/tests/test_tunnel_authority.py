@@ -7,7 +7,7 @@ from uuid import uuid4
 import pytest
 from compute.state import RedisComputeStateRepository
 from compute.tunnel_authority import AgentTunnelAuthority
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from database.context import ServiceContext
 from database.repositories.compute import (
     ComputeMachineEnrollmentCreate,
@@ -131,7 +131,7 @@ def test_tunnel_routes_require_live_destination_assignment_within_enrollment_sco
     )
     worker_id, foreign_worker_id, foreign_machine_id = (str(uuid4()) for _ in range(3))
     workload_workspace = owned_workspace(
-        ControlPlaneService(service_context),
+        ControlServices.create(service_context),
         "tunnel-workload",
     )
     with service_context.database.session() as session:

@@ -3,7 +3,7 @@ from __future__ import annotations
 from uuid import uuid4
 
 import pytest
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from database.context import ServiceContext
 from database.repositories.source_cache import SourceCacheCleanupRepository
 from shared.errors import ConflictError
@@ -18,7 +18,7 @@ from worker_repository.source_cache import WorkerSourceCacheService
 def test_private_worker_cannot_resolve_another_workspace_cache_claim(
     service_context: ServiceContext,
 ) -> None:
-    control = ControlPlaneService(service_context)
+    control = ControlServices.create(service_context)
     owner_workspace = owned_workspace(control, "source-cache-owner")
     other_workspace = owned_workspace(control, "source-cache-other")
     worker_id = "private-worker"

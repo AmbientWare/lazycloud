@@ -5,7 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Protocol
 
-from control.service import ControlPlaneService, StubKind, StubRecord
+from control.stubs import StubService
+from database.records.apps import StubKind, StubRecord
 from database.repositories.execution import TaskDependencyRepository
 from shared.errors import InvalidInputError, NotFoundError, UpstreamUnavailableError
 from shared.http.functions import (
@@ -28,10 +29,10 @@ class FunctionInvoker(Protocol):
 class TaskRerunService:
     services: ExecutionServices
     function_invoker: FunctionInvoker
-    control_plane: ControlPlaneService = field(init=False)
+    stubs: StubService = field(init=False)
 
     def __post_init__(self) -> None:
-        self.control_plane = ControlPlaneService(self.services.context)
+        self.stubs = StubService(self.services.context)
 
     def rerun(self, *, workspace_id: str, task_id: str) -> Task:
         source = self._workspace_task(workspace_id, task_id)
@@ -48,7 +49,7 @@ class TaskRerunService:
 
     def _rerun_stub_task(self, source: Task) -> Task:
         try:
-            stub = self.control_plane.get_stub(source.stub_id or "")
+            stub = self.stubs.get_stub(source.stub_id or "")
         except NotFoundError as exc:
             raise NotFoundError(str(exc)) from exc
         if stub.kind is StubKind.Function:

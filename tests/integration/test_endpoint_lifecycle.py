@@ -17,7 +17,8 @@ import uvicorn
 from anyio.from_thread import start_blocking_portal
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
-from control.service import ControlPlaneService, StubRecord
+from control.service import ControlServices
+from database.records.apps import StubRecord
 from database.records.endpoint_dispatch import EndpointDispatchStateRecord
 from database.repositories.endpoint_dispatch import EndpointDispatchRepository
 from database.repositories.execution import TaskRepository
@@ -623,7 +624,7 @@ async def test_endpoint_dispatch_timeout_preserves_committed_cancellation(
 def _stub_for_deployment(services: ApiServices, deployment_id: str) -> StubRecord:
     matches = [
         stub
-        for stub in ControlPlaneService(services.context).list_stubs()
+        for stub in ControlServices.create(services.context).stubs.list_stubs()
         if stub.deployment_id == deployment_id
     ]
     assert len(matches) == 1
@@ -704,7 +705,7 @@ def _set_endpoint_dispatch_limits(
     max_pending: int = 10,
     concurrency: int = 1,
 ) -> None:
-    ControlPlaneService(services.context).update_stub_config(
+    ControlServices.create(services.context).stubs.update_stub_config(
         stub.id,
         fields={
             "runtime.timeout_seconds": timeout_seconds,

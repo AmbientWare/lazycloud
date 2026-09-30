@@ -100,12 +100,12 @@ class AutoscalerOperationsService:
         workspace: str = "default",
     ) -> AutoscalerReconcileResponse:
         if stub_id_or_name is not None:
-            stub = self.services.control_plane_service.get_stub(
+            stub = self.services.control_plane_service.stubs.get_stub(
                 stub_id_or_name,
                 workspace=workspace,
             )
             kind = target_kind or _target_kind_for_stub(stub)
-            records = self.services.control_plane_service.list_autoscaling_stubs([stub.id])
+            records = self.services.control_plane_service.stubs.list_autoscaling_stubs([stub.id])
             return AutoscalerReconcileResponse(
                 results=[
                     _dump_result(result)
@@ -129,7 +129,7 @@ class AutoscalerOperationsService:
         workspace: str,
         enabled: bool,
     ) -> AutoscalerControlResponse:
-        stub = self.services.control_plane_service.update_stub_config(
+        stub = self.services.control_plane_service.stubs.update_stub_config(
             stub_id_or_name,
             workspace=workspace,
             fields={"metadata.autoscaling_enabled": enabled},
@@ -167,7 +167,7 @@ class AutoscalerOperationsService:
     def _workspace_id(self, workspace: str | None) -> str | None:
         if workspace is None:
             return None
-        return self.services.control_plane_service.get_workspace(workspace).id
+        return self.services.control_plane_service.workspaces.get_workspace(workspace).id
 
 
 def _source_for_kind(target_kind: AutoscalerTargetKind) -> str:

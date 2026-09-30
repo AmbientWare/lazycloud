@@ -2,7 +2,7 @@ from datetime import timedelta
 from uuid import uuid4
 
 from api.server.services import ApiServices
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from database.repositories.orchestration import ContainerRepository
 from database.tables.orchestration import ContainerTable
 from observability.startup_latency import StartupLatencyService
@@ -20,7 +20,7 @@ def test_startup_report_keeps_failed_and_overdue_containers_in_the_cohort(
     )
     stub = next(
         item
-        for item in ControlPlaneService(isolated_services.context).list_stubs()
+        for item in ControlServices.create(isolated_services.context).stubs.list_stubs()
         if item.deployment_id == deployment.id
     )
     now = utc_now()

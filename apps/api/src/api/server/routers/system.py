@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Annotated
 
-from control.service import ControlPlaneService
 from database.records.identity import DeviceAuthorizationRecord
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from identity.auth import AuthError
@@ -160,9 +159,10 @@ def api_v1_workspace_signing_key(
     workspace_id: read_workspace,
     services: ApiServiceCore = Depends(current_services),
 ) -> WorkspaceSigningKeyResponse:
-    return WorkspaceSigningKeyResponse(
-        signing_key=ControlPlaneService(services.context).workspace_signing_key(workspace_id)
-    )
+    with services.context.database.session() as session:
+        return WorkspaceSigningKeyResponse(
+            signing_key=services.context.workspace(session, workspace_id).signing_key
+        )
 
 
 @router.get(

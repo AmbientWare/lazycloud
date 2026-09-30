@@ -22,8 +22,9 @@ import pytest
 from api.server.async_io import ApiAsyncIo
 from api.server.services import ApiServices
 from apps.api.tests.runtime import service_graph
-from control.service import ControlPlaneService, StubKind
+from control.service import ControlServices
 from coordination.redis_client import RedisSettings
+from database.records.apps import StubKind
 from database.tables.orchestration import ContainerTable
 from execution.functions.service import FunctionControlService
 from shared.function_payloads import FunctionJsonInvocation
@@ -79,7 +80,7 @@ def _prove_a_simultaneous_burst_starts_one_container(services: ApiServices) -> N
     """
 
     functions = FunctionControlService(services)
-    stub = ControlPlaneService(services.context).create_stub(
+    stub = ControlServices.create(services.context).stubs.create_stub(
         "capacity-burst",
         kind=StubKind.Function,
         handler="module:handler",
@@ -112,7 +113,7 @@ def _prove_the_autoscaler_stops_at_the_ceiling(services: ApiServices) -> None:
     """Concurrent batches retain committed starts and cannot cross the ceiling."""
 
     functions = FunctionControlService(services)
-    stub = ControlPlaneService(services.context).create_stub(
+    stub = ControlServices.create(services.context).stubs.create_stub(
         "capacity-autoscaled",
         kind=StubKind.Function,
         handler="module:handler",

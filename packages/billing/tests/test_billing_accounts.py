@@ -8,7 +8,7 @@ from uuid import uuid4
 import pytest
 from billing.costs import BillingStandingService
 from billing.periods import carry_plan_into_cycle
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from database.context import ServiceContext
 from database.repositories.billing import BillingAccountRepository
 from database.repositories.billing_allowance import BillingAllowanceRepository
@@ -223,7 +223,7 @@ def test_a_workspace_is_judged_on_its_owners_account_and_nobody_elses(
     starts work.
     """
 
-    control = ControlPlaneService(service_context)
+    control = ControlServices.create(service_context)
     stranger = owned_workspace(control, "stranger")
     with service_context.database.session() as session:
         paying_workspace_id = service_context.default_workspace_id(session)
@@ -590,7 +590,7 @@ def test_the_container_limit_counts_every_workspace_the_account_owns(
     """
 
     first_workspace_id = owned_workspace(
-        ControlPlaneService(service_context),
+        ControlServices.create(service_context),
         f"first-{uuid4()}",
     ).id
     user_id = workspace_owner_user_id(service_context, first_workspace_id)

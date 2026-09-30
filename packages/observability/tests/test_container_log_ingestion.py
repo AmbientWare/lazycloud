@@ -7,7 +7,7 @@ from uuid import uuid4
 
 import pytest
 from api.server.services import ApiServices
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from database.repositories.execution import LogRepository, TaskRepository
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.orchestration import (
@@ -192,9 +192,9 @@ def test_container_log_runtime_attribution_uses_durable_ownership(
     )
     stub = next(
         item
-        for item in ControlPlaneService(
+        for item in ControlServices.create(
             isolated_services.context,
-        ).list_stubs()
+        ).stubs.list_stubs()
         if item.deployment_id == deployment.id
     )
     runtime_worker_id = "compose-container-worker"

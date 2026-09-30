@@ -286,17 +286,12 @@ class UserRepository:
         row = self.session.get(UserTable, user_id)
         return user_record_from_table(row) if row is not None else None
 
-    def lock_active(self, user_id: str) -> UserRecord:
-        """Take a share lock on the account so a concurrent disable cannot slip past.
-
-        The workspace branch of token issue fences its owner the same way: without the
-        lock a token can be minted against an account another transaction is in the
-        middle of disabling.
-        """
+    def lock_active(self, user_id: str, *, exclusive: bool = False) -> UserRecord:
+        """Fence disabling; exclusive mode serializes account-level admission."""
         row = self.session.scalars(
             select(UserTable)
             .where(UserTable.id == user_id)
-            .with_for_update(read=True, key_share=True)
+            .with_for_update(read=not exclusive, key_share=not exclusive)
             .execution_options(populate_existing=True)
         ).first()
         if row is None:
@@ -735,13 +730,7 @@ class WorkspaceMemberRepository:
         return [workspace_record_from_table(row) for row in rows]
 
     def owned_workspace(self, user_id: str) -> WorkspaceRecord | None:
-        """The workspace this account owns, which is the one it was given.
-
-        Ownership rather than "their only membership": joining somebody else's
-        workspace must not change which one is theirs. Ordered by the membership
-        like `owned_workspace_ids` so the two cannot disagree about which comes
-        first, and narrowed to active because a caller acts on this one.
-        """
+        """The earliest active workspace the account owns, excluding guest memberships."""
         row = self.session.scalars(
             select(WorkspaceTable)
             .join(WorkspaceMemberTable, WorkspaceMemberTable.workspace_id == WorkspaceTable.id)
@@ -751,6 +740,7 @@ class WorkspaceMemberRepository:
                 WorkspaceTable.status == WorkspaceStatus.Active.value,
             )
             .order_by(WorkspaceMemberTable.created_at.asc())
+            .limit(1)
         ).first()
         return None if row is None else workspace_record_from_table(row)
 
@@ -967,6 +957,16 @@ class WorkspaceInvitationRepository:
 class WorkspaceRepository:
     session: Session
 
+    def lock_name(self, name: str) -> None:
+        self.session.execute(
+            select(func.pg_advisory_xact_lock(func.hashtextextended(f"workspace-name:{name}", 0)))
+        )
+
+    def existing_names(self, names: list[str]) -> set[str]:
+        return set(
+            self.session.scalars(select(WorkspaceTable.name).where(WorkspaceTable.name.in_(names)))
+        )
+
     def platform(self) -> WorkspaceRecord | None:
         row = self.session.scalar(
             select(WorkspaceTable).where(WorkspaceTable.kind == WorkspaceKind.Platform.value)
@@ -1073,30 +1073,26 @@ class WorkspaceRepository:
         ).first()
         return _workspace_record(row, workspace_id)
 
-    def list(self) -> list[WorkspaceRecord]:
+    def list(self, *, statuses: set[WorkspaceStatus] | None = None) -> list[WorkspaceRecord]:
+        statement = select(WorkspaceTable).where(WorkspaceTable.kind == WorkspaceKind.Tenant.value)
+        if statuses is not None:
+            statement = statement.where(
+                WorkspaceTable.status.in_([status.value for status in statuses])
+            )
         rows = self.session.scalars(
-            select(WorkspaceTable)
-            .where(WorkspaceTable.kind == WorkspaceKind.Tenant.value)
-            .order_by(WorkspaceTable.created_at.desc(), WorkspaceTable.id)
+            statement.order_by(WorkspaceTable.created_at.desc(), WorkspaceTable.id)
         )
         return [workspace_record_from_table(row) for row in rows]
 
-    def lock_active_owner(self, workspace_id: str) -> WorkspaceRecord:
-        """Fence a tenant-owned write against irreversible workspace deletion.
-
-        PostgreSQL key-share locks are mutually compatible, so independent
-        reconcilers can continue writing state for the same active workspace.
-        They conflict with the deletion transaction's row lock: a writer that
-        arrives first commits before the purge, while a writer that arrives
-        after deletion observes the tombstone and cannot recreate owned state.
-        """
+    def lock_active_owner(self, workspace_id: str, *, exclusive: bool = False) -> WorkspaceRecord:
+        """Fence deletion; exclusive mode also serializes workspace configuration writes."""
         row = self.session.scalars(
             select(WorkspaceTable)
             .where(
                 WorkspaceTable.id == workspace_id,
                 WorkspaceTable.status == WorkspaceStatus.Active.value,
             )
-            .with_for_update(read=True, key_share=True)
+            .with_for_update(read=not exclusive, key_share=not exclusive)
             .execution_options(populate_existing=True)
         ).first()
         return _workspace_record(row, workspace_id)
@@ -1301,6 +1297,21 @@ def _mapped_table_name(model: type[DatabaseBase]) -> str:
 class ConcurrencyLimitRepository:
     session: Session
 
+    def previous(
+        self, *, workspace_id: str, current_id: str | None
+    ) -> ConcurrencyLimitRecord | None:
+        statement = select(ConcurrencyLimitTable).where(
+            ConcurrencyLimitTable.workspace_id == workspace_id, ConcurrencyLimitTable.limit > 0
+        )
+        if current_id is not None:
+            statement = statement.where(ConcurrencyLimitTable.id != current_id)
+        row = self.session.scalar(
+            statement.order_by(
+                ConcurrencyLimitTable.created_at.desc(), ConcurrencyLimitTable.id
+            ).limit(1)
+        )
+        return concurrency_limit_from_table(row) if row is not None else None
+
     def upsert(
         self, record: ConcurrencyLimitRecord, *, workspace_id: str
     ) -> ConcurrencyLimitRecord:
@@ -1325,22 +1336,28 @@ class ConcurrencyLimitRepository:
         self.session.flush()
         return concurrency_limit_from_table(row)
 
-    def get(self, limit_id: str, *, workspace_id: str) -> ConcurrencyLimitRecord | None:
-        row = self.session.scalar(
-            select(ConcurrencyLimitTable).where(
-                ConcurrencyLimitTable.id == limit_id,
-                ConcurrencyLimitTable.workspace_id == workspace_id,
-            )
+    def get(
+        self, limit_id: str, *, workspace_id: str, for_update: bool = False
+    ) -> ConcurrencyLimitRecord | None:
+        statement = select(ConcurrencyLimitTable).where(
+            ConcurrencyLimitTable.id == limit_id,
+            ConcurrencyLimitTable.workspace_id == workspace_id,
         )
+        if for_update:
+            statement = statement.with_for_update().execution_options(populate_existing=True)
+        row = self.session.scalar(statement)
         return concurrency_limit_from_table(row) if row is not None else None
 
-    def by_name(self, name: str, *, workspace_id: str) -> ConcurrencyLimitRecord | None:
-        row = self.session.scalar(
-            select(ConcurrencyLimitTable).where(
-                ConcurrencyLimitTable.name == name,
-                ConcurrencyLimitTable.workspace_id == workspace_id,
-            )
+    def by_name(
+        self, name: str, *, workspace_id: str, for_update: bool = False
+    ) -> ConcurrencyLimitRecord | None:
+        statement = select(ConcurrencyLimitTable).where(
+            ConcurrencyLimitTable.name == name,
+            ConcurrencyLimitTable.workspace_id == workspace_id,
         )
+        if for_update:
+            statement = statement.with_for_update().execution_options(populate_existing=True)
+        row = self.session.scalar(statement)
         return concurrency_limit_from_table(row) if row is not None else None
 
     def list(self, *, workspace_id: str) -> list[ConcurrencyLimitRecord]:
@@ -2022,6 +2039,15 @@ class DeviceAuthorizationRepository:
 @dataclass(slots=True)
 class SecretRepository:
     session: Session
+
+    def existing_names(self, names: set[str], *, workspace_id: str) -> set[str]:
+        return set(
+            self.session.scalars(
+                select(SecretTable.name).where(
+                    SecretTable.workspace_id == workspace_id, SecretTable.name.in_(names)
+                )
+            )
+        )
 
     def create(self, name: str, ciphertext: str, *, workspace_id: str) -> SecretStorageRecord:
         row = SecretTable(workspace_id=workspace_id, name=name, ciphertext=ciphertext)

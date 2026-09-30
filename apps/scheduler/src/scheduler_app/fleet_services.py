@@ -23,7 +23,7 @@ from control.custom_domains import CustomDomainService
 from control.deployment_cleanup import AppDeploymentLifecycleService
 from control.deployment_plans import DeploymentPlanService
 from control.deployment_resources import DeploymentResourceService
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from coordination.event_bus import RedisEventBus
 from coordination.process_presence import RedisProcessPresence
 from coordination.redis_client import RedisClient
@@ -122,7 +122,7 @@ class FleetAppServices:
     deployment_plans: DeploymentPlanService
     containers: ContainerService
     container_shutdowns: ContainerShutdownService
-    control_plane_service: ControlPlaneService
+    control_plane_service: ControlServices
     compute: ComputeServices
     custom_domains: CustomDomainService
     tasks: TaskService
@@ -168,7 +168,7 @@ class FleetAppServices:
             )
         )
         compute_policies = WorkspaceComputePolicyService(context)
-        control_plane = ControlPlaneService(
+        control_plane = ControlServices.create(
             context,
             workspace_storage_client=object_client,
             public_http_origin=gateway_origin,

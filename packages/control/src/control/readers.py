@@ -56,7 +56,7 @@ class DatabaseDeploymentReader:
             repository = DeploymentRepository(session)
             record = repository.get_across_workspaces(deployment_id_or_name)
             if record is None:
-                record = repository.latest_by_name_across_workspaces(deployment_id_or_name)
+                record = repository.latest_by_name(deployment_id_or_name, workspace_id=None)
         if record is None:
             raise NotFoundError(f"deployment not found: {deployment_id_or_name}")
         return record

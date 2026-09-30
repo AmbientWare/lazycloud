@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import pytest
 from api.server.services import ApiServices
-from control.service import ControlPlaneService, StubKind
+from control.service import ControlServices
+from database.records.apps import StubKind
 from database.tables.execution import TaskTable
 from database.tables.orchestration import ContainerTable
 from execution.functions.service import FunctionControlService
@@ -21,7 +22,7 @@ def test_invoking_against_a_machine_that_is_gone_refuses_and_queues_nothing(
     reused stub is in after its machine leaves. The refusal has to land before
     the task row, or the run would sit pending for capacity that never arrives.
     """
-    stub = ControlPlaneService(isolated_services.context).create_stub(
+    stub = ControlServices.create(isolated_services.context).stubs.create_stub(
         "on-gone-machine",
         kind=StubKind.Function,
         handler="pkg.workloads:handler",

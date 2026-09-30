@@ -4,7 +4,7 @@ import json
 
 import pytest
 from api.server.services import ApiServices
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from database.repositories.apps import StubRecord
 from gateway.stub_config import deployment_spec_from_stub, stub_config
 from pydantic import ValidationError
@@ -46,10 +46,10 @@ def test_pod_checkpoint_readiness_is_retained_by_source_and_deployed_stubs(
 
     gateway = isolated_services.gateway_deployment_service
     prepared = gateway.get_or_create_stub(request)
-    control = ControlPlaneService(
+    control = ControlServices.create(
         isolated_services.context,
     )
-    source = control.get_stub(prepared.stub_id)
+    source = control.stubs.get_stub(prepared.stub_id)
     assert source.config.runtime == normalized
 
     deployed = gateway.deploy_stub(
@@ -61,7 +61,7 @@ def test_pod_checkpoint_readiness_is_retained_by_source_and_deployed_stubs(
         )
     )
     assert deployed.invoke_url == f"https://{deployed.stub_id}-8080.compute.example"
-    deployment_stub = control.get_stub(deployed.stub_id)
+    deployment_stub = control.stubs.get_stub(deployed.stub_id)
     assert deployment_stub.config.runtime.checkpoint_enabled is True
     assert deployment_stub.config.runtime.checkpoint_readiness_path == "/ready"
     assert deployment_stub.config.runtime.checkpoint_readiness_port == 8080
@@ -83,17 +83,17 @@ def test_runtime_prepare_stays_outside_apps_and_deployments_until_publish(
     repeated = gateway.get_or_create_stub(request)
     peer = gateway.get_or_create_stub(request.model_copy(update={"app_name": "peer_runtime"}))
 
-    control = ControlPlaneService(
+    control = ControlServices.create(
         isolated_services.context,
     )
-    runtime = control.get_stub(prepared.stub_id)
+    runtime = control.stubs.get_stub(prepared.stub_id)
     assert repeated.stub_id == runtime.id
     assert peer.stub_id != runtime.id
     assert runtime.app_id is None
     assert runtime.deployment_id is None
     assert runtime.metadata["app"] == "runtime_boundary"
     assert isolated_services.apps.list() == []
-    assert control.list_stubs(deployed_only=True) == []
+    assert control.stubs.list_stubs(deployed_only=True) == []
 
     published = gateway.deploy_stub(
         DeployStubRequest(
@@ -104,7 +104,7 @@ def test_runtime_prepare_stays_outside_apps_and_deployments_until_publish(
     )
 
     assert published.app_id is not None
-    deployed = control.list_stubs(deployed_only=True)
+    deployed = control.stubs.list_stubs(deployed_only=True)
     assert [stub.id for stub in deployed] == [published.stub_id]
     assert deployed[0].app_id == published.app_id
     assert deployed[0].deployment_id == published.deployment_id

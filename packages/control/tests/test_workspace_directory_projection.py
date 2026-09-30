@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from database.context import ServiceContext
 from database.repositories.identity import WorkspaceRepository
 from shared.identity import WorkspaceStatus
@@ -10,7 +10,7 @@ from tests.workspaces import owned_workspace
 def test_workspace_directory_projects_active_deleting_and_deleted_lifecycles(
     service_context: ServiceContext,
 ) -> None:
-    control = ControlPlaneService(service_context)
+    control = ControlServices.create(service_context)
     active = owned_workspace(control, "projection-active")
     deleting = owned_workspace(control, "projection-deleting")
     deleted = owned_workspace(control, "projection-deleted")
@@ -39,14 +39,14 @@ def test_workspace_directory_projects_active_deleting_and_deleted_lifecycles(
 
 
 def _projection(
-    control: ControlPlaneService,
+    control: ControlServices,
     *,
     include_deleting: bool = False,
     include_deleted: bool = False,
 ) -> dict[str, WorkspaceStatus]:
     return {
         workspace.name: workspace.status
-        for workspace in control.list_workspaces(
+        for workspace in control.workspaces.list_workspaces(
             include_deleting=include_deleting,
             include_deleted=include_deleted,
         )

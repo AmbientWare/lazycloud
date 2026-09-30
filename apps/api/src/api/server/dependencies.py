@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Annotated, Protocol
 
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from database.repositories.identity import WorkspaceMemberRepository
 from fastapi import Depends, HTTPException, Security, WebSocket, WebSocketException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -86,7 +86,7 @@ def current_services(services: Annotated[ApiServiceCore, Depends(api_services)])
 
 def canonical_workspace_id(services: ApiServiceCore, workspace: str = "default") -> str:
     try:
-        record = ControlPlaneService(services.context).get_workspace(workspace)
+        record = ControlServices.create(services.context).workspaces.get_workspace(workspace)
         if record.kind is WorkspaceKind.Platform:
             raise NotFoundError(f"workspace not found: {workspace}")
         return record.id

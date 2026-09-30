@@ -5,7 +5,6 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Protocol
 
-from control.service import ControlPlaneService
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.storage import VolumeRepository
 from shared.errors import ConflictError, InvalidInputError, NotFoundError
@@ -92,7 +91,6 @@ class VolumeControlService:
         filesystem: VolumeFilesystem,
     ) -> None:
         self.services = services
-        self.control_plane = ControlPlaneService(services.context)
         self.filesystem = filesystem
         self.volume_metering = services.volume_metering
         worker_absence = services.container_shutdowns.durable_worker_absence
@@ -112,7 +110,8 @@ class VolumeControlService:
         *,
         workspace_id: str = "default",
     ) -> GetOrCreateVolumeResponse:
-        workspace = self.control_plane.get_workspace(workspace_id)
+        with self.services.context.database.session() as workspace_session:
+            workspace = self.services.context.workspace(workspace_session, workspace_id)
         # Admitted only where a volume would be created. Resolving one that
         # already exists is how a container mounts it and how its owner reads
         # their own files back, and refusing that would be a data-loss incident
@@ -133,7 +132,8 @@ class VolumeControlService:
         *,
         workspace_id: str = "default",
     ) -> DeleteVolumeResponse:
-        workspace = self.control_plane.get_workspace(workspace_id)
+        with self.services.context.database.session() as workspace_session:
+            workspace = self.services.context.workspace(workspace_session, workspace_id)
         return DeleteVolumeResponse(
             deleted=self.deletion.request(request.name, workspace_id=workspace.id)
         )
@@ -154,7 +154,8 @@ class VolumeControlService:
         )
 
     def list_volumes(self, *, workspace_id: str = "default") -> ListVolumesResponse:
-        workspace = self.control_plane.get_workspace(workspace_id)
+        with self.services.context.database.session() as workspace_session:
+            workspace = self.services.context.workspace(workspace_session, workspace_id)
         return ListVolumesResponse(
             volumes=tuple(
                 self._volume_instance(record, workspace)
@@ -396,7 +397,8 @@ class VolumeControlService:
         *,
         workspace_id: str,
     ) -> ResolvedVolume:
-        workspace = self.control_plane.get_workspace(workspace_id)
+        with self.services.context.database.session() as workspace_session:
+            workspace = self.services.context.workspace(workspace_session, workspace_id)
         with self.services.context.database.session() as session:
             record = VolumeRepository(session).get(name, workspace_id=workspace.id)
         if record is None:

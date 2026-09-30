@@ -4,7 +4,7 @@ from datetime import timedelta
 from uuid import uuid4
 
 from api.server.services import ApiServices
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from database.repositories.compute import (
     ComputeJoinCredentialRepository,
     ComputeMachineEnrollmentRepository,
@@ -36,7 +36,7 @@ def test_machine_retirement_preserves_cleanup_evidence_after_repeated_deletion(
 ) -> None:
     services = isolated_services
     workspace = owned_workspace(
-        ControlPlaneService(services.context),
+        ControlServices.create(services.context),
         "machine-retirement",
     )
     unit = services.compute.units.create_unit(
@@ -127,7 +127,7 @@ def test_pending_join_preserves_empty_pool_until_credential_expires(
 ) -> None:
     services = isolated_services
     workspace = owned_workspace(
-        ControlPlaneService(services.context),
+        ControlServices.create(services.context),
         "pending-machine-join",
     )
     gateway = services.gateway_service

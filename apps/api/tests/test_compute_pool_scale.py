@@ -23,7 +23,7 @@ from compute.providers import (
     ResolvedProviderPolicy,
 )
 from compute.service import ComputeServices
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from database.repositories.aws_connections import AwsAccountConnectionRepository
 from database.repositories.compute import ComputeUnitRepository
 from database.repositories.orchestration import ContainerRepository
@@ -279,7 +279,7 @@ def test_pool_scale_is_workspace_scoped_and_idempotently_returns_durable_capacit
         headers = {"Authorization": f"Bearer {raw_token}"}
         path = f"/api/v1/units/{pool.id}/scale"
         owned_workspace(
-            ControlPlaneService(
+            ControlServices.create(
                 isolated_services.context,
             ),
             "other",

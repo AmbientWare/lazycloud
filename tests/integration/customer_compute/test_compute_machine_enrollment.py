@@ -11,7 +11,7 @@ from api.server.services import ApiServices
 from api.server.workspace_deletion import WorkspaceDeletionService
 from compute.agent_control import hash_compute_token
 from compute.state import ComputeAgentTokenState, RedisComputeStateRepository
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from database.repositories.compute import (
     ComputeJoinCredentialRepository,
     ComputeMachineEnrollmentRepository,
@@ -563,7 +563,7 @@ def test_workspace_deletion_preflight_preserves_enrolled_self_hosted_ownership(
 ) -> None:
     redis = real_redis_actors.client()
     services = isolated_services
-    control = ControlPlaneService(services.context)
+    control = ControlServices.create(services.context)
     owned_workspace(control, "default")
     _raw_token, audit_actor = administrator_credential(
         isolated_services.context, "workspace-delete-admin"
@@ -613,7 +613,7 @@ def test_workspace_deletion_preflight_preserves_enrolled_self_hosted_ownership(
             audit_actor=audit_actor,
         )
 
-    assert control.get_workspace(workspace.id).status is WorkspaceStatus.Active
+    assert control.workspaces.get_workspace(workspace.id).status is WorkspaceStatus.Active
     assert gateway.compute_states.get_unit_state(workspace.id, unit.capacity_owner_id) is not None
     assert gateway.compute_states.get_join_token_state(join_token_hash) is not None
     assert gateway.compute_states.get_agent_token_state(agent_token_hash) is not None
@@ -730,7 +730,7 @@ def test_machine_join_command_mints_one_named_unit_that_only_serves_by_name(
     """
     workspace_id = _workspace_id(isolated_services)
     user_id = workspace_owner_user_id(isolated_services.context, workspace_id)
-    second_workspace = isolated_services.control_plane_service.set_workspace(
+    second_workspace = isolated_services.control_plane_service.workspaces.set_workspace(
         "second-workspace",
         owner_user_id=user_id,
     )

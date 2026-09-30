@@ -9,10 +9,10 @@ import pytest
 from botocore.exceptions import ClientError
 from cli.main import build_admin_cli
 from cli.offline_auth import _read_configured_token
-from control.service import WorkspaceStorageError
 from identity.auth import AuthService, IdentityDatabaseContext
 from identity.credential_files import CredentialFileError
 from shared.identity import TokenKind
+from storage.workspace_provisioning import WorkspaceStorageError
 from storage_client.s3 import S3ObjectStoreClient
 from typer.testing import CliRunner
 

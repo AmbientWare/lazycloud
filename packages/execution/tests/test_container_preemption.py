@@ -3,7 +3,7 @@ from __future__ import annotations
 from uuid import uuid4
 
 from api.server.services import ApiServices
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from database.repositories.execution import TaskRepository
 from database.repositories.orchestration import AutoscalingTargetRepository, ContainerRepository
 from execution.containers.preemption import PreemptedContainerService
@@ -28,8 +28,8 @@ def _running_task(
     leaves empty, and the claim-side lookup that actually runs would go untested.
     """
 
-    control = ControlPlaneService(services.context)
-    stub = control.create_stub(name, kind=kind)
+    control = ControlServices.create(services.context)
+    stub = control.stubs.create_stub(name, kind=kind)
     task = services.tasks.create(
         name,
         workspace_id=stub.workspace_id,
@@ -68,7 +68,7 @@ def test_function_preemption_uses_explicit_retry_policy(
     )
     service = PreemptedContainerService(
         services=isolated_services,
-        stubs=isolated_services.control_plane_service,
+        stubs=isolated_services.control_plane_service.stubs,
     )
 
     result = service.preempted(container, exit_code=562)
@@ -132,7 +132,7 @@ def test_unsettled_preemption_recovers_once_after_a_crash(
         repository.upsert(stranded)
     service = PreemptedContainerService(
         services=isolated_services,
-        stubs=isolated_services.control_plane_service,
+        stubs=isolated_services.control_plane_service.stubs,
     )
 
     recovered = service.recover_unsettled()
@@ -153,7 +153,7 @@ def test_endpoint_preemption_fails_without_blind_replay(
     )
     service = PreemptedContainerService(
         services=isolated_services,
-        stubs=isolated_services.control_plane_service,
+        stubs=isolated_services.control_plane_service.stubs,
     )
 
     result = service.preempted(container, exit_code=562)

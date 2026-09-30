@@ -6,7 +6,7 @@ from typing import Protocol
 
 from compute.service import ComputeServices
 from control.apps import AppReader
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from database.records.apps import AppRecord
 from database.types import DatabaseSession
 from observability.workspace_changes import WorkspaceChangePublisher
@@ -155,7 +155,7 @@ class SchedulerServices(Protocol):
     def containers(self) -> SchedulerContainerService: ...
 
     @property
-    def control_plane_service(self) -> ControlPlaneService: ...
+    def control_plane_service(self) -> ControlServices: ...
 
     @property
     def workspace_changes(self) -> WorkspaceChangePublisher: ...
@@ -163,7 +163,7 @@ class SchedulerServices(Protocol):
 
 class FleetServices(Protocol):
     @property
-    def control_plane_service(self) -> ControlPlaneService: ...
+    def control_plane_service(self) -> ControlServices: ...
 
     @property
     def context(self) -> SchedulerContext: ...

@@ -6,7 +6,8 @@ from uuid import uuid4
 
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
-from control.service import ControlPlaneService, StubKind
+from control.service import ControlServices
+from database.records.apps import StubKind
 from execution.containers.scheduling import ContainerSchedulingPersistenceService
 from execution.functions.service import FunctionControlService
 from fastapi.testclient import TestClient
@@ -75,10 +76,10 @@ def test_function_dependency_waits_then_schedules_materialized_args(
 ) -> None:
     scheduler = _Scheduler()
     isolated_services.containers.scheduler = scheduler
-    control = ControlPlaneService(
+    control = ControlServices.create(
         isolated_services.context,
     )
-    stub = control.create_stub(
+    stub = control.stubs.create_stub(
         "nested-fn",
         kind=StubKind.Function,
         handler="pkg.fn:handler",
@@ -191,9 +192,9 @@ def test_function_result_and_completion_reject_stale_container_attempt(
 ) -> None:
     scheduler = _Scheduler()
     isolated_services.containers.scheduler = scheduler
-    stub = ControlPlaneService(
+    stub = ControlServices.create(
         isolated_services.context,
-    ).create_stub(
+    ).stubs.create_stub(
         "stale-result-function",
         kind=StubKind.Function,
         handler="pkg.fn:handler",
@@ -256,7 +257,7 @@ def test_function_cancel_stops_container_and_rejects_terminal_writes(
             ),
         ),
     )
-    stub = ControlPlaneService(services.context).create_stub(
+    stub = ControlServices.create(services.context).stubs.create_stub(
         "cancelled-result-function",
         kind=StubKind.Function,
         handler="pkg.fn:handler",
@@ -324,10 +325,10 @@ def test_function_dependency_failure_fails_downstream_without_scheduling(
 ) -> None:
     scheduler = _Scheduler()
     isolated_services.containers.scheduler = scheduler
-    control = ControlPlaneService(
+    control = ControlServices.create(
         isolated_services.context,
     )
-    stub = control.create_stub(
+    stub = control.stubs.create_stub(
         "nested-fn-failure",
         kind=StubKind.Function,
         handler="pkg.fn:handler",

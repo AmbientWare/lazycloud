@@ -11,7 +11,8 @@ from uuid import uuid4
 
 from anyio import CancelScope
 from control.apps import DatabaseAppExecutionAdmission
-from control.service import ControlPlaneService, StubKind, StubRecord
+from control.stubs import StubService
+from database.records.apps import StubKind, StubRecord
 from database.repositories.apps import DeploymentRepository
 from database.repositories.container_rollouts import ContainerRolloutRepository
 from database.repositories.execution import (
@@ -124,13 +125,13 @@ class FunctionControlService:
     services: ExecutionServices
     async_database: AsyncDatabaseClient | None = None
     task_changes: AsyncTaskChangeReader | None = None
-    control_plane: ControlPlaneService = field(init=False)
+    stubs: StubService = field(init=False)
     _admissions: dict[tuple[str, str], RequestBatch[FunctionInvokeBody, _InvocationResult]] = field(
         default_factory=dict, init=False
     )
 
     def __post_init__(self) -> None:
-        self.control_plane = ControlPlaneService(self.services.context)
+        self.stubs = StubService(self.services.context)
 
     def function_invoke(
         self, request: FunctionInvokeBody, *, stub: StubRecord
@@ -149,7 +150,7 @@ class FunctionControlService:
     ) -> FunctionInvokeResponse:
         if stub is None:
             stub = await self._async_database().run_transaction(
-                lambda session: self.control_plane.get_stub_in_session(
+                lambda session: self.stubs.get_stub_in_session(
                     session, request.stub_id, workspace=workspace_id
                 )
             )
@@ -561,7 +562,7 @@ class FunctionControlService:
             return TaskRepository(session).containers_with_inflight_work(container_ids)
 
     def start_function_serve(self, request: FunctionServeRequest) -> FunctionServeResponse:
-        stub = self.control_plane.get_stub(request.stub_id)
+        stub = self.stubs.get_stub(request.stub_id)
         if stub.kind is not StubKind.Function:
             raise InvalidInputError("serve requires a function")
         if stub.deployment_id is not None:
@@ -586,7 +587,7 @@ class FunctionControlService:
     def start_function_containers(self, stub_id: str, *, desired_count: int) -> Iterator[str]:
         if desired_count <= 0:
             return
-        stub = self.control_plane.get_stub(stub_id)
+        stub = self.stubs.get_stub(stub_id)
         if stub.kind is not StubKind.Function:
             return
         with self.services.context.database.session() as session:
@@ -628,7 +629,7 @@ class FunctionControlService:
                 exit_code=1,
             )
             return None
-        stub = self.control_plane.get_stub(task.stub_id)
+        stub = self.stubs.get_stub(task.stub_id)
         if not self._scheduled_execution_allowed(task, scheduled=bool(stub.config.cron)):
             return None
         return next(
@@ -660,7 +661,8 @@ class FunctionControlService:
         A warm floor passes no task.
         """
 
-        workspace = self.control_plane.get_workspace(stub.workspace_id)
+        with self.services.context.database.session() as workspace_session:
+            workspace = self.services.context.workspace(workspace_session, stub.workspace_id)
         config = FunctionStubConfig.model_validate(stub.config, from_attributes=True)
         # A task with nothing to run cannot be served by any container, so it
         # fails here rather than after one has been started for it.
@@ -930,7 +932,7 @@ class FunctionControlService:
         if updated.container_id:
             if not updated.stub_id:
                 raise InvalidInputError("running function task has no stub")
-            runtime = self.control_plane.get_stub(updated.stub_id).config.runtime
+            runtime = self.stubs.get_stub(updated.stub_id).config.runtime
             if runtime.in_process or runtime.concurrency <= 1:
                 self.services.containers.stop(
                     updated.container_id,
@@ -949,7 +951,7 @@ class FunctionControlService:
         current = now or datetime.now(UTC)
         for task in self.services.tasks.due_retry_tasks(now=current, limit=limit):
             if task.stub_id:
-                stub = self.control_plane.get_stub(task.stub_id)
+                stub = self.stubs.get_stub(task.stub_id)
                 if stub.kind is not StubKind.Function:
                     continue
             if task.next_retry_at is not None and current < task.next_retry_at:
@@ -1496,7 +1498,7 @@ class FunctionControlService:
         *,
         workspace_id: str,
     ) -> FunctionRetireResponse:
-        stub = self.control_plane.get_stub(request.stub_id, workspace=workspace_id)
+        stub = self.stubs.get_stub(request.stub_id, workspace=workspace_id)
         keep_warm = stub.config.runtime.keep_warm
         now = utc_now()
         with self.services.context.database.session() as session:

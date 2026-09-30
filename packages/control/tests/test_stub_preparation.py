@@ -4,7 +4,8 @@ from uuid import uuid4
 
 import pytest
 from api.server.services import ApiServices
-from control.service import ControlPlaneService
+from control.service import ControlServices
+from database.context import ServiceContext
 from database.repositories.apps import StubRepository
 from database.repositories.orchestration import ContainerRepository
 from database.repositories.storage import ObjectRepository
@@ -15,13 +16,43 @@ from shared.objects import ObjectRecord
 from shared.workload_config import StubConfig, StubImageConfig, StubRuntimeConfig
 
 
+def test_concurrent_config_patches_preserve_each_others_fields(
+    committed_service_context: ServiceContext,
+) -> None:
+    control = ControlServices.create(committed_service_context)
+    stub = control.stubs.create_stub("patched")
+    start = Barrier(2)
+
+    def patch(field: str) -> None:
+        start.wait(timeout=10)
+        control.stubs.update_stub_config(stub.id, fields={field: 2})
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        list(executor.map(patch, ("runtime.cpu", "runtime.gpu_count")))
+    runtime = control.stubs.get_stub(stub.id).config.runtime
+    assert runtime.cpu == 2
+    assert runtime.gpu_count == 2
+
+
+def test_patch_rejects_missing_objects_without_changing_config(
+    committed_service_context: ServiceContext,
+) -> None:
+    control = ControlServices.create(committed_service_context)
+    stub = control.stubs.create_stub("invalid-patch")
+    with pytest.raises(ConflictError):
+        control.stubs.update_stub_config(
+            stub.id, fields={"object_id": str(uuid4()), "runtime.cpu": 4}
+        )
+    assert control.stubs.get_stub(stub.id).config == stub.config
+
+
 def test_preparing_function_keeps_same_named_endpoint_container_on_its_revision(
     isolated_services: ApiServices,
 ) -> None:
-    control = ControlPlaneService(
+    control = ControlServices.create(
         isolated_services.context,
     )
-    endpoint = control.create_stub(
+    endpoint = control.stubs.create_stub(
         "print_hello",
         kind=StubKind.Endpoint,
         handler="main:print_hello",
@@ -39,7 +70,7 @@ def test_preparing_function_keeps_same_named_endpoint_container_on_its_revision(
                 status=ContainerStatus.Running,
             )
         )
-    function = control.create_stub(
+    function = control.stubs.create_stub(
         "print_hello",
         kind=StubKind.Function,
         handler="main:print_hello",
@@ -48,15 +79,15 @@ def test_preparing_function_keeps_same_named_endpoint_container_on_its_revision(
 
     assert function.id != endpoint.id
     assert function.name == endpoint.name == "print_hello"
-    assert control.get_stub(endpoint.id).kind is StubKind.Endpoint
+    assert control.stubs.get_stub(endpoint.id).kind is StubKind.Endpoint
     with isolated_services.context.database.session() as session:
         persisted = ContainerRepository(session).get_across_workspaces(container.id)
     assert persisted is not None
     assert persisted.stub_id == endpoint.id
     assert persisted.status is ContainerStatus.Running
-    assert not control.discard_registration_source_stub(endpoint.id)
+    assert not control.stubs.discard_registration_source_stub(endpoint.id)
     with pytest.raises(ConflictError):
-        control.get_stub("print_hello", workspace=endpoint.workspace_id)
+        control.stubs.get_stub("print_hello", workspace=endpoint.workspace_id)
     with pytest.raises(ConflictError):
         isolated_services.apps.create(
             "quickstart", stub_id="print_hello", workspace=endpoint.workspace_id
@@ -66,10 +97,10 @@ def test_preparing_function_keeps_same_named_endpoint_container_on_its_revision(
 def test_source_and_runtime_changes_prepare_distinct_reusable_revisions(
     isolated_services: ApiServices,
 ) -> None:
-    control = ControlPlaneService(
+    control = ControlServices.create(
         isolated_services.context,
     )
-    workspace = control.get_workspace()
+    workspace = control.workspaces.get_workspace()
     sources = [
         ObjectRecord(
             id=str(uuid4()),
@@ -89,25 +120,28 @@ def test_source_and_runtime_changes_prepare_distinct_reusable_revisions(
         image=StubImageConfig(image_id="image-v1"),
         runtime=StubRuntimeConfig(cpu=1, memory="256Mi", timeout_seconds=300),
     )
-    original = control.create_stub("hello", handler="main:hello", config=original_config)
+    original = control.stubs.create_stub("hello", handler="main:hello", config=original_config)
     source_config = original_config.model_copy(update={"object_id": sources[1].id}, deep=True)
-    source_changed = control.create_stub("hello", handler="main:hello", config=source_config)
+    source_changed = control.stubs.create_stub("hello", handler="main:hello", config=source_config)
     runtime_config = source_config.model_copy(
         update={"runtime": StubRuntimeConfig(cpu=2, memory="512Mi")}, deep=True
     )
-    runtime_changed = control.create_stub("hello", handler="main:hello", config=runtime_config)
+    runtime_changed = control.stubs.create_stub(
+        "hello", handler="main:hello", config=runtime_config
+    )
     image_config = runtime_config.model_copy(
         update={"image": StubImageConfig(image_id="image-v2")}, deep=True
     )
-    image_changed = control.create_stub("hello", handler="main:hello", config=image_config)
+    image_changed = control.stubs.create_stub("hello", handler="main:hello", config=image_config)
 
     assert len({original.id, source_changed.id, runtime_changed.id, image_changed.id}) == 4
-    assert control.get_stub(original.id).config == original_config
+    assert control.stubs.get_stub(original.id).config == original_config
     assert (
-        control.create_stub("hello", handler="main:hello", config=original_config).id == original.id
+        control.stubs.create_stub("hello", handler="main:hello", config=original_config).id
+        == original.id
     )
     assert (
-        control.create_stub("hello", handler="main:hello", config=image_config).id
+        control.stubs.create_stub("hello", handler="main:hello", config=image_config).id
         == image_changed.id
     )
 
@@ -115,37 +149,39 @@ def test_source_and_runtime_changes_prepare_distinct_reusable_revisions(
 def test_concurrent_prepares_reuse_one_revision_but_keep_app_scope(
     isolated_services: ApiServices,
 ) -> None:
-    control = ControlPlaneService(
+    control = ControlServices.create(
         isolated_services.context,
     )
     start = Barrier(4)
 
     def prepare() -> str:
         start.wait(timeout=5)
-        return control.create_stub("hello", handler="main:hello", metadata={"app": "first"}).id
+        return control.stubs.create_stub(
+            "hello", handler="main:hello", metadata={"app": "first"}
+        ).id
 
     with ThreadPoolExecutor(max_workers=4) as executor:
         futures = [executor.submit(prepare) for _ in range(4)]
         ids = [future.result(timeout=10) for future in futures]
     assert len(set(ids)) == 1
-    other_app = control.create_stub("hello", handler="main:hello", metadata={"app": "second"})
+    other_app = control.stubs.create_stub("hello", handler="main:hello", metadata={"app": "second"})
     assert other_app.id != ids[0]
 
 
 def test_preparation_does_not_reuse_unverified_or_explicitly_patched_definitions(
     isolated_services: ApiServices,
 ) -> None:
-    control = ControlPlaneService(
+    control = ControlServices.create(
         isolated_services.context,
     )
-    unverified = control.create_stub("hello", handler="main:hello", reuse_existing=False)
-    prepared = control.create_stub("hello", handler="main:hello")
+    unverified = control.stubs.create_stub("hello", handler="main:hello", reuse_existing=False)
+    prepared = control.stubs.create_stub("hello", handler="main:hello")
     assert prepared.id != unverified.id
 
-    control.update_stub_config(prepared.id, fields={"runtime.cpu": 2})
-    replacement = control.create_stub("hello", handler="main:hello")
+    control.stubs.update_stub_config(prepared.id, fields={"runtime.cpu": 2})
+    replacement = control.stubs.create_stub("hello", handler="main:hello")
     assert replacement.id not in {prepared.id, unverified.id}
-    assert control.get_stub(prepared.id).config.runtime.cpu == 2
+    assert control.stubs.get_stub(prepared.id).config.runtime.cpu == 2
     assert replacement.config.runtime.cpu is None
 
     with isolated_services.context.database.session() as session:
@@ -154,6 +190,6 @@ def test_preparation_does_not_reuse_unverified_or_explicitly_patched_definitions
         assert changed is not None
         changed.handler = "main:changed"
         repository.upsert(changed)
-    after_old_writer = control.create_stub("hello", handler="main:hello")
+    after_old_writer = control.stubs.create_stub("hello", handler="main:hello")
     assert after_old_writer.id != replacement.id
-    assert control.get_stub(replacement.id).handler == "main:changed"
+    assert control.stubs.get_stub(replacement.id).handler == "main:changed"

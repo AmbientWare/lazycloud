@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from api.server.services import ApiServices
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from coordination.redis_client import RedisClient, RedisWireScalar, redis_text
 from database.tables.identity import TokenTable
 from identity.auth import AuthError, AuthorizationDeniedError, AuthService
@@ -232,7 +232,7 @@ def test_ticket_mint_rejects_wrong_workspace_and_insufficient_scope(
     assert not fake.values
 
     other_workspace = owned_workspace(
-        ControlPlaneService(
+        ControlServices.create(
             isolated_services.context,
         ),
         "other",

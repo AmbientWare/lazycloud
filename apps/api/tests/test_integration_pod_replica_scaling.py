@@ -4,7 +4,8 @@ from contextlib import ExitStack
 
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
-from control.service import ControlPlaneService, StubKind
+from control.service import ControlServices
+from database.records.apps import StubKind
 from fastapi.testclient import TestClient
 from identity.auth import AuthService
 from shared.deployment_records import DeploymentSpec, Resources
@@ -32,9 +33,9 @@ def test_pod_replica_scaling_is_typed_authorized_and_lifecycle_gated(
         function = isolated_services.deployments.deploy(
             DeploymentSpec(name="calculate", kind=DeploymentKind.Function)
         )
-        workspace = ControlPlaneService(
+        workspace = ControlServices.create(
             isolated_services.context,
-        ).get_workspace(app.workspace_id)
+        ).workspaces.get_workspace(app.workspace_id)
         auth = AuthService(isolated_services.context)
         writer_token, _ = auth.create_token(
             "pod-scale-writer",
@@ -139,9 +140,9 @@ def test_pod_replica_scaling_is_typed_authorized_and_lifecycle_gated(
 
         pod_stub = next(
             stub
-            for stub in ControlPlaneService(
+            for stub in ControlServices.create(
                 isolated_services.context,
-            ).list_stubs(workspace=workspace.id)
+            ).stubs.list_stubs(workspace=workspace.id)
             if stub.deployment_id == deployment.id and stub.kind is StubKind.Pod
         )
         assert pod_stub.config.runtime.keep_warm == 120
@@ -170,10 +171,10 @@ def test_pod_scale_rejects_incompatible_checkpoint_before_mutation(
                 },
             )
         )
-        control_plane = ControlPlaneService(
+        control_plane = ControlServices.create(
             isolated_services.context,
         )
-        workspace = control_plane.get_workspace(app.workspace_id)
+        workspace = control_plane.workspaces.get_workspace(app.workspace_id)
         token, _ = AuthService(isolated_services.context).create_token(
             "checkpoint-scale-writer",
             scopes=[AuthScope.Read.value, AuthScope.Write.value],
@@ -192,7 +193,7 @@ def test_pod_scale_rejects_incompatible_checkpoint_before_mutation(
         assert response.json()["detail"] == "checkpointing does not support more than one GPU"
         pod_stub = next(
             stub
-            for stub in control_plane.list_stubs(workspace=workspace.id)
+            for stub in control_plane.stubs.list_stubs(workspace=workspace.id)
             if stub.deployment_id == deployment.id and stub.kind is StubKind.Pod
         )
         assert pod_stub.config.autoscaler.min_containers == 0

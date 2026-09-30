@@ -7,8 +7,9 @@ from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from cli.api_client import AdminApiClient
 from cli.main import build_admin_cli
-from control.service import ControlPlaneService, StubKind, StubRecord
+from control.service import ControlServices
 from coordination.token_lock import release_token_lock
+from database.records.apps import StubKind, StubRecord
 from database.repositories.orchestration import AutoscalerStateRepository
 from fastapi.testclient import TestClient
 from identity.auth import AuthService
@@ -127,10 +128,10 @@ def test_autoscaler_cli_controls_real_api_and_persists_owner_state(
             ],
         )
         persisted_metadata = (
-            ControlPlaneService(
+            ControlServices.create(
                 isolated_services.context,
             )
-            .get_stub(stub.id)
+            .stubs.get_stub(stub.id)
             .config.metadata
         )
         history_actions = [
@@ -175,7 +176,7 @@ def _create_endpoint_stub(
     *,
     config: dict[str, JsonValue] | None = None,
 ) -> StubRecord:
-    return ControlPlaneService(services.context).create_stub(
+    return ControlServices.create(services.context).stubs.create_stub(
         "endpoint-autoscale",
         kind=StubKind.Endpoint,
         handler="pkg.endpoint:handler",

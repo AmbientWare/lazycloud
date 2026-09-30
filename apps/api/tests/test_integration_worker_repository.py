@@ -17,7 +17,7 @@ from compute.agent_control import hash_compute_token
 from compute.state import RedisComputeStateRepository
 from control.release_settings import ReleaseSettings
 from control.releases import DeploymentReleaseService
-from control.service import ControlPlaneService, StubKind
+from control.service import ControlServices
 from coordination.event_bus import (
     EventBusEvent,
     EventBusEventType,
@@ -25,6 +25,7 @@ from coordination.event_bus import (
     event_id_for_event,
 )
 from database.context import ServiceContext
+from database.records.apps import StubKind
 from database.repositories.billing_ledger import ContainerBillingShapeRepository
 from database.repositories.capacity_recovery import CapacityRecoveryRepository
 from database.repositories.compute import (
@@ -177,7 +178,7 @@ def test_spot_build_retry_fences_retired_execution_and_preserves_logs(
 ) -> None:
     services = isolated_services
     images = services.images
-    workspace_id = services.control_plane_service.get_workspace().id
+    workspace_id = services.control_plane_service.workspaces.get_workspace().id
     owner_id = workspace_owner_user_id(services.context, workspace_id)
     build = images.build(
         ImageSpec(ignore_python=True, commands=["true"]), workspace_id=workspace_id
@@ -381,10 +382,10 @@ def test_worker_result_durably_finishes_a_build_and_is_idempotent(
     assert service.dependencies is not None
     service.dependencies = replace(service.dependencies, images=images)
     workspace_id = (
-        ControlPlaneService(
+        ControlServices.create(
             isolated_services.context,
         )
-        .get_workspace()
+        .workspaces.get_workspace()
         .id
     )
     build = _pending_image_build(isolated_services, ImageSpec(commands=["python -V"]))
@@ -449,12 +450,12 @@ def test_automatic_checkpoint_lease_is_bound_to_assigned_container_and_worker(
     isolated_services: ApiServices,
 ) -> None:
     service = isolated_services.worker_repository_service
-    control = ControlPlaneService(
+    control = ControlServices.create(
         isolated_services.context,
     )
     workspace = owned_workspace(control, "default")
     workspace_owner_user_id(isolated_services.context, workspace.id)
-    stub = control.create_stub("automatic-checkpoint-lease", workspace=workspace.id)
+    stub = control.stubs.create_stub("automatic-checkpoint-lease", workspace=workspace.id)
     container_id = str(uuid4())
     service.containers.set_container_state(
         SchedulerContainerState(
@@ -876,10 +877,10 @@ def test_image_build_context_download_is_bound_to_active_assignment_and_object(
 def test_cache_origin_broker_returns_urls_without_storage_credentials(
     isolated_services: ApiServices,
 ) -> None:
-    control = ControlPlaneService(
+    control = ControlServices.create(
         isolated_services.context,
     )
-    workspace = control.set_workspace_storage(
+    workspace = control.workspaces.set_workspace_storage(
         owned_workspace(control, "brokered-worker").id,
         WorkspaceStorageConfig(backend="s3", bucket="workspace-bucket"),
     )
@@ -941,7 +942,7 @@ def test_cache_origin_broker_denies_other_workers_container_and_image(
     with ExitStack() as client_stack:
         redis = real_redis_actors.client()
         workspace = owned_workspace(
-            ControlPlaneService(
+            ControlServices.create(
                 isolated_services.context,
             ),
             "origin-authorization-owner",
@@ -1124,7 +1125,7 @@ def test_worker_repository_api_authenticates_and_streams_container_requests(
     with ExitStack() as client_stack:
         redis = real_redis_actors.client()
         token = _worker_token(isolated_services, "workspace-a")
-        control = ControlPlaneService(
+        control = ControlServices.create(
             isolated_services.context,
         )
         workspace = owned_workspace(control, "workspace-a")
@@ -1135,7 +1136,7 @@ def test_worker_repository_api_authenticates_and_streams_container_requests(
             worker_cpu_millicores=1000,
             worker_memory_mib=1024,
         )
-        stub = control.create_stub("worker-request", workspace=workspace.id)
+        stub = control.stubs.create_stub("worker-request", workspace=workspace.id)
         container_id = str(uuid4())
         with isolated_services.context.database.session() as session:
             ContainerRepository(session).upsert(
@@ -1550,12 +1551,12 @@ def test_worker_repository_api_vends_container_credentials_from_worker_token(
 ) -> None:
     with ExitStack() as client_stack:
         redis = real_redis_actors.client()
-        control = ControlPlaneService(
+        control = ControlServices.create(
             isolated_services.context,
         )
         workspace = owned_workspace(control, "workspace-a")
         workspace_owner_user_id(isolated_services.context, workspace.id)
-        stub = control.create_stub("worker", workspace=workspace.id)
+        stub = control.stubs.create_stub("worker", workspace=workspace.id)
         isolated_services.secrets.set("API_TOKEN", "secret-value", workspace=workspace.id)
         RedisSchedulerContainerRepository(redis).set_container_state(
             SchedulerContainerState(
@@ -1640,7 +1641,7 @@ def test_worker_repository_vends_ssh_identity_only_to_the_assigned_worker_of_an_
 ) -> None:
     with ExitStack() as client_stack:
         redis = real_redis_actors.client()
-        control = ControlPlaneService(isolated_services.context)
+        control = ControlServices.create(isolated_services.context)
         workspace = owned_workspace(control, "workspace-ssh")
         for name, ssh in (("box", True), ("web", False)):
             deployment = isolated_services.deployments.deploy(
@@ -1868,7 +1869,7 @@ def test_container_shutdown_requires_assigned_worker_storage_release(
     redis = real_redis_actors.client()
     containers = RedisSchedulerContainerRepository(redis)
     workspace = owned_workspace(
-        ControlPlaneService(
+        ControlServices.create(
             isolated_services.context,
         ),
         "shutdown-storage-release",
@@ -3107,7 +3108,7 @@ def _worker_token(
     kind: TokenKind = TokenKind.Worker,
 ) -> str:
     workspace = owned_workspace(
-        ControlPlaneService(
+        ControlServices.create(
             isolated_services.context,
         ),
         workspace_id,
@@ -3453,7 +3454,7 @@ def test_worker_container_routes_are_bound_to_the_container_the_worker_was_given
     """
 
     with ExitStack() as client_stack:
-        control = ControlPlaneService(
+        control = ControlServices.create(
             isolated_services.context,
         )
         workspace = owned_workspace(control, "usage-owner")
@@ -3465,7 +3466,7 @@ def test_worker_container_routes_are_bound_to_the_container_the_worker_was_given
                 worker_cpu_millicores=1000,
                 worker_memory_mib=1024,
             )
-        stub = control.create_stub("usage-owner", workspace=workspace.id)
+        stub = control.stubs.create_stub("usage-owner", workspace=workspace.id)
         container_id = str(uuid4())
         with isolated_services.context.database.session() as session:
             ContainerRepository(session).upsert(
@@ -3580,7 +3581,7 @@ def test_worker_usage_is_bounded_by_the_container_lifetime_the_platform_recorded
     """
 
     with ExitStack() as client_stack:
-        control = ControlPlaneService(
+        control = ControlServices.create(
             isolated_services.context,
         )
         workspace = owned_workspace(control, "window-owner")
@@ -3591,7 +3592,7 @@ def test_worker_usage_is_bounded_by_the_container_lifetime_the_platform_recorded
             worker_cpu_millicores=1000,
             worker_memory_mib=1024,
         )
-        stub = control.create_stub("window-owner", workspace=workspace.id)
+        stub = control.stubs.create_stub("window-owner", workspace=workspace.id)
         started_at = utc_now() - timedelta(hours=1)
         finished_at = started_at + timedelta(minutes=30)
         container_id = str(uuid4())
@@ -3719,9 +3720,9 @@ def test_worker_repository_exit_charges_an_attempt_for_what_a_pooled_container_l
     """
 
     service = isolated_services.worker_repository_service
-    stub = ControlPlaneService(
+    stub = ControlServices.create(
         isolated_services.context,
-    ).create_stub(
+    ).stubs.create_stub(
         "pooled-exit",
         kind=StubKind.Function,
         handler="pkg.jobs:handler",

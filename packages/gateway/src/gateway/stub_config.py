@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from control.service import StubKind, StubRecord
+from database.records.apps import StubKind, StubRecord
 from pydantic import JsonValue, TypeAdapter
 from shared.autoscaling import Autoscaler
 from shared.deployment_records import (

@@ -300,8 +300,12 @@ class SandboxStatsRequest(HttpModel):
 
 class SandboxStatsResponse(HttpModel):
     concurrent: int
-    total_created: int
-    rate_per_second: float
+    total_created: int = Field(
+        description="All retained sandbox instances, including preparations without a container."
+    )
+    rate_per_second: float = Field(
+        description="Sandbox instances created in the trailing 24 hours, divided by 86,400 seconds."
+    )
     status_counts: dict[SandboxDashboardStatus, int]
     created_buckets: tuple[SandboxCreatedBucket, ...] = ()
 

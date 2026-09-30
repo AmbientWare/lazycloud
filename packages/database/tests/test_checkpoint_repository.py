@@ -3,8 +3,9 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from control.service import ControlPlaneService, StubKind
+from control.service import ControlServices
 from database.context import ServiceContext
+from database.records.apps import StubKind
 from database.repositories.images import CheckpointRepository
 from shared.checkpoints import (
     CheckpointRecord,
@@ -15,11 +16,11 @@ from tests.workspaces import owned_workspace
 
 
 def test_checkpoint_repository_lifecycle_uses_database(service_context: ServiceContext) -> None:
-    control = ControlPlaneService(service_context)
+    control = ControlServices.create(service_context)
     workspace = owned_workspace(control, "workspace-1")
     other_workspace = owned_workspace(control, "workspace-2")
-    stub = control.create_stub("stub-1", workspace=workspace.id, kind=StubKind.Function)
-    other_stub = control.create_stub(
+    stub = control.stubs.create_stub("stub-1", workspace=workspace.id, kind=StubKind.Function)
+    other_stub = control.stubs.create_stub(
         "stub-2",
         workspace=other_workspace.id,
         kind=StubKind.Function,
@@ -90,20 +91,20 @@ def test_checkpoint_repository_lifecycle_uses_database(service_context: ServiceC
 def test_checkpoint_repository_requires_durable_expiration_before_pruning(
     service_context: ServiceContext,
 ) -> None:
-    control = ControlPlaneService(service_context)
+    control = ControlServices.create(service_context)
     workspace = owned_workspace(control, "workspace-1")
     other_workspace = owned_workspace(control, "workspace-2")
-    active_stub = control.create_stub(
+    active_stub = control.stubs.create_stub(
         "stub-active",
         workspace=workspace.id,
         kind=StubKind.Function,
     )
-    stale_stub = control.create_stub(
+    stale_stub = control.stubs.create_stub(
         "stub-stale",
         workspace=workspace.id,
         kind=StubKind.Function,
     )
-    other_stub = control.create_stub(
+    other_stub = control.stubs.create_stub(
         "stub-other",
         workspace=other_workspace.id,
         kind=StubKind.Function,
@@ -185,7 +186,7 @@ def test_checkpoint_retention_selects_only_published_or_terminal_records(
     service_context: ServiceContext,
 ) -> None:
     workspace = owned_workspace(
-        ControlPlaneService(service_context),
+        ControlServices.create(service_context),
         "checkpoint-retention-states",
     )
     now = datetime(2026, 2, 1, tzinfo=UTC)

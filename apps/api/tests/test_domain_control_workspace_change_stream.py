@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from fastapi.testclient import TestClient
 from pydantic import JsonValue, TypeAdapter
 from shared.http.workspace_changes import (
@@ -35,7 +35,7 @@ def test_workspace_change_stream_resumes_and_isolates_workspaces(
     isolated_services: ApiServices,
 ) -> None:
     with ExitStack() as client_stack:
-        control = ControlPlaneService(
+        control = ControlServices.create(
             isolated_services.context,
         )
         default = owned_workspace(control, "default")

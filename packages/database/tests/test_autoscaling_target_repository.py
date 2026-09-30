@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import timedelta
 from pathlib import Path
 
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from database.context import ServiceContext
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.orchestration import AutoscalingTargetRepository
@@ -20,7 +20,7 @@ def test_activation_during_claim_is_not_lost(
     context = ServiceContext.create(database, root=tmp_path)
     with database.session() as session:
         workspace = WorkspaceRepository(session).create(name="target-owner")
-    stub = ControlPlaneService(context).create_stub(
+    stub = ControlServices.create(context).stubs.create_stub(
         "claimed-target",
         workspace=workspace.id,
     )

@@ -9,8 +9,8 @@ from uuid import uuid4
 
 from api.server.services import ApiServices
 from compute.agent_control import hash_compute_token
-from control.service import StubRecord
 from coordination.agent_connections import RedisAgentConnectionDirectory
+from database.records.apps import StubRecord
 from database.repositories.compute import (
     ComputeMachineEnrollmentCreate,
     ComputeMachineEnrollmentRepository,
