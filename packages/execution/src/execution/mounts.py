@@ -78,7 +78,6 @@ def container_resource_mounts(
     workspace_id: str,
     workspace_name: str,
     object_id: str,
-    stub_id: str,
     container_id: str,
     volumes: Iterable[VolumeMountInput] | None = None,
 ) -> list[RequestMount]:
@@ -89,14 +88,6 @@ def container_resource_mounts(
         workspace_name=workspace_name,
         object_id=object_id,
     )
-    if stub_id:
-        mounts.append(
-            RequestMount(
-                local_path=posixpath.join(DEFAULT_ARTIFACTS_PATH, workspace_name, stub_id),
-                mount_path=WORKER_USER_ARTIFACT_VOLUME,
-                read_only=True,
-            )
-        )
     mounts.extend(
         configured_volume_mounts(
             context=context,
@@ -107,6 +98,14 @@ def container_resource_mounts(
         )
     )
     return mounts
+
+
+def devbox_artifact_mount(*, workspace_name: str, stub_id: str) -> RequestMount:
+    return RequestMount(
+        local_path=posixpath.join(DEFAULT_ARTIFACTS_PATH, workspace_name, stub_id),
+        mount_path=WORKER_USER_ARTIFACT_VOLUME,
+        read_only=True,
+    )
 
 
 def container_resource_mounts_require_workspace_storage(

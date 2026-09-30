@@ -299,6 +299,8 @@ class ComputeReleaseRolloutService:
                 if updating
                 else "waiting for replacement capacity on the target release"
                 if operation.replacement_machine_id is None and operation.surge_machines
+                else "idle source update can start"
+                if operation.replacement_machine_id is None
                 else "replacement reserved; source update can start"
             )
             phase = CapacityMaintenancePhase.Draining if updating else operation.phase

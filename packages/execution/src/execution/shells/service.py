@@ -168,7 +168,6 @@ class ShellControlService:
             workspace_id=stub.workspace_id,
             workspace_name=workspace.name,
             object_id=config.object_id,
-            stub_id=stub.id,
             container_id=plan.container_id,
             volumes=config.volume_inputs,
         )

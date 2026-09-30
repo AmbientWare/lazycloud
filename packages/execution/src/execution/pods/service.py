@@ -115,6 +115,7 @@ from execution.containers.service import PendingContainerReservation
 from execution.mounts import (
     container_resource_mounts,
     container_resource_mounts_require_workspace_storage,
+    devbox_artifact_mount,
 )
 from execution.placement import workload_placement
 from execution.pods.config import PodStubConfig
@@ -381,10 +382,13 @@ class PodControlService:
             workspace_id=stub.workspace_id,
             workspace_name=workspace.name,
             object_id="" if devbox else config.object_id,
-            stub_id=stub.id,
             container_id=container.id,
             volumes=config.volume_inputs,
         )
+        if devbox:
+            resource_mounts.append(
+                devbox_artifact_mount(workspace_name=workspace.name, stub_id=stub.id)
+            )
         if plan.keep_warm_lock_key is not None:
             self._set_keep_warm_lock(
                 plan.keep_warm_lock_key,

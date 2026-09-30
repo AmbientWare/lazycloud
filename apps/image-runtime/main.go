@@ -413,6 +413,21 @@ func (r *imageRuntime) mount(req request) (mountedImage, error) {
 		RegistryCredProvider:  r.credentials,
 		ContentCache:          cache,
 		ContentCacheAvailable: true,
+		ReadTraceObserver: func(event clipcommon.ReadTraceEvent) {
+			if event.Success && event.Duration < 50*time.Millisecond {
+				return
+			}
+			slog.Info("image read",
+				"image_id", req.ImageID,
+				"operation", event.Operation,
+				"source", event.Source,
+				"caller_pid", event.CallerPID,
+				"started_at", event.StartedAt,
+				"duration_ms", float64(event.Duration)/float64(time.Millisecond),
+				"bytes", event.BytesRead,
+				"success", event.Success,
+			)
+		},
 	}
 	if req.Preload {
 		options.PrepareConcurrency = 8

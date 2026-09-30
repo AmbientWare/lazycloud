@@ -30,31 +30,16 @@ from shared.deployments import DeploymentKind, PodRole
 from shared.disks import DiskMount, parse_disk_size_bytes
 from shared.gpu import GpuInput
 from shared.http.errors import HttpApiError, HttpResponseDecodeError, HttpTransportError
-from shared.http.gateway import DeployStubResponse
 from shared.serialization import to_json_value
 from shared.tasks import TaskPolicy
 
 from lazycloud.abstractions.disk import Disk, disk_mounts
-from lazycloud.abstractions.endpoint import (
-    ASGI,
-    ASGIOptions,
-    Endpoint,
-    EndpointOptions,
-    RealtimeASGI,
-)
-from lazycloud.abstractions.endpoint import _asgi as asgi_decorator
-from lazycloud.abstractions.endpoint import _endpoint as endpoint_decorator
-from lazycloud.abstractions.function import Function, FunctionOptions
-from lazycloud.abstractions.function import _function as function_decorator
-from lazycloud.abstractions.image import Image
 from lazycloud.abstractions.metadata import (
     LifecycleHookInput,
     MachineInput,
     RetryPolicyInput,
     SchemaInput,
 )
-from lazycloud.abstractions.pod import Pod, PodOptions
-from lazycloud.abstractions.sandbox import Sandbox, SandboxOptions
 from lazycloud.abstractions.volume import VolumeExport, volume_mounts
 from lazycloud.agent_harness import AgentHarness, agent_install_commands
 from lazycloud.control import resolve_control_client_config
@@ -66,6 +51,17 @@ if TYPE_CHECKING:
         DeploymentPlanResponse,
         DeploymentPruneResponse,
     )
+    from shared.http.gateway import DeployStubResponse
+
+    from lazycloud.abstractions.endpoint import (
+        ASGI,
+        Endpoint,
+        RealtimeASGI,
+    )
+    from lazycloud.abstractions.function import Function
+    from lazycloud.abstractions.image import Image
+    from lazycloud.abstractions.pod import Pod
+    from lazycloud.abstractions.sandbox import Sandbox
 
 
 class AppOperationError(RuntimeError):
@@ -322,6 +318,9 @@ class App:
             machine, metadata: A joined machine this workload must run on, by name
                 (unset runs in the workspace), and custom metadata.
         """
+        from lazycloud.abstractions.function import FunctionOptions
+        from lazycloud.abstractions.function import _function as function_decorator
+
         kwargs = FunctionOptions(
             image=image,
             name=name,
@@ -520,6 +519,9 @@ class App:
             machine, metadata: A joined machine this workload must run on, by name
                 (unset runs in the workspace), and custom metadata.
         """
+        from lazycloud.abstractions.endpoint import EndpointOptions
+        from lazycloud.abstractions.endpoint import _endpoint as endpoint_decorator
+
         kwargs = EndpointOptions(
             image=image,
             name=name,
@@ -617,6 +619,9 @@ class App:
             machine: A joined machine this workload must run on, by name; unset runs
                 in the workspace.
         """
+        from lazycloud.abstractions.endpoint import ASGI, ASGIOptions
+        from lazycloud.abstractions.endpoint import _asgi as asgi_decorator
+
         kwargs = ASGIOptions(
             name=name,
             image=image,
@@ -708,6 +713,9 @@ class App:
             machine: A joined machine this workload must run on, by name; unset runs
                 in the workspace.
         """
+        from lazycloud.abstractions.endpoint import ASGIOptions, RealtimeASGI
+        from lazycloud.abstractions.endpoint import _asgi as asgi_decorator
+
         kwargs = ASGIOptions(
             name=name,
             image=image,
@@ -810,6 +818,9 @@ class App:
             machine, metadata: A joined machine this workload must run on, by name
                 (unset runs in the workspace), and custom metadata.
         """
+        from lazycloud.abstractions.image import Image
+        from lazycloud.abstractions.pod import Pod, PodOptions
+
         kwargs = PodOptions(
             name=name,
             image=Image() if image is None else image,
@@ -898,6 +909,8 @@ class App:
             docker_enabled: Allow Docker inside the devbox.
             region, availability_zone, machine: Placement, as on `pod`.
         """
+        from lazycloud.abstractions.pod import Pod
+
         install_commands = agent_install_commands(agent_harnesses, image.architecture)
         if install_commands:
             if image.explicit_image_id:
@@ -980,6 +993,8 @@ class App:
                 (unset runs in the workspace), and custom metadata.
             command: Optional initial command run by the sandbox container.
         """
+        from lazycloud.abstractions.sandbox import Sandbox, SandboxOptions
+
         kwargs = SandboxOptions(
             cpu=cpu,
             memory=memory,
@@ -1219,6 +1234,8 @@ def _deploy_app_resource(
     item: Function[..., Any] | Endpoint[..., Any] | ASGI | Pod,
     kwargs: Mapping[str, object],
 ) -> DeployStubResponse:
+    from shared.http.gateway import DeployStubResponse
+
     try:
         result = _invoke_method(item.deploy, kwargs)
         if not isinstance(result, DeployStubResponse):

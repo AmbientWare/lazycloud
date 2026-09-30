@@ -15,13 +15,6 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from pydantic import JsonValue, TypeAdapter
 from shared.app_identity import IMAGE_BUILD_CONTEXT_BUCKET
-from shared.http.images import (
-    BuildImageRequest,
-    BuildImageResponse,
-    BuildStep,
-    VerifyImageBuildRequest,
-    VerifyImageBuildResponse,
-)
 from shared.image_building import (
     DEFAULT_IMAGE_BASE,
     fingerprint_build_context,
@@ -49,6 +42,14 @@ from typing_extensions import Self
 from lazycloud.terminal import ProgressCallback, Terminal, TerminalStep
 
 if TYPE_CHECKING:
+    from shared.http.images import (
+        BuildImageRequest,
+        BuildImageResponse,
+        BuildStep,
+        VerifyImageBuildRequest,
+        VerifyImageBuildResponse,
+    )
+
     from lazycloud.abstractions.image_project import ImageProject
 
 
@@ -434,6 +435,8 @@ class Image:
     def _build_request(
         self, *, env: Mapping[str, str] | None = None, machine: str = ""
     ) -> BuildImageRequest:
+        from shared.http.images import BuildImageRequest
+
         spec = self.spec()
         return BuildImageRequest(
             architecture=spec.architecture,
@@ -459,6 +462,8 @@ class Image:
         force_rebuild: bool = False,
         env: Mapping[str, str] | None = None,
     ) -> VerifyImageBuildRequest:
+        from shared.http.images import VerifyImageBuildRequest
+
         spec = self.spec()
         return VerifyImageBuildRequest(
             architecture=spec.architecture,
@@ -782,6 +787,8 @@ def _env_items(
 
 
 def _http_build_step(step: ImageBuildStep) -> BuildStep:
+    from shared.http.images import BuildStep
+
     command = step.command or shlex.join(step.args)
     return BuildStep(type=step.kind.value, command=command, groups=step.groups)
 

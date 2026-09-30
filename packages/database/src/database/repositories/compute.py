@@ -2183,7 +2183,6 @@ class ComputeProviderInstanceRepository:
                 ComputeUnitTable.phase.not_in(
                     (ComputeUnitPhase.Deleting.value, ComputeUnitPhase.Deleted.value)
                 ),
-                func.nullif(ComputeUnitTable.degraded_reason, "").is_(None),
                 ~exists().where(
                     CapacityMaintenanceTable.source_machine_id == table.machine_id,
                     CapacityMaintenanceTable.completed_at.is_(None),

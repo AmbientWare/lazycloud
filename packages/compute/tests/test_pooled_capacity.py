@@ -4559,6 +4559,23 @@ def test_stopped_reserve_from_an_older_release_is_prepared_again_and_records_the
     if not controller_exit:
         assert compute.refresh_stale_reserves(release, now=now) == []
         now += timedelta(seconds=unit.registration_timeout_seconds)
+    with service_context.database.session() as session:
+        units = ComputeUnitRepository(session)
+        current = units.get(unit.id)
+        assert current is not None
+        units.upsert(
+            current.model_copy(
+                update={
+                    "phase": ComputeUnitPhase.Degraded,
+                    "provider_state": current.provider_state.model_copy(
+                        update={
+                            "degraded_reason": "provider_acquisition_rejected",
+                            "degraded_at": now,
+                        }
+                    ),
+                }
+            )
+        )
     assert compute.refresh_stale_reserves(release, now=now) == [machine_id]
     with service_context.database.session() as session:
         repository = CapacityMaintenanceRepository(session)
@@ -4625,6 +4642,77 @@ def test_stopped_reserve_from_an_older_release_is_prepared_again_and_records_the
     status = ComputeReleaseStatusService(service_context.database).read(release, [])
     assert status.complete
     assert status.machines[0].phase is ReleaseMachinePhase.Current
+
+
+def test_idle_platform_worker_updates_without_buying_capacity_in_a_degraded_pool(
+    service_context: ServiceContext,
+    real_redis_actors: RealRedisActors,
+) -> None:
+    now = datetime.now(UTC)
+    compute, _provider, _leases, unit, machine_id = _stopped_reserve(
+        service_context, real_redis_actors, now=now
+    )
+    _seed_serving_machine(
+        service_context,
+        unit,
+        _SchedulerHooks(),
+        machine_id=machine_id,
+        instance_id=_RESERVE_INSTANCE,
+        now=now,
+    )
+    with service_context.database.session() as session:
+        units = ComputeUnitRepository(session)
+        unit = units.upsert(
+            unit.model_copy(
+                update={
+                    "phase": ComputeUnitPhase.Degraded,
+                    "provider_state": unit.provider_state.model_copy(
+                        update={
+                            "degraded_reason": "provider_acquisition_rejected",
+                            "degraded_at": now,
+                        }
+                    ),
+                }
+            )
+        )
+    source = SchedulerWorkerRecord(
+        worker_id=agent_machine_worker_id(machine_id),
+        machine_id=machine_id,
+        workspace_id=unit.workspace_id,
+        capacity_owner_id=unit.id,
+        placement=unit.placement,
+        runtime_image="worker:old",
+        agent_binary_sha256="b" * 64,
+        admitted_release_generation=1,
+        status=SchedulerWorkerStatus.Available,
+        request_poll_expires_at=now + timedelta(minutes=5),
+        total_cpu_millicores=1000,
+        free_cpu_millicores=1000,
+    )
+    release = ActiveRelease(
+        generation=2,
+        manifest_url="https://example.test/release",
+        target=_RESERVE_RELEASE,
+    )
+    operation = compute.prepare_worker_release(source, release, [source])
+    assert operation.surge_machines == 0
+    assert operation.replacement_machine_id is None
+    busy = source.model_copy(update={"free_cpu_millicores": 0})
+    with (
+        pytest.raises(ConflictError, match="replacement capacity"),
+        compute.worker_release_admission(busy, release, [busy]),
+    ):
+        pass
+    with compute.worker_release_admission(source, release, [source]):
+        pass
+    with service_context.database.session() as session:
+        assert WorkerReleaseRepository(session).machine_has_update(machine_id)
+        [admitted] = CapacityMaintenanceRepository(session).active_for_pools([unit.id])
+        current = ComputeUnitRepository(session).get(unit.id)
+    assert admitted.phase is CapacityMaintenancePhase.Draining
+    assert admitted.surge_machines == 0
+    assert current is not None
+    assert current.provider_state.degraded_reason == "provider_acquisition_rejected"
 
 
 def test_a_resumed_reserve_registers_no_worker_until_its_stream_authorizes_the_resume(

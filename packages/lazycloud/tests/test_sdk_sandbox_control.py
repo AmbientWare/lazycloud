@@ -451,6 +451,20 @@ def test_sandbox_create_does_not_retry_non_pending_http_failures() -> None:
     assert pod.terminated == ["ctr-stub-1"]
 
 
+def test_interrupted_sandbox_creation_terminates_its_container() -> None:
+    class InterruptedClient(FakeSandboxPodClient):
+        def sandbox_connect(self, container_id: str) -> PodSandboxConnectResponse:
+            raise KeyboardInterrupt
+
+    pod = InterruptedClient()
+    sandbox = _bind_internal_state(Sandbox(_app_slug="test"), stub_id="stub-1", client=pod)
+
+    with pytest.raises(KeyboardInterrupt):
+        sandbox.create()
+
+    assert pod.terminated == ["ctr-stub-1"]
+
+
 def test_sandbox_create_timeout_preserves_state_and_cleans_up_once() -> None:
     cause = http_api_error("container ctr-stub-1 is pending", status_code=503)
     pod = FakeSandboxPodClient(connect_outcomes=[cause])

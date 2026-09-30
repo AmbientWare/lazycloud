@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from shared.http.task_progress import (
     PENDING_NOTICE_DELAY_SECONDS,
@@ -13,7 +14,8 @@ from shared.http.task_progress import (
 )
 from shared.timestamps import utc_now
 
-from lazycloud.terminal import Terminal, TerminalStep
+if TYPE_CHECKING:
+    from lazycloud.terminal import Terminal, TerminalStep
 
 PendingProgressCallback = Callable[[str, TaskPendingProgress | None], None]
 _callback: ContextVar[PendingProgressCallback | None] = ContextVar("pending_progress", default=None)
