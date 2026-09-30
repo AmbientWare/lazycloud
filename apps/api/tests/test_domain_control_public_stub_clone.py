@@ -8,13 +8,17 @@ import pytest
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from apps.api.tests.runtime import services_with_object_storage
-from control.service import ControlPlaneService, StubKind
+from control.service import ControlServices
+from database.records.apps import StubKind
 from database.repositories.identity import SecretRepository
 from database.repositories.storage import ObjectRepository, VolumeRepository
 from fastapi.testclient import TestClient
 from identity.auth import AuthService
 from pydantic import JsonValue, TypeAdapter
 from shared.app_identity import SOURCE_PACKAGE_BUCKET
+from shared.errors import InvalidInputError
+from shared.http.apps import StubCloneResponse
+from shared.http.stubs import PublicStubConfigResponse, StubResponse
 from shared.identity import AuthScope, TokenKind
 from shared.objects import ObjectWriteCommand
 from storage.service import ObjectStorage
@@ -28,18 +32,18 @@ def test_public_stub_config_allows_public_and_same_workspace_private_only(
     isolated_services: ApiServices,
 ) -> None:
     with ExitStack() as client_stack:
-        control = ControlPlaneService(
+        control = ControlServices.create(
             isolated_services.context,
         )
         owner = owned_workspace(control, "owner")
         other = owned_workspace(control, "other")
-        private_stub = control.create_stub(
+        private_stub = control.stubs.create_stub(
             "private-api",
             workspace=owner.id,
             public=False,
             config={"runtime": {"cpu": 1}},
         )
-        public_stub = control.create_stub(
+        public_stub = control.stubs.create_stub(
             "public-api",
             workspace=owner.id,
             public=True,
@@ -65,18 +69,12 @@ def test_public_stub_config_allows_public_and_same_workspace_private_only(
         anonymous_private = client.get(f"/api/v1/stubs/{private_stub.id}/config")
 
         assert public_response.status_code == 200
-        public_payload = _JSON_OBJECT_ADAPTER.validate_json(public_response.content)
-        public_runtime = public_payload["runtime"]
-        assert isinstance(public_runtime, dict)
-        assert public_runtime["cpu"] == 2
+        public = PublicStubConfigResponse.model_validate_json(public_response.content)
+        assert public.runtime is not None and public.runtime.cpu == 2
         assert owner_private_public_route.status_code == 404
         assert owner_private_scoped.status_code == 200
-        private_payload = _JSON_OBJECT_ADAPTER.validate_json(owner_private_scoped.content)
-        private_config = private_payload["config"]
-        assert isinstance(private_config, dict)
-        private_runtime = private_config["runtime"]
-        assert isinstance(private_runtime, dict)
-        assert private_runtime["cpu"] == 1
+        private = StubResponse.model_validate_json(owner_private_scoped.content)
+        assert private.config.runtime is not None and private.config.runtime.cpu == 1
         assert other_private.status_code == 404
         assert anonymous_private.status_code == 404
 
@@ -86,12 +84,12 @@ def test_public_clone_copies_local_object_and_remaps_target_workspace_refs(
     tmp_path: Path,
 ) -> None:
     with ExitStack() as client_stack:
-        control = ControlPlaneService(
+        control = ControlServices.create(
             isolated_services.context,
         )
         owner = owned_workspace(control, "clone-owner")
         target = owned_workspace(control, "clone-target")
-        source = control.create_stub(
+        source = control.stubs.create_stub(
             "shared", workspace=owner.id, public=True, kind=StubKind.Function
         )
         with isolated_services.context.database.session() as session:
@@ -112,7 +110,7 @@ def test_public_clone_copies_local_object_and_remaps_target_workspace_refs(
             content=source_bytes,
             metadata={"stub_id": source.id, "workspace_id": owner.id},
         )
-        source = control.create_stub(
+        source = control.stubs.create_stub(
             "shared",
             workspace=owner.id,
             public=True,
@@ -120,7 +118,7 @@ def test_public_clone_copies_local_object_and_remaps_target_workspace_refs(
                 "object_id": source_object.id,
                 "secrets": ["TARGET_SECRET", "OWNER_ONLY"],
                 "volumes": [{"name": "models", "id": "source-volume", "path": "/private/models"}],
-                "runtime": {"cpu": 1},
+                "runtime": {"cpu": 1, "gpu": ["T4"]},
             },
         )
         token = _workspace_token(isolated_services, target.id, "clone-target-token")
@@ -133,54 +131,99 @@ def test_public_clone_copies_local_object_and_remaps_target_workspace_refs(
         )
 
         assert response.status_code == 201, response.text
-        payload = _JSON_OBJECT_ADAPTER.validate_json(response.content)
-        cloned = payload["cloned_stub"]
-        assert isinstance(cloned, dict)
-        copied_objects = payload["copied_objects"]
-        assert isinstance(copied_objects, list)
-        assert copied_objects
-        copied_object_id = copied_objects[0]
-        assert isinstance(copied_object_id, str)
-        assert cloned["workspace_id"] == target.id
-        cloned_config = cloned["config"]
-        assert isinstance(cloned_config, dict)
-        assert cloned_config["object_id"] == copied_object_id
-        assert cloned_config["secrets"] == ["TARGET_SECRET"]
+        payload = StubCloneResponse.model_validate_json(response.content)
+        cloned = payload.cloned_stub
+        (copied_object_id,) = payload.copied_objects
+        assert cloned.workspace_id == target.id
+        assert cloned.config.object_id == copied_object_id
+        assert cloned.config.secrets == ["TARGET_SECRET"]
+        assert cloned.config.runtime is not None and cloned.config.runtime.gpu == ["T4"]
         with isolated_services.context.database.session() as session:
             target_volume = VolumeRepository(session).get("models", workspace_id=target.id)
-            copied = next(
-                (
-                    item
-                    for item in ObjectRepository(session).list(workspace_id=target.id)
-                    if item.id == copied_object_id
-                ),
-                None,
-            )
+            copied = ObjectRepository(session).get(copied_object_id, workspace_id=target.id)
         assert target_volume is not None
-        cloned_volumes = cloned_config["volumes"]
-        assert isinstance(cloned_volumes, list) and cloned_volumes
-        cloned_volume = cloned_volumes[0]
-        assert isinstance(cloned_volume, dict)
-        assert cloned_volume["id"] == target_volume.id
-        assert cloned_volume["name"] == target_volume.name
-        assert cloned_volume.get("path", "") == ""
+        (cloned_volume,) = cloned.config.volumes
+        assert cloned_volume.id == target_volume.id
+        assert cloned_volume.name == target_volume.name
+        assert cloned_volume.path == ""
         assert copied is not None
-        cloned_id = cloned["id"]
-        assert isinstance(cloned_id, str)
-        assert copied.metadata["stub_id"] == cloned_id
-        assert Path(copied.path).read_bytes() == source_bytes
+        assert copied.metadata["stub_id"] == cloned.id
+        downloaded = tmp_path / "cloned.bin"
+        isolated_services.object_storage.download_by_id_for_workspace(
+            copied.id, downloaded, workspace_id=target.id
+        )
+        assert downloaded.read_bytes() == source_bytes
+
+
+@pytest.mark.parametrize("failure", ["copy", "registration"])
+def test_failed_clone_removes_its_copies_and_rolls_back_owned_records(
+    isolated_services: ApiServices,
+    tmp_path: Path,
+    failure: str,
+) -> None:
+    control = isolated_services.control_plane_service
+    owner = owned_workspace(control, "rollback-owner")
+    target = owned_workspace(control, "rollback-target")
+    source = control.stubs.create_stub(
+        "invalid app name" if failure == "registration" else "copy-failure",
+        workspace=owner.id,
+        public=True,
+        config={"volumes": [{"name": "clone-volume"}]},
+    )
+    if failure == "copy":
+        _create_object(
+            isolated_services,
+            workspace_id=owner.id,
+            bucket=SOURCE_PACKAGE_BUCKET,
+            key="missing",
+            path=str(tmp_path / "missing"),
+            content=b"missing",
+            metadata={"stub_id": source.id},
+        )
+    data = tmp_path / "source"
+    data.write_bytes(b"source bytes")
+    _create_object(
+        isolated_services,
+        workspace_id=owner.id,
+        bucket=SOURCE_PACKAGE_BUCKET,
+        key="source",
+        path=str(data),
+        content=data.read_bytes(),
+        metadata={"stub_id": source.id},
+    )
+    sibling = isolated_services.object_storage.put_file_for_workspace(
+        workspace_id=target.id,
+        bucket=SOURCE_PACKAGE_BUCKET,
+        key="sibling",
+        source=data,
+        overwrite=False,
+    )
+    with pytest.raises(FileNotFoundError if failure == "copy" else InvalidInputError):
+        control.cloning.clone_stub(source.id, apps=isolated_services.apps, workspace=target.id)
+    assert control.stubs.list_stubs(workspace=target.id) == []
+    assert isolated_services.apps.list(workspace=target.id) == []
+    with isolated_services.context.database.session() as session:
+        assert VolumeRepository(session).list(workspace_id=target.id) == []
+        assert [record.id for record in ObjectRepository(session).list(workspace_id=target.id)] == [
+            sibling.id
+        ]
+    downloaded = tmp_path / "sibling"
+    isolated_services.object_storage.download_by_id_for_workspace(
+        sibling.id, downloaded, workspace_id=target.id
+    )
+    assert downloaded.read_bytes() == b"source bytes"
 
 
 def test_cross_workspace_private_clone_is_denied(
     isolated_services: ApiServices,
 ) -> None:
     with ExitStack() as client_stack:
-        control = ControlPlaneService(
+        control = ControlServices.create(
             isolated_services.context,
         )
         owner = owned_workspace(control, "private-owner")
         other = owned_workspace(control, "private-other")
-        source = control.create_stub("private", workspace=owner.id, public=False)
+        source = control.stubs.create_stub("private", workspace=owner.id, public=False)
         token = _workspace_token(isolated_services, other.id, "private-other-token")
         client = client_stack.enter_context(TestClient(create_app(isolated_services)))
 
@@ -199,12 +242,12 @@ def test_deployment_package_download_streams_local_file_and_redirects_presigned(
     request: pytest.FixtureRequest,
 ) -> None:
     with ExitStack() as client_stack:
-        control = ControlPlaneService(
+        control = ControlServices.create(
             isolated_services.context,
         )
         workspace = owned_workspace(control, "packages")
-        local_stub = control.create_stub("local-package", workspace=workspace.id)
-        remote_stub = control.create_stub("remote-package", workspace=workspace.id)
+        local_stub = control.stubs.create_stub("local-package", workspace=workspace.id)
+        remote_stub = control.stubs.create_stub("remote-package", workspace=workspace.id)
         local_file = tmp_path / "local.pkg"
         local_bytes = b"local deployment package"
         local_file.write_bytes(local_bytes)

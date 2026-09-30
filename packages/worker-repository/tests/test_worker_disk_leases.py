@@ -3,8 +3,8 @@ from uuid import uuid4
 
 import pytest
 from api.server.services import ApiServices
-from control.service import ControlPlaneService, StubKind
-from database.records.apps import StubRecord
+from control.service import ControlServices
+from database.records.apps import StubKind, StubRecord
 from database.repositories.apps import StubRepository
 from database.repositories.orchestration import ContainerRepository
 from identity.auth import AuthorizationDeniedError
@@ -103,7 +103,7 @@ def test_a_worker_leases_only_the_disks_its_assigned_container_declares(
 
     # Once stopped, the container has no scheduler state to vend credentials on,
     # and its release still has to publish. The lease is the authority.
-    ControlPlaneService(isolated_services.context).set_workspace_storage(
+    ControlServices.create(isolated_services.context).workspaces.set_workspace_storage(
         workspace.id, WorkspaceStorageConfig(backend="s3", bucket="workspace-bucket")
     )
     with database.session() as session:

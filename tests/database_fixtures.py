@@ -7,7 +7,7 @@ from uuid import uuid4
 
 import pytest
 from billing.rate_publication import publish_metered_rate_history
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from database.context import ServiceContext
 from identity.platform import PlatformNamespaceService
 from sqlalchemy import Engine, create_engine, text
@@ -127,12 +127,12 @@ def workspace_template_url(
         try:
             context = ServiceContext.create(database, root=tmp_path_factory.mktemp("domain"))
             PlatformNamespaceService(database).initialize()
-            control = ControlPlaneService(
+            control = ControlServices.create(
                 context,
                 workspace_storage_client=FakeWorkspaceBuckets(),
             )
             owned_workspace(control, "default")
-            control.ensure_workspace_storage("default")
+            control.workspaces.ensure_workspace_storage("default")
         finally:
             database.dispose()
         yield url

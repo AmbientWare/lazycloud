@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from datetime import datetime, timedelta
 from uuid import uuid4
 
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from database.context import ServiceContext
 from database.repositories.aws_connections import AwsAccountConnectionRepository
 from database.repositories.billing import BillingAccountRepository
@@ -80,7 +80,7 @@ def _fixture_account(database: DatabaseClient, display_name: str) -> str:
 
 
 def owned_workspace(
-    control: ControlPlaneService,
+    control: ControlServices,
     name: str = "default",
     *,
     labels: dict[str, str] | None = None,
@@ -91,7 +91,7 @@ def owned_workspace(
         control.context.database,
         f"{name}-owner-{uuid4().hex[:8]}",
     )
-    return control.set_workspace(
+    return control.workspaces.set_workspace(
         name,
         owner_user_id=owner_user_id,
         labels=labels,
@@ -100,7 +100,7 @@ def owned_workspace(
 
 
 def connected_workspace(
-    control: ControlPlaneService,
+    control: ControlServices,
     name: str,
     *,
     owner_user_id: str | None = None,
@@ -122,8 +122,10 @@ def connected_workspace(
     )
     with control.context.database.session() as session:
         AwsAccountConnectionRepository(session).create(connection)
-    workspace = control.set_workspace(name, owner_user_id=owner, connection_id=connection.id)
-    return control.set_workspace_storage(
+    workspace = control.workspaces.set_workspace(
+        name, owner_user_id=owner, connection_id=connection.id
+    )
+    return control.workspaces.set_workspace_storage(
         workspace.id,
         WorkspaceStorageConfig(
             backend="s3",
@@ -134,7 +136,7 @@ def connected_workspace(
     )
 
 
-def _existing_owner(control: ControlPlaneService, name: str) -> str | None:
+def _existing_owner(control: ControlServices, name: str) -> str | None:
     with control.context.database.session() as session:
         record = WorkspaceRepository(session).by_name(name)
         if record is None:

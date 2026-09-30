@@ -6,9 +6,11 @@ from datetime import datetime, timedelta
 
 from api.server.services import ApiServices
 from compute.capacity_recovery import CAPACITY_WAKE_SCOPE
-from control.service import ControlPlaneService, StubConfigUpdateValue, StubKind, StubRecord
+from control.service import ControlServices
+from control.stub_config import StubConfigUpdateValue
 from coordination.redis_client import RedisClient
 from coordination.wake_signal import RedisWakeSignal
+from database.records.apps import StubKind, StubRecord
 from database.records.endpoint_dispatch import EndpointDispatchStateRecord
 from database.repositories.endpoint_dispatch import EndpointDispatchRepository
 from database.repositories.orchestration import AutoscalerStateRepository, ContainerRepository
@@ -239,10 +241,10 @@ def _create_endpoint_stub(
     }
     if runtime_config is not None:
         stub_runtime_config.update(runtime_config)
-    control = ControlPlaneService(runtime.context)
+    control = ControlServices.create(runtime.context)
     stub = next(
         item
-        for item in control.list_stubs()
+        for item in control.stubs.list_stubs()
         if item.deployment_id == deployment.id and item.kind is StubKind.Endpoint
     )
     fields: dict[str, StubConfigUpdateValue] = {
@@ -250,7 +252,7 @@ def _create_endpoint_stub(
         "runtime": stub_runtime_config,
         "autoscaler": autoscaler,
     }
-    return control.update_stub_config(
+    return control.stubs.update_stub_config(
         stub.id,
         fields=fields,
     ).stub

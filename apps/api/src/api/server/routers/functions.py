@@ -6,7 +6,8 @@ from functools import partial
 from typing import Annotated
 
 from anyio import CancelScope, to_thread
-from control.service import ControlPlaneService, StubKind, StubRecord
+from control.service import ControlServices
+from database.records.apps import StubKind, StubRecord
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 from shared.function_payloads import FunctionJsonInvocation
@@ -82,7 +83,7 @@ def function_serve(
     request: FunctionServeRequest,
     workspace_id: write_workspace,
     service: FunctionApiService = Depends(function_service),
-    control_plane: ControlPlaneService = Depends(control_plane_service),
+    control_plane: ControlServices = Depends(control_plane_service),
 ) -> FunctionServeResponse:
     require_function_stub_workspace(control_plane, request.stub_id, workspace_id)
     return service.start_function_serve(request)
@@ -180,7 +181,7 @@ async def deployed_function_invoke_by_id(
     invocation: HttpFunctionInvocation,
     workspace_id: write_workspace,
     service: FunctionApiService = Depends(function_service),
-    control_plane: ControlPlaneService = Depends(control_plane_service),
+    control_plane: ControlServices = Depends(control_plane_service),
     services: ApiServiceCore = Depends(current_services),
 ) -> FunctionInvokeResponse:
     stub = await to_thread.run_sync(
@@ -204,7 +205,7 @@ async def deployed_public_function_invoke_by_id(
     connection: Request,
     invocation: HttpFunctionInvocation,
     service: FunctionApiService = Depends(function_service),
-    control_plane: ControlPlaneService = Depends(control_plane_service),
+    control_plane: ControlServices = Depends(control_plane_service),
     services: ApiServiceCore = Depends(current_services),
 ) -> FunctionInvokeResponse:
     stub = await to_thread.run_sync(

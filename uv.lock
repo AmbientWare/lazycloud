@@ -711,6 +711,7 @@ dependencies = [
     { name = "lazycloud-shared" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "storage" },
 ]
 
 [package.metadata]
@@ -722,6 +723,7 @@ requires-dist = [
     { name = "lazycloud-shared", editable = "packages/shared" },
     { name = "pydantic", specifier = ">=2,<3" },
     { name = "pydantic-settings", specifier = ">=2.4,<3" },
+    { name = "storage", editable = "packages/storage" },
 ]
 
 [[package]]

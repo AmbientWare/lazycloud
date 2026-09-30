@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from database.context import ServiceContext
 from database.repositories.identity import (
     UserRepository,
@@ -34,7 +34,7 @@ def test_storage_observations_dedupe_survive_deletion_and_exclude_customer_stora
         workspace = WorkspaceRepository(session).create(name="storage accounting")
         WorkspaceMemberRepository(session).ensure_owner(workspace_id=workspace.id, user_id=user.id)
     external = connected_workspace(
-        ControlPlaneService(service_context),
+        ControlServices.create(service_context),
         "customer storage",
     )
     with database.session() as session:

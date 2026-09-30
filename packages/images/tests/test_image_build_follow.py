@@ -12,7 +12,7 @@ def test_build_follow_fans_out_progress_and_replays_terminal_logs(
     isolated_services: ApiServices,
 ) -> None:
     images = isolated_services.images
-    workspace_id = isolated_services.control_plane_service.get_workspace().id
+    workspace_id = isolated_services.control_plane_service.workspaces.get_workspace().id
     build = images.build(
         ImageSpec(ignore_python=True, commands=["true"]), workspace_id=workspace_id
     )
@@ -51,7 +51,7 @@ def test_build_follow_recovers_logs_committed_without_a_notification(
     isolated_services: ApiServices,
 ) -> None:
     images = isolated_services.images
-    workspace_id = isolated_services.control_plane_service.get_workspace().id
+    workspace_id = isolated_services.control_plane_service.workspaces.get_workspace().id
     build = images.build(
         ImageSpec(ignore_python=True, commands=["true"]), workspace_id=workspace_id
     )

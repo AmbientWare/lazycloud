@@ -5,7 +5,8 @@ from pathlib import Path
 
 import pytest
 from api.server.services import ApiServices
-from control.service import ControlPlaneService, StubKind, StubRecord
+from control.service import ControlServices
+from database.records.apps import StubKind, StubRecord
 from execution.functions.service import FunctionControlService
 from gateway.service import GatewayControlService
 from observability.startup_latency import StartupLatencyService
@@ -182,7 +183,7 @@ async def test_unbounded_function_settles_unconfirmed_publication_without_retry(
         "    return 42\n",
         "result_value",
     )
-    stub = ControlPlaneService(async_services.context).create_stub(
+    stub = ControlServices.create(async_services.context).stubs.create_stub(
         "unbounded-function",
         kind=StubKind.Function,
         handler=handler_ref,
@@ -271,7 +272,7 @@ async def _invoke_and_run(
 
 
 def _create_function_stub(services: ApiServices, handler_ref: str) -> StubRecord:
-    return ControlPlaneService(services.context).create_stub(
+    return ControlServices.create(services.context).stubs.create_stub(
         "streaming-function",
         kind=StubKind.Function,
         handler=handler_ref,
@@ -325,16 +326,12 @@ class _FunctionRunnerServiceChannel:
             claim = FunctionClaimRequest.model_validate(payload)
             response = self.function_service.function_claim(
                 claim,
-                workspace_id=self.function_service.control_plane.get_stub(
-                    claim.stub_id
-                ).workspace_id,
+                workspace_id=self.function_service.stubs.get_stub(claim.stub_id).workspace_id,
             )
             return _JSON_OBJECT_ADAPTER.validate_json(response.model_dump_json())
         if path == "/gateway/functions/retire":
             retirement = FunctionRetireRequest.model_validate(payload)
-            workspace_id = self.function_service.control_plane.get_stub(
-                retirement.stub_id
-            ).workspace_id
+            workspace_id = self.function_service.stubs.get_stub(retirement.stub_id).workspace_id
             response = self.function_service.function_retire(retirement, workspace_id=workspace_id)
             return _JSON_OBJECT_ADAPTER.validate_json(response.model_dump_json())
         if path == "/api/v1/functions/set-result":

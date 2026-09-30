@@ -3,7 +3,7 @@ from __future__ import annotations
 from base64 import b64encode
 
 from api.server.services import ApiServices
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from database.repositories.images import ImageArchiveRepository, ImageRepository
 from shared.identity import TokenKind
 from shared.image_building.records import ImageArchiveRecord, ImageRecord
@@ -69,7 +69,7 @@ def _publish_archive(services: ApiServices, *, workspace_id: str) -> ImageArchiv
 def test_archive_download_is_signed_only_for_an_authorized_workspace(
     isolated_services: ApiServices,
 ) -> None:
-    control = ControlPlaneService(
+    control = ControlServices.create(
         isolated_services.context,
     )
     workspace = owned_workspace(control, "workspace-a")
@@ -125,7 +125,7 @@ def test_archive_upload_binds_the_reserved_digest_and_skips_a_published_archive(
     isolated_services: ApiServices,
 ) -> None:
     workspace = owned_workspace(
-        ControlPlaneService(
+        ControlServices.create(
             isolated_services.context,
         ),
         "workspace-a",
@@ -221,7 +221,7 @@ def test_image_archive_presign_failures_are_sanitized(
     isolated_services: ApiServices,
 ) -> None:
     workspace = owned_workspace(
-        ControlPlaneService(
+        ControlServices.create(
             isolated_services.context,
         ),
         "workspace-1",

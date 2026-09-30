@@ -11,10 +11,10 @@ from typing import Protocol
 from urllib.parse import urlencode
 from uuid import uuid4
 
-from control.service import ControlPlaneService, StubKind
+from control.stubs import StubService
 from control.tcp_ingress import tcp_pod_url
 from coordination.redis_client import RedisClient
-from database.records.apps import StubRecord
+from database.records.apps import StubKind, StubRecord
 from database.repositories.apps import StubRepository
 from database.repositories.execution import PodUrlRepository
 from database.repositories.images import CheckpointRepository
@@ -211,13 +211,13 @@ class PodControlService:
     sync_workload_changes: SyncWorkloadChangeReader | None = None
     container_connect_timeout_seconds: float = DEFAULT_POD_CONNECTION_TIMEOUT_SECONDS
     pod_proxy_start_timeout_seconds: float = DEFAULT_POD_PROXY_TIMEOUT_SECONDS
-    control_plane: ControlPlaneService = field(init=False)
+    stubs: StubService = field(init=False)
     _result_waits: dict[tuple[str, str, float], _SandboxResultWait] = field(
         default_factory=dict, init=False, repr=False
     )
 
     def __post_init__(self) -> None:
-        self.control_plane = ControlPlaneService(self.services.context)
+        self.stubs = StubService(self.services.context)
         if self.scheduler_containers is None:
             candidate = getattr(self.services.containers, "scheduler_containers", None)
             if isinstance(candidate, ContainerSchedulingDirectory):
@@ -244,14 +244,15 @@ class PodControlService:
             and request.stub_id != requested_checkpoint.stub_id
         ):
             raise InvalidInputError("checkpoint does not belong to the requested sandbox stub")
-        stub = self.control_plane.get_stub(stub_id)
+        stub = self.stubs.get_stub(stub_id)
         if stub.kind not in {StubKind.Pod, StubKind.Sandbox}:
             raise InvalidInputError(f"stub is not runnable as a pod: {stub.id}")
         if authorized_workspace_id is not None and stub.workspace_id != authorized_workspace_id:
             raise NotFoundError(f"stub not found: {stub.id}")
         if requested_checkpoint is not None and stub.kind is not StubKind.Sandbox:
             raise InvalidInputError("memory checkpoints can only restore Sandbox workloads")
-        workspace = self.control_plane.get_workspace(stub.workspace_id)
+        with self.services.context.database.session() as workspace_session:
+            workspace = self.services.context.workspace(workspace_session, stub.workspace_id)
         config = PodStubConfig.model_validate(stub.config, from_attributes=True)
         if stub.config.ssh and stub.deployment_id is None:
             raise InvalidInputError(
@@ -995,7 +996,7 @@ class PodControlService:
         protocol: PodProxyProtocol,
     ) -> PodProxySession:
         stub = await self._async_database().run_transaction(
-            lambda session: self.control_plane.get_stub_in_session(session, stub_id)
+            lambda session: self.stubs.get_stub_in_session(session, stub_id)
         )
         workspace_id = stub.workspace_id
         config = PodStubConfig.model_validate(stub.config, from_attributes=True)
@@ -1109,7 +1110,7 @@ class PodControlService:
         container = self._container(container_id)
         if not container.stub_id:
             raise InvalidInputError(f"container is not a sandbox: {container_id}")
-        stub = self.control_plane.get_stub(container.stub_id, workspace=container.workspace_id)
+        stub = self.stubs.get_stub(container.stub_id, workspace=container.workspace_id)
         if stub.workspace_id != container.workspace_id or stub.kind is not StubKind.Sandbox:
             raise InvalidInputError(f"container is not a sandbox: {container_id}")
         return container, stub

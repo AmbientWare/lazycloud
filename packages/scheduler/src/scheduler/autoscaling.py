@@ -346,7 +346,7 @@ class AutoscalingDriver:
             if stubs is not None
             else [
                 stub
-                for stub in self.services.control_plane_service.list_autoscaling_stubs()
+                for stub in self.services.control_plane_service.stubs.list_autoscaling_stubs()
                 if self.selects(stub)
             ]
         )

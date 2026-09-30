@@ -11,7 +11,7 @@ from control.apps import (
 from control.deployments import CronJobService
 from control.placement import PlacementResolver
 from control.readers import DatabaseAppReader, DatabaseDeploymentReader
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from coordination.event_bus import RedisEventBus
 from coordination.redis_client import RedisClient
 from coordination.wake_signal import RedisWakeSignal
@@ -68,7 +68,7 @@ class SchedulerAppServices:
     cron_jobs: CronJobService
     containers: ContainerService
     container_shutdowns: ContainerShutdownService
-    control_plane_service: ControlPlaneService
+    control_plane_service: ControlServices
     compute_policies: WorkspaceComputePolicyService
     tasks: TaskService
     execution_demand: ExecutionDemandService
@@ -110,7 +110,7 @@ class SchedulerAppServices:
 
         compute_policies = WorkspaceComputePolicyService(context)
 
-        control_plane = ControlPlaneService(
+        control_plane = ControlServices.create(
             context,
             workspace_storage_client=object_client,
             public_http_origin=gateway_origin,

@@ -8,7 +8,8 @@ from uuid import uuid4
 
 import pytest
 from api.server.services import ApiServices
-from control.service import ControlPlaneService, StubKind
+from control.service import ControlServices
+from database.records.apps import StubKind
 from database.repositories.compute import (
     ComputeCapacityOperationRecord,
     ComputeCapacityOperationRepository,
@@ -37,7 +38,7 @@ def test_capacity_diagnosis_survives_failover_until_worker_assignment(
 ) -> None:
     services = isolated_services
     now = utc_now()
-    stub = ControlPlaneService(services.context).create_stub(
+    stub = ControlServices.create(services.context).stubs.create_stub(
         "capacity-progress", kind=StubKind.Function, handler="main:hello"
     )
     container = ContainerRecord(

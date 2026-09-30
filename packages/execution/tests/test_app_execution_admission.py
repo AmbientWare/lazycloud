@@ -4,7 +4,8 @@ from typing import Literal
 
 import pytest
 from api.server.services import ApiServices
-from control.service import ControlPlaneService, StubKind
+from control.service import ControlServices
+from database.records.apps import StubKind
 from execution.endpoints.service import EndpointControlService
 from execution.functions.service import FunctionControlService
 from shared.errors import ConflictError
@@ -20,9 +21,9 @@ def test_paused_app_rejects_every_execution_producer_without_container_orphans(
 ) -> None:
     app = isolated_services.apps.create(f"paused_{producer}")
     kind = StubKind.Function if producer == "function" else StubKind.Endpoint
-    stub = ControlPlaneService(
+    stub = ControlServices.create(
         isolated_services.context,
-    ).create_stub(
+    ).stubs.create_stub(
         producer,
         kind=kind,
         handler="pkg.workloads:handler",

@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from database.context import ServiceContext
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.source_cache import SourceCacheCleanupRepository
@@ -22,7 +22,7 @@ def test_source_cache_cleanup_status_is_bounded_and_outlives_its_workspace(
     workspace to take it is a different tenant whose cleanup this is not.
     """
     workspace = owned_workspace(
-        ControlPlaneService(service_context),
+        ControlServices.create(service_context),
         "cleanup-status",
     )
     started_at = datetime(2026, 7, 21, 12, tzinfo=UTC)
@@ -62,7 +62,7 @@ def test_source_cache_cleanup_status_clamps_future_clock_and_reports_missing(
     service_context: ServiceContext,
 ) -> None:
     workspace = owned_workspace(
-        ControlPlaneService(service_context),
+        ControlServices.create(service_context),
         "clock-status",
     )
     started_at = datetime(2026, 7, 21, 12, tzinfo=UTC)

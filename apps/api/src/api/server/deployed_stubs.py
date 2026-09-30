@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from control.service import ControlPlaneService, StubKind, StubRecord
+from control.service import ControlServices
+from database.records.apps import StubKind, StubRecord
 from database.types import DatabaseSession
 from fastapi import HTTPException
 from shared.deployments import DeploymentKind
@@ -12,7 +13,7 @@ from api.server.services import ApiServiceCore
 
 
 def resolve_deployed_stub_id(
-    control_plane: ControlPlaneService,
+    control_plane: ControlServices,
     services: ApiServiceCore,
     stub_id: str,
     expected_kind: StubKind,
@@ -35,7 +36,7 @@ def resolve_deployed_stub_id(
 
 
 async def resolve_deployed_stub_id_async(
-    control_plane: ControlPlaneService,
+    control_plane: ControlServices,
     services: ApiServiceCore,
     stub_id: str,
     expected_kind: StubKind,
@@ -98,7 +99,7 @@ async def resolve_deployed_stub_async(
 
 
 def _stub_by_id(
-    control_plane: ControlPlaneService,
+    control_plane: ControlServices,
     services: ApiServiceCore,
     stub_id: str,
     expected_kind: StubKind,
@@ -111,7 +112,7 @@ def _stub_by_id(
 
     def resolve(session: DatabaseSession) -> StubRecord:
         try:
-            stub = control_plane.get_stub_in_session(session, stub_id, workspace=workspace)
+            stub = control_plane.stubs.get_stub_in_session(session, stub_id, workspace=workspace)
         except NotFoundError as exc:
             raise HTTPException(status_code=404, detail=f"{name} not found") from exc
         _validate(stub, expected_kind, public=public, resource_name=name)

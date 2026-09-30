@@ -6,7 +6,7 @@ from uuid import uuid4
 
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from database.repositories.source_cache import SourceCacheCleanupRepository
 from fastapi.testclient import TestClient
 from identity.auth import AuthService
@@ -19,10 +19,10 @@ def test_source_cache_cleanup_status_is_admin_only_and_bounded(
     isolated_services: ApiServices,
 ) -> None:
     with ExitStack() as client_stack:
-        control = ControlPlaneService(
+        control = ControlServices.create(
             isolated_services.context,
         )
-        default_workspace = control.get_workspace("default")
+        default_workspace = control.workspaces.get_workspace("default")
         target = owned_workspace(control, "cleanup-status-target")
         started_at = datetime(2026, 7, 21, 12, tzinfo=UTC)
         with isolated_services.context.database.session() as session:

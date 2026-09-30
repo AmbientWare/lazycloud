@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from database.repositories.billing_rates import DiskRateRepository, PlatformRateRepository
 from database.repositories.disks import DiskRepository
 from database.repositories.identity import WorkspaceMemberRepository
@@ -53,7 +53,7 @@ def test_account_costs_sum_what_this_account_pays_for_and_nothing_else(
         now = utc_now()
         started_at = now + _WINDOW_AT
         ended_at = started_at + _WINDOW
-        control = ControlPlaneService(
+        control = ControlServices.create(
             unpriced_services.context,
         )
         with unpriced_services.context.database.session() as session:
@@ -144,7 +144,7 @@ def test_account_cost_series_buckets_the_window_and_stops_at_the_payer(
         # An hour boundary far enough ahead that the rate below is already effective
         # when the first metering window opens.
         origin = (now + timedelta(hours=2)).replace(minute=0, second=0, microsecond=0)
-        control = ControlPlaneService(
+        control = ControlServices.create(
             unpriced_services.context,
         )
         with unpriced_services.context.database.session() as session:

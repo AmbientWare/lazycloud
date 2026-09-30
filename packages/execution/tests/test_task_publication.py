@@ -5,8 +5,9 @@ from dataclasses import replace
 
 import pytest
 from api.server.services import ApiServices
-from control.service import ControlPlaneService, StubKind
+from control.service import ControlServices
 from coordination.redis_client import AsyncRedisClient, RedisClient, RedisSettings
+from database.records.apps import StubKind
 from observability.stream_state import AsyncRedisEventStreamRepository, RedisEventStreamRepository
 from shared.tasks import TaskStatus
 
@@ -15,7 +16,7 @@ from shared.tasks import TaskStatus
 async def test_redis_publication_outage_preserves_task_admission_and_completion(
     async_services: ApiServices,
 ) -> None:
-    stub = ControlPlaneService(async_services.context).create_stub(
+    stub = ControlServices.create(async_services.context).stubs.create_stub(
         "publication-outage", kind=StubKind.Endpoint
     )
     with socket.socket() as unavailable_port:

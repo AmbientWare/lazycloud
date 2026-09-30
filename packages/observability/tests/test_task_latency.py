@@ -6,7 +6,7 @@ from uuid import uuid4
 
 import pytest
 from api.server.services import ApiServices
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from database.repositories.orchestration import ContainerRepository
 from operations.management import ManagementService
 from shared.containers import ContainerRecord, ContainerStatus
@@ -22,7 +22,7 @@ def _seed_stub(services: ApiServices):
     )
     stub = next(
         item
-        for item in ControlPlaneService(services.context).list_stubs()
+        for item in ControlServices.create(services.context).stubs.list_stubs()
         if item.deployment_id == deployment.id
     )
     return deployment, stub

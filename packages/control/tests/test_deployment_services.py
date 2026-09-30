@@ -9,7 +9,7 @@ from api.server.services import ApiServices
 from control.apps import AppService
 from control.deployment_registration import DeploymentRegistrationService
 from control.deployments import DeploymentAppResolution, DeploymentRegistration
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from database.records.apps import AppRecord
 from database.repositories.apps import DeploymentRepository
 from database.repositories.cleanup import (
@@ -160,9 +160,9 @@ def test_deployment_versions_are_scoped_by_kind_and_keep_versioned_stubs(
 
     stubs_by_deployment = {
         stub.deployment_id: stub
-        for stub in ControlPlaneService(
+        for stub in ControlServices.create(
             isolated_services.context,
-        ).list_stubs()
+        ).stubs.list_stubs()
         if stub.deployment_id
     }
     assert stubs_by_deployment[first_function.id].kind.value == DeploymentKind.Function.value
@@ -171,11 +171,11 @@ def test_deployment_versions_are_scoped_by_kind_and_keep_versioned_stubs(
     assert stubs_by_deployment[first_function.id].id == first_function.stub_id
     assert stubs_by_deployment[endpoint.id].id == endpoint.stub_id
     assert stubs_by_deployment[second_function.id].id == second_function.stub_id
-    control = ControlPlaneService(
+    control = ControlServices.create(
         isolated_services.context,
     )
     for deployment in (first_function, endpoint, second_function):
-        resolved = control.get_deployment_stub(deployment.id, workspace="default")
+        resolved = control.stubs.get_deployment_stub(deployment.id, workspace="default")
         assert resolved is not None and resolved.id == deployment.stub_id
 
     latest_resources = isolated_services.deployment_resources.list(
@@ -197,7 +197,7 @@ def test_deployment_versions_are_scoped_by_kind_and_keep_versioned_stubs(
 def test_registration_failure_tombstones_deployment_and_reconciles_placement(
     isolated_services: ApiServices,
 ) -> None:
-    control_plane = ControlPlaneService(
+    control_plane = ControlServices.create(
         isolated_services.context,
         workspace_changes=isolated_services.workspace_changes,
     )
@@ -212,7 +212,7 @@ def test_registration_failure_tombstones_deployment_and_reconciles_placement(
     )
     with isolated_services.context.database.session() as session:
         ObjectRepository(session).upsert(source_object, workspace_id=workspace.id)
-    source_stub = control_plane.create_stub(
+    source_stub = control_plane.stubs.create_stub(
         "registration-source",
         workspace=workspace.id,
         config=StubConfig(object_id=source_object.id),
@@ -222,7 +222,7 @@ def test_registration_failure_tombstones_deployment_and_reconciles_placement(
         isolated_services.deployments,
         registrar=DeploymentRegistrationService(
             _ClaimingAppRegistry(isolated_services.apps, source_object.id),
-            control_plane,
+            control_plane.stubs,
         ),
         placement_resources=placements,
     )
@@ -253,7 +253,7 @@ def test_registration_failure_tombstones_deployment_and_reconciles_placement(
     assert failed[0].stub_id is None
     assert placements.calls == [(workspace.id, True), (workspace.id, False)]
     assert isolated_services.apps.list(workspace=workspace.id) == []
-    remaining_stubs = control_plane.list_stubs(workspace=workspace.id)
+    remaining_stubs = control_plane.stubs.list_stubs(workspace=workspace.id)
     assert [stub.id for stub in remaining_stubs] == [source_stub.id]
     assert all(stub.deployment_id != failed[0].id for stub in remaining_stubs)
 
@@ -269,19 +269,19 @@ def test_registration_failure_tombstones_deployment_and_reconciles_placement(
     assert retry.active
     assert retry.stub_id is not None
     with pytest.raises(ConflictError, match="already bound"):
-        control_plane.discard_deployment_registration_stub(
+        control_plane.stubs.discard_deployment_registration_stub(
             retry.stub_id,
             deployment_id=retry.id,
             workspace=workspace.id,
         )
-    assert control_plane.get_stub(retry.stub_id, workspace=workspace.id).id == retry.stub_id
+    assert control_plane.stubs.get_stub(retry.stub_id, workspace=workspace.id).id == retry.stub_id
 
 
 def test_registration_and_placement_cleanup_failures_are_both_reported(
     isolated_services: ApiServices,
 ) -> None:
     workspace = owned_workspace(
-        ControlPlaneService(
+        ControlServices.create(
             isolated_services.context,
         ),
         "default",
@@ -474,7 +474,7 @@ def test_redeploying_releases_the_prior_version_warm_floor(
             metadata=warm,
         )
     )
-    assert control_plane.get_stub(v1.stub_id or "").config.autoscaler.min_containers == 2
+    assert control_plane.stubs.get_stub(v1.stub_id or "").config.autoscaler.min_containers == 2
 
     isolated_services.deployments.deploy(
         DeploymentSpec(
@@ -485,7 +485,7 @@ def test_redeploying_releases_the_prior_version_warm_floor(
         )
     )
 
-    superseded = control_plane.get_stub(v1.stub_id or "")
+    superseded = control_plane.stubs.get_stub(v1.stub_id or "")
     assert superseded.config.autoscaler.min_containers == 0, (
         "the superseded version still holds its own warm floor, so every deploy leaves "
         "another two containers running that nothing routes to and nothing retires"
@@ -569,7 +569,7 @@ def test_management_stop_and_delete_are_workspace_scoped_and_stop_containers(
     )
     stub = next(
         stub
-        for stub in ControlPlaneService(services.context).list_stubs()
+        for stub in ControlServices.create(services.context).stubs.list_stubs()
         if stub.deployment_id == deployment.id
     )
     container = services.containers.run(
@@ -597,12 +597,12 @@ def test_registration_keeps_a_source_stub_that_something_is_using(
 ) -> None:
     """Registration preserves invocations and transfers warm capacity to the deployment."""
 
-    control_plane = ControlPlaneService(
+    control_plane = ControlServices.create(
         isolated_services.context,
         workspace_changes=isolated_services.workspace_changes,
     )
     workspace = owned_workspace(control_plane, "default")
-    source_stub = control_plane.create_stub(
+    source_stub = control_plane.stubs.create_stub(
         "used-before-deploy",
         workspace=workspace.id,
         kind=StubKind.Function,
@@ -632,11 +632,11 @@ def test_registration_keeps_a_source_stub_that_something_is_using(
 
     assert deployment.stub_id is not None
     assert deployment.stub_id != source_stub.id
-    retained = control_plane.get_stub(source_stub.id, workspace=workspace.id)
+    retained = control_plane.stubs.get_stub(source_stub.id, workspace=workspace.id)
     assert retained.config.autoscaler.min_containers == 0
     assert retained.config.runtime.keep_warm == -1
     assert (
-        control_plane.get_stub(
+        control_plane.stubs.get_stub(
             deployment.stub_id, workspace=workspace.id
         ).config.autoscaler.min_containers
         == 2

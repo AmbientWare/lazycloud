@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 from api.server.services import ApiServices
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from fastapi.testclient import TestClient
 from shared.deployment_records import DeploymentSpec
 from shared.deployments import DeploymentKind
@@ -23,10 +23,12 @@ def test_app_scoped_resource_lists_exclude_peer_apps(
 ) -> None:
     services, _ = api_runtime
     if resource == "stubs":
-        control = ControlPlaneService(services.context)
+        control = ControlServices.create(services.context)
         app = services.apps.create("scoped_list_app", workspace=api_workspace.id)
-        expected = control.create_stub("scoped-stub", app_id=app.id, workspace=api_workspace.id)
-        control.create_stub("peer-stub", workspace=api_workspace.id)
+        expected = control.stubs.create_stub(
+            "scoped-stub", app_id=app.id, workspace=api_workspace.id
+        )
+        control.stubs.create_stub("peer-stub", workspace=api_workspace.id)
         response_type = StubListResponse
         items_field = "stubs"
     else:
@@ -71,8 +73,8 @@ def test_deployed_stub_list_excludes_runtime_only_revisions(
     api_client: TestClient,
 ) -> None:
     services, _ = api_runtime
-    control = ControlPlaneService(services.context)
-    runtime = control.create_stub("runtime-only", workspace=api_workspace.id)
+    control = ControlServices.create(services.context)
+    runtime = control.stubs.create_stub("runtime-only", workspace=api_workspace.id)
     deployment = services.deployments.deploy(
         DeploymentSpec(
             name="published",
@@ -167,7 +169,7 @@ def test_aggregate_tasks_by_time_window_filters_by_stub_id(
     api_client: TestClient,
 ) -> None:
     services, _ = api_runtime
-    control = ControlPlaneService(services.context)
+    control = ControlServices.create(services.context)
     app = services.apps.create("aggregate_app", workspace=api_workspace.id)
     services.deployments.deploy(
         DeploymentSpec(
@@ -178,8 +180,12 @@ def test_aggregate_tasks_by_time_window_filters_by_stub_id(
         ),
         workspace=api_workspace.id,
     )
-    first_stub = control.create_stub("aggregate-first", app_id=app.id, workspace=api_workspace.id)
-    second_stub = control.create_stub("aggregate-second", app_id=app.id, workspace=api_workspace.id)
+    first_stub = control.stubs.create_stub(
+        "aggregate-first", app_id=app.id, workspace=api_workspace.id
+    )
+    second_stub = control.stubs.create_stub(
+        "aggregate-second", app_id=app.id, workspace=api_workspace.id
+    )
 
     def seed(name: str, *, app_id: str | None, stub_id: str | None, status: TaskStatus) -> None:
         task = services.tasks.create(

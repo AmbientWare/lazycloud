@@ -13,7 +13,7 @@ from api.fastapi_app import create_app
 from api.server.services import ApiServices
 from apps.api.tests.runtime import services_with_object_storage
 from compute.state import RedisComputeStateRepository
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from coordination.event_bus import EventBusEvent, RedisEventBus
 from database.repositories.aws_connections import AwsAccountConnectionRepository
 from database.repositories.identity import (
@@ -47,7 +47,7 @@ def test_workspace_deletion_api_requires_admin_and_returns_no_content(
     isolated_services: ApiServices,
 ) -> None:
     with ExitStack() as client_stack:
-        control = ControlPlaneService(
+        control = ControlServices.create(
             isolated_services.context,
         )
         owned_workspace(control, "default")
@@ -118,14 +118,14 @@ def test_deleting_one_workspace_leaves_the_accounts_aws_connection_intact(
     what deletion requires released is the capacity this workspace itself holds.
     """
     with ExitStack() as client_stack:
-        control = ControlPlaneService(
+        control = ControlServices.create(
             isolated_services.context,
         )
-        default = control.get_workspace("default")
+        default = control.workspaces.get_workspace("default")
         # One account holding two workspaces is the case that matters: the connection is
         # theirs, so deleting one workspace must not take it from the other.
         owner_id = workspace_owner_user_id(isolated_services.context, default.id)
-        workspace = control.set_workspace("tenant", owner_user_id=owner_id)
+        workspace = control.workspaces.set_workspace("tenant", owner_user_id=owner_id)
         admin_token, _actor = administrator_credential(isolated_services.context, "admin")
         now = utc_now()
         connection_id = str(uuid4())
@@ -159,7 +159,7 @@ def test_workspace_deletion_aborts_when_object_removal_is_not_confirmed(
     request: pytest.FixtureRequest,
 ) -> None:
     with ExitStack() as client_stack:
-        control = ControlPlaneService(
+        control = ControlServices.create(
             isolated_services.context,
         )
         owned_workspace(control, "default")
@@ -226,7 +226,7 @@ def test_workspace_deletion_keeps_durable_source_cleanup_when_wake_delivery_fail
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     with ExitStack() as client_stack:
-        control = ControlPlaneService(
+        control = ControlServices.create(
             isolated_services.context,
         )
         owned_workspace(control, "default")
@@ -285,7 +285,7 @@ def test_concurrent_upload_and_workspace_deletion_converges_without_orphan(
             ),
             request,
         )
-        control = ControlPlaneService(services.context)
+        control = ControlServices.create(services.context)
         owned_workspace(control, "default")
         workspace = owned_workspace(control, "tenant")
         admin_token, _actor = administrator_credential(isolated_services.context, "admin")

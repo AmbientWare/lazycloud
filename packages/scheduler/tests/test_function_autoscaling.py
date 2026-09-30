@@ -17,9 +17,11 @@ from typing import Protocol
 import pytest
 from api.server.services import ApiServices
 from compute.capacity_recovery import CAPACITY_WAKE_SCOPE
-from control.service import ControlPlaneService, StubConfigUpdateValue, StubKind, StubRecord
+from control.service import ControlServices
+from control.stub_config import StubConfigUpdateValue
 from coordination.redis_client import AsyncRedisClient, RedisClient
 from coordination.wake_signal import RedisWakeSignal
+from database.records.apps import StubKind, StubRecord
 from database.repositories.orchestration import AutoscalerStateRepository, ContainerRepository
 from execution.containers.scheduling import ContainerSchedulingPersistenceService
 from execution.functions.service import FunctionControlService
@@ -250,7 +252,7 @@ def test_function_scale_down_preserves_assigned_startup_until_inactive(
     assigned = pending[0].model_copy(update={"runtime_worker_id": "worker-1"})
     with services.context.database.session() as session:
         ContainerRepository(session).upsert(assigned)
-    [current_stub] = services.control_plane_service.list_autoscaling_stubs([stub.id])
+    [current_stub] = services.control_plane_service.stubs.list_autoscaling_stubs([stub.id])
     autoscaler = FunctionAutoscaler(services, functions=FunctionControlService(services))
     # Assignment landed after the scheduler's snapshot. Stop checks its current owner.
     actions = autoscaler.scale_down(
@@ -540,10 +542,10 @@ def _create_function_stub(runtime: ApiServices, *, max_containers: int) -> StubR
             resources=Resources(timeout_seconds=30, concurrency=1),
         )
     )
-    control = ControlPlaneService(runtime.context)
+    control = ControlServices.create(runtime.context)
     stub = next(
         item
-        for item in control.list_stubs()
+        for item in control.stubs.list_stubs()
         if item.deployment_id == deployment.id and item.kind is StubKind.Function
     )
     autoscaler: dict[str, JsonValue] = {
@@ -555,7 +557,7 @@ def _create_function_stub(runtime: ApiServices, *, max_containers: int) -> StubR
         "runtime": {"timeout_seconds": 30, "concurrency": 1},
         "autoscaler": autoscaler,
     }
-    return control.update_stub_config(stub.id, fields=fields).stub
+    return control.stubs.update_stub_config(stub.id, fields=fields).stub
 
 
 def _enqueue_invocations(runtime: ApiServices, stub: StubRecord, *, count: int) -> None:

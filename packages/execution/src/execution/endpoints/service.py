@@ -11,7 +11,8 @@ from datetime import datetime, timedelta
 from uuid import uuid4
 
 from anyio import CancelScope
-from control.service import ControlPlaneService, StubKind, StubRecord
+from control.stubs import StubService
+from database.records.apps import StubKind, StubRecord
 from database.records.endpoint_dispatch import (
     EndpointDispatchStateRecord,
 )
@@ -172,7 +173,7 @@ class EndpointControlService:
     async_database: AsyncDatabaseClient | None = None
     async_dispatcher: AsyncEndpointRequestDispatcher | None = None
     workload_changes: AsyncWorkloadChangeReader | None = None
-    control_plane: ControlPlaneService = field(init=False)
+    stubs: StubService = field(init=False)
     _capacity: dict[tuple[str, str | None], EndpointCapacity] = field(
         default_factory=dict, init=False
     )
@@ -184,7 +185,7 @@ class EndpointControlService:
     )
 
     def __post_init__(self) -> None:
-        self.control_plane = ControlPlaneService(self.services.context)
+        self.stubs = StubService(self.services.context)
 
     def start_endpoint_serve(
         self,
@@ -203,10 +204,11 @@ class EndpointControlService:
     ) -> Iterator[StartEndpointServeResponse]:
         if count <= 0:
             return
-        stub = self.control_plane.get_stub(request.stub_id)
+        stub = self.stubs.get_stub(request.stub_id)
         if stub.kind not in {StubKind.Endpoint, StubKind.Asgi}:
             raise InvalidInputError(f"stub is not an endpoint: {stub.id}")
-        workspace = self.control_plane.get_workspace(stub.workspace_id)
+        with self.services.context.database.session() as workspace_session:
+            workspace = self.services.context.workspace(workspace_session, stub.workspace_id)
         config = EndpointStubConfig.model_validate(stub.config, from_attributes=True)
         entrypoint = [config.image.python_executable, "-m", "runner.serve"]
         image_id = config.effective_image_id or ENDPOINT_IMAGE

@@ -4,7 +4,7 @@ from contextlib import ExitStack
 
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from database.repositories.image_build_dispatch import ImageBuildDispatchRepository
 from fastapi.testclient import TestClient
 from identity.auth import AuthService
@@ -27,7 +27,7 @@ def test_image_build_http_records_events_and_context_are_workspace_owned(
     isolated_services: ApiServices,
 ) -> None:
     with ExitStack() as client_stack:
-        control = ControlPlaneService(
+        control = ControlServices.create(
             isolated_services.context,
         )
         first_workspace = owned_workspace(control, "image-build-first")

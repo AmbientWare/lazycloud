@@ -135,6 +135,6 @@ def _seed_connected_workspace(isolated_services: ApiServices) -> WorkspaceRecord
                 updated_at=now,
             )
         )
-    return isolated_services.control_plane_service.set_workspace(
+    return isolated_services.control_plane_service.workspaces.set_workspace(
         "bucket-access", owner_user_id=owner_id, connection_id=connection_id
     )

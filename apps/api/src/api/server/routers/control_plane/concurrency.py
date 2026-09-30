@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
-
-from control.models import ConcurrencyAcquireResult
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from fastapi import APIRouter, Depends, Response, status
 from shared.http.concurrency import (
     ConcurrencyAcquireResponse,
@@ -11,34 +8,11 @@ from shared.http.concurrency import (
     ConcurrencyLimitResponse,
     ConcurrencyLimitSetRequest,
 )
-from shared.identity import ConcurrencyLimitRecord
 
 from api.server.auth import read_workspace, write_workspace
 from api.server.service_dependencies import control_plane_service
 
 router = APIRouter()
-
-
-def _limit_response(record: ConcurrencyLimitRecord) -> ConcurrencyLimitResponse:
-    payload = record.model_dump(mode="json")
-    payload["available"] = record.available
-    payload["saturated"] = record.saturated
-    return ConcurrencyLimitResponse.model_validate(payload)
-
-
-def _limit_list_response(records: Sequence[ConcurrencyLimitRecord]) -> ConcurrencyLimitListResponse:
-    return ConcurrencyLimitListResponse(limits=[_limit_response(item) for item in records])
-
-
-def _acquire_response(result: ConcurrencyAcquireResult) -> ConcurrencyAcquireResponse:
-    return ConcurrencyAcquireResponse(
-        status=result.status.value,
-        acquired=result.acquired,
-        record=_limit_response(result.record),
-        available_before=result.available_before,
-        available_after=result.available_after,
-        reason=result.reason,
-    )
 
 
 @router.get(
@@ -48,9 +22,14 @@ def _acquire_response(result: ConcurrencyAcquireResult) -> ConcurrencyAcquireRes
 )
 def list_concurrency_limits(
     workspace_id: read_workspace,
-    service: ControlPlaneService = Depends(control_plane_service),
+    service: ControlServices = Depends(control_plane_service),
 ) -> ConcurrencyLimitListResponse:
-    return _limit_list_response(service.list_concurrency_limits(workspace=workspace_id))
+    return ConcurrencyLimitListResponse(
+        limits=[
+            ConcurrencyLimitResponse.model_validate(record)
+            for record in service.concurrency.list_concurrency_limits(workspace=workspace_id)
+        ]
+    )
 
 
 @router.post(
@@ -62,10 +41,10 @@ def list_concurrency_limits(
 def set_concurrency_limit(
     request: ConcurrencyLimitSetRequest,
     workspace_id: write_workspace,
-    service: ControlPlaneService = Depends(control_plane_service),
+    service: ControlServices = Depends(control_plane_service),
 ) -> ConcurrencyLimitResponse:
-    return _limit_response(
-        service.upsert_concurrency_limit(
+    return ConcurrencyLimitResponse.model_validate(
+        service.concurrency.upsert_concurrency_limit(
             request.name,
             workspace=workspace_id,
             limit=request.limit,
@@ -83,9 +62,11 @@ def set_concurrency_limit(
 )
 def current_concurrency_limit(
     workspace_id: read_workspace,
-    service: ControlPlaneService = Depends(control_plane_service),
+    service: ControlServices = Depends(control_plane_service),
 ) -> ConcurrencyLimitResponse:
-    return _limit_response(service.current_concurrency_limit(workspace=workspace_id))
+    return ConcurrencyLimitResponse.model_validate(
+        service.concurrency.current_concurrency_limit(workspace=workspace_id)
+    )
 
 
 @router.delete(
@@ -96,9 +77,9 @@ def current_concurrency_limit(
 )
 def delete_current_concurrency_limit(
     workspace_id: write_workspace,
-    service: ControlPlaneService = Depends(control_plane_service),
+    service: ControlServices = Depends(control_plane_service),
 ) -> None:
-    service.delete_current_concurrency_limit(workspace=workspace_id)
+    service.concurrency.delete_current_concurrency_limit(workspace=workspace_id)
 
 
 @router.post(
@@ -108,9 +89,11 @@ def delete_current_concurrency_limit(
 )
 def revert_concurrency_limit(
     workspace_id: write_workspace,
-    service: ControlPlaneService = Depends(control_plane_service),
+    service: ControlServices = Depends(control_plane_service),
 ) -> ConcurrencyLimitResponse:
-    return _limit_response(service.revert_concurrency_limit(workspace=workspace_id))
+    return ConcurrencyLimitResponse.model_validate(
+        service.concurrency.revert_concurrency_limit(workspace=workspace_id)
+    )
 
 
 @router.post(
@@ -121,10 +104,10 @@ def revert_concurrency_limit(
 def acquire_concurrency_limit(
     limit_id_or_name: str,
     workspace_id: write_workspace,
-    service: ControlPlaneService = Depends(control_plane_service),
+    service: ControlServices = Depends(control_plane_service),
 ) -> ConcurrencyAcquireResponse:
-    return _acquire_response(
-        service.acquire_concurrency(
+    return ConcurrencyAcquireResponse.model_validate(
+        service.concurrency.acquire_concurrency(
             limit_id_or_name,
             workspace=workspace_id,
         )
@@ -139,10 +122,10 @@ def acquire_concurrency_limit(
 def release_concurrency_limit(
     limit_id_or_name: str,
     workspace_id: write_workspace,
-    service: ControlPlaneService = Depends(control_plane_service),
+    service: ControlServices = Depends(control_plane_service),
 ) -> ConcurrencyAcquireResponse:
-    return _acquire_response(
-        service.release_concurrency(
+    return ConcurrencyAcquireResponse.model_validate(
+        service.concurrency.release_concurrency(
             limit_id_or_name,
             workspace=workspace_id,
         )

@@ -5,7 +5,7 @@ from typing import Annotated
 from compute.aws_connections import AwsAccountConnectionDirectory, AwsAccountConnectionService
 from compute.fleet_status import FleetStatusService
 from compute.policy import WorkspaceComputePolicyService
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from execution.artifacts.service import ArtifactStorageService
 from execution.collections.redis import (
     RedisMapService,
@@ -74,7 +74,7 @@ def fleet_status_service(
 
 def control_plane_service(
     services: Annotated[ApiServiceCore, Depends(api_services)],
-) -> ControlPlaneService:
+) -> ControlServices:
     return services.control_plane_service
 
 

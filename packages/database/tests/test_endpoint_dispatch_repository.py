@@ -4,7 +4,8 @@ from datetime import datetime, timedelta
 from uuid import uuid4
 
 from api.server.services import ApiServices
-from control.service import ControlPlaneService, StubKind
+from control.service import ControlServices
+from database.records.apps import StubKind
 from database.records.endpoint_dispatch import (
     EndpointDispatchObservationRecord,
     EndpointDispatchStateRecord,
@@ -22,9 +23,9 @@ from sqlalchemy import delete, func, select
 def test_endpoint_dispatch_queries_bound_active_state_and_task_owns_cleanup(
     isolated_services: ApiServices,
 ) -> None:
-    stub = ControlPlaneService(
+    stub = ControlServices.create(
         isolated_services.context,
-    ).create_stub(
+    ).stubs.create_stub(
         "dispatch-state",
         kind=StubKind.Endpoint,
         handler="module:handler",

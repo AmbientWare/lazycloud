@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from database.context import ServiceContext
 from database.repositories.identity import TokenRepository
 from database.tables.identity import TokenTable
@@ -26,7 +26,7 @@ def test_consumed_token_requires_terminal_revocation(
     revoked_at: datetime | None,
 ) -> None:
     workspace = owned_workspace(
-        ControlPlaneService(service_context),
+        ControlServices.create(service_context),
         "consumed-token-invariant",
     )
     consumed_at = datetime(2026, 7, 21, 12, tzinfo=UTC)

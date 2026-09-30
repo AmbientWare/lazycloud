@@ -5,7 +5,8 @@ from datetime import datetime, timedelta
 
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
-from control.service import ControlPlaneService, StubKind, StubRecord
+from control.service import ControlServices
+from database.records.apps import StubKind, StubRecord
 from database.repositories.orchestration import ContainerRepository
 from execution.pods.service import PodControlService
 from fastapi.testclient import TestClient
@@ -194,7 +195,7 @@ def test_sandbox_restore_resolves_source_stub_and_schedules_typed_checkpoint(
         redis=isolated_services.redis_client,
     )
     stub = _sandbox_stub(services, keep_warm_seconds=60)
-    workspace = ControlPlaneService(services.context).get_workspace(stub.workspace_id)
+    workspace = ControlServices.create(services.context).workspaces.get_workspace(stub.workspace_id)
     source = service.create_pod(
         CreatePodRequest(stub_id=stub.id), authorized_workspace_id=workspace.id
     )
@@ -225,9 +226,9 @@ def test_sandbox_restore_resolves_source_stub_and_schedules_typed_checkpoint(
 
 
 def _sandbox_stub(services: ApiServices, *, keep_warm_seconds: int) -> StubRecord:
-    control = ControlPlaneService(services.context)
-    stub = control.create_stub("sandbox-lifecycle", kind=StubKind.Sandbox)
-    return control.update_stub_config(
+    control = ControlServices.create(services.context)
+    stub = control.stubs.create_stub("sandbox-lifecycle", kind=StubKind.Sandbox)
+    return control.stubs.update_stub_config(
         stub.id,
         fields={
             "runtime": {"keep_warm": keep_warm_seconds},

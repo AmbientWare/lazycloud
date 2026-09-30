@@ -23,7 +23,7 @@ def test_cross_workspace_resource_ids_are_not_found_from_another_workspace(
     services, client = api_runtime
     control = services.control_plane_service
     owner = owned_workspace(control, "isolation-owner")
-    control.ensure_workspace_storage(owner.id)
+    control.workspaces.ensure_workspace_storage(owner.id)
     intruder = owned_workspace(control, "isolation-intruder")
     owner_token = _workspace_token(services, owner.id, "owner-token")
     intruder_token = _workspace_token(services, intruder.id, "intruder-token")

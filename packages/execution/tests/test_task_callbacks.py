@@ -9,7 +9,8 @@ from dataclasses import dataclass
 
 import pytest
 from api.server.services import ApiServices
-from control.service import ControlPlaneService, StubKind
+from control.service import ControlServices
+from database.records.apps import StubKind
 from execution.callbacks import (
     CallbackDeliveryError,
     HttpTaskCallbackSender,
@@ -52,10 +53,10 @@ def test_terminal_tasks_deliver_signed_callback_for_supported_workloads(
         now=lambda: 1_720_000_000.0,
     )
     isolated_services.tasks.callback_dispatcher = callback_service
-    control_plane = ControlPlaneService(
+    control_plane = ControlServices.create(
         isolated_services.context,
     )
-    stub = control_plane.create_stub(
+    stub = control_plane.stubs.create_stub(
         "callback-function",
         kind=StubKind.Function,
         config={"callback_url": "https://callbacks.example.com/task?source=test"},
@@ -91,7 +92,9 @@ def test_terminal_tasks_deliver_signed_callback_for_supported_workloads(
     assert len(call.headers["Idempotency-Key"]) == 64
     signed_data = base64.b64encode(call.body) + b":1720000000"
     expected_signature = hmac.digest(
-        control_plane.workspace_signing_key(stub.workspace_id).encode(), signed_data, "sha256"
+        control_plane.workspaces.get_workspace(stub.workspace_id).signing_key.encode(),
+        signed_data,
+        "sha256",
     ).hex()
     assert call.headers["X-Task-Signature"] == expected_signature
     events = isolated_services.events.list(
@@ -121,9 +124,9 @@ def test_retry_callback_uses_bounded_delivery_retries_and_stable_idempotency(
         sleep=delays.append,
         now=lambda: 1_720_000_000.0,
     )
-    stub = ControlPlaneService(
+    stub = ControlServices.create(
         isolated_services.context,
-    ).create_stub(
+    ).stubs.create_stub(
         "retry-callback",
         kind=StubKind.Function,
         config={"callback_url": "https://callbacks.example.com/task"},
@@ -164,9 +167,9 @@ def test_permanent_callback_failure_is_observable_without_exposing_target_query(
         isolated_services.events,
         sender=sender,
     )
-    stub = ControlPlaneService(
+    stub = ControlServices.create(
         isolated_services.context,
-    ).create_stub(
+    ).stubs.create_stub(
         "failed-callback",
         kind=StubKind.Function,
         config={"callback_url": "https://callbacks.example.com/task?token=secret-value"},

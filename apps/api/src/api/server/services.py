@@ -38,7 +38,7 @@ from control.deployment_resources import DeploymentResourceService
 from control.deployments import CronJobService, DeploymentService
 from control.placement import PlacementResolver
 from control.readers import DatabaseAppReader, DatabaseDeploymentReader
-from control.service import ControlPlaneService, WorkspaceBucketClient
+from control.service import ControlServices
 from control.tcp_ingress import TcpIngressSettings
 from coordination.agent_connections import RedisAgentConnectionDirectory
 from coordination.event_bus import RedisEventBus
@@ -238,6 +238,7 @@ from storage.volume_filesystem import (
     workspace_volume_store_resolver,
 )
 from storage.volume_metering import PersistentVolumeMeteringService
+from storage.workspace_provisioning import WorkspaceBucketClient
 from storage_client.s3 import S3ObjectStoreSettings
 from worker.container_client.scheduler import (
     SchedulerContainerClientFactory,
@@ -458,15 +459,6 @@ class EndpointApiService(Protocol):
     ) -> None: ...
 
 
-@runtime_checkable
-class _RuntimeWorkspaceBucketClient(Protocol):
-    def create_bucket(self, bucket: str | None = None) -> None: ...
-
-    def validate_bucket_access(self, bucket: str | None = None) -> None: ...
-
-    def configure_workspace_bucket(self, bucket: str, *, public_origin: str) -> None: ...
-
-
 @dataclass(frozen=True, slots=True)
 class ApiInfrastructure:
     workspace_bucket_client: WorkspaceBucketClient | None
@@ -548,7 +540,7 @@ class ApiServiceCore(ApiInfrastructure):
     users: UserService
     tasks: TaskService
     execution_demand: ExecutionDemandService
-    control_plane_service: ControlPlaneService
+    control_plane_service: ControlServices
     workspace_compute_policy_service: WorkspaceComputePolicyService
     apps: AppReader
     deployments: ExecutionLookupService
@@ -848,8 +840,9 @@ def create_workload_core(
     )
     secrets = SecretService(context, events, workspace_changes=workspace_changes)
     compute_policies = WorkspaceComputePolicyService(context)
-    control_plane = ControlPlaneService(
+    control_plane = ControlServices.create(
         context,
+        object_storage=object_storage_service,
         public_http_origin=gateway_config.public_http_url,
         workspace_storage_client=infrastructure.workspace_bucket_client,
         connected_workspace_storage=connected_workspace_storage(
@@ -1230,7 +1223,7 @@ def create_management_core(core: RuntimeServiceCore) -> ManagementServiceCore:
         context=context,
         redis=redis,
         provider_factory=GitHubAppSettings().provider,
-        provision_default_workspace=control_plane.ensure_default_workspace,
+        provision_default_workspace=control_plane.workspaces.ensure_default_workspace,
         provision_billing_account=_billing_account_provisioner(context, payment_provider),
     )
     disk_deletion = DiskDeletionService(
@@ -1273,7 +1266,7 @@ def create_management_core(core: RuntimeServiceCore) -> ManagementServiceCore:
         context,
         events,
         compute_policies,
-        DeploymentRegistrationService(apps, control_plane),
+        DeploymentRegistrationService(apps, control_plane.stubs),
         cron_jobs,
         payment_admission,
         execution_lifecycle,
@@ -1754,7 +1747,7 @@ def compose_management_routes(
         function_service=function,
         gateway_service=gateway,
         gateway_deployment_service=GatewayDeploymentService(
-            control_plane=core.control_plane_service,
+            stubs=core.control_plane_service.stubs,
             apps=core.apps,
             deployments=core.deployments,
             deployment_resources=core.deployment_resources,
@@ -1894,7 +1887,7 @@ def _gateway_control_service(
     compute_states = RedisComputeStateRepository(core.redis())
     return GatewayControlService(
         core,
-        control_plane=core.control_plane_service,
+        stubs=core.control_plane_service.stubs,
         function_tasks=FunctionControlService(core),
         compute_state=compute_states,
         scheduler_workers=scheduler_workers,
@@ -2013,7 +2006,7 @@ def _worker_repository_service(
             workspace_changes=core.workspace_changes,
             preempted_containers=PreemptedContainerService(
                 services=core,
-                stubs=core.control_plane_service,
+                stubs=core.control_plane_service.stubs,
             ),
             tasks=core.tasks,
             disk_leases=WorkerDiskLeaseService(
@@ -2048,7 +2041,7 @@ def _billing_account_provisioner(
 
 
 def _workspace_bucket_client(client: ObjectByteClient) -> WorkspaceBucketClient | None:
-    if isinstance(client, _RuntimeWorkspaceBucketClient):
+    if isinstance(client, WorkspaceBucketClient):
         return client
     return None
 

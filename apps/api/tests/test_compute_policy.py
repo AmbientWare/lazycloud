@@ -286,7 +286,7 @@ def test_deployment_refuses_a_machine_that_is_unknown_or_serves_another_workspac
     """
     workspace_id = _workspace_id(isolated_services)
     owner_id = _workspace_owner_id(isolated_services)
-    elsewhere = isolated_services.control_plane_service.set_workspace(
+    elsewhere = isolated_services.control_plane_service.workspaces.set_workspace(
         "machine-elsewhere", owner_user_id=owner_id
     )
     machine_id = str(uuid4())

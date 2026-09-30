@@ -9,7 +9,8 @@ from urllib.parse import urlsplit
 import pytest
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
-from control.service import ControlPlaneService, StubRecord
+from control.service import ControlServices
+from database.records.apps import StubRecord
 from execution.endpoints.dispatch import AsyncEndpointResponseStream, EndpointDispatchTarget
 from execution.endpoints.service import EndpointIngressDispatchSession
 from fastapi.testclient import TestClient
@@ -468,10 +469,10 @@ def test_endpoint_host_routing_preserves_numeric_deployment_suffixes(
         headers = _auth_headers(isolated_services)
 
         url = (
-            ControlPlaneService(
+            ControlServices.create(
                 isolated_services.context,
             )
-            .stub_url(stub.id, external_url=BASE_URL)
+            .stubs.stub_url(stub.id, external_url=BASE_URL)
             .url
         )
         parsed = urlsplit(url)
@@ -533,7 +534,7 @@ def test_public_app_keeps_private_endpoint_authorization(
 ) -> None:
     monkeypatch.setattr(isolated_services.gateway_settings, "public_http_url", BASE_URL)
     workspace = owned_workspace(
-        ControlPlaneService(
+        ControlServices.create(
             isolated_services.context,
         ),
         "mixed-owner",
@@ -681,7 +682,7 @@ def _deploy(
     public: bool = False,
 ) -> tuple[Deployment, StubRecord]:
     owned_workspace(
-        ControlPlaneService(services.context),
+        ControlServices.create(services.context),
         workspace,
     )
     deployment = services.deployments.deploy(
@@ -700,7 +701,7 @@ def _deploy(
 def _stub_for_deployment(services: ApiServices, deployment_id: str) -> StubRecord:
     matches = [
         stub
-        for stub in ControlPlaneService(services.context).list_stubs()
+        for stub in ControlServices.create(services.context).stubs.list_stubs()
         if stub.deployment_id == deployment_id
     ]
     assert len(matches) == 1
@@ -713,7 +714,7 @@ def _base_host(url: str) -> str:
 
 def _auth_headers(services: ApiServices, *, workspace: str = "default") -> dict[str, str]:
     owned_workspace(
-        ControlPlaneService(services.context),
+        ControlServices.create(services.context),
         workspace,
     )
     raw_token, _record = AuthService(services.context).create_token(

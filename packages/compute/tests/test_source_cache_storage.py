@@ -5,7 +5,7 @@ from uuid import uuid4
 
 import pytest
 from compute.source_cache_storage import SourceCacheStorageLifecycleService
-from control.service import ControlPlaneService
+from control.service import ControlServices
 from database.context import ServiceContext
 from database.repositories.source_cache import SourceCacheCleanupRepository
 from shared.errors import ConflictError, NotFoundError
@@ -24,7 +24,7 @@ def test_storage_owner_remains_incomplete_until_explicit_destruction_evidence(
     service_context: ServiceContext,
 ) -> None:
     workspace = owned_workspace(
-        ControlPlaneService(service_context),
+        ControlServices.create(service_context),
         "cache-storage-owner",
     )
     owner = WorkerCacheStorageOwnerRecord(

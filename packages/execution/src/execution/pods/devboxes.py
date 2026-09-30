@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from typing import Protocol
 
 from control.deployment_resources import DeploymentResource
-from control.service import StubRecord
+from database.records.apps import StubRecord
 from database.repositories.apps import DeploymentRepository, StubRepository
 from database.repositories.disks import DiskRepository
 from database.repositories.identity import WorkspaceRepository

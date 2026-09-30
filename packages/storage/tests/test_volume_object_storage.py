@@ -29,9 +29,9 @@ def test_volume_control_isolates_same_name_by_stable_workspace_and_volume_ids(
     assert isinstance(client, FakeObjectClient)
     service = VolumeControlService(isolated_services, filesystem=filesystem)
     control = isolated_services.control_plane_service
-    default_workspace = control.get_workspace()
+    default_workspace = control.workspaces.get_workspace()
     other_workspace = owned_workspace(control, "other")
-    control.ensure_workspace_storage(other_workspace.id)
+    control.workspaces.ensure_workspace_storage(other_workspace.id)
 
     default = service.get_or_create_volume(GetOrCreateVolumeRequest(name="data"))
     other = service.get_or_create_volume(

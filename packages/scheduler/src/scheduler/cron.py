@@ -62,7 +62,7 @@ class CronScheduler:
                     run.reason = "cron job lock not acquired"
                 else:
                     try:
-                        stub = self.services.control_plane_service.get_stub(
+                        stub = self.services.control_plane_service.stubs.get_stub(
                             stub_id, workspace=cron_job.workspace_id
                         )
                         response = self.functions.function_invoke(

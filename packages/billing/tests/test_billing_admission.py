@@ -156,7 +156,7 @@ def test_team_counts_three_people_once_across_owned_workspaces(
             scheduled_terms_version=None,
             scheduled_change_at=None,
         )
-    other_workspace = isolated_services.control_plane_service.set_workspace(
+    other_workspace = isolated_services.control_plane_service.workspaces.set_workspace(
         "second-team-workspace", owner_user_id=owner_id
     )
     first = isolated_services.users.create(display_name="first")
@@ -348,7 +348,7 @@ def test_an_unfunded_account_gets_no_new_volume_but_still_reaches_the_one_it_has
                 utc_now(),
             ),
         )
-    isolated_services.control_plane_service.ensure_workspace_storage(workspace_id)
+    isolated_services.control_plane_service.workspaces.ensure_workspace_storage(workspace_id)
     existing = volumes.get_or_create_volume(
         GetOrCreateVolumeRequest(name="already-here"),
         workspace_id=workspace_id,

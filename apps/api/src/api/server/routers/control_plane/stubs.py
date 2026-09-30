@@ -2,16 +2,15 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from control.models import StubCloneOverride, StubUrlPlan
-from control.service import ControlPlaneService
+from control.models import StubCloneResult, StubConfigUpdateResult, StubUrlPlan
+from control.service import ControlServices
 from database.records.apps import StubRecord
 from fastapi import APIRouter, Depends, HTTPException, status
-from shared.http.apps import AppResponse, StubCloneResponse
+from shared.http.apps import StubCloneResponse
 from shared.http.pods import SandboxListResponse, SandboxStatsResponse, SandboxTimeline
 from shared.http.stubs import (
     PublicStubConfigResponse,
     StubCloneRequest,
-    StubConfigResponse,
     StubConfigUpdateRequest,
     StubConfigUpdateResponse,
     StubCreateRequest,
@@ -55,10 +54,10 @@ def list_stubs(
     deployed_only: bool = False,
     *,
     workspace_id: read_workspace,
-    service: ControlPlaneService = Depends(control_plane_service),
+    service: ControlServices = Depends(control_plane_service),
 ) -> StubListResponse:
     return _stub_list_response(
-        service.list_stubs(
+        service.stubs.list_stubs(
             workspace=workspace_id,
             app_id=app_id,
             deployed_only=deployed_only,
@@ -75,10 +74,10 @@ def list_stubs(
 def create_stub(
     request: StubCreateRequest,
     workspace_id: write_workspace,
-    service: ControlPlaneService = Depends(control_plane_service),
+    service: ControlServices = Depends(control_plane_service),
 ) -> StubResponse:
     return StubResponse.model_validate(
-        service.create_stub(
+        service.stubs.create_stub(
             request.name,
             workspace=workspace_id,
             kind=request.kind,
@@ -101,9 +100,9 @@ def sandbox_stats(
     app_id: str | None = None,
     *,
     workspace_id: read_workspace,
-    service: ControlPlaneService = Depends(control_plane_service),
+    service: ControlServices = Depends(control_plane_service),
 ) -> SandboxStatsResponse:
-    return service.sandbox_stats(workspace=workspace_id, app_id=app_id)
+    return service.sandboxes.sandbox_stats(workspace=workspace_id, app_id=app_id)
 
 
 @router.get(
@@ -116,9 +115,9 @@ def sandbox_timeline(
     container_id: str | None = None,
     *,
     workspace_id: read_workspace,
-    service: ControlPlaneService = Depends(control_plane_service),
+    service: ControlServices = Depends(control_plane_service),
 ) -> SandboxTimeline:
-    return service.sandbox_timeline(
+    return service.sandboxes.sandbox_timeline(
         stub_id,
         workspace=workspace_id,
         container_id=container_id,
@@ -135,9 +134,9 @@ def list_sandboxes(
     limit: int = 50,
     *,
     workspace_id: read_workspace,
-    service: ControlPlaneService = Depends(control_plane_service),
+    service: ControlServices = Depends(control_plane_service),
 ) -> SandboxListResponse:
-    return service.list_sandbox_rows(
+    return service.sandboxes.list_sandbox_rows(
         workspace=workspace_id,
         app_id=app_id,
         limit=limit,
@@ -151,10 +150,10 @@ def list_sandboxes(
 )
 def get_public_stub_config(
     stub_id: str,
-    service: ControlPlaneService = Depends(control_plane_service),
+    service: ControlServices = Depends(control_plane_service),
 ) -> PublicStubConfigResponse:
     try:
-        return PublicStubConfigResponse.model_validate(service.get_stub_config(stub_id))
+        return PublicStubConfigResponse.model_validate(service.stubs.get_stub_config(stub_id))
     except PermissionError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "stub config not found") from exc
 
@@ -170,11 +169,8 @@ def clone_stub(
     request: StubCloneRequest,
     principal: write_principal,
     services: ManagementServiceCore = Depends(management_services),
-    service: ControlPlaneService = Depends(control_plane_service),
-) -> StubCloneResponse:
-    # The destination is named in the body rather than the query, so this asks the
-    # shared check directly instead of building its own requirement: a person reaches
-    # the target workspace through membership, which only that check reads.
+    service: ControlServices = Depends(control_plane_service),
+) -> StubCloneResult:
     workspace_id = authorize_token_workspace(
         services,
         principal.token,
@@ -182,22 +178,9 @@ def clone_stub(
         AuthScope.Write,
         platform_role=principal.platform_role,
     )
-    try:
-        result = service.clone_stub(
-            stub_id,
-            apps=services.apps,
-            workspace=workspace_id,
-            overrides=StubCloneOverride.model_validate(request.overrides.model_dump(mode="json")),
-        )
-        return StubCloneResponse(
-            source_stub=StubResponse.model_validate(result.source_stub),
-            cloned_stub=StubResponse.model_validate(result.cloned_stub),
-            app=AppResponse.model_validate(result.app),
-            copied_config=StubConfigResponse.model_validate(result.copied_config),
-            copied_objects=list(result.copied_objects),
-        )
-    except PermissionError as exc:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "stub not found") from exc
+    return service.cloning.clone_stub(
+        stub_id, apps=services.apps, workspace=workspace_id, overrides=request.overrides
+    )
 
 
 @router.get(
@@ -212,10 +195,10 @@ def stub_url(
     port: int | None = None,
     *,
     workspace_id: read_workspace,
-    service: ControlPlaneService = Depends(control_plane_service),
+    service: ControlServices = Depends(control_plane_service),
 ) -> StubUrlResponse:
     return _stub_url_response(
-        service.stub_url(
+        service.stubs.stub_url(
             stub_id,
             workspace=workspace_id,
             external_url=external_url,
@@ -234,17 +217,12 @@ def update_stub_config(
     stub_id: str,
     request: StubConfigUpdateRequest,
     workspace_id: write_workspace,
-    service: ControlPlaneService = Depends(control_plane_service),
-) -> StubConfigUpdateResponse:
-    result = service.update_stub_config(
+    service: ControlServices = Depends(control_plane_service),
+) -> StubConfigUpdateResult:
+    return service.stubs.update_stub_config(
         stub_id,
         workspace=workspace_id,
         fields=request.fields(),
-    )
-    return StubConfigUpdateResponse(
-        stub=StubResponse.model_validate(result.stub),
-        updated_fields=list(result.updated_fields),
-        message=result.message,
     )
 
 
@@ -256,6 +234,6 @@ def update_stub_config(
 def get_stub(
     stub_id: str,
     workspace_id: read_workspace,
-    service: ControlPlaneService = Depends(control_plane_service),
+    service: ControlServices = Depends(control_plane_service),
 ) -> StubResponse:
-    return StubResponse.model_validate(service.get_stub(stub_id, workspace=workspace_id))
+    return StubResponse.model_validate(service.stubs.get_stub(stub_id, workspace=workspace_id))
