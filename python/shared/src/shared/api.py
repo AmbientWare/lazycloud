@@ -91,15 +91,15 @@ class Backoff(str, Enum):
 
 class RetryPolicy(BaseModel):
     max_attempts: Annotated[int, Field(description="Attempts including the first.", ge=1, le=100)]
-    delay_seconds: Annotated[float | None, Field(ge=0.0, le=3600.0)] = 0
-    backoff: Backoff | None = Backoff.fixed
+    delay_seconds: Annotated[float, Field(ge=0.0, le=3600.0)] = 0
+    backoff: Backoff = Backoff.fixed
     max_delay_seconds: Annotated[float | None, Field(ge=0.0, le=86400.0)] = None
 
 
 class Autoscaler(BaseModel):
-    min_containers: Annotated[int | None, Field(ge=0, le=1000)] = 0
-    max_containers: Annotated[int | None, Field(ge=1, le=1000)] = 1
-    tasks_per_container: Annotated[int | None, Field(ge=1, le=10000)] = 1
+    min_containers: Annotated[int, Field(ge=0, le=1000)] = 0
+    max_containers: Annotated[int, Field(ge=1, le=1000)] = 1
+    tasks_per_container: Annotated[int, Field(ge=1, le=10000)] = 1
 
 
 class State1(str, Enum):
@@ -194,18 +194,18 @@ class FunctionSpec(BaseModel):
     source: SourceRef
     image: ImageSpec
     resources: Resources
-    timeout_seconds: Annotated[int | None, Field(ge=1, le=86400)] = 3600
+    timeout_seconds: Annotated[int, Field(ge=1, le=86400)] = 3600
     retry_policy: RetryPolicy | None = None
     concurrency: Annotated[
-        int | None,
+        int,
         Field(description="Tasks one container runs at once, one process per slot.", ge=1, le=256),
     ] = 1
     keep_warm_seconds: Annotated[
-        int | None,
+        int,
         Field(description="Idle time before a container above the minimum stops.", ge=0, le=86400),
     ] = 10
     autoscaler: Autoscaler | None = None
-    max_pending_tasks: Annotated[int | None, Field(ge=1, le=1000000)] = 100
+    max_pending_tasks: Annotated[int, Field(ge=1, le=1000000)] = 100
     environment: dict[str, str] | None = None
 
 
@@ -240,7 +240,7 @@ class Task(BaseModel):
 class DeploymentRequest(BaseModel):
     functions: Annotated[list[FunctionSpec], Field(max_length=200, min_length=1)]
     prune: Annotated[
-        bool | None, Field(description="Stop every function of the app that is not listed.")
+        bool, Field(description="Stop every function of the app that is not listed.")
     ] = False
 
 
