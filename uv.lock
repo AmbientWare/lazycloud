@@ -4,7 +4,6 @@ requires-python = ">=3.12"
 
 [manifest]
 members = [
-    "foundation",
     "lazycloud-client",
     "lazycloud-shared",
     "runner",
@@ -123,17 +122,6 @@ wheels = [
 ]
 
 [[package]]
-name = "foundation"
-version = "0.1.0"
-source = { editable = "packages/foundation" }
-dependencies = [
-    { name = "lazycloud-shared" },
-]
-
-[package.metadata]
-requires-dist = [{ name = "lazycloud-shared", editable = "packages/shared" }]
-
-[[package]]
 name = "h11"
 version = "0.16.0"
 source = { registry = "https://pypi.org/simple" }
@@ -230,7 +218,7 @@ wheels = [
 [[package]]
 name = "lazycloud-client"
 version = "0.1.0"
-source = { editable = "packages/lazycloud" }
+source = { editable = "python/lazycloud" }
 dependencies = [
     { name = "cloudpickle" },
     { name = "httpx" },
@@ -254,7 +242,7 @@ dependencies = [
 requires-dist = [
     { name = "cloudpickle", specifier = ">=3,<4" },
     { name = "httpx", specifier = ">=0.28,<1" },
-    { name = "lazycloud-shared", editable = "packages/shared" },
+    { name = "lazycloud-shared", editable = "python/shared" },
     { name = "pathspec", specifier = ">=0.12,<1" },
     { name = "pillow", specifier = ">=11.3,<13" },
     { name = "poetry-core", specifier = ">=2.2,<3" },
@@ -273,7 +261,7 @@ requires-dist = [
 [[package]]
 name = "lazycloud-shared"
 version = "0.1.0"
-source = { editable = "packages/shared" }
+source = { editable = "python/shared" }
 dependencies = [
     { name = "anyio" },
     { name = "certifi" },
@@ -759,10 +747,9 @@ wheels = [
 [[package]]
 name = "runner"
 version = "0.1.0"
-source = { editable = "packages/runner" }
+source = { editable = "python/runner" }
 dependencies = [
     { name = "cloudpickle" },
-    { name = "foundation" },
     { name = "lazycloud-shared" },
     { name = "packaging" },
     { name = "pydantic" },
@@ -773,8 +760,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "cloudpickle", specifier = ">=3,<4" },
-    { name = "foundation", editable = "packages/foundation" },
-    { name = "lazycloud-shared", editable = "packages/shared" },
+    { name = "lazycloud-shared", editable = "python/shared" },
     { name = "packaging", specifier = ">=24,<27" },
     { name = "pydantic", specifier = ">=2.12,<3" },
     { name = "uvicorn", specifier = ">=0.30,<1" },
@@ -1037,7 +1023,6 @@ source = { virtual = "." }
 dev = [
     { name = "basedpyright" },
     { name = "fastapi" },
-    { name = "foundation" },
     { name = "httpx2" },
     { name = "lazycloud-client" },
     { name = "lazycloud-shared" },
@@ -1053,12 +1038,11 @@ dev = [
 dev = [
     { name = "basedpyright", specifier = ">=1.39.9" },
     { name = "fastapi", specifier = ">=0.115,<1" },
-    { name = "foundation", editable = "packages/foundation" },
     { name = "httpx2", specifier = ">=2.4.0" },
-    { name = "lazycloud-client", editable = "packages/lazycloud" },
-    { name = "lazycloud-shared", editable = "packages/shared" },
+    { name = "lazycloud-client", editable = "python/lazycloud" },
+    { name = "lazycloud-shared", editable = "python/shared" },
     { name = "numpy", specifier = ">=2,<3" },
     { name = "pytest", specifier = ">=9,<10" },
     { name = "ruff", specifier = ">=0.6" },
-    { name = "runner", editable = "packages/runner" },
+    { name = "runner", editable = "python/runner" },
 ]

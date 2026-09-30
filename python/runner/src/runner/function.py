@@ -1,0 +1,1297 @@
+from __future__ import annotations
+
+import io
+import os
+import pickle
+import random
+import signal
+import socket
+import sys
+import threading
+import time
+import traceback
+from contextlib import suppress
+from dataclasses import dataclass, field
+from multiprocessing import Pipe, Process
+from multiprocessing.connection import wait
+from types import FrameType
+from typing import Any, NoReturn, Protocol, TextIO
+from uuid import uuid4
+
+import cloudpickle
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
+from shared.deployments import DeploymentKind
+from shared.enums import StringEnum
+from shared.env import (
+    APP_ID_ENV,
+    CHECKPOINT_ENABLED_ENV,
+    CONTAINER_ID_ENV,
+    FUNCTION_CONCURRENCY_ENV,
+    FUNCTION_IN_PROCESS_ENV,
+    GATEWAY_HTTP_URL_ENV,
+    GATEWAY_TOKEN_ENV,
+    KEEP_WARM_SECONDS_ENV,
+    LIFECYCLE_HOOKS_ENV,
+    WORKSPACE_ID_ENV,
+    WORKSPACE_NAME_ENV,
+    truthy_env_value,
+)
+from shared.errors import InvalidInputError
+from shared.execution_entry import observe_execution_entry
+from shared.function_display import build_function_result_display
+from shared.function_payloads import (
+    FUNCTION_MARKER_MAX_DEPTH,
+    FUNCTION_MARKER_MAX_NODES,
+    FunctionCallPersistentId,
+    FunctionCloudpickleResult,
+    FunctionDependencyBinding,
+    FunctionJsonInvocation,
+    FunctionJsonResult,
+    FunctionPayloadEncoding,
+    FunctionResultPayload,
+)
+from shared.http.errors import HttpApiError, HttpResponseDecodeError, HttpTransportError
+from shared.http.execution_entry import ExecutionEntryEvidence
+from shared.http.functions import (
+    FUNCTION_CALL_REF_MARKER,
+    FunctionClaimedTask,
+    FunctionClaimRequest,
+    FunctionClaimResponse,
+    FunctionMonitorRequest,
+    FunctionMonitorResponse,
+    FunctionRetireRequest,
+    FunctionRetireResponse,
+    FunctionSetResultBody,
+    FunctionSetResultResponse,
+)
+from shared.http.gateway_tasks import (
+    EndTaskRequest,
+    EndTaskResponse,
+)
+from shared.http_transport import HttpChannel
+from shared.lifecycle import (
+    LifecycleHookName,
+    LifecycleHooks,
+    LifecycleStartupContext,
+    LifecycleTaskContext,
+)
+from shared.serialization import to_json_value
+from shared.task_context import task_context
+from shared.tasks import TaskStatus
+
+from runner.checkpoints import restored_container_identity, wait_for_checkpoint
+from runner.handler_loading import evict_user_code_modules, load_callable
+from runner.hooks import lifecycle_hooks_from_env, run_lifecycle_hooks
+from runner.invocation import cloudpickle_bytes, invoke_handler
+from runner.reload import SourceChangeWatcher, hot_reload_enabled, hot_reload_root
+from runner.runtime import (
+    DEFAULT_GATEWAY_ENDPOINT,
+    DEFAULT_RUNNER_TIMEOUT_SECONDS,
+    RunnerTaskLogStream,
+    TaskLogBuffer,
+    install_context_routed_output,
+    post_task_logs,
+    required_env,
+    routed_output,
+)
+from runner.worker_processes import stop_worker_processes
+
+# Retry delay for transport failures and source reloads.
+DEFAULT_FUNCTION_POLL_INTERVAL_SECONDS = 0.1
+_CANCELLED_WORKER_EXIT_CODE = 75
+_RESULT_PUBLICATION_BUDGET_SECONDS = 60.0
+_FUNCTION_CALL_REFERENCE_ADAPTER = TypeAdapter[FunctionCallPersistentId](FunctionCallPersistentId)
+
+
+@dataclass(slots=True)
+class ExecutionTiming:
+    entered_at: float | None = None
+
+    def entered(self) -> None:
+        if self.entered_at is None:
+            self.entered_at = time.monotonic()
+
+    def evidence(self) -> ExecutionEntryEvidence | None:
+        if self.entered_at is None:
+            return None
+        return ExecutionEntryEvidence(
+            elapsed_since_entry_seconds=time.monotonic() - self.entered_at,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class FunctionRunnerConfig:
+    """What a function container is, independent of any call it serves.
+
+    There is no task here. The container is started for the stub and finds out
+    which invocation it is running by claiming one, so everything that varies per
+    call lives in `ClaimedTask` instead.
+    """
+
+    stub_id: str
+    handler_ref: str
+    endpoint: str = DEFAULT_GATEWAY_ENDPOINT
+    token: str = ""
+    container_id: str = ""
+    container_hostname: str = ""
+    workspace_id: str = ""
+    workspace_name: str = ""
+    app_id: str = ""
+    lifecycle_hooks: LifecycleHooks = field(default_factory=LifecycleHooks)
+    timeout_seconds: float = DEFAULT_RUNNER_TIMEOUT_SECONDS
+    keep_warm_seconds: int = 0
+    poll_interval_seconds: float = DEFAULT_FUNCTION_POLL_INTERVAL_SECONDS
+    checkpoint_enabled: bool = False
+    in_process: bool = False
+    workers: int = 1
+
+
+@dataclass(frozen=True, slots=True)
+class ClaimedTask:
+    """One invocation this container has taken ownership of."""
+
+    task_id: str
+    root_task_id: str
+    attempt_number: int
+    max_attempts: int
+    invocation: FunctionInvocation
+    claim_id: str = ""
+
+
+class FunctionInvocation(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
+
+    args: tuple[Any, ...] = ()
+    kwargs: dict[str, Any] = Field(default_factory=dict)
+    result_format: FunctionPayloadEncoding = FunctionPayloadEncoding.Cloudpickle
+    argument_encoding: FunctionPayloadEncoding = FunctionPayloadEncoding.Cloudpickle
+
+
+class FunctionControlChannel(Protocol):
+    def post(
+        self,
+        path: str,
+        payload: dict[str, JsonValue] | None = None,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> JsonValue: ...
+
+
+class FunctionWorkerState(StringEnum):
+    Starting = "starting"
+    Ready = "ready"
+    Busy = "busy"
+    Cancelled = "cancelled"
+
+
+class FunctionWorkerEvent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    state: FunctionWorkerState
+    task_id: str = ""
+
+
+class FunctionWorkerChannel(Protocol):
+    def send_bytes(self, buf: bytes) -> None: ...
+
+    def recv_bytes(self) -> bytes: ...
+
+    def poll(self, timeout: float = 0.0) -> bool: ...
+
+    def fileno(self) -> int: ...
+
+    def close(self) -> None: ...
+
+
+@dataclass(slots=True)
+class FunctionRunner:
+    config: FunctionRunnerConfig
+    channel: FunctionControlChannel | None = None
+    worker_channel: FunctionWorkerChannel | None = None
+    _worker_channel_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
+    _handler: Any = field(default=None, init=False)
+    _startup_hooks_ran: bool = field(default=False, init=False)
+    # Identity lives here rather than on the config because restoring from a
+    # checkpoint hands the process a different container to be, and what it
+    # reports itself as afterwards has to be the one it actually is.
+    container_id: str = field(default="", init=False)
+    container_hostname: str = field(default="", init=False)
+    _container_streams: tuple[TextIO, TextIO] | None = field(default=None, init=False)
+    _retired: threading.Event = field(default_factory=threading.Event, init=False)
+    _active_task: ClaimedTask | None = field(default=None, init=False)
+    _active_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
+    _monitor_shutdown: threading.Event = field(default_factory=threading.Event, init=False)
+    _monitor: threading.Thread | None = field(default=None, init=False)
+    _reload_watcher: SourceChangeWatcher | None = field(default=None, init=False)
+    _reload_pending: threading.Event = field(default_factory=threading.Event, init=False)
+    _generation_lock: threading.Lock = field(default_factory=threading.Lock, init=False)
+    _generation_calls: int = field(default=0, init=False)
+    _reload_failed: bool = field(default=False, init=False)
+
+    def __post_init__(self) -> None:
+        restored = restored_container_identity(enabled=self.config.checkpoint_enabled)
+        self.container_id = restored.container_id if restored else self.config.container_id
+        self.container_hostname = (
+            restored.container_hostname if restored else self.config.container_hostname
+        )
+
+    @property
+    def control(self) -> FunctionControlChannel:
+        if self.channel is None:
+            self.channel = HttpChannel(
+                endpoint=self.config.endpoint,
+                token=self.config.token or None,
+                timeout_seconds=self.config.timeout_seconds,
+            )
+        return self.channel
+
+    def run(self) -> int:
+        """Serve invocations for this stub until the container goes idle.
+
+        A failing invocation is reported and the loop continues — it is one
+        caller's error, not this container's. Startup failing is the opposite: a
+        container whose `on_start` did not finish cannot serve anything, so it
+        stops rather than answering claims it will fail.
+        """
+
+        self.install_output_routing()
+        try:
+            self.run_startup_hooks_once()
+        except BaseException:
+            print(traceback.format_exc(), file=sys.stderr)
+            self.close()
+            return 1
+        try:
+            self._report_worker_state(FunctionWorkerState.Ready)
+            if self.worker_channel is not None:
+                self._monitor = threading.Thread(target=self._monitor_cancellation, daemon=True)
+                self._monitor.start()
+            return self.serve()
+        finally:
+            self.close()
+
+    def close(self) -> None:
+        if self._reload_watcher is not None:
+            self._reload_watcher.stop()
+        self._monitor_shutdown.set()
+        if self._monitor is not None:
+            self._monitor.join()
+        if isinstance(self.channel, HttpChannel):
+            self.channel.close()
+
+    def _monitor_cancellation(self) -> None:
+        with HttpChannel(
+            endpoint=self.config.endpoint,
+            token=self.config.token or None,
+            timeout_seconds=5,
+        ) as channel:
+            while not self._monitor_shutdown.wait(0.25):
+                with self._active_lock:
+                    task = self._active_task
+                if task is None:
+                    continue
+                try:
+                    response = FunctionMonitorResponse.model_validate(
+                        channel.post(
+                            "/api/v1/functions/monitor",
+                            FunctionMonitorRequest(
+                                task_id=task.task_id,
+                                stub_id=self.config.stub_id,
+                                container_id=self.container_id,
+                            ).model_dump(mode="json"),
+                        )
+                    )
+                except (HttpApiError, HttpTransportError) as exc:
+                    print(
+                        f"function cancellation monitor failed: {exc}",
+                        file=self.container_streams[1],
+                        flush=True,
+                    )
+                    continue
+                except ValidationError as exc:
+                    print(
+                        f"invalid function cancellation response: {exc}",
+                        file=self.container_streams[1],
+                        flush=True,
+                    )
+                    os._exit(1)
+                if response.cancelled:
+                    with self._active_lock:
+                        if self._active_task is not task:
+                            continue
+                        if self.worker_channel is None:
+                            raise RuntimeError("function worker cancellation channel is closed")
+                        self._report_worker_state(FunctionWorkerState.Cancelled, task.task_id)
+                        os._exit(_CANCELLED_WORKER_EXIT_CODE)
+
+    def _report_worker_state(self, state: FunctionWorkerState, task_id: str = "") -> None:
+        if self.worker_channel is not None:
+            event = FunctionWorkerEvent(state=state, task_id=task_id)
+            with self._worker_channel_lock:
+                self.worker_channel.send_bytes(event.model_dump_json().encode())
+
+    def install_output_routing(self) -> None:
+        """Take over this process's streams once, before anything writes.
+
+        The real streams are kept because a task's log sink writes through to
+        them; wrapping whatever `sys.stdout` happens to be at the time would
+        wrap the router and recurse.
+        """
+
+        if self._container_streams is None:
+            self._container_streams = install_context_routed_output()
+
+    @property
+    def container_streams(self) -> tuple[TextIO, TextIO]:
+        if self._container_streams is None:
+            self.install_output_routing()
+        if self._container_streams is None:
+            raise RuntimeError("container output routing was not installed")
+        return self._container_streams
+
+    def serve(self, shutdown: threading.Event | None = None) -> int:
+        """Claim and run invocations until the keep-warm window passes.
+
+        Concurrent slots share the handler and startup state. A source change
+        closes admission until active calls finish, then reloads both before
+        claiming more work.
+        """
+
+        idle_since = time.monotonic()
+        retirement_retry_at = 0.0
+        claim_id = str(uuid4())
+        while shutdown is None or not shutdown.is_set():
+            if self._retired.is_set():
+                return 0
+            if not self._begin_invocation():
+                time.sleep(self.config.poll_interval_seconds)
+                continue
+            task = None
+            claim_failed = False
+            received_claim_id = claim_id
+            try:
+                try:
+                    remaining = (
+                        20.0
+                        if self.config.keep_warm_seconds < 0
+                        else max(
+                            0.0, self.config.keep_warm_seconds - (time.monotonic() - idle_since)
+                        )
+                    )
+                    remaining = max(remaining, retirement_retry_at - time.monotonic())
+                    claimed = self.claim(claim_id, wait_seconds=min(20.0, remaining))
+                except Exception as exc:
+                    # Keep the claim id: the server may have assigned a task whose
+                    # response was lost, and resending the id recovers it. A
+                    # control plane that cannot be reached is not an empty queue,
+                    # so say so on the container's own stream.
+                    print(f"function claim failed: {exc}", file=sys.stderr, flush=True)
+                    claimed = None
+                    claim_failed = True
+                else:
+                    claim_id = str(uuid4())
+                if claimed is not None:
+                    task = ClaimedTask(
+                        task_id=claimed.task_id,
+                        root_task_id=claimed.root_task_id or claimed.task_id,
+                        attempt_number=claimed.attempt_number,
+                        max_attempts=claimed.max_attempts,
+                        invocation=decode_function_invocation(claimed),
+                        claim_id=received_claim_id,
+                    )
+                    self.run_task(task)
+            finally:
+                with self._generation_lock:
+                    self._generation_calls -= 1
+            if task is None:
+                if self.keep_warm_expired(idle_since):
+                    if self.retire_if_idle():
+                        return 0
+                    retirement_retry_at = time.monotonic() + 5
+                if claim_failed:
+                    time.sleep(self.config.poll_interval_seconds)
+                continue
+            idle_since = time.monotonic()
+        return 0
+
+    def _begin_invocation(self) -> bool:
+        with self._generation_lock:
+            if self._reload_pending.is_set():
+                if self._generation_calls:
+                    return False
+                self._reload_pending.clear()
+                try:
+                    evict_user_code_modules(hot_reload_root())
+                    self._handler = None
+                    self._load_handler_and_hooks()
+                except Exception:
+                    self._reload_failed = True
+                    self.append_container_log("stderr", traceback.format_exc())
+                    return False
+                self._reload_failed = False
+                self.append_container_log("stdout", "hot reload: function handler refreshed\n")
+            if self._reload_failed:
+                return False
+            self._generation_calls += 1
+            return True
+
+    def keep_warm_expired(self, idle_since: float) -> bool:
+        if self.config.keep_warm_seconds < 0:
+            return False
+        return time.monotonic() - idle_since >= self.config.keep_warm_seconds
+
+    def retire_if_idle(self) -> bool:
+        response = FunctionRetireResponse.model_validate(
+            self.control.post(
+                "/gateway/functions/retire",
+                FunctionRetireRequest(
+                    stub_id=self.config.stub_id,
+                    container_id=self.container_id,
+                ).model_dump(mode="json"),
+            )
+        )
+        if response.retired:
+            self._retired.set()
+        return response.retired
+
+    def claim(self, claim_id: str, *, wait_seconds: float = 0) -> FunctionClaimedTask | None:
+        return FunctionClaimResponse.model_validate(
+            self.control.post(
+                "/api/v1/functions/claim",
+                FunctionClaimRequest(
+                    stub_id=self.config.stub_id,
+                    container_id=self.container_id,
+                    claim_id=claim_id,
+                    wait_seconds=wait_seconds,
+                ).model_dump(mode="json"),
+            )
+        ).task
+
+    def run_task(self, task: ClaimedTask) -> None:
+        with self._active_lock:
+            if self.worker_channel is not None:
+                self._active_task = task
+        try:
+            self._report_worker_state(FunctionWorkerState.Busy, task.task_id)
+            with task_context(task.task_id, task.root_task_id):
+                self._run_claimed_task(task)
+        finally:
+            with self._active_lock:
+                self._active_task = None
+        self._report_worker_state(FunctionWorkerState.Ready)
+
+    def _run_claimed_task(self, task: ClaimedTask) -> None:
+        started = time.perf_counter()
+        timing = ExecutionTiming()
+        try:
+            self.run_task_hooks(task, LifecycleHookName.Running, TaskStatus.Running)
+            result = self.execute_with_log_capture(task, timing)
+            serialized = _serialize_function_result(result, task.invocation)
+        except BaseException as exc:
+            duration = time.perf_counter() - started
+            formatted = (
+                f"Invalid input: {exc}\n"
+                if isinstance(exc, InvalidInputError)
+                else traceback.format_exc()
+            )
+            try:
+                self.append_task_logs(task.task_id, "stderr", formatted)
+            except Exception as log_error:
+                self.report_log_delivery_failure(
+                    task.task_id, f"traceback: {type(log_error).__name__}: {log_error}"
+                )
+            self.run_error_hooks(task, exc, duration_seconds=duration)
+            response = self.end_failed_task(
+                task,
+                exc,
+                duration_seconds=duration,
+                execution_entry=timing.evidence(),
+            )
+            self.run_final_failure_hooks(task, exc, response, duration_seconds=duration)
+            return
+
+        # A lost completion response must never turn successful user code into
+        # a failed attempt. Only publication is safe to retry under this claim.
+        try:
+            response = self.set_result(task, serialized, execution_entry=timing.evidence())
+            completed = response.status is TaskStatus.Complete and response.claim_acknowledged
+        except (HttpApiError, HttpTransportError, HttpResponseDecodeError, ValidationError) as exc:
+            detail = (
+                f"HTTP {exc.status_code}" if isinstance(exc, HttpApiError) else type(exc).__name__
+            )
+            print(
+                f"task {task.task_id}: result publication failed ({detail}); "
+                "completion is unconfirmed",
+                file=self.container_streams[1],
+                flush=True,
+            )
+            settlement = self.settle_unpublished_result(task, timing, started=started)
+            completed = (
+                settlement.final_status is TaskStatus.Complete and settlement.claim_acknowledged
+            )
+        if not completed:
+            return
+        duration = time.perf_counter() - started
+        self.run_task_hooks(
+            task,
+            LifecycleHookName.Success,
+            TaskStatus.Complete,
+            duration_seconds=duration,
+            result_available=True,
+        )
+        self.run_task_hooks(
+            task,
+            LifecycleHookName.Finish,
+            TaskStatus.Complete,
+            duration_seconds=duration,
+            result_available=True,
+        )
+
+    def handler(self) -> Any:
+        if self._handler is None:
+            self._handler = load_callable(self.config.handler_ref)
+        return self._handler
+
+    def execute_with_log_capture(self, task: ClaimedTask, timing: ExecutionTiming) -> Any:
+        logs = TaskLogBuffer(
+            lambda stream, messages: self.append_task_logs(task.task_id, stream, messages)
+        )
+        stdout = RunnerTaskLogStream("stdout", logs)
+        stderr = RunnerTaskLogStream("stderr", logs)
+        with routed_output(stdout, stderr), observe_execution_entry(timing.entered):
+            try:
+                return invoke_handler(
+                    self.handler(),
+                    task.invocation.args,
+                    task.invocation.kwargs,
+                    encoding=task.invocation.argument_encoding,
+                )
+            finally:
+                stdout.close()
+                stderr.close()
+                logs.close()
+                if logs.dropped_appends:
+                    unit = "line" if logs.dropped_appends == 1 else "lines"
+                    self.report_log_delivery_failure(
+                        task.task_id,
+                        f"{logs.dropped_appends} log {unit}: {logs.last_append_error}",
+                    )
+
+    def report_log_delivery_failure(self, task_id: str, detail: str) -> None:
+        print(
+            f"task {task_id}: log delivery failed for {detail}",
+            file=self.container_streams[1],
+            flush=True,
+        )
+
+    def set_result(
+        self,
+        task: ClaimedTask,
+        result: FunctionResultPayload,
+        *,
+        execution_entry: ExecutionEntryEvidence | None = None,
+    ) -> FunctionSetResultResponse:
+        started = time.monotonic()
+        deadline = started + _RESULT_PUBLICATION_BUDGET_SECONDS
+        request = FunctionSetResultBody(
+            task_id=task.task_id,
+            container_id=self.container_id,
+            result=result,
+            claim_id=task.claim_id,
+        )
+        attempt = 0
+        while True:
+            if execution_entry is not None:
+                request.execution_entry = ExecutionEntryEvidence(
+                    elapsed_since_entry_seconds=(
+                        execution_entry.elapsed_since_entry_seconds + time.monotonic() - started
+                    )
+                )
+            try:
+                return FunctionSetResultResponse.model_validate(
+                    self.control.post(
+                        "/api/v1/functions/set-result",
+                        request.model_dump(mode="json"),
+                        timeout_seconds=min(5.0, max(deadline - time.monotonic(), 0.001)),
+                    )
+                )
+            except (HttpApiError, HttpTransportError) as exc:
+                if isinstance(exc, HttpApiError) and not (
+                    exc.status_code in (408, 429) or 500 <= exc.status_code < 600
+                ):
+                    raise
+                remaining = deadline - time.monotonic()
+                delay = random.uniform(0.5, 1.0) * min(0.25 * 2**attempt, 4.0)
+                if attempt == 11 or remaining <= delay:
+                    raise
+                time.sleep(delay)
+                attempt += 1
+
+    def settle_unpublished_result(
+        self, task: ClaimedTask, timing: ExecutionTiming, *, started: float
+    ) -> EndTaskResponse:
+        # Keep ownership until the server acknowledges settlement. Releasing a
+        # live claim locally strands calls whose execution timeout is disabled.
+        while True:
+            try:
+                response = EndTaskResponse.model_validate(
+                    self.control.post(
+                        "/gateway/tasks/end",
+                        EndTaskRequest(
+                            task_id=task.task_id,
+                            task_duration=time.perf_counter() - started,
+                            task_status=TaskStatus.Failed,
+                            container_id=self.container_id,
+                            container_hostname=self.container_hostname,
+                            claim_id=task.claim_id,
+                            execution_entry=timing.evidence(),
+                            retryable=False,
+                            error=(
+                                "function completed, but result publication could not be confirmed"
+                            ),
+                        ).model_dump(mode="json"),
+                        timeout_seconds=5.0,
+                    )
+                )
+                if response.final_status is None:
+                    self.hold_unsettled_task(task, "settlement response omitted final status")
+                return response
+            except (HttpApiError, HttpTransportError) as exc:
+                if isinstance(exc, HttpApiError) and not (
+                    exc.status_code in (408, 429) or 500 <= exc.status_code < 600
+                ):
+                    self.hold_unsettled_task(
+                        task, f"settlement rejected with HTTP {exc.status_code}"
+                    )
+                print(
+                    f"task {task.task_id}: terminal settlement unavailable; retaining active claim",
+                    file=self.container_streams[1],
+                    flush=True,
+                )
+                if self._monitor_shutdown.wait(random.uniform(5.0, 10.0)):
+                    raise InterruptedError("function runner closed during task settlement") from exc
+            except (HttpResponseDecodeError, ValidationError):
+                self.hold_unsettled_task(task, "invalid terminal settlement response")
+
+    def hold_unsettled_task(self, task: ClaimedTask, reason: str) -> NoReturn:
+        while True:
+            print(
+                f"task {task.task_id}: {reason}; active claim retained, operator action required",
+                file=self.container_streams[1],
+                flush=True,
+            )
+            if self._monitor_shutdown.wait(60.0):
+                raise InterruptedError("function runner closed with unsettled task")
+
+    def append_task_logs(self, task_id: str, stream: str, messages: str | list[str]) -> None:
+        post_task_logs(self.control, task_id, stream, messages)
+
+    def append_container_log(self, stream: str, message: str) -> None:
+        """Write to the container's own stream, for output no task owns."""
+
+        if stream == "stderr":
+            print(message, file=sys.stderr, end="", flush=True)
+        else:
+            print(message, end="", flush=True)
+
+    def end_failed_task(
+        self,
+        task: ClaimedTask,
+        exc: BaseException,
+        *,
+        duration_seconds: float,
+        execution_entry: ExecutionEntryEvidence | None = None,
+    ) -> EndTaskResponse | None:
+        try:
+            return EndTaskResponse.model_validate(
+                self.control.post(
+                    "/gateway/tasks/end",
+                    EndTaskRequest(
+                        task_id=task.task_id,
+                        task_duration=duration_seconds,
+                        task_status=TaskStatus.Failed,
+                        error=f"{type(exc).__name__}: {exc}",
+                        retryable=not isinstance(exc, InvalidInputError),
+                        container_id=self.container_id,
+                        container_hostname=self.container_hostname,
+                        result_base64="",
+                        execution_entry=execution_entry,
+                        claim_id=task.claim_id,
+                    ).model_dump(mode="json"),
+                )
+            )
+        except HttpApiError as end_exc:
+            print(
+                end_exc.detail or f"failed to mark task failed after {type(exc).__name__}",
+                file=sys.stderr,
+            )
+            return None
+
+    def run_startup_hooks_once(self) -> None:
+        """Prepare this container to serve, exactly once.
+
+        Importing the handler happens here rather than at the first invocation,
+        so the import cost is paid by the container's startup instead of by
+        whichever call happened to arrive first. `on_start` runs after it, which
+        is the ordering the hook was always documented to have and never had
+        while a process served exactly one call.
+
+        Startup output goes to the container's stream, not to a task's log: the
+        first task to arrive did not cause this work and must not be the record
+        of it.
+        """
+
+        if self._startup_hooks_ran:
+            return
+        self._startup_hooks_ran = True
+        self._load_handler_and_hooks()
+        restored = wait_for_checkpoint(
+            enabled=self.config.checkpoint_enabled,
+            workers=self.config.workers,
+        )
+        if restored is not None:
+            self.container_id = restored.container_id
+            self.container_hostname = restored.container_hostname
+        if hot_reload_enabled():
+            self._reload_watcher = SourceChangeWatcher(hot_reload_root(), self._reload_pending.set)
+            self._reload_watcher.start()
+
+    def _load_handler_and_hooks(self) -> None:
+        self.handler()
+        context = LifecycleStartupContext(
+            stub_id=self.config.stub_id,
+            workspace_id=self.config.workspace_id,
+            workspace_name=self.config.workspace_name,
+            app_id=self.config.app_id,
+            container_id=self.container_id,
+            container_hostname=self.container_hostname,
+            handler=self.config.handler_ref,
+            resource_kind=DeploymentKind.Function,
+        )
+        run_lifecycle_hooks(
+            self.config.lifecycle_hooks,
+            LifecycleHookName.Start,
+            context,
+            log=self.append_container_log,
+            capture_output=False,
+            raise_on_error=True,
+        )
+
+    def run_error_hooks(
+        self,
+        task: ClaimedTask,
+        exc: BaseException,
+        *,
+        duration_seconds: float,
+    ) -> None:
+        self.run_task_hooks(
+            task,
+            LifecycleHookName.Error,
+            TaskStatus.Failed,
+            duration_seconds=duration_seconds,
+            error_type=type(exc).__name__,
+            error_message=str(exc),
+        )
+
+    def run_final_failure_hooks(
+        self,
+        task: ClaimedTask,
+        exc: BaseException,
+        response: EndTaskResponse | None,
+        *,
+        duration_seconds: float,
+    ) -> None:
+        if response is not None and not response.claim_acknowledged:
+            return
+        end_status = response.final_status if response is not None else None
+        final_status = end_status or TaskStatus.Failed
+        retry_scheduled = response.retry_scheduled if response is not None else False
+        attempt_number = response.attempt_number if response is not None else 0
+        max_attempts = response.max_attempts if response is not None else 0
+        hook = LifecycleHookName.Retry if retry_scheduled else LifecycleHookName.Failure
+        self.run_task_hooks(
+            task,
+            hook,
+            final_status,
+            duration_seconds=duration_seconds,
+            error_type=type(exc).__name__,
+            error_message=str(exc),
+            retry_scheduled=retry_scheduled,
+            attempt_number=attempt_number,
+            max_attempts=max_attempts,
+        )
+        self.run_task_hooks(
+            task,
+            LifecycleHookName.Finish,
+            final_status,
+            duration_seconds=duration_seconds,
+            error_type=type(exc).__name__,
+            error_message=str(exc),
+            retry_scheduled=retry_scheduled,
+            attempt_number=attempt_number,
+            max_attempts=max_attempts,
+        )
+
+    def run_task_hooks(
+        self,
+        task: ClaimedTask,
+        hook: LifecycleHookName,
+        status: TaskStatus,
+        *,
+        duration_seconds: float = 0.0,
+        error_type: str = "",
+        error_message: str = "",
+        retry_scheduled: bool = False,
+        result_available: bool = False,
+        attempt_number: int = 0,
+        max_attempts: int = 1,
+    ) -> None:
+        def log(stream: str, message: str) -> None:
+            try:
+                self.append_task_logs(task.task_id, stream, message)
+            except (HttpApiError, HttpTransportError, HttpResponseDecodeError):
+                self.report_log_delivery_failure(task.task_id, "lifecycle hook output")
+
+        context = LifecycleTaskContext(
+            hook=hook,
+            task_id=task.task_id,
+            status=status,
+            stub_id=self.config.stub_id,
+            root_task_id=task.root_task_id,
+            workspace_id=self.config.workspace_id,
+            workspace_name=self.config.workspace_name,
+            app_id=self.config.app_id,
+            container_id=self.container_id,
+            container_hostname=self.container_hostname,
+            handler=self.config.handler_ref,
+            resource_kind=DeploymentKind.Function,
+            attempt_number=attempt_number or task.attempt_number,
+            max_attempts=max_attempts or task.max_attempts,
+            duration_seconds=duration_seconds,
+            error_type=error_type,
+            error_message=error_message,
+            retry_scheduled=retry_scheduled,
+            result_available=result_available,
+        )
+        run_lifecycle_hooks(
+            self.config.lifecycle_hooks,
+            hook,
+            context,
+            log=log,
+        )
+
+
+def decode_function_invocation(response: FunctionClaimedTask) -> FunctionInvocation:
+    values = {
+        binding.task_id: _decode_dependency_result(binding) for binding in response.dependencies
+    }
+    used: set[str] = set()
+    if isinstance(response.invocation, FunctionJsonInvocation):
+        invocation = FunctionInvocation(
+            args=tuple(response.invocation.args),
+            kwargs=response.invocation.kwargs,
+            result_format=response.invocation.result_encoding,
+            argument_encoding=FunctionPayloadEncoding.Json,
+        )
+        state = _MarkerTraversalState()
+        invocation.args = tuple(
+            _replace_dependency_markers(item, values, used, state, depth=0)
+            for item in invocation.args
+        )
+        invocation.kwargs = {
+            key: _replace_dependency_markers(item, values, used, state, depth=0)
+            for key, item in invocation.kwargs.items()
+        }
+    else:
+        unpickler = _FunctionInvocationUnpickler(
+            io.BytesIO(response.invocation.bytes_value()), values, used
+        )
+        payload = unpickler.load()
+        try:
+            invocation = FunctionInvocation.model_validate(payload)
+        except ValidationError as exc:
+            raise ValueError("invalid function invocation envelope") from exc
+    if used != set(values):
+        unused = sorted(set(values) - used)
+        raise ValueError(f"unused function dependency bindings: {', '.join(unused)}")
+    return invocation
+
+
+class _FunctionInvocationUnpickler(pickle.Unpickler):
+    def __init__(self, stream: io.BytesIO, values: dict[str, object], used: set[str]) -> None:
+        super().__init__(stream)
+        self.values = values
+        self.used = used
+
+    def persistent_load(self, value: object) -> object:
+        try:
+            _, task_id = _FUNCTION_CALL_REFERENCE_ADAPTER.validate_python(value, strict=True)
+        except ValidationError as exc:
+            raise ValueError("invalid function dependency reference") from exc
+        if task_id not in self.values:
+            raise ValueError(f"undeclared function dependency reference: {task_id}")
+        self.used.add(task_id)
+        return self.values[task_id]
+
+
+@dataclass(slots=True)
+class _MarkerTraversalState:
+    nodes: int = 0
+    memo: dict[int, Any] = field(default_factory=dict)
+
+
+def _replace_dependency_markers(
+    value: Any,
+    values: dict[str, Any],
+    used: set[str],
+    state: _MarkerTraversalState,
+    *,
+    depth: int,
+) -> Any:
+    if depth > FUNCTION_MARKER_MAX_DEPTH:
+        raise ValueError(f"function dependency marker depth exceeds {FUNCTION_MARKER_MAX_DEPTH}")
+    state.nodes += 1
+    if state.nodes > FUNCTION_MARKER_MAX_NODES:
+        raise ValueError(f"function dependency marker nodes exceed {FUNCTION_MARKER_MAX_NODES}")
+    if isinstance(value, dict):
+        return _replace_dependency_mapping(value, values, used, state, depth=depth)
+    if isinstance(value, list):
+        return _replace_dependency_list(value, values, used, state, depth=depth)
+    return value
+
+
+def _replace_dependency_mapping(
+    value: Any,
+    values: dict[str, Any],
+    used: set[str],
+    state: _MarkerTraversalState,
+    *,
+    depth: int,
+) -> Any:
+    if (
+        len(value) == 2
+        and value.get(FUNCTION_CALL_REF_MARKER) is True
+        and isinstance(value.get("task_id"), str)
+    ):
+        task_id = value["task_id"]
+        if task_id not in values:
+            raise ValueError(f"undeclared function dependency marker: {task_id}")
+        used.add(task_id)
+        return values[task_id]
+    identity = id(value)
+    if identity in state.memo:
+        return state.memo[identity]
+    replaced: dict[Any, Any] = {}
+    state.memo[identity] = replaced
+    for key, item in value.items():
+        replaced[key] = _replace_dependency_markers(
+            item,
+            values,
+            used,
+            state,
+            depth=depth + 1,
+        )
+    return replaced
+
+
+def _replace_dependency_list(
+    value: Any,
+    values: dict[str, Any],
+    used: set[str],
+    state: _MarkerTraversalState,
+    *,
+    depth: int,
+) -> Any:
+    identity = id(value)
+    if identity in state.memo:
+        return state.memo[identity]
+    replaced: list[Any] = []
+    state.memo[identity] = replaced
+    replaced.extend(
+        _replace_dependency_markers(item, values, used, state, depth=depth + 1) for item in value
+    )
+    return replaced
+
+
+def _decode_dependency_result(binding: FunctionDependencyBinding) -> Any:
+    if binding.result.encoding is FunctionPayloadEncoding.Json:
+        return binding.result.value
+    return cloudpickle.loads(binding.result.bytes_value())
+
+
+def config_from_env(env: dict[str, str] | None = None) -> FunctionRunnerConfig:
+    source = env or os.environ
+    return FunctionRunnerConfig(
+        stub_id=required_env(source, "STUB_ID"),
+        handler_ref=required_env(source, "HANDLER"),
+        endpoint=source.get(GATEWAY_HTTP_URL_ENV) or DEFAULT_GATEWAY_ENDPOINT,
+        token=source.get(GATEWAY_TOKEN_ENV, ""),
+        container_id=source.get(CONTAINER_ID_ENV) or socket.gethostname(),
+        container_hostname=socket.gethostname(),
+        workspace_id=source.get(WORKSPACE_ID_ENV, ""),
+        workspace_name=source.get(WORKSPACE_NAME_ENV, ""),
+        app_id=source.get(APP_ID_ENV, ""),
+        lifecycle_hooks=lifecycle_hooks_from_env(source.get(LIFECYCLE_HOOKS_ENV)),
+        keep_warm_seconds=_keep_warm_seconds(source.get(KEEP_WARM_SECONDS_ENV)),
+        poll_interval_seconds=DEFAULT_FUNCTION_POLL_INTERVAL_SECONDS,
+        checkpoint_enabled=truthy_env_value(source.get(CHECKPOINT_ENABLED_ENV)),
+        in_process=truthy_env_value(source.get(FUNCTION_IN_PROCESS_ENV)),
+    )
+
+
+def _keep_warm_seconds(value: str | None) -> int:
+    if not value:
+        return 0
+    try:
+        return int(value)
+    except ValueError:
+        return 0
+
+
+@dataclass(slots=True)
+class FunctionWorker:
+    process: Process
+    channel: FunctionWorkerChannel
+    state: FunctionWorkerState = FunctionWorkerState.Starting
+    cancelled_task_id: str = ""
+    channel_closed: bool = False
+
+
+@dataclass(slots=True)
+class FunctionProcessManager:
+    """Grow isolated slots on demand and retain them for subsequent calls."""
+
+    config: FunctionRunnerConfig
+    workers: int
+    poll_interval_seconds: float = DEFAULT_FUNCTION_POLL_INTERVAL_SECONDS
+    shutdown: threading.Event = field(default_factory=threading.Event)
+    slots: list[FunctionWorker] = field(default_factory=list, init=False)
+
+    def run(self) -> int:
+        previous_handlers = {
+            handled_signal: signal.signal(handled_signal, self._request_shutdown)
+            for handled_signal in (signal.SIGINT, signal.SIGTERM)
+        }
+        try:
+            self.slots.append(self._start_worker(0))
+            while not self.shutdown.is_set():
+                channels = [slot.channel.fileno() for slot in self.slots if not slot.channel_closed]
+                readable = wait(channels, timeout=self.poll_interval_seconds)
+                for slot in self.slots:
+                    if not slot.channel_closed and slot.channel.fileno() in readable:
+                        self._read_events(slot)
+                for index, slot in enumerate(self.slots):
+                    process = slot.process
+                    if process.exitcode != _CANCELLED_WORKER_EXIT_CODE:
+                        continue
+                    self._read_events(slot)
+                    if not slot.cancelled_task_id:
+                        raise RuntimeError("cancelled function worker did not identify its task")
+                    process.join()
+                    self._kill_process_group(process)
+                    slot.channel.close()
+                    print(
+                        f"cancelled function task {slot.cancelled_task_id}; "
+                        "replacing its worker slot",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    self.slots[index] = self._start_worker(index)
+                    process.close()
+                codes = [slot.process.exitcode for slot in self.slots]
+                failed = next((code for code in codes if code not in (None, 0)), None)
+                if failed is not None:
+                    print(
+                        f"function worker process exited with {failed}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    return 1
+                if all(code is not None for code in codes):
+                    return 0
+                if len(self.slots) < self.workers and all(
+                    slot.state is FunctionWorkerState.Busy and slot.process.exitcode is None
+                    for slot in self.slots
+                ):
+                    self.slots.append(self._start_worker(len(self.slots)))
+        finally:
+            self.stop()
+            for handled_signal, previous_handler in previous_handlers.items():
+                signal.signal(handled_signal, previous_handler)
+        return 0
+
+    def stop(self) -> None:
+        stop_worker_processes(self.shutdown, [slot.process for slot in self.slots])
+        for slot in self.slots:
+            self._kill_process_group(slot.process)
+            slot.process.close()
+            slot.channel.close()
+
+    @staticmethod
+    def _read_events(slot: FunctionWorker) -> None:
+        while not slot.channel_closed and slot.channel.poll():
+            try:
+                event = FunctionWorkerEvent.model_validate_json(slot.channel.recv_bytes())
+            except EOFError:
+                slot.channel_closed = True
+                return
+            slot.state = event.state
+            if event.state is FunctionWorkerState.Cancelled:
+                slot.cancelled_task_id = event.task_id
+
+    @staticmethod
+    def _kill_process_group(process: Process) -> None:
+        if process.pid is None:
+            raise RuntimeError("function worker process never started")
+        with suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGKILL)
+
+    def _start_worker(self, index: int) -> FunctionWorker:
+        receive, send = Pipe(duplex=False)
+        process = Process(
+            target=_run_function_worker,
+            args=(self.config, send, receive),
+            name=f"function-worker-{index}",
+        )
+        process.start()
+        send.close()
+        return FunctionWorker(process=process, channel=receive)
+
+    def _request_shutdown(self, signum: int, frame: FrameType | None) -> None:
+        del signum, frame
+        self.shutdown.set()
+
+
+def _run_function_worker(
+    config: FunctionRunnerConfig, send: FunctionWorkerChannel, receive: FunctionWorkerChannel
+) -> None:
+    receive.close()
+    os.setsid()
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+    try:
+        raise SystemExit(FunctionRunner(config, worker_channel=send).run())
+    finally:
+        send.close()
+
+
+@dataclass(slots=True)
+class FunctionThreadManager:
+    """Serve several invocations at once inside one interpreter.
+
+    The reason to prefer this over a process each is memory that cannot be
+    duplicated: a model loaded into VRAM by `on_start` is loaded once and served
+    by every slot, where four processes would load four copies and a second one
+    would not fit. The cost is the interpreter's own limits — one slot's CPU
+    work holds the GIL against the others, so this is for handlers that spend
+    their time in a library that releases it or waiting on something.
+
+    Everything a second concurrent call would otherwise collide on is carried
+    per context rather than per process: the task identity the SDK reads, and
+    the stream its output is attributed to. Threads propagate that context, so
+    the same mechanism covers a handler that awaits.
+
+    Shutdown is the same shape as the process manager's: the signal sets the
+    event, each loop finishes the invocation it is holding rather than dropping
+    it, and the container exits once they have all returned.
+    """
+
+    runner: FunctionRunner
+    workers: int
+    shutdown: threading.Event = field(default_factory=threading.Event)
+    threads: list[threading.Thread] = field(default_factory=list, init=False)
+
+    def run(self) -> int:
+        self.runner.install_output_routing()
+        try:
+            self.runner.run_startup_hooks_once()
+        except BaseException:
+            print(traceback.format_exc(), file=sys.stderr)
+            self.runner.close()
+            return 1
+        _ = self.runner.control
+        previous_handlers = {
+            handled_signal: signal.signal(handled_signal, self._request_shutdown)
+            for handled_signal in (signal.SIGINT, signal.SIGTERM)
+        }
+        try:
+            for index in range(self.workers):
+                thread = threading.Thread(
+                    target=self._serve,
+                    name=f"function-worker-{index}",
+                    daemon=True,
+                )
+                thread.start()
+                self.threads.append(thread)
+            for thread in self.threads:
+                thread.join()
+        finally:
+            self.shutdown.set()
+            for thread in self.threads:
+                thread.join()
+            self.runner.close()
+            for handled_signal, previous_handler in previous_handlers.items():
+                signal.signal(handled_signal, previous_handler)
+        return 0
+
+    def _serve(self) -> None:
+        try:
+            self.runner.serve(shutdown=self.shutdown)
+        except BaseException:
+            # A slot that dies takes its own capacity with it and nothing else.
+            # Said on the container's stream because there is no task to blame:
+            # whatever it was holding was already settled by `run_task`.
+            print(traceback.format_exc(), file=sys.stderr, flush=True)
+
+    def _request_shutdown(self, signum: int, frame: FrameType | None) -> None:
+        del signum, frame
+        self.shutdown.set()
+
+
+def main() -> int:
+    config = config_from_env()
+    concurrency = _concurrency(os.environ.get(FUNCTION_CONCURRENCY_ENV))
+    if concurrency <= 1:
+        # Served in this process. A manager here would supervise one slot doing
+        # the same work, whichever kind of slot it is.
+        return FunctionRunner(config).run()
+    if config.in_process:
+        return FunctionThreadManager(runner=FunctionRunner(config), workers=concurrency).run()
+    return FunctionProcessManager(config=config, workers=concurrency).run()
+
+
+def _concurrency(value: str | None) -> int:
+    if not value:
+        return 1
+    try:
+        return max(int(value), 1)
+    except ValueError:
+        return 1
+
+
+def _serialize_function_result(
+    result: Any,
+    invocation: FunctionInvocation,
+) -> FunctionResultPayload:
+    if invocation.result_format is FunctionPayloadEncoding.Json:
+        try:
+            value = to_json_value(result)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"return value of type {type(result).__name__} cannot be returned as JSON; "
+                "call this function through the Python SDK for Python results"
+            ) from exc
+        return FunctionJsonResult(value=value)
+    try:
+        payload = cloudpickle_bytes(result)
+    except Exception as exc:
+        raise ValueError(
+            f"return value of type {type(result).__name__} cannot be serialized as a Python result"
+        ) from exc
+    return FunctionCloudpickleResult.from_bytes(
+        payload, display=build_function_result_display(result)
+    )
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -33,8 +33,8 @@ classes. Record defects separately. Existing package names, service topology,
 queries, locks, intermediate states and algorithms are not requirements.
 Later fixes on main need explicit evaluation; do not silently mix baselines.
 
-The initial tree retains the Python client, runner, shared contracts, foundation
-helpers, frontend and public examples/docs. Old backend
+The initial tree retains the Python client, runner, shared contracts, frontend
+and public docs. Old backend
 code, database migrations, Go platform helpers, admin CLI, deployment automation
 and backend-specific tests remain in the reference and Git history. The backend is not implemented here
 yet. Removing its files is preparation, not a completed capability or a performance
@@ -62,12 +62,12 @@ requiring explicit scope and authorization.
 
 - Rust owns platform backend decisions, orchestration and host runtime.
 - Python owns deployment authoring, SDK/CLI workflows and execution of Python user
-  code. The public CLI is in packages/lazycloud. The former apps/cli was the internal
+  code. The public CLI is in python/lazycloud. The former apps/cli was the internal
   admin CLI; rebuild its supported operations through administration contracts.
 - TypeScript owns the existing frontend. Future TypeScript and Go SDKs should use
   the same public protocol without depending on Python implementation details.
-- Existing Python shared/foundation packages support retained consumers. Reduce
-  them as contracts and consumers change; never turn them into a second backend.
+- The Python shared package supports retained consumers. Reduce it as contracts
+  and consumers change; never turn it into a second backend.
 
 Use ordinary domain names such as control, execution, scheduler, compute, agent
 and storage. Do not add Rust, New, Next, V2 or rewrite prefixes/suffixes to product

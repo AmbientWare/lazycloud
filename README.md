@@ -7,10 +7,10 @@ Read [update.md](update.md) for the architecture, reference implementation,
 agent instructions and capability checklist. [AGENTS.md](AGENTS.md) contains
 development rules.
 
-The Python SDK and public CLI live in packages/lazycloud, the Python runner in
-packages/runner, and the frontend in apps/web. Their existing contracts and runner
-helpers remain in packages/shared and packages/foundation. Published product
-documentation and examples describe the reference platform.
+The Python SDK and public CLI live in python/lazycloud, the Python runner in
+python/runner and their wire contracts in python/shared. The frontend lives in
+web and language-neutral contract examples in contracts. Published product
+documentation describes the reference platform.
 
 The old backend, internal admin CLI, deployment automation and backend-specific
 tests remain available in the pinned reference. The public lazycloud CLI remains;
@@ -24,7 +24,7 @@ uv run --group dev pytest -x
 uv run --group dev lazycloud --help
 ```
 
-Use Bun from apps/web for frontend development. Backend-dependent UI workflows
+Use Bun from web for frontend development. Backend-dependent UI workflows
 need an API implementing their contracts. The new backend may use fresh contracts
 and a fresh schema; update these consumers together. Old migration history remains
 in the pinned reference, without requiring a data migration or compatibility layer.

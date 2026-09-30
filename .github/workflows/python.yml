@@ -4,18 +4,16 @@ on:
   pull_request:
     paths:
       - ".github/workflows/python.yml"
-      - "packages/**"
-      - "tests/**"
-      - "conftest.py"
+      - "python/**"
+      - "contracts/**"
       - "pyproject.toml"
       - "uv.lock"
   push:
-    branches: [rust-rewrite]
+    branches: [main, rust-rewrite]
     paths:
       - ".github/workflows/python.yml"
-      - "packages/**"
-      - "tests/**"
-      - "conftest.py"
+      - "python/**"
+      - "contracts/**"
       - "pyproject.toml"
       - "uv.lock"
 
@@ -32,5 +30,6 @@ jobs:
           version: "0.11.29"
           python-version: "3.12"
       - run: uv sync --frozen --group dev
-      - run: uv run --frozen --group dev ruff check packages tests conftest.py
+      - run: uv run --frozen --group dev ruff check python
+      - run: uv run --frozen --group dev ruff format --check python
       - run: uv run --frozen --group dev pytest -x

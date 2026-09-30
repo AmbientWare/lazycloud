@@ -8,7 +8,6 @@ requires-python = ">=3.12"
 dev = [
     "lazycloud-client==0.1.0",
     "runner",
-    "foundation",
     "lazycloud-shared==0.1.0",
     "pytest>=9,<10",
     "ruff>=0.6",
@@ -24,35 +23,32 @@ default-groups = []
 
 [tool.uv.workspace]
 members = [
-    "packages/lazycloud",
-    "packages/runner",
-    "packages/shared",
-    "packages/foundation",
+    "python/lazycloud",
+    "python/runner",
+    "python/shared",
 ]
 
 [tool.uv.sources]
 lazycloud-client = { workspace = true }
 runner = { workspace = true }
 lazycloud-shared = { workspace = true }
-foundation = { workspace = true }
 
 [tool.pytest.ini_options]
-pythonpath = ["."]
-testpaths = ["packages", "tests"]
+pythonpath = ["python"]
+testpaths = ["python"]
 addopts = "--import-mode=importlib --durations=10"
 filterwarnings = ["error::UserWarning"]
 
 [tool.ruff]
 line-length = 100
-src = ["packages", "tests"]
+src = ["python"]
 target-version = "py312"
 
 [tool.ruff.per-file-target-version]
-"packages/foundation/**/*.py" = "py310"
-"packages/runner/**/*.py" = "py310"
-"packages/lazycloud/**/*.py" = "py310"
-"packages/lazycloud/src/lazycloud/_examples/**/*.py" = "py312"
-"packages/shared/**/*.py" = "py310"
+"python/runner/**/*.py" = "py310"
+"python/lazycloud/**/*.py" = "py310"
+"python/lazycloud/src/lazycloud/_examples/**/*.py" = "py312"
+"python/shared/**/*.py" = "py310"
 "**/test_*_python_compatibility.py" = "py310"
 
 [tool.ruff.lint]
