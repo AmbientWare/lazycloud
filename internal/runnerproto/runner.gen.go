@@ -126,6 +126,12 @@ func (e SucceededType) Valid() bool {
 	}
 }
 
+// Arguments The invoke payload: this object as UTF-8 JSON for `json`, or a cloudpickle of the same dict for `cloudpickle`.
+type Arguments struct {
+	Args   *[]interface{}          `json:"args,omitempty"`
+	Kwargs *map[string]interface{} `json:"kwargs,omitempty"`
+}
+
 // Encoding defines model for Encoding.
 type Encoding string
 
@@ -139,7 +145,7 @@ type Failed struct {
 // FailedType defines model for Failed.Type.
 type FailedType string
 
-// Invoke The payload is the encoded arguments.
+// Invoke The payload is the encoded Arguments.
 type Invoke struct {
 	AttemptId     string     `json:"attempt_id"`
 	InputEncoding Encoding   `json:"input_encoding"`
@@ -185,7 +191,9 @@ type LoadedType string
 type RunnerError struct {
 	Message   string  `json:"message"`
 	Traceback *string `json:"traceback,omitempty"`
-	Type      string  `json:"type"`
+
+	// Type The exception class: `qualname` for builtins, otherwise `module.qualname`.
+	Type string `json:"type"`
 }
 
 // Succeeded The payload is the encoded return value.

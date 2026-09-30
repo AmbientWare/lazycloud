@@ -335,11 +335,13 @@ type ImageSpecPythonVersion string
 
 // LogEntry defines model for LogEntry.
 type LogEntry struct {
-	Attempt int            `json:"attempt"`
-	Data    string         `json:"data"`
-	Id      int64          `json:"id"`
-	Stream  LogEntryStream `json:"stream"`
-	Time    time.Time      `json:"time"`
+	Attempt int `json:"attempt"`
+
+	// Data One line of output without its trailing newline.
+	Data   string         `json:"data"`
+	Id     int64          `json:"id"`
+	Stream LogEntryStream `json:"stream"`
+	Time   time.Time      `json:"time"`
 }
 
 // LogEntryStream defines model for LogEntry.Stream.
@@ -466,7 +468,9 @@ type UploadTarget struct {
 	ExpiresAt time.Time          `json:"expires_at"`
 	Headers   map[string]string  `json:"headers"`
 	Method    UploadTargetMethod `json:"method"`
-	Url       string             `json:"url"`
+
+	// Url Absolute URL; the request carries no bearer token.
+	Url string `json:"url"`
 }
 
 // UploadTargetMethod defines model for UploadTarget.Method.
