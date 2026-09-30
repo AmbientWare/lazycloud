@@ -24,6 +24,9 @@ import (
 func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil)).With("component", "agent")
 	cfg, err := parseConfig(os.Args[1:])
+	if errors.Is(err, flag.ErrHelp) {
+		return
+	}
 	if err != nil {
 		logger.Error("invalid configuration", "error", err)
 		os.Exit(2)

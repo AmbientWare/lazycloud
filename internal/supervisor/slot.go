@@ -87,11 +87,17 @@ func (sl *slot) serve(ctx context.Context, p *runnerProcess, handler string, run
 		return false, ErrLoadFailed
 	}
 	sl.sup.slotLoaded(sl)
+	loaded := time.Now()
 	for {
 		select {
 		case <-ctx.Done():
 			return false, fmt.Errorf("serve attempts: %w", ctx.Err())
 		case <-p.done:
+			// A runner that dies on its own right after loading restarts at
+			// most once a second.
+			if !sleepCtx(ctx, time.Second-time.Since(loaded)) {
+				return false, fmt.Errorf("restart runner: %w", ctx.Err())
+			}
 			return true, nil
 		case run, ok := <-runs:
 			if !ok {
@@ -426,4 +432,19 @@ func describeExit(err error) string {
 		return "exit status 0"
 	}
 	return err.Error()
+}
+
+// sleepCtx waits for d and reports whether ctx is still live.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	if d <= 0 {
+		return ctx.Err() == nil
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
 }
