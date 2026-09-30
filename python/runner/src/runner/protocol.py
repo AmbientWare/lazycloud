@@ -18,7 +18,7 @@ import traceback
 from collections.abc import Callable
 from typing import Annotated, Any
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 from shared.errors import InvalidInputError
 from shared.serialization import to_json_value
 from shared.task_context import task_context
@@ -26,6 +26,7 @@ from shared.task_context import task_context
 from runner.handler_loading import load_handler
 from runner.invocation import cloudpickle_bytes, invoke_handler
 from runner.protocol_models import (
+    Arguments,
     Encoding,
     Failed,
     Invoke,
@@ -49,13 +50,6 @@ _INBOUND: TypeAdapter[Load | Invoke] = TypeAdapter(
 
 class ProtocolError(Exception):
     """The supervisor sent a frame the protocol does not allow."""
-
-
-class _Arguments(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    args: list[Any] = Field(default_factory=list)
-    kwargs: dict[str, Any] = Field(default_factory=dict)
 
 
 class Connection:
@@ -164,9 +158,9 @@ def _decode_arguments(
 ) -> tuple[tuple[Any, ...], dict[str, Any]]:
     try:
         if encoding is Encoding.json:
-            arguments = _Arguments.model_validate_json(payload)
+            arguments = Arguments.model_validate_json(payload)
         else:
-            arguments = _Arguments.model_validate(pickle.loads(payload))
+            arguments = Arguments.model_validate(pickle.loads(payload))
     except Exception as exc:
         raise InvalidInputError(f"invalid {encoding.value} arguments: {exc}") from exc
     return tuple(arguments.args), arguments.kwargs
