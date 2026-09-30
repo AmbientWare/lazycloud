@@ -2,4 +2,4 @@
 // contracts/runner.yaml.
 package runnerproto
 
-//go:generate go tool oapi-codegen -generate types -package runnerproto -o runner.gen.go ../../contracts/runner.yaml
+//go:generate go tool oapi-codegen -config oapi-codegen.yaml ../../contracts/runner.yaml
