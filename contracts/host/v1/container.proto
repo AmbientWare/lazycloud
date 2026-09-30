@@ -1,0 +1,84 @@
+syntax = "proto3";
+
+package lazycloud.host.v1;
+
+import "google/protobuf/timestamp.proto";
+import "host/v1/host.proto";
+
+option go_package = "github.com/AmbientWare/lazycloud/internal/hostproto";
+
+// ContainerLink connects the supervisor (PID 1 in a container) to the agent.
+// The agent serves it on a Unix socket it creates for that container alone, so
+// the socket identifies the container. Agent and supervisor ship together.
+service ContainerLink {
+  rpc Connect(stream SupervisorMessage) returns (stream SupervisorCommand);
+}
+
+message SupervisorMessage {
+  oneof body {
+    SlotsReady ready = 1;
+    LoadFailed load_failed = 2;
+    AttemptFinished finished = 3;
+    OutputChunk output = 4;
+  }
+}
+
+// SlotsReady reports that every slot loaded its handler.
+message SlotsReady {
+  int32 slots = 1;
+}
+
+message LoadFailed {
+  RunnerError error = 1;
+}
+
+message AttemptFinished {
+  string attempt_id = 1;
+  oneof outcome {
+    TaskSuccess success = 2;
+    TaskFailure failure = 3;
+  }
+}
+
+// OutputChunk is output a slot wrote while running an attempt. attempt_id is
+// empty for output outside an attempt, such as during import.
+message OutputChunk {
+  string attempt_id = 1;
+  LogStream stream = 2;
+  string data = 3;
+  google.protobuf.Timestamp time = 4;
+}
+
+message SupervisorCommand {
+  oneof body {
+    Configure configure = 1;
+    RunAttempt run = 2;
+    CancelSlot cancel = 3;
+    Drain drain = 4;
+  }
+}
+
+// Configure is the first command. The supervisor starts `slots` runner
+// processes with runner_command in working_directory.
+message Configure {
+  string handler = 1;
+  int32 slots = 2;
+  repeated string runner_command = 3;
+  string working_directory = 4;
+}
+
+message RunAttempt {
+  string task_id = 1;
+  string attempt_id = 2;
+  PayloadEncoding input_encoding = 3;
+  bytes input = 4;
+  google.protobuf.Timestamp deadline = 5;
+}
+
+// CancelSlot kills the process running the attempt and starts a replacement.
+message CancelSlot {
+  string attempt_id = 1;
+}
+
+// Drain lets running attempts finish, then exits the supervisor.
+message Drain {}
