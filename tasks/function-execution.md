@@ -188,9 +188,61 @@ agent and server, and cloud provisioning.
 
 ## Progress
 
-- [ ] Foundation: module, contracts, schema, database package, compose, lint
-- [ ] Server
-- [ ] Scheduler
-- [ ] Host runtime
-- [ ] Python
-- [ ] Integrated acceptance and measurements
+- [x] Foundation: module, contracts, schema, database package, compose, lint
+- [x] Server (packet 1)
+- [x] Scheduler (packet 2)
+- [x] Host runtime (packet 3)
+- [x] Python (packet 4)
+- [x] Integrated local run: `deploy/local/run.sh start`, then the SDK
+- [ ] Review findings resolved
+- [ ] Reference baseline measured under the same conditions
+
+## Integrated evidence
+
+The measurements below come from one local host (24 CPUs, Docker 29, runc).
+The same SDK script ran against server, scheduler and agent processes with
+PostgreSQL 18 and Garage.
+
+| Scenario | Result |
+| --- | --- |
+| Deploy of a three-function app | 0.65 s from the CLI |
+| Cold `.remote()`: admission, placement, image present, container ready, result | 0.9 to 1.1 s |
+| Container assigned to ready (supervisor, runner import, handler load) | 0.85 to 1.3 s |
+| Warm `.remote()` round trip | p50 9 to 14 ms, p95 12 to 18 ms |
+| `.map()` over 200 inputs, max 8 containers | 0.9 to 1.3 s |
+| `.map()` over 2,000 inputs, max 8 containers | 4.6 to 4.9 s |
+| Planning plus placement for 2,000 queued tasks, 50 containers, 5 hosts | 5.3 ms (scheduler benchmark) |
+| User exception | Re-raised as the original class with its message |
+| `timeout_seconds=2` | Fails as `timeout` 3.7 s after submit, cold start included |
+| Idle containers | Drain after `keep_warm_seconds` and stop |
+
+Defects found by the integrated run and fixed:
+
+- A Unix socket under a deep state directory exceeded `sun_path`. The agent
+  now keeps link sockets in a short socket directory.
+- The agent freed a slot before the server recorded its completion, so the
+  next claim saw a full container and waited 20 s for a wake that never came.
+  The slot is now freed after `CompleteTask` returns.
+- Containers were hard-limited to their reservation, which made a 0.125-CPU
+  cold import take 6 s. As in the reference, reservations are now CPU shares
+  and `memory.low`, with burst ceilings: the CPU reservation plus 16 cores
+  capped at the host, and memory at the stated limit or four times the
+  reservation, bounded to 1 to 8 GiB above it.
+
+## Intentional differences from the reference
+
+- A task's failure is a typed object (`kind`, `type`, `message`, `traceback`,
+  serialized exception), and the SDK re-raises the original exception. The
+  reference returned only `"Type: message"`.
+- A handler import error fails the release's queued tasks immediately instead
+  of retrying the import per task.
+- Containers hold no platform credential.
+
+## Parity gaps after this slice
+
+The Python packet removed CLI commands and SDK paths whose backend was gone.
+They return as their areas land, matching the reference one to one:
+`lazycloud app` (pause, resume, delete, export), `lazycloud deployment`
+(list, stop, start, delete), `lazycloud logs`, `task list`, device-code
+`login`, `deploy --diff --prune` previews, `serve`, and every option listed
+by `Function.unsupported_options()`.
