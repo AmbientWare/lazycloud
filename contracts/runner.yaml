@@ -20,6 +20,10 @@ info:
        optional serialized exception as payload. One attempt runs at a time.
     3. Closing the socket asks the runner to exit. The supervisor kills the
        process group to cancel an attempt.
+
+    The runner exits 0 after the socket closes, 1 after `load_failed` and 2 on
+    a protocol error such as a malformed frame or an unsupported
+    `protocol_version`.
 paths: {}
 components:
   schemas:
@@ -27,11 +31,29 @@ components:
       type: string
       enum: [json, cloudpickle]
 
+    Arguments:
+      description: >-
+        The invoke payload: this object as UTF-8 JSON for `json`, or a
+        cloudpickle of the same dict for `cloudpickle`.
+      type: object
+      additionalProperties: false
+      properties:
+        args:
+          type: array
+          items: {}
+          default: []
+        kwargs:
+          type: object
+          additionalProperties: true
+          default: {}
+
     RunnerError:
       type: object
       required: [type, message]
       properties:
-        type: { type: string }
+        type:
+          description: "The exception class: `qualname` for builtins, otherwise `module.qualname`."
+          type: string
         message: { type: string }
         traceback: { type: string }
 
@@ -59,7 +81,7 @@ components:
         error: { $ref: "#/components/schemas/RunnerError" }
 
     Invoke:
-      description: The payload is the encoded arguments.
+      description: The payload is the encoded Arguments.
       type: object
       required: [type, task_id, attempt_id, input_encoding]
       properties:

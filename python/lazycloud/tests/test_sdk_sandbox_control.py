@@ -14,7 +14,7 @@ from lazycloud.abstractions.sandbox import (
     SandboxProcessManager,
 )
 from shared.deployment_records import VolumeMount
-from shared.http.errors import HttpApiError
+from shared.http.errors import ErrorResponse, HttpApiError
 from shared.http.pods import (
     CreatePodRequest,
     CreatePodResponse,
@@ -64,9 +64,11 @@ from shared.http.pods import (
     SandboxTimelineRequest,
 )
 
-from tests.fakes import FakeDeploymentClient, http_api_error
-
 T = TypeVar("T")
+
+
+def http_api_error(detail: str, *, status_code: int = 400) -> HttpApiError:
+    return HttpApiError(detail, status_code=status_code, error=ErrorResponse(detail=detail))
 
 
 @dataclass
@@ -538,34 +540,3 @@ def test_sandbox_url_operations_wrap_transport_failures_for_sync_and_async() -> 
         assert isinstance(async_list.value.__cause__, HttpApiError)
 
     asyncio.run(scenario())
-
-
-def test_sandbox_prepare_emits_canonical_deployment_request() -> None:
-    deployment = FakeDeploymentClient(stub_id="stub-sandbox")
-    sandbox = Sandbox(
-        _app_slug="test",
-        keep_warm_seconds=900,
-        sync_local_dir=True,
-        docker_enabled=True,
-        preemptible=True,
-        block_network=True,
-        ports=[8000, 9000],
-        machine="gpu-box",
-        authorized=True,
-        volumes=[ExportableVolume(name="data", mount_path="/data")],
-    )
-    _bind_internal_state(sandbox, deployment_client=deployment)
-
-    assert sandbox.prepare(workspace="platform") == "stub-sandbox"
-
-    request = deployment.requests[0]
-    assert request.stub_type == "sandbox"
-    assert request.workspace == "platform"
-    assert (
-        request.authorized,
-        request.block_network,
-        request.docker_enabled,
-        request.preemptible,
-    ) == (True, True, True, True)
-    assert request.machine == "gpu-box"
-    assert [(volume.id, volume.mount_path) for volume in request.volumes] == [("data", "/data")]

@@ -7,7 +7,7 @@ from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Protocol, TypedDict
+from typing import Any, NoReturn, Protocol, TypedDict
 
 from pydantic import JsonValue
 from shared.app_identity import SANDBOX_COMPOSE_OVERRIDE_PATH
@@ -79,8 +79,8 @@ from lazycloud.abstractions.metadata import MachineInput, build_resource_metadat
 from lazycloud.abstractions.volume import VolumeExport, volume_mounts
 from lazycloud.aio import to_thread
 from lazycloud.control import ControlClientConfigMixin
+from lazycloud.exceptions import UnsupportedFeatureError
 from lazycloud.json_contracts import validate_json_object
-from lazycloud.session.deployment import DeploymentClient, DeploymentControlClient
 
 SANDBOX_CONTROL_TIMEOUT_SECONDS = 30.0
 SANDBOX_READY_TIMEOUT_SECONDS = 120.0
@@ -1617,7 +1617,6 @@ class Sandbox(ControlClientConfigMixin):
     image_id: str | None = None
     checkpoint_id: str | None = None
     client: SandboxPodClient | None = None
-    deployment_client: DeploymentControlClient | None = None
     workspace: str | None = None
     endpoint: str | None = None
     token: str | None = None
@@ -1682,7 +1681,6 @@ class Sandbox(ControlClientConfigMixin):
         self.image_id = None
         self.checkpoint_id = None
         self.client = None
-        self.deployment_client = None
         self.workspace = None
         self.endpoint = None
         self.token = None
@@ -1735,23 +1733,8 @@ class Sandbox(ControlClientConfigMixin):
             ),
         )
 
-    def prepare(self, *, workspace: str | None = None) -> str:
-        try:
-            response = DeploymentClient(
-                client=self.deployment_client,
-                workspace=workspace or self.workspace,
-                endpoint=self.endpoint,
-                token=self.token,
-                timeout_seconds=self.timeout_seconds,
-                sync_source=self.sync_local_dir,
-            ).prepare(self.spec(), workspace=workspace or self.workspace, image=self.image)
-        except RuntimeError as exc:
-            raise SandboxConnectionError(str(exc)) from exc
-        if not response.stub_id:
-            msg = "deployment prepare did not return a sandbox stub_id"
-            raise SandboxConnectionError(msg)
-        self.stub_id = response.stub_id
-        return self.stub_id
+    def prepare(self, *, workspace: str | None = None) -> NoReturn:
+        raise UnsupportedFeatureError(f"sandbox {self.name}", ["sandboxes"])
 
     def create(
         self,

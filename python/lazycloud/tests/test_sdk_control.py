@@ -9,23 +9,18 @@ from lazycloud.config import (
     reset_settings_cache,
     set_profile,
 )
-from lazycloud.control import resolve_control_client_config
-from shared.env import (
-    GATEWAY_HTTP_URL_ENV,
-    GATEWAY_TOKEN_ENV,
-    WORKSPACE_ID_ENV,
-    WORKSPACE_NAME_ENV,
-)
+from lazycloud.control import control_workspace_scope, resolve_control_client_config
 
 
 @pytest.mark.parametrize(
     ("source", "expected"),
     [
-        ("worker", ("http://control-plane:9000", "rt_worker", "workspace-id")),
         ("profile", ("https://api.example", "profile-token", "profile-workspace")),
         ("explicit", ("https://api.example", "explicit-token", "explicit-workspace")),
+        ("scope", ("https://api.example", "profile-token", "scoped-workspace")),
         ("packaged", (PACKAGED_DEFAULT_ENDPOINT, None, "")),
         ("endpoint-env", ("https://env.example", None, "")),
+        ("bare-host", ("http://127.0.0.1:8080", None, "")),
     ],
 )
 def test_resolve_control_client_config_precedence(
@@ -35,42 +30,32 @@ def test_resolve_control_client_config_precedence(
     tmp_path: Path,
 ) -> None:
     monkeypatch.setenv("LAZYCLOUD_HOME", str(tmp_path))
-    monkeypatch.chdir(tmp_path)
-    for variable in (
-        "LAZYCLOUD_ENDPOINT",
-        GATEWAY_HTTP_URL_ENV,
-        GATEWAY_TOKEN_ENV,
-        WORKSPACE_ID_ENV,
-        WORKSPACE_NAME_ENV,
-    ):
-        monkeypatch.delenv(variable, raising=False)
-    if source in {"worker", "explicit"}:
-        monkeypatch.setenv(GATEWAY_HTTP_URL_ENV, "http://control-plane:9000")
-        monkeypatch.setenv(GATEWAY_TOKEN_ENV, "rt_worker")
-        monkeypatch.setenv(WORKSPACE_ID_ENV, "workspace-id")
-        monkeypatch.setenv(WORKSPACE_NAME_ENV, "workspace-name")
-    elif source == "profile":
+    monkeypatch.delenv("LAZYCLOUD_ENDPOINT", raising=False)
+    if source in {"profile", "scope"}:
         set_profile(
             ClientProfile(
                 name="company",
                 endpoint="https://api.example",
                 token="profile-token",
                 workspace="profile-workspace",
-                tls=True,
             )
         )
     elif source == "endpoint-env":
         monkeypatch.setenv("LAZYCLOUD_ENDPOINT", "https://env.example")
+    elif source == "bare-host":
+        monkeypatch.setenv("LAZYCLOUD_ENDPOINT", "127.0.0.1:8080")
     reset_settings_cache()
 
-    config = (
-        resolve_control_client_config(
+    if source == "explicit":
+        config = resolve_control_client_config(
             endpoint="https://api.example",
             token="explicit-token",
             workspace="explicit-workspace",
         )
-        if source == "explicit"
-        else resolve_control_client_config()
-    )
+    elif source == "scope":
+        with control_workspace_scope("scoped-workspace"):
+            config = resolve_control_client_config()
+    else:
+        config = resolve_control_client_config()
 
     assert (config.endpoint, config.token, config.workspace) == expected

@@ -4,7 +4,7 @@ Run these commands from this downloaded project directory:
 
 ```bash
 uv sync
-uv run lazycloud login
+uv run lazycloud login --token <token>
 uv run lazycloud deploy app:app
 uv run lazycloud run app:run_function 7
 ```
@@ -14,8 +14,8 @@ Try `app:run_nested_function 6`, `app:run_endpoint 7`, or `app:run_asgi`.
 The failure helpers deliberately submit failing tasks and return
 `expected_failure: true`.
 
-The heartbeat runs every minute and the pod remains running. Pause them with
-`uv run lazycloud app pause all_workloads`. On-demand pod and sandbox helpers
+The heartbeat runs every minute and the pod remains running until stopped.
+On-demand pod and sandbox helpers
 return container IDs; stop those containers separately. Delete the app and
 saved artifacts when no longer needed.
 

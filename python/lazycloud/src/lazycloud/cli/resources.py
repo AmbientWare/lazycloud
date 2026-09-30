@@ -4,7 +4,6 @@ import subprocess
 import sys
 import time
 import webbrowser
-from pathlib import Path
 from typing import Annotated, Any
 
 import typer
@@ -25,14 +24,11 @@ from shared.http.gateway import (
     AttachToContainerResponse,
     CheckpointContainerRequest,
 )
-from shared.tasks import is_terminal_task_status
 
-from lazycloud._terminal.cards import empty_state, notice_card, result_card
-from lazycloud._terminal.formatting import duration, timestamp
-from lazycloud._terminal.streams import console, error_console
-from lazycloud._terminal.theme import MUTED, state_style, styled
-from lazycloud.cli.apps import resolve_app_id
-from lazycloud.cli.components.errors import ClientError
+from lazycloud._terminal.cards import notice_card, result_card
+from lazycloud._terminal.formatting import duration
+from lazycloud._terminal.streams import console
+from lazycloud._terminal.theme import state_style, styled
 from lazycloud.cli.components.output import (
     emit,
     json_default,
@@ -45,13 +41,10 @@ from lazycloud.cli.control import (
     compute_client,
     gateway_client,
     resource_client,
-    task_client,
 )
 from lazycloud.cli.machine_join import agent_join_interrupted, build_machine_join_command
-from lazycloud.cli.result_output import task_result_export, task_result_view
 from lazycloud.clients.aws import create_connection_stack
 
-task_app = typer.Typer(help="Inspect and manage tasks.")
 container_app = typer.Typer(help="Inspect and manage containers.")
 machine_app = typer.Typer(help="Manage self-hosted machines.")
 cloud_app = typer.Typer(help="Connect and manage this account's cloud connection.")
@@ -436,174 +429,6 @@ def _print_cloud_poll(
     elapsed = duration(time.monotonic() - started_at)
     status = styled(response.phase.value.replace("_", " "), state_style(response.phase))
     console.print(f"[{elapsed}] {account_id}", status, response.detail, soft_wrap=True)
-
-
-@task_app.command("list", help="List recent tasks.")
-def task_list(
-    ctx: typer.Context,
-    limit: Annotated[int, typer.Option("--limit", min=1)] = 100,
-    app: Annotated[
-        str | None,
-        typer.Option("--app", help="App name or ID."),
-    ] = None,
-    workspace: Annotated[str | None, typer.Option("--workspace")] = None,
-) -> None:
-    client = resource_client(workspace=workspace)
-    app_id = resolve_app_id(app, client=client) if app else None
-    response = client.list_tasks(limit=limit, app_id=app_id)
-    if json_output_enabled(ctx):
-        print_payload(ctx, [item.model_dump(mode="json") for item in response.data])
-        return
-    rows: list[list[str]] = [
-        [
-            item.workload.name if item.workload is not None else item.name,
-            item.status.value,
-            timestamp(item.created_at),
-            item.id,
-        ]
-        for item in response.data
-    ]
-    console.print(table("Tasks", ["workload", "status", "requested", "id"], rows))
-
-
-@task_app.command("stop", help="Stop one or more tasks.")
-def task_stop(
-    ctx: typer.Context,
-    task_ids: Annotated[list[str], typer.Argument()],
-    workspace: Annotated[str | None, typer.Option("--workspace")] = None,
-) -> None:
-    response = resource_client(workspace=workspace).stop_tasks(task_ids)
-    summary: dict[str, object] = {"stopped": len(response.stopped)}
-    if response.skipped:
-        summary["skipped"] = list(response.skipped)
-    emit(
-        ctx,
-        payload=response.model_dump(mode="json"),
-        view=result_card(
-            json_default(summary),
-            title="Tasks stopped",
-            tone="warning" if response.skipped else "success",
-        ),
-    )
-
-
-@task_app.command("show", help="Show one task and its current state.")
-def task_show(
-    ctx: typer.Context,
-    task_id: str,
-    workspace: Annotated[str | None, typer.Option("--workspace")] = None,
-) -> None:
-    task = task_client(workspace=workspace).detail(task_id)
-    task_name = task.workload.name if task.workload is not None else task.name
-    summary: dict[str, object] = {
-        "workload": task_name,
-        "status": task.status.value,
-        "requested": timestamp(task.created_at),
-    }
-    if task.max_attempts > 1:
-        summary["attempt"] = f"{max(task.attempt_number, 1)} of {task.max_attempts}"
-    if task.started_at is not None:
-        summary["started"] = timestamp(task.started_at)
-    if task.finished_at is not None:
-        summary["finished"] = timestamp(task.finished_at)
-    if task.container_id:
-        summary["container"] = task.container_id
-    if task.error:
-        summary["error"] = task.error
-    emit(
-        ctx,
-        payload=task.model_dump(mode="json"),
-        view=result_card(json_default(summary)),
-    )
-
-
-@task_app.command("result", help="Wait for and display a task result.")
-def task_result(
-    ctx: typer.Context,
-    task_id: str,
-    wait: Annotated[bool, typer.Option("--wait/--no-wait")] = True,
-    timeout_seconds: Annotated[float | None, typer.Option("--timeout", min=0)] = None,
-    workspace: Annotated[str | None, typer.Option("--workspace")] = None,
-    output: Annotated[
-        Path | None,
-        typer.Option(
-            "--output",
-            help="Save the result to a .png, .html, .txt, .json, or .pkl file.",
-            dir_okay=False,
-            writable=True,
-        ),
-    ] = None,
-) -> None:
-    client = task_client(workspace=workspace)
-    if wait and not json_output_enabled(ctx):
-        with console.status(f"Waiting for task {task_id}…"):
-            result = client.handle(task_id).result(
-                wait=True,
-                timeout_seconds=timeout_seconds,
-            )
-    else:
-        result = client.handle(task_id).result(
-            wait=wait,
-            timeout_seconds=timeout_seconds,
-        )
-    task = client.detail(task_id)
-    if result.ok:
-        if output is not None:
-            task_result_export(task).write(output)
-        emit(ctx, payload=task.model_dump(mode="json"), view=task_result_view(task))
-        if output is not None and not json_output_enabled(ctx):
-            error_console.print(styled(f"Saved {output}", MUTED))
-        return
-    if is_terminal_task_status(result.status):
-        raise ClientError(
-            result.error or f"task {task_id} finished with status {result.status.value}",
-            type="task_failed",
-            title="Task failed",
-            exit_code=result.exit_code or 1,
-        )
-    emit(
-        ctx,
-        payload=task.model_dump(mode="json"),
-        view=notice_card(
-            f"Task {task_id} is {task.status.value.replace('_', ' ')}.",
-            hint=f"Run `lazycloud task result {task_id}` to wait for it.",
-        ),
-    )
-
-
-@task_app.command("logs", help="Print logs for one task.")
-def task_logs(
-    ctx: typer.Context,
-    task_id: str,
-    limit: Annotated[int, typer.Option("--limit", min=1)] = 250,
-    workspace: Annotated[str | None, typer.Option("--workspace")] = None,
-) -> None:
-    logs = task_client(workspace=workspace).logs(task_id, limit=limit)
-    if json_output_enabled(ctx):
-        print_payload(ctx, [entry.model_dump(mode="json") for entry in logs])
-        return
-    if not logs:
-        console.print(empty_state("No log entries found."))
-        return
-    for entry in logs:
-        write_stream(entry.message if entry.message.endswith("\n") else f"{entry.message}\n")
-
-
-@task_app.command("cancel", help="Cancel a task.")
-def task_cancel(
-    ctx: typer.Context,
-    task_id: str,
-    workspace: Annotated[str | None, typer.Option("--workspace")] = None,
-) -> None:
-    response = task_client(workspace=workspace).cancel(task_id)
-    emit(
-        ctx,
-        payload=response.model_dump(mode="json"),
-        view=notice_card(
-            f"Cancelled task {task_id}.",
-            tone="success",
-        ),
-    )
 
 
 @container_app.command("list", help="List recent containers.")

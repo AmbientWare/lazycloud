@@ -1,35 +1,15 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 
 TRUTHY_ENV_VALUES: frozenset[str] = frozenset({"1", "true", "yes", "on"})
 IMPORTING_USER_CODE_ENV = "IMPORTING_USER_CODE"
 CONTAINER_ID_ENV = "CONTAINER_ID"
-CONTAINER_HOSTNAME_ENV = "CONTAINER_HOSTNAME"
-CHECKPOINT_ENABLED_ENV = "CHECKPOINT_ENABLED"
-ENDPOINT_SERVE_HOST_ENV = "ENDPOINT_SERVE_HOST"
-ENDPOINT_WORKERS_ENV = "ENDPOINT_WORKERS"
-GATEWAY_GRPC_HOST_ENV = "GATEWAY_GRPC_HOST"
-GATEWAY_GRPC_PORT_ENV = "GATEWAY_GRPC_PORT"
-GATEWAY_GRPC_TLS_ENV = "GATEWAY_GRPC_TLS"
-GATEWAY_HTTP_HOST_ENV = "GATEWAY_HTTP_HOST"
-GATEWAY_HTTP_PORT_ENV = "GATEWAY_HTTP_PORT"
-GATEWAY_HTTP_TLS_ENV = "GATEWAY_HTTP_TLS"
 GATEWAY_HTTP_URL_ENV = "GATEWAY_HTTP_URL"
-FUNCTION_CONCURRENCY_ENV = "FUNCTION_CONCURRENCY"
-FUNCTION_IN_PROCESS_ENV = "FUNCTION_IN_PROCESS"
 GATEWAY_TOKEN_ENV = "GATEWAY_TOKEN"
-HOT_RELOAD_ENV = "HOT_RELOAD"
-HOT_RELOAD_DIR_ENV = "HOT_RELOAD_DIR"
-KEEP_WARM_SECONDS_ENV = "KEEP_WARM_SECONDS"
-LIFECYCLE_HOOKS_ENV = "LIFECYCLE_HOOKS"
-APP_ID_ENV = "APP_ID"
-STORAGE_AVAILABLE_ENV = "STORAGE_AVAILABLE"
-STUB_ID_ENV = "STUB_ID"
-STUB_TYPE_ENV = "STUB_TYPE"
 ROOT_TASK_ID_ENV = "ROOT_TASK_ID"
 TASK_ID_ENV = "TASK_ID"
 WORKSPACE_ID_ENV = "WORKSPACE_ID"
@@ -38,15 +18,6 @@ WORKSPACE_NAME_ENV = "WORKSPACE_NAME"
 
 def truthy_env_value(value: str | None) -> bool:
     return (value or "").strip().lower() in TRUTHY_ENV_VALUES
-
-
-def parse_environment(values: Iterable[str]) -> dict[str, str]:
-    result: dict[str, str] = {}
-    for value in values:
-        key, separator, item = value.partition("=")
-        if separator:
-            result[key] = item
-    return result
 
 
 _IMPORTING_USER_CODE: ContextVar[bool] = ContextVar(
@@ -88,37 +59,16 @@ def importing_user_code_now(env: Mapping[str, str] | None = None) -> bool:
 
 
 __all__ = [
-    "APP_ID_ENV",
-    "CHECKPOINT_ENABLED_ENV",
-    "CONTAINER_HOSTNAME_ENV",
     "CONTAINER_ID_ENV",
-    "ENDPOINT_SERVE_HOST_ENV",
-    "ENDPOINT_WORKERS_ENV",
-    "FUNCTION_CONCURRENCY_ENV",
-    "FUNCTION_IN_PROCESS_ENV",
-    "GATEWAY_GRPC_HOST_ENV",
-    "GATEWAY_GRPC_PORT_ENV",
-    "GATEWAY_GRPC_TLS_ENV",
-    "GATEWAY_HTTP_HOST_ENV",
-    "GATEWAY_HTTP_PORT_ENV",
-    "GATEWAY_HTTP_TLS_ENV",
     "GATEWAY_HTTP_URL_ENV",
     "GATEWAY_TOKEN_ENV",
-    "HOT_RELOAD_DIR_ENV",
-    "HOT_RELOAD_ENV",
     "IMPORTING_USER_CODE_ENV",
-    "KEEP_WARM_SECONDS_ENV",
-    "LIFECYCLE_HOOKS_ENV",
     "ROOT_TASK_ID_ENV",
-    "STORAGE_AVAILABLE_ENV",
-    "STUB_ID_ENV",
-    "STUB_TYPE_ENV",
     "TASK_ID_ENV",
     "TRUTHY_ENV_VALUES",
     "WORKSPACE_ID_ENV",
     "WORKSPACE_NAME_ENV",
     "importing_user_code",
     "importing_user_code_now",
-    "parse_environment",
     "truthy_env_value",
 ]

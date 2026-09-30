@@ -4,9 +4,7 @@ from typing import NewType, TypeVar
 
 import pytest
 from lazycloud.client_contracts import ClientContractError, build_client_contract
-from lazycloud.function_results import FunctionResultDecodeError, decode_function_result
 from shared.deployments import DeploymentKind
-from shared.function_payloads import FunctionCloudpickleResult
 from typing_extensions import TypeAliasType
 
 from lazycloud import App
@@ -64,9 +62,3 @@ def test_constructor_annotation_is_rejected() -> None:
     invalid.__annotations__["return"] = len
     with pytest.raises(ClientContractError, match="use a type"):
         App("invalid_annotation").function()(invalid).spec()
-
-
-def test_missing_result_dependency_names_the_missing_module() -> None:
-    payload = FunctionCloudpickleResult.from_bytes(b"clazycloud_missing_user_dependency\nValue\n.")
-    with pytest.raises(FunctionResultDecodeError, match=r"missing dependency.*lazycloud_missing"):
-        decode_function_result(payload)

@@ -4,7 +4,7 @@ Run these commands from this downloaded project directory:
 
 ```bash
 uv sync
-uv run lazycloud login
+uv run lazycloud login --token <token>
 uv run lazycloud run app:create_report
 ```
 

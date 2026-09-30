@@ -15,6 +15,7 @@ dev = [
     "numpy>=2,<3",
     "fastapi>=0.115,<1",
     "httpx2>=2.4.0",
+    "datamodel-code-generator==0.83.0",
 ]
 
 [tool.uv]
@@ -54,3 +55,36 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 ignore = ["B008"]
+
+# datamodel-codegen formats its output but does not sort imports.
+[tool.ruff.lint.per-file-ignores]
+"python/shared/src/shared/api.py" = ["I001"]
+"python/runner/src/runner/protocol_models.py" = ["I001"]
+
+# Pydantic bindings for the language-neutral contracts. Regenerate with
+# `uv run --group dev datamodel-codegen --profile api` and `--profile runner`.
+[tool.datamodel-codegen]
+input-file-type = "openapi"
+output-model-type = "pydantic_v2.BaseModel"
+target-python-version = "3.10"
+use-annotated = true
+field-constraints = true
+use-standard-collections = true
+use-union-operator = true
+use-double-quotes = true
+use-subclass-enum = true
+enum-field-as-literal = "one"
+set-default-enum-member = true
+strict-nullable = true
+collapse-root-models = true
+disable-timestamp = true
+type-mappings = ["string+byte=binary"]
+formatters = ["ruff-format"]
+
+[tool.datamodel-codegen.profiles.api]
+input = "contracts/openapi.yaml"
+output = "python/shared/src/shared/api.py"
+
+[tool.datamodel-codegen.profiles.runner]
+input = "contracts/runner.yaml"
+output = "python/runner/src/runner/protocol_models.py"

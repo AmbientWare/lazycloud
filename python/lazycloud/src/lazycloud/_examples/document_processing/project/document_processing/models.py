@@ -30,16 +30,7 @@ class UploadAccepted(BaseModel):
 class JobStatusResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    status: Literal[
-        "pending",
-        "running",
-        "retry",
-        "complete",
-        "failed",
-        "expired",
-        "timeout",
-        "cancelled",
-    ]
+    status: Literal["queued", "running", "succeeded", "failed", "cancelled"]
     ready: bool
     error: str | None = None
 
