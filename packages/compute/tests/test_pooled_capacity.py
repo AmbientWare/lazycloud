@@ -2306,6 +2306,10 @@ def test_release_rollout_preserves_singleton_until_replacement_and_fresh_intake(
             agent=AgentArtifact(url="https://example.test/agent", sha256="b" * 64, size_bytes=1),
         ),
     )
+    if platform_fleet:
+        idle = source.model_copy(update={"free_cpu_millicores": 4000, "free_disk_volumes": 2})
+        planned = compute.prepare_worker_release(idle, release, [idle])
+        assert planned.surge_machines == 0
     with (
         pytest.raises(ConflictError, match="reserved replacement"),
         compute.worker_release_admission(source, release, [source]),
