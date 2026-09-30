@@ -12,17 +12,18 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
+	"github.com/AmbientWare/lazycloud/internal/identity"
 	. "github.com/AmbientWare/lazycloud/internal/storage"
 	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
 
-func workspace(t *testing.T, pool *pgxpool.Pool) uuid.UUID {
+func workspace(t *testing.T, pool *pgxpool.Pool) identity.WorkspaceID {
 	t.Helper()
 	var id uuid.UUID
 	if err := pool.QueryRow(t.Context(), "insert into workspaces (name) values ('ws') returning id").Scan(&id); err != nil {
 		t.Fatal(err)
 	}
-	return id
+	return identity.WorkspaceID(id)
 }
 
 func put(t *testing.T, target *UploadTarget, body []byte) int {

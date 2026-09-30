@@ -19,6 +19,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
 const (
@@ -95,15 +97,15 @@ type SourceUpload struct {
 	Upload *UploadTarget
 }
 
-func sourceKey(workspace uuid.UUID, digest Digest) string {
+func sourceKey(workspace identity.WorkspaceID, digest Digest) string {
 	return fmt.Sprintf("workspaces/%s/sources/%s.zip", workspace, digest)
 }
 
 // RegisterSource records the archive with digest and size for workspace
 // when the object store holds it, and otherwise returns a presigned upload.
 // The upload request carries the digest, so the store rejects other bytes.
-func (s *Storage) RegisterSource(ctx context.Context, workspace uuid.UUID, digest Digest, size int64) (SourceUpload, error) {
-	_, err := s.queries.SourceObjectSize(ctx, SourceObjectSizeParams{WorkspaceID: workspace, Sha256: digest[:]})
+func (s *Storage) RegisterSource(ctx context.Context, workspace identity.WorkspaceID, digest Digest, size int64) (SourceUpload, error) {
+	_, err := s.queries.SourceObjectSize(ctx, SourceObjectSizeParams{WorkspaceID: uuid.UUID(workspace), Sha256: digest[:]})
 	if err == nil {
 		return SourceUpload{Present: true}, nil
 	}
@@ -118,7 +120,7 @@ func (s *Storage) RegisterSource(ctx context.Context, workspace uuid.UUID, diges
 	}
 	if stored {
 		if err := s.queries.InsertSourceObject(ctx, InsertSourceObjectParams{
-			WorkspaceID: workspace, Sha256: digest[:], SizeBytes: size,
+			WorkspaceID: uuid.UUID(workspace), Sha256: digest[:], SizeBytes: size,
 		}); err != nil {
 			return SourceUpload{}, fmt.Errorf("record source object: %w", err)
 		}
@@ -171,7 +173,7 @@ func (s *Storage) storedMatches(ctx context.Context, key string, digest Digest, 
 }
 
 // SourceURL is a presigned GET for a workspace's source archive.
-func (s *Storage) SourceURL(ctx context.Context, workspace uuid.UUID, digest Digest) (string, time.Time, error) {
+func (s *Storage) SourceURL(ctx context.Context, workspace identity.WorkspaceID, digest Digest) (string, time.Time, error) {
 	req, err := s.presign.PresignGetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(s.bucket),
 		Key:    aws.String(sourceKey(workspace, digest)),
