@@ -7,9 +7,9 @@ from dataclasses import dataclass
 from time import monotonic
 
 from coordination.redis_client import REDIS_UNAVAILABLE_ERRORS
-from scheduler.fleet_controller import FleetController
 from scheduler.reconciliation import SchedulerRunResult
 
+from scheduler_app.fleet_coordinator import FleetCoordinator
 from scheduler_app.loops import SchedulerLoop, SchedulerLoopSupervisor, run_loop
 
 LOGGER = logging.getLogger(__name__)
@@ -41,7 +41,7 @@ class _ContendedDemand:
 
 
 def start_fleet_loops(
-    controller: FleetController,
+    controller: FleetCoordinator,
     *,
     stop: threading.Event,
     beats: dict[str, Callable[[], None]],
@@ -50,9 +50,7 @@ def start_fleet_loops(
     loops: list[SchedulerLoop] = []
 
     def wait_for_wake(timeout: float) -> bool:
-        wake = controller.workloads.capacity_wake
-        if wake is None:
-            raise RuntimeError("fleet acquisition requires its demand wake")
+        wake = controller.wake
         try:
             deadline = monotonic() + timeout
             while not stop.is_set():

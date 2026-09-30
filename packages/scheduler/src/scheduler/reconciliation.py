@@ -1,15 +1,10 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
-from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Protocol, runtime_checkable
 
 from compute.projection import PrivateUnitState
-from compute.state import RedisComputeStateRepository
-from coordination.redis_client import RedisClient
-from coordination.wake_signal import WakeSignalWaiter
 from database.records.apps import AppRecord
 from pydantic import Field, JsonValue
 from shared.containers import ContainerRecord
@@ -18,38 +13,18 @@ from shared.cron import CronJobRun
 from shared.events import EventLevel
 from shared.scheduling import WorkerRemovalResult
 from shared.tasks import Task
-from shared.worker_events import (
-    WORKER_POOL_DRAIN_DECISION_ACTION,
-)
+from shared.worker_events import WORKER_POOL_DRAIN_DECISION_ACTION
 
-from scheduler.agent_pool import (
-    AgentPoolConfig,
-    AgentPoolReconcileResult,
-    SchedulerAgentPoolService,
-)
-from scheduler.autoscaling import (
-    AutoscaleResult,
-)
-from scheduler.capacity_reservations import (
-    CapacityProvisioningReservation,
-    CapacityReservationService,
-)
-from scheduler.containers import (
-    SchedulerContainerDispatchResult,
-    SchedulerContainerRequestService,
-)
+from scheduler.agent_pool import AgentPoolReconcileResult
+from scheduler.autoscaling import AutoscaleResult
+from scheduler.capacity_reservations import CapacityProvisioningReservation
+from scheduler.containers import SchedulerContainerDispatchResult
 from scheduler.fleet import WorkerPoolStateSnapshot
 from scheduler.pool_drain import (
     WorkerPoolDrainAction,
     WorkerPoolDrainResult,
-    WorkerPoolDrainService,
 )
-from scheduler.pool_state import SchedulerPoolStateService
-from scheduler.preemption import (
-    SchedulerCapacityInterruptionService,
-    WorkerPreemptionResult,
-)
-from scheduler.reserves import FleetConsolidationService
+from scheduler.preemption import WorkerPreemptionResult
 from scheduler.services import FleetServices
 
 LOGGER = logging.getLogger(__name__)
@@ -141,269 +116,6 @@ class OrphanedContainerConfirmationRepository(Protocol):
     def claim_confirmed(self, container_id: str) -> bool: ...
 
     def forget(self, container_id: str) -> None: ...
-
-
-class SchedulerVolumeMeteringBatch(Protocol):
-    @property
-    def metered_count(self) -> int: ...
-
-    @property
-    def failure_count(self) -> int: ...
-
-
-class SchedulerStorageAccessService(Protocol):
-    def reconcile(self) -> int: ...
-
-
-class SchedulerVolumeMeteringService(Protocol):
-    def reconcile_due(
-        self,
-        *,
-        now: datetime | None = None,
-        limit: int = 100,
-    ) -> SchedulerVolumeMeteringBatch: ...
-
-
-class SchedulerVolumeDeletionService(Protocol):
-    def reconcile_due(self, *, now: datetime | None = None, limit: int = 100) -> None: ...
-
-
-class SchedulerDiskDeletionService(Protocol):
-    def reconcile_due(self, *, now: datetime | None = None, limit: int = 100) -> None: ...
-
-
-class SchedulerDiskVolumeService(Protocol):
-    def reconcile_due(self, *, now: datetime | None = None, limit: int = 100) -> None: ...
-
-
-class SchedulerMeterEventBatch(Protocol):
-    @property
-    def sent_count(self) -> int: ...
-
-    @property
-    def retried_count(self) -> int: ...
-
-    @property
-    def abandoned_count(self) -> int: ...
-
-
-class SchedulerAbandonedMeterEvents(Protocol):
-    @property
-    def count(self) -> int: ...
-
-    @property
-    def value_nanos(self) -> int: ...
-
-
-class SchedulerEmailDrainResult(Protocol):
-    @property
-    def sent_count(self) -> int: ...
-
-    @property
-    def retried_count(self) -> int: ...
-
-    @property
-    def abandoned_count(self) -> int: ...
-
-
-class SchedulerEmailOutboxService(Protocol):
-    """The sweep that delivers what a request already committed to sending."""
-
-    def drain(self, *, now: datetime | None = None) -> SchedulerEmailDrainResult: ...
-
-    def abandoned_backlog(self) -> int: ...
-
-    def redact(self, *, now: datetime | None = None, limit: int = 1_000) -> int: ...
-
-
-class SchedulerMeterOutboxService(Protocol):
-    """The sweep that hands the provider what the pricer already owed it."""
-
-    def drain(self, *, now: datetime | None = None) -> SchedulerMeterEventBatch: ...
-
-    def abandoned_backlog(self) -> SchedulerAbandonedMeterEvents: ...
-
-
-class SchedulerPlanChangeBatch(Protocol):
-    @property
-    def applied_count(self) -> int: ...
-
-    @property
-    def not_applied_count(self) -> int: ...
-
-    @property
-    def retried_count(self) -> int: ...
-
-    @property
-    def abandoned_count(self) -> int: ...
-
-    @property
-    def open_count(self) -> int: ...
-
-
-class SchedulerPlanChangeService(Protocol):
-    """The sweep that finishes plan changes whose outcome nobody recorded."""
-
-    def settle_open(self, *, now: datetime | None = None) -> SchedulerPlanChangeBatch: ...
-
-
-class SchedulerBillingReconciliationBatch(Protocol):
-    @property
-    def accounts_checked(self) -> int: ...
-
-    @property
-    def divergent_count(self) -> int: ...
-
-    @property
-    def unreachable_count(self) -> int: ...
-
-
-class SchedulerBillingReconciliationService(Protocol):
-    """The pass that reports where the provider and this platform disagree."""
-
-    def reconcile(self, *, now: datetime | None = None) -> SchedulerBillingReconciliationBatch: ...
-
-
-class SchedulerBillingPaymentsService(Protocol):
-    def maintain(self, *, now: datetime | None = None) -> None: ...
-
-
-class SchedulerBillingEnforcementBatch(Protocol):
-    @property
-    def accounts_checked(self) -> int: ...
-
-    @property
-    def unfunded_count(self) -> int: ...
-
-    @property
-    def stopped_count(self) -> int: ...
-
-    @property
-    def failed_count(self) -> int: ...
-
-
-class SchedulerBillingEnforcementService(Protocol):
-    """The pass that stops compute nobody can be billed for."""
-
-    def enforce(self, *, now: datetime | None = None) -> SchedulerBillingEnforcementBatch: ...
-
-
-@dataclass(frozen=True, slots=True)
-class _MeterEventSweep:
-    """What one tick of the outbox did, and what it left behind.
-
-    The first three are the tick's own work and the last two are the standing
-    backlog, which is read whether or not the sending worked: a provider outage
-    is exactly when charges are given up on, and a gauge that went quiet for the
-    duration of one would report nothing during the failure it exists for.
-    """
-
-    sent_count: int = 0
-    retried_count: int = 0
-    abandoned_count: int = 0
-    abandoned_outstanding_count: int = 0
-    abandoned_outstanding_nanos: int = 0
-
-
-@dataclass(frozen=True, slots=True)
-class _NoPlanChanges:
-    applied_count: int = 0
-    not_applied_count: int = 0
-    retried_count: int = 0
-    abandoned_count: int = 0
-    open_count: int = 0
-
-
-@dataclass(frozen=True, slots=True)
-class _NoBillingReconciliation:
-    accounts_checked: int = 0
-    divergent_count: int = 0
-    unreachable_count: int = 0
-
-
-@dataclass(frozen=True, slots=True)
-class _NoBillingEnforcement:
-    accounts_checked: int = 0
-    unfunded_count: int = 0
-    stopped_count: int = 0
-    failed_count: int = 0
-
-
-_NO_METER_EVENT_SWEEP = _MeterEventSweep()
-
-
-_NO_PLAN_CHANGES = _NoPlanChanges()
-
-
-_NO_BILLING_RECONCILIATION = _NoBillingReconciliation()
-
-
-_NO_BILLING_ENFORCEMENT = _NoBillingEnforcement()
-
-
-class SchedulerRetentionBatch(Protocol):
-    @property
-    def removed(self) -> int: ...
-
-
-class SchedulerRetentionService(Protocol):
-    def reconcile(self, *, now: datetime | None = None) -> SchedulerRetentionBatch: ...
-
-
-class SchedulerCustomDomainService(Protocol):
-    def reconcile_due(
-        self,
-        *,
-        now: datetime | None = None,
-        limit: int = 50,
-    ) -> int: ...
-
-
-class SchedulerPreemptionRecovery(Protocol):
-    def recover_unsettled(self, *, limit: int = 100) -> list[str]: ...
-
-
-@dataclass(frozen=True, slots=True)
-class SchedulerWorkloadControls:
-    containers: SchedulerContainerRequestService | None = None
-    capacity_wake: WakeSignalWaiter | None = None
-    preemption_recovery: SchedulerPreemptionRecovery | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class SchedulerStateStores:
-    compute: RedisComputeStateRepository | None = None
-    pools: SchedulerPoolStateService | None = None
-    orphaned_container_networks: OrphanedContainerNetworkRepository | None = None
-    orphaned_container_confirmations: OrphanedContainerConfirmationRepository | None = None
-    cron_job_locks: RedisClient | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class SchedulerCapacityControls:
-    agent_pools: SchedulerAgentPoolService | None = None
-    agent_pool_configs: Callable[[], list[AgentPoolConfig]] | None = None
-    capacity_reservations: CapacityReservationService | None = None
-    worker_pool_drain: WorkerPoolDrainService | None = None
-    capacity_interruptions: SchedulerCapacityInterruptionService | None = None
-    consolidation: FleetConsolidationService | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class SchedulerMaintenanceControls:
-    billing_payments: SchedulerBillingPaymentsService | None = None
-    storage_access: SchedulerStorageAccessService | None = None
-    volume_metering: SchedulerVolumeMeteringService | None = None
-    volume_deletion: SchedulerVolumeDeletionService | None = None
-    disk_deletion: SchedulerDiskDeletionService | None = None
-    disk_volumes: SchedulerDiskVolumeService | None = None
-    meter_outbox: SchedulerMeterOutboxService | None = None
-    email_outbox: SchedulerEmailOutboxService | None = None
-    plan_changes: SchedulerPlanChangeService | None = None
-    billing_reconciliation: SchedulerBillingReconciliationService | None = None
-    billing_enforcement: SchedulerBillingEnforcementService | None = None
-    retention: SchedulerRetentionService | None = None
-    custom_domains: SchedulerCustomDomainService | None = None
 
 
 class SchedulerRunResult(ContractModel):

@@ -10,7 +10,7 @@ from typing import Protocol
 from uuid import uuid4
 
 from compute.machine_lifecycle import reserve_awaits_resume
-from compute.service import ComputeService
+from compute.service import ComputeServices
 from compute.state import AsyncRedisComputeStateRepository, RedisComputeStateRepository
 from control.deployment_resources import DeploymentResourceService
 from control.releases import DeploymentReleaseService
@@ -245,13 +245,9 @@ from worker_repository.checkpoint_records import (
     AutomaticCheckpointCreationLeaseService,
     CheckpointService,
 )
-from worker_repository.credentials import (
-    WorkerCredentialService,
-)
+from worker_repository.credentials import WorkerCredentialService
 from worker_repository.disk_leases import WorkerDiskLeaseService
-from worker_repository.image_build_credentials import (
-    RedisImageBuildUploadCapabilityGuard,
-)
+from worker_repository.image_build_credentials import RedisImageBuildUploadCapabilityGuard
 from worker_repository.image_build_dispatch import image_build_private_inputs
 from worker_repository.origin_credentials import WorkerCacheOriginCredentialService
 from worker_repository.source_cache import (
@@ -362,7 +358,7 @@ class WorkerRepositoryObjectStorage(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class WorkerRepositoryDependencies:
-    compute: ComputeService
+    compute: ComputeServices
     context: ServiceContext
     auth: AuthService
     deployment_resources: DeploymentResourceService
@@ -889,7 +885,7 @@ class WorkerRepositoryService:
         self._validate_runtime_worker_registration(request.worker, principal, unit=unit)
         if self.services is None:
             raise UpstreamUnavailableError("service dependencies are required for registration")
-        availability_zone = self.services.compute.worker_availability_zone(
+        availability_zone = self.services.compute.machines.worker_availability_zone(
             unit=unit, machine_id=request.worker.machine_id
         )
         source_cache = self._source_cache_service()
@@ -2846,7 +2842,7 @@ class WorkerRepositoryService:
         unit = self._feeding_unit(worker, principal)
         if self.services is None:
             raise UpstreamUnavailableError("worker network policy service is unavailable")
-        return self.services.compute.worker_egress_policy(
+        return self.services.compute.machines.worker_egress_policy(
             workspace_id=unit.workspace_id,
             capacity_owner_id=unit.capacity_owner_id,
             machine_id=worker.machine_id,

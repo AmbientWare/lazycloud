@@ -39,7 +39,7 @@ def test_machine_retirement_preserves_cleanup_evidence_after_repeated_deletion(
         ControlPlaneService(services.context),
         "machine-retirement",
     )
-    unit = services.compute.create_unit(
+    unit = services.compute.units.create_unit(
         UnitName("retirement"), provider="agent", workspace=workspace.id
     )
     gateway = services.gateway_service
@@ -102,8 +102,8 @@ def test_machine_retirement_preserves_cleanup_evidence_after_repeated_deletion(
         assert not ContainerRepository(session).storage_is_released(
             container_id, worker_id=worker_id
         )
-    assert services.compute.list_machines(workspace=workspace.id) == []
-    assert all(worker.id != worker_id for worker in services.compute.list_workers())
+    assert services.compute.units.list_machines(workspace=workspace.id) == []
+    assert all(worker.id != worker_id for worker in services.compute.units.list_workers())
     assert absence.is_absent(worker_id)
 
     workers.add_worker(
@@ -131,7 +131,7 @@ def test_pending_join_preserves_empty_pool_until_credential_expires(
         "pending-machine-join",
     )
     gateway = services.gateway_service
-    unit = services.compute.create_unit(
+    unit = services.compute.units.create_unit(
         UnitName("pending-join"),
         provider="agent",
         workspace=workspace.id,
@@ -151,22 +151,22 @@ def test_pending_join_preserves_empty_pool_until_credential_expires(
             memory_mb=4096,
         )
     )
-    assert not services.compute.delete_empty_joined_unit(unit)
+    assert not services.compute.units.delete_empty_joined_unit(unit)
     gateway.unit_state_coordinator.create_unit_join_token(
         unit, workspace_id=workspace.id, owner_token_id="pending-join-owner"
     )
     gateway.leave_agent(LeaveAgentRequest(agent_token=agent.agent_token))
-    assert not services.compute.delete_empty_joined_unit(unit)
+    assert not services.compute.units.delete_empty_joined_unit(unit)
     with services.context.database.session() as session:
         credentials = ComputeJoinCredentialRepository(session)
         for issued in credentials.list_for_unit(workspace.id, unit.capacity_owner_id):
             credentials.save(
                 issued.model_copy(update={"expires_at": utc_now() - timedelta(seconds=1)})
             )
-    assert unit.id in {candidate.id for candidate in services.compute.empty_joined_units()}
-    assert services.compute.delete_empty_joined_unit(unit)
-    assert not services.compute.delete_empty_joined_unit(unit)
-    replacement = services.compute.create_unit(
+    assert unit.id in {candidate.id for candidate in services.compute.units.empty_joined_units()}
+    assert services.compute.units.delete_empty_joined_unit(unit)
+    assert not services.compute.units.delete_empty_joined_unit(unit)
+    replacement = services.compute.units.create_unit(
         UnitName("pending-join"),
         provider="agent",
         workspace=workspace.id,

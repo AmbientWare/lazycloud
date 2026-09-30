@@ -117,6 +117,7 @@ def test_consolidation_moves_only_preemptible_work_after_rechecking_under_the_lo
     fleet = _Fleet(hosts=[_host("roomy", free_cpu_millicores=4_000)])
     service = FleetConsolidationService(
         compute=fleet,
+        machine_units=fleet.provider_machine_unit,
         containers=DatabaseMachineContainers(service_context.database),
         workers=fleet,
         stopper=fleet,

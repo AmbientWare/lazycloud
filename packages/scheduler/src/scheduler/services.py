@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from datetime import datetime, timedelta
 from typing import Protocol
 
-from compute.service import ComputeService
+from compute.service import ComputeServices
 from control.apps import AppReader
 from control.service import ControlPlaneService
 from database.records.apps import AppRecord
@@ -184,4 +184,4 @@ class FleetServices(Protocol):
     def containers(self) -> SchedulerContainerService: ...
 
     @property
-    def compute(self) -> ComputeService: ...
+    def compute(self) -> ComputeServices: ...

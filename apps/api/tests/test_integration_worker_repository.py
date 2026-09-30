@@ -12,13 +12,9 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 import pytest
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
-from api.server.worker_repository_service import (
-    WorkerRepositoryService,
-)
+from api.server.worker_repository_service import WorkerRepositoryService
 from compute.agent_control import hash_compute_token
-from compute.state import (
-    RedisComputeStateRepository,
-)
+from compute.state import RedisComputeStateRepository
 from control.release_settings import ReleaseSettings
 from control.releases import DeploymentReleaseService
 from control.service import ControlPlaneService, StubKind
@@ -165,9 +161,7 @@ from worker.repository_payloads import (
 )
 from worker.ssh_identity import ContainerSshIdentity
 from worker.tools import ContainerCredentialRequest
-from worker_repository.origin_credentials import (
-    CacheOriginCredentialConfig,
-)
+from worker_repository.origin_credentials import CacheOriginCredentialConfig
 from worker_repository.source_cache import (
     WorkerSourceCacheService,
     WorkerSourceCacheUnavailableError,
@@ -1135,7 +1129,7 @@ def test_worker_repository_api_authenticates_and_streams_container_requests(
         )
         workspace = owned_workspace(control, "workspace-a")
         workspace_owner_user_id(isolated_services.context, workspace.id)
-        isolated_services.compute.create_unit(
+        isolated_services.compute.units.create_unit(
             UnitName("pool"),
             workspace=workspace.id,
             worker_cpu_millicores=1000,
@@ -1348,7 +1342,7 @@ async def test_worker_repository_stream_blocks_until_scheduler_assignment(
                 workspace_id=workspace_id,
             )
         )
-    async_services.compute.create_unit(
+    async_services.compute.units.create_unit(
         UnitName("default"),
         workspace=workspace_id,
         capacity_owner_id=capacity_owner_id,
@@ -1720,7 +1714,7 @@ def test_worker_repository_rotates_worker_session_on_reregistration(
         bootstrap = _worker_token(isolated_services, "workspace-a")
         client = client_stack.enter_context(TestClient(create_app(isolated_services)))
         capacity_owner_id = str(uuid5(NAMESPACE_URL, "lazycloud-test-capacity:workspace-a:pool"))
-        isolated_services.compute.create_unit(
+        isolated_services.compute.units.create_unit(
             UnitName("pool"),
             workspace="workspace-a",
             provider="local",
@@ -1822,7 +1816,7 @@ def test_worker_registration_fails_closed_without_matching_durable_capacity_owne
             },
             headers=headers,
         )
-        isolated_services.compute.create_unit(
+        isolated_services.compute.units.create_unit(
             UnitName("capacity-pool"),
             workspace="capacity-owner-registration",
             provider="local",
@@ -2729,7 +2723,7 @@ def test_a_joined_machine_cannot_register_itself_into_the_shared_fleet(
     worker_id = agent_machine_worker_id(machine_id)
     joined_unit = next(
         unit
-        for unit in isolated_services.compute.list_units(workspace=workspace_id)
+        for unit in isolated_services.compute.units.list_units(workspace=workspace_id)
         if unit.placement == Placement.machine(machine_id)
     )
     workers = RedisSchedulerWorkerRepository(redis)
@@ -3017,7 +3011,7 @@ def _join_gateway_agent(
     # The join credential names the account the machine belongs to, so the workspace
     # needs the owner row production writes with it.
     workspace_owner_user_id(services.context, workspace_id)
-    services.compute.create_unit(
+    services.compute.units.create_unit(
         UnitName(unit_name),
         provider="agent",
         workspace=workspace_id,
@@ -3142,7 +3136,7 @@ def _register_worker_session(
         capacity_owner_id = str(
             uuid5(NAMESPACE_URL, f"lazycloud-test-capacity:{durable_workspace_id}:{unit_name}")
         )
-        unit = services.compute.create_unit(
+        unit = services.compute.units.create_unit(
             UnitName(unit_name),
             workspace=durable_workspace_id,
             provider="local",
@@ -3465,7 +3459,7 @@ def test_worker_container_routes_are_bound_to_the_container_the_worker_was_given
         workspace = owned_workspace(control, "usage-owner")
         workspace_owner_user_id(isolated_services.context, workspace.id)
         for pool in ("pool-assigned", "pool-stranger"):
-            isolated_services.compute.create_unit(
+            isolated_services.compute.units.create_unit(
                 UnitName(pool),
                 workspace=workspace.id,
                 worker_cpu_millicores=1000,
@@ -3591,7 +3585,7 @@ def test_worker_usage_is_bounded_by_the_container_lifetime_the_platform_recorded
         )
         workspace = owned_workspace(control, "window-owner")
         workspace_owner_user_id(isolated_services.context, workspace.id)
-        isolated_services.compute.create_unit(
+        isolated_services.compute.units.create_unit(
             UnitName("pool-window"),
             workspace=workspace.id,
             worker_cpu_millicores=1000,

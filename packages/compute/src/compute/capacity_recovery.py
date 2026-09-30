@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING
 from uuid import NAMESPACE_URL, uuid5
 
 from database.repositories.capacity_recovery import (
@@ -40,8 +39,10 @@ from shared.compute_policy import (
 from shared.errors import UpstreamUnavailableError
 from shared.timestamps import utc_now
 
+from compute.acquisition import CapacityAcquisitionService
 from compute.agent_control import machine_serves_workloads
 from compute.capacity_errors import CapacityReservationLockContendedError
+from compute.maintenance import CapacityMaintenanceService
 from compute.offers import (
     ComputeOffer,
     OfferRequest,
@@ -50,10 +51,11 @@ from compute.offers import (
     filter_offers,
     offer_selection_key,
 )
+from compute.pool_provider import PoolProviderService
 from compute.providers import ResolvedComputeProvider
-
-if TYPE_CHECKING:
-    from compute.service import ComputeService
+from compute.reserve_machines import ReserveMachineService
+from compute.unit_provisioning import UnitProvisioningService
+from compute.unit_reconciliation import UnitReconciliationService
 
 LOGGER = logging.getLogger(__name__)
 CAPACITY_WAKE_SCOPE = "scheduler-capacity-acquisition"
@@ -95,15 +97,20 @@ def record_capacity_risk(
 
 @dataclass(slots=True)
 class CapacityRecoveryService:
-    compute: ComputeService
+    capacity: CapacityAcquisitionService
+    maintenance: CapacityMaintenanceService
+    providers: PoolProviderService
+    provisioning: UnitProvisioningService
+    reconciliation: UnitReconciliationService
+    reserve_machines: ReserveMachineService
 
     def reconcile(self, *, now: datetime, limit: int = 16) -> None:
-        with self.compute.context.database.session() as session:
+        with self.providers.context.database.session() as session:
             identities = CapacityRecoveryRepository(session).claim_due(now=now, limit=limit)
         reconciled_targets: set[str] = set()
         for identity in identities:
             try:
-                with self.compute._required_capacity_owner_mutations().mutation_lock(identity):
+                with self.providers.required_capacity_owner_mutations().mutation_lock(identity):
                     self._reconcile(identity, now=now, reconciled_targets=reconciled_targets)
             except CapacityReservationLockContendedError:
                 continue
@@ -111,7 +118,7 @@ class CapacityRecoveryService:
                 LOGGER.exception("capacity recovery failed for %s", identity)
 
     def _save(self, record: CapacityRecoveryRecord, *, now: datetime) -> None:
-        with self.compute.context.database.session() as session:
+        with self.providers.context.database.session() as session:
             CapacityRecoveryRepository(session).save(
                 record.model_copy(
                     update={
@@ -121,14 +128,14 @@ class CapacityRecoveryService:
             )
 
     def _reconcile(self, identity: str, *, now: datetime, reconciled_targets: set[str]) -> None:
-        with self.compute.context.database.session() as session:
+        with self.providers.context.database.session() as session:
             record = CapacityRecoveryRepository(session).get(identity)
             if record is None or record.completed_at is not None:
                 return
             source = ComputeUnitRepository(session).get(record.source_unit_id)
         if source is None:
             raise UpstreamUnavailableError("capacity recovery source is missing")
-        source_provider, _ = self.compute._resolved_internal_unit_provider(source)
+        source_provider, _ = self.providers.resolved_internal_unit_provider(source)
         if (
             source.phase in {ComputeUnitPhase.Deleting, ComputeUnitPhase.Deleted}
             or source_provider.policy is None
@@ -140,23 +147,23 @@ class CapacityRecoveryService:
             source, record = self._adjust_source(source, record, now=now)
         # Persisted reduction must reach the provider before it can replenish the old market.
         if not record.source_applied:
-            with self.compute._required_capacity_owner_mutations().mutation_lock(source.id):
-                with self.compute.context.database.session() as session:
+            with self.providers.required_capacity_owner_mutations().mutation_lock(source.id):
+                with self.providers.context.database.session() as session:
                     current = ComputeUnitRepository(session).get(source.id)
                 if current is None:
                     raise UpstreamUnavailableError("capacity recovery source is missing")
                 source = current
-                provider, offer = self.compute._resolved_internal_unit_provider(source)
+                provider, offer = self.providers.resolved_internal_unit_provider(source)
                 if provider.pooled is None:
                     raise UpstreamUnavailableError("capacity recovery source is not pooled")
-                request = self.compute._provider_unit_request(source, offer)
+                request = self.providers.provider_unit_request(source, offer)
                 if source.phase not in {ComputeUnitPhase.Deleted, ComputeUnitPhase.Deleting}:
                     snapshot = provider.pooled.set_unit_capacity(
                         request,
                         desired_machines=request.desired_machines,
                         max_machines=request.max_machines,
                     )
-                    self.compute.provider_machines._apply_pooled_snapshot(
+                    self.providers.machines._apply_pooled_snapshot(
                         source,
                         offer,
                         snapshot,
@@ -184,9 +191,9 @@ class CapacityRecoveryService:
                 )
                 return
             provider, offer = selected
-            target_id = self.compute.pooled_offer_owner_id(provider, offer)
-            with self.compute._required_capacity_owner_mutations().mutation_lock(target_id):
-                target = self.compute.prepare_pooled_offer(
+            target_id = self.providers.pooled_offer_owner_id(provider, offer)
+            with self.providers.required_capacity_owner_mutations().mutation_lock(target_id):
+                target = self.provisioning.prepare_pooled_offer(
                     provider=provider,
                     offer=offer,
                     requirements=ComputeResourceRequirements(preemptible=source.worker_preemptible),
@@ -210,8 +217,8 @@ class CapacityRecoveryService:
         now: datetime,
     ) -> tuple[ComputeUnitRecord, CapacityRecoveryRecord]:
         with (
-            self.compute._required_capacity_owner_mutations().mutation_lock(source.id),
-            self.compute.context.database.session() as session,
+            self.providers.required_capacity_owner_mutations().mutation_lock(source.id),
+            self.providers.context.database.session() as session,
         ):
             units = ComputeUnitRepository(session)
             if source.platform_fleet:
@@ -293,10 +300,10 @@ class CapacityRecoveryService:
         *,
         now: datetime,
     ) -> tuple[ResolvedComputeProvider, ComputeOffer] | None:
-        resolver = self.compute.provider_resolver
+        resolver = self.providers.provider_resolver
         if resolver is None:
             raise UpstreamUnavailableError("capacity recovery provider resolver is unavailable")
-        source_provider, source_offer = self.compute._resolved_internal_unit_provider(source)
+        source_provider, source_offer = self.providers.resolved_internal_unit_provider(source)
         providers = (
             tuple(resolver.list_platform_providers())
             if source.platform_fleet
@@ -335,7 +342,7 @@ class CapacityRecoveryService:
                     continue
                 if offer.market == source_offer.market:
                     continue
-                if self.compute.pooled_offer_rejection(
+                if self.providers.pooled_offer_rejection(
                     provider, offer, preemptible=source.worker_preemptible, now=now
                 ):
                     continue
@@ -351,7 +358,7 @@ class CapacityRecoveryService:
             for provider, offer in candidates
             if provider.policy is not None
         }
-        with self.compute.context.database.session() as session:
+        with self.providers.context.database.session() as session:
             states = ComputeUnitRepository(session).offer_states(tuple(identities))
         short_regions = cooling_regions(
             (
@@ -372,7 +379,7 @@ class CapacityRecoveryService:
                 unit.phase is ComputeUnitPhase.Deleting
                 or (
                     unit.provider_state.degraded_reason is not None
-                    and not self.compute._failed_market_retry_ready(unit, now=now)
+                    and not self.providers.failed_market_retry_ready(unit, now=now)
                 )
             ):
                 continue
@@ -397,15 +404,17 @@ class CapacityRecoveryService:
         self, record: CapacityRecoveryRecord, *, now: datetime, reconciled_targets: set[str]
     ) -> None:
         assert record.target_unit_id is not None and record.operation_id is not None
-        with self.compute._required_capacity_owner_mutations().mutation_lock(record.target_unit_id):
-            with self.compute.context.database.session() as session:
+        with self.providers.required_capacity_owner_mutations().mutation_lock(
+            record.target_unit_id
+        ):
+            with self.providers.context.database.session() as session:
                 target = ComputeUnitRepository(session).get(record.target_unit_id)
             if target is None:
                 raise UpstreamUnavailableError("capacity recovery target is missing")
             if target.id not in reconciled_targets:
-                self.compute.reconcile_unit_capacity(target.id, now=now)
+                self.reconciliation.reconcile_unit_capacity(target.id, now=now)
                 reconciled_targets.add(target.id)
-            with self.compute.context.database.session() as session:
+            with self.providers.context.database.session() as session:
                 current_target = ComputeUnitRepository(session).get(target.id)
                 if current_target is None:
                     raise UpstreamUnavailableError("capacity recovery target is missing")
@@ -431,7 +440,7 @@ class CapacityRecoveryService:
                     now=now,
                 )
                 return
-            hooks = self.compute.scheduler_hooks
+            hooks = self.providers.scheduler_hooks
             if hooks is None:
                 raise UpstreamUnavailableError("capacity recovery requires worker readiness")
             if operation is not None and operation.status is CapacityOperationStatus.Fulfilled:
@@ -451,12 +460,12 @@ class CapacityRecoveryService:
                         continue
                     if not self._replacement_ready(target.workspace_id, machine.machine_id):
                         continue
-                    with self.compute.context.database.session() as session:
+                    with self.providers.context.database.session() as session:
                         if CapacityRecoveryRepository(session).machine_is_replacement(
                             machine.machine_id
                         ):
                             continue
-                    status = self.compute.fulfill_acquired_capacity(
+                    status = self.capacity.fulfill_acquired_capacity(
                         CapacityFulfillmentRequest(
                             capacity_owner_id=target.id,
                             operation_id=record.operation_id,
@@ -487,14 +496,14 @@ class CapacityRecoveryService:
                 >= operation.created_at + timedelta(seconds=target.registration_timeout_seconds)
             ):
                 failure_code = operation.failure_code
-                self.compute.release_acquired_capacity(
+                self.capacity.release_acquired_capacity(
                     CapacityReleaseRequest(
                         capacity_owner_id=target.id,
                         operation_id=record.operation_id,
                         reservation_id=record.operation_id,
                     )
                 )
-                with self.compute.context.database.session() as session:
+                with self.providers.context.database.session() as session:
                     operation = ComputeCapacityOperationRepository(session).get(
                         target.id, record.operation_id
                     )
@@ -537,19 +546,19 @@ class CapacityRecoveryService:
                     preemptible=target.worker_preemptible,
                 ),
             )
-            with self.compute.context.database.session() as session:
+            with self.providers.context.database.session() as session:
                 other_claims = CapacityRecoveryRepository(session).other_target_claims(
                     target.id, record.id, observed_at=record.observed_at
                 )
             earlier_machines = sum(machine.created_at < record.observed_at for machine in machines)
             if operation is None and target.desired_machines > earlier_machines + other_claims:
-                result = self.compute._acquire_pooled_capacity(
+                result = self.capacity.acquire_pooled_capacity(
                     target,
                     acquisition,
                     desired_unit=target.desired_machines,
                 )
             else:
-                result = self.compute.ensure_capacity(acquisition)
+                result = self.capacity.ensure_capacity(acquisition)
             if result.status is CapacityAcquisitionStatus.AtLimit:
                 reason = "fleet capacity limit prevents replacement"
             else:
@@ -560,17 +569,17 @@ class CapacityRecoveryService:
         self, record: CapacityRecoveryRecord, *, reason: str, now: datetime
     ) -> None:
         if record.target_unit_id is not None and record.operation_id is not None:
-            with self.compute._required_capacity_owner_mutations().mutation_lock(
+            with self.providers.required_capacity_owner_mutations().mutation_lock(
                 record.target_unit_id
             ):
-                self.compute.release_acquired_capacity(
+                self.capacity.release_acquired_capacity(
                     CapacityReleaseRequest(
                         capacity_owner_id=record.target_unit_id,
                         operation_id=record.operation_id,
                         reservation_id=record.operation_id,
                     )
                 )
-                with self.compute.context.database.session() as session:
+                with self.providers.context.database.session() as session:
                     operation = ComputeCapacityOperationRepository(session).get(
                         record.target_unit_id, record.operation_id
                     )
@@ -584,7 +593,7 @@ class CapacityRecoveryService:
     ) -> None:
         if record.replacement_machine_id is None or record.target_unit_id is None:
             raise UpstreamUnavailableError("capacity recovery replacement is missing")
-        with self.compute.context.database.session() as session:
+        with self.providers.context.database.session() as session:
             target = ComputeUnitRepository(session).get(record.target_unit_id)
         if target is None or not self._replacement_ready(
             target.workspace_id, record.replacement_machine_id
@@ -598,7 +607,7 @@ class CapacityRecoveryService:
                 record.model_copy(update={"reason": "replacement is not accepting work"}), now=now
             )
             return
-        with self.compute.context.database.session() as session:
+        with self.providers.context.database.session() as session:
             machine = ComputeProviderInstanceRepository(session).get_by_machine(
                 record.source_machine_id
             )
@@ -615,21 +624,21 @@ class CapacityRecoveryService:
             ReservationStatus.Terminating.value,
             ReservationStatus.Deleted.value,
         }:
-            self.compute.drain_internal_unit_machine(
+            self.maintenance.drain_internal_unit_machine(
                 source.workspace_id,
                 record.source_machine_id,
                 reason="replacement capacity accepts work",
                 now=now,
             )
-            self.compute.release_internal_unit_machine(
+            self.reserve_machines.release_internal_unit_machine(
                 source.workspace_id, source.id, record.source_machine_id
             )
 
     def _replacement_ready(self, workspace_id: str, machine_id: str) -> bool:
-        hooks = self.compute.scheduler_hooks
+        hooks = self.providers.scheduler_hooks
         if hooks is None:
             raise UpstreamUnavailableError("capacity recovery requires worker readiness")
-        with self.compute.context.database.session() as session:
+        with self.providers.context.database.session() as session:
             enrollment = ComputeMachineEnrollmentRepository(session).by_machine(
                 workspace_id, machine_id
             )

@@ -65,6 +65,7 @@ class SchedulerPoolStateService:
         self,
         *,
         agent_pool_configs: list[AgentPoolConfig] | None = None,
+        workers: list[SchedulerWorkerRecord] | None = None,
         now: datetime | None = None,
     ) -> dict[str, WorkerPoolStateSnapshot]:
         configs_by_owner: dict[str, AgentPoolConfig] = {}
@@ -80,7 +81,9 @@ class SchedulerPoolStateService:
                 raise RuntimeError(
                     f"capacity owner {config.capacity_owner_id!r} has multiple agent pool configs"
                 )
-        for worker in self.workers.list_workers():
+        workers_by_owner: dict[str, list[SchedulerWorkerRecord]] = {}
+        for worker in self.workers.list_workers() if workers is None else workers:
+            workers_by_owner.setdefault(worker.capacity_owner_id, []).append(worker)
             self._register_capacity_owner(
                 placements_by_owner,
                 capacity_owner_id=worker.capacity_owner_id,
@@ -92,6 +95,7 @@ class SchedulerPoolStateService:
                 capacity_owner_id,
                 placement=placements_by_owner[capacity_owner_id],
                 agent_pool_config=configs_by_owner.get(capacity_owner_id),
+                workers=workers_by_owner.get(capacity_owner_id, []),
                 now=now,
             )
             states[capacity_owner_id] = state
@@ -103,10 +107,12 @@ class SchedulerPoolStateService:
         *,
         placement: Placement,
         agent_pool_config: AgentPoolConfig | None = None,
+        workers: list[SchedulerWorkerRecord] | None = None,
         now: datetime | None = None,
     ) -> WorkerPoolStateSnapshot:
         self._require_capacity_owner(capacity_owner_id)
-        workers = self.workers.list_workers_for_capacity_owner(capacity_owner_id)
+        if workers is None:
+            workers = self.workers.list_workers_for_capacity_owner(capacity_owner_id)
         if any(worker.placement != placement for worker in workers):
             raise RuntimeError(f"capacity owner {capacity_owner_id!r} spans several placements")
         if agent_pool_config is not None and (

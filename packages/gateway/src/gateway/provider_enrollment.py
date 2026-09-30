@@ -13,7 +13,7 @@ from compute.provider_nodes import (
     ProviderNodeIdentityProof,
     ProviderNodeIdentityVerifier,
 )
-from compute.service import ComputeService
+from compute.service import ComputeServices
 from coordination.rate_limit import release_slot, try_acquire_slot, try_consume
 from coordination.redis_client import RedisClient
 from database.repositories.aws_connections import AwsAccountConnectionRepository
@@ -77,7 +77,7 @@ def _sanitized_excerpt(excerpt: str) -> str:
 @dataclass(frozen=True, slots=True)
 class ProviderNodeEnrollmentService:
     gateway: GatewayControlService
-    compute: ComputeService
+    compute: ComputeServices
     identity_verifier: ProviderNodeIdentityVerifier
     events: GatewayEventSink | None = None
     rate_limiter: RedisClient | None = None
@@ -180,7 +180,7 @@ class ProviderNodeEnrollmentService:
         pool, admission = self._enrollment_target(request)
         self._verify_active_node(pool=pool, admission=admission, request=request)
         excerpt = _sanitized_excerpt(request.diagnostic_excerpt)
-        observed = self.compute.record_provider_node_lifecycle(
+        observed = self.compute.machines.record_provider_node_lifecycle(
             pool_id=pool.id,
             provider_instance_id=request.provider_instance_id,
             lifecycle=MachineLifecycle.Failed,
@@ -217,7 +217,7 @@ class ProviderNodeEnrollmentService:
     ) -> ProviderNodeBootstrapFailureResponse:
         pool, admission = self._enrollment_target(request)
         self._verify_active_node(pool=pool, admission=admission, request=request)
-        observed = self.compute.record_provider_node_lifecycle(
+        observed = self.compute.machines.record_provider_node_lifecycle(
             pool_id=pool.id,
             provider_instance_id=request.provider_instance_id,
             lifecycle=request.phase,
@@ -309,7 +309,7 @@ class ProviderNodeEnrollmentService:
         ):
             return False
         with suppress(Exception):
-            self.compute.describe_internal_unit(pool.workspace_id, pool.capacity_owner_id)
+            self.compute.scaling.describe_internal_unit(pool.workspace_id, pool.capacity_owner_id)
         return True
 
     def _enrollment_target(
@@ -363,7 +363,7 @@ class ProviderNodeEnrollmentService:
                 machine_role_id=connection.node_role_arn,
                 machine_profile_id=connection.node_instance_profile_arn,
             )
-        resolver = self.compute.provider_resolver
+        resolver = self.compute.providers.provider_resolver
         if resolver is None:
             raise UpstreamUnavailableError("provider bindings are unavailable")
         provider = resolver.resolve(pool.workspace_id, pool.provider_ref)

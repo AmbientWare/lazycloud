@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from compute.aws_connections import AwsAccountConnectionDirectory
 from compute.provider_state import ProviderUnitStateService
 from compute.reserve_state import RedisFleetReserveState
-from compute.service import ComputeService
+from compute.service import ComputeServices
 from compute.state import RedisComputeStateRepository
 from coordination.redis_client import RedisClient, RedisSettings
 from database.context import ServiceContext
@@ -25,7 +25,7 @@ from database import DatabaseApplicationName, DatabaseClient, DatabaseSettings
 
 
 @contextmanager
-def platform_compute() -> Iterator[ComputeService]:
+def platform_compute() -> Iterator[ComputeServices]:
     database = DatabaseClient.from_settings(
         DatabaseSettings(application_name=DatabaseApplicationName.Admin).direct()
     )
@@ -58,7 +58,7 @@ def platform_compute() -> Iterator[ComputeService]:
                 ),
             ),
         )
-        yield ComputeService(
+        yield ComputeServices.create(
             context,
             provider_resolver=resolver,
             pool_bootstrap_factory=PoolBootstrapProvisioner(

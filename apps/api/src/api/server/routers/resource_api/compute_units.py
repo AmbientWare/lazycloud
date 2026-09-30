@@ -48,7 +48,7 @@ def list_units(
     return UnitListResponse(
         pools=[
             UnitResponse.model_validate(item)
-            for item in services.compute.list_units(workspace=workspace_id)
+            for item in services.compute.units.list_units(workspace=workspace_id)
         ]
     )
 
@@ -66,7 +66,7 @@ def create_unit(
     services: ManagementServiceCore = Depends(management_services),
 ) -> UnitResponse:
     return UnitResponse.model_validate(
-        services.compute.create_unit(
+        services.compute.units.create_unit(
             UnitName(request.name),
             workspace=workspace_id,
             provider=request.provider,

@@ -664,11 +664,19 @@ class MachineRepository:
         self.session.flush()
         return machine_from_row(row)
 
-    def list_for_capacity_owner(self, workspace_id: str, capacity_owner_id: str) -> list[Machine]:
+    def list_for_capacity_owner(
+        self,
+        workspace_id: str,
+        capacity_owner_id: str,
+        *,
+        exclude_deleted: bool = False,
+    ) -> list[Machine]:
         statement = select(MachineTable).where(
             MachineTable.workspace_id == workspace_id,
             MachineTable.capacity_owner_id == capacity_owner_id,
         )
+        if exclude_deleted:
+            statement = statement.where(MachineTable.lifecycle != MachineLifecycle.Deleted.value)
         return [machine_from_row(row) for row in self.session.scalars(statement)]
 
 

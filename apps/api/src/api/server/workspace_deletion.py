@@ -154,7 +154,7 @@ class WorkspaceDeletionService:
         )
         _delete_workspace_workload_state(self.services.redis(), workspace.id)
 
-        for pool in self.services.compute.list_pools_for_workspace_deletion(workspace.id):
+        for pool in self.services.compute.units.list_pools_for_workspace_deletion(workspace.id):
             self.gateway.delete_pool_for_workspace_deletion(
                 pool.name,
                 workspace_id=workspace.id,

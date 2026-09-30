@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING
 
 from database.repositories.capacity_maintenance import CapacityMaintenanceRepository
 from database.repositories.compute import ComputeProviderInstanceRepository, ComputeUnitRepository
@@ -28,66 +27,24 @@ from compute.capacity_errors import (
     CapacityReservationLeaseLostError,
     CapacityReservationLockContendedError,
 )
-
-if TYPE_CHECKING:
-    from compute.service import ComputeService
+from compute.maintenance import CapacityMaintenanceService
+from compute.pool_provider import PoolProviderService
+from compute.unit_reconciliation import UnitReconciliationService
 
 LOGGER = logging.getLogger(__name__)
 
 
-def release_replacement(
-    source: SchedulerWorkerRecord,
-    workers: list[SchedulerWorkerRecord],
-    release: ActiveRelease,
-    *,
-    now: datetime,
-) -> SchedulerWorkerRecord | None:
-    """A current worker in the same pool with room for the source's allocations."""
-    for candidate in workers:
-        if (
-            candidate.machine_id == source.machine_id
-            or candidate.capacity_owner_id != source.capacity_owner_id
-            or candidate.placement != source.placement
-            or candidate.owner_user_id != source.owner_user_id
-            or candidate.gpu_type != source.gpu_type
-            or candidate.disk_storage != source.disk_storage
-            or (
-                source.total_disk_volumes > source.free_disk_volumes
-                and source.availability_zone
-                and candidate.availability_zone != source.availability_zone
-            )
-            or not set(source.runtime_classes).issubset(candidate.runtime_classes)
-            or candidate.request_intake_status(at=now) is not SchedulerWorkerStatus.Available
-            or not release.admits(candidate.runtime_image, candidate.agent_binary_sha256)
-        ):
-            continue
-        if all(
-            free >= max(total - remaining, 0)
-            for free, total, remaining in (
-                (
-                    candidate.free_cpu_millicores,
-                    source.total_cpu_millicores,
-                    source.free_cpu_millicores,
-                ),
-                (candidate.free_memory_mib, source.total_memory_mib, source.free_memory_mib),
-                (candidate.free_gpu_count, source.total_gpu_count, source.free_gpu_count),
-                (candidate.free_disk_bytes, source.total_disk_bytes, source.free_disk_bytes),
-                (candidate.free_disk_volumes, source.total_disk_volumes, source.free_disk_volumes),
-            )
-        ):
-            return candidate
-    return None
-
-
 @dataclass(slots=True)
 class ComputeReleaseRolloutService:
-    compute: ComputeService
+    maintenance: CapacityMaintenanceService
+    providers: PoolProviderService
+    reconciliation: UnitReconciliationService
 
     def reconcile(
         self, release: ActiveRelease, workers: list[SchedulerWorkerRecord], *, now: datetime
     ) -> None:
-        with self.compute._required_capacity_owner_mutations().mutation_lock("release-rollout"):
-            with self.compute.context.database.session() as session:
+        with self.providers.required_capacity_owner_mutations().mutation_lock("release-rollout"):
+            with self.providers.context.database.session() as session:
                 unit_ids = ComputeUnitRepository(session).release_rollout_unit_ids(
                     {
                         worker.capacity_owner_id
@@ -98,8 +55,8 @@ class ComputeReleaseRolloutService:
                 )
             for unit_id in unit_ids:
                 try:
-                    with self.compute._required_capacity_owner_mutations().mutation_lock(unit_id):
-                        with self.compute.context.database.session() as session:
+                    with self.providers.required_capacity_owner_mutations().mutation_lock(unit_id):
+                        with self.providers.context.database.session() as session:
                             unit = ComputeUnitRepository(session).get(unit_id)
                         if unit is None:
                             continue
@@ -107,7 +64,7 @@ class ComputeReleaseRolloutService:
                     if (
                         changed or unit.maintenance_active
                     ) and unit.capacity_mode is ComputeCapacityMode.Pooled:
-                        self.compute.reconcile_unit_capacity(unit_id, now=now)
+                        self.reconciliation.reconcile_unit_capacity(unit_id, now=now)
                 except CapacityReservationLockContendedError:
                     continue
                 except CapacityReservationLeaseLostError:
@@ -127,7 +84,7 @@ class ComputeReleaseRolloutService:
     ) -> bool:
         if unit.phase is ComputeUnitPhase.Deleting:
             return False
-        with self.compute.context.database.session() as session:
+        with self.providers.context.database.session() as session:
             repository = CapacityMaintenanceRepository(session)
             active = repository.active_for_pools([unit.id])
             if unit.phase is ComputeUnitPhase.Deleted:
@@ -165,7 +122,7 @@ class ComputeReleaseRolloutService:
             ):
                 continue
             try:
-                operation = self.compute.prepare_worker_release(source, release, workers)
+                operation = self.maintenance.prepare_worker_release(source, release, workers)
                 changed = (
                     source.machine_id not in active_sources and operation.surge_machines > 0
                 ) or changed
@@ -184,7 +141,7 @@ class ComputeReleaseRolloutService:
     ) -> bool:
         if operation.release_generation > release.generation:
             return False
-        with self.compute.context.database.session() as session:
+        with self.providers.context.database.session() as session:
             instances = ComputeProviderInstanceRepository(session)
             source = instances.get_by_machine(operation.source_machine_id)
             updating = WorkerReleaseRepository(session).machine_has_update(
