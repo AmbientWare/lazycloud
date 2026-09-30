@@ -81,7 +81,7 @@ resuming it schedules the next future occurrence; time spent paused is not
 replayed. If the scheduler is unavailable, it admits one overdue occurrence
 when it recovers, then continues with the next future occurrence.
 
-Each occurrence creates one durable task. A scheduler restart cannot create a
+Each admitted occurrence creates one durable task. A scheduler restart cannot create a
 second task for that occurrence. The function's retry policy still applies to
 task execution, so handlers should tolerate retries of their side effects.
 

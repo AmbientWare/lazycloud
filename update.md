@@ -23,7 +23,7 @@ Services:
 - [x] Compute capacity and fleet management
 - [x] Control plane
 - [x] Apps, deployments, and releases
-- [ ] Cron jobs
+- [x] Cron jobs
 - [ ] Container lifecycle
 - [ ] Task lifecycle
 - [ ] Function execution

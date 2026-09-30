@@ -152,7 +152,7 @@ def test_cron_history_reads(isolated_services: ApiServices) -> None:
                         response = client.get(
                             path,
                             params={
-                                "workspace_id": target.workspace_id,
+                                "workspace": target.workspace_id,
                                 "deployment_id": target.deployment_id,
                                 "limit": 10,
                             },

@@ -38,7 +38,7 @@ def test_manual_cron_tick_enqueues_and_exposes_durable_run(
         assert runs[0].task_id is not None
         task = isolated_services.tasks.get(runs[0].task_id)
         assert task.stub_id == deployment.stub_id
-        history = client.get("/api/v1/cron-job-runs", params={"workspace_id": job.workspace_id})
+        history = client.get("/api/v1/cron-job-runs", params={"workspace": job.workspace_id})
         assert history.status_code == 200, history.text
         saved = CronJobRunListResponse.model_validate(history.json()).data
         assert [item.id for item in saved] == [runs[0].id]
@@ -65,14 +65,14 @@ def test_schedule_lookup_filters_in_the_authorized_workspace(
         for deployment_id, expected in ((first.id, [first.id]), (foreign.id, [])):
             response = client.get(
                 "/api/v1/cron-jobs",
-                params={"workspace_id": own_workspace, "deployment_id": deployment_id},
+                params={"workspace": own_workspace, "deployment_id": deployment_id},
             )
             assert response.status_code == 200
             assert [row["deployment_id"] for row in response.json()["cron_jobs"]] == expected
         assert (
             client.get(
                 "/api/v1/cron-jobs",
-                params={"workspace_id": own_workspace, "deployment_id": "invalid"},
+                params={"workspace": own_workspace, "deployment_id": "invalid"},
             ).status_code
             == 400
         )
