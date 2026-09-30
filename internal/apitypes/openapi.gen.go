@@ -4,6 +4,7 @@
 package apitypes
 
 import (
+	"encoding/json"
 	"time"
 
 	openapi_types "github.com/oapi-codegen/runtime/types"
@@ -71,28 +72,28 @@ func (e ErrorCode) Valid() bool {
 
 // Defines values for FailureKind.
 const (
-	LoadError   FailureKind = "load_error"
-	Lost        FailureKind = "lost"
-	StartFailed FailureKind = "start_failed"
-	System      FailureKind = "system"
-	Timeout     FailureKind = "timeout"
-	UserError   FailureKind = "user_error"
+	FailureKindLoadError   FailureKind = "load_error"
+	FailureKindLost        FailureKind = "lost"
+	FailureKindStartFailed FailureKind = "start_failed"
+	FailureKindSystem      FailureKind = "system"
+	FailureKindTimeout     FailureKind = "timeout"
+	FailureKindUserError   FailureKind = "user_error"
 )
 
 // Valid indicates whether the value is a known member of the FailureKind enum.
 func (e FailureKind) Valid() bool {
 	switch e {
-	case LoadError:
+	case FailureKindLoadError:
 		return true
-	case Lost:
+	case FailureKindLost:
 		return true
-	case StartFailed:
+	case FailureKindStartFailed:
 		return true
-	case System:
+	case FailureKindSystem:
 		return true
-	case Timeout:
+	case FailureKindTimeout:
 		return true
-	case UserError:
+	case FailureKindUserError:
 		return true
 	default:
 		return false
@@ -138,6 +139,27 @@ func (e ImageSpecPythonVersion) Valid() bool {
 	case N313:
 		return true
 	case N314:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for LogEntryStream.
+const (
+	LogEntryStreamStderr LogEntryStream = "stderr"
+	LogEntryStreamStdout LogEntryStream = "stdout"
+	LogEntryStreamSystem LogEntryStream = "system"
+)
+
+// Valid indicates whether the value is a known member of the LogEntryStream enum.
+func (e LogEntryStream) Valid() bool {
+	switch e {
+	case LogEntryStreamStderr:
+		return true
+	case LogEntryStreamStdout:
+		return true
+	case LogEntryStreamSystem:
 		return true
 	default:
 		return false
@@ -311,6 +333,18 @@ type ImageSpec struct {
 // ImageSpecPythonVersion defines model for ImageSpec.PythonVersion.
 type ImageSpecPythonVersion string
 
+// LogEntry defines model for LogEntry.
+type LogEntry struct {
+	Attempt int            `json:"attempt"`
+	Data    string         `json:"data"`
+	Id      int64          `json:"id"`
+	Stream  LogEntryStream `json:"stream"`
+	Time    time.Time      `json:"time"`
+}
+
+// LogEntryStream defines model for LogEntry.Stream.
+type LogEntryStream string
+
 // Me defines model for Me.
 type Me struct {
 	User       User        `json:"user"`
@@ -322,9 +356,9 @@ type Name = string
 
 // Payload A task argument or return value. `json` carries `value`; `cloudpickle` carries base64 `data`. Arguments encode `{"args": [...], "kwargs": {...}}`.
 type Payload struct {
-	Data     *[]byte         `json:"data,omitempty"`
-	Encoding PayloadEncoding `json:"encoding"`
-	Value    interface{}     `json:"value,omitempty"`
+	Data     *[]byte          `json:"data,omitempty"`
+	Encoding PayloadEncoding  `json:"encoding"`
+	Value    *json.RawMessage `json:"value,omitempty"`
 }
 
 // PayloadEncoding defines model for Payload.Encoding.

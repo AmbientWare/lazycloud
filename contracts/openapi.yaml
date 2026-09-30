@@ -483,7 +483,10 @@ components:
         encoding:
           type: string
           enum: [json, cloudpickle]
-        value: {}
+        value:
+          # Kept as raw JSON so values pass through unchanged, including
+          # integers beyond float64 precision.
+          x-go-type: json.RawMessage
         data:
           type: string
           format: byte

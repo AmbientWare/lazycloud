@@ -21,9 +21,6 @@ where c.state = 'starting'
 order by c.assigned_at, c.id
 limit @batch_size;
 
--- name: LiveContainersOnHost :many
-select id from containers where host_id = @host_id and state <> 'stopped' order by id;
-
 -- name: LockStuckStartingContainer :execrows
 -- Rechecks the start timeout under the row lock: a container that became
 -- ready after the scan keeps running.
