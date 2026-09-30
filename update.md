@@ -18,10 +18,10 @@ change, smaller source tree or passing tests alone does not establish success.
 
 ## Reference and branch state
 
-- Branch: rust-rewrite, created from local main. The name predates choosing Go.
+- Branch: go-rewrite, created from local main.
 - Pinned baseline: 9e259ce7545d620435dfaa572e63631834c7401e.
 - Main reference checkout: /home/cmclean/.t3/worktrees/lazycloud/t3code-9782b237.
-- Rewrite checkout: /home/cmclean/.t3/worktrees/lazycloud/rust-rewrite.
+- Rewrite checkout: /home/cmclean/.t3/worktrees/lazycloud/go-rewrite.
 
 Treat the reference checkout as read-only. Its branch may advance; the pinned
 commit defines this baseline. Use git worktree list to locate main on another
@@ -215,7 +215,7 @@ framework. Land required shared definitions before dependent agents implement th
 
 Assign bounded work packets. Each states the public outcome, owned files/modules,
 dependencies, contracts consumed/provided, invariants, acceptance and deletions.
-Use a separate task branch/worktree based on rust-rewrite per concurrent agent.
+Use a separate task branch/worktree based on go-rewrite per concurrent agent.
 The reference remains read-only; never use its credentials or services implicitly.
 
 | Work stream | Owns | Required agreement before parallel implementation |

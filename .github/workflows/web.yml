@@ -7,7 +7,7 @@ on:
       - "web/**"
       - "contracts/**"
   push:
-    branches: [main, rust-rewrite]
+    branches: [main, go-rewrite]
     paths:
       - ".github/workflows/web.yml"
       - "web/**"
