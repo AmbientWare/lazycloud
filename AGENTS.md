@@ -1,379 +1,104 @@
-# Repository guidance
+# Repository rules
 
-Every `AGENTS.md` has a `CLAUDE.md` symlinked to it. Edit the `AGENTS.md`; never
-write through the symlink or replace it with a regular file. A new `AGENTS.md`
-gets its `CLAUDE.md` symlink in the same change.
+Edit `AGENTS.md`, never its `CLAUDE.md` symlink. Add that symlink with any new
+guidance file. Keep permanent rules here; service rewrite goals and process
+rules belong in root `update.md`.
 
-## Core rules
+## Ownership and code
 
-- Fix the architecture, model, boundary, ownership, or signature, not the
-  checker. Do not hide problems with `type: ignore`, broad `Any`/`object` or
-  casts, checker-only branches, exclusions, shims, fallback imports, fake
-  adapters, or compatibility wrappers.
-- Implement current production behavior through canonical owners. Delete stale
-  aliases, routes, stores, wrappers, and tests instead of preserving old paths.
-- Do not create fake success paths. Acceptance uses the production
-  implementation and contracts; local processes may use real Docker-backed
-  dependencies where those are the production boundary.
-- Use the single best production route. Do not add feature flags, capability
-  gates, environment switches, or fallbacks that let test and production take
-  different paths, and do not silently degrade to a weaker backend. A path only
-  production takes is a path only production debugs. Where a capability is
-  genuinely unavailable, fail loudly and name the reason.
-- Protect secrets and user work. Never expose secrets in output, URLs, logs,
-  tests, comments, docs, or durable records. Inspect the dirty tree, preserve
-  unrelated changes, and stage only intentional files.
-- Read other codebases freely and learn from them: how a problem was solved,
-  what a design costs, what it missed. Match the capability, security,
-  durability, operability, cost, performance, and public contracts production
-  requires rather than another project's internals.
-- Describe LazyCloud directly in documentation, UI copy and code comments. Never
-  name or link other platforms, apps or repositories as comparisons, inspiration
-  or explanations of our behavior. External names belong only where needed to
-  document an actual dependency, supported integration or operational step.
+- Domain packages own decisions and workflows; repositories map and query
+  persistence; apps own composition and process lifetime. Handlers, commands,
+  schedulers and workers call the responsible owner through explicit dependencies.
+- Keep cross-service coordination separate from each service's domain decisions.
+  Give shared behavior and configuration one owner; separate configuration only
+  for distinct permissions, tenant isolation or lifetimes.
+- `shared` owns backend-free contracts, `lazycloud` the public SDK/CLI, and
+  `runner` code inside user containers. SDK and runner depend only on shared
+  contracts and user code. Providers implement neutral domain protocols.
+- PostgreSQL/SQLAlchemy/Alembic own durable state; Redis owns transient
+  coordination; object stores and filesystems own bytes. Do not duplicate stores.
+- Fix ownership, models, boundaries and signatures. Do not hide defects with
+  `type: ignore`, broad `Any`/`object`, casts, checker exceptions, shims,
+  compatibility wrappers or fallback imports.
+- Use one production implementation. No fake success, weaker backends or switches
+  that give tests another path. Missing capabilities fail with a named reason.
+  Remove obsolete paths and update consumers together.
+- Use Python 3.12 types, Pydantic v2 at boundaries, precise enums/dataclasses/
+  protocols and selective exports. Preserve omitted values versus explicit zero.
+  Read consumers before changing an enum, status, sentinel, default or contract.
+- Work from the root with `uv`; use Bun for web packages, `apply_patch` for
+  manual edits, and Ruff for Python formatting/imports.
+- Comments explain only non-obvious current constraints. Load the `unslop` skill
+  before writing prose. Describe LazyCloud directly; name external products only
+  for actual dependencies, integrations or operational steps.
 
-## Reporting and responding to the user
+## Database and contracts
 
-Answer condensed. This is a must-follow rule, not a preference.
+- Filter, aggregate and project in SQL. Lookups must not load collections.
+  Recurring work scans live resources and due work, batches shared reads and
+  reuses snapshots rather than scanning retained history.
+- Keep locks only for concrete concurrency invariants; use the narrowest scope
+  and measure contention. Budget recurring reads across replicas and cadence.
+  For changed polling/reconciliation/lookups, record query counts and returned
+  bytes before/after with representative history, idle and active; verify the
+  deployed rate in query insights.
+- Use `/api/v1/<resource>` for resources and `/gateway/*` for RPC. Authorize
+  every requested workspace against token scope and membership; only an
+  administrator may reach a tenant workspace without membership.
+- FastAPI handlers validate, authorize, call one service and map typed results.
+  JSON payloads use `HttpModel`, precise response models, stable operation IDs,
+  `{data, next}` lists, `datetime` and `204` for bodiless success.
+- Services raise `shared.errors`; central handlers map `ErrorResponse`.
+  SDK/CLI transport errors use `HttpApiError`. Synchronize contracts, SDK/CLI,
+  runner and web Zod consumers in the same change.
+- `0001_relational_baseline` and every deployed migration are frozen.
+  Add a chained Alembic revision; never infer permission for a production reset.
 
-- Lead with the answer or outcome. State blockers and decisions needed in one
-  line each.
-- During builds, CI runs, and deployments, report only success or failure.
-  Do not narrate individual steps or send updates that only say work is still
-  running.
-- Omit reasoning already accepted, alternatives not taken, restated context,
-  and evidence the reader did not ask for. Link or name a file or command
-  instead of reproducing its content.
-- No recap sections, no narration of what was just done, no tables or headings
-  unless they carry information prose cannot.
-- Expand only when asked, or when a correctness, security, cost, or data-loss
-  risk needs the detail to be actionable.
+## Acceptance
 
-## Ownership and architecture
+- Define the user-visible outcome and cheapest authoritative evidence first.
+  Validate a coherent owner or cross-owner change with focused checks; use the
+  real service/container/provider when that boundary changes. Broad gates are
+  for releases or explicit broad quality claims.
+- Add or retain a test only if it proves a material production invariant at a
+  stable owner/public boundary, provides unique evidence, and is cheaper and more
+  maintainable than production-representative acceptance. Remove encountered
+  tests that fail this gate.
+- Protect authorization, data integrity, durability, concurrency, cleanup and
+  public outcomes. Do not test implementation shape, mock call order, wiring,
+  copy, snapshots, harnesses or behavior already proven elsewhere.
+- Owner tests live beside their package/app; root tests cover cross-owner
+  behavior. Opt-in E2E runs use an exact named module or browser node, never
+  Python file paths. Do not import E2E internals into pytest.
+- Run focused tests directly, prefer `pytest -x`, and keep output observable.
+  Diagnose with bounded polling of durable state, logs and external signals;
+  investigate stalled progress instead of silently waiting for a terminal state.
+- Missing credentials/services are acceptance gaps, not permission for mocks.
+  Fix failures caused by the change; name unrelated failures and unverified
+  boundaries. Clean up every acceptance resource the task created.
 
-- Treat service optimization work as a full rewrite of the service's design.
-  Reconsider its responsibilities, state model, workflows, queries, dependencies,
-  and composition together. Existing implementations are not constraints.
-  Small patches, file moves, and cosmetic cleanup alone do not complete this work.
-- Require substantial net production code reduction and measured performance
-  improvements. Remove redundant workflows, unnecessary abstractions, and
-  superseded implementations in the same change.
-- A full rewrite must retain the same underlying functionality. Preserve
-  supported workflows, public contracts, authorization and tenant isolation,
-  durable state, concurrency guarantees, failure handling, recovery, and cleanup.
-  Change how the service works internally, not what users can do with it.
-  Removing capabilities, weakening guarantees, or skipping work does not count
-  as optimization. Any intended behavior change needs explicit owner direction.
+## Safety and delivery
 
-- `packages/shared` owns backend-free boundary contracts and protocol-neutral
-  types and helpers. JSON contracts live under `shared.http.*`.
-- `packages/lazycloud` owns the backend-free public SDK and `lazycloud` CLI.
-- `packages/runner` owns code executed inside user containers and may depend
-  only on shared contracts and user code.
-- Domain packages own reusable decisions and services. Repositories map/query
-  persistence; services decide workflows; handlers, commands, schedulers,
-  workers, and process entrypoints stay thin.
-- Separate cross-service logic by responsibility. Each service owns its domain
-  decisions; a workflow spanning services has one explicit coordinating owner
-  and calls their typed contracts. Move misplaced decisions to their owner and
-  remove duplicate logic. Do not add forwarding layers solely to separate files.
-- `apps/*` owns deployable composition and process lifetime. `apps/api` owns
-  FastAPI composition, `apps/cli` owns internal `lazycloud-admin`, and
-  `apps/web` owns the dashboard.
-- Provider implementations live under `packages/providers/*` behind
-  provider-neutral protocols. Shared settings, contracts, functions and files use
-  protocol or domain names; provider-specific names belong inside the provider
-  implementation. Preserve customer-owned infrastructure paths when changing
-  the platform's provider.
-- Give configuration one canonical owner. Reuse settings and credentials among
-  consumers with the same trust boundary and required permissions. Separate sets
-  need a concrete permissions, tenant isolation, or lifecycle reason. Remove
-  transitional duplicates in the consuming feature's change; do not add
-  speculative configuration options or adapters.
-- PostgreSQL/SQLAlchemy/Alembic own durable state. Redis owns queues, locks,
-  leases, pub/sub, coordination, and short-lived caches. Object storage and
-  mounted filesystems own object/file data. Do not add duplicate stores or
-  backend switches.
-
-## Database cost
-
-- Validate every lock added or retained in changed code against a concrete
-  concurrency invariant. Remove it when constraints or the existing transaction
-  already protect that invariant. Use the narrowest scope and lock mode that
-  preserves correctness, and measure contention under concurrent requests.
-- Filter and aggregate in SQL. An ID or name lookup must not load a collection.
-  Read only the columns needed; do not fetch JSON histories to count or select
-  current resources.
-- Recurring work scales with live resources and due work, not retained history.
-  Keep terminal records out of active scans while preserving pending cleanup,
-  retries and fencing. Batch shared reads and reuse the snapshot within a pass.
-- Budget recurring database work across every replica and its actual cadence.
-  A lock prevents duplicate mutations, not repeated reads after it is released.
-  Keep idle passes cheap without slowing admission, billing enforcement or recovery.
-- For changed polling, reconciliation or lookup paths, record before/after query
-  counts and returned bytes using the production owner with representative history.
-  Check both idle and active behavior. Fast queries and passing tests alone do not
-  establish acceptable database cost. Verify the deployed rate in query insights.
-
-## Style and tooling
-
-Keep dependencies explicit and owner-directed. Use Python 3.12 types, Pydantic
-v2 at runtime boundaries, precise domain enums/dataclasses/protocols, and
-selective exports. Production defaults belong in shared contracts or backend
-normalization; preserve meaningful distinctions such as omitted versus `0`.
-
-Work from the repository root with `uv`; Bun is the only web package manager.
-Use `apply_patch` for manual edits and Ruff for Python formatting/imports.
-
-Comment sparingly, and only about the code as it now stands. A comment earns its
-place by explaining what the code cannot say itself: a non-obvious constraint, an
-ordering that must hold, a rejected alternative that looks correct. Do not narrate
-what the next line does, restate a name, or describe a change relative to what was
-there before. The reader has the current code, not the diff, and a comment about
-"used to" or "now" is stale the moment it is written. Rationale that belongs to a
-change belongs in the commit message; rationale that belongs to a decision belongs
-in the owning `AGENTS.md`. Delete comments that no longer describe the code when
-you touch the surrounding lines.
-
-Writing for people follows the `unslop` skill. Load it before writing or editing
-an `AGENTS.md`, documentation, a commit message, or a reply.
-If it is not installed, install it first from
-https://github.com/cursor/plugins/blob/main/pstack/skills/unslop/SKILL.md
-(for Claude Code, as `~/.claude/skills/unslop/SKILL.md`), then load it.
-
-## Public boundaries
-
-- Resources use `/api/v1/<resource>`; `/gateway/*` is reserved for RPC-style
-  control. A bearer token names an account or one workspace; a request names the
-  workspace it acts on and is checked against membership, and only an
-  administrator reaches a workspace they do not belong to.
-- FastAPI handlers validate and authorize, call one service, and map typed
-  results. JSON routes use `HttpModel` contracts, precise response models,
-  stable operation IDs, `{data, next}` lists, `datetime`, and `204` for
-  bodiless success.
-- Services raise typed `shared.errors`; central API handlers map them to
-  `ErrorResponse`. SDK/CLI transport failures use `HttpApiError`. Do not add
-  soft-error envelopes or unvalidated response dictionaries.
-- Keep Pydantic contracts, SDK/CLI consumers, runner consumers, and hand-written
-  web Zod schemas synchronized in the same change.
-- CLI commands remain thin, preserve clean machine-readable output, show real
-  progress, and never present polling or fabricated output as logs.
-
-## Acceptance and tests
-
-Tests are part of every service rewrite. Update, simplify, refactor, and rewrite
-them alongside production code. Remove obsolete tests, duplicate coverage,
-implementation-shape assertions, and unnecessary fixtures, mocks, helpers, and
-test frameworks. Keep the smallest clear evidence for each material behavior
-or guarantee. Do not preserve old test structure to constrain a better design,
-or weaken assertions and remove unique coverage merely to make checks pass.
-
-Define the user-visible outcome and cheapest authoritative evidence before
-implementation. Complete the coherent owner or cross-owner slice before
-validating it. Match the check to the change: iteration checks while editing,
-the narrowest changed-file/owner checks once per slice, a real local service,
-public workflow, container image, deployment, or provider only when that
-boundary changed, and the broad repository/release gate only for a release or
-an explicit broad quality claim, never as routine feature acceptance. A green
-narrow run is evidence for the owner it covered and nothing more. Reuse healthy
-infrastructure and clean up every process, port, and resource created for
-acceptance.
-
-Run tests directly and let them finish. Keep the output observable rather than
-piping a long run to `tail`, and prefer fail-fast (`pytest -x`) with narrow owner
-scopes so the first real failure shows up immediately.
-
-### Never wait on a state, always poll
-
-This section applies to bounded acceptance and incident diagnosis. It does not
-authorize adding fast database polling to production loops.
-
-Waiting for a state to be reached is not allowed. A wait keyed on the outcome
-is keyed on exactly the thing that does not happen when something is wrong: a
-phase becoming `ready`, a row appearing, a worker registering. It consumes its
-whole timeout and then reports nothing about why.
-
-Poll instead, fast, and read several independent signals every cycle: the
-durable record, the logs at both ends, the external system's own view, and
-whether the request arrived at all. Print them whether or not they changed.
-Fast cycles are the point. They are how a wrong turn shows up in seconds rather
-than at a deadline. No progress after a cycle or two is a finding to
-investigate immediately, not a reason to keep waiting; reach into the running
-thing (`docker compose exec`, SSM, `journalctl`) rather than waiting for it to
-report out.
-
-A terminal state may still end the loop early, but it is never what the loop
-depends on, and the loop always emits its signals on the way. A silent watcher
-that returns "still pending" after five minutes has produced nothing; the same
-five minutes of polling would have named the cause.
-
-Tests are optional evidence, not a completion ritual or count target. Add one
-only when it is the cheapest unique proof of a material contract, failure,
-authorization boundary, durable transition, data-loss risk, concurrency
-invariant, or cleanup obligation. Existing authoritative coverage or a
-production-representative execution can be sufficient. Preserve focused
-matrices only when rows protect distinct high-risk transitions.
-
-### Test decision gate
-
-Do not add a test merely because code changed, a bug was fixed, or a test could
-be written. Before adding or retaining an automated test, all of these must be
-true:
-
-1. It proves current production behavior at a stable owner or public boundary,
-   not test machinery or an implementation detail.
-2. Failure would materially affect authorization, security, data integrity,
-   durability, concurrency, cleanup, a public contract, or a user-visible
-   terminal outcome.
-3. The same invariant is not already proven at a cheaper authoritative owner or
-   by the production-representative acceptance path.
-4. The test is cheaper, more deterministic, and more maintainable than proving
-   the behavior through the real owner or named acceptance scenario.
-
-If any answer is no, do not add the test. Delete existing tests that fail this
-gate when they are encountered in the changed scope.
-
-Test stable production decisions such as validation and serialization at a real
-boundary, authorization and tenant isolation, durable state transitions,
-idempotency and fencing, data-loss prevention, concurrency invariants, scoped
-cleanup, and regressions in production code that escaped existing authoritative
-evidence and are likely to recur.
-
-Do not test:
-
-- E2E scenarios, smoke scripts, acceptance harnesses, runbooks, setup/teardown
-  orchestration, fixtures, or their private helpers. Execute the exact named
-  scenario instead.
-- Call order, mock transcripts, constructor wiring, generated commands or
-  plans, constants, signatures, types, source layout, imports, exports, routes,
-  repository policy, or other implementation shape.
-- Literal copy, colors, pixels, snapshots, provider inventory fields, volatile
-  external configuration, or third-party defaults unless they are themselves a
-  stable public contract with material user impact.
-- Behavior already proven by an owner test, integration boundary, real service
-  execution, public CLI/API/SDK workflow, or live provider acceptance.
-- One-time deployment wiring or a fixed bug by default. Add evidence only when
-  it independently passes the four-part gate above.
-
-Make production behavior work first. Add at most the smallest focused case for
-each unique invariant; do not create a matrix, shared fixture, helper framework,
-or companion suite for a single scenario. If acceptance orchestration becomes
-complex enough to seem unit-testable, simplify it. If it contains reusable
-production decisions, move those decisions to their proper production owner
-and test that owner instead. Never import `tests.e2e` internals into pytest
-tests.
-
-Owner tests live beside their package/app; root `tests/` is for concrete
-cross-owner or deployment behavior. Opt-in live scenarios live under
-`tests/e2e/`, are excluded from ordinary test discovery, and run only through
-an exact named module (`python -m tests.e2e...`) or browser node after cheaper
-owner evidence passes. Do not execute Python E2E files by path or add
-import-path bootstrap code.
-
-An unavailable credential or external service is an acceptance gap. Report it
-after exhausting meaningful local evidence; never replace it with a mock or
-local-only backend. Fix failures caused by the change or blocking its outcome
-and report unrelated failures separately.
-
-A target the owner explicitly selects or supplies for a run is approved; do not
-refuse it because its account or network name looks personal or shared. Treat
-every external system a live run touches, whether a provider account, cluster,
-tailnet, DNS zone, or registry, as shared state you do not own. Read its current
-configuration before mutating it, scope every change to resources the run created
-and can name exactly, preserve every unrelated user and resource, and prove
-cleanup is equally scoped. Never replace a whole policy or configuration
-document, and never delete or rotate a resource that is not proven to belong to
-the current run.
-
-## Product phase and destructive work
-
-Local deployments use local databases and queues, a development GitHub App, and
-provider test credentials wherever available. Run the same implementation and
-contracts as production with those endpoints and credentials. Use real external
-provider resources, such as Cloudflare, when the task calls for them, with cleanup
-scoped to resources created for the run. A local frontend pointed at the production
-API is an explicit exception for production-data review; it does not authorize
-loading production operator credentials into local backend services.
-
-For owner-authorized deployments of our platform, use the AWS `default` profile.
-For disposable AWS provider acceptance, including platform capacity lifecycle
-and customer BYO-cloud tests, check the existing `default-test` profile first.
-List configured profiles and verify the selected identity with STS before creating
-resources or reporting missing credentials. The test account is available through
-`default-test`; it is not a prerequisite for deploying our platform. If `default`
-uses root credentials, it cannot perform the provider's AssumeRole workflow.
-Use the test account for acceptance instead of asking for new credentials. Keep
-test resources scoped to the run and prove their cleanup. Never switch the target
-account of a platform deployment to work around a credential failure.
-GitHub deployments use their configured OIDC role.
-Never copy local AWS credentials into workloads, images, or GitHub secrets.
-
-`0001_relational_baseline` is deployed and frozen. Schema changes add an Alembic
-revision chained onto the previous one. A deployed database records the revision
-it reached, so changing that file invalidates its history and refuses the next
-deploy. The completed owner-authorized reset in PR #295 does not authorize
-another production reset.
-Local development state is the Compose databases, volumes, and stacks;
-resetting and re-bootstrapping those is ordinary development work.
-
-Resolve destructive targets exactly before acting. List what a delete would
-remove and confirm every item belongs to the current task; a stack, a bucket,
-or a prefix is not self-describing. Preserve tenant/workspace scope, sibling
-resources, retries, idempotency, fencing, partial-failure state, and cleanup
-proof where relevant. Prefer the reversible step, and when an action is
-irreversible, say so plainly before taking it rather than after. Stop for user
-direction when an irreversible action, public contract, security/cost posture,
-provider strategy, or top-level architecture choice is genuinely unresolved.
-
-## Working rules
-
-Develop each feature on its own branch, open a pull request, and merge it only
-after its checks pass.
-
-Always prioritize shipping related work together. Keep the task's implementation,
-cleanup, and discovered fixes in one pull request whenever possible. Finish the
-full scope, review, and checks before starting Ship, then deploy once. If related
-pull requests already exist, merge them before that deployment. Do not split
-shipments for convenience or intermediate production measurements. Separate
-shipments require explicit owner direction; each repeats the release delay and
-agent work.
-
-Default to one task at a time. Parallel work is the exception you justify, not
-the mode you assume: it requires genuinely disjoint owners and files, and the
-manager still reviews returned work and runs integrated acceptance. Delegating
-does not reduce the number of things you are responsible for finishing. Agents
-stay within assigned files, preserve concurrent changes, raise real blockers,
-and report changed paths, evidence, gaps, and conflicts.
-
-Finish the current task before starting the next. A defect the task reveals is
-usually cheapest to fix in the same change, so take it there rather than
-deferring it to a later pass. Leaving a tree that does not build or a change
-half-migrated across owners costs more than the work saved.
-
-A returned result from a subagent, a tool, or a prior run is a claim with
-evidence attached, not an established fact. Verify anything that would change
-what you build, delete, or tell the owner. Report what you actually observed and
-name what you did not.
-
-A value that leaves this process has consumers who decide what it means, and
-they are the ones who define it. Before changing one, whether an enum member, a
-status, a sentinel, or a default, read what reads it on the far side. A change
-that looks like relabelling here is a behaviour change there, and the reasoning
-that makes it look safe is written in the module you are editing, not in the one
-that acts on it. The trap is the value that reads as a null: a placeholder
-locally is a fact somewhere else, and the code that treats it as one is exactly
-the code you have not opened. Grep for the consumers first; it is cheaper than
-any of the ways of finding out afterwards.
-
-A blocked tool call is a stop, not an obstacle to route around. When a permission
-layer refuses an action, say what was refused and what it was for, and wait. Do
-not re-issue it reshaped: split, re-encoded, moved into a script or a test, or
-narrowed until it passes. Reshaping until something succeeds defeats the only
-control the owner has over what runs, and it converts a decision that was theirs
-into one already made. Continue with whatever genuinely does not depend on the
-refused action, and name the rest as blocked.
-
-Finish when the requested outcome and proportionate acceptance pass. Do not
-start a new audit or broad hardening pass without a concrete in-scope reason.
-Never add commit attribution trailers; commits are authored by the repository
-owner.
+- Inspect the dirty tree, preserve unrelated work and stage intentional files.
+  Never expose secrets in output, logs, URLs, tests, comments or durable records.
+- Treat external systems as shared. Inspect before changing them; delete only
+  exact resources proven to belong to this task, preserving siblings and tenants.
+  State irreversible actions beforehand; ask when their scope or an architectural,
+  public-contract, security or cost decision is unresolved.
+- A refused tool call is a stop. Report it and wait; do not reshape or reroute it.
+- Local backends use local databases/queues and development credentials. Viewing
+  production through a local frontend does not authorize local operator credentials.
+  Local Compose state may be reset for development.
+- Authorized platform deployments use AWS `default`; disposable provider
+  acceptance checks `default-test` first. List profiles and verify STS identity.
+  Never switch deployment accounts to bypass a failure or copy credentials into
+  workloads/images/GitHub secrets. CI deployments use OIDC.
+- Use a task branch and one PR for related implementation, cleanup and fixes.
+  Finish review/checks before shipping; merge only after checks pass and deploy
+  related work together once.
+- Work sequentially by default. Delegate only disjoint owners/files when justified;
+  review returned work and integrated evidence. Verify tool and agent claims.
+- Finish the requested scope and proportionate acceptance, then stop. Do not
+  begin unrelated audits. Never add commit attribution trailers.
+- Respond briefly and lead with outcomes. Name blockers and decisions explicitly;
+  report build/CI/deployment success or failure without routine narration.

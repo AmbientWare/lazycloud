@@ -1,4 +1,16 @@
-Goal: Make LazyCloud simpler, faster, and more scalable through a full rewrite of each service's design, with substantial net production code reduction and measurable performance improvements. Reconsider responsibilities, state handling, workflows, queries, dependencies, and composition together. Separate domain decisions from cross-service coordination. Remove redundant logic, unnecessary abstractions, and superseded implementations. Apply the same simplification and refactoring to tests, removing obsolete cases, duplicate coverage, and unnecessary test machinery while preserving proof of material behavior and guarantees. Every rewrite must retain the same underlying functionality, including supported workflows, public contracts, security, durability, concurrency, failure handling, recovery, and cleanup. Existing implementations are not constraints. Removing capabilities, weakening guarantees, small patches, file moves, cosmetic cleanup, or simply adding more code do not satisfy this goal.
+Goal: Fully rewrite the services to make LazyCloud simpler, faster and more scalable, with substantial net code reduction and measurable performance improvements while preserving the same underlying functionality.
+
+Refactor rules:
+
+- Treat each service as a full rewrite. Reconsider responsibilities, state, workflows, queries, dependencies and composition together; existing implementations are not constraints.
+- Preserve supported workflows, public contracts, security, durability, concurrency, failure handling, recovery and cleanup. Removing capabilities or weakening guarantees is not optimization; intentional behavior changes require owner direction.
+- Reduce total complexity and production code. Delete redundant logic, unnecessary abstractions and superseded implementations. Small patches, file moves, cosmetic cleanup and added layers alone do not meet the goal.
+- Separate cross-service coordination from domain decisions. Keep each responsibility with its canonical owner and dependencies explicit.
+- Refactor tests alongside production code. Rewrite and simplify useful tests; remove obsolete cases, duplicate coverage and unnecessary fixtures/helpers/frameworks. Preserve unique proof of material behavior and guarantees without preserving the old implementation's shape.
+- Measure code reduction and performance before and after each rewrite, including database work with representative history, idle load and concurrent activity. Passing tests alone does not prove optimization.
+- Finish the service's coherent change and required acceptance before marking it complete. Keep refactor process rules in this file; AGENTS.md files contain only permanent repository standards.
+
+Services:
 
 - [ ] Scheduling and autoscaling
 - [ ] Compute capacity and fleet management

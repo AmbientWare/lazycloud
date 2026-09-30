@@ -5,7 +5,8 @@ from datetime import timedelta
 from api.server.services import ApiServices
 from control.service import ControlPlaneService
 from coordination.redis_client import redis_text
-from scheduler.service import Scheduler
+from execution.functions.service import FunctionControlService
+from scheduler.cron import CronScheduler
 from shared.deployment_records import DeploymentSpec
 from shared.http.workspace_changes import (
     WorkspaceChangeEvent,
@@ -72,7 +73,11 @@ def test_cron_execution_publishes_after_last_and_next_run_persist(
     due_at = cron_job.next_run_at
     cursor = _current_cursor(isolated_services, workspace.id)
 
-    Scheduler(isolated_services).tick(now=due_at)
+    CronScheduler(
+        isolated_services,
+        isolated_services.redis(),
+        FunctionControlService(isolated_services),
+    ).tick(now=due_at)
 
     updated = next(
         item
