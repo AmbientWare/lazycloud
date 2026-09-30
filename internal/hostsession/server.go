@@ -32,9 +32,9 @@ const (
 	maxRecvBytes = 64 << 20
 	// maxSendBytes matches the agent's receive limit, so a claim of several
 	// large inputs still fits.
-	maxSendBytes = 512 << 20
-	maxClaimWait    = 60 * time.Second
-	maxClaimTasks   = 256
+	maxSendBytes  = 512 << 20
+	maxClaimWait  = 60 * time.Second
+	maxClaimTasks = 256
 )
 
 // Config tunes the host connection.
