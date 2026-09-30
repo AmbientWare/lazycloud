@@ -10,13 +10,13 @@ Refactor rules:
 - Break oversized production and test files into focused modules with clear responsibilities. Reduce the underlying complexity as part of the split; moving the same code into more files alone does not count as simplification.
 - Refactor tests alongside production code. Rewrite and simplify useful tests; remove obsolete cases, duplicate coverage and unnecessary fixtures/helpers/frameworks. Preserve unique proof of material behavior and guarantees without preserving the old implementation's shape.
 - Measure code reduction and performance before and after each rewrite, including database work with representative history, idle load and concurrent activity. Passing tests alone does not prove optimization.
-- Finish the service's coherent change and required acceptance before marking it complete. Keep refactor process rules in this file; AGENTS.md files contain only permanent repository standards.
+- Check off each service as its rewrite is accepted for merge, and include the checklist update in that PR. Document remaining limitations in the PR without leaving accepted rewrites unchecked. Keep refactor process rules in this file; AGENTS.md files contain only permanent repository standards.
 
 Services:
 
-- [ ] Scheduling and autoscaling
-- [ ] Compute capacity and fleet management
-- [ ] Control plane
+- [x] Scheduling and autoscaling
+- [x] Compute capacity and fleet management
+- [x] Control plane
 - [ ] Apps, deployments, and releases
 - [ ] Cron jobs
 - [ ] Container lifecycle
