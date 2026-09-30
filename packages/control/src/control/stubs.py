@@ -5,8 +5,9 @@ from dataclasses import dataclass
 from uuid import uuid4
 
 from database.records.apps import AutoscalingStubRecord, StubKind, StubRecord
-from database.repositories.apps import DeploymentRepository, StubRepository
+from database.repositories.apps import StubRepository
 from database.repositories.cleanup import CleanupRepository
+from database.repositories.deployments import DeploymentRepository
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.orchestration import AutoscalingTargetRepository, ContainerRepository
 from foundation.ids import try_uuid
@@ -14,7 +15,7 @@ from observability.workspace_changes import WorkspaceChangePublisher
 from pydantic import JsonValue
 from shared.autoscaler_state import autoscaler_target_kind
 from shared.deployment_records import Deployment
-from shared.errors import ConflictError, InvalidInputError, NotFoundError
+from shared.errors import InvalidInputError, NotFoundError
 from shared.http.workspace_changes import WorkspaceChangeType
 from shared.timestamps import utc_now
 from shared.urls import (
@@ -202,54 +203,30 @@ class StubService:
         with self.context.database.session() as session:
             return StubRepository(session).list_autoscaling_across_workspaces(stub_ids=stub_ids)
 
-    def discard_deployment_registration_stub(
-        self, stub_id: str, *, deployment_id: str, workspace: str = "default"
-    ) -> None:
-        with self.context.database.session() as session:
-            workspace_record = self.context.workspace(session, workspace)
-            repository = StubRepository(session)
-            stub = repository.get_for_update(stub_id, workspace_id=workspace_record.id)
-            if stub is None:
-                return
-            if stub.deployment_id != deployment_id:
-                raise ConflictError(f"stub is not owned by deployment registration: {stub.id}")
-            if repository.registration_is_bound(stub.id):
-                raise ConflictError(f"deployment registration stub is already bound: {stub.id}")
-            if not repository.delete(stub.id, workspace_id=workspace_record.id):
-                raise ConflictError(
-                    f"deployment registration stub could not be discarded: {stub.id}"
-                )
-        publish_workload_change(self.workspace_changes, stub, WorkspaceChangeType.Deleted)
-
-    def discard_registration_source_stub(self, stub_id: str, *, workspace: str = "default") -> bool:
-        """Discard a preparation or release its floor while references remain."""
-
-        with self.context.database.session() as session:
-            workspace_record = self.context.workspace(session, workspace)
-            repository = StubRepository(session)
-            stub = repository.get_for_update(stub_id, workspace_id=workspace_record.id)
-            if stub is None:
-                return False
-            if stub.deployment_id:
-                return False
-            if repository.registration_is_bound(stub.id):
-                if stub.kind is not StubKind.Function or not stub.config.autoscaler.min_containers:
-                    return False
-                # Registration copied the floor to the deployment. Preserve existing
-                # invocations, but let the autoscaler retire idle preparation containers.
-                stub.config.autoscaler.min_containers = 0
-                stub.updated_at = utc_now()
-                repository.upsert(stub)
-                repository.set_preparation_fingerprint(
-                    stub.id, workspace_id=workspace_record.id, fingerprint=None
-                )
-                change = WorkspaceChangeType.Updated
-            else:
-                if not repository.delete(stub.id, workspace_id=workspace_record.id):
-                    return False
-                change = WorkspaceChangeType.Deleted
-        publish_workload_change(self.workspace_changes, stub, change)
-        return change is WorkspaceChangeType.Deleted
+    def discard_source_in_session(
+        self,
+        session: Session,
+        stub_id: str,
+        *,
+        workspace_id: str,
+    ) -> tuple[StubRecord, WorkspaceChangeType] | None:
+        repository = StubRepository(session)
+        stub = repository.get_for_update(stub_id, workspace_id=workspace_id)
+        if stub is None or stub.deployment_id:
+            return None
+        if repository.registration_is_bound(stub.id):
+            if stub.kind is not StubKind.Function or not stub.config.autoscaler.min_containers:
+                return None
+            stub.config.autoscaler.min_containers = 0
+            stub.updated_at = utc_now()
+            repository.upsert(stub)
+            repository.set_preparation_fingerprint(
+                stub.id, workspace_id=workspace_id, fingerprint=None
+            )
+            return stub, WorkspaceChangeType.Updated
+        if repository.delete(stub.id, workspace_id=workspace_id):
+            return stub, WorkspaceChangeType.Deleted
+        return None
 
     def get_stub_config(self, stub_id_or_name: str) -> dict[str, JsonValue]:
         stub = self.get_stub(stub_id_or_name)

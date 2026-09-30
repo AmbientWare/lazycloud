@@ -287,7 +287,7 @@ def test_unversioned_invoke_rejects_stopped_latest_without_fallback(
     with ExitStack() as client_stack:
         _v1_deployment, v1_stub = _deploy(isolated_services, "roll", DeploymentKind.Function)
         v2_deployment, _v2_stub = _deploy(isolated_services, "roll", DeploymentKind.Function)
-        ManagementService(isolated_services).set_deployment_active(
+        isolated_services.deployments.set_deployment_active(
             "default", v2_deployment.id, active=False
         )
         service = RecordingFunctionService()
@@ -429,7 +429,9 @@ def test_endpoint_version_routes_follow_deployment_lifecycle(
         v1_path = f"/api/v1/endpoints/versioned-endpoint/v{v1_deployment.version}"
         v2_path = f"/api/v1/endpoints/versioned-endpoint/v{v2_deployment.version}"
 
-        management.set_deployment_active("default", v2_deployment.id, active=False)
+        management.services.deployments.set_deployment_active(
+            "default", v2_deployment.id, active=False
+        )
         stopped_latest = client.post(latest_path, headers=headers, json={})
         stopped_v2 = client.post(v2_path, headers=headers, json={})
         active_v1 = client.post(v1_path, headers=headers, json={})
@@ -440,13 +442,15 @@ def test_endpoint_version_routes_follow_deployment_lifecycle(
         assert active_v1.status_code == 202
         assert service.forward_requests[-1].stub_id == v1_stub.id
 
-        management.set_deployment_active("default", v2_deployment.id, active=True)
+        management.services.deployments.set_deployment_active(
+            "default", v2_deployment.id, active=True
+        )
         restarted_latest = client.post(latest_path, headers=headers, json={})
 
         assert restarted_latest.status_code == 202
         assert service.forward_requests[-1].stub_id == v2_stub.id
 
-        management.delete_deployment("default", v1_deployment.id)
+        management.services.deployments.delete(v1_deployment.id, workspace="default")
         deleted_v1 = client.post(v1_path, headers=headers, json={})
 
         assert deleted_v1.status_code == 404

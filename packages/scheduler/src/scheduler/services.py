@@ -99,10 +99,6 @@ class SchedulerDeploymentPruneService(Protocol):
 
 
 class SchedulerCronJobService(Protocol):
-    def list(self, *, workspace: str = "default") -> list[CronJobRecord]: ...
-
-    def list_all(self) -> list[CronJobRecord]: ...
-
     def publish_change(
         self,
         record: CronJobRecord,

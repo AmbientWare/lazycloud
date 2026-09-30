@@ -3,7 +3,7 @@ from __future__ import annotations
 from uuid import uuid4
 
 from api.server.services import ApiServices
-from database.repositories.apps import DeploymentRepository
+from database.repositories.deployments import DeploymentRepository
 from database.repositories.orchestration import ContainerRepository
 from fastapi.testclient import TestClient
 from identity.auth import AuthService

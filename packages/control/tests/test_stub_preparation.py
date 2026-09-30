@@ -85,7 +85,8 @@ def test_preparing_function_keeps_same_named_endpoint_container_on_its_revision(
     assert persisted is not None
     assert persisted.stub_id == endpoint.id
     assert persisted.status is ContainerStatus.Running
-    assert not control.stubs.discard_registration_source_stub(endpoint.id)
+    isolated_services.deployments.deploy_prepared(endpoint.id)
+    assert control.stubs.get_stub(endpoint.id).id == endpoint.id
     with pytest.raises(ConflictError):
         control.stubs.get_stub("print_hello", workspace=endpoint.workspace_id)
     with pytest.raises(ConflictError):

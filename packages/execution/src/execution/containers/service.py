@@ -7,7 +7,7 @@ import json
 import logging
 import shlex
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Protocol
@@ -16,7 +16,8 @@ from uuid import UUID, uuid4
 from control.placement import PlacementResolver
 from control.releases import DeploymentReleaseService
 from coordination.event_bus import EventBusEvent, EventBusEventType, EventBusSendResult
-from database.repositories.apps import DeploymentRepository, StubRepository
+from database.repositories.apps import StubRepository
+from database.repositories.deployments import DeploymentRepository
 from database.repositories.execution import TaskRepository
 from database.repositories.identity import WorkspaceMemberRepository, WorkspaceRepository
 from database.repositories.images import ImageArchiveRepository, ImageBuildRepository
@@ -173,6 +174,7 @@ class ContainerService:
     workers: RuntimeWorkerLookup
     placement_resolver: PlacementResolver
     runtime_state: ContainerRuntimeStateRepository | None = None
+    releases: DeploymentReleaseService = field(default_factory=DeploymentReleaseService)
 
     def admit_container_start(
         self,
@@ -615,9 +617,7 @@ class ContainerService:
             for worker_id in set(workers_by_container.values())
             if (worker := self.workers.get_worker(worker_id)) is not None
         ]
-        admitted = {
-            worker.worker_id for worker in DeploymentReleaseService().admitted_workers(workers)
-        }
+        admitted = {worker.worker_id for worker in self.releases.admitted_workers(workers)}
         return {
             container_id
             for container_id, worker_id in workers_by_container.items()

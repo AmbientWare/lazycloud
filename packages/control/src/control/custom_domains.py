@@ -6,8 +6,8 @@ from datetime import datetime, timedelta
 from typing import Protocol
 from uuid import uuid4
 
-from database.repositories.apps import DeploymentResourceRepository
 from database.repositories.custom_domains import CustomDomainRepository
+from database.repositories.deployment_resources import DeploymentResourceRepository
 from database.repositories.identity import WorkspaceMemberRepository
 from shared.custom_domains import (
     CustomDomain,

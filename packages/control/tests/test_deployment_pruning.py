@@ -3,10 +3,10 @@ from uuid import UUID, uuid4
 
 import pytest
 from api.server.services import ApiServices
-from database.repositories.apps import CronJobRepository, DeploymentRepository
+from database.repositories.cron_jobs import CronJobRepository
 from database.repositories.deployment_plans import DeploymentPlanRepository
+from database.repositories.deployments import DeploymentRepository
 from execution.containers.service import PendingContainerReservation
-from operations.management import ManagementService
 from shared.containers import ContainerStatus
 from shared.deployment_records import DeploymentSpec
 from shared.deployments import DeploymentKind
@@ -39,7 +39,7 @@ def test_prune_retires_all_omitted_versions_and_schedules_but_preserves_other_wo
         )
         for _ in range(2)
     ]
-    ManagementService(services).set_deployment_active("default", stale[-1].id, active=False)
+    services.deployments.set_deployment_active("default", stale[-1].id, active=False)
     sibling = services.deployments.deploy(
         DeploymentSpec(
             name="old",
@@ -195,8 +195,6 @@ def test_interrupted_prune_resumes_exact_targets_without_deleting_redeployment(
         )
     assert services.cron_jobs.list() == []
     replacement = services.deployments.deploy(old.spec.model_copy(update={"cron": "0 * * * *"}))
-    with pytest.raises(ConflictError, match="deleted deployment"):
-        services.cron_jobs.set_for_deployment(old, cron=None, workspace="default")
     with services.context.database.session() as session:
         assert not CronJobRepository(session).record_run(
             old_schedule, workspace_id=app.workspace_id

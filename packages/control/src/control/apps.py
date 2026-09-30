@@ -4,6 +4,7 @@ import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import timedelta
+from time import monotonic
 from typing import Protocol
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
@@ -12,7 +13,6 @@ from database.repositories.apps import (
     AppContainerShutdownIntentRepository,
     AppDeploymentIntentRepository,
     AppRepository,
-    DeploymentRepository,
     StubRepository,
 )
 from database.repositories.cleanup import CleanupRepository
@@ -55,36 +55,6 @@ class AppReader(Protocol):
     def get(self, app_id_or_name: str, *, workspace: str | None = None) -> AppRecord: ...
 
 
-class AppRegistry(AppReader, Protocol):
-    def create(
-        self,
-        name: str,
-        *,
-        stub_id: str | None = None,
-        workspace: str = "default",
-        version: int = 1,
-        public: bool | None = None,
-        metadata: Mapping[str, JsonValue] | None = None,
-    ) -> AppRecord: ...
-
-    def list(
-        self,
-        *,
-        workspace: str | None = None,
-        active: bool | None = None,
-    ) -> list[AppRecord]: ...
-
-
-class AppImageAvailability(Protocol):
-    def assert_available(self, session: Session, stub_id: str) -> None: ...
-
-
-@dataclass(frozen=True, slots=True)
-class DatabaseAppImageAvailability:
-    def assert_available(self, session: Session, stub_id: str) -> None:
-        CleanupRepository(session).assert_stub_available(stub_id)
-
-
 @dataclass(frozen=True, slots=True)
 class DatabaseAppExecutionAdmission:
     def assert_active(
@@ -102,13 +72,7 @@ class DatabaseAppExecutionAdmission:
 
 
 class AppExecutionLifecycleEffects(Protocol):
-    def stop_app_containers(
-        self,
-        *,
-        workspace_id: str,
-        app_id: str,
-        container_targets: list[ContainerShutdownTarget],
-    ) -> None: ...
+    def stop_containers(self, targets: list[ContainerShutdownTarget]) -> None: ...
 
     def delete_app_execution(self, *, workspace_id: str, app_id: str) -> None: ...
 
@@ -118,7 +82,6 @@ class AppService:
     context: ControlContext
     deployment_lifecycle: AppDeploymentLifecycleService
     execution_effects: AppExecutionLifecycleEffects
-    artifact_availability: AppImageAvailability
     workspace_changes: WorkspaceChangePublisher | None = None
 
     def create(
@@ -162,7 +125,7 @@ class AppService:
         workspace_record = self.context.workspace(session, workspace)
         stub = _get_stub(session, stub_id, workspace_id=workspace_record.id) if stub_id else None
         if stub is not None:
-            self.artifact_availability.assert_available(session, stub.id)
+            CleanupRepository(session).assert_stub_available(stub.id)
         repository = AppRepository(session)
         repository.lock_name(workspace_id=workspace_record.id, name=app_name)
         existing = repository.get_by_name(
@@ -234,14 +197,11 @@ class AppService:
                 self.context.workspace(session, workspace).id if workspace is not None else None
             )
             repository = AppRepository(session)
-            records = (
-                repository.list(workspace_id=workspace_id)
+            return (
+                repository.list(workspace_id=workspace_id, active=active)
                 if workspace_id is not None
-                else repository.list_across_workspaces()
+                else repository.list_across_workspaces(active=active)
             )
-        if active is not None:
-            records = [item for item in records if item.active is active]
-        return records
 
     def pause(self, app_id_or_name: str, *, workspace: str = "default") -> AppRecord:
         return self._mutate(
@@ -249,6 +209,11 @@ class AppService:
             workspace=workspace,
             target=AppLifecycleTarget.Paused,
         )
+
+    def active_by_ids(self, app_ids: list[str], *, workspace: str) -> dict[str, bool]:
+        with self.context.database.session() as session:
+            workspace_id = self.context.workspace(session, workspace).id
+            return AppRepository(session).active_by_ids(app_ids, workspace_id=workspace_id)
 
     def resume(self, app_id_or_name: str, *, workspace: str = "default") -> AppRecord:
         return self._mutate(
@@ -266,15 +231,22 @@ class AppService:
         )
 
     def reconcile_pending(self, *, limit: int = 25) -> list[AppRecord]:
-        claim_id = str(uuid4())
-        with self.context.database.session() as session:
-            claimed = AppRepository(session).claim_unfinished(
-                claim_id=claim_id,
-                stale_before=utc_now() - timedelta(seconds=_RECONCILE_CLAIM_SECONDS),
-                limit=limit,
-            )
+        deadline = monotonic() + _RECONCILE_CLAIM_SECONDS
         reconciled: list[AppRecord] = []
-        for app in claimed:
+        for _ in range(limit):
+            if monotonic() >= deadline:
+                break
+            claim_id = str(uuid4())
+            with self.context.database.session() as session:
+                claimed = AppRepository(session).claim_unfinished(
+                    claim_id=claim_id,
+                    stale_before=utc_now() - timedelta(seconds=_RECONCILE_CLAIM_SECONDS),
+                    limit=1,
+                    exclude_ids=[app.id for app in reconciled],
+                )
+            if not claimed:
+                break
+            app = claimed[0]
             try:
                 reconciled.append(self._run_claimed(app, claim_id=claim_id))
             except Exception:
@@ -316,9 +288,22 @@ class AppService:
                     revision=revision,
                     target=target,
                 )
-            claim_id = _claim_specific(session, app, revision=revision)
-            if claim_id is None:
+            now = utc_now()
+            if (
+                app.reconcile_claim_id is not None
+                and app.reconcile_claimed_at is not None
+                and app.reconcile_claimed_at >= now - timedelta(seconds=_RECONCILE_CLAIM_SECONDS)
+            ):
                 return app
+            claim_id = str(uuid4())
+            AppRepository(session).upsert(
+                app.model_copy(
+                    update={
+                        "reconcile_claim_id": claim_id,
+                        "reconcile_claimed_at": now,
+                    }
+                )
+            )
         return self._run_claimed(app, claim_id=claim_id)
 
     def _begin_operation(
@@ -329,22 +314,17 @@ class AppService:
         revision: int,
         target: AppLifecycleTarget,
     ) -> AppRecord:
-        deployments = DeploymentRepository(session)
         intents = AppDeploymentIntentRepository(session)
         AppContainerShutdownIntentRepository(session).clear(app_id=app.id)
         if target is AppLifecycleTarget.Paused:
             if app.lifecycle_state is not AppLifecycleState.Active:
                 raise ConflictError("only an active app can be paused")
-            deployment_ids = [
-                item.id
-                for item in deployments.list(workspace_id=app.workspace_id, app_id=app.id)
-                if item.active
-            ]
-            intents.replace(
+            intents.capture(
                 app_id=app.id,
-                deployment_ids=deployment_ids,
+                workspace_id=app.workspace_id,
                 operation_revision=revision,
                 target=AppDeploymentIntentTarget.Inactive,
+                active_only=True,
             )
             state = AppLifecycleState.Pausing
         elif target is AppLifecycleTarget.Active:
@@ -357,19 +337,12 @@ class AppService:
             )
             state = AppLifecycleState.Resuming
         else:
-            if app.lifecycle_state is AppLifecycleState.Deleted:
-                return app
-            intents.replace(
+            intents.capture(
                 app_id=app.id,
-                deployment_ids=[
-                    item.id
-                    for item in deployments.list(
-                        workspace_id=app.workspace_id,
-                        app_id=app.id,
-                    )
-                ],
+                workspace_id=app.workspace_id,
                 operation_revision=revision,
                 target=AppDeploymentIntentTarget.Deleted,
+                active_only=False,
             )
             state = AppLifecycleState.Deleting
         started = app.model_copy(
@@ -392,33 +365,20 @@ class AppService:
     def _run_claimed(self, app: AppRecord, *, claim_id: str) -> AppRecord:
         phase = "deployment-lifecycle"
         try:
-            with self.context.database.session() as session:
-                current = AppRepository(session).get(
-                    app.id,
-                    workspace_id=app.workspace_id,
-                    include_deleted=True,
-                )
-                if current is None:
-                    raise NotFoundError(f"app not found: {app.id}")
-                if current.reconcile_claim_id != claim_id:
-                    return current
-                intents = AppDeploymentIntentRepository(session).list(app_id=app.id)
-            self.deployment_lifecycle.apply_intents(
+            if not self.deployment_lifecycle.apply_intents(
                 app_id=app.id,
                 workspace_id=app.workspace_id,
-                intents=intents,
-            )
+                revision=app.lifecycle_revision,
+                claim_id=claim_id,
+            ):
+                return self._get_including_deleted(app.id, workspace_id=app.workspace_id)
             target = app.lifecycle_target
             if target is None:
                 raise ConflictError("app lifecycle target is missing")
             if target is not AppLifecycleTarget.Active:
                 phase = "container-stop"
-                container_targets = self._capture_container_shutdown_intents(app)
-                self.execution_effects.stop_app_containers(
-                    workspace_id=app.workspace_id,
-                    app_id=app.id,
-                    container_targets=container_targets,
-                )
+                container_targets = self._capture_container_shutdown_intents(app, claim_id=claim_id)
+                self.execution_effects.stop_containers(container_targets)
             if target is AppLifecycleTarget.Deleted:
                 phase = "execution-cleanup"
                 self.execution_effects.delete_app_execution(
@@ -432,6 +392,8 @@ class AppService:
             )
             phase = "terminal-event"
             staged = self._stage_terminal_event(app, claim_id=claim_id, target=target)
+            if staged is None:
+                return self._get_including_deleted(app.id, workspace_id=app.workspace_id)
             phase = "terminal-change"
             return self._publish_and_complete_terminal(
                 staged,
@@ -448,7 +410,7 @@ class AppService:
         *,
         claim_id: str,
         target: AppLifecycleTarget,
-    ) -> AppRecord:
+    ) -> AppRecord | None:
         with self.context.database.session() as session:
             repository = AppRepository(session)
             current = repository.get_for_update(
@@ -463,7 +425,7 @@ class AppService:
                 or current.reconcile_claim_id != claim_id
                 or current.lifecycle_target is not target
             ):
-                return current
+                return None
             now = utc_now()
             event_id = current.lifecycle_event_id or str(
                 uuid5(
@@ -588,8 +550,19 @@ class AppService:
     def _capture_container_shutdown_intents(
         self,
         app: AppRecord,
+        *,
+        claim_id: str,
     ) -> list[ContainerShutdownTarget]:
         with self.context.database.session() as session:
+            current = AppRepository(session).get_for_update(
+                app.id, workspace_id=app.workspace_id, include_deleted=True
+            )
+            if (
+                current is None
+                or current.lifecycle_revision != app.lifecycle_revision
+                or current.reconcile_claim_id != claim_id
+            ):
+                return []
             intents = AppContainerShutdownIntentRepository(session).capture_pending_shutdowns(
                 app_id=app.id,
                 workspace_id=app.workspace_id,
@@ -717,41 +690,9 @@ def _app_event_action(target: AppLifecycleTarget) -> str:
     return "app.deleted"
 
 
-def _claim_specific(session: Session, app: AppRecord, *, revision: int) -> str | None:
-    repository = AppRepository(session)
-    current = repository.get_for_update(
-        app.id,
-        workspace_id=app.workspace_id,
-        include_deleted=True,
-    )
-    if current is None or current.lifecycle_revision != revision:
-        return None
-    now = utc_now()
-    claim_is_live = (
-        current.reconcile_claim_id is not None
-        and current.reconcile_claimed_at is not None
-        and current.reconcile_claimed_at >= now - timedelta(seconds=_RECONCILE_CLAIM_SECONDS)
-    )
-    if claim_is_live:
-        return None
-    claim_id = str(uuid4())
-    repository.upsert(
-        current.model_copy(
-            update={
-                "reconcile_claim_id": claim_id,
-                "reconcile_claimed_at": now,
-            }
-        )
-    )
-    return claim_id
-
-
 __all__ = [
     "AppExecutionLifecycleEffects",
-    "AppImageAvailability",
     "AppReader",
-    "AppRegistry",
     "AppService",
     "DatabaseAppExecutionAdmission",
-    "DatabaseAppImageAvailability",
 ]

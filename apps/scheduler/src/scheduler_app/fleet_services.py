@@ -17,7 +17,6 @@ from compute.telemetry import AGENT_INTAKE_PRESENCE_ROLE
 from control.apps import (
     AppService,
     DatabaseAppExecutionAdmission,
-    DatabaseAppImageAvailability,
 )
 from control.custom_domains import CustomDomainService
 from control.deployment_cleanup import AppDeploymentLifecycleService
@@ -48,6 +47,7 @@ from operations.container_shutdown import (
     DatabaseContainerStorageRelease,
     DatabaseDurableWorkerAbsence,
 )
+from operations.deployment_effects import DeploymentEffects
 from provider_aws.provider import AwsEcrImageRegistry
 from provider_aws.storage_access import AwsStorageAccessSettings, AwsStorageAccessSource
 from provider_clients import workspace_compute_provider_resolver
@@ -120,6 +120,7 @@ class FleetAppServices:
     metrics: MetricsService
     apps: AppService
     deployment_plans: DeploymentPlanService
+    deployment_effects: DeploymentEffects
     containers: ContainerService
     container_shutdowns: ContainerShutdownService
     control_plane_service: ControlServices
@@ -384,11 +385,6 @@ class FleetAppServices:
             if capacity.aws_connections.configured
             else None
         )
-        deployment_lifecycle = AppDeploymentLifecycleService(
-            context,
-            workspace_changes=workspace_changes,
-            placement_resources=placement_resources,
-        )
         execution_lifecycle = ProductionAppExecutionLifecycleEffects(
             context,
             containers,
@@ -396,6 +392,10 @@ class FleetAppServices:
             redis,
             container_shutdowns,
         )
+        deployment_effects = DeploymentEffects(
+            context, execution_lifecycle, workspace_changes, placement_resources
+        )
+        deployment_lifecycle = AppDeploymentLifecycleService(context, deployment_effects)
         deployment_plans = DeploymentPlanService(
             context,
             execution_lifecycle,
@@ -406,7 +406,6 @@ class FleetAppServices:
             context,
             deployment_lifecycle,
             execution_lifecycle,
-            DatabaseAppImageAvailability(),
             workspace_changes=workspace_changes,
         )
         return cls(
@@ -416,6 +415,7 @@ class FleetAppServices:
             metrics=MetricsService(),
             apps=apps,
             deployment_plans=deployment_plans,
+            deployment_effects=deployment_effects,
             containers=containers,
             container_shutdowns=container_shutdowns,
             control_plane_service=control_plane,

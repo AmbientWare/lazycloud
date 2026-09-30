@@ -7,11 +7,9 @@ from control.deployment_resources import DeploymentResourceService, client_manif
 from control.deployments import DeploymentService
 from control.stubs import StubService
 from database.records.apps import StubKind
-from operations.management import ManagementService
 from pydantic import JsonValue
 from shared.app_slug import app_slug_or_default, validate_app_slug
 from shared.deployment_records import resolve_authorized, resolve_max_pending_tasks, resolve_retries
-from shared.deployments import DeploymentKind
 from shared.errors import (
     DomainError,
     InvalidInputError,
@@ -34,7 +32,7 @@ from shared.http.gateway import (
     ResolveDeploymentTargetResponse,
 )
 
-from gateway.stub_config import deployment_spec_from_stub, stub_config, stub_kind
+from gateway.stub_config import stub_config, stub_kind
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,7 +41,6 @@ class GatewayDeploymentService:
     apps: AppService
     deployments: DeploymentService
     deployment_resources: DeploymentResourceService
-    management: ManagementService
 
     def get_or_create_stub(self, request: GetOrCreateStubRequest) -> GetOrCreateStubResponse:
         try:
@@ -75,19 +72,10 @@ class GatewayDeploymentService:
 
     def deploy_stub(self, request: DeployStubRequest) -> DeployStubResponse:
         try:
-            stub = self.stubs.get_stub(request.stub_id, workspace=request.workspace)
-            workspace = request.workspace or stub.workspace_id
-            deployment = self.deployments.deploy(
-                deployment_spec_from_stub(stub, name=request.name or stub.name),
-                workspace=workspace,
+            resource = self.deployments.deploy_prepared(
+                request.stub_id, name=request.name, workspace=request.workspace
             )
-            resource = self.deployment_resources.get_by_deployment_id(
-                deployment.id,
-                workspace=workspace,
-            )
-            if resource is None:
-                msg = f"deployment resource not found after deploy: {deployment.id}"
-                raise ValueError(msg)
+            deployment = resource.deployment
             invoke_url = resource.invoke_url(request.external_url)
         except (KeyError, ValueError) as exc:
             raise _domain_error(exc) from exc
@@ -106,12 +94,11 @@ class GatewayDeploymentService:
     def get_url(self, request: GetUrlRequest) -> GetUrlResponse:
         try:
             if request.url_type is GatewayUrlKind.Deployment and request.deployment_id:
-                url = self.management.deployment_url(
+                resource = self.deployment_resources.resolve(
                     request.deployment_id,
                     workspace=request.workspace,
-                    external_url=request.external_url,
-                    port=request.port,
-                ).url
+                )
+                url = resource.invoke_url(request.external_url, port=request.port)
             else:
                 url = self.stubs.stub_url(
                     request.stub_id,
@@ -130,7 +117,6 @@ class GatewayDeploymentService:
         request: ResolveDeploymentTargetRequest,
     ) -> ResolveDeploymentTargetResponse:
         try:
-            stub_type = _deployment_kind_to_stub_kind(request.kind)
             app_id = None
             if request.app:
                 app = self.apps.get(
@@ -138,16 +124,13 @@ class GatewayDeploymentService:
                     workspace=request.workspace,
                 )
                 app_id = app.id
-            result = self.management.deployment_url_by_name(
-                request.workspace,
-                stub_type,
+            result = self.deployment_resources.resolve_target(
                 request.name,
-                request.deployment_version,
+                request.kind,
+                workspace=request.workspace,
+                version=request.deployment_version,
                 app_id=app_id,
-                external_url=request.external_url,
             )
-            if result.stub is None:
-                raise NotFoundError(f"deployment target has no stub: {request.name}")
         except (KeyError, ValueError) as exc:
             raise _domain_error(exc) from exc
         return ResolveDeploymentTargetResponse(
@@ -156,7 +139,9 @@ class GatewayDeploymentService:
             deployment_id=result.deployment.id,
             deployment_name=result.deployment.name,
             deployment_version=result.deployment.version,
-            url=result.url,
+            url=result.invoke_url(
+                request.external_url, pin_version=request.deployment_version is not None
+            ),
         )
 
     def client_manifest(self, request: ClientManifestRequest) -> ClientManifestResponse:
@@ -183,14 +168,6 @@ class GatewayDeploymentService:
             workspace=request.workspace,
             resources=resources,
         )
-
-
-def _deployment_kind_to_stub_kind(kind: DeploymentKind) -> StubKind:
-    try:
-        return StubKind(kind.value)
-    except ValueError as exc:
-        msg = f"deployment kind is not invokable: {kind}"
-        raise ValueError(msg) from exc
 
 
 def _request_with_workload_defaults(

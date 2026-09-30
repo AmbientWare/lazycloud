@@ -4,9 +4,10 @@ import json
 
 import pytest
 from api.server.services import ApiServices
+from control.deployment_config import deployment_spec_from_stub
 from control.service import ControlServices
 from database.repositories.apps import StubRecord
-from gateway.stub_config import deployment_spec_from_stub, stub_config
+from gateway.stub_config import stub_config
 from pydantic import ValidationError
 from shared.deployment_records import (
     DEFAULT_DEVBOX_KEEP_WARM_SECONDS,

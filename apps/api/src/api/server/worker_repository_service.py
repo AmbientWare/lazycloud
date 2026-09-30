@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator, Iterator
 from contextlib import contextmanager, suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Protocol
@@ -424,6 +424,7 @@ class WorkerRepositoryService:
     events: RedisEventBus
     container_credentials: WorkerCredentialService
     origin_credentials: WorkerCacheOriginCredentialService
+    releases: DeploymentReleaseService = field(default_factory=DeploymentReleaseService)
     dependencies: WorkerRepositoryDependencies | None = None
     redis: RedisClient | None = None
     runtime_state: ContainerRuntimeStateRepository | None = None
@@ -937,7 +938,7 @@ class WorkerRepositoryService:
             }
         )
         initializing_worker.admitted_release_generation = (
-            DeploymentReleaseService().worker_registration_generation(initializing_worker)
+            self.releases.worker_registration_generation(initializing_worker)
         )
         try:
             with self._runtime_worker_registration(initializing_worker, principal, unit=unit):
@@ -1181,7 +1182,7 @@ class WorkerRepositoryService:
             raise _scheduler_domain_error(exc) from exc
 
     def _worker_release_admitted(self, worker: SchedulerWorkerRecord) -> bool:
-        releases = DeploymentReleaseService()
+        releases = self.releases
         if worker.admitted_release_generation == 0:
             generation = releases.worker_registration_generation(worker)
             if self.services is not None and worker.machine_id:

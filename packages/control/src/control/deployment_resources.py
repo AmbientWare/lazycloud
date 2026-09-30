@@ -3,12 +3,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from database.records.apps import AppRecord, StubRecord
-from database.repositories.apps import DeploymentResourceRepository, DeploymentResourceRow
+from database.repositories.deployment_resources import (
+    DeploymentCursor,
+    DeploymentResourceRepository,
+    DeploymentResourceRow,
+)
 from database.types import DatabaseSession
 from shared.deployment_records import Deployment
 from shared.deployments import DeploymentKind, StubKind
 from shared.errors import InvalidInputError, NotFoundError, UpstreamUnavailableError
-from shared.http.client_manifests import ClientManifestResource, client_manifest_schemas
+from shared.http.client_manifests import (
+    INVOKABLE_DEPLOYMENT_KINDS,
+    ClientManifestResource,
+    client_manifest_schemas,
+)
 from shared.urls import StubUrlTarget, build_deployment_url, build_pod_url, deployment_handler_path
 
 from control.context import ControlContext
@@ -59,6 +67,10 @@ def client_manifest_resource(
     external_url: str,
 ) -> ClientManifestResource:
     """Invoke-facing view of one deployed resource: URL plus recorded schemas."""
+    if resource.deployment.kind not in INVOKABLE_DEPLOYMENT_KINDS:
+        raise InvalidInputError(
+            f"deployment kind is not invokable: {resource.deployment.kind.value}"
+        )
     spec = resource.deployment.spec
     inputs, outputs = client_manifest_schemas(spec.metadata)
     return ClientManifestResource(
@@ -88,6 +100,18 @@ def client_manifest_resource(
 class DeploymentResourceService:
     context: ControlContext
 
+    def resolve(self, identifier: str, *, workspace: str | None) -> DeploymentResource:
+        with self.context.database.session() as session:
+            workspace_id = (
+                self.context.workspace(session, workspace).id if workspace is not None else None
+            )
+            row = DeploymentResourceRepository(session).resolve(
+                identifier, workspace_id=workspace_id
+            )
+        if row is None:
+            raise NotFoundError(f"deployment resource not found: {identifier}")
+        return _deployment_resource(row)
+
     def list(
         self,
         *,
@@ -100,6 +124,8 @@ class DeploymentResourceService:
         version: int | None = None,
         active: bool | None = True,
         latest_per_resource: bool = False,
+        limit: int | None = None,
+        after: DeploymentCursor | None = None,
     ) -> list[DeploymentResource]:
         with self.context.database.session() as session:
             return self.list_in_session(
@@ -113,6 +139,8 @@ class DeploymentResourceService:
                 version=version,
                 active=active,
                 latest_per_resource=latest_per_resource,
+                limit=limit,
+                after=after,
             )
 
     def list_in_session(
@@ -128,6 +156,8 @@ class DeploymentResourceService:
         version: int | None = None,
         active: bool | None = True,
         latest_per_resource: bool = False,
+        limit: int | None = None,
+        after: DeploymentCursor | None = None,
     ) -> list[DeploymentResource]:
         workspace_id = (
             self.context.workspace(session, workspace).id if workspace is not None else None
@@ -143,17 +173,19 @@ class DeploymentResourceService:
                 kinds=kinds,
                 version=version,
                 active=active,
+                latest_per_resource=latest_per_resource,
+                limit=limit,
+                after=after,
             )
         ]
-        if latest_per_resource:
-            resources = _latest_per_resource(resources)
-        resources.sort(
-            key=lambda item: (
-                item.deployment.kind.value,
-                item.deployment.name,
-                item.deployment.version,
+        if limit is None:
+            resources.sort(
+                key=lambda item: (
+                    item.deployment.kind.value,
+                    item.deployment.name,
+                    item.deployment.version,
+                )
             )
-        )
         return resources
 
     def resolve_target(
@@ -189,21 +221,22 @@ class DeploymentResourceService:
         target = self.resolve_target_in_session(
             session, name, kind, workspace=workspace, version=version, app_id=app_id
         )
-        _require_active(target)
+        _require_active(
+            target.app.name,
+            target.app.active,
+            target.deployment.name,
+            target.deployment.version,
+            target.deployment.active,
+        )
         return target
 
     def require_stub_active_in_session(self, session: DatabaseSession, stub: StubRecord) -> None:
         if stub.deployment_id is None:
             return
-        resources = self.list_in_session(
-            session,
-            workspace=stub.workspace_id,
-            deployment_id=stub.deployment_id,
-            active=None,
-        )
-        if not resources:
+        state = DeploymentResourceRepository(session).invocation_state(stub)
+        if state is None:
             raise NotFoundError("deployment not found")
-        _require_active(resources[0])
+        _require_active(*state)
 
     def resolve_target_in_session(
         self,
@@ -223,10 +256,11 @@ class DeploymentResourceService:
             kinds=frozenset({kind}),
             version=version,
             active=None,
+            limit=1,
         )
         if not candidates:
             raise NotFoundError(f"deployment not found: {name}")
-        return max(candidates, key=lambda item: item.deployment.version)
+        return candidates[0]
 
     def get_by_deployment_id(
         self,
@@ -290,14 +324,11 @@ class DeploymentResourceService:
         return _deployment_resource(row) if row is not None else None
 
 
-def _require_active(resource: DeploymentResource) -> None:
-    if not resource.app.active:
-        raise UpstreamUnavailableError(f"app is not active: {resource.app.name}")
-    if not resource.deployment.active:
-        deployment = resource.deployment
-        raise UpstreamUnavailableError(
-            f"deployment is not active: {deployment.name} v{deployment.version}"
-        )
+def _require_active(app_name: str, app_active: bool, name: str, version: int, active: bool) -> None:
+    if not app_active:
+        raise UpstreamUnavailableError(f"app is not active: {app_name}")
+    if not active:
+        raise UpstreamUnavailableError(f"deployment is not active: {name} v{version}")
 
 
 def _deployment_resource(row: DeploymentResourceRow) -> DeploymentResource:
@@ -306,13 +337,3 @@ def _deployment_resource(row: DeploymentResourceRow) -> DeploymentResource:
         deployment=row.deployment,
         stub=row.stub,
     )
-
-
-def _latest_per_resource(resources: list[DeploymentResource]) -> list[DeploymentResource]:
-    selected: dict[tuple[str, DeploymentKind], DeploymentResource] = {}
-    for resource in resources:
-        key = (resource.deployment.name, resource.deployment.kind)
-        current = selected.get(key)
-        if current is None or resource.deployment.version > current.deployment.version:
-            selected[key] = resource
-    return list(selected.values())

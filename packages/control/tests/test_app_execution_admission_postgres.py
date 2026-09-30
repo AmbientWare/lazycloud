@@ -8,6 +8,7 @@ import pytest
 from api.server.services import ApiServices
 from control.apps import DatabaseAppExecutionAdmission
 from database.records.apps import AppRecord
+from database.repositories.apps import AppRepository
 from database.tables.execution import TaskTable
 from database.tables.orchestration import ContainerTable
 from database.types import DatabaseSession
@@ -16,24 +17,14 @@ from shared.app_lifecycle import AppLifecycleState
 from shared.container_requests import ContainerShutdownTarget
 from shared.errors import ConflictError
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
-
-from control import apps as apps_module
 
 
 @dataclass(slots=True)
 class _RecordingExecutionEffects:
     stopped: list[list[ContainerShutdownTarget]] = field(default_factory=list)
 
-    def stop_app_containers(
-        self,
-        *,
-        workspace_id: str,
-        app_id: str,
-        container_targets: list[ContainerShutdownTarget],
-    ) -> None:
-        del workspace_id, app_id
-        self.stopped.append(container_targets)
+    def stop_containers(self, targets: list[ContainerShutdownTarget]) -> None:
+        self.stopped.append(targets)
 
     def delete_app_execution(self, *, workspace_id: str, app_id: str) -> None:
         del workspace_id, app_id
@@ -119,16 +110,17 @@ def _prove_creation_after_lifecycle_begin_is_rejected_without_orphans(
     lifecycle_locked = Event()
     release_lifecycle = Event()
     creation_started = Event()
-    original_claim = apps_module._claim_specific
+    original_save = AppRepository.upsert
 
-    def blocking_claim(session: Session, current: AppRecord, *, revision: int) -> str | None:
-        claim_id = original_claim(session, current, revision=revision)
-        lifecycle_locked.set()
-        if not release_lifecycle.wait(timeout=10):
-            raise TimeoutError("test did not release app lifecycle begin")
-        return claim_id
+    def blocking_save(repository: AppRepository, current: AppRecord) -> AppRecord:
+        saved = original_save(repository, current)
+        if current.id == app.id and current.lifecycle_state is AppLifecycleState.Pausing:
+            lifecycle_locked.set()
+            if not release_lifecycle.wait(timeout=10):
+                raise TimeoutError("test did not release app lifecycle begin")
+        return saved
 
-    monkeypatch.setattr(apps_module, "_claim_specific", blocking_claim)
+    monkeypatch.setattr(AppRepository, "upsert", blocking_save)
 
     def create_container() -> None:
         creation_started.set()
