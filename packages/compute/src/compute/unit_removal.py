@@ -237,11 +237,8 @@ class UnitRemovalService:
                     _owns_provider_pool_capacity(compute_pool)
                     and compute_pool.phase is not ComputeUnitPhase.Deleted
                 ):
-                    # Workspace deletion only begins once the provider account is
-                    # disconnected, so nothing here can still reach the provider to
-                    # release a pool. The deleted phase the drain recorded is the
-                    # only proof the provider holds nothing, and dropping the row
-                    # without it orphans an Auto Scaling group no record can name.
+                    # The account is already disconnected. Keep the pool record
+                    # until its drain proves provider capacity was deleted.
                     termination_errors.append(
                         f"{compute_pool.provider_ref}/{compute_pool.name}: provider pool "
                         f"capacity is still held ({compute_pool.phase.value})"

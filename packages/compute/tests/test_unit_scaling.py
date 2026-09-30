@@ -189,9 +189,7 @@ def test_scale_zero_skips_provider_only_after_durable_convergence(
         before_mutation=_allow_scale,
     )
 
-    # Control-plane startup drives every workspace through this path on every
-    # boot. A pool already durably at zero must cost a describe and nothing else
-    # — no capacity write, no generation churn.
+    # Startup repeats this reconciliation for every workspace.
     assert provider.capacity_calls == []
     assert second.generation == generation
     assert second == first

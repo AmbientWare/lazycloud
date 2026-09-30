@@ -570,7 +570,7 @@ class UnitReconciliationService:
         if active < 2:
             return True
         LOGGER.warning(
-            "pooled capacity reclaim observed no agent reporting in %s; judging nothing this pass",
+            "pooled capacity reclaim deferred for %s: no agent reports observed",
             pool.name,
         )
         return False
@@ -587,9 +587,7 @@ class UnitReconciliationService:
         proof of instance and storage absence from the provider snapshot."""
         hooks = self.providers.machines.scheduler_hooks
         if hooks is None:
-            # Nothing can say whether these machines take work, so nothing here
-            # can say they failed to. Declining is the same answer as an absent
-            # heartbeat intake below, for the same reason.
+            # Reclaim requires worker observations to establish a bootstrap failure.
             LOGGER.warning(
                 "pooled capacity reclaim declined for %s: no scheduler worker state is configured",
                 pool.name,
@@ -597,10 +595,7 @@ class UnitReconciliationService:
             return pool
         observing_since = hooks.agent_intake_observing_since()
         if observing_since is None:
-            # Nothing is receiving agent heartbeats, so every machine looks
-            # silent and none of that silence is evidence. Declining is loud
-            # rather than quiet: a registry that stays empty stops reclaim
-            # entirely, and a machine that leaks bills until someone reads this.
+            # Missing intake cannot establish that a machine failed to report.
             LOGGER.warning(
                 "pooled capacity reclaim declined for %s: no agent heartbeat intake is registered",
                 pool.name,
