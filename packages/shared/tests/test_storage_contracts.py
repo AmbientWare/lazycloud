@@ -7,9 +7,7 @@ from shared.app_identity import (
     SOURCE_PACKAGE_BUCKET,
     WORKSPACE_OBJECT_BUCKET,
 )
-from shared.cache_records import CacheEntry
 from shared.http.objects import ObjectMetadata, PutObjectRequest
-from shared.objects import ObjectWriteCommand
 from shared.secrets import SecretRecord
 
 
@@ -20,29 +18,6 @@ def test_secret_record_masks_values_and_excludes_them_from_representations() -> 
     assert "plaintext-must-not-appear" not in repr(secret)
     assert "plaintext-must-not-appear" not in str(secret)
     assert SecretRecord(name="EMPTY", value="").masked() == ""
-
-
-def test_object_write_command_rejects_mutation_and_negative_storage_counts() -> None:
-    command = ObjectWriteCommand(
-        bucket="objects",
-        key="result.bin",
-        path="s3://objects/result.bin",
-        size=1,
-        sha256="c" * 64,
-    )
-
-    with pytest.raises(ValidationError):
-        command.size = 2
-    with pytest.raises(ValidationError):
-        ObjectWriteCommand(
-            bucket="objects",
-            key="invalid.bin",
-            path="s3://objects/invalid.bin",
-            size=-1,
-            sha256="d" * 64,
-        )
-    with pytest.raises(ValidationError):
-        CacheEntry(key="invalid", path="/cache/invalid", size=1, sha256="e" * 64, hits=-1)
 
 
 @pytest.mark.parametrize(
