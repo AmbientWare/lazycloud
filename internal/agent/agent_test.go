@@ -2,8 +2,10 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -127,6 +129,33 @@ func TestAgentCancelsAndRecoversSlots(t *testing.T) {
 	if got := result(t, e.completion(e.task(id, `{"args": ["total", [5]]}`))); got != "5" {
 		t.Fatalf("after crash %q", got)
 	}
+}
+
+// A slow log consumer holds the runner back instead of losing output, and
+// the result still arrives after all of it.
+func TestAgentAppliesLogBackpressure(t *testing.T) {
+	const lines = 8192 // 8 MiB, past every buffer between runner and server
+	e := newEnv(t)
+	e.server.appendDelay = 10 * time.Millisecond
+	e.startAgent()
+	s := e.session()
+	id := e.startReady(s, 1)
+
+	began := time.Now()
+	attempt := e.task(id, fmt.Sprintf(`{"args": ["spam", %d]}`, lines))
+	if got := result(t, e.completion(attempt)); got != strconv.Itoa(lines) {
+		t.Fatalf("result %q", got)
+	}
+	output := strings.Split(strings.TrimSuffix(e.server.output(attempt), "\n"), "\n")
+	if len(output) != lines {
+		t.Fatalf("got %d of %d lines", len(output), lines)
+	}
+	for i, line := range output {
+		if !strings.HasPrefix(line, fmt.Sprintf("%08d", i)) || len(line) != 1023 {
+			t.Fatalf("line %d is %.20q (%d bytes)", i, line, len(line))
+		}
+	}
+	t.Logf("8 MiB of output through a 10 ms-per-batch consumer: %s", time.Since(began))
 }
 
 func TestAgentReportsLoadAndStartFailures(t *testing.T) {

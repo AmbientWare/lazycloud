@@ -12,6 +12,10 @@ def handle(action, *args):
         print(f"summing {len(args[0])} values")
         print("stderr line", file=sys.stderr)
         return sum(args[0])
+    if action == "spam":
+        for i in range(args[0]):
+            print(f"{i:08d}" + "x" * 1015)
+        return args[0]
     if action == "sleep":
         time.sleep(args[0])
         return "slept"

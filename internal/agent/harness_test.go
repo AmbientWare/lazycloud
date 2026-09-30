@@ -65,6 +65,8 @@ type hostServer struct {
 	queued  map[string][]*hostproto.ClaimedTask
 	changed chan struct{}
 	logs    []*hostproto.LogLine
+	// appendDelay makes AppendLogs a slow consumer.
+	appendDelay time.Duration
 }
 
 type serverSession struct {
@@ -181,6 +183,10 @@ func (s *hostServer) CompleteTask(_ context.Context, r *hostproto.CompleteTaskRe
 }
 
 func (s *hostServer) AppendLogs(_ context.Context, r *hostproto.AppendLogsRequest) (*hostproto.AppendLogsResponse, error) {
+	s.mu.Lock()
+	delay := s.appendDelay
+	s.mu.Unlock()
+	time.Sleep(delay)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.logs = append(s.logs, r.GetLines()...)

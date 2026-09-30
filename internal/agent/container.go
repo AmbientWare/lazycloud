@@ -395,6 +395,12 @@ func (c *container) onSupervisorMessage(ctx context.Context, m *hostproto.Superv
 		c.onFinished(body.Finished)
 	case *hostproto.SupervisorMessage_Output:
 		o := body.Output
+		if o.GetAttemptId() == "" {
+			// Output outside an attempt, such as import-time prints, belongs
+			// to no task log; a load error carries its own traceback.
+			c.log.Debug("container output", "stream", o.GetStream(), "data", o.GetData())
+			return
+		}
 		_ = c.logs.append(ctx, &hostproto.LogLine{AttemptId: o.GetAttemptId(), Stream: o.GetStream(), Data: o.GetData(), Time: o.GetTime()})
 	default:
 		c.log.Warn("ignoring unknown supervisor message")
@@ -469,7 +475,13 @@ func (c *container) claimLoop(ctx context.Context) {
 			if ctx.Err() != nil {
 				return
 			}
-			c.log.Warn("claim failed", "error", err, "retry_in", delay)
+			level := slog.LevelWarn
+			if status.Code(err) == codes.FailedPrecondition {
+				// The server no longer lets this container claim, as while
+				// it drains; a stop follows.
+				level = slog.LevelDebug
+			}
+			c.log.Log(ctx, level, "claim failed", "error", err, "retry_in", delay)
 			if !sleep(ctx, delay) {
 				return
 			}
