@@ -21,7 +21,6 @@ from execution.pods.proxy import PodConnectionHold, PodProxySession, PodProxyTar
 from execution.pods.service import PodControlService
 from gateway.pod_proxy import AsyncRedisPodProxyConnectionRepository
 from observability.stream_state import RedisEventStreamRepository
-from operations.management import ManagementService
 from pydantic import JsonValue
 from scheduler.autoscaling import AutoscalingDriver, PodAutoscaler
 from scheduler.containers import (
@@ -203,7 +202,7 @@ def test_pod_keep_warm_minus_one_is_durable_never_scale_to_zero(
     assert "KEEP_WARM_SECONDS=-1" in payload.env
 
     with pytest.raises(InvalidInputError, match="always-on pod deployments"):
-        ManagementService(isolated_services).scale_deployment(
+        isolated_services.deployments.scale_deployment(
             "default",
             deployment.id,
             containers=0,
@@ -265,7 +264,7 @@ def test_always_on_pod_deployment_releases_containers_the_operator_scaled_away(
 
     deployment_id = stub.deployment_id
     assert deployment_id is not None
-    ManagementService(isolated_services).scale_deployment(
+    isolated_services.deployments.scale_deployment(
         "default",
         deployment_id,
         containers=1,
@@ -461,7 +460,7 @@ def test_pod_deployment_explicit_zero_scale_remains_zero_with_connections(
     deployment_id = stub.deployment_id or ""
     redis.set(redis.key(pod_total_connections_key(stub.workspace_id, stub.id)), 4)
 
-    ManagementService(isolated_services).scale_deployment(
+    isolated_services.deployments.scale_deployment(
         "default",
         deployment_id,
         containers=0,

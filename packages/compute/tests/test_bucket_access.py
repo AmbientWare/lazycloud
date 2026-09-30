@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
+import pytest
 from api.server.services import ApiServices
 from compute.bucket_access import (
     AwsDeploymentBucketAccessService,
@@ -11,6 +12,9 @@ from compute.bucket_access import (
 )
 from compute.policy import WorkspaceComputePolicyService
 from database.repositories.aws_connections import AwsAccountConnectionRepository
+from database.repositories.deployment_effects import DeploymentEffectRepository
+from database.tables.deployment_effects import DeploymentPreparationTable
+from operations.deployment_effects import DeploymentEffects
 from shared.aws_connections import (
     AwsAccountAuthorizationGeneration,
     AwsAccountAuthorizationMode,
@@ -21,6 +25,7 @@ from shared.aws_connections import (
 from shared.deployment_records import DeploymentSpec, VolumeMount
 from shared.identity import WorkspaceRecord
 from shared.mounts import MountAuthMode
+from sqlalchemy import select, update
 from tests.workspaces import workspace_owner_user_id
 
 
@@ -49,7 +54,12 @@ def test_aws_deployment_lifecycle_reconciles_aggregate_ambient_bucket_access(
     deployments = replace(
         isolated_services.deployments,
         placement=WorkspaceComputePolicyService(isolated_services.context),
-        placement_resources=bucket_access,
+        effects=DeploymentEffects(
+            isolated_services.context,
+            isolated_services.deployments.effects.containers,
+            workspace_changes=isolated_services.workspace_changes,
+            placement_resources=bucket_access,
+        ),
     )
 
     first = deployments.deploy(
@@ -98,6 +108,96 @@ def test_aws_deployment_lifecycle_reconciles_aggregate_ambient_bucket_access(
     deployments.delete(first.id, workspace=workspace.id)
 
     assert controller.grants == ()
+
+
+def test_abandoned_preparation_expires_without_revoking_sibling_workspace_grants(
+    isolated_services: ApiServices,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    services = isolated_services
+    workspace = _seed_connected_workspace(services)
+    owner_id = workspace_owner_user_id(services.context, workspace.id)
+    with services.context.database.session() as session:
+        connection = AwsAccountConnectionRepository(session).get_for_user(owner_id)
+    assert connection is not None
+    sibling = services.control_plane_service.workspaces.set_workspace(
+        "bucket-sibling", owner_user_id=owner_id, connection_id=connection.id
+    )
+    controller = _BucketAccessController()
+    access = AwsDeploymentBucketAccessService(services.context, controller)
+    effects = DeploymentEffects(
+        services.context,
+        services.deployments.effects.containers,
+        workspace_changes=services.workspace_changes,
+        placement_resources=access,
+    )
+    deployments = replace(
+        services.deployments,
+        placement=WorkspaceComputePolicyService(services.context),
+        effects=effects,
+    )
+    spec = DeploymentSpec(
+        name="retained",
+        volumes=[
+            VolumeMount(
+                name="data",
+                mount_path="/data",
+                config={"bucket_name": "customer-data", "prefix": "retained"},
+            )
+        ],
+    )
+    retained = deployments.deploy(spec, workspace=sibling.id)
+    draft = retained.model_copy(
+        update={
+            "id": str(uuid4()),
+            "app_id": None,
+            "stub_id": None,
+            "spec": spec.model_copy(
+                update={
+                    "volumes": [
+                        VolumeMount(
+                            name="data",
+                            mount_path="/data",
+                            config={"bucket_name": "customer-data", "prefix": "abandoned"},
+                        )
+                    ]
+                }
+            ),
+        }
+    )
+    with services.context.database.session() as session:
+        DeploymentEffectRepository(session).prepare(
+            draft, workspace_id=workspace.id, now=datetime.now(UTC)
+        )
+    access.reconcile_deployments(workspace=workspace.id)
+    assert {grant.prefix for grant in controller.grants} == {"retained", "abandoned"}
+    with services.context.database.session() as session:
+        current = AwsAccountConnectionRepository(session).get(connection.id)
+        assert current is not None and current.bucket_access_reconcile_pending
+        session.execute(
+            update(DeploymentPreparationTable)
+            .where(DeploymentPreparationTable.id == draft.id)
+            .values(expires_at=datetime.now(UTC) - timedelta(seconds=1))
+        )
+
+    def unavailable(
+        self: AwsDeploymentBucketAccessService, *, workspace: str, required: bool = True
+    ) -> None:
+        raise RuntimeError("provider reconciliation unavailable")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(AwsDeploymentBucketAccessService, "reconcile_deployments", unavailable)
+        with pytest.raises(RuntimeError, match="reconciliation unavailable"):
+            effects.reconcile_pending()
+    with services.context.database.session() as session:
+        assert session.scalar(select(DeploymentPreparationTable.id)) == draft.id
+    effects.reconcile_pending()
+    assert {grant.prefix for grant in controller.grants} == {"retained"}
+    assert deployments.get(retained.id).active
+    with services.context.database.session() as session:
+        assert session.scalar(select(DeploymentPreparationTable.id)) is None
+        current = AwsAccountConnectionRepository(session).get(connection.id)
+        assert current is not None and not current.bucket_access_reconcile_pending
 
 
 def _seed_connected_workspace(isolated_services: ApiServices) -> WorkspaceRecord:

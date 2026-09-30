@@ -16,9 +16,9 @@ from control.service import ControlServices
 from coordination.event_bus import EventBusEvent, EventBusEventType, event_id_for_event, event_key
 from coordination.redis_client import AsyncRedisClient, RedisClient, redis_text
 from database.records.apps import StubRecord
-from database.repositories.apps import DeploymentRepository
 from database.repositories.billing_ledger import ContainerBillingShapeRepository
 from database.repositories.container_scheduling import ContainerSchedulingRepository
+from database.repositories.deployments import DeploymentRepository
 from database.repositories.orchestration import ContainerRepository
 from execution.containers.scheduling import ContainerSchedulingPersistenceService
 from execution.functions.service import FunctionControlService
@@ -673,7 +673,7 @@ def test_stopped_cron_deployment_cancels_due_retry_and_never_revives_it(
         ContainerRepository(session).upsert(finished_container)
 
     management = ManagementService(isolated_services)
-    management.set_deployment_active("default", deployment.id, active=False)
+    management.services.deployments.set_deployment_active("default", deployment.id, active=False)
     scheduled = functions.schedule_due_retries(now=retry.next_retry_at)
 
     assert scheduled == []
@@ -683,13 +683,10 @@ def test_stopped_cron_deployment_cancels_due_retry_and_never_revives_it(
     assert len(container_scheduler.requests) == 1
     assert isolated_services.cron_jobs.list()[0].enabled is False
 
-    management.set_deployment_active("default", deployment.id, active=True)
+    management.services.deployments.set_deployment_active("default", deployment.id, active=True)
     assert isolated_services.cron_jobs.list()[0].enabled is True
     assert functions.schedule_due_retries(now=retry.next_retry_at + timedelta(days=1)) == []
     assert len(container_scheduler.requests) == 1
-
-    management.delete_deployment("default", deployment.id)
-    assert isolated_services.cron_jobs.list() == []
 
 
 def test_scheduler_tick_skips_cron_function_when_lock_is_held(

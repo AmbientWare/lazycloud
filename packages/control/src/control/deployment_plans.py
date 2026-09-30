@@ -10,7 +10,8 @@ from typing import Protocol
 from uuid import NAMESPACE_URL, uuid5
 
 from database.records.apps import AppRecord
-from database.repositories.apps import AppRepository, CronJobRepository
+from database.repositories.apps import AppRepository
+from database.repositories.cron_jobs import CronJobRepository
 from database.repositories.deployment_plans import (
     DeploymentPlanRepository,
     PruneOperation,
@@ -34,7 +35,7 @@ from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeT
 from shared.timestamps import utc_now
 
 from control.context import ControlContext
-from control.deployment_cleanup import DeploymentPlacementResourceManager
+from control.deployment_effects import DeploymentPlacementResourceManager
 
 LOGGER = logging.getLogger(__name__)
 

@@ -8,7 +8,7 @@ from compute.reserve_state import RedisFleetReserveState
 from control.apps import (
     DatabaseAppExecutionAdmission,
 )
-from control.deployments import CronJobService
+from control.cron_jobs import CronJobService
 from control.placement import PlacementResolver
 from control.readers import DatabaseAppReader, DatabaseDeploymentReader
 from control.service import ControlServices

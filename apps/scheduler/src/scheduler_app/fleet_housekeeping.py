@@ -55,6 +55,11 @@ class FleetHousekeeping:
             lambda: services.deployment_plans.reconcile_pending(limit=limit),
             None,
         )
+        run.run(
+            "deployment_effects",
+            lambda: services.deployment_effects.reconcile_pending(limit=limit),
+            None,
+        )
         if services.storage_access is not None:
             result.storage_access_observed = run.run(
                 "storage_access", services.storage_access.reconcile, None

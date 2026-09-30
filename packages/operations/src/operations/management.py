@@ -11,12 +11,11 @@ from typing import Protocol
 from uuid import UUID
 
 from control.apps import AppService
+from control.cron_jobs import CronJobService
 from control.deployment_resources import (
-    DeploymentResource,
     DeploymentResourceService,
-    client_manifest_resource,
 )
-from control.deployments import CronJobService, DeploymentService
+from control.deployments import DeploymentService
 from control.service import ControlServices
 from database.context import ServiceContext
 from database.records.apps import AppRecord, StubKind, StubRecord
@@ -24,10 +23,14 @@ from database.repositories.apps import (
     ActivityStartSource,
     AppRepository,
     AppSummaryRepository,
-    DeploymentRepository,
     StubRepository,
 )
 from database.repositories.billing_costs import BillingLedgerCostRepository
+from database.repositories.deployment_resources import (
+    DeploymentResourceRepository,
+    DeploymentResourceRow,
+)
+from database.repositories.deployments import DeploymentRepository
 from database.repositories.execution import (
     LogPageCursor,
     LogRepository,
@@ -36,29 +39,24 @@ from database.repositories.execution import (
 )
 from database.repositories.identity import WorkspaceRepository
 from database.repositories.orchestration import (
-    AutoscalingTargetRepository,
     ContainerRepository,
 )
 from database.repositories.storage import ObjectRepository
-from execution.containers.planning import validate_checkpoint_activation
 from execution.containers.service import ContainerService
 from execution.tasks import TaskService
 from observability.events import EventService
 from observability.log_retention import LogRetentionService
 from pydantic import Field
-from shared.autoscaler_state import autoscaler_target_kind
 from shared.billing_quotes import LedgerComponent
 from shared.container_requests import (
     ContainerShutdownTarget,
     StopContainerReason,
-    WorkerStartupKind,
 )
 from shared.containers import ContainerRecord, ContainerStatus
 from shared.contracts import ContractModel
-from shared.deployment_records import Deployment, keeps_one_active_version, resolve_pod_role
+from shared.deployment_records import Deployment, resolve_pod_role
 from shared.deployments import DeploymentKind, PodRole
 from shared.errors import ConflictError, InvalidInputError, NotFoundError
-from shared.http.client_manifests import INVOKABLE_DEPLOYMENT_KINDS, ClientManifestResource
 from shared.http.observability import (
     ACTIVITY_MEASURE_UNITS,
     AccountActivityMeasure,
@@ -75,7 +73,6 @@ from shared.http.tasks import (
     TaskDeploymentReferenceResponse,
     TaskWorkloadReferenceResponse,
 )
-from shared.http.workspace_changes import WorkspaceChangeTopic, WorkspaceChangeType
 from shared.identity import WorkspaceStatus
 from shared.objects import ObjectRecord
 from shared.realtime.streams import LogStreamQuery
@@ -134,12 +131,6 @@ class DeploymentCursorPayload(ContractModel):
 class LogCursorPayload(ContractModel):
     created_at: datetime
     id: str
-
-
-class DeploymentUrlResult(ContractModel):
-    deployment: Deployment
-    stub: StubRecord | None = None
-    url: str
 
 
 class DeploymentPackagePlan(ContractModel):
@@ -594,7 +585,7 @@ class ManagementService:
     def control_plane(self) -> ControlServices:
         return ControlServices.create(
             self.services.context,
-            workspace_changes=self.services.deployments.workspace_changes,
+            workspace_changes=self.services.deployments.effects.workspace_changes,
         )
 
     def list_deployments(
@@ -616,16 +607,10 @@ class ManagementService:
                 name=name,
                 kinds={kind} if kind is not None else None,
                 active=active,
+                limit=max(limit, 0) + 1,
+                after=_decode_deployment_cursor(cursor),
             )
         ]
-        deployments.sort(key=_deployment_cursor_key)
-        decoded_cursor = _decode_deployment_cursor(cursor)
-        if decoded_cursor is not None:
-            deployments = [
-                deployment
-                for deployment in deployments
-                if _deployment_cursor_key(deployment) > decoded_cursor
-            ]
         page = deployments[:limit]
         next_cursor = (
             _encode_deployment_cursor(_deployment_cursor_key(page[-1]))
@@ -646,31 +631,25 @@ class ManagementService:
         kind: DeploymentKind | None = None,
         limit: int = 100,
     ) -> CursorPage[Deployment]:
-        grouped: dict[tuple[str, str], Deployment] = {}
-        for resource in self.services.deployment_resources.list(
+        resources = self.services.deployment_resources.list(
             workspace=workspace,
             app_id=app_id,
             name=name,
             kinds={kind} if kind is not None else None,
             active=True,
-        ):
-            deployment = resource.deployment
-            key = (deployment.kind.value, deployment.name)
-            existing = grouped.get(key)
-            if existing is None or deployment.version > existing.version:
-                grouped[key] = deployment
-        latest = sorted(grouped.values(), key=lambda item: (item.name, item.version))
-        return CursorPage(data=tuple(latest[:limit]))
+            latest_per_resource=True,
+            limit=limit,
+        )
+        return CursorPage(data=tuple(resource.deployment for resource in resources))
 
     def app_summaries(self, workspace: str) -> tuple[AppOperationalSummary, ...]:
         workspace_record = self.control_plane.workspaces.get_workspace(workspace)
-        apps = self.services.apps.list(workspace=workspace_record.id, active=None)
-        resources = self.services.deployment_resources.list(
-            workspace=workspace_record.id,
-            active=None,
-        )
-        resources_by_app: dict[str, list[DeploymentResource]] = {}
-        for resource in resources:
+        with self.services.context.database.session() as session:
+            rows, active_versions = DeploymentResourceRepository(session).summary_resources(
+                workspace_id=workspace_record.id
+            )
+        resources_by_app: dict[str, list[DeploymentResourceRow]] = {}
+        for resource in rows:
             resources_by_app.setdefault(resource.app.id, []).append(resource)
 
         hour_start = utc_now().replace(minute=0, second=0, microsecond=0) - timedelta(hours=23)
@@ -681,12 +660,8 @@ class ManagementService:
             )
 
         summaries: list[AppOperationalSummary] = []
-        for app in apps:
-            app_resources = resources_by_app.get(app.id, [])
-            # An app may be created before it has a deployment; the dashboard
-            # lists published workloads, not empty app records.
-            if not app_resources:
-                continue
+        for app_resources in resources_by_app.values():
+            app = app_resources[0].app
             latest = max(
                 app_resources,
                 key=lambda item: (item.deployment.created_at, item.deployment.version),
@@ -694,7 +669,7 @@ class ManagementService:
             )
             # Each workload is classified by its current version: the newest active
             # one, or the newest when none is active.
-            current: dict[tuple[str, str], DeploymentResource] = {}
+            current: dict[tuple[str, str], DeploymentResourceRow] = {}
             for resource in app_resources:
                 key = (resource.stub.kind.value, resource.stub.name)
                 held = current.get(key)
@@ -720,9 +695,7 @@ class ManagementService:
                     workload_kinds=dict(sorted(workload_kinds.items())),
                     devbox_count=len(devboxes),
                     workload_count=len(workloads),
-                    active_versions=sum(
-                        1 for resource in app_resources if resource.deployment.active
-                    ),
+                    active_versions=active_versions.get(app.id, 0),
                     running_containers=facts.running_containers if facts is not None else 0,
                     runs_24h=facts.runs_24h if facts is not None else 0,
                     failed_runs_24h=facts.failed_runs_24h if facts is not None else 0,
@@ -738,144 +711,6 @@ class ManagementService:
         summaries.sort(key=lambda item: item.app.name)
         return tuple(summaries)
 
-    def retrieve_deployment(self, workspace: str, deployment_id_or_name: str) -> Deployment:
-        if _is_uuid(deployment_id_or_name):
-            resource = self.services.deployment_resources.get_by_deployment_id(
-                deployment_id_or_name,
-                workspace=workspace,
-            )
-            if resource is not None:
-                return resource.deployment
-        matches = [
-            resource.deployment
-            for resource in self.services.deployment_resources.list(
-                workspace=workspace,
-                name=deployment_id_or_name,
-                active=None,
-            )
-        ]
-        if matches:
-            return max(matches, key=lambda item: item.version)
-        msg = f"deployment not found in workspace: {deployment_id_or_name}"
-        raise NotFoundError(msg)
-
-    def set_deployment_active(
-        self,
-        workspace: str,
-        deployment_id_or_name: str,
-        *,
-        active: bool,
-        allow_paused_app: bool = False,
-    ) -> Deployment:
-        deployment = self.retrieve_deployment(workspace, deployment_id_or_name)
-        workspace_id = self.control_plane.workspaces.get_workspace(workspace).id
-        if active and deployment.app_id and not allow_paused_app:
-            app = self.services.apps.get(deployment.app_id, workspace=workspace)
-            if not app.active:
-                msg = f"cannot start deployment while app is paused: {app.name}"
-                raise ConflictError(msg)
-        if active and keeps_one_active_version(deployment.kind, deployment.spec.role):
-            self._refuse_superseded_start(deployment, workspace_id=workspace_id)
-        deployment.active = active
-        deployment.updated_at = utc_now()
-        with self.services.context.database.session() as session:
-            updated = DeploymentRepository(session).upsert(
-                deployment,
-                workspace_id=workspace_id,
-            )
-            if active:
-                targets = AutoscalingTargetRepository(session)
-                for stub in StubRepository(session).list_for_deployments(
-                    [updated.id], workspace_id=workspace_id
-                ):
-                    target_kind = autoscaler_target_kind(stub.kind)
-                    if target_kind is not None:
-                        targets.activate(
-                            stub_id=stub.id,
-                            workspace_id=workspace_id,
-                            target_kind=target_kind,
-                        )
-        self._publish_deployment_change(updated, workspace_id=workspace_id)
-        # Unconditional: the call matches on deployment id, so a deployment with
-        # no schedule has nothing to toggle and asking is cheaper than knowing.
-        self.services.cron_jobs.set_deployment_enabled(
-            updated.id,
-            enabled=active,
-            workspace=workspace,
-        )
-        if not active:
-            self.stop_deployment_containers(workspace, updated, reason=None)
-        else:
-            self.services.deployments.stop_superseded_versions(updated, workspace_id=workspace_id)
-        self.services.events.emit(
-            "deployment.started" if active else "deployment.stopped",
-            resource_type="deployment",
-            resource_id=updated.id,
-            message=f"{'started' if active else 'stopped'} deployment {updated.name}",
-            workspace_id=workspace_id,
-        )
-        return updated
-
-    def _refuse_superseded_start(self, deployment: Deployment, *, workspace_id: str) -> None:
-        """A workload that keeps one version on cannot start one older than the one it runs."""
-        with self.services.context.database.session() as session:
-            newest = DeploymentRepository(session).newest_active_version(
-                workspace_id=workspace_id,
-                app_id=deployment.app_id,
-                name=deployment.name,
-                kind=deployment.kind,
-            )
-        if newest is not None and newest > deployment.version:
-            msg = (
-                f"{deployment.name} v{deployment.version} is replaced by v{newest}; "
-                f"stop v{newest} before starting an older version"
-            )
-            raise ConflictError(msg)
-
-    def scale_deployment(
-        self,
-        workspace: str,
-        deployment_id_or_name: str,
-        *,
-        containers: int,
-    ) -> Deployment:
-        if containers < 0:
-            raise InvalidInputError("replicas cannot be negative")
-        deployment = self.retrieve_deployment(workspace, deployment_id_or_name)
-        if deployment.kind is not DeploymentKind.Pod:
-            raise InvalidInputError("only pod deployments can be scaled directly")
-        if not deployment.active:
-            raise ConflictError(f"cannot scale inactive deployment: {deployment.name}")
-        if deployment.app_id:
-            app = self.services.apps.get(deployment.app_id, workspace=workspace)
-            if not app.active:
-                raise ConflictError(f"cannot scale deployment while app is paused: {app.name}")
-        scaled_stubs = self._scale_pod_deployment_stubs(workspace, deployment, containers)
-        if not scaled_stubs:
-            raise ConflictError(f"pod deployment has no scalable workload: {deployment.name}")
-        deployment.updated_at = utc_now()
-        with self.services.context.database.session() as session:
-            updated = DeploymentRepository(session).upsert(
-                deployment,
-                workspace_id=scaled_stubs[0].workspace_id,
-            )
-        self._publish_deployment_change(
-            updated,
-            workspace_id=scaled_stubs[0].workspace_id,
-        )
-        self.services.events.emit(
-            "deployment.scale.updated",
-            resource_type="deployment",
-            resource_id=deployment.id,
-            message=f"scaled deployment {deployment.name} to {containers} containers",
-            data={
-                "containers": containers,
-                "stub_ids": [stub.id for stub in scaled_stubs],
-            },
-            workspace_id=scaled_stubs[0].workspace_id,
-        )
-        return updated
-
     def pod_deployment_scaling(
         self,
         workspace: str,
@@ -885,10 +720,13 @@ class ManagementService:
             return {}
         workspace_record = self.control_plane.workspaces.get_workspace(workspace)
         grouped: dict[str, list[StubRecord]] = {}
-        for stub in self.control_plane.stubs.list_stubs(workspace=workspace_record.id):
-            if stub.deployment_id not in deployment_ids:
-                continue
-            grouped.setdefault(stub.deployment_id, []).append(stub)
+        with self.services.context.database.session() as session:
+            stubs = StubRepository(session).list_for_deployments(
+                list(deployment_ids), workspace_id=workspace_record.id
+            )
+        for stub in stubs:
+            if stub.deployment_id is not None:
+                grouped.setdefault(stub.deployment_id, []).append(stub)
 
         scaling: dict[str, PodDeploymentScaling] = {}
         for deployment_id, stubs in grouped.items():
@@ -900,51 +738,18 @@ class ManagementService:
             )
         return scaling
 
-    def delete_deployment(self, workspace: str, deployment_id_or_name: str) -> Deployment:
-        """Delete the named workload; every version goes, not only the one named."""
-        deployment = self.retrieve_deployment(workspace, deployment_id_or_name)
-        workspace_id = self.control_plane.workspaces.get_workspace(workspace).id
-        with self.services.context.database.session() as session:
-            container_ids = DeploymentRepository(session).live_container_ids(
-                workspace_id=workspace_id,
-                workload=(deployment.app_id, deployment.name, deployment.kind),
-            )
-        for container_id in container_ids:
-            self.services.containers.stop(container_id)
-        return self.services.deployments.delete(deployment.id, workspace=workspace_id)
-
-    def stop_all_active_deployments(self, workspace: str) -> tuple[Deployment, ...]:
-        active = [
-            Deployment.model_validate(item)
-            for item in self.list_deployments(workspace, active=True, limit=10_000).data
-        ]
-        return tuple(
-            self.set_deployment_active(workspace, deployment.id, active=False)
-            for deployment in active
-        )
-
     def stop_all_active_deployments_for_workspace_deletion(
-        self,
-        workspace_id: str,
+        self, workspace_id: str
     ) -> tuple[Deployment, ...]:
-        """Deactivate existing deployments without reopening tenant admission."""
-        now = utc_now()
         with self.services.context.database.session() as session:
-            repository = DeploymentRepository(session)
-            active = repository.list(workspace_id=workspace_id, active=True)
-            stopped = [
-                updated
-                for deployment in active
-                if (
-                    updated := repository.deactivate_for_workspace_deletion(
-                        deployment.id,
-                        workspace_id=workspace_id,
-                        now=now,
-                    )
+            workspace = WorkspaceRepository(session).lock_for_deletion(workspace_id)
+            if workspace.status is not WorkspaceStatus.Deleting:
+                raise ConflictError(f"workspace cleanup requires deleting state: {workspace_id}")
+            return tuple(
+                DeploymentRepository(session).deactivate_for_workspace_deletion(
+                    workspace_id=workspace_id, now=utc_now()
                 )
-                is not None
-            ]
-        return tuple(stopped)
+            )
 
     def stop_deployment_containers(
         self, workspace: str, deployment: Deployment, *, reason: StopContainerReason | None
@@ -957,140 +762,6 @@ class ManagementService:
             )
         for container_id in container_ids:
             self.services.containers.stop(container_id, reason=reason)
-
-    def _scale_pod_deployment_stubs(
-        self,
-        workspace: str,
-        deployment: Deployment,
-        containers: int,
-    ) -> list[StubRecord]:
-        workspace_record = self.control_plane.workspaces.get_workspace(workspace)
-        stubs = [
-            stub
-            for stub in self.control_plane.stubs.list_stubs(workspace=workspace_record.id)
-            if stub.deployment_id == deployment.id
-        ]
-        if not stubs or any(stub.kind is not StubKind.Pod for stub in stubs):
-            return []
-        if containers == 0 and any(stub.config.runtime.keep_warm == -1 for stub in stubs):
-            raise InvalidInputError("always-on pod deployments cannot be scaled to zero")
-        if containers > 1 and any(stub.config.disks for stub in stubs):
-            raise InvalidInputError("a pod with a disk runs one container; scale it to 0 or 1")
-        if containers > 0:
-            for stub in stubs:
-                validate_checkpoint_activation(
-                    startup_kind=WorkerStartupKind.Pod,
-                    runtime=stub.config.runtime,
-                )
-        updated: list[StubRecord] = []
-        for stub in stubs:
-            autoscaler = stub.config.autoscaler.model_copy(
-                update={
-                    "max_containers": containers,
-                    "min_containers": containers,
-                }
-            )
-            result = self.control_plane.stubs.update_stub_config(
-                stub.id,
-                workspace=workspace_record.id,
-                fields={"autoscaler": autoscaler},
-            )
-            updated.append(result.stub)
-        return updated
-
-    def _publish_deployment_change(
-        self,
-        deployment: Deployment,
-        *,
-        workspace_id: str,
-    ) -> None:
-        publisher = self.services.deployments.workspace_changes
-        if publisher is None:
-            return
-        publisher.emit_change(
-            workspace_id=workspace_id,
-            topic=WorkspaceChangeTopic.Deployments,
-            change=WorkspaceChangeType.Updated,
-            resource_id=deployment.id,
-            app_id=deployment.app_id,
-            deployment_id=deployment.id,
-        )
-
-    def deployment_url(
-        self,
-        deployment_id_or_name: str,
-        *,
-        workspace: str | None = None,
-        external_url: str = "http://127.0.0.1:9000",
-        port: int | None = None,
-    ) -> DeploymentUrlResult:
-        deployment = (
-            self.retrieve_deployment(workspace, deployment_id_or_name)
-            if workspace
-            else self.services.deployments.get(deployment_id_or_name)
-        )
-        resource = self.services.deployment_resources.get_by_deployment_id(
-            deployment.id,
-            workspace=workspace,
-        )
-        if resource is None:
-            msg = f"deployment resource not found: {deployment.id}"
-            raise NotFoundError(msg)
-        return DeploymentUrlResult(
-            deployment=resource.deployment,
-            stub=resource.stub,
-            url=resource.invoke_url(external_url, port=port),
-        )
-
-    def deployment_manifest(
-        self,
-        deployment_id: str,
-        *,
-        workspace: str,
-        external_url: str = "http://127.0.0.1:9000",
-    ) -> ClientManifestResource:
-        """Invoke manifest (URL, schemas, client contract) for one deployment."""
-        deployment = self.retrieve_deployment(workspace, deployment_id)
-        if deployment.kind not in INVOKABLE_DEPLOYMENT_KINDS:
-            msg = f"deployment kind is not invokable: {deployment.kind.value}"
-            raise InvalidInputError(msg)
-        resource = self.services.deployment_resources.get_by_deployment_id(
-            deployment.id,
-            workspace=workspace,
-        )
-        if resource is None:
-            msg = f"deployment resource not found: {deployment.id}"
-            raise NotFoundError(msg)
-        return client_manifest_resource(resource, external_url=external_url)
-
-    def deployment_url_by_name(
-        self,
-        workspace: str,
-        stub_type: StubKind,
-        deployment_name: str,
-        version: int | None = None,
-        *,
-        app_id: str | None = None,
-        external_url: str = "http://127.0.0.1:9000",
-    ) -> DeploymentUrlResult:
-        try:
-            deployment_kind = DeploymentKind(stub_type.value)
-        except ValueError as exc:
-            msg = f"deployment kind is not invokable: {stub_type}"
-            raise InvalidInputError(msg) from exc
-        resource = self.services.deployment_resources.resolve_target(
-            deployment_name,
-            deployment_kind,
-            workspace=workspace,
-            version=version,
-            app_id=app_id,
-        )
-        return DeploymentUrlResult(
-            deployment=resource.deployment,
-            stub=resource.stub,
-            # A caller that named a version gets a URL that keeps pointing at it.
-            url=resource.invoke_url(external_url, pin_version=version is not None),
-        )
 
     def deployment_package(self, workspace: str, stub_id: str) -> DeploymentPackagePlan:
         workspace_record = self.control_plane.workspaces.get_workspace(workspace)
@@ -1571,14 +1242,11 @@ class ManagementService:
     ) -> Deployment | None:
         if workload is None or workload.deployment_id is None:
             return None
-        return next(
-            (
-                deployment
-                for deployment in self.services.deployments.list(workspace=workspace)
-                if deployment.id == workload.deployment_id
-            ),
-            None,
-        )
+        with self.services.context.database.session() as session:
+            workspace_id = self.control_plane.context.workspace(session, workspace).id
+            return DeploymentRepository(session).get(
+                workload.deployment_id, workspace_id=workspace_id
+            )
 
     def _container_run(
         self,

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Collection, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
@@ -9,12 +9,8 @@ from database.mappers.apps import (
     app_container_shutdown_intent_from_table,
     app_deployment_intent_from_table,
     app_record_from_table,
-    cron_job_from_table,
-    deployment_from_table,
     stub_from_table,
     write_app_row,
-    write_cron_job_row,
-    write_deployment_row,
     write_stub_row,
 )
 from database.mappers.containers import container_from_row
@@ -38,7 +34,6 @@ from database.tables.apps import (
     AppContainerShutdownIntentTable,
     AppDeploymentIntentTable,
     AppTable,
-    CronJobTable,
     DeploymentTable,
     StubTable,
 )
@@ -51,54 +46,30 @@ from shared.app_lifecycle import (
     AppDeploymentIntentTarget,
     AppLifecycleState,
 )
-from shared.containers import LIVE_CONTAINER_STATUSES, ContainerStatus
-from shared.cron import CronJobRecord
-from shared.deployment_records import Deployment
-from shared.deployments import DeploymentKind, PodRole, StubKind
+from shared.containers import ContainerStatus
+from shared.deployments import StubKind
 from shared.disks import DISK_ROOT_MOUNT_PATH
 from shared.enums import StringEnum
 from shared.errors import ConflictError, NotFoundError
-from shared.identity import WorkspaceStatus
-from shared.placement import Placement
 from shared.tasks import TaskStatus
 from shared.workload_config import StubAutoscalerConfig, StubTaskPolicy
 from sqlalchemy import (
-    and_,
     case,
     cast,
     delete,
-    exists,
     func,
+    insert,
     literal,
     or_,
     select,
     text,
-    tuple_,
     type_coerce,
     update,
 )
 from sqlalchemy.dialects.postgresql import JSONB, JSONPATH
 from sqlalchemy.orm import Session, load_only
-from sqlalchemy.sql.elements import ColumnElement
 
 _ROOT_DISK_PATH = f'$[*] ? (!exists(@.mount_path) || @.mount_path == "{DISK_ROOT_MOUNT_PATH}")'
-
-
-@dataclass(frozen=True, slots=True)
-class SshPodRow:
-    app_id: str
-    app_name: str
-    pod: str
-    role: PodRole
-    deployment_id: str
-    active: bool
-    ssh: bool
-
-
-class DeploymentResourceRow(BaseModel):
-    app: AppRecord
-    deployment: Deployment
-    stub: StubRecord
 
 
 class AppRunningResult(BaseModel):
@@ -210,18 +181,21 @@ class AppRepository:
 
         return names_by_id(self.session, AppTable.id, AppTable.name, app_ids)
 
-    def active_by_ids(self, app_ids: Sequence[str]) -> dict[str, bool]:
+    def active_by_ids(
+        self, app_ids: Sequence[str], *, workspace_id: str | None = None
+    ) -> dict[str, bool]:
         wanted = tuple(dict.fromkeys(app_ids))
         active = {app_id: False for app_id in wanted}
         if not wanted:
             return active
-        rows = self.session.scalars(
-            select(AppTable.id).where(
-                AppTable.id.in_(wanted),
-                AppTable.lifecycle_state == AppLifecycleState.Active.value,
-                AppTable.deleted_at.is_(None),
-            )
+        statement = select(AppTable.id).where(
+            AppTable.id.in_(wanted),
+            AppTable.lifecycle_state == AppLifecycleState.Active.value,
+            AppTable.deleted_at.is_(None),
         )
+        if workspace_id is not None:
+            statement = statement.where(AppTable.workspace_id == workspace_id)
+        rows = self.session.scalars(statement)
         for app_id in rows:
             active[str(app_id)] = True
         return active
@@ -293,17 +267,28 @@ class AppRepository:
         *,
         workspace_id: str,
         include_deleted: bool = False,
+        active: bool | None = None,
     ) -> list[AppRecord]:
         statement = select(AppTable).where(AppTable.workspace_id == workspace_id)
         if not include_deleted:
             statement = statement.where(AppTable.deleted_at.is_(None))
+        if active is not None:
+            statement = statement.where(
+                (AppTable.lifecycle_state == AppLifecycleState.Active.value).is_(active)
+            )
         statement = statement.order_by(AppTable.name, AppTable.version, AppTable.id)
         return [app_record_from_table(row) for row in self.session.scalars(statement)]
 
-    def list_across_workspaces(self, *, include_deleted: bool = False) -> list[AppRecord]:
+    def list_across_workspaces(
+        self, *, include_deleted: bool = False, active: bool | None = None
+    ) -> list[AppRecord]:
         statement = select(AppTable)
         if not include_deleted:
             statement = statement.where(AppTable.deleted_at.is_(None))
+        if active is not None:
+            statement = statement.where(
+                (AppTable.lifecycle_state == AppLifecycleState.Active.value).is_(active)
+            )
         statement = statement.order_by(
             AppTable.workspace_id, AppTable.name, AppTable.version, AppTable.id
         )
@@ -315,12 +300,14 @@ class AppRepository:
         claim_id: str,
         stale_before: datetime,
         limit: int,
+        exclude_ids: Sequence[str] = (),
     ) -> list[AppRecord]:
         states = tuple(state.value for state in UNFINISHED_APP_LIFECYCLE_STATES)
         statement = (
             select(AppTable)
             .where(
                 AppTable.lifecycle_state.in_(states),
+                AppTable.id.not_in(exclude_ids),
                 or_(
                     AppTable.reconcile_claim_id.is_(None),
                     AppTable.reconcile_claimed_at.is_(None),
@@ -344,46 +331,48 @@ class AppRepository:
 class AppDeploymentIntentRepository:
     session: Session
 
-    def replace(
+    def capture(
         self,
         *,
         app_id: str,
-        deployment_ids: list[str],
+        workspace_id: str,
         operation_revision: int,
         target: AppDeploymentIntentTarget,
-    ) -> list[AppDeploymentIntentRecord]:
+        active_only: bool,
+    ) -> None:
         self.clear(app_id=app_id)
-        rows = [
-            AppDeploymentIntentTable(
-                app_id=app_id,
-                deployment_id=deployment_id,
-                operation_revision=operation_revision,
-                target=target.value,
-            )
-            for deployment_id in sorted(set(deployment_ids))
-        ]
-        self.session.add_all(rows)
-        self.session.flush()
-        return [app_deployment_intent_from_table(row) for row in rows]
-
-    def retarget(
-        self,
-        *,
-        app_id: str,
-        operation_revision: int,
-        target: AppDeploymentIntentTarget,
-    ) -> list[AppDeploymentIntentRecord]:
-        rows = list(
-            self.session.scalars(
-                update(AppDeploymentIntentTable)
-                .where(AppDeploymentIntentTable.app_id == app_id)
-                .values(operation_revision=operation_revision, target=target.value)
-                .returning(AppDeploymentIntentTable)
-                .execution_options(populate_existing=True)
+        selected = select(
+            DeploymentTable.app_id,
+            DeploymentTable.id,
+            literal(operation_revision),
+            literal(target.value),
+        ).where(
+            DeploymentTable.workspace_id == workspace_id,
+            DeploymentTable.app_id == app_id,
+            DeploymentTable.deleted_at.is_(None),
+        )
+        if active_only:
+            selected = selected.where(DeploymentTable.active.is_(True))
+        self.session.execute(
+            insert(AppDeploymentIntentTable).from_select(
+                ["app_id", "deployment_id", "operation_revision", "target"], selected
             )
         )
-        rows.sort(key=lambda row: row.deployment_id)
-        return [app_deployment_intent_from_table(row) for row in rows]
+
+    def retarget(
+        self, *, app_id: str, operation_revision: int, target: AppDeploymentIntentTarget
+    ) -> None:
+        self.session.execute(
+            update(AppDeploymentIntentTable)
+            .where(AppDeploymentIntentTable.app_id == app_id)
+            .values(
+                operation_revision=operation_revision,
+                target=target.value,
+                event_id=None,
+                event_created_at=None,
+                workspace_change_published_at=None,
+            )
+        )
 
     def list(self, *, app_id: str) -> list[AppDeploymentIntentRecord]:
         rows = self.session.scalars(
@@ -392,22 +381,6 @@ class AppDeploymentIntentRepository:
             .order_by(AppDeploymentIntentTable.deployment_id)
         )
         return [app_deployment_intent_from_table(row) for row in rows]
-
-    def get_for_update(
-        self,
-        *,
-        app_id: str,
-        deployment_id: str,
-    ) -> AppDeploymentIntentRecord | None:
-        row = self.session.scalars(
-            select(AppDeploymentIntentTable)
-            .where(
-                AppDeploymentIntentTable.app_id == app_id,
-                AppDeploymentIntentTable.deployment_id == deployment_id,
-            )
-            .with_for_update()
-        ).first()
-        return app_deployment_intent_from_table(row) if row is not None else None
 
     def update_publication(
         self,
@@ -1033,6 +1006,7 @@ class StubRepository:
         deployment_ids: Sequence[str],
         *,
         workspace_id: str,
+        for_update: bool = False,
     ) -> list[StubRecord]:
         wanted = tuple(dict.fromkeys(deployment_ids))
         if not wanted:
@@ -1046,6 +1020,8 @@ class StubRepository:
                 StubTable.workspace_id == workspace_id,
             )
         )
+        if for_update:
+            statement = statement.with_for_update(of=StubTable, key_share=True)
         return [stub_from_table(row) for row in self.session.scalars(statement)]
 
     def get_for_update(self, stub_id: str, *, workspace_id: str) -> StubRecord | None:
@@ -1095,786 +1071,3 @@ class StubRepository:
             )
             is not None
         )
-
-
-@dataclass(slots=True)
-class DeploymentRepository:
-    session: Session
-
-    def latest_by_name(
-        self, name: str, *, workspace_id: str | None, active: bool | None = None
-    ) -> Deployment | None:
-        statement = select(DeploymentTable).where(
-            DeploymentTable.name == name, DeploymentTable.deleted_at.is_(None)
-        )
-        if workspace_id is not None:
-            statement = statement.where(DeploymentTable.workspace_id == workspace_id)
-        if active is not None:
-            statement = statement.where(DeploymentTable.active.is_(active))
-        row = self.session.scalars(
-            statement.order_by(DeploymentTable.version.desc()).limit(1)
-        ).first()
-        return deployment_from_table(row) if row is not None else None
-
-    def name_live_in_other_app(
-        self, name: str, *, kind: DeploymentKind, app_id: str, workspace_id: str
-    ) -> bool:
-        """Whether an active deployment of this kind and name lives in another app."""
-        return bool(
-            self.session.scalar(
-                select(
-                    exists().where(
-                        DeploymentTable.workspace_id == workspace_id,
-                        DeploymentTable.kind == kind.value,
-                        DeploymentTable.name == name,
-                        DeploymentTable.app_id != app_id,
-                        DeploymentTable.active.is_(True),
-                        DeploymentTable.deleted_at.is_(None),
-                    )
-                )
-            )
-        )
-
-    def lock_live(self, deployment_id: str, *, workspace_id: str) -> bool:
-        return (
-            self.session.scalar(
-                select(DeploymentTable.id)
-                .where(
-                    DeploymentTable.id == deployment_id,
-                    DeploymentTable.workspace_id == workspace_id,
-                    DeploymentTable.deleted_at.is_(None),
-                )
-                .with_for_update(read=True)
-            )
-            is not None
-        )
-
-    def lock_stub_deployment_active(self, stub_id: str, *, workspace_id: str) -> bool | None:
-        return self.session.scalar(
-            select(and_(DeploymentTable.active.is_(True), DeploymentTable.deleted_at.is_(None)))
-            .join(StubTable, StubTable.deployment_id == DeploymentTable.id)
-            .where(
-                StubTable.id == stub_id,
-                StubTable.workspace_id == workspace_id,
-                DeploymentTable.workspace_id == workspace_id,
-            )
-            .with_for_update(read=True, of=DeploymentTable)
-        )
-
-    def lock_invocation_active(
-        self, deployment_id: str, *, workspace_id: str, stub_id: str
-    ) -> bool | None:
-        return self.session.scalar(
-            select(DeploymentTable.active)
-            .where(
-                DeploymentTable.id == deployment_id,
-                DeploymentTable.workspace_id == workspace_id,
-                DeploymentTable.stub_id == stub_id,
-                DeploymentTable.deleted_at.is_(None),
-            )
-            .with_for_update(read=True)
-        )
-
-    def workspaces_pinned_to(
-        self, placement: Placement, workspace_ids: Collection[str]
-    ) -> list[str]:
-        """Workspaces among `workspace_ids` with a live deployment pinned to `placement`.
-
-        Only deployments count: they keep the placement they were deployed with,
-        while a run or sandbox resolves its placement each time it starts.
-        """
-        if not workspace_ids:
-            return []
-        return list(
-            self.session.scalars(
-                select(DeploymentTable.workspace_id)
-                .where(
-                    DeploymentTable.placement == placement.key,
-                    DeploymentTable.workspace_id.in_(list(workspace_ids)),
-                    DeploymentTable.deleted_at.is_(None),
-                )
-                .distinct()
-            )
-        )
-
-    def get_for_update(self, deployment_id: str, *, workspace_id: str) -> Deployment | None:
-        row = self.session.scalars(
-            select(DeploymentTable)
-            .where(
-                DeploymentTable.id == deployment_id,
-                DeploymentTable.workspace_id == workspace_id,
-                DeploymentTable.deleted_at.is_(None),
-            )
-            .with_for_update()
-        ).first()
-        return deployment_from_table(row) if row is not None else None
-
-    def upsert(self, deployment: Deployment, *, workspace_id: str) -> Deployment:
-        WorkspaceRepository(self.session).lock_active_owner(workspace_id)
-        if deployment.app_id is not None:
-            app = AppRepository(self.session).get_for_update(
-                deployment.app_id, workspace_id=workspace_id, include_deleted=True
-            )
-            if app is None or (app.deleted_at is not None and deployment.deleted_at is None):
-                raise ConflictError("deployment app is unavailable")
-        row = self.session.get(DeploymentTable, deployment.id, populate_existing=True)
-        if row is None:
-            row = DeploymentTable(id=deployment.id, workspace_id=workspace_id)
-            self.session.add(row)
-        elif str(row.workspace_id) != workspace_id:
-            raise ConflictError("deployment ownership cannot change")
-        elif row.deleted_at is not None and deployment.deleted_at is None:
-            raise ConflictError("deleted deployment cannot be restored")
-        write_deployment_row(row, deployment)
-        self.session.flush()
-        return deployment_from_table(row)
-
-    def next_version(
-        self, *, workspace_id: str, app_id: str | None, name: str, kind: DeploymentKind
-    ) -> int:
-        latest = self.session.scalar(
-            select(func.max(DeploymentTable.version)).where(
-                DeploymentTable.workspace_id == workspace_id,
-                DeploymentTable.app_id.is_not_distinct_from(app_id),
-                DeploymentTable.name == name,
-                DeploymentTable.kind == kind.value,
-            )
-        )
-        return (latest or 0) + 1
-
-    def live_stub_ids(
-        self, *, workspace_id: str, app_id: str | None, name: str, kind: DeploymentKind
-    ) -> list[str]:
-        return list(
-            self.session.scalars(
-                select(StubTable.id)
-                .join(DeploymentTable, DeploymentTable.stub_id == StubTable.id)
-                .where(
-                    DeploymentTable.workspace_id == workspace_id,
-                    DeploymentTable.app_id.is_not_distinct_from(app_id),
-                    DeploymentTable.name == name,
-                    DeploymentTable.kind == kind.value,
-                    DeploymentTable.deleted_at.is_(None),
-                    DeploymentTable.active.is_(True),
-                    StubTable.workspace_id == workspace_id,
-                )
-            )
-        )
-
-    def newest_active_version(
-        self, *, workspace_id: str, app_id: str | None, name: str, kind: DeploymentKind
-    ) -> int | None:
-        return self.session.scalar(
-            select(func.max(DeploymentTable.version)).where(
-                DeploymentTable.workspace_id == workspace_id,
-                DeploymentTable.app_id.is_not_distinct_from(app_id),
-                DeploymentTable.name == name,
-                DeploymentTable.kind == kind.value,
-                DeploymentTable.deleted_at.is_(None),
-                DeploymentTable.active.is_(True),
-            )
-        )
-
-    def deactivate_superseded_versions(
-        self,
-        *,
-        workspace_id: str,
-        app_id: str | None,
-        name: str,
-        kind: DeploymentKind,
-        now: datetime,
-    ) -> list[Deployment]:
-        """Switch off every active version below the newest registered active one.
-
-        The version number decides, not the order deploys finish in: an older
-        deploy that registers last is switched off by its own call. A version
-        still registering does not count as newest, so a deploy that then fails
-        cannot leave the workload with nothing on. Locking the workload's rows
-        first makes two concurrent calls take turns.
-        """
-        workload = and_(
-            DeploymentTable.workspace_id == workspace_id,
-            DeploymentTable.app_id.is_not_distinct_from(app_id),
-            DeploymentTable.name == name,
-            DeploymentTable.kind == kind.value,
-            DeploymentTable.deleted_at.is_(None),
-        )
-        self.session.execute(select(DeploymentTable.id).where(workload).with_for_update())
-        newest = (
-            select(func.max(DeploymentTable.version))
-            .where(
-                workload,
-                DeploymentTable.active.is_(True),
-                DeploymentTable.stub_id.is_not(None),
-            )
-            .scalar_subquery()
-        )
-        rows = self.session.scalars(
-            update(DeploymentTable)
-            .where(workload, DeploymentTable.active.is_(True), DeploymentTable.version < newest)
-            .values(active=False, updated_at=now)
-            .returning(DeploymentTable)
-            .execution_options(synchronize_session=False)
-        )
-        return [deployment_from_table(row) for row in rows]
-
-    def assert_subdomain_unclaimed(
-        self,
-        subdomain: str,
-        *,
-        workspace_id: str,
-        app_id: str | None,
-        name: str,
-        kind: DeploymentKind,
-    ) -> None:
-        """Refuse a subdomain another resource already answers on.
-
-        `uq_deployments_subdomain_version_active` only catches a digest collision when
-        both resources reach the same version number. Two colliding resources sitting at
-        different versions would otherwise share a hostname, and the edge would hand one
-        tenant's traffic to the other's resource.
-        """
-        same_resource = and_(
-            DeploymentTable.workspace_id == workspace_id,
-            DeploymentTable.app_id.is_not_distinct_from(app_id),
-            DeploymentTable.name == name,
-            DeploymentTable.kind == kind.value,
-        )
-        conflict = self.session.execute(
-            select(DeploymentTable.id)
-            .where(DeploymentTable.subdomain == subdomain)
-            .where(DeploymentTable.deleted_at.is_(None))
-            .where(~same_resource)
-            .limit(1)
-        ).first()
-        if conflict is not None:
-            raise ConflictError(
-                f"subdomain {subdomain} already belongs to another resource; "
-                f"rename {name} to claim a different one"
-            )
-
-    def ssh_pods(
-        self,
-        *,
-        workspace_id: str,
-        app: str | None = None,
-        pod: str | None = None,
-        role: PodRole | None = None,
-        after: tuple[str, str] | None = None,
-        limit: int,
-    ) -> list[SshPodRow]:
-        """Pods whose newest version is active and serves SSH, ordered by app and name.
-
-        The newest version decides, because it is the one an SSH connection
-        reaches. Filtered by `pod`, stopped pods and pods without SSH come back
-        too, marked as such, so a caller can say why it cannot connect.
-        """
-        newest = (
-            select(
-                AppTable.id.label("app_id"),
-                AppTable.name.label("app_name"),
-                DeploymentTable.name.label("pod"),
-                DeploymentTable.id.label("deployment_id"),
-                DeploymentTable.active.label("active"),
-                StubTable.ssh.label("ssh"),
-                StubTable.role.label("role"),
-            )
-            .join(AppTable, AppTable.id == DeploymentTable.app_id)
-            .join(StubTable, StubTable.id == DeploymentTable.stub_id)
-            .where(
-                DeploymentTable.workspace_id == workspace_id,
-                DeploymentTable.kind == DeploymentKind.Pod.value,
-                DeploymentTable.deleted_at.is_(None),
-                AppTable.deleted_at.is_(None),
-            )
-            .distinct(AppTable.name, DeploymentTable.name)
-            .order_by(AppTable.name, DeploymentTable.name, DeploymentTable.version.desc())
-        )
-        if app is not None:
-            newest = newest.where(AppTable.name == app)
-        if pod is not None:
-            newest = newest.where(DeploymentTable.name == pod)
-        candidates = newest.subquery()
-        statement = select(
-            candidates.c.app_id,
-            candidates.c.app_name,
-            candidates.c.pod,
-            candidates.c.role,
-            candidates.c.deployment_id,
-            candidates.c.active,
-            candidates.c.ssh,
-        )
-        if pod is None:
-            statement = statement.where(candidates.c.ssh.is_(True), candidates.c.active.is_(True))
-        if role is not None:
-            statement = statement.where(candidates.c.role == role.value)
-        if after is not None:
-            statement = statement.where(
-                tuple_(candidates.c.app_name, candidates.c.pod)
-                > tuple_(literal(after[0]), literal(after[1]))
-            )
-        rows = self.session.execute(
-            statement.order_by(candidates.c.app_name, candidates.c.pod).limit(limit)
-        ).tuples()
-        return [
-            SshPodRow(
-                app_id=str(app_id),
-                app_name=app_name,
-                pod=pod_name,
-                role=PodRole(role) if role else PodRole.Service,
-                deployment_id=str(deployment_id),
-                active=bool(active),
-                ssh=bool(ssh),
-            )
-            for app_id, app_name, pod_name, role, deployment_id, active, ssh in rows
-        ]
-
-    def live_container_ids(
-        self,
-        *,
-        workspace_id: str,
-        deployment_id: str | None = None,
-        workload: tuple[str | None, str, DeploymentKind] | None = None,
-    ) -> list[str]:
-        """Live containers of one deployment, or of every live version of a workload.
-
-        `workload` is `(app_id, name, kind)`.
-        """
-        statement = (
-            select(ContainerTable.id)
-            .join(StubTable, StubTable.id == ContainerTable.stub_id)
-            .join(DeploymentTable, DeploymentTable.id == StubTable.deployment_id)
-            .where(
-                ContainerTable.workspace_id == workspace_id,
-                ContainerTable.status.in_([status.value for status in LIVE_CONTAINER_STATUSES]),
-                DeploymentTable.workspace_id == workspace_id,
-            )
-        )
-        if deployment_id is not None:
-            statement = statement.where(DeploymentTable.id == deployment_id)
-        if workload is not None:
-            app_id, name, kind = workload
-            statement = statement.where(
-                DeploymentTable.app_id.is_not_distinct_from(app_id),
-                DeploymentTable.name == name,
-                DeploymentTable.kind == kind.value,
-                DeploymentTable.deleted_at.is_(None),
-            )
-        return [str(container_id) for container_id in self.session.scalars(statement)]
-
-    def delete_versions(
-        self,
-        *,
-        workspace_id: str,
-        app_id: str | None,
-        name: str,
-        kind: DeploymentKind,
-        now: datetime,
-    ) -> list[Deployment]:
-        """Soft-delete every live version of one workload and return them.
-
-        A stopped older version is still listed as the workload, so deleting only
-        the newest leaves the workload standing.
-        """
-        WorkspaceRepository(self.session).lock_active_owner(workspace_id)
-        rows = self.session.scalars(
-            update(DeploymentTable)
-            .where(
-                DeploymentTable.workspace_id == workspace_id,
-                DeploymentTable.app_id.is_not_distinct_from(app_id),
-                DeploymentTable.name == name,
-                DeploymentTable.kind == kind.value,
-                DeploymentTable.deleted_at.is_(None),
-            )
-            .values(active=False, deleted_at=now, updated_at=now)
-            .returning(DeploymentTable)
-            .execution_options(synchronize_session=False)
-        )
-        return [deployment_from_table(row) for row in rows]
-
-    def deactivate_for_workspace_deletion(
-        self,
-        deployment_id: str,
-        *,
-        workspace_id: str,
-        now: datetime,
-    ) -> Deployment | None:
-        """System cleanup transition for an existing deployment in Deleting state."""
-        workspace = WorkspaceRepository(self.session).lock_for_deletion(workspace_id)
-        if workspace.status is not WorkspaceStatus.Deleting:
-            raise ConflictError(f"workspace cleanup requires deleting state: {workspace_id}")
-        deployment = self.get(deployment_id, workspace_id=workspace_id, include_deleted=True)
-        if deployment is None:
-            return None
-        deployment.active = False
-        deployment.updated_at = now
-        row = self.session.get(DeploymentTable, deployment_id)
-        if row is None or str(row.workspace_id) != workspace_id:
-            raise ConflictError(
-                f"deployment disappeared during workspace deletion: {deployment_id}"
-            )
-        row.active = False
-        row.updated_at = now
-        self.session.flush()
-        return deployment
-
-    def get(
-        self,
-        deployment_id: str,
-        *,
-        workspace_id: str,
-        include_deleted: bool = False,
-    ) -> Deployment | None:
-        try:
-            UUID(deployment_id)
-        except ValueError:
-            return None
-        statement = select(DeploymentTable).where(
-            DeploymentTable.id == deployment_id,
-            DeploymentTable.workspace_id == workspace_id,
-        )
-        if not include_deleted:
-            statement = statement.where(DeploymentTable.deleted_at.is_(None))
-        row = self.session.scalar(statement)
-        return deployment_from_table(row) if row is not None else None
-
-    def get_across_workspaces(
-        self,
-        deployment_id: str,
-        *,
-        include_deleted: bool = False,
-    ) -> Deployment | None:
-        """System lookup for scheduler/worker paths acting under their own authority."""
-        try:
-            UUID(deployment_id)
-        except ValueError:
-            return None
-        statement = select(DeploymentTable).where(DeploymentTable.id == deployment_id)
-        if not include_deleted:
-            statement = statement.where(DeploymentTable.deleted_at.is_(None))
-        row = self.session.scalar(statement)
-        return deployment_from_table(row) if row is not None else None
-
-    def workspace_id(self, deployment_id: str) -> str | None:
-        value = self.session.scalar(
-            select(DeploymentTable.workspace_id).where(DeploymentTable.id == deployment_id)
-        )
-        return str(value) if value is not None else None
-
-    def list(
-        self,
-        *,
-        workspace_id: str,
-        app_id: str | None = None,
-        active: bool | None = None,
-        include_deleted: bool = False,
-    ) -> list[Deployment]:
-        return self._list(
-            workspace_id=workspace_id,
-            app_id=app_id,
-            active=active,
-            include_deleted=include_deleted,
-        )
-
-    def list_across_workspaces(
-        self,
-        *,
-        app_id: str | None = None,
-        active: bool | None = None,
-        include_deleted: bool = False,
-    ) -> list[Deployment]:
-        """Operator/system listing over every workspace's deployments."""
-        return self._list(
-            workspace_id=None,
-            app_id=app_id,
-            active=active,
-            include_deleted=include_deleted,
-        )
-
-    def active_by_ids(self, deployment_ids: Sequence[str]) -> dict[str, bool]:
-        wanted = tuple(dict.fromkeys(deployment_ids))
-        active = {deployment_id: False for deployment_id in wanted}
-        if not wanted:
-            return active
-        rows = self.session.scalars(
-            select(DeploymentTable.id).where(
-                DeploymentTable.id.in_(wanted),
-                DeploymentTable.active.is_(True),
-                DeploymentTable.deleted_at.is_(None),
-            )
-        )
-        for deployment_id in rows:
-            active[str(deployment_id)] = True
-        return active
-
-    def _list(
-        self,
-        *,
-        workspace_id: str | None,
-        app_id: str | None,
-        active: bool | None,
-        include_deleted: bool,
-    ) -> list[Deployment]:
-        statement = select(DeploymentTable)
-        if workspace_id is not None:
-            statement = statement.where(DeploymentTable.workspace_id == workspace_id)
-        if app_id is not None:
-            statement = statement.where(DeploymentTable.app_id == app_id)
-        if active is not None:
-            statement = statement.where(DeploymentTable.active.is_(active))
-        if not include_deleted:
-            statement = statement.where(DeploymentTable.deleted_at.is_(None))
-        statement = statement.order_by(
-            DeploymentTable.created_at.desc(),
-            DeploymentTable.id.asc(),
-        )
-        return [deployment_from_table(row) for row in self.session.scalars(statement)]
-
-
-@dataclass(slots=True)
-class DeploymentResourceRepository:
-    session: Session
-
-    def list(
-        self,
-        *,
-        workspace_id: str | None,
-        app: str | None,
-        app_id: str | None,
-        deployment_id: str | None,
-        name: str | None,
-        kinds: frozenset[DeploymentKind] | set[DeploymentKind] | None,
-        version: int | None,
-        active: bool | None,
-    ) -> list[DeploymentResourceRow]:
-        statement = (
-            select(AppTable, DeploymentTable, StubTable)
-            .join(DeploymentTable, DeploymentTable.app_id == AppTable.id)
-            .join(StubTable, StubTable.id == DeploymentTable.stub_id)
-            .where(AppTable.deleted_at.is_(None))
-            .where(DeploymentTable.deleted_at.is_(None))
-        )
-        if workspace_id is not None:
-            statement = statement.where(AppTable.workspace_id == workspace_id).where(
-                DeploymentTable.workspace_id == workspace_id
-            )
-        if app is not None:
-            statement = statement.where(AppTable.name == app)
-        if app_id is not None:
-            statement = statement.where(AppTable.id == app_id)
-        if deployment_id is not None:
-            statement = statement.where(DeploymentTable.id == deployment_id)
-        if name is not None:
-            statement = statement.where(DeploymentTable.name == name)
-        if kinds is not None:
-            statement = statement.where(
-                DeploymentTable.kind.in_([deployment_kind.value for deployment_kind in kinds])
-            )
-        if version is not None:
-            statement = statement.where(DeploymentTable.version == version)
-        if active is not None:
-            statement = statement.where(DeploymentTable.active.is_(active))
-        statement = statement.order_by(
-            DeploymentTable.kind.asc(),
-            DeploymentTable.name.asc(),
-            DeploymentTable.version.desc(),
-            DeploymentTable.created_at.desc(),
-        )
-        return [
-            DeploymentResourceRow(
-                app=app_record_from_table(app_row),
-                deployment=deployment_from_table(deployment_row),
-                stub=stub_from_table(stub_row),
-            )
-            for app_row, deployment_row, stub_row in self.session.execute(statement).tuples()
-        ]
-
-    def hostnames_claimed_under(self, *, workspace_id: str) -> list[str]:
-        """Every hostname a live deployment in this workspace currently answers on.
-
-        Read before retiring a registration, so discarding a certificate cannot take
-        a serving deployment offline as a side effect.
-        """
-        rows = self.session.execute(
-            select(DeploymentTable.custom_hostname)
-            .where(DeploymentTable.workspace_id == workspace_id)
-            .where(DeploymentTable.deleted_at.is_(None))
-            .where(DeploymentTable.active.is_(True))
-            .where(DeploymentTable.custom_hostname.is_not(None))
-            .distinct()
-        ).scalars()
-        return [hostname for hostname in rows if hostname]
-
-    def get_by_custom_hostname(self, hostname: str) -> DeploymentResourceRow | None:
-        """Resolve the resource that claimed a registered hostname, at its latest version.
-
-        Not workspace-scoped, for the same reason `get_by_subdomain` is not: the edge
-        has only the hostname. Safe because a deployment may claim a hostname only
-        under a domain its own workspace registered, and the registration is unique
-        across workspaces.
-        """
-        return self._resolve_host_row(DeploymentTable.custom_hostname == hostname)
-
-    def get_by_subdomain(
-        self,
-        subdomain: str,
-        *,
-        version: int | None = None,
-    ) -> DeploymentResourceRow | None:
-        """Resolve the resource a public hostname addresses.
-
-        `version=None` answers with the latest, which is what a bare hostname means.
-
-        Deliberately not workspace-scoped, unlike every other lookup here: a request
-        arriving at the edge carries no token, so the subdomain is the only routing key
-        available and the row it finds is what establishes which workspace answers.
-        That is safe only because a subdomain belongs to exactly one resource, which
-        `assert_subdomain_unclaimed` establishes when the subdomain is minted.
-        """
-        match = DeploymentTable.subdomain == subdomain
-        if version is not None:
-            match = and_(match, DeploymentTable.version == version)
-        return self._resolve_host_row(match)
-
-    def _resolve_host_row(self, match: ColumnElement[bool]) -> DeploymentResourceRow | None:
-        row = (
-            self.session.execute(
-                select(AppTable, DeploymentTable, StubTable)
-                .join(DeploymentTable, DeploymentTable.app_id == AppTable.id)
-                .join(StubTable, StubTable.id == DeploymentTable.stub_id)
-                .where(AppTable.deleted_at.is_(None))
-                .where(DeploymentTable.deleted_at.is_(None))
-                .where(match)
-                .order_by(DeploymentTable.version.desc())
-                .limit(1)
-            )
-            .tuples()
-            .first()
-        )
-        if row is None:
-            return None
-        app_row, deployment_row, stub_row = row
-        return DeploymentResourceRow(
-            app=app_record_from_table(app_row),
-            deployment=deployment_from_table(deployment_row),
-            stub=stub_from_table(stub_row),
-        )
-
-
-@dataclass(slots=True)
-class CronJobRepository:
-    session: Session
-
-    def delete_for_deployments(
-        self, deployment_ids: set[str], *, workspace_id: str | None = None
-    ) -> None:
-        statement = delete(CronJobTable).where(CronJobTable.deployment_id.in_(deployment_ids))
-        if workspace_id is not None:
-            statement = statement.where(CronJobTable.workspace_id == workspace_id)
-        self.session.execute(statement)
-
-    def upsert(self, cron_job: CronJobRecord, *, workspace_id: str) -> CronJobRecord:
-        WorkspaceRepository(self.session).lock_active_owner(workspace_id)
-        if cron_job.workspace_id != workspace_id:
-            raise ConflictError("cron job ownership cannot change")
-        if not DeploymentRepository(self.session).lock_live(
-            cron_job.deployment_id, workspace_id=workspace_id
-        ):
-            raise ConflictError("cannot change the schedule of a deleted deployment")
-        self.session.execute(
-            text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
-            {"lock_key": f"cron-job:{workspace_id}:{cron_job.name}"},
-        )
-        row = self.session.scalar(
-            select(CronJobTable).where(
-                CronJobTable.workspace_id == workspace_id,
-                CronJobTable.name == cron_job.name,
-            )
-        )
-        if row is None:
-            row = CronJobTable(workspace_id=workspace_id)
-            self.session.add(row)
-        write_cron_job_row(row, cron_job)
-        self.session.flush()
-        return cron_job_from_table(row)
-
-    def record_run(self, cron_job: CronJobRecord, *, workspace_id: str) -> bool:
-        if cron_job.workspace_id != workspace_id:
-            raise ConflictError("cron job ownership cannot change")
-        return (
-            self.session.scalar(
-                update(CronJobTable)
-                .where(
-                    CronJobTable.workspace_id == workspace_id,
-                    CronJobTable.name == cron_job.name,
-                    CronJobTable.deployment_id == cron_job.deployment_id,
-                    CronJobTable.cron == cron_job.cron,
-                )
-                .values(
-                    last_run_at=cron_job.last_run_at,
-                    next_run_at=cron_job.next_run_at,
-                    updated_at=cron_job.updated_at,
-                )
-                .returning(CronJobTable.name)
-            )
-            is not None
-        )
-
-    def get(self, name: str, *, workspace_id: str) -> CronJobRecord | None:
-        row = self.session.scalar(
-            select(CronJobTable).where(
-                CronJobTable.workspace_id == workspace_id,
-                CronJobTable.name == name,
-            )
-        )
-        return cron_job_from_table(row) if row is not None else None
-
-    def list(self, *, workspace_id: str) -> list[CronJobRecord]:
-        return [
-            cron_job_from_table(row)
-            for row in self.session.scalars(
-                select(CronJobTable)
-                .where(CronJobTable.workspace_id == workspace_id)
-                .order_by(CronJobTable.created_at.desc(), CronJobTable.id)
-            )
-        ]
-
-    def list_across_workspaces(self) -> list[CronJobRecord]:
-        """Scheduler-owned listing over every workspace's cron jobs."""
-        return [
-            cron_job_from_table(row)
-            for row in self.session.scalars(
-                select(CronJobTable).order_by(CronJobTable.created_at.desc(), CronJobTable.id)
-            )
-        ]
-
-    def delete(self, name: str, *, workspace_id: str) -> None:
-        self.session.execute(
-            delete(CronJobTable).where(
-                CronJobTable.workspace_id == workspace_id,
-                CronJobTable.name == name,
-            )
-        )
-
-    def due_across_workspaces(
-        self,
-        *,
-        now: datetime,
-        limit: int,
-    ) -> list[CronJobRecord]:
-        if limit <= 0:
-            return []
-        statement = (
-            select(CronJobTable)
-            .where(
-                CronJobTable.enabled.is_(True),
-                CronJobTable.next_run_at.is_not(None),
-                CronJobTable.next_run_at <= now,
-            )
-            .order_by(
-                CronJobTable.next_run_at.asc().nulls_first(),
-                CronJobTable.id.asc(),
-            )
-            .limit(limit)
-        )
-        return [cron_job_from_table(row) for row in self.session.scalars(statement)]

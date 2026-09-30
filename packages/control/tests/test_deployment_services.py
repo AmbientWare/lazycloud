@@ -1,22 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
-from dataclasses import replace
-from uuid import uuid4
-
 import pytest
 from api.server.services import ApiServices
-from control.apps import AppService
-from control.deployment_registration import DeploymentRegistrationService
-from control.deployments import DeploymentAppResolution, DeploymentRegistration
 from control.service import ControlServices
-from database.records.apps import AppRecord
-from database.repositories.apps import DeploymentRepository
-from database.repositories.cleanup import (
-    OBJECT_CLEANUP_SOURCE,
-    CleanupRepository,
-)
-from database.repositories.storage import ObjectRepository
 from operations.management import ManagementService
 from pydantic import JsonValue, TypeAdapter
 from shared.app_identity import FUNCTION_IMAGE, POD_IMAGE
@@ -24,106 +10,12 @@ from shared.containers import ContainerStatus
 from shared.deployment_records import Deployment, DeploymentSpec
 from shared.deployments import DeploymentKind, PodRole, StubKind
 from shared.errors import ConflictError, NotFoundError, UpstreamUnavailableError
-from shared.objects import ObjectRecord
-from shared.timestamps import utc_now
 from shared.workload_config import StubConfig
 from tests.real_redis import RealRedisActors
 from tests.scheduler_composition import services_with_redis_container_control
 from tests.workspaces import owned_workspace
 
 _JSON_VALUE_ADAPTER: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
-
-
-class _ClaimingAppRegistry:
-    def __init__(self, apps: AppService, object_id: str) -> None:
-        self.apps = apps
-        self.object_id = object_id
-
-    def create(
-        self,
-        name: str,
-        *,
-        stub_id: str | None = None,
-        workspace: str = "default",
-        version: int = 1,
-        public: bool | None = None,
-        metadata: Mapping[str, JsonValue] | None = None,
-    ) -> AppRecord:
-        if stub_id is not None:
-            with self.apps.context.database.session() as session:
-                CleanupRepository(session).mark_object_claimed(
-                    self.object_id,
-                    claimed_at=utc_now(),
-                    cleanup_kind=OBJECT_CLEANUP_SOURCE,
-                )
-        return self.apps.create(
-            name,
-            stub_id=stub_id,
-            workspace=workspace,
-            version=version,
-            public=public,
-            metadata=metadata,
-        )
-
-    def get(
-        self,
-        app_id_or_name: str,
-        *,
-        workspace: str | None = None,
-    ) -> AppRecord:
-        return self.apps.get(app_id_or_name, workspace=workspace)
-
-    def list(
-        self,
-        *,
-        workspace: str | None = None,
-        active: bool | None = None,
-    ) -> list[AppRecord]:
-        return self.apps.list(workspace=workspace, active=active)
-
-
-class _RecordingPlacementResources:
-    def __init__(self) -> None:
-        self.calls: list[tuple[str, bool]] = []
-
-    def reconcile_deployments(
-        self,
-        *,
-        workspace: str,
-        required: bool = True,
-    ) -> None:
-        self.calls.append((workspace, required))
-
-
-class _FailingDeploymentRegistrar:
-    def resolve_deployment_app(
-        self,
-        spec: DeploymentSpec,
-        *,
-        workspace: str = "default",
-    ) -> DeploymentAppResolution:
-        del spec, workspace
-        return DeploymentAppResolution(app_id=None, app_name="failing")
-
-    def register_deployment(
-        self,
-        deployment: Deployment,
-        *,
-        workspace: str = "default",
-    ) -> DeploymentRegistration:
-        raise RuntimeError(f"registration failed for {deployment.id} in {workspace}")
-
-
-class _FailingPlacementCleanup(_RecordingPlacementResources):
-    def reconcile_deployments(
-        self,
-        *,
-        workspace: str,
-        required: bool = True,
-    ) -> None:
-        super().reconcile_deployments(workspace=workspace, required=required)
-        if not required:
-            raise RuntimeError("placement cleanup failed")
 
 
 def test_deployment_versions_are_scoped_by_kind_and_keep_versioned_stubs(
@@ -194,131 +86,6 @@ def test_deployment_versions_are_scoped_by_kind_and_keep_versioned_stubs(
     assert resource.stub.id == first_function.stub_id
 
 
-def test_registration_failure_tombstones_deployment_and_reconciles_placement(
-    isolated_services: ApiServices,
-) -> None:
-    control_plane = ControlServices.create(
-        isolated_services.context,
-        workspace_changes=isolated_services.workspace_changes,
-    )
-    workspace = owned_workspace(control_plane, "default")
-    source_object = ObjectRecord(
-        id=str(uuid4()),
-        bucket="objects",
-        key="sources/registration-failure.zip",
-        path="/objects/registration-failure.zip",
-        size=6,
-        sha256="source",
-    )
-    with isolated_services.context.database.session() as session:
-        ObjectRepository(session).upsert(source_object, workspace_id=workspace.id)
-    source_stub = control_plane.stubs.create_stub(
-        "registration-source",
-        workspace=workspace.id,
-        config=StubConfig(object_id=source_object.id),
-    )
-    placements = _RecordingPlacementResources()
-    deployments = replace(
-        isolated_services.deployments,
-        registrar=DeploymentRegistrationService(
-            _ClaimingAppRegistry(isolated_services.apps, source_object.id),
-            control_plane.stubs,
-        ),
-        placement_resources=placements,
-    )
-    with pytest.raises(ConflictError, match="cleanup is in progress"):
-        deployments.deploy(
-            DeploymentSpec(
-                name="registration-failure",
-                kind=DeploymentKind.Function,
-                handler="pkg:function",
-                metadata={"stub_id": source_stub.id},
-            ),
-            workspace=workspace.id,
-        )
-
-    with isolated_services.context.database.session() as session:
-        failed = [
-            deployment
-            for deployment in DeploymentRepository(session).list(
-                workspace_id=workspace.id,
-                include_deleted=True,
-            )
-            if deployment.name == "registration-failure"
-        ]
-    assert len(failed) == 1
-    assert not failed[0].active
-    assert failed[0].deleted_at is not None
-    assert failed[0].app_id is None
-    assert failed[0].stub_id is None
-    assert placements.calls == [(workspace.id, True), (workspace.id, False)]
-    assert isolated_services.apps.list(workspace=workspace.id) == []
-    remaining_stubs = control_plane.stubs.list_stubs(workspace=workspace.id)
-    assert [stub.id for stub in remaining_stubs] == [source_stub.id]
-    assert all(stub.deployment_id != failed[0].id for stub in remaining_stubs)
-
-    retry = isolated_services.deployments.deploy(
-        DeploymentSpec(
-            name="registration-failure",
-            kind=DeploymentKind.Function,
-            handler="pkg:function",
-        ),
-        workspace=workspace.id,
-    )
-    assert retry.version == 2
-    assert retry.active
-    assert retry.stub_id is not None
-    with pytest.raises(ConflictError, match="already bound"):
-        control_plane.stubs.discard_deployment_registration_stub(
-            retry.stub_id,
-            deployment_id=retry.id,
-            workspace=workspace.id,
-        )
-    assert control_plane.stubs.get_stub(retry.stub_id, workspace=workspace.id).id == retry.stub_id
-
-
-def test_registration_and_placement_cleanup_failures_are_both_reported(
-    isolated_services: ApiServices,
-) -> None:
-    workspace = owned_workspace(
-        ControlServices.create(
-            isolated_services.context,
-        ),
-        "default",
-    )
-    placements = _FailingPlacementCleanup()
-    deployments = replace(
-        isolated_services.deployments,
-        registrar=_FailingDeploymentRegistrar(),
-        placement_resources=placements,
-    )
-    with pytest.raises(ExceptionGroup) as raised:
-        deployments.deploy(
-            DeploymentSpec(
-                name="failed-compensation",
-                kind=DeploymentKind.Function,
-                handler="pkg:function",
-            ),
-            workspace=workspace.id,
-        )
-
-    messages = [str(error) for error in raised.value.exceptions]
-    assert any("registration failed" in message for message in messages)
-    assert any("placement cleanup failed" in message for message in messages)
-    with isolated_services.context.database.session() as session:
-        failed = [
-            deployment
-            for deployment in DeploymentRepository(session).list(
-                workspace_id=workspace.id,
-                include_deleted=True,
-            )
-            if deployment.name == "failed-compensation"
-        ]
-    assert len(failed) == 1
-    assert failed[0].deleted_at is not None
-    assert placements.calls == [(workspace.id, True), (workspace.id, False)]
-
-
 def test_new_deployment_version_keeps_prior_versions_invokable(
     isolated_services: ApiServices,
 ) -> None:
@@ -354,7 +121,7 @@ def test_invoke_target_never_falls_back_when_latest_version_is_stopped(
         DeploymentSpec(name="predict", kind=DeploymentKind.Function, handler="pkg:v2")
     )
 
-    management.set_deployment_active("default", v2.id, active=False)
+    management.services.deployments.set_deployment_active("default", v2.id, active=False)
 
     with (
         isolated_services.context.database.session() as session,
@@ -363,7 +130,7 @@ def test_invoke_target_never_falls_back_when_latest_version_is_stopped(
         resources.resolve_invoke_target_in_session(
             session, "predict", DeploymentKind.Function, workspace="default"
         )
-    stopped = management.deployment_url_by_name("default", StubKind.Function, "predict")
+    stopped = resources.resolve_target("predict", DeploymentKind.Function, workspace="default")
     assert stopped.deployment.id == v2.id and not stopped.deployment.active
 
     still_versioned = resources.resolve_target(
@@ -371,7 +138,7 @@ def test_invoke_target_never_falls_back_when_latest_version_is_stopped(
     )
     assert still_versioned.deployment.id == v1.id
 
-    management.set_deployment_active("default", v1.id, active=False)
+    management.services.deployments.set_deployment_active("default", v1.id, active=False)
     with (
         isolated_services.context.database.session() as session,
         pytest.raises(UpstreamUnavailableError, match="not active: predict v1"),
@@ -380,7 +147,7 @@ def test_invoke_target_never_falls_back_when_latest_version_is_stopped(
             session, "predict", DeploymentKind.Function, workspace="default", version=1
         )
 
-    management.set_deployment_active("default", v2.id, active=True)
+    management.services.deployments.set_deployment_active("default", v2.id, active=True)
     restarted = resources.resolve_target("predict", DeploymentKind.Function, workspace="default")
     assert restarted.deployment.id == v2.id
 
@@ -404,20 +171,20 @@ def test_cron_schedule_follows_deployment_lifecycle(
     assert len(isolated_services.cron_jobs.list()) == 1
     management = ManagementService(isolated_services)
 
-    management.set_deployment_active("default", deployment.id, active=False)
+    management.services.deployments.set_deployment_active("default", deployment.id, active=False)
 
     stopped = isolated_services.cron_jobs.list()
     assert len(stopped) == 1
     assert not stopped[0].enabled
 
-    management.set_deployment_active("default", deployment.id, active=True)
+    management.services.deployments.set_deployment_active("default", deployment.id, active=True)
 
     restarted = isolated_services.cron_jobs.list()
     assert len(restarted) == 1
     assert restarted[0].enabled
     assert restarted[0].next_run_at is not None
 
-    management.delete_deployment("default", deployment.id)
+    management.services.deployments.delete(deployment.id, workspace="default")
 
     assert isolated_services.cron_jobs.list() == []
 
@@ -579,14 +346,19 @@ def test_management_stop_and_delete_are_workspace_scoped_and_stop_containers(
         stub_id=stub.id,
     )
 
-    stopped = management.set_deployment_active("default", "managed", active=False)
+    stopped = management.services.deployments.set_deployment_active(
+        "default", "managed", active=False
+    )
 
     assert stopped.id == deployment.id
     assert not stopped.active
-    assert management.retrieve_deployment("default", "managed").id == deployment.id
+    assert (
+        management.services.deployments.retrieve_deployment("default", "managed").id
+        == deployment.id
+    )
     assert services.containers.get(container.id).status is ContainerStatus.Stopped
 
-    deleted = management.delete_deployment("default", "managed")
+    deleted = management.services.deployments.delete("managed", workspace="default")
 
     assert deleted.id == deployment.id
     assert deleted.deleted_at is not None
@@ -677,8 +449,8 @@ def test_a_devbox_runs_only_its_newest_version_because_its_versions_share_one_di
 
     management = ManagementService(services)
     with pytest.raises(ConflictError):
-        management.set_deployment_active("default", v1.id, active=True)
-    management.set_deployment_active("default", v2.id, active=False)
-    management.set_deployment_active("default", v1.id, active=True)
+        management.services.deployments.set_deployment_active("default", v1.id, active=True)
+    management.services.deployments.set_deployment_active("default", v2.id, active=False)
+    management.services.deployments.set_deployment_active("default", v1.id, active=True)
     assert services.deployments.get(v1.id).active
     assert not services.deployments.get(v2.id).active

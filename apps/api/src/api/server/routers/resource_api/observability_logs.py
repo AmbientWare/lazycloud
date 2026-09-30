@@ -227,7 +227,7 @@ def _resolve_log_query_request(
 ) -> LogQueryRequest:
     if request.object_type is not LogObjectType.Deployment or not request.object_id:
         return request
-    deployment = _management(services).retrieve_deployment(
+    deployment = services.deployments.retrieve_deployment(
         request.workspace_id,
         request.object_id,
     )

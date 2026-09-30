@@ -5,7 +5,6 @@ import logging
 from dataclasses import dataclass
 from typing import Protocol
 
-from database.repositories.apps import DeploymentRepository
 from database.repositories.aws_connections import AwsAccountConnectionRepository
 from database.repositories.compute import (
     ComputeMachineEnrollmentRecord,
@@ -13,6 +12,7 @@ from database.repositories.compute import (
     ComputeProviderInstanceRecord,
     ComputeProviderInstanceRepository,
 )
+from database.repositories.deployments import DeploymentRepository
 from database.repositories.identity import (
     WorkspaceMemberRepository,
     WorkspaceRecord,

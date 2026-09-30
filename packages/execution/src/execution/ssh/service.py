@@ -9,13 +9,12 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from database.records.apps import StubRecord
-from database.repositories.apps import (
-    DeploymentRepository,
+from database.repositories.apps import StubRepository
+from database.repositories.deployment_resources import (
     DeploymentResourceRepository,
     DeploymentResourceRow,
-    SshPodRow,
-    StubRepository,
 )
+from database.repositories.deployments import DeploymentRepository, SshPodRow
 from database.repositories.identity import WorkspaceRepository
 from database.types import DatabaseSession
 from shared.deployment_subdomains import deployment_subdomain

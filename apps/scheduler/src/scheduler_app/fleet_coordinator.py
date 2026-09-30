@@ -56,6 +56,7 @@ class FleetCoordinator:
     interruptions: SchedulerCapacityInterruptionService
     consolidation: FleetConsolidationService | None
     housekeeping: FleetHousekeeping
+    releases: DeploymentReleaseService = field(default_factory=DeploymentReleaseService)
     managed_compute_reconcile_interval_seconds: float = 60
     last_release_reconcile_at: datetime | None = field(default=None, init=False)
     last_release_generation: int = field(default=0, init=False)
@@ -190,7 +191,7 @@ class FleetCoordinator:
             reserve_free_capacity(workers, now=now), now=now
         )
         plan = compute.reserves.reconcile_platform_reserves(
-            now=now, early=early, workers=workers, release=DeploymentReleaseService().active()
+            now=now, early=early, workers=workers, release=self.releases.active()
         )
         if self.consolidation is not None:
             self.consolidation.reconcile(plan, now=now)
@@ -206,7 +207,7 @@ class FleetCoordinator:
         return results
 
     def reconcile_release(self, workers: list[SchedulerWorkerRecord], *, now: datetime) -> None:
-        releases = DeploymentReleaseService()
+        releases = self.releases
         release = releases.active()
         controlled = release is not None and releases.controls(release)
         if release is None or not controlled:

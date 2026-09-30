@@ -50,6 +50,11 @@ from database.tables.compute import (
 from database.tables.container_rollouts import ContainerRolloutDrainTable
 from database.tables.credit_purchases import CreditPurchaseTable
 from database.tables.custom_domains import CustomDomainTable
+from database.tables.deployment_effects import (
+    DeploymentEffectTable,
+    DeploymentPreparationTable,
+    DeploymentShutdownTable,
+)
 from database.tables.deployment_prunes import DeploymentPruneTable, DeploymentPruneTargetTable
 from database.tables.disks import (
     DiskAttachmentTable,
@@ -153,8 +158,11 @@ __all__ = [
     "CronJobTable",
     "CustomDomainTable",
     "DatabaseBase",
+    "DeploymentEffectTable",
+    "DeploymentPreparationTable",
     "DeploymentPruneTable",
     "DeploymentPruneTargetTable",
+    "DeploymentShutdownTable",
     "DeploymentTable",
     "DiskAttachmentTable",
     "DiskGenerationTable",

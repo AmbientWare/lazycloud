@@ -13,8 +13,8 @@ from anyio import CancelScope
 from control.apps import DatabaseAppExecutionAdmission
 from control.stubs import StubService
 from database.records.apps import StubKind, StubRecord
-from database.repositories.apps import DeploymentRepository
 from database.repositories.container_rollouts import ContainerRolloutRepository
+from database.repositories.deployments import DeploymentRepository
 from database.repositories.execution import (
     LogPage,
     LogPageCursor,

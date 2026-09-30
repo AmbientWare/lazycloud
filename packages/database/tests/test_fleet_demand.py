@@ -3,7 +3,9 @@ from uuid import uuid4
 
 from database.mappers.containers import write_container
 from database.records.apps import StubRecord
-from database.repositories.apps import CronJobRepository, DeploymentRepository, StubRepository
+from database.repositories.apps import StubRepository
+from database.repositories.cron_jobs import CronJobRepository
+from database.repositories.deployments import DeploymentRepository
 from database.repositories.fleet_demand import FleetDemandRepository
 from database.tables.orchestration import ContainerTable
 from identity.platform import PlatformNamespaceService

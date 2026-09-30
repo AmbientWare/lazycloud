@@ -6,8 +6,9 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
-from database.repositories.apps import DeploymentRepository
 from database.repositories.aws_connections import AwsAccountConnectionRepository
+from database.repositories.deployment_effects import DeploymentEffectRepository
+from database.repositories.deployments import DeploymentRepository
 from database.repositories.identity import WorkspaceMemberRepository
 from pydantic import BaseModel, ConfigDict
 from shared.aws_connections import AwsAccountConnection, AwsAccountConnectionPhase
@@ -78,11 +79,7 @@ class AwsDeploymentBucketAccessService:
                     "connected AWS bucket access could not be reconciled"
                 ) from exc
             return
-        self._complete_if_current(
-            connection.id,
-            workspace_id=workspace_id,
-            applied_digest=_grants_digest(grants),
-        )
+        self._complete_if_current(connection.id, applied_digest=_grants_digest(grants))
 
     def reconcile_connection(self, connection: AwsAccountConnection) -> None:
         current, grants = self._snapshot_for_user(connection.user_id)
@@ -126,6 +123,9 @@ class AwsDeploymentBucketAccessService:
                     active=True,
                 )
             ]
+            deployments.extend(
+                DeploymentEffectRepository(session).preparations(workspace_ids, now=utc_now())
+            )
         grants = _deployment_bucket_access_grants(
             _deployments_on_connection(deployments, connection)
         )
@@ -153,7 +153,6 @@ class AwsDeploymentBucketAccessService:
         self,
         connection_id: str,
         *,
-        workspace_id: str,
         applied_digest: str,
     ) -> None:
         now = utc_now()
@@ -162,14 +161,19 @@ class AwsDeploymentBucketAccessService:
             current = repository.get(connection_id, for_update=True)
             if current is None:
                 return
-            deployments = DeploymentRepository(session).list(
-                workspace_id=workspace_id,
-                active=True,
-            )
+            workspace_ids = WorkspaceMemberRepository(session).owned_workspace_ids(current.user_id)
+            preparations = DeploymentEffectRepository(session).preparations(workspace_ids, now=now)
+            deployments = [
+                deployment
+                for workspace_id in workspace_ids
+                for deployment in DeploymentRepository(session).list(
+                    workspace_id=workspace_id, active=True
+                )
+            ]
             current_grants = _deployment_bucket_access_grants(
-                _deployments_on_connection(deployments, repository.get(connection_id))
+                _deployments_on_connection(deployments + preparations, current)
             )
-            still_current = _grants_digest(current_grants) == applied_digest
+            still_current = not preparations and _grants_digest(current_grants) == applied_digest
             repository.save(
                 current.model_copy(
                     update={

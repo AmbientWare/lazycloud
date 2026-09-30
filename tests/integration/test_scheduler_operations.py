@@ -2,7 +2,7 @@ from datetime import timedelta
 
 from api.fastapi_app import create_app
 from api.server.services import ApiServices
-from database.repositories.apps import CronJobRepository
+from database.repositories.cron_jobs import CronJobRepository
 from fastapi.testclient import TestClient
 from shared.deployment_records import DeploymentSpec
 from shared.deployments import DeploymentKind
