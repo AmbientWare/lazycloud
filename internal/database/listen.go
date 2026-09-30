@@ -100,12 +100,13 @@ func (l *Listener) Run(ctx context.Context) error {
 }
 
 func (l *Listener) listen(ctx context.Context) error {
-	conn, err := l.pool.Acquire(ctx)
+	pooled, err := l.pool.Acquire(ctx)
 	if err != nil {
 		return fmt.Errorf("acquire listener connection: %w", err)
 	}
 	// A listening connection must not return to the pool with LISTEN active.
-	defer conn.Hijack().Close(context.WithoutCancel(ctx)) //nolint:errcheck // Closing a dead listener connection has no recovery.
+	conn := pooled.Hijack()
+	defer conn.Close(context.WithoutCancel(ctx)) //nolint:errcheck // Closing a dead listener connection has no recovery.
 	for _, channel := range l.channels {
 		if _, err := conn.Exec(ctx, "listen "+pgx.Identifier{string(channel)}.Sanitize()); err != nil {
 			return fmt.Errorf("listen %s: %w", channel, err)
@@ -114,7 +115,7 @@ func (l *Listener) listen(ctx context.Context) error {
 	// Anything committed before LISTEN took effect must be re-read.
 	l.wakeAll()
 	for {
-		notification, err := conn.Conn().WaitForNotification(ctx)
+		notification, err := conn.WaitForNotification(ctx)
 		if err != nil {
 			return fmt.Errorf("wait for notification: %w", err)
 		}
