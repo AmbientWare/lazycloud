@@ -121,3 +121,29 @@ supervisor's certificate server, with the CA and host keys stored per
 workspace so they rotate independently. Connections reach containers
 through the agent's data connection. Idle detection uses heartbeated
 `container_leases` rows instead of Redis counters that never expire.
+
+## Packets
+
+Each packet delivers its parity sections from tasks/parity.md one to one,
+across the Go owners, host runtime, contracts and the Python SDK and CLI.
+Dashboard pages come in the web packet once their APIs exist.
+
+| Packet | Parity sections | Migration | Proto field range |
+| --- | --- | --- | --- |
+| identity | Auth and accounts; Workspaces, members and invitations | 0002 | none |
+| control | Apps and deployments; Functions and tasks (rest); Logs CLI | 0003 | 60-69 |
+| workload-runtime | Container API; Secrets; Schedules; lifecycle hooks; callbacks; in_process slots | 0004 | 10-19 |
+| images | Images | 0005 | 20-29 |
+| endpoints | Endpoints, ASGI and realtime; Custom domains; HTTP function invoke; serve | 0006 | 30-39 |
+| storage | Volumes and disks; Artifacts; Maps and queues | 0007 | 40-49 |
+
+Shared-file rules for concurrent packets:
+
+- Migrations: a packet adds only its numbered file. Earlier files are frozen.
+- Protobuf: new fields and oneof arms in existing messages use only the
+  packet's range. New messages and RPCs are free. Regenerate after editing.
+- OpenAPI: add paths and schemas in the packet's own tag section. Do not
+  rename existing schemas.
+- Go: new files per owner. `cmd/server/main.go`, `internal/api` Owners and
+  `cmd/scheduler/main.go` get minimal wiring edits that the integrator merges.
+- Python: new modules per area. Edits to shared SDK modules stay minimal.
