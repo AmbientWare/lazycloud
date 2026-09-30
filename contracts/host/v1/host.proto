@@ -90,6 +90,9 @@ message ContainerReport {
   ContainerPhase phase = 2;
   ContainerExit exit = 3;
   google.protobuf.Timestamp observed_at = 4;
+  // Attempts the container is running. The server cancels any whose durable
+  // state is no longer running, which covers cancels lost in a disconnect.
+  repeated string running_attempts = 5;
 }
 
 message ContainerExit {

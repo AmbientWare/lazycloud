@@ -144,7 +144,9 @@ Owner package conventions:
   (`execution.NewExecution`), because sqlc's `New` builds `Queries`.
 - `Execution.finishAttempt` is the single transition from a running attempt to
   a task outcome. Completion, timeouts, container exits and host loss all call
-  it. Lock order is task, then attempt, then container.
+  it. `Execution.containerExited` is the single container stop transition:
+  reports, start timeouts and host loss call it. Lock order is container,
+  then task, then attempt; no transaction locks a container after a task.
 
 ```yaml
 version: "2"

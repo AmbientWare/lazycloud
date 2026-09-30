@@ -677,13 +677,16 @@ func (x *Hello) GetAgentVersion() string {
 }
 
 type ContainerReport struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ContainerId   string                 `protobuf:"bytes,1,opt,name=container_id,json=containerId,proto3" json:"container_id,omitempty"`
-	Phase         ContainerPhase         `protobuf:"varint,2,opt,name=phase,proto3,enum=lazycloud.host.v1.ContainerPhase" json:"phase,omitempty"`
-	Exit          *ContainerExit         `protobuf:"bytes,3,opt,name=exit,proto3" json:"exit,omitempty"`
-	ObservedAt    *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=observed_at,json=observedAt,proto3" json:"observed_at,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	ContainerId string                 `protobuf:"bytes,1,opt,name=container_id,json=containerId,proto3" json:"container_id,omitempty"`
+	Phase       ContainerPhase         `protobuf:"varint,2,opt,name=phase,proto3,enum=lazycloud.host.v1.ContainerPhase" json:"phase,omitempty"`
+	Exit        *ContainerExit         `protobuf:"bytes,3,opt,name=exit,proto3" json:"exit,omitempty"`
+	ObservedAt  *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=observed_at,json=observedAt,proto3" json:"observed_at,omitempty"`
+	// Attempts the container is running. The server cancels any whose durable
+	// state is no longer running, which covers cancels lost in a disconnect.
+	RunningAttempts []string `protobuf:"bytes,5,rep,name=running_attempts,json=runningAttempts,proto3" json:"running_attempts,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *ContainerReport) Reset() {
@@ -740,6 +743,13 @@ func (x *ContainerReport) GetExit() *ContainerExit {
 func (x *ContainerReport) GetObservedAt() *timestamppb.Timestamp {
 	if x != nil {
 		return x.ObservedAt
+	}
+	return nil
+}
+
+func (x *ContainerReport) GetRunningAttempts() []string {
+	if x != nil {
+		return x.RunningAttempts
 	}
 	return nil
 }
@@ -2017,13 +2027,14 @@ const file_host_v1_host_proto_rawDesc = "" +
 	"\n" +
 	"containers\x18\x03 \x03(\v2\".lazycloud.host.v1.ContainerReportR\n" +
 	"containers\x12#\n" +
-	"\ragent_version\x18\x04 \x01(\tR\fagentVersion\"\xe0\x01\n" +
+	"\ragent_version\x18\x04 \x01(\tR\fagentVersion\"\x8b\x02\n" +
 	"\x0fContainerReport\x12!\n" +
 	"\fcontainer_id\x18\x01 \x01(\tR\vcontainerId\x127\n" +
 	"\x05phase\x18\x02 \x01(\x0e2!.lazycloud.host.v1.ContainerPhaseR\x05phase\x124\n" +
 	"\x04exit\x18\x03 \x01(\v2 .lazycloud.host.v1.ContainerExitR\x04exit\x12;\n" +
 	"\vobserved_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"observedAt\"\xb3\x01\n" +
+	"observedAt\x12)\n" +
+	"\x10running_attempts\x18\x05 \x03(\tR\x0frunningAttempts\"\xb3\x01\n" +
 	"\rContainerExit\x125\n" +
 	"\x06reason\x18\x01 \x01(\x0e2\x1d.lazycloud.host.v1.ExitReasonR\x06reason\x12\x1b\n" +
 	"\texit_code\x18\x02 \x01(\x05R\bexitCode\x12\x18\n" +
