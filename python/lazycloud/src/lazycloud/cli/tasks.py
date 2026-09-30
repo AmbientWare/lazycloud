@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+from pydantic import JsonValue
 
 from lazycloud._terminal.cards import notice_card, result_card
 from lazycloud._terminal.formatting import timestamp
@@ -29,7 +30,7 @@ def task_show(
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
     view = Task.from_id(task_id, workspace=workspace).status()
-    summary: dict[str, object] = {
+    summary: dict[str, JsonValue] = {
         "function": f"{view.app}.{view.function}",
         "status": view.status.value,
         "attempts": view.attempts,

@@ -110,13 +110,9 @@ class Task:
         while True:
             try:
                 return call()
-            except ApiError as exc:
-                if exc.status_code == 404:
-                    raise TaskNotFoundError(self.task_id) from exc
-                failures += 1
-                if not is_transient(exc) or failures >= _TRANSIENT_ATTEMPTS:
-                    raise
             except Exception as exc:
+                if isinstance(exc, ApiError) and exc.status_code == 404:
+                    raise TaskNotFoundError(self.task_id) from exc
                 failures += 1
                 if not is_transient(exc) or failures >= _TRANSIENT_ATTEMPTS:
                     raise

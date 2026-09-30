@@ -13,6 +13,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+from collections.abc import Mapping
 
 PROBE_APP = """
 import platform
@@ -32,7 +33,7 @@ def probe(count: int) -> dict:
 """
 
 
-def send(sock: socket.socket, header: dict[str, object], payload: bytes = b"") -> None:
+def send(sock: socket.socket, header: Mapping[str, object], payload: bytes = b"") -> None:
     encoded = json.dumps(header).encode()
     sock.sendall(
         len(encoded).to_bytes(4, "big") + encoded + len(payload).to_bytes(4, "big") + payload
@@ -82,7 +83,11 @@ def main() -> int:
             send(parent, invoke, json.dumps({"args": ["3"], "kwargs": {}}).encode())
             reply, payload = receive(parent)
         code = process.wait(timeout=60)
-    expected = {"task": "probe-task", "count": 3, "python": platform.python_version()}
+    expected: dict[str, object] = {
+        "task": "probe-task",
+        "count": 3,
+        "python": platform.python_version(),
+    }
     if reply.get("type") != "succeeded" or json.loads(payload) != expected or code != 0:
         raise SystemExit(f"unexpected invoke reply: {reply} {payload!r} exit={code}")
     print(f"runtime probe ok: python {expected['python']} task {expected['task']}")

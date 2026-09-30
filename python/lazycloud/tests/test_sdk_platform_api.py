@@ -13,7 +13,6 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
-import cloudpickle
 import pytest
 from lazycloud.cli.components.errors import ClientError
 from lazycloud.cli.main import build_public_cli, start
@@ -23,6 +22,7 @@ from lazycloud.exceptions import (
     RemoteTaskError,
     UnsupportedFeatureError,
 )
+from lazycloud.values import cloudpickle_bytes
 from typer.testing import CliRunner
 
 from tests.api_server import (
@@ -70,7 +70,7 @@ def summarize_sales(values: list[int]) -> int:
 def _project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source: str = REPORTS) -> ModuleType:
     (tmp_path / "reports.py").write_text(source, encoding="utf-8")
     monkeypatch.chdir(tmp_path)
-    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setattr(sys, "path", [str(tmp_path), *sys.path])
     sys.modules.pop("reports", None)
     return importlib.import_module("reports")
 
@@ -93,13 +93,12 @@ def _task_id(index: int) -> str:
 
 
 def _pickled(value: object) -> str:
-    return base64.b64encode(cloudpickle.dumps(value)).decode()
+    return base64.b64encode(cloudpickle_bytes(value)).decode()
 
 
 def _inputs(request: ApiRequest) -> list[dict[str, Any]]:
     body = request.json()
-    assert isinstance(body, dict)
-    decoded = []
+    decoded: list[dict[str, Any]] = []
     for item in body["inputs"]:
         assert item["encoding"] == "cloudpickle"
         decoded.append(pickle.loads(base64.b64decode(item["data"])))
@@ -109,9 +108,7 @@ def _inputs(request: ApiRequest) -> list[dict[str, Any]]:
 def _serve_deployment(api: FakeApi, *, stored: set[str]) -> None:
     @api.route("POST", "/v1/workspaces/team/sources")
     def sources(request: ApiRequest) -> Reply:
-        body = request.json()
-        assert isinstance(body, dict)
-        sha = body["sha256"]
+        sha: str = request.json()["sha256"]
         state: dict[str, object] = {"sha256": sha, "present": sha in stored}
         if sha not in stored:
             state["upload"] = {
@@ -129,24 +126,19 @@ def _serve_deployment(api: FakeApi, *, stored: set[str]) -> None:
 
     @api.route("POST", "/v1/workspaces/team/apps/reports/deployments")
     def deploy(request: ApiRequest) -> Reply:
-        body = request.json()
-        assert isinstance(body, dict)
-        return json_reply(
+        functions: list[dict[str, Any]] = request.json()["functions"]
+        releases: list[dict[str, object]] = [
             {
-                "app": {"id": APP_ID, "name": "reports", "state": "active", "created_at": NOW},
-                "releases": [
-                    {
-                        "id": RELEASE_ID,
-                        "function": spec["name"],
-                        "version": 1,
-                        "created_at": NOW,
-                        "spec": spec,
-                    }
-                    for spec in body["functions"]
-                ],
-                "pruned": [],
+                "id": RELEASE_ID,
+                "function": spec["name"],
+                "version": 1,
+                "created_at": NOW,
+                "spec": spec,
             }
-        )
+            for spec in functions
+        ]
+        app = {"id": APP_ID, "name": "reports", "state": "active", "created_at": NOW}
+        return json_reply({"app": app, "releases": releases, "pruned": []})
 
 
 def test_deploy_uploads_the_source_once_and_maps_function_options(
@@ -244,7 +236,13 @@ def test_remote_streams_output_resumes_dropped_logs_and_returns_the_value(
     log_streams: list[Iterator[bytes]] = []
 
     def entry(number: int, stream: str, data: str) -> bytes:
-        record = {"id": number, "attempt": 1, "stream": stream, "data": data, "time": NOW}
+        record: dict[str, object] = {
+            "id": number,
+            "attempt": 1,
+            "stream": stream,
+            "data": data,
+            "time": NOW,
+        }
         return json.dumps(record).encode() + b"\n"
 
     def dropped() -> Iterator[bytes]:
@@ -341,7 +339,7 @@ def test_spawn_map_submits_in_batches_and_keeps_input_order(
 
     @fake_api.route("POST", TASKS)
     def submit(request: ApiRequest) -> Reply:
-        tasks = []
+        tasks: list[dict[str, object]] = []
         for payload in _inputs(request):
             submitted.append(payload["args"][0])
             tasks.append(_task(_task_id(submitted[-1])))
@@ -438,7 +436,7 @@ def test_cli_run_json_and_task_commands_use_the_task_api(
     assert ran.exit_code == 0, ran.output
     assert json.loads(ran.stdout) == 6
     (submit,) = fake_api.calls("POST", TASKS)
-    arguments = {"args": [[1, 2, 3]], "kwargs": {}}
+    arguments: dict[str, object] = {"args": [[1, 2, 3]], "kwargs": {}}
     assert submit.json() == {"inputs": [{"encoding": "json", "value": arguments}]}
     assert result.exit_code == 0, result.output
     assert json.loads(result.stdout) == 6

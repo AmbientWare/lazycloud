@@ -4,7 +4,7 @@ import inspect
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from copy import deepcopy
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ParamSpec, Protocol, TypeVar, overload
+from typing import TYPE_CHECKING, Any, ParamSpec, Protocol, TypeVar, cast, overload
 
 from shared.app_slug import validate_app_slug
 from shared.autoscaling import Autoscaler
@@ -1012,15 +1012,18 @@ class App:
         selected = (
             self._select_many(resource=resource, method="deploy") if resource else self.resources
         )
-        functions = tuple(item for item in selected if isinstance(item, Function))
-        unsupported = [
-            _resource_selector(item) for item in selected if not isinstance(item, Function)
-        ]
+        functions: list[Function[..., Any]] = []
+        unsupported: list[str] = []
+        for item in selected:
+            if isinstance(item, Function):
+                functions.append(cast("Function[..., Any]", item))
+            else:
+                unsupported.append(_resource_selector(item))
         if unsupported:
             raise UnsupportedFeatureError(f"app {self.slug}", unsupported)
         if not functions:
             raise AppOperationError(f"app {self.slug} has no functions to deploy")
-        return AppFunctions(app=self.slug, functions=functions, prune=prune)
+        return AppFunctions(app=self.slug, functions=tuple(functions), prune=prune)
 
     def serve(
         self,

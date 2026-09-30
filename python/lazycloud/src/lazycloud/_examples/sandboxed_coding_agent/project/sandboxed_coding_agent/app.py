@@ -264,10 +264,7 @@ def _seed_files() -> dict[str, str]:
 
 def _invoke_planner(prompt: str, seed_files: dict[str, str]) -> tuple[str, PatchPlan]:
     handle = plan_patch.spawn(prompt, seed_files)
-    result = handle.result(wait=True, timeout_seconds=180, poll_interval_seconds=1)
-    if not result.ok:
-        raise RuntimeError(result.error or "planner Task failed")
-    return handle.task_id, validate_patch_plan(result.task.result)
+    return handle.task_id, handle.get(timeout_seconds=180)
 
 
 def _bounded_output(stdout: str, stderr: str) -> str:

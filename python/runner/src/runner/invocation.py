@@ -2,13 +2,24 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import io
+import pickle
 from collections.abc import Callable
 from typing import Any
 
+import cloudpickle
 from shared.callables import InvocationHandler, prepare_callable_arguments
 from shared.function_payloads import FunctionPayloadEncoding
 
 from runner.protocol_models import Encoding
+
+
+def cloudpickle_bytes(value: Any) -> bytes:
+    """Cloudpickle through the typed pickle entry point."""
+
+    stream = io.BytesIO()
+    pickle.Pickler.dump(cloudpickle.CloudPickler(stream), value)
+    return stream.getvalue()
 
 
 def invoke_handler(
@@ -39,4 +50,4 @@ async def _await(value: Any) -> Any:
     return await value
 
 
-__all__ = ["invoke_handler"]
+__all__ = ["cloudpickle_bytes", "invoke_handler"]

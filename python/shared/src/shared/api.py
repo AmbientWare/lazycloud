@@ -92,7 +92,7 @@ class Backoff(str, Enum):
 class RetryPolicy(BaseModel):
     max_attempts: Annotated[int, Field(description="Attempts including the first.", ge=1, le=100)]
     delay_seconds: Annotated[float | None, Field(ge=0.0, le=3600.0)] = 0
-    backoff: Backoff | None = "fixed"
+    backoff: Backoff | None = Backoff.fixed
     max_delay_seconds: Annotated[float | None, Field(ge=0.0, le=86400.0)] = None
 
 

@@ -74,6 +74,7 @@ use-union-operator = true
 use-double-quotes = true
 use-subclass-enum = true
 enum-field-as-literal = "one"
+set-default-enum-member = true
 collapse-root-models = true
 disable-timestamp = true
 type-mappings = ["string+byte=binary"]

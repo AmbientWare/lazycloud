@@ -12,6 +12,7 @@ from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Any, ClassVar
 from urllib.parse import parse_qs, urlsplit
 
 from tests.http_server import running_http_server
@@ -28,7 +29,7 @@ class ApiRequest:
     headers: dict[str, str]
     body: bytes
 
-    def json(self) -> object:
+    def json(self) -> Any:
         return json.loads(self.body)
 
 
@@ -68,7 +69,7 @@ class FakeApi:
 
 class _Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
-    server: _Server
+    api: ClassVar[FakeApi]
 
     def log_message(self, format: str, *args: object) -> None:
         return None
@@ -92,7 +93,7 @@ class _Handler(BaseHTTPRequestHandler):
             headers={name.lower(): value for name, value in self.headers.items()},
             body=self.rfile.read(length) if length else b"",
         )
-        api = self.server.api
+        api = self.api
         api.requests.append(request)
         for method, pattern, handler in api.routes:
             if method == request.method and pattern.fullmatch(request.path):
@@ -120,14 +121,12 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(b"0\r\n\r\n")
 
 
-class _Server(ThreadingHTTPServer):
-    daemon_threads = True
-    api: FakeApi
-
-
 @contextmanager
 def running_fake_api() -> Iterator[FakeApi]:
-    server = _Server(("127.0.0.1", 0), _Handler)
-    server.api = FakeApi(url=f"http://127.0.0.1:{server.server_address[1]}")
+    api = FakeApi()
+    handler = type("_BoundHandler", (_Handler,), {"api": api})
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    server.daemon_threads = True
+    api.url = f"http://127.0.0.1:{server.server_address[1]}"
     with running_http_server(server):
-        yield server.api
+        yield api

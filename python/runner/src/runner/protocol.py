@@ -11,20 +11,20 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import pickle
 import socket
 import sys
 import traceback
 from collections.abc import Callable
 from typing import Annotated, Any
 
-import cloudpickle
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 from shared.errors import InvalidInputError
 from shared.serialization import to_json_value
 from shared.task_context import task_context
 
 from runner.handler_loading import load_handler
-from runner.invocation import invoke_handler
+from runner.invocation import cloudpickle_bytes, invoke_handler
 from runner.protocol_models import (
     Encoding,
     Failed,
@@ -67,7 +67,7 @@ class Connection:
     def receive(self) -> tuple[Load | Invoke, bytearray] | None:
         """Read one frame, or None when the supervisor closed between frames."""
 
-        prefix = self._read(4, eof_allowed=True)
+        prefix = self._read_prefix()
         if prefix is None:
             return None
         header_length = int.from_bytes(prefix, "big")
@@ -92,15 +92,21 @@ class Connection:
         if payload:
             self._sock.sendall(payload)
 
-    def _read(self, size: int, *, eof_allowed: bool = False) -> bytearray | None:
+    def _read_prefix(self) -> bytearray | None:
+        """The next frame's header length bytes, or None on a clean close."""
+
+        first = self._sock.recv(1)
+        if not first:
+            return None
+        return bytearray(first) + self._read(3)
+
+    def _read(self, size: int) -> bytearray:
         buffer = bytearray(size)
         view = memoryview(buffer)
         filled = 0
         while filled < size:
             count = self._sock.recv_into(view[filled:])
             if count == 0:
-                if filled == 0 and eof_allowed:
-                    return None
                 raise ProtocolError("supervisor closed the socket inside a frame")
             filled += count
         return buffer
@@ -160,7 +166,7 @@ def _decode_arguments(
         if encoding is Encoding.json:
             arguments = _Arguments.model_validate_json(payload)
         else:
-            arguments = _Arguments.model_validate(cloudpickle.loads(payload))
+            arguments = _Arguments.model_validate(pickle.loads(payload))
     except Exception as exc:
         raise InvalidInputError(f"invalid {encoding.value} arguments: {exc}") from exc
     return tuple(arguments.args), arguments.kwargs
@@ -173,7 +179,7 @@ def _encode_result(result: Any, encoding: Encoding) -> bytes:
                 to_json_value(result), ensure_ascii=False, allow_nan=False, separators=(",", ":")
             ).encode()
         else:
-            encoded = cloudpickle.dumps(result)
+            encoded = cloudpickle_bytes(result)
     except Exception as exc:
         raise ValueError(
             f"return value of type {type(result).__name__} cannot be encoded as "
@@ -203,8 +209,8 @@ def _exception_payload(exc: BaseException) -> bytes:
     """Cloudpickle the exception when it survives a round trip, else nothing."""
 
     try:
-        encoded = cloudpickle.dumps(exc)
-        cloudpickle.loads(encoded)
+        encoded = cloudpickle_bytes(exc)
+        pickle.loads(encoded)
     except KeyboardInterrupt:
         raise
     except BaseException:

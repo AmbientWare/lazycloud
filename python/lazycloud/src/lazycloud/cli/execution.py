@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Annotated, Any, Protocol, runtime_checkable
 
 import typer
+from pydantic import JsonValue
 from shared.api import Deployment
 
 from lazycloud._invocation import prepare_arguments
@@ -94,22 +95,22 @@ def deploy(
                     kwargs={"workspace": selected_workspace, "source_root": source_root},
                 )
                 return
-    summaries = [_deployment_summary(item) for item in deployments]
+    summaries: list[JsonValue] = [_deployment_summary(item) for item in deployments]
     emit(
         ctx,
         payload=[item.model_dump(mode="json") for item in deployments]
         if len(deployments) > 1
         else deployments[0].model_dump(mode="json"),
         view=result_card(
-            summaries[0] if len(summaries) == 1 else {"apps": summaries},
+            summaries[0] if len(summaries) == 1 else {"apps": list(summaries)},
             title="App deployed" if len(summaries) == 1 else "Apps deployed",
             tone="success",
         ),
     )
 
 
-def _deployment_summary(deployment: Deployment) -> dict[str, object]:
-    summary: dict[str, object] = {
+def _deployment_summary(deployment: Deployment) -> dict[str, JsonValue]:
+    summary: dict[str, JsonValue] = {
         "app": deployment.app.name,
         "functions": [f"{release.function} v{release.version}" for release in deployment.releases],
     }

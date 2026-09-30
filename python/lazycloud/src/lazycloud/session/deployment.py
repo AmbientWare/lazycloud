@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from shared.api import Deployment, DeploymentRequest, FunctionSpec, SourceUploadRequest
 
@@ -37,7 +37,7 @@ class AppFunctions:
     """The functions of one app that a deployment makes current."""
 
     app: str
-    functions: tuple[Function[..., object], ...]
+    functions: tuple[Function[..., Any], ...]
     prune: bool = False
 
 
@@ -95,7 +95,7 @@ def deploy_functions(
     return deployments
 
 
-def _source_placement(function: Function[..., object], root: Path) -> tuple[str, tuple[str, ...]]:
+def _source_placement(function: Function[..., Any], root: Path) -> tuple[str, tuple[str, ...]]:
     """The handler reference inside the archive and the archive's module prefix."""
     try:
         reference = source_root_handler_reference(dotted_reference(function.func), root)

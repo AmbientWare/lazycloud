@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import cloudpickle
 import pytest
+from runner.invocation import cloudpickle_bytes
 
 HANDLERS = """
 import asyncio
@@ -80,7 +82,7 @@ def workdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / "broken.py").write_text("def handler(:\n", encoding="utf-8")
     (tmp_path / "exits.py").write_text("raise SystemExit(3)\n", encoding="utf-8")
     # Lets this process unpickle exceptions defined in the user module.
-    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setattr(sys, "path", [str(tmp_path), *sys.path])
     return tmp_path
 
 
@@ -112,9 +114,9 @@ def test_cloudpickle_invocation_round_trips_python_objects(
     runner = start_runner(workdir)
     runner.load("handlers:echo")
 
-    value = {"set": {1, 2}, "bytes": b"\x00\xff"}
+    value: dict[str, object] = {"set": {1, 2}, "bytes": b"\x00\xff"}
     header, payload = runner.invoke(
-        cloudpickle.dumps({"args": [value], "kwargs": {}}), encoding="cloudpickle"
+        cloudpickle_bytes({"args": [value], "kwargs": {}}), encoding="cloudpickle"
     )
 
     assert header["type"] == "succeeded"
