@@ -33,12 +33,19 @@ where b.user_id = p.user_id and a.user_id = p.user_id
   and (b.balance_nanos - b.accrued_nanos > 0 or a.complimentary_since is not null)
 returning p.message_id;
 
+-- name: ExpiredUnfundedAccounts :many
+select user_id from unfunded_periods where started_at <= now() - make_interval(days => @days::int) order by user_id;
+
 -- name: ExpiredUnfundedWorkspaces :many
--- Workspaces whose owner stayed without credit through the period.
+-- Workspaces whose owner stayed without credit through the period and is
+-- still without it on a settled balance.
 select p.user_id, o.workspace_id
 from unfunded_periods p
+join billing_balances b on b.user_id = p.user_id
+join billing_accounts a on a.user_id = p.user_id
 join workspace_members o on o.user_id = p.user_id and o.role = 'owner'
 where p.started_at <= now() - make_interval(days => @days::int)
+  and b.balance_nanos - b.accrued_nanos <= 0 and not b.due and a.complimentary_since is null
 order by p.user_id, o.workspace_id;
 
 -- name: EndUnfundedPeriod :exec

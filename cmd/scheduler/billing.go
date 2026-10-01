@@ -107,9 +107,11 @@ func (b *billingLoops) meter(ctx context.Context) {
 	if _, err := b.billing.Meter(ctx); err != nil {
 		b.logger.ErrorContext(ctx, "metering pass", "error", err)
 	}
+	var rollupErr error
 	for {
 		result, err := b.billing.Rollup(ctx)
 		if err != nil {
+			rollupErr = err
 			b.logger.ErrorContext(ctx, "balance rollup", "error", err)
 		}
 		if err != nil || !result.More {
@@ -132,6 +134,10 @@ func (b *billingLoops) meter(ctx context.Context) {
 					"count", stopped, "reason", account.Reason)
 			}
 		}
+	}
+	// A reload decides from settled balances; without a rollup it waits.
+	if rollupErr != nil {
+		return
 	}
 	if _, err := b.billing.Reload(ctx); err != nil {
 		b.logger.ErrorContext(ctx, "automatic reload", "error", err)

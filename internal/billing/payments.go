@@ -243,6 +243,32 @@ func (b *Billing) settlePurchase(ctx context.Context, id uuid.UUID) error {
 		p, err = s.checkoutPayment(ctx, *row.CheckoutSessionID)
 	case row.Status != paymentPending:
 		return nil
+	case row.Kind == purchaseAutomatic:
+		// The payment may exist with its creation response lost: find it by
+		// the purchase id it carries before charging again or giving up.
+		found, ferr := s.paymentOfPurchase(ctx, row.ID)
+		if ferr != nil {
+			return ferr
+		}
+		switch {
+		case found != "":
+			if err := b.queries.PurchaseIntentFound(ctx, PurchaseIntentFoundParams{ID: row.ID, PaymentIntentID: found}); err != nil {
+				return fmt.Errorf("record found payment: %w", err)
+			}
+			p, err = s.payment(ctx, found)
+		case time.Since(row.CreatedAt) > purchaseRetryWindow:
+			p = payment{purchase: id.String(), status: paymentCancelled}
+		default:
+			eligible, eerr := b.queries.ReloadEligible(ctx, row.UserID)
+			if eerr != nil {
+				return fmt.Errorf("check reload: %w", eerr)
+			}
+			if !eligible {
+				p = payment{purchase: id.String(), status: paymentCancelled}
+				break
+			}
+			p, err = s.chargeCard(ctx, *customer.StripeCustomerID, row.ID, row.AmountNanos/nanosPerCent)
+		}
 	case time.Since(row.CreatedAt) > purchaseRetryWindow:
 		p = payment{purchase: id.String(), status: paymentCancelled}
 	case row.Kind == purchaseManual:
@@ -254,8 +280,6 @@ func (b *Billing) settlePurchase(ctx context.Context, id uuid.UUID) error {
 			ID: row.ID, CheckoutSessionID: &session.id, CheckoutUrl: &session.url, CheckoutExpiresAt: &session.expires,
 			NextAttemptAt: session.expires.Add(time.Minute),
 		})
-	default:
-		p, err = s.chargeCard(ctx, *customer.StripeCustomerID, row.ID, row.AmountNanos/nanosPerCent)
 	}
 	if err != nil {
 		return err
@@ -348,14 +372,12 @@ func (b *Billing) Reload(ctx context.Context) (int, error) {
 	}
 	started := 0
 	for _, account := range due {
-		id, err := b.queries.InsertAutomaticPurchase(ctx, InsertAutomaticPurchaseParams{
-			UserID: account.UserID, AmountNanos: int64(account.ReloadAmountCents) * nanosPerCent,
-		})
-		if errors.Is(err, pgx.ErrNoRows) {
-			continue
-		}
+		id, ok, err := b.startReload(ctx, account.UserID)
 		if err != nil {
-			return started, fmt.Errorf("insert automatic purchase: %w", err)
+			return started, err
+		}
+		if !ok {
+			continue
 		}
 		started++
 		if err := b.settlePurchase(ctx, id); err != nil {
@@ -363,6 +385,44 @@ func (b *Billing) Reload(ctx context.Context) (int, error) {
 		}
 	}
 	return started, nil
+}
+
+// startReload decides one account's reload under its balance lock: the
+// balance is settled first, so credit a reload just added counts, and the
+// purchase is inserted in the same transaction as the decision.
+func (b *Billing) startReload(ctx context.Context, user uuid.UUID) (uuid.UUID, bool, error) {
+	var id uuid.UUID
+	started := false
+	err := pgx.BeginFunc(ctx, b.pool, func(tx pgx.Tx) error {
+		q := b.queries.WithTx(tx)
+		account, err := q.LockBalance(ctx, user)
+		if err != nil {
+			return fmt.Errorf("lock balance: %w", err)
+		}
+		if err := settle(ctx, q, user, account.ComplimentarySince, account.Now); err != nil {
+			return err
+		}
+		cents, err := q.ReloadAmount(ctx, user)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("read reload: %w", err)
+		}
+		id, err = q.InsertAutomaticPurchase(ctx, InsertAutomaticPurchaseParams{UserID: user, AmountNanos: int64(cents) * nanosPerCent})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("insert automatic purchase: %w", err)
+		}
+		started = true
+		return nil
+	})
+	if err != nil {
+		return uuid.UUID{}, false, fmt.Errorf("start automatic reload: %w", err)
+	}
+	return id, started, nil
 }
 
 func truncate(s string) string {

@@ -50,11 +50,38 @@ func (q *Queries) EndUnfundedPeriod(ctx context.Context, userID uuid.UUID) error
 	return err
 }
 
+const expiredUnfundedAccounts = `-- name: ExpiredUnfundedAccounts :many
+select user_id from unfunded_periods where started_at <= now() - make_interval(days => $1::int) order by user_id
+`
+
+func (q *Queries) ExpiredUnfundedAccounts(ctx context.Context, days int32) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, expiredUnfundedAccounts, days)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var user_id uuid.UUID
+		if err := rows.Scan(&user_id); err != nil {
+			return nil, err
+		}
+		items = append(items, user_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const expiredUnfundedWorkspaces = `-- name: ExpiredUnfundedWorkspaces :many
 select p.user_id, o.workspace_id
 from unfunded_periods p
+join billing_balances b on b.user_id = p.user_id
+join billing_accounts a on a.user_id = p.user_id
 join workspace_members o on o.user_id = p.user_id and o.role = 'owner'
 where p.started_at <= now() - make_interval(days => $1::int)
+  and b.balance_nanos - b.accrued_nanos <= 0 and not b.due and a.complimentary_since is null
 order by p.user_id, o.workspace_id
 `
 
@@ -63,7 +90,8 @@ type ExpiredUnfundedWorkspacesRow struct {
 	WorkspaceID uuid.UUID
 }
 
-// Workspaces whose owner stayed without credit through the period.
+// Workspaces whose owner stayed without credit through the period and is
+// still without it on a settled balance.
 func (q *Queries) ExpiredUnfundedWorkspaces(ctx context.Context, days int32) ([]ExpiredUnfundedWorkspacesRow, error) {
 	rows, err := q.db.Query(ctx, expiredUnfundedWorkspaces, days)
 	if err != nil {

@@ -98,6 +98,17 @@ func warnUnfunded(ctx context.Context, tx pgx.Tx, q *Queries, user uuid.UUID, st
 // ExpiredUnfunded returns the accounts that stayed without credit through
 // the retention period, with the workspaces whose data storage deletes.
 func (b *Billing) ExpiredUnfunded(ctx context.Context) ([]Unfunded, error) {
+	// Settle each expired account first, so credit added on the last day
+	// counts before anything is deleted.
+	users, err := b.queries.ExpiredUnfundedAccounts(ctx, unfundedRetainDays)
+	if err != nil {
+		return nil, fmt.Errorf("list expired retention: %w", err)
+	}
+	for _, user := range users {
+		if _, err := b.rollupOne(ctx, &user); err != nil {
+			return nil, err
+		}
+	}
 	rows, err := b.queries.ExpiredUnfundedWorkspaces(ctx, unfundedRetainDays)
 	if err != nil {
 		return nil, fmt.Errorf("list expired retention: %w", err)

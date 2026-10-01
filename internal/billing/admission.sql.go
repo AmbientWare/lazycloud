@@ -13,7 +13,7 @@ import (
 )
 
 const accountStanding = `-- name: AccountStanding :one
-select a.terms_version, a.status, a.payment_method_attached_at, a.complimentary_since,
+select a.terms_version, a.scheduled_terms_version, a.status, a.payment_method_attached_at, a.complimentary_since,
        a.monthly_usage_limit_nanos, b.balance_nanos, b.accrued_nanos, b.month_spent_nanos, b.month_started_at,
        exists (select 1 from plan_changes p where p.user_id = a.user_id and p.state = 'open')::bool as plan_change_pending,
        now()::timestamptz as now
@@ -24,6 +24,7 @@ where a.user_id = $1
 
 type AccountStandingRow struct {
 	TermsVersion            string
+	ScheduledTermsVersion   *string
 	Status                  string
 	PaymentMethodAttachedAt *time.Time
 	ComplimentarySince      *time.Time
@@ -41,6 +42,7 @@ func (q *Queries) AccountStanding(ctx context.Context, userID uuid.UUID) (Accoun
 	var i AccountStandingRow
 	err := row.Scan(
 		&i.TermsVersion,
+		&i.ScheduledTermsVersion,
 		&i.Status,
 		&i.PaymentMethodAttachedAt,
 		&i.ComplimentarySince,
@@ -59,8 +61,8 @@ const lockAccountContainers = `-- name: LockAccountContainers :exec
 select pg_advisory_xact_lock(hashtextextended('billing-account:' || cast($1::uuid as text), 0))
 `
 
-// Serializes container starts of one account, so concurrency is counted
-// exactly across planning and image builds.
+// Serializes the account's plan-limited additions, so containers counted
+// across planning and image builds, and workspaces and members, are exact.
 func (q *Queries) LockAccountContainers(ctx context.Context, userID uuid.UUID) error {
 	_, err := q.db.Exec(ctx, lockAccountContainers, userID)
 	return err

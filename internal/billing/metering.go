@@ -246,8 +246,17 @@ func (b *Billing) meteredContainers(ctx context.Context, since time.Time) ([]met
 	if err != nil {
 		return nil, fmt.Errorf("read stopped containers: %w", err)
 	}
+	// A container that stopped between the two reads is in both; its
+	// stopped row wins, so it is written once.
+	stoppedIDs := make(map[uuid.UUID]bool, len(stopped))
+	for _, r := range stopped {
+		stoppedIDs[r.ID] = true
+	}
 	out := make([]meteredContainer, 0, len(live)+len(stopped))
 	for _, r := range live {
+		if stoppedIDs[r.ID] {
+			continue
+		}
 		out = append(out, meteredContainer{
 			id: r.ID, workspace: r.WorkspaceID, owner: r.OwnerID, app: r.AppID, workload: r.WorkloadID,
 			build: r.ImageBuildID != nil, readyAt: r.ReadyAt, stoppedAt: r.StoppedAt, stopReason: r.StopReason,

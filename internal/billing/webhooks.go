@@ -127,7 +127,25 @@ func (b *Billing) processEvent(ctx context.Context, kind, object, customer strin
 	case kind == "payment_method.detached", kind == "customer.updated":
 		return b.refreshCard(ctx, customer)
 	case strings.HasPrefix(kind, "payment_intent."):
-		return b.settlePurchaseBy(ctx, func() (uuid.UUID, error) { return b.queries.PurchaseByIntent(ctx, object) })
+		return b.settlePurchaseBy(ctx, func() (uuid.UUID, error) {
+			id, err := b.queries.PurchaseByIntent(ctx, object)
+			if !errors.Is(err, pgx.ErrNoRows) {
+				return id, err
+			}
+			// A payment whose creation response was lost names its purchase.
+			intent, err := s.client.V1PaymentIntents.Retrieve(ctx, object, nil)
+			if err != nil {
+				return uuid.UUID{}, fmt.Errorf("read payment %s: %w", object, err)
+			}
+			purchase, err := uuid.Parse(intent.Metadata["credit_purchase_id"])
+			if err != nil {
+				return uuid.UUID{}, pgx.ErrNoRows
+			}
+			if err := b.queries.PurchaseIntentFound(ctx, PurchaseIntentFoundParams{ID: purchase, PaymentIntentID: object}); err != nil {
+				return uuid.UUID{}, fmt.Errorf("record found payment: %w", err)
+			}
+			return purchase, nil
+		})
 	case strings.HasPrefix(kind, "charge.dispute."):
 		dispute, err := s.client.V1Disputes.Retrieve(ctx, object, nil)
 		if err != nil {

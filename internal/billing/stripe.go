@@ -41,7 +41,14 @@ type stripeProvider struct {
 	// process; a price never changes once created.
 	mu     sync.Mutex
 	prices map[TermsVersion]string
+	// portal is the billing portal configuration sessions open with.
+	portal string
 }
+
+// portalConfigurationName marks the portal configuration this platform
+// creates: invoices and payment methods only. Plan changes and
+// cancellations go through ChangePlan, which checks the account fits.
+const portalConfigurationName = "lazycloud-invoices-and-cards-v1"
 
 func newStripeProvider(cfg StripeConfig) *stripeProvider {
 	backend := &stripe.BackendConfig{
@@ -116,13 +123,58 @@ func (s *stripeProvider) setupSession(ctx context.Context, customer, success, ca
 }
 
 func (s *stripeProvider) portalSession(ctx context.Context, customer, returnURL string) (string, error) {
+	configuration, err := s.portalConfiguration(ctx)
+	if err != nil {
+		return "", err
+	}
 	session, err := s.client.V1BillingPortalSessions.Create(ctx, &stripe.BillingPortalSessionCreateParams{
-		Customer: stripe.String(customer), ReturnURL: stripe.String(returnURL),
+		Customer: stripe.String(customer), ReturnURL: stripe.String(returnURL), Configuration: stripe.String(configuration),
 	})
 	if err != nil {
 		return "", fmt.Errorf("create billing portal session: %w", err)
 	}
 	return session.URL, nil
+}
+
+// portalConfiguration returns the portal configuration that shows invoices
+// and saved cards and nothing else, creating it once per Stripe account.
+func (s *stripeProvider) portalConfiguration(ctx context.Context) (string, error) {
+	s.mu.Lock()
+	id := s.portal
+	s.mu.Unlock()
+	if id != "" {
+		return id, nil
+	}
+	for c, err := range s.client.V1BillingPortalConfigurations.List(ctx, &stripe.BillingPortalConfigurationListParams{Active: stripe.Bool(true)}).All(ctx) {
+		if err != nil {
+			return "", fmt.Errorf("list portal configurations: %w", err)
+		}
+		if c.Metadata["lazycloud"] == portalConfigurationName {
+			id = c.ID
+			break
+		}
+	}
+	if id == "" {
+		params := &stripe.BillingPortalConfigurationCreateParams{
+			Metadata: map[string]string{"lazycloud": portalConfigurationName},
+			Features: &stripe.BillingPortalConfigurationCreateFeaturesParams{
+				InvoiceHistory:      &stripe.BillingPortalConfigurationCreateFeaturesInvoiceHistoryParams{Enabled: stripe.Bool(true)},
+				PaymentMethodUpdate: &stripe.BillingPortalConfigurationCreateFeaturesPaymentMethodUpdateParams{Enabled: stripe.Bool(true)},
+				SubscriptionCancel:  &stripe.BillingPortalConfigurationCreateFeaturesSubscriptionCancelParams{Enabled: stripe.Bool(false)},
+				SubscriptionUpdate:  &stripe.BillingPortalConfigurationCreateFeaturesSubscriptionUpdateParams{Enabled: stripe.Bool(false)},
+			},
+		}
+		keyed(params, "portal-configuration-"+portalConfigurationName)
+		created, err := s.client.V1BillingPortalConfigurations.Create(ctx, params)
+		if err != nil {
+			return "", fmt.Errorf("create portal configuration: %w", err)
+		}
+		id = created.ID
+	}
+	s.mu.Lock()
+	s.portal = id
+	s.mu.Unlock()
+	return id, nil
 }
 
 type checkout struct {
@@ -239,6 +291,23 @@ func (s *stripeProvider) disputed(ctx context.Context, charge string) (int64, er
 		}
 	}
 	return total, nil
+}
+
+// paymentOfPurchase finds the payment carrying a purchase's id, or "" when
+// none exists.
+func (s *stripeProvider) paymentOfPurchase(ctx context.Context, purchase uuid.UUID) (string, error) {
+	search := &stripe.PaymentIntentSearchParams{SearchParams: stripe.SearchParams{
+		Query: fmt.Sprintf("metadata['credit_purchase_id']:'%s'", purchase),
+	}}
+	for intent, err := range s.client.V1PaymentIntents.Search(ctx, search).All(ctx) {
+		if err != nil {
+			return "", fmt.Errorf("search payments of %s: %w", purchase, err)
+		}
+		if intent.Metadata["credit_purchase_id"] == purchase.String() {
+			return intent.ID, nil
+		}
+	}
+	return "", nil
 }
 
 // checkoutPayment returns the payment a credit checkout collected, or the

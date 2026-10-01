@@ -2,7 +2,7 @@
 select user_id from workspace_members where workspace_id = @workspace_id and role = 'owner';
 
 -- name: AccountStanding :one
-select a.terms_version, a.status, a.payment_method_attached_at, a.complimentary_since,
+select a.terms_version, a.scheduled_terms_version, a.status, a.payment_method_attached_at, a.complimentary_since,
        a.monthly_usage_limit_nanos, b.balance_nanos, b.accrued_nanos, b.month_spent_nanos, b.month_started_at,
        exists (select 1 from plan_changes p where p.user_id = a.user_id and p.state = 'open')::bool as plan_change_pending,
        now()::timestamptz as now
@@ -11,8 +11,8 @@ join billing_balances b on b.user_id = a.user_id
 where a.user_id = @user_id;
 
 -- name: LockAccountContainers :exec
--- Serializes container starts of one account, so concurrency is counted
--- exactly across planning and image builds.
+-- Serializes the account's plan-limited additions, so containers counted
+-- across planning and image builds, and workspaces and members, are exact.
 select pg_advisory_xact_lock(hashtextextended('billing-account:' || cast(@user_id::uuid as text), 0));
 
 -- name: OwnerLiveContainers :one

@@ -58,6 +58,8 @@ type standing struct {
 	monthSpent    int64
 	changePending bool
 	entitlements  Entitlements
+	// limits are the workspace and member limits additions are held to.
+	limits Entitlements
 }
 
 // readStanding returns the account of user, creating it on first use.
@@ -88,7 +90,28 @@ func readStanding(ctx context.Context, q *Queries, user uuid.UUID) (standing, er
 	if err != nil {
 		return standing{}, err
 	}
+	s.limits = s.entitlements
+	if row.ScheduledTermsVersion != nil && !s.complimentary {
+		// While a cheaper plan is scheduled, additions are held to the
+		// stricter of the two, so the account fits it when it applies.
+		next, err := planOfTerms(TermsVersion(*row.ScheduledTermsVersion))
+		if err != nil {
+			return standing{}, err
+		}
+		s.limits.MaxWorkspaces = stricter(s.limits.MaxWorkspaces, next.Entitlements.MaxWorkspaces)
+		s.limits.MaxMembers = stricter(s.limits.MaxMembers, next.Entitlements.MaxMembers)
+	}
 	return s, nil
+}
+
+func stricter(a, b Limit) Limit {
+	switch {
+	case a.Unlimited:
+		return b
+	case b.Unlimited:
+		return a
+	}
+	return Limit{Max: min(a.Max, b.Max)}
 }
 
 // fundsRefusal is why the account may not start billed work, or nil.
@@ -208,6 +231,10 @@ func planChangePending() error {
 // allowed.
 func AdmitWorkspace(ctx context.Context, tx pgx.Tx, owner uuid.UUID) error {
 	q := New(tx)
+	// Concurrent additions count each other.
+	if err := q.LockAccountContainers(ctx, owner); err != nil {
+		return fmt.Errorf("lock account: %w", err)
+	}
 	owned, err := q.OwnedWorkspaceCount(ctx, owner)
 	if err != nil {
 		return fmt.Errorf("count owned workspaces: %w", err)
@@ -222,7 +249,7 @@ func AdmitWorkspace(ctx context.Context, tx pgx.Tx, owner uuid.UUID) error {
 	if s.changePending {
 		return planChangePending()
 	}
-	if l := s.entitlements.MaxWorkspaces; !l.Unlimited && int(owned) >= l.Max {
+	if l := s.limits.MaxWorkspaces; !l.Unlimited && int(owned) >= l.Max {
 		return &LimitError{Message: fmt.Sprintf(
 			"this account already owns %d workspaces, which is the most its plan allows (%d)", owned, l.Max)}
 	}
@@ -247,6 +274,10 @@ func AdmitMember(ctx context.Context, tx pgx.Tx, workspace uuid.UUID, who Candid
 	if err != nil {
 		return fmt.Errorf("read workspace owner: %w", err)
 	}
+	// Concurrent invitations and acceptances count each other.
+	if err := q.LockAccountContainers(ctx, owner); err != nil {
+		return fmt.Errorf("lock account: %w", err)
+	}
 	s, err := readStanding(ctx, q, owner)
 	if err != nil {
 		return err
@@ -254,7 +285,7 @@ func AdmitMember(ctx context.Context, tx pgx.Tx, workspace uuid.UUID, who Candid
 	if s.changePending {
 		return planChangePending()
 	}
-	limit := s.entitlements.MaxMembers
+	limit := s.limits.MaxMembers
 	if limit.Unlimited {
 		return nil
 	}

@@ -104,7 +104,7 @@ with entry as (
     returning user_id
 )
 update billing_balances set due = true
-where user_id in (select user_id from hour) and not due;
+where user_id in (select user_id from hour);
 
 -- name: AdvanceCursors :exec
 insert into usage_cursors (source_kind, source_id, billed_through, complete, updated_at)

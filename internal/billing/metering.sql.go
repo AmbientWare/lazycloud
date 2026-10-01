@@ -187,7 +187,7 @@ with entry as (
     returning user_id
 )
 update billing_balances set due = true
-where user_id in (select user_id from hour) and not due
+where user_id in (select user_id from hour)
 `
 
 type InsertLedgerEntriesParams struct {

@@ -92,6 +92,36 @@ where a.reload_enabled and a.reload_paused_purchase_id is null
   )
 limit @row_limit;
 
+-- name: ReloadAmount :one
+-- The reload one account is due, read under its balance lock after the
+-- balance is settled, so credit from a reload that just succeeded counts.
+select a.reload_amount_cents
+from billing_accounts a
+join billing_balances b on b.user_id = a.user_id
+where a.user_id = @user_id
+  and a.reload_enabled and a.reload_paused_purchase_id is null
+  and a.payment_method_attached_at is not null and a.stripe_customer_id is not null
+  and a.status = 'active' and a.complimentary_since is null
+  and not b.due
+  and b.balance_nanos - b.accrued_nanos <= a.reload_threshold_cents::bigint * 10000000
+  and not exists (
+      select 1 from credit_purchases p where p.user_id = a.user_id and p.kind = 'automatic' and p.status = 'pending'
+  );
+
+-- name: ReloadEligible :one
+-- Whether an automatic payment may still be charged: reload is on and not
+-- paused, the account is active, uncomplimentary and has a card.
+select exists (
+    select 1 from billing_accounts a
+    where a.user_id = @user_id and a.reload_enabled and a.reload_paused_purchase_id is null
+      and a.payment_method_attached_at is not null and a.status = 'active' and a.complimentary_since is null
+)::bool;
+
+-- name: PurchaseIntentFound :exec
+-- A payment found by its metadata after its creation response was lost.
+update credit_purchases set payment_intent_id = @payment_intent_id::text, updated_at = now()
+where id = @id and payment_intent_id is null;
+
 -- name: PauseReload :exec
 update billing_accounts
 set reload_paused_purchase_id = @purchase_id, reload_pause_reason = @reason, updated_at = now()

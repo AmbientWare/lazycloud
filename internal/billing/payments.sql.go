@@ -299,6 +299,63 @@ func (q *Queries) PurchaseByRequest(ctx context.Context, arg PurchaseByRequestPa
 	return i, err
 }
 
+const purchaseIntentFound = `-- name: PurchaseIntentFound :exec
+update credit_purchases set payment_intent_id = $1::text, updated_at = now()
+where id = $2 and payment_intent_id is null
+`
+
+type PurchaseIntentFoundParams struct {
+	PaymentIntentID string
+	ID              uuid.UUID
+}
+
+// A payment found by its metadata after its creation response was lost.
+func (q *Queries) PurchaseIntentFound(ctx context.Context, arg PurchaseIntentFoundParams) error {
+	_, err := q.db.Exec(ctx, purchaseIntentFound, arg.PaymentIntentID, arg.ID)
+	return err
+}
+
+const reloadAmount = `-- name: ReloadAmount :one
+select a.reload_amount_cents
+from billing_accounts a
+join billing_balances b on b.user_id = a.user_id
+where a.user_id = $1
+  and a.reload_enabled and a.reload_paused_purchase_id is null
+  and a.payment_method_attached_at is not null and a.stripe_customer_id is not null
+  and a.status = 'active' and a.complimentary_since is null
+  and not b.due
+  and b.balance_nanos - b.accrued_nanos <= a.reload_threshold_cents::bigint * 10000000
+  and not exists (
+      select 1 from credit_purchases p where p.user_id = a.user_id and p.kind = 'automatic' and p.status = 'pending'
+  )
+`
+
+// The reload one account is due, read under its balance lock after the
+// balance is settled, so credit from a reload that just succeeded counts.
+func (q *Queries) ReloadAmount(ctx context.Context, userID uuid.UUID) (int32, error) {
+	row := q.db.QueryRow(ctx, reloadAmount, userID)
+	var reload_amount_cents int32
+	err := row.Scan(&reload_amount_cents)
+	return reload_amount_cents, err
+}
+
+const reloadEligible = `-- name: ReloadEligible :one
+select exists (
+    select 1 from billing_accounts a
+    where a.user_id = $1 and a.reload_enabled and a.reload_paused_purchase_id is null
+      and a.payment_method_attached_at is not null and a.status = 'active' and a.complimentary_since is null
+)::bool
+`
+
+// Whether an automatic payment may still be charged: reload is on and not
+// paused, the account is active, uncomplimentary and has a card.
+func (q *Queries) ReloadEligible(ctx context.Context, userID uuid.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, reloadEligible, userID)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const retryPurchase = `-- name: RetryPurchase :exec
 update credit_purchases
 set attempts = attempts + 1, last_error = $1, next_attempt_at = $2, updated_at = now()
