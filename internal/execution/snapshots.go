@@ -151,7 +151,7 @@ func (e *Execution) CompleteSnapshot(ctx context.Context, host compute.HostID, o
 		params.State = string(apitypes.MemorySnapshotStateAvailable)
 		params.SizeBytes, params.Sha256 = &out.SizeBytes, &out.SHA256
 	}
-	return pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
+	err := pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
 		if _, err := e.queries.WithTx(tx).FinishSnapshot(ctx, params); errors.Is(err, pgx.ErrNoRows) {
 			return ErrStaleSnapshot
 		} else if err != nil {
@@ -159,6 +159,10 @@ func (e *Execution) CompleteSnapshot(ctx context.Context, host compute.HostID, o
 		}
 		return database.Notify(ctx, tx, database.ChannelContainerOp, out.Snapshot.String())
 	})
+	if err != nil {
+		return fmt.Errorf("container operation: %w", err)
+	}
+	return nil
 }
 
 // unsupportedPrefix marks a failure the host could not attempt, so the API
@@ -319,9 +323,13 @@ func (e *Execution) TakeAutomaticSnapshots(ctx context.Context, logger *slog.Log
 	if len(ids) == 0 {
 		return nil
 	}
-	return pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
+	err = pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
 		return notifyAll(ctx, tx, database.ChannelContainerOp, ids)
 	})
+	if err != nil {
+		return fmt.Errorf("container operation: %w", err)
+	}
+	return nil
 }
 
 // FilesystemImage is a filesystem publish as its requester waits for it.
@@ -371,7 +379,7 @@ func (e *Execution) WaitFilesystemImage(ctx context.Context, listener *database.
 		if err != nil {
 			return FilesystemImage{}, fmt.Errorf("read filesystem image: %w", err)
 		}
-		out := FilesystemImage{ID: row.ID, State: row.State, ImageID: row.ImageID, Failure: row.Failure}
+		out := FilesystemImage(row)
 		if row.State != "publishing" {
 			return out, nil
 		}
@@ -413,7 +421,7 @@ func (e *Execution) FinishFilesystemImage(ctx context.Context, host compute.Host
 	if failure != "" {
 		params.Failure = &failure
 	}
-	return pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
+	err := pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
 		if _, err := e.queries.WithTx(tx).FinishFilesystemImage(ctx, params); errors.Is(err, pgx.ErrNoRows) {
 			return ErrStaleSnapshot
 		} else if err != nil {
@@ -421,6 +429,10 @@ func (e *Execution) FinishFilesystemImage(ctx context.Context, host compute.Host
 		}
 		return database.Notify(ctx, tx, database.ChannelContainerOp, request.String())
 	})
+	if err != nil {
+		return fmt.Errorf("container operation: %w", err)
+	}
+	return nil
 }
 
 func (e *Execution) workspaceOfContainer(ctx context.Context, q *Queries, container ContainerID) (identity.WorkspaceID, error) {

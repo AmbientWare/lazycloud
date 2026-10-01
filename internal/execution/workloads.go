@@ -440,7 +440,10 @@ func (e *Execution) SetNetwork(ctx context.Context, workspace identity.Workspace
 		}
 		return database.Notify(ctx, tx, database.ChannelHost, row.HostID.String())
 	})
-	return out, err
+	if err != nil {
+		return NetworkPolicy{}, fmt.Errorf("set network policy: %w", err)
+	}
+	return out, nil
 }
 
 // Network reads a container's outbound policy.
@@ -553,7 +556,7 @@ func (e *Execution) StopIdle(ctx context.Context, logger *slog.Logger) (int, err
 		return notifyHosts(ctx, tx, drained)
 	})
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("stop idle instances: %w", err)
 	}
 	for _, c := range drained {
 		logger.InfoContext(ctx, "idle instance draining", "container_id", c.id, "host_id", c.host)

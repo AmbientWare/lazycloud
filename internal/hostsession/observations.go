@@ -83,6 +83,8 @@ func stageKind(k hostproto.StartupStageKind) (observability.StartupStageKind, bo
 		return observability.StageCreate, true
 	case hostproto.StartupStageKind_STARTUP_STAGE_KIND_RUNTIME:
 		return observability.StageRuntime, true
+	case hostproto.StartupStageKind_STARTUP_STAGE_KIND_DISK:
+		return observability.StageDisk, true
 	case hostproto.StartupStageKind_STARTUP_STAGE_KIND_UNSPECIFIED:
 	}
 	return "", false

@@ -83,6 +83,8 @@ func (e *Edge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		e.serveRecorded(w, r, t, func(w http.ResponseWriter, r *http.Request, rec *requestRecord) { e.proxy(w, r, t, authorized, rec) })
 	case apitypes.WorkloadKindAsgi:
 		e.serveRecorded(w, r, t, func(w http.ResponseWriter, r *http.Request, rec *requestRecord) { e.proxy(w, r, t, authorized, rec) })
+	case apitypes.WorkloadKindPod, apitypes.WorkloadKindSandbox:
+		writeError(w, http.StatusNotFound, "pods answer on <id>-<port> hosts")
 	default:
 		writeError(w, http.StatusNotFound, "no workload answers on this host")
 	}

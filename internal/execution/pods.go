@@ -234,7 +234,7 @@ func (e *Execution) lockPod(ctx context.Context, q *Queries, workspace identity.
 
 // ScalePod holds an active pod at containers.
 func (e *Execution) ScalePod(ctx context.Context, workspace identity.WorkspaceID, workload uuid.UUID, containers int) error {
-	return pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
+	err := pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
 		q := e.queries.WithTx(tx)
 		row, spec, err := e.lockPod(ctx, q, workspace, workload)
 		if err != nil {
@@ -260,12 +260,16 @@ func (e *Execution) ScalePod(ctx context.Context, workspace identity.WorkspaceID
 		}
 		return database.Notify(ctx, tx, database.ChannelExecution, row.ActiveReleaseID.String())
 	})
+	if err != nil {
+		return fmt.Errorf("scale pod: %w", err)
+	}
+	return nil
 }
 
 // WakePod asks for a container of an active pod now, as a connection or a
 // devbox start does.
 func (e *Execution) WakePod(ctx context.Context, workspace identity.WorkspaceID, workload uuid.UUID) error {
-	return pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
+	err := pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
 		q := e.queries.WithTx(tx)
 		row, _, err := e.lockPod(ctx, q, workspace, workload)
 		if err != nil {
@@ -282,12 +286,16 @@ func (e *Execution) WakePod(ctx context.Context, workspace identity.WorkspaceID,
 		}
 		return database.Notify(ctx, tx, database.ChannelExecution, row.ActiveReleaseID.String())
 	})
+	if err != nil {
+		return fmt.Errorf("wake pod: %w", err)
+	}
+	return nil
 }
 
 // ParkPod stops a pod's serve containers and keeps them stopped until the
 // next wake, as a devbox stop does. Its disks are saved as they stop.
 func (e *Execution) ParkPod(ctx context.Context, workspace identity.WorkspaceID, workload uuid.UUID) error {
-	return pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
+	err := pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
 		q := e.queries.WithTx(tx)
 		if _, _, err := e.lockPod(ctx, q, workspace, workload); err != nil {
 			return err
@@ -308,6 +316,10 @@ func (e *Execution) ParkPod(ctx context.Context, workspace identity.WorkspaceID,
 		}
 		return notifyHosts(ctx, tx, drained)
 	})
+	if err != nil {
+		return fmt.Errorf("park pod: %w", err)
+	}
+	return nil
 }
 
 // PodContainer is a ready serve container of a pod.

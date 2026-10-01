@@ -125,7 +125,7 @@ func (s *Server) forward(ctx context.Context, workspace string, container uuid.U
 			out.Header.Set("Content-Type", "application/json")
 		}
 	}
-	resp, err := s.owners.Edge.RoundTrip(ctx, *route.Host, container, edge.ControlAPI, out)
+	resp, err := s.owners.Edge.RoundTrip(ctx, *route.Host, container, edge.ControlAPI, out) //nolint:bodyclose // controlCall.write closes it.
 	if err != nil {
 		return controlCall{}, err
 	}
