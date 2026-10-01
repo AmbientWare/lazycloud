@@ -8,15 +8,21 @@ from typing import TYPE_CHECKING, Any, TypedDict
 from uuid import UUID
 
 from pydantic import ValidationError
-from shared.api import Container as ApiContainer
 from shared.api import (
+    AllowListItem,
+    CheckpointSpec,
+    CommandItem,
     ContainerState,
     CreateInstanceRequest,
     DeployedWorkload,
+    DiskMountSpec,
+    HealthCheck,
     PodKind,
+    PodSpec,
     StopReason,
     WorkloadKind,
 )
+from shared.api import Container as ApiContainer
 from shared.api import FunctionSpec as ApiFunctionSpec
 from shared.deployment_records import (
     DEFAULT_DISK,
@@ -367,27 +373,31 @@ class Pod:
         """The API definition of this pod for an uploaded source and a ready image."""
         del handler
         self.require_supported()
-        pod: dict[str, Any] = {"kind": (PodKind.devbox if self.is_devbox else PodKind.pod).value}
+        # Only the options set are sent, so the server's defaults apply.
+        pod = PodSpec(kind=PodKind.devbox if self.is_devbox else PodKind.pod)
         if self.command:
-            pod["command"] = list(self.command)
+            pod.command = [CommandItem(item) for item in self.command]
         if self.ports:
-            pod["ports"] = dict(self.ports)
+            pod.ports = dict(self.ports)
         if self.tcp:
-            pod["tcp"] = True
+            pod.tcp = True
         if self.ssh:
-            pod["ssh"] = True
+            pod.ssh = True
         if self.health_check_path:
-            pod["health_check"] = {"path": self.health_check_path}
+            pod.health_check = HealthCheck(path=self.health_check_path)
             if self.health_check_port:
-                pod["health_check"]["port"] = self.health_check_port
-        disks = [disk.model_dump(mode="json") for disk in self.disks]
+                pod.health_check.port = self.health_check_port
+        disks = [
+            DiskMountSpec(name=disk.name, size_bytes=disk.size_bytes, mount_path=disk.mount_path)
+            for disk in self.disks
+        ]
         if self.is_devbox and self.root_disk_bytes is not None:
-            root = {
-                "name": self.name,
-                "size_bytes": self.root_disk_bytes,
-                "mount_path": DISK_ROOT_MOUNT_PATH,
-            }
-            disks.insert(0, root)
+            disks.insert(
+                0,
+                DiskMountSpec(
+                    name=self.name, size_bytes=self.root_disk_bytes, mount_path=DISK_ROOT_MOUNT_PATH
+                ),
+            )
         keep_warm = self.keep_warm
         if keep_warm is None and self.is_devbox:
             keep_warm = DEVBOX_KEEP_WARM_SECONDS
@@ -395,12 +405,12 @@ class Pod:
         if preemptible is None:
             preemptible = not self.is_devbox
         checkpoint = (
-            {
-                "readiness_path": self.checkpoint_readiness_path,
-                "readiness_port": self.checkpoint_readiness_port,
-                "readiness_timeout_seconds": self.checkpoint_readiness_timeout_seconds,
-                "readiness_interval_seconds": self.checkpoint_readiness_interval_seconds,
-            }
+            CheckpointSpec(
+                readiness_path=self.checkpoint_readiness_path,
+                readiness_port=self.checkpoint_readiness_port,
+                readiness_timeout_seconds=self.checkpoint_readiness_timeout_seconds,
+                readiness_interval_seconds=self.checkpoint_readiness_interval_seconds,
+            )
             if self.checkpoint_enabled
             else None
         )
@@ -582,23 +592,23 @@ def container_function_spec(
     owner: Any,
     *,
     label: str,
-    pod: dict[str, Any],
+    pod: PodSpec,
     source_sha256: str,
     image: ImageBuildResult,
     keep_warm: int | None,
     preemptible: bool,
     block_network: bool,
     allow_list: list[str] | None,
-    disks: list[dict[str, Any]] | None = None,
-    checkpoint: dict[str, Any] | None = None,
+    disks: list[DiskMountSpec] | None = None,
+    checkpoint: CheckpointSpec | None = None,
 ) -> ApiFunctionSpec:
     """The API definition of a pod, devbox or sandbox: a command, not a handler."""
     from lazycloud.abstractions.function import _resources, _volume_spec
 
     if block_network:
-        pod["block_network"] = True
+        pod.block_network = True
     if allow_list is not None:
-        pod["allow_list"] = list(allow_list)
+        pod.allow_list = [AllowListItem(item) for item in allow_list]
     spec: dict[str, Any] = {
         "name": owner.resource_name,
         "source": {"sha256": source_sha256},

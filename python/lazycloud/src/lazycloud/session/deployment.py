@@ -61,6 +61,7 @@ class Workload(Protocol):
 
     _app_slug: str
     image: Image
+    terminal: Terminal | None
 
     @property
     def resource_name(self) -> str: ...

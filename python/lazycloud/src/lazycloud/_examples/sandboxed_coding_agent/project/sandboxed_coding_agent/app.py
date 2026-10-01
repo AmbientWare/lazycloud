@@ -282,7 +282,7 @@ def inspect_sandboxes(limit: int = 20) -> list[SandboxInspection]:
         raise ValueError("limit must be between 1 and 100")
     return [
         {
-            "id": row.id,
+            "id": str(row.id),
             "status": row.status.value,
             "created_at": row.created_at.isoformat(),
         }
