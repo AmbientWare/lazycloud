@@ -137,8 +137,13 @@ func (s *Supervisor) pushRequestOutput(request string, stream hostproto.LogStrea
 type httpFront struct {
 	sup         *Supervisor
 	concurrency int
-	listener    net.Listener
-	server      *http.Server
+	path        string
+
+	mu     sync.Mutex
+	server *http.Server
+	// err is the first failure to serve.
+	err    error
+	served sync.WaitGroup
 }
 
 func (s *Supervisor) listenHTTP(ctx context.Context, cfg *hostproto.Configure) (*httpFront, error) {
@@ -146,33 +151,62 @@ func (s *Supervisor) listenHTTP(ctx context.Context, cfg *hostproto.Configure) (
 	if path == "" {
 		return nil, errors.New("configure has http but no http_socket")
 	}
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("remove stale http socket: %w", err)
+	f := &httpFront{sup: s, concurrency: max(1, int(cfg.GetHttp().GetConcurrency())), path: path}
+	if err := f.reopen(ctx); err != nil {
+		return nil, err
 	}
-	listener, err := (&net.ListenConfig{}).Listen(ctx, "unix", path)
-	if err != nil {
-		return nil, fmt.Errorf("listen on http socket: %w", err)
-	}
-	// The agent connects from the host, possibly as another user.
-	if err := os.Chmod(path, 0o666); err != nil { //nolint:gosec // only the agent reaches this directory
-		_ = listener.Close()
-		return nil, fmt.Errorf("chmod http socket: %w", err)
-	}
-	f := &httpFront{sup: s, concurrency: max(1, int(cfg.GetHttp().GetConcurrency())), listener: listener}
-	f.server = &http.Server{Handler: f, ReadHeaderTimeout: 30 * time.Second}
 	return f, nil
 }
 
-func (f *httpFront) serve() error {
-	if err := f.server.Serve(f.listener); !errors.Is(err, http.ErrServerClosed) {
-		return fmt.Errorf("serve http: %w", err)
+// reopen listens on the front's socket and serves it until release.
+func (f *httpFront) reopen(ctx context.Context) error {
+	if err := os.Remove(f.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove stale http socket: %w", err)
 	}
+	listener, err := (&net.ListenConfig{}).Listen(ctx, "unix", f.path)
+	if err != nil {
+		return fmt.Errorf("listen on http socket: %w", err)
+	}
+	// The agent connects from the host, possibly as another user.
+	if err := os.Chmod(f.path, 0o666); err != nil { //nolint:gosec // only the agent reaches this directory
+		_ = listener.Close()
+		return fmt.Errorf("chmod http socket: %w", err)
+	}
+	server := &http.Server{Handler: f, ReadHeaderTimeout: 30 * time.Second}
+	f.mu.Lock()
+	f.server = server
+	f.mu.Unlock()
+	f.served.Go(func() {
+		if err := server.Serve(listener); !errors.Is(err, http.ErrServerClosed) {
+			f.mu.Lock()
+			if f.err == nil {
+				f.err = fmt.Errorf("serve http: %w", err)
+			}
+			f.mu.Unlock()
+		}
+	})
 	return nil
 }
 
-// close stops accepting; the slots have already finished their requests.
-func (f *httpFront) close() {
-	_ = f.server.Close()
+// release closes the socket and every connection on it.
+func (f *httpFront) release() {
+	f.mu.Lock()
+	server := f.server
+	f.server = nil
+	f.mu.Unlock()
+	if server != nil {
+		_ = server.Close()
+	}
+	f.served.Wait()
+}
+
+// close stops serving, once the slots have finished their requests, and
+// returns the first failure to serve.
+func (f *httpFront) close() error {
+	f.release()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.err
 }
 
 func (f *httpFront) ServeHTTP(w http.ResponseWriter, r *http.Request) {

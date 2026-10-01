@@ -55,31 +55,69 @@ func listenLink(ctx context.Context, c *container, dir string) (*link, error) {
 	if err := os.Chmod(dir, os.ModeSticky|0o777); err != nil { //nolint:gosec // see above
 		return nil, fmt.Errorf("chmod link directory: %w", err)
 	}
-	path := filepath.Join(dir, linkSocketName)
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+	l := &link{c: c, path: filepath.Join(dir, linkSocketName)}
+	listener, err := l.listen(ctx)
+	if err != nil {
+		return nil, err
+	}
+	l.listener, l.server = listener, l.newServer()
+	return l, nil
+}
+
+// listen creates the link socket, replacing a stale one.
+func (l *link) listen(ctx context.Context) (net.Listener, error) {
+	if err := os.Remove(l.path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("remove stale link socket: %w", err)
 	}
-	listener, err := (&net.ListenConfig{}).Listen(ctx, "unix", path)
+	listener, err := (&net.ListenConfig{}).Listen(ctx, "unix", l.path)
 	if err != nil {
 		return nil, fmt.Errorf("listen on link socket: %w", err)
 	}
-	if err := chmodInside(dir, linkSocketName, 0o666); err != nil {
+	if err := chmodInside(filepath.Dir(l.path), linkSocketName, 0o666); err != nil {
 		_ = listener.Close()
 		return nil, err
 	}
-	l := &link{
-		c:        c,
-		path:     path,
-		listener: listener,
-		server: grpc.NewServer(
-			// Stop then waits for handlers, which own the receive goroutines.
-			grpc.WaitForHandlers(true),
-			grpc.MaxRecvMsgSize(supervisor.MaxMessageBytes),
-			grpc.MaxSendMsgSize(supervisor.MaxMessageBytes),
-		),
+	return listener, nil
+}
+
+func (l *link) newServer() *grpc.Server {
+	server := grpc.NewServer(
+		// Stop then waits for handlers, which own the receive goroutines.
+		grpc.WaitForHandlers(true),
+		grpc.MaxRecvMsgSize(supervisor.MaxMessageBytes),
+		grpc.MaxSendMsgSize(supervisor.MaxMessageBytes),
+	)
+	hostproto.RegisterContainerLinkServer(server, l)
+	return server
+}
+
+// pause closes the link socket and every connection on it, so a checkpoint
+// finds no host socket in the container; queued commands wait for resume.
+func (l *link) pause() {
+	l.mu.Lock()
+	server, serving := l.server, l.served && !l.closed
+	l.mu.Unlock()
+	if serving {
+		server.Stop()
 	}
-	hostproto.RegisterContainerLinkServer(l.server, l)
-	return l, nil
+}
+
+// resume listens and serves again after pause.
+func (l *link) resume(ctx context.Context) error {
+	listener, err := l.listen(ctx)
+	if err != nil {
+		return err
+	}
+	server := l.newServer()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.closed || !l.served {
+		_ = listener.Close()
+		return nil
+	}
+	l.listener, l.server = listener, server
+	l.goroutines.Go(func() { _ = server.Serve(listener) })
+	return nil
 }
 
 // chmodInside changes the mode of name in dir without following a link out
@@ -109,7 +147,8 @@ func (l *link) serve() {
 		return
 	}
 	l.served = true
-	l.goroutines.Go(func() { _ = l.server.Serve(l.listener) })
+	server, listener := l.server, l.listener
+	l.goroutines.Go(func() { _ = server.Serve(listener) })
 }
 
 // close stops the link after its current stream ends on its own, or after
@@ -121,22 +160,22 @@ func (l *link) close(timeout time.Duration) {
 		return
 	}
 	l.closed = true
-	served := l.served
+	served, server, listener := l.served, l.server, l.listener
 	l.mu.Unlock()
 	if !served {
 		// The server only owns the listener once it serves it.
-		_ = l.listener.Close()
+		_ = listener.Close()
 	}
 	stopped := make(chan struct{})
 	l.goroutines.Go(func() {
-		l.server.GracefulStop()
+		server.GracefulStop()
 		close(stopped)
 	})
 	timer := time.NewTimer(timeout)
 	select {
 	case <-stopped:
 	case <-timer.C:
-		l.server.Stop()
+		server.Stop()
 	}
 	timer.Stop()
 	l.goroutines.Wait()

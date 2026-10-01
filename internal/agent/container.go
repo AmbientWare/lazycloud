@@ -72,6 +72,8 @@ type container struct {
 	disks   diskSet
 	// apiCalls bounds container API calls in flight.
 	apiCalls chan struct{}
+	// detached receives the supervisor's answer to a Detach.
+	detached chan struct{}
 
 	// work covers preparation, claims and log delivery; claims stop earlier
 	// when the container begins stopping.
@@ -146,6 +148,7 @@ func (a *Agent) newContainer(id, handler string, slots int, httpServing *hostpro
 		slotFree:   make(chan struct{}, 1),
 		gone:       make(chan struct{}),
 		apiCalls:   make(chan struct{}, maxContainerAPICalls),
+		detached:   make(chan struct{}, 1),
 	}
 	if httpServing != nil {
 		c.requests = socketTransport(filepath.Join(c.linkDir(), httpSocketName))
@@ -656,6 +659,11 @@ func (c *container) onSupervisorMessage(ctx context.Context, m *hostproto.Superv
 		c.onFinished(body.Finished)
 	case *hostproto.SupervisorMessage_CommandExited:
 		c.onCommandExited(body.CommandExited)
+	case *hostproto.SupervisorMessage_Detached:
+		select {
+		case c.detached <- struct{}{}:
+		default:
+		}
 	case *hostproto.SupervisorMessage_Output:
 		// Output outside an attempt, such as import-time prints and HTTP
 		// requests, goes to the container's own log.

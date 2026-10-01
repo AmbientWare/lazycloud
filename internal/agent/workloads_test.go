@@ -659,6 +659,9 @@ func waitLog(t *testing.T, s *hostServer, container, text string) {
 // the container keeps running. A probe that never answers fails the
 // snapshot instead.
 func TestSnapshotOnRuncWithoutCRIUIsUnsupported(t *testing.T) {
+	if testRuntime() != "runc" {
+		t.Skip("this runtime checkpoints")
+	}
 	e := newEnv(t)
 	e.startAgent()
 	session := e.session()
@@ -707,6 +710,99 @@ func TestSnapshotOnRuncWithoutCRIUIsUnsupported(t *testing.T) {
 	if listing := e.server.data.forward(t, portHead(id, 8000, "/"), ""); listing.status != http.StatusOK {
 		t.Fatalf("the pod stopped serving after the snapshot: %+v", listing)
 	}
+}
+
+// Under gVisor a running pod checkpoints once its supervisor closed its
+// host sockets and keeps serving afterwards; a root agent, which reads and
+// places Docker's checkpoints, uploads and restores it.
+func TestSnapshotUnderRunscDetachesAndKeepsServing(t *testing.T) {
+	if testRuntime() != "runsc" {
+		t.Skip("needs LAZYCLOUD_TEST_OCI_RUNTIME=runsc")
+	}
+	e := newEnv(t)
+	e.startAgent()
+	session := e.session()
+	start := e.podCommand(&hostproto.PodWorkload{Command: []string{"python3", "-m", "http.server", "8000"}, Ports: []int32{8000}})
+	id := start.GetStart().GetContainerId()
+	session.send(t, start)
+	session.phase(t, id, hostproto.ContainerPhase_CONTAINER_PHASE_READY)
+	var stored atomic.Pointer[[]byte]
+	store := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut {
+			body, _ := io.ReadAll(r.Body)
+			stored.Store(&body)
+			return
+		}
+		if body := stored.Load(); body != nil {
+			_, _ = w.Write(*body)
+		}
+	}))
+	t.Cleanup(store.Close)
+
+	snapshotID := uuid.NewString()
+	began := time.Now()
+	session.send(t, &hostproto.ServerMessage{CommandId: uuid.NewString(), Body: &hostproto.ServerMessage_Snapshot{Snapshot: &hostproto.SnapshotContainer{
+		ContainerId: id, SnapshotId: snapshotID, UploadUrl: store.URL, Deadline: timestamppb.New(time.Now().Add(time.Minute)),
+		Ready: &hostproto.ReadinessProbe{Path: "/", Port: 8000, TimeoutSeconds: 30, IntervalSeconds: 0.2},
+	}}})
+	var r *hostproto.CompleteSnapshotRequest
+	select {
+	case r = <-e.server.snapshots:
+	case <-time.After(time.Minute):
+		t.Fatal("no snapshot outcome")
+	}
+	root := os.Geteuid() == 0
+	if !root {
+		// The checkpoint was taken; only root reads what Docker wrote.
+		if !r.GetUnsupported() || !strings.Contains(r.GetFailure(), "agent running as root") {
+			t.Fatalf("snapshot outcome without root %v", r)
+		}
+	} else {
+		body := stored.Load()
+		if r.GetFailure() != "" || body == nil || int64(len(*body)) != r.GetSizeBytes() {
+			t.Fatalf("snapshot outcome %v", r)
+		}
+		sum := sha256.Sum256(*body)
+		if hex.EncodeToString(sum[:]) != r.GetSha256() {
+			t.Fatal("the uploaded snapshot does not match its digest")
+		}
+		t.Logf("checkpoint of %d bytes uploaded in %s", r.GetSizeBytes(), time.Since(began))
+	}
+
+	// The supervisor reopens its sockets once the link is back.
+	for deadline := time.Now().Add(15 * time.Second); ; time.Sleep(200 * time.Millisecond) {
+		files := e.server.data.forward(t, controlHead(id, http.MethodGet, "/files?path=/workspace"), "")
+		port := e.server.data.forward(t, portHead(id, 8000, "/"), "")
+		if files.status == http.StatusOK && port.status == http.StatusOK {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("after the snapshot: control %+v, port %+v", files, port)
+		}
+	}
+	t.Logf("serving again %s after the snapshot began", time.Since(began))
+
+	if !root {
+		return
+	}
+	restored := e.podCommand(&hostproto.PodWorkload{Command: []string{"python3", "-m", "http.server", "8000"}, Ports: []int32{8000}})
+	restored.GetStart().Restore = &hostproto.SnapshotRestore{SnapshotId: snapshotID, Url: store.URL, Sha256: r.GetSha256()}
+	restoredID := restored.GetStart().GetContainerId()
+	began = time.Now()
+	session.send(t, restored)
+	ready := session.phase(t, restoredID, hostproto.ContainerPhase_CONTAINER_PHASE_READY)
+	if ready.GetRestoreFailed() != "" {
+		t.Fatalf("restore report %v", ready)
+	}
+	for deadline := time.Now().Add(15 * time.Second); ; time.Sleep(200 * time.Millisecond) {
+		if port := e.server.data.forward(t, portHead(restoredID, 8000, "/"), ""); port.status == http.StatusOK {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the restored pod does not serve")
+		}
+	}
+	t.Logf("restored and serving in %s", time.Since(began))
 }
 
 // An automatic snapshot that does not restore starts the container cold and

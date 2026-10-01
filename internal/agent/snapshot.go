@@ -248,13 +248,74 @@ func (a *Agent) takeSnapshot(ctx context.Context, request *hostproto.SnapshotCon
 			a.log.Warn("removing a snapshot directory failed", "dir", dir, "error", err)
 		}
 	}()
-	if _, err := a.docker.CheckpointCreate(ctx, c.dockerName(), client.CheckpointCreateOptions{CheckpointID: id, CheckpointDir: dir, Exit: false}); err != nil {
+	reattach := c.detachForCheckpoint(ctx)
+	err = a.checkpoint(ctx, c, client.CheckpointCreateOptions{CheckpointID: id, CheckpointDir: dir, Exit: false})
+	reattach()
+	if err != nil {
 		if cannotCheckpoint(err) {
 			return 0, "", fmt.Errorf("%w: %v", errCannotCheckpoint, err) //nolint:errorlint // the runtime's error is a message, not a cause to match
 		}
 		return 0, "", fmt.Errorf("checkpoint: %w", err)
 	}
-	return a.uploadDir(ctx, filepath.Join(dir, id), request.GetUploadUrl())
+	size, sum, err := a.uploadDir(ctx, filepath.Join(dir, id), request.GetUploadUrl())
+	if errors.Is(err, fs.ErrPermission) && os.Geteuid() != 0 {
+		// Docker writes the checkpoint as root.
+		return 0, "", fmt.Errorf("%w: reading a checkpoint takes an agent running as root: %v", errCannotCheckpoint, err) //nolint:errorlint // see above
+	}
+	return size, sum, err
+}
+
+// detachTimeout bounds the wait for the supervisor to close its sockets.
+const detachTimeout = 10 * time.Second
+
+// detachForCheckpoint has the supervisor close its sockets on the host and
+// closes the link, since no runtime checkpoints a container holding a host
+// socket. The returned function opens the link again; the supervisor
+// reopens its sockets once it reconnects.
+func (c *container) detachForCheckpoint(ctx context.Context) func() {
+	c.mu.Lock()
+	l := c.link
+	c.mu.Unlock()
+	select {
+	case <-c.detached:
+	default:
+	}
+	l.enqueue(&hostproto.SupervisorCommand{Body: &hostproto.SupervisorCommand_Detach{Detach: &hostproto.Detach{}}})
+	timer := time.NewTimer(detachTimeout)
+	select {
+	case <-c.detached:
+	case <-timer.C:
+		c.log.Warn("the supervisor did not detach before the checkpoint")
+	case <-ctx.Done():
+	}
+	timer.Stop()
+	l.pause()
+	for _, t := range []*http.Transport{c.control, c.ports, c.requests} {
+		if t != nil {
+			t.CloseIdleConnections()
+		}
+	}
+	return func() {
+		if err := l.resume(c.work); err != nil {
+			c.log.Error("reopening the link after a checkpoint failed", "error", err)
+		}
+	}
+}
+
+// checkpoint checkpoints c, retrying briefly while the sandbox still
+// closes the sockets the supervisor released.
+func (a *Agent) checkpoint(ctx context.Context, c *container, options client.CheckpointCreateOptions) error {
+	for attempt := 1; ; attempt++ {
+		_, err := a.docker.CheckpointCreate(ctx, c.dockerName(), options)
+		if err == nil || attempt == 3 || !strings.Contains(err.Error(), "host socket") {
+			return err //nolint:wrapcheck // Wrapped by the caller.
+		}
+		select {
+		case <-ctx.Done():
+			return err //nolint:wrapcheck // see above
+		case <-time.After(300 * time.Millisecond):
+		}
+	}
 }
 
 // cannotCheckpoint recognizes runtimes that cannot checkpoint, as opposed
