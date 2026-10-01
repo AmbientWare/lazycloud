@@ -9,3 +9,10 @@ additional-imports:
     alias: .
 output-options:
   nullable-type: true
+  # The API host serves these path routes outside the operation router; see
+  # workloadRoutes.
+  exclude-operation-ids:
+    - requestEndpointPath
+    - requestEndpointPathVersion
+    - requestAsgiPath
+    - requestAsgiPathVersion
