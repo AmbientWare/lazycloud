@@ -1,10 +1,10 @@
 import { queryOptions } from "@tanstack/react-query";
 
-import { apiRequest } from "@/lib/api/client";
-import {
-  accountActivitySchema,
-  accountContainerCountsSchema,
-  type AccountActivityMeasure,
+import { api, ok } from "@/lib/api/client";
+import type {
+  AccountActivity,
+  AccountActivityMeasure,
+  AccountContainerCounts,
 } from "@/lib/api/schemas";
 
 import { accountQueryKeys, workspaceLiveQueryMeta } from "./workspace-keys";
@@ -20,7 +20,10 @@ import { accountQueryKeys, workspaceLiveQueryMeta } from "./workspace-keys";
 export function accountContainerCountsQueryOptions() {
   return queryOptions({
     queryKey: accountQueryKeys.metrics.containerCounts(),
-    queryFn: () => apiRequest("/api/v1/metrics/account/containers", accountContainerCountsSchema),
+    queryFn: async (): Promise<AccountContainerCounts> => {
+      const metrics = await ok(api.GET("/v1/me/metrics"));
+      return { pending: metrics.containers.pending, running: metrics.containers.running };
+    },
     meta: workspaceLiveQueryMeta(true),
   });
 }
@@ -63,17 +66,32 @@ export function accountActivityQueryOptions(options: {
   const { spanSeconds, windowSeconds } = accountActivityRanges[range];
   return queryOptions({
     queryKey: accountQueryKeys.metrics.activity({ measure, range, limit }),
-    queryFn: () => {
-      const params = new URLSearchParams({
-        measure,
-        window_seconds: String(windowSeconds),
-        start: new Date(Date.now() - spanSeconds * 1000).toISOString(),
-        limit: String(limit),
-      });
-      return apiRequest(
-        `/api/v1/metrics/account/activity?${params.toString()}`,
-        accountActivitySchema,
+    queryFn: async (): Promise<AccountActivity> => {
+      const activity = await ok(
+        api.GET("/v1/me/activity", {
+          params: {
+            query: {
+              measure,
+              window_seconds: windowSeconds,
+              start: new Date(Date.now() - spanSeconds * 1000).toISOString(),
+              limit,
+            },
+          },
+        }),
       );
+      return {
+        ...activity,
+        series: activity.series.map((series) => ({
+          kind: series.kind,
+          // The API names a series' workspace; its labels read only the name.
+          workspace_id: "",
+          workspace_name: series.workspace ?? "",
+          app_id: series.app_id ?? "",
+          app_name: series.app ?? "",
+          total: series.total,
+          buckets: series.buckets,
+        })),
+      };
     },
     staleTime: 30_000,
     meta: workspaceLiveQueryMeta(true),

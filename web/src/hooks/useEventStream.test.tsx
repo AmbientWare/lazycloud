@@ -125,12 +125,12 @@ describe("useEventStream", () => {
 
     const { rerender, unmount } = renderHook(
       ({ url }) => useEventStream(url, { onEvent: () => undefined }),
-      { initialProps: { url: "/api/v1/events/changes/stream?workspace=one" } },
+      { initialProps: { url: "/api/v1/events/stream?workspace=one" } },
     );
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     const firstSignal = fetchMock.mock.calls[0]?.[1]?.signal;
 
-    rerender({ url: "/api/v1/events/changes/stream?workspace=two" });
+    rerender({ url: "/api/v1/events/stream?workspace=two" });
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     expect(firstSignal?.aborted).toBe(true);
 

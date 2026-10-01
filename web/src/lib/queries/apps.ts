@@ -1,6 +1,6 @@
 import { queryOptions, type QueryClient } from "@tanstack/react-query";
 
-import { ApiError, api, ok } from "@/lib/api/client";
+import { ApiError, api, ok, type Schemas } from "@/lib/api/client";
 import type { AppSummary, DeploymentManifest } from "@/lib/api/schemas";
 import { clientContractSchema } from "@/lib/api/schemas/client_manifests";
 import {
@@ -13,6 +13,7 @@ import {
 import { workspaceName } from "@/lib/api/workspaces";
 
 import { appDirectory, workloadDirectory } from "./directory";
+import { countTotal, taskActivity } from "./tasks";
 import { workspaceLiveQueryMeta, workspaceQueryKeys } from "./workspace-keys";
 
 export function appQueryOptions(workspaceId: string, appId: string) {
@@ -34,8 +35,8 @@ export function appQueryOptions(workspaceId: string, appId: string) {
 /**
  * Every app with what its card shows. The API has no per-app summary, so the
  * latest workload, kinds and running containers come from the workspace's
- * deployed workloads and live containers; 24 hour activity waits for the
- * observability API and reads as none.
+ * deployed workloads and live containers, and 24 hour activity from one read
+ * of the workspace's task activity.
  */
 export function appSummariesQueryOptions(workspaceId: string) {
   return queryOptions({
@@ -50,7 +51,7 @@ export function appSummariesQueryOptions(workspaceId: string) {
         queryKey: [...workspaceQueryKeys.deployments.root(workspaceId), "directory"],
         refetchType: "none",
       });
-      const [apps, workloads, containers] = await Promise.all([
+      const [apps, workloads, containers, activity] = await Promise.all([
         appDirectory(client, workspaceId),
         workloadDirectory(client, workspaceId),
         ok(
@@ -58,7 +59,9 @@ export function appSummariesQueryOptions(workspaceId: string) {
             params: { path: { workspace }, query: { live: true, limit: 1000 } },
           }),
         ),
+        taskActivity(workspaceId, 3600),
       ]);
+      const activityByApp = new Map(activity.series.map((series) => [series.app, series]));
       const items: AppSummary[] = [...apps.byId.values()]
         .sort((left, right) => left.name.localeCompare(right.name))
         .map((app) => {
@@ -83,14 +86,7 @@ export function appSummariesQueryOptions(workspaceId: string) {
                 container.app === app.name &&
                 (container.state === "ready" || container.state === "draining"),
             ).length,
-            runs_24h: 0,
-            failed_runs_24h: 0,
-            pending_runs_24h: 0,
-            succeeded_runs_24h: 0,
-            activity_24h: [],
-            failures_24h: [],
-            pending_24h: [],
-            succeeded_24h: [],
+            ...activity24h(activityByApp.get(app.name)),
             last_deployed_at: latest?.deployed_at ?? null,
           };
         });
@@ -98,6 +94,27 @@ export function appSummariesQueryOptions(workspaceId: string) {
     },
     meta: workspaceLiveQueryMeta(true),
   });
+}
+
+/** An app's tasks over the last 24 hours, in total and per hour by outcome. */
+function activity24h(series: Schemas["ActivitySeries"] | undefined) {
+  const buckets = series?.buckets ?? [];
+  const sum = (values: number[]) => values.reduce((total, value) => total + value, 0);
+  const failures = buckets.map((bucket) => bucket.status_counts.failed);
+  const pending = buckets.map(
+    (bucket) => bucket.status_counts.queued + bucket.status_counts.running,
+  );
+  const succeeded = buckets.map((bucket) => bucket.status_counts.succeeded);
+  return {
+    runs_24h: series?.total ?? 0,
+    failed_runs_24h: sum(failures),
+    pending_runs_24h: sum(pending),
+    succeeded_runs_24h: sum(succeeded),
+    activity_24h: buckets.map((bucket) => countTotal(bucket.status_counts)),
+    failures_24h: failures,
+    pending_24h: pending,
+    succeeded_24h: succeeded,
+  };
 }
 
 export function invalidateAppLists(queryClient: QueryClient, workspaceId: string) {

@@ -225,6 +225,34 @@ export function viewTaskStatus(task: Schemas["Task"]): string {
   }
 }
 
+/**
+ * A status without the attempt detail `viewTaskStatus` reads: queued work is
+ * pending and a failure is failed, whether or not it retries or timed out.
+ */
+export function viewStatus(status: Schemas["TaskStatus"]): string {
+  switch (status) {
+    case "queued":
+      return "pending";
+    case "succeeded":
+      return "complete";
+    case "running":
+    case "failed":
+    case "cancelled":
+      return status;
+  }
+}
+
+/** Task counts by status, keyed by the reference's statuses. */
+export function viewStatusCounts(counts: Schemas["TaskStatusCounts"]): Record<string, number> {
+  return {
+    pending: counts.queued,
+    running: counts.running,
+    complete: counts.succeeded,
+    failed: counts.failed,
+    cancelled: counts.cancelled,
+  };
+}
+
 /** The API status a reference status filter asks for. */
 export function apiTaskStatus(status: string | undefined): Schemas["TaskStatus"] | undefined {
   switch (status) {

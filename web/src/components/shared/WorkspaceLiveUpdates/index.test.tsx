@@ -3,22 +3,30 @@ import { act, render } from "@testing-library/react";
 import { focusManager, QueryClientProvider, useQuery, type QueryKey } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { rememberWorkspaces } from "@/lib/api/workspaces";
 import { workspaceLiveQueryMeta, workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 
 import { WorkspaceLiveUpdatesProvider } from "./index";
 
-const WORKSPACE_ID = "workspace-1";
+const WORKSPACE_ID = "0199a000-0000-7000-8000-000000000001";
+rememberWorkspaces([{ id: WORKSPACE_ID, name: "dev" }]);
 
 function changeFrame(sequence: number): string {
   const event = {
-    event_id: `${sequence}-0`,
-    occurred_at: "2026-07-13T15:30:00Z",
+    seq: sequence,
     workspace_id: WORKSPACE_ID,
-    topic: "tasks",
-    change: "updated",
-    resource_id: `task-${sequence}`,
+    occurred_at: "2026-07-13T15:30:00Z",
+    changes: [
+      {
+        topic: "tasks",
+        change: "updated",
+        resource_id: `task-${sequence}`,
+        task_id: `task-${sequence}`,
+        status: "running",
+      },
+    ],
   };
-  return `id: ${sequence}-0\nevent: workspace.change\ndata: ${JSON.stringify(event)}\n\n`;
+  return `id: ${sequence}\nevent: change\ndata: ${JSON.stringify(event)}\n\n`;
 }
 
 /** One open server-sent-event response the test writes frames into. */
