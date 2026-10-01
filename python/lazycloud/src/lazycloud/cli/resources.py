@@ -493,7 +493,7 @@ def container_attach(
     except PodOperationError as exc:
         raise typer.BadParameter(str(exc)) from exc
     finished = client.api.get_container(client.workspace, _container_uuid(container_id))
-    payload = {**finished.model_dump(mode="json"), "output": attached.output}
+    payload: dict[str, object] = {**finished.model_dump(mode="json"), "output": attached.output}
     if attached.exit_code is not None:
         emit(
             ctx,
