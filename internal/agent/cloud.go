@@ -45,12 +45,12 @@ func newIMDS(endpoint string) *imds.Client {
 // profile's credentials. The server sends it to STS to learn the instance's
 // role session, and the signature covers the host id header.
 func cloudIdentity(ctx context.Context, metadata *imds.Client, hostID string) (*hostproto.CloudIdentity, error) {
-	region, err := metadata.GetRegion(ctx, &imds.GetRegionInput{})
+	region, err := readMetadata(ctx, metadata, "placement/region")
 	if err != nil {
-		return nil, fmt.Errorf("read instance region: %w", err)
+		return nil, err
 	}
 	credentials := aws.NewCredentialsCache(ec2rolecreds.New(func(o *ec2rolecreds.Options) { o.Client = metadata }))
-	client := sts.New(sts.Options{Region: region.Region, Credentials: credentials})
+	client := sts.New(sts.Options{Region: region, Credentials: credentials})
 	presigned, err := sts.NewPresignClient(client).PresignGetCallerIdentity(ctx, &sts.GetCallerIdentityInput{},
 		sts.WithPresignClientFromClientOptions(func(o *sts.Options) {
 			o.APIOptions = append(o.APIOptions, func(stack *middleware.Stack) error {
@@ -79,6 +79,19 @@ func signIdentityFields(hostID string) middleware.BuildMiddleware {
 		}
 		return next.HandleBuild(ctx, in)
 	})
+}
+
+func readMetadata(ctx context.Context, metadata *imds.Client, path string) (string, error) {
+	out, err := metadata.GetMetadata(ctx, &imds.GetMetadataInput{Path: path})
+	if err != nil {
+		return "", fmt.Errorf("read instance metadata %s: %w", path, err)
+	}
+	defer func() { _ = out.Content.Close() }()
+	data, err := io.ReadAll(io.LimitReader(out.Content, 4096))
+	if err != nil {
+		return "", fmt.Errorf("read instance metadata %s: %w", path, err)
+	}
+	return strings.TrimSpace(string(data)), nil
 }
 
 // interruption is a provider's reclaim notice.
@@ -129,24 +142,19 @@ func (a *Agent) watchInterruptions(ctx context.Context) {
 func spotNotice(ctx context.Context, metadata *imds.Client) (*interruption, error) {
 	ctx, cancel := context.WithTimeout(ctx, imdsCallTimeout)
 	defer cancel()
-	out, err := metadata.GetMetadata(ctx, &imds.GetMetadataInput{Path: spotActionPath})
+	body, err := readMetadata(ctx, metadata, spotActionPath)
 	if err != nil {
 		var response *smithyhttp.ResponseError
 		if errors.As(err, &response) && response.HTTPStatusCode() == http.StatusNotFound {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("read %s: %w", spotActionPath, err)
-	}
-	defer func() { _ = out.Content.Close() }()
-	body, err := io.ReadAll(io.LimitReader(out.Content, 4096))
-	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", spotActionPath, err)
+		return nil, err
 	}
 	var notice struct {
 		Action string    `json:"action"`
 		Time   time.Time `json:"time"`
 	}
-	if err := json.Unmarshal(body, &notice); err != nil || notice.Action == "" || notice.Time.IsZero() {
+	if err := json.Unmarshal([]byte(body), &notice); err != nil || notice.Action == "" || notice.Time.IsZero() {
 		return nil, fmt.Errorf("unreadable %s notice %q", spotActionPath, body)
 	}
 	return &interruption{reason: "aws-ec2-spot-" + notice.Action, reclaimAt: notice.Time}, nil

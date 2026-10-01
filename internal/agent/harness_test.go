@@ -298,7 +298,8 @@ type runningAgent struct {
 	done   chan error
 }
 
-func (e *env) startAgent() *runningAgent {
+// startAgent runs an agent; configure adjusts its configuration.
+func (e *env) startAgent(configure ...func(*Config)) *runningAgent {
 	e.t.Helper()
 	runtimeDir, err := filepath.Abs("../supervisor/testdata/runtime")
 	if err != nil {
@@ -320,6 +321,9 @@ func (e *env) startAgent() *runningAgent {
 		Version:        "test",
 		Logger:         slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})),
 	}
+	for _, fn := range configure {
+		fn(&cfg)
+	}
 	go func() { a.done <- Run(ctx, cfg) }()
 	e.t.Cleanup(a.stop)
 	return a
@@ -333,6 +337,30 @@ func (a *runningAgent) stop() {
 		panic("agent did not stop")
 	}
 	a.done <- nil
+}
+
+// exited waits for Run to return on its own.
+func (a *runningAgent) exited(t *testing.T) error {
+	t.Helper()
+	select {
+	case err := <-a.done:
+		a.done <- nil
+		return err
+	case <-time.After(60 * time.Second):
+		t.Fatal("agent did not exit")
+		return nil
+	}
+}
+
+func (e *env) enrollment() *hostproto.EnrollRequest {
+	e.t.Helper()
+	select {
+	case r := <-e.server.enrolls:
+		return r
+	case <-time.After(30 * time.Second):
+		e.t.Fatal("agent did not enroll")
+		return nil
+	}
 }
 
 func (e *env) session() *serverSession {

@@ -221,7 +221,11 @@ func Run(ctx context.Context, cfg Config) error {
 		restart:    cancel,
 		containers: make(map[string]*container),
 	}
-	defer a.shutdown()
+	// Owned goroutines stop with ctx, so it ends before shutdown waits for them.
+	defer func() {
+		cancel(nil)
+		a.shutdown()
+	}()
 	if err := a.removeBuildContainers(ctx); err != nil {
 		return err
 	}
