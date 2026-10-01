@@ -13,12 +13,15 @@ import (
 	"time"
 
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
+	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
 
 // After shutdown starts the server reports draining on /readyz and keeps
-// serving for the drain delay, so a load balancer stops routing to it
-// before its listeners close; then it stops within the shutdown grace.
+// serving the API for the drain delay, so a load balancer stops routing to
+// it before its listeners close; then it stops within the shutdown grace.
+// Background work outlives the drain: a token used while draining is still
+// recorded.
 func TestServeDrainsOnShutdown(t *testing.T) {
 	pool := dbtest.New(t)
 	key := filepath.Join(t.TempDir(), "secrets.key")
@@ -27,30 +30,41 @@ func TestServeDrainsOnShutdown(t *testing.T) {
 	if err := os.WriteFile(key, secret, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	ident := identity.NewIdentity(pool, identity.Config{})
+	if _, err := ident.CreateUser(t.Context(), "drain@example.com", false); err != nil {
+		t.Fatal(err)
+	}
+	token, err := ident.CreateToken(t.Context(), "drain@example.com", "", "drain")
+	if err != nil {
+		t.Fatal(err)
+	}
 	cfg := serveConfig{objectStore: storagetest.Config(), secretsKey: key, drainDelay: time.Second}
 	cfg.images.Registry = "127.0.0.1:1"
-	httpListener := listen(t)
-	grpcListener := listen(t)
-	base := "http://" + httpListener.Addr().String()
+	ls := listeners{http: listen(t), grpc: listen(t), health: listen(t)}
+	api := "http://" + ls.http.Addr().String()
+	probes := "http://" + ls.health.Addr().String()
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		done <- serveWith(ctx, pool, cfg, slog.New(slog.DiscardHandler), httpListener, grpcListener)
+		done <- serveWith(ctx, pool, cfg, slog.New(slog.DiscardHandler), ls)
 	}()
 
-	waitFor(t, base+"/readyz", http.StatusOK)
-	if status := get(t, base+"/healthz"); status != http.StatusOK {
+	waitFor(t, probes+"/readyz", http.StatusOK)
+	if status := get(t, probes+"/healthz", ""); status != http.StatusOK {
 		t.Fatalf("healthz = %d, want 200", status)
+	}
+	if status := get(t, api+"/readyz", ""); status == http.StatusOK {
+		t.Fatal("the API port answers /readyz; probes belong on the health port")
 	}
 
 	stopped := time.Now()
 	cancel()
-	waitFor(t, base+"/readyz", http.StatusServiceUnavailable)
+	waitFor(t, probes+"/readyz", http.StatusServiceUnavailable)
 	// Still serving during the drain delay.
-	if status := get(t, base+"/healthz"); status != http.StatusOK {
-		t.Fatalf("healthz while draining = %d, want 200", status)
+	if status := get(t, api+"/v1/me", token); status != http.StatusOK {
+		t.Fatalf("API while draining = %d, want 200", status)
 	}
 	select {
 	case err := <-done:
@@ -64,9 +78,15 @@ func TestServeDrainsOnShutdown(t *testing.T) {
 		t.Fatalf("server stopped after %s, before the %s drain delay", elapsed, cfg.drainDelay)
 	}
 	var dialer net.Dialer
-	if conn, err := dialer.DialContext(t.Context(), "tcp", httpListener.Addr().String()); err == nil {
-		_ = conn.Close()
-		t.Fatal("listener still accepts after shutdown")
+	for _, l := range []net.Listener{ls.http, ls.health} {
+		if conn, err := dialer.DialContext(t.Context(), "tcp", l.Addr().String()); err == nil {
+			_ = conn.Close()
+			t.Fatalf("%s still accepts after shutdown", l.Addr())
+		}
+	}
+	var used *time.Time
+	if err := pool.QueryRow(t.Context(), "select last_used_at from api_tokens where name = 'drain'").Scan(&used); err != nil || used == nil {
+		t.Fatalf("token use during the drain was not recorded: %v %v", used, err)
 	}
 }
 
@@ -80,11 +100,15 @@ func listen(t *testing.T) net.Listener {
 	return l
 }
 
-func get(t *testing.T, url string) int {
+// get returns the status of GET url, with token as the bearer when set.
+func get(t *testing.T, url, token string) int {
 	t.Helper()
 	req, err := http.NewRequestWithContext(context.WithoutCancel(t.Context()), http.MethodGet, url, nil)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

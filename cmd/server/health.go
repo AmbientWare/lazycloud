@@ -1,50 +1,34 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"sync/atomic"
-	"time"
-
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// readinessTimeout bounds the database check of one readiness probe.
-const readinessTimeout = 2 * time.Second
-
-// health answers the orchestrator's probes. /healthz reports that the
-// process serves requests; /readyz also requires the database and turns
-// false once shutdown starts, so load balancers stop routing new requests
-// here before the listeners close.
+// health answers the orchestrator's probes on their own listener, apart
+// from the public API. /healthz reports that the process serves; /readyz
+// turns false once shutdown starts, so load balancers stop routing new
+// requests here before the listeners close. Readiness leaves the database
+// out: when it is down every replica would turn unready together, and
+// clients would lose the typed errors the API returns for it.
 type health struct {
-	pool     *pgxpool.Pool
 	draining atomic.Bool
 }
 
-// withProbes serves the probes beside next.
-func (h *health) withProbes(next http.Handler) http.Handler {
+func (h *health) handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeProbe(w, http.StatusOK, "ok")
 	})
-	mux.HandleFunc("GET /readyz", h.ready)
-	mux.Handle("/", next)
+	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, _ *http.Request) {
+		if h.draining.Load() {
+			writeProbe(w, http.StatusServiceUnavailable, "draining")
+			return
+		}
+		writeProbe(w, http.StatusOK, "ok")
+	})
 	return mux
-}
-
-func (h *health) ready(w http.ResponseWriter, r *http.Request) {
-	if h.draining.Load() {
-		writeProbe(w, http.StatusServiceUnavailable, "draining")
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), readinessTimeout)
-	defer cancel()
-	if err := h.pool.Ping(ctx); err != nil {
-		writeProbe(w, http.StatusServiceUnavailable, "database unavailable")
-		return
-	}
-	writeProbe(w, http.StatusOK, "ok")
 }
 
 func writeProbe(w http.ResponseWriter, status int, body string) {

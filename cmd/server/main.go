@@ -109,6 +109,7 @@ type serveConfig struct {
 	databaseURL   string
 	httpAddr      string
 	grpcAddr      string
+	healthAddr    string
 	objectStore   storage.Config
 	imageTemplate string
 	secretsKey    string
@@ -126,6 +127,7 @@ func serve(ctx context.Context, args []string) error {
 	fs.StringVar(&cfg.databaseURL, "database-url", env("LAZYCLOUD_DATABASE_URL", ""), "PostgreSQL URL (LAZYCLOUD_DATABASE_URL)")
 	fs.StringVar(&cfg.httpAddr, "http-addr", env("LAZYCLOUD_HTTP_ADDR", "127.0.0.1:8080"), "public API address (LAZYCLOUD_HTTP_ADDR)")
 	fs.StringVar(&cfg.grpcAddr, "grpc-addr", env("LAZYCLOUD_GRPC_ADDR", "127.0.0.1:8081"), "host connection address (LAZYCLOUD_GRPC_ADDR)")
+	fs.StringVar(&cfg.healthAddr, "health-addr", env("LAZYCLOUD_HEALTH_ADDR", ""), "address of /healthz and /readyz, unset for none (LAZYCLOUD_HEALTH_ADDR)")
 	fs.StringVar(&cfg.objectStore.Endpoint, "object-store-endpoint", env("LAZYCLOUD_OBJECT_STORE_ENDPOINT", ""), "S3-compatible endpoint URL (LAZYCLOUD_OBJECT_STORE_ENDPOINT)")
 	fs.StringVar(&cfg.objectStore.Region, "object-store-region", env("LAZYCLOUD_OBJECT_STORE_REGION", ""), "object store region (LAZYCLOUD_OBJECT_STORE_REGION)")
 	fs.StringVar(&cfg.objectStore.Bucket, "object-store-bucket", env("LAZYCLOUD_OBJECT_STORE_BUCKET", ""), "bucket for source archives (LAZYCLOUD_OBJECT_STORE_BUCKET)")
@@ -175,24 +177,42 @@ func serve(ctx context.Context, args []string) error {
 		if err := database.Migrate(ctx, pool); err != nil {
 			return err
 		}
-		var lc net.ListenConfig
-		httpListener, err := lc.Listen(ctx, "tcp", cfg.httpAddr)
-		if err != nil {
-			return fmt.Errorf("listen on %s: %w", cfg.httpAddr, err)
-		}
-		grpcListener, err := lc.Listen(ctx, "tcp", cfg.grpcAddr)
-		if err != nil {
-			_ = httpListener.Close()
-			return fmt.Errorf("listen on %s: %w", cfg.grpcAddr, err)
-		}
+		var ls listeners
 		// The servers close them too; this covers a failed setup.
-		defer func() { _ = httpListener.Close(); _ = grpcListener.Close() }()
-		return serveWith(ctx, pool, cfg, logger, httpListener, grpcListener)
+		defer func() { ls.close() }()
+		var lc net.ListenConfig
+		var err error
+		for _, l := range []struct {
+			addr string
+			into *net.Listener
+		}{{cfg.httpAddr, &ls.http}, {cfg.grpcAddr, &ls.grpc}, {cfg.healthAddr, &ls.health}} {
+			if l.addr == "" {
+				continue
+			}
+			if *l.into, err = lc.Listen(ctx, "tcp", l.addr); err != nil {
+				return fmt.Errorf("listen on %s: %w", l.addr, err)
+			}
+		}
+		return serveWith(ctx, pool, cfg, logger, ls)
 	})
 }
 
+// listeners are the server's sockets; health is nil without a health
+// address.
+type listeners struct {
+	http, grpc, health net.Listener
+}
+
+func (ls listeners) close() {
+	for _, l := range []net.Listener{ls.http, ls.grpc, ls.health} {
+		if l != nil {
+			_ = l.Close()
+		}
+	}
+}
+
 // serveWith serves on the listeners until ctx ends, then drains.
-func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, logger *slog.Logger, httpListener, grpcListener net.Listener) error {
+func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, logger *slog.Logger, ls listeners) error {
 	listener := database.NewListener(pool, logger, database.ChannelHost, database.ChannelTask, database.ChannelClaim,
 		database.ChannelLogs, database.ChannelImageBuild, database.ChannelImageBuildLog, storage.ChannelQueue)
 	store := storage.NewStorage(pool, cfg.objectStore)
@@ -226,27 +246,46 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, logger 
 	}, logger)
 	grpcServer := grpc.NewServer(hosts.ServerOptions()...)
 	hostproto.RegisterHostServiceServer(grpcServer, hosts)
-	probes := &health{pool: pool}
-	httpServer := &http.Server{Handler: probes.withProbes(handler), ReadHeaderTimeout: 10 * time.Second}
-	logger.InfoContext(ctx, "serving", "version", version, "http", httpListener.Addr().String(), "grpc", grpcListener.Addr().String())
+	probes := &health{}
+	httpServer := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+	logger.InfoContext(ctx, "serving", "version", version, "http", ls.http.Addr().String(), "grpc", ls.grpc.Addr().String())
 
 	g, gctx := errgroup.WithContext(ctx)
-	g.Go(func() error { return listener.Run(gctx) })
-	g.Go(func() error { return ident.RunTokenUse(gctx, logger) })
+	// Requests and RPCs still open during the drain wait on NOTIFY wake-ups
+	// and record token use, so the listener and the token-use writer stop
+	// only after both servers have stopped.
+	background, stopBackground := context.WithCancel(context.WithoutCancel(ctx))
+	defer stopBackground()
+	g.Go(func() error { return listener.Run(background) })
+	g.Go(func() error { return ident.RunTokenUse(background, logger) })
 	g.Go(func() error {
-		if err := httpServer.Serve(httpListener); !errors.Is(err, http.ErrServerClosed) {
+		if err := httpServer.Serve(ls.http); !errors.Is(err, http.ErrServerClosed) {
 			return fmt.Errorf("serve http: %w", err)
 		}
 		return nil
 	})
 	g.Go(func() error {
-		if err := grpcServer.Serve(grpcListener); err != nil {
+		if err := grpcServer.Serve(ls.grpc); err != nil {
 			return fmt.Errorf("serve grpc: %w", err)
 		}
 		return nil
 	})
+	var healthServer *http.Server
+	if ls.health != nil {
+		healthServer = &http.Server{Handler: probes.handler(), ReadHeaderTimeout: 5 * time.Second}
+		g.Go(func() error {
+			if err := healthServer.Serve(ls.health); !errors.Is(err, http.ErrServerClosed) {
+				return fmt.Errorf("serve health: %w", err)
+			}
+			return nil
+		})
+	}
 	g.Go(func() error {
 		<-gctx.Done()
+		defer stopBackground()
+		if healthServer != nil {
+			defer func() { _ = healthServer.Close() }()
+		}
 		probes.draining.Store(true)
 		if cfg.drainDelay > 0 {
 			logger.Info("draining", "delay", cfg.drainDelay.String())
