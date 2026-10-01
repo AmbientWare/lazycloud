@@ -87,6 +87,10 @@ type container struct {
 	claiming   bool
 	// build marks an image build container, which has no link or slots.
 	isBuild bool
+
+	// gpus are the UUIDs of the devices the container holds, guarded by the
+	// agent's mutex.
+	gpus []string
 	// startup holds the finished start stages; created is when the
 	// container process started, which begins the runtime stage.
 	startup []*hostproto.StartupStage
@@ -215,6 +219,13 @@ func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer)
 	if info, err := os.Stat(runtime); err != nil || !info.IsDir() {
 		return fmt.Errorf("python runtime %s is not installed at %s", version, runtime)
 	}
+	var gpus []string
+	if n := int(spec.GetResources().GetGpuCount()); n > 0 {
+		var err error
+		if gpus, err = c.a.allocateGPUs(c, n); err != nil {
+			return err
+		}
+	}
 
 	began := time.Now()
 	pulled, err := c.a.images.ensure(ctx, spec.GetImage(), spec.GetImageAuth(), spec.GetImagePlatform())
@@ -251,7 +262,7 @@ func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer)
 			workspaces = append(workspaces, ws)
 		}
 	}
-	if err := c.a.createAndStart(ctx, c, spec, runtime, binds, workspaces); err != nil {
+	if err := c.a.createAndStart(ctx, c, spec, runtime, binds, workspaces, gpus); err != nil {
 		return err
 	}
 	created := time.Now()

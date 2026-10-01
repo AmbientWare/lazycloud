@@ -23,6 +23,10 @@ select id, email, is_admin from users where email = @email;
 -- name: InsertWorkspace :one
 insert into workspaces (name) values (@name) returning id, created_at;
 
+-- name: SetWorkspaceConnection :exec
+-- Places a new workspace in a connected AWS account; it stays there.
+update workspaces set connection_id = @connection_id where id = @id;
+
 -- name: InsertMember :exec
 insert into workspace_members (workspace_id, user_id, role) values (@workspace_id, @user_id, @role);
 

@@ -24,7 +24,7 @@ import (
 func newTestContainer(t *testing.T, server *hostServer) *container {
 	t.Helper()
 	grpcServer, address := server.serve(t, "127.0.0.1:0")
-	conn, err := dialServer(address, server.hostToken, nil)
+	conn, err := dialServer(Config{Server: address, ServerPlaintext: true}, server.hostToken)
 	if err != nil {
 		t.Fatal(err)
 	}

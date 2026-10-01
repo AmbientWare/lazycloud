@@ -105,6 +105,8 @@ def test_workspace_create_and_rename_keep_the_profile_selected(api: FakeApi) -> 
     assert created.exit_code == 0, created.output
     assert json.loads(created.stdout)["name"] == "review"
     assert get_profile(apply_env=False).workspace == "review"
+    (create,) = api.calls("POST", "/v1/workspaces")
+    assert create.json() == {"name": "review"}
 
     renamed = CliRunner().invoke(cli, ["--json", "workspace", "rename", "renamed"])
     assert renamed.exit_code == 0, renamed.output
@@ -117,17 +119,20 @@ def test_workspace_create_and_rename_keep_the_profile_selected(api: FakeApi) -> 
     assert [w["name"] for w in json.loads(listed.stdout)["workspaces"]] == ["default", "renamed"]
 
 
-def test_workspace_create_in_a_cloud_needs_a_connection(api: FakeApi) -> None:
+def test_workspace_create_in_a_cloud_names_the_cloud(api: FakeApi) -> None:
     _Workspaces(api, "default")
     _profile(api, "default")
+    cli = build_public_cli()
 
-    result = CliRunner().invoke(
-        build_public_cli(), ["workspace", "create", "review", "--cloud", "aws"]
-    )
+    created = CliRunner().invoke(cli, ["--json", "workspace", "create", "review", "--cloud", "aws"])
+    assert created.exit_code == 0, created.output
+    (request,) = api.calls("POST", "/v1/workspaces")
+    assert request.json() == {"name": "review", "cloud": "aws"}
 
-    assert isinstance(result.exception, ClientError)
-    assert "lazycloud cloud connect aws" in str(result.exception)
-    assert not api.calls("POST", "/v1/workspaces")
+    refused = CliRunner().invoke(cli, ["workspace", "create", "other", "--cloud", "gcp"])
+    assert isinstance(refused.exception, ClientError)
+    assert "unsupported cloud 'gcp'; connected clouds: aws" in str(refused.exception)
+    assert len(api.calls("POST", "/v1/workspaces")) == 1
 
 
 def test_workspace_use_selects_only_an_accessible_workspace(api: FakeApi) -> None:

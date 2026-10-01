@@ -17,8 +17,8 @@ const (
 	PendingRetry               PendingReason = "retry"
 	PendingCapacityBusy        PendingReason = "capacity_busy"
 	PendingCapacityUnavailable PendingReason = "capacity_unavailable"
-	// PendingCapacityLimit and PendingProvisioningCompute come from compute
-	// once it provisions hosts and enforces limits.
+	// PendingCapacityLimit and PendingProvisioningCompute come from the
+	// capacity controller's mark on the release's pending containers.
 	PendingCapacityLimit       PendingReason = "capacity_limit"
 	PendingProvisioningCompute PendingReason = "provisioning_compute"
 	PendingStartingContainer   PendingReason = "starting_container"
@@ -104,9 +104,15 @@ func pendingProgress(row PendingFactsRow) PendingProgress {
 		return at(PendingRetry, nil)
 	case row.StartingSince != nil:
 		return at(PendingStartingContainer, row.StartingSince)
+	case row.UnplacedSince != nil && row.Provisioning > 0:
+		// Compute is buying a host for the container.
+		return at(PendingProvisioningCompute, row.UnplacedSince)
+	case row.UnplacedSince != nil && row.Limited > 0:
+		// The fleet limit holds the purchase back.
+		return at(PendingCapacityLimit, row.UnplacedSince)
 	case row.UnplacedSince != nil:
 		// Placement runs as soon as a container is requested, so one that
-		// stays unplaced has no host with room.
+		// stays unplaced has no host with room and none is being bought.
 		return at(PendingCapacityUnavailable, row.UnplacedSince)
 	case row.Ready > 0:
 		return at(PendingCapacityBusy, nil)

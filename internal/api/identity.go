@@ -223,7 +223,18 @@ func (s *Server) CreateWorkspace(ctx context.Context, req CreateWorkspaceRequest
 	if err != nil {
 		return nil, err
 	}
-	ws, err := s.owners.Identity.CreateOwnedWorkspace(ctx, p, req.Body.Name)
+	var connection *uuid.UUID
+	if req.Body.Cloud != nil {
+		if !p.IsAdmin {
+			return nil, identity.ErrAdminRequired
+		}
+		id, err := s.owners.Compute.WorkspaceConnection(ctx, p.User)
+		if err != nil {
+			return nil, err
+		}
+		connection = &id
+	}
+	ws, err := s.owners.Identity.CreateOwnedWorkspaceIn(ctx, p, req.Body.Name, connection)
 	if err != nil {
 		return nil, err
 	}
