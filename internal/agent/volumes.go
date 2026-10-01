@@ -231,13 +231,14 @@ func (v *volumes) ensureMount(ctx context.Context, workspace, container string) 
 	lock.Lock()
 	defer lock.Unlock()
 
+	// A running mount container is never replaced, since live workloads bind
+	// to its mount; a new one only replaces a container that has exited.
 	root := filepath.Join(v.mountDir(), workspace)
-	if mounted(root) && v.mounterRunning(ctx, workspace) {
-		return root, nil
-	}
-	if err := v.startMounter(ctx, workspace); err != nil {
-		v.release(container)
-		return "", err
+	if !v.mounterRunning(ctx, workspace) {
+		if err := v.startMounter(ctx, workspace); err != nil {
+			v.release(container)
+			return "", err
+		}
 	}
 	deadline := time.Now().Add(mountWait)
 	for !mounted(root) {
