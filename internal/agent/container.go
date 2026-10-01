@@ -60,7 +60,16 @@ type container struct {
 	http *hostproto.HttpServing
 	// requests reaches the supervisor's HTTP socket.
 	requests *http.Transport
-	disks    diskSet
+	// pod is set for containers that run a command instead of runner
+	// slots; docker runs a Docker daemon in the container.
+	pod    *hostproto.PodProcess
+	docker bool
+	// control reaches the supervisor's control API, and ports the
+	// container's ports through it.
+	control *http.Transport
+	ports   *http.Transport
+	network networkState
+	disks   diskSet
 	// apiCalls bounds container API calls in flight.
 	apiCalls chan struct{}
 
@@ -88,6 +97,10 @@ type container struct {
 	stopping   bool
 	grace      time.Duration
 	loadError  *hostproto.RunnerError
+	// commandExit is a pod command's exit code once it ended on its own.
+	commandExit *int32
+	// restoreFailed is the snapshot the start could not restore.
+	restoreFailed string
 	// volumeLost says why the container was stopped for a dead mount.
 	volumeLost string
 	link       *link
@@ -135,16 +148,11 @@ func (a *Agent) newContainer(id, handler string, slots int, httpServing *hostpro
 		apiCalls:   make(chan struct{}, maxContainerAPICalls),
 	}
 	if httpServing != nil {
-		socket := filepath.Join(c.linkDir(), httpSocketName)
-		c.requests = &http.Transport{
-			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-				return (&net.Dialer{}).DialContext(ctx, "unix", socket)
-			},
-			MaxIdleConnsPerHost: maxIdleRequestConns,
-			IdleConnTimeout:     90 * time.Second,
-			DisableCompression:  true,
-		}
+		c.requests = socketTransport(filepath.Join(c.linkDir(), httpSocketName))
 	}
+	control := filepath.Join(c.linkDir(), controlSocketName)
+	c.control = socketTransport(control)
+	c.ports = portTransport(control)
 	c.work, c.cancelWork = context.WithCancel(a.ctx)
 	c.claims, c.cancelClaims = context.WithCancel(c.work)
 	c.logs = newLogBatcher(id, a.host, c.log)
@@ -163,14 +171,21 @@ func (c *container) dockerName() string   { return "lazycloud-" + c.id }
 
 func (c *container) configure() *hostproto.Configure {
 	configure := &hostproto.Configure{
-		Handler:          c.handler,
-		Slots:            int32(c.slots), //nolint:gosec // slots come from an int32
-		RunnerCommand:    []string{"python3", "-m", "runner"},
-		WorkingDirectory: containerWorkspace,
-		InProcess:        c.runtime.InProcess,
-		Hooks:            c.runtime.Hooks,
-		SecretEnv:        c.runtime.SecretEnv,
+		SecretEnv:     c.runtime.SecretEnv,
+		ControlSocket: containerControlSocket,
+		Docker:        c.docker,
 	}
+	if c.pod != nil {
+		configure.Pod = c.pod
+		configure.WorkingDirectory = c.pod.GetWorkingDirectory()
+		return configure
+	}
+	configure.Handler = c.handler
+	configure.Slots = int32(c.slots) //nolint:gosec // slots come from an int32
+	configure.RunnerCommand = []string{"python3", "-m", "runner"}
+	configure.WorkingDirectory = containerWorkspace
+	configure.InProcess = c.runtime.InProcess
+	configure.Hooks = c.runtime.Hooks
 	if c.http != nil {
 		configure.Http = c.http
 		configure.HttpSocket = containerLinkDir + "/" + httpSocketName
@@ -194,7 +209,26 @@ func (c *container) snapshot() *hostproto.ContainerReport {
 		ObservedAt:      timestamppb.Now(),
 		RunningAttempts: running,
 		Startup:         slices.Clone(c.startup),
+		RestoreFailed:   c.restoreFailed,
 	}
+}
+
+// addStage records a finished start stage and reports it, so the server
+// sees each stage of a slow start as it ends.
+func (c *container) addStage(kind hostproto.StartupStageKind, started, finished time.Time, cached bool) {
+	c.mu.Lock()
+	c.startup = append(c.startup, &hostproto.StartupStage{Kind: kind,
+		StartedAt: timestamppb.New(started), FinishedAt: timestamppb.New(finished), Cached: cached})
+	c.mu.Unlock()
+	c.report()
+}
+
+// reachable reports whether the container's supervisor may serve its
+// control API: the container started here and has not exited.
+func (c *container) reachable() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.started && c.phase != hostproto.ContainerPhase_CONTAINER_PHASE_EXITED
 }
 
 func (c *container) report() {
@@ -228,20 +262,22 @@ func (c *container) launch(ctx context.Context, spec *hostproto.StartContainer) 
 	c.watch(ctx)
 }
 
-// prepare fetches the image and source, creates the link socket and starts
-// the Docker container. Each stage is timed.
+// prepare fetches the image and source, attaches disks, creates the link
+// socket, starts the Docker container and applies its network policy. Each
+// stage is timed and reported as it finishes.
 func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer) error {
-	fn := spec.GetFunction()
-	if fn.GetHandler() == "" {
-		return fmt.Errorf("start has no function handler")
+	pod := spec.GetPod()
+	if pod == nil && spec.GetFunction().GetHandler() == "" {
+		return fmt.Errorf("start has neither a function handler nor a pod")
 	}
-	version := spec.GetPythonVersion()
-	if version == "" || !filepath.IsLocal(version) || filepath.Base(version) != version {
-		return fmt.Errorf("python version %q is not a runtime name", version)
-	}
-	runtime := filepath.Join(c.a.cfg.RuntimeDir, version)
-	if info, err := os.Stat(runtime); err != nil || !info.IsDir() {
-		return fmt.Errorf("python runtime %s is not installed at %s", version, runtime)
+	// Functions run the managed Python runner; a pod mounts the runtime
+	// only when the start names one.
+	var runtime string
+	if version := spec.GetPythonVersion(); pod == nil || version != "" {
+		var err error
+		if runtime, err = c.a.pythonRuntime(version); err != nil {
+			return err
+		}
 	}
 	var gpus []string
 	if n := int(spec.GetResources().GetGpuCount()); n > 0 {
@@ -256,15 +292,41 @@ func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer)
 	if err != nil {
 		return err
 	}
+	if pod != nil {
+		process, err := c.a.podProcess(ctx, spec)
+		if err != nil {
+			return err
+		}
+		c.mu.Lock()
+		c.pod = process
+		c.mu.Unlock()
+	}
 	imageReady := time.Now()
-	archive, err := c.a.sources.fetch(ctx, spec.GetSource())
-	if err != nil {
-		return err
+	c.addStage(hostproto.StartupStageKind_STARTUP_STAGE_KIND_IMAGE, began, imageReady, !pulled)
+
+	// A devbox's root disk is its filesystem; it gets no source.
+	if !pod.GetDevbox() {
+		if err := c.prepareWorkspace(ctx, spec.GetSource()); err != nil {
+			return err
+		}
 	}
-	if err := extractWorkspace(archive, c.workspaceDir()); err != nil {
-		return err
+	stageEnd := time.Now()
+	c.addStage(hostproto.StartupStageKind_STARTUP_STAGE_KIND_SOURCE, imageReady, stageEnd, false)
+
+	if pod.GetDevbox() && !slices.ContainsFunc(spec.GetDisks(), func(d *hostproto.DiskAttachment) bool { return d.GetMountPath() == "/" }) {
+		return fmt.Errorf("a devbox needs a disk mounted at /")
 	}
-	sourceReady := time.Now()
+	var diskBinds []mount.Mount
+	var workspaces []string
+	if len(spec.GetDisks()) > 0 {
+		diskStart := stageEnd
+		if diskBinds, workspaces, err = c.attachDisks(ctx, spec.GetDisks(), pod.GetDevbox()); err != nil {
+			return err
+		}
+		stageEnd = time.Now()
+		c.addStage(hostproto.StartupStageKind_STARTUP_STAGE_KIND_DISK, diskStart, stageEnd, false)
+	}
+
 	l, err := listenLink(ctx, c, c.linkDir())
 	if err != nil {
 		return err
@@ -272,43 +334,65 @@ func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer)
 	c.mu.Lock()
 	c.link = l
 	c.mu.Unlock()
-	binds, workspaces, err := c.a.volumes.binds(ctx, c.id, spec.GetVolumes())
-	if err != nil {
-		return err
-	}
-	diskBinds, diskWorkspaces, err := c.attachDisks(ctx, spec.GetDisks())
+	binds, volumeWorkspaces, err := c.a.volumes.binds(ctx, c.id, spec.GetVolumes())
 	if err != nil {
 		return err
 	}
 	binds = append(binds, diskBinds...)
-	for _, ws := range diskWorkspaces {
+	for _, ws := range volumeWorkspaces {
 		if !slices.Contains(workspaces, ws) {
 			workspaces = append(workspaces, ws)
 		}
 	}
-	if err := c.a.createAndStart(ctx, c, spec, runtime, binds, workspaces, gpus); err != nil {
+	restore := c.prepareRestore(ctx, spec.GetRestore())
+	if err := c.a.createAndStart(ctx, c, spec, runtime, binds, workspaces, gpus, restore); err != nil {
+		return err
+	}
+	// The supervisor waits for Configure, which the link serves only after
+	// this, so the command never runs before its filter is in place.
+	if err := c.applyStartNetwork(ctx, pod.GetNetwork()); err != nil {
 		return err
 	}
 	created := time.Now()
 	c.mu.Lock()
 	c.created = created
-	c.startup = append(c.startup,
-		&hostproto.StartupStage{Kind: hostproto.StartupStageKind_STARTUP_STAGE_KIND_IMAGE,
-			StartedAt: timestamppb.New(began), FinishedAt: timestamppb.New(imageReady), Cached: !pulled},
-		&hostproto.StartupStage{Kind: hostproto.StartupStageKind_STARTUP_STAGE_KIND_SOURCE,
-			StartedAt: timestamppb.New(imageReady), FinishedAt: timestamppb.New(sourceReady)},
-		&hostproto.StartupStage{Kind: hostproto.StartupStageKind_STARTUP_STAGE_KIND_CREATE,
-			StartedAt: timestamppb.New(sourceReady), FinishedAt: timestamppb.New(created)},
-	)
 	c.mu.Unlock()
+	c.addStage(hostproto.StartupStageKind_STARTUP_STAGE_KIND_CREATE, stageEnd, created, false)
 	c.watchUsage(ctx)
 	c.log.Info("container started",
 		"image_pulled", pulled,
 		"image_ms", imageReady.Sub(began).Milliseconds(),
-		"source_ms", sourceReady.Sub(imageReady).Milliseconds(),
-		"start_ms", time.Since(sourceReady).Milliseconds(),
+		"start_ms", created.Sub(imageReady).Milliseconds(),
 	)
 	return nil
+}
+
+// pythonRuntime is the host directory of an installed Python runtime.
+func (a *Agent) pythonRuntime(version string) (string, error) {
+	if version == "" || !filepath.IsLocal(version) || filepath.Base(version) != version {
+		return "", fmt.Errorf("python version %q is not a runtime name", version)
+	}
+	runtime := filepath.Join(a.cfg.RuntimeDir, version)
+	if info, err := os.Stat(runtime); err != nil || !info.IsDir() {
+		return "", fmt.Errorf("python runtime %s is not installed at %s", version, runtime)
+	}
+	return runtime, nil
+}
+
+// prepareWorkspace extracts the source into the workspace, or leaves it
+// empty for a pod without one.
+func (c *container) prepareWorkspace(ctx context.Context, source *hostproto.Source) error {
+	if source == nil && c.pod != nil {
+		if err := os.MkdirAll(c.workspaceDir(), 0o755); err != nil { //nolint:gosec // the container reads its workspace
+			return fmt.Errorf("create workspace: %w", err)
+		}
+		return nil
+	}
+	archive, err := c.a.sources.fetch(ctx, source)
+	if err != nil {
+		return err
+	}
+	return extractWorkspace(archive, c.workspaceDir())
 }
 
 // watch waits for the Docker container to exit. Agent shutdown leaves it
@@ -378,6 +462,10 @@ func (c *container) observeExit(ctx context.Context) {
 		exit.Message = c.loadError.GetMessage()
 	case inspectErr == nil && state.OOMKilled:
 		exit.Reason = hostproto.ExitReason_EXIT_REASON_OUT_OF_MEMORY
+	case c.commandExit != nil:
+		exit.Reason = hostproto.ExitReason_EXIT_REASON_EXITED
+		exit.ExitCode = *c.commandExit
+		exit.Message = fmt.Sprintf("the command exited with code %d", *c.commandExit)
 	case c.volumeLost != "":
 		exit.Message = c.volumeLost
 	}
@@ -420,6 +508,8 @@ func (c *container) cleanup(ctx context.Context) {
 	if c.requests != nil {
 		c.requests.CloseIdleConnections()
 	}
+	c.control.CloseIdleConnections()
+	c.ports.CloseIdleConnections()
 	c.a.volumes.release(c.id)
 	c.a.volumes.releaseBuckets(ctx, c.id)
 	if err := c.a.removeContainer(ctx, c.dockerName()); err != nil {
@@ -555,6 +645,8 @@ func (c *container) onSupervisorMessage(ctx context.Context, m *hostproto.Superv
 		c.log.Warn("handler failed to load", "type", c.loadError.GetType(), "message", c.loadError.GetMessage())
 	case *hostproto.SupervisorMessage_Finished:
 		c.onFinished(body.Finished)
+	case *hostproto.SupervisorMessage_CommandExited:
+		c.onCommandExited(body.CommandExited)
 	case *hostproto.SupervisorMessage_Output:
 		// Output outside an attempt, such as import-time prints and HTTP
 		// requests, goes to the container's own log.
@@ -598,8 +690,9 @@ func (c *container) onReady(ready *hostproto.SlotsReady) {
 		c.startup = append(c.startup, &hostproto.StartupStage{Kind: hostproto.StartupStageKind_STARTUP_STAGE_KIND_RUNTIME,
 			StartedAt: timestamppb.New(c.created), FinishedAt: timestamppb.New(now)})
 	}
-	// HTTP workers take requests from the data connection instead.
-	startClaims := !c.claiming && !c.stopping && c.http == nil
+	// HTTP workers take requests from the data connection instead, and
+	// pods run a command.
+	startClaims := !c.claiming && !c.stopping && c.http == nil && c.pod == nil
 	c.claiming = c.claiming || startClaims
 	c.mu.Unlock()
 	c.signalSlotFree()
