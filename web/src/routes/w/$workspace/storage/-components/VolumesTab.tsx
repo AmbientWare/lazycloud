@@ -145,9 +145,7 @@ function VolumeRow({
             {volume.deletion_requested_at ? (
               "Deleting · billing stopped"
             ) : (
-              <>
-                {formatBytes(volume.size)} · updated <LiveRelativeTime value={volume.updated_at} />
-              </>
+              formatBytes(volume.size)
             )}
           </span>
         </button>

@@ -94,7 +94,6 @@ export function CollectionAccordion({
                           workspaceId={workspaceId}
                           name={name}
                           oldestMessageAgeSeconds={numberValue(row.oldest_message_age_seconds)}
-                          putRatePerMinute={numberValue(row.put_rate_per_minute) ?? 0}
                         />
                       ) : (
                         <MapInspector

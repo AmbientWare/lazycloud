@@ -28,12 +28,10 @@ export function QueueInspector({
   workspaceId,
   name,
   oldestMessageAgeSeconds,
-  putRatePerMinute,
 }: {
   workspaceId: string;
   name: string;
   oldestMessageAgeSeconds: number | null;
-  putRatePerMinute: number;
 }) {
   const client = useQueryClient();
   const [adding, setAdding] = useState(false);
@@ -65,7 +63,6 @@ export function QueueInspector({
                 ? "Empty"
                 : formatDuration(oldestMessageAgeSeconds * 1_000),
           },
-          { label: "Writes", value: `${putRatePerMinute.toLocaleString()}/min` },
         ]}
       />
       <div className="mt-3 min-w-0 border-t border-border/60 pt-3">
