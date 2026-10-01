@@ -15,7 +15,12 @@ import (
 const listAppTasks = `-- name: ListAppTasks :many
 select t.id, a.name as app_name, w.name as function_name, t.release_id, r.version, t.status,
        t.attempt_count, t.max_attempts, t.parent_task_id, t.root_task_id, t.available_at,
-       t.created_at, t.started_at, t.finished_at, t.failure, latest.container_id
+       t.created_at, t.started_at, t.finished_at, t.failure,
+       -- The latest attempt's container, as zero or one element: a scalar
+       -- subquery keeps the per-row index lookup, and the array keeps sqlc
+       -- from reading it as non-null.
+       array(select at.container_id from attempts at
+             where at.task_id = t.id and at.number = t.attempt_count)::uuid[] as container_ids
 from workloads w
 join apps a on a.id = w.app_id
 cross join lateral (
@@ -27,7 +32,6 @@ cross join lateral (
     limit $3
 ) t
 join releases r on r.id = t.release_id
-left join attempts latest on latest.task_id = t.id and latest.number = t.attempt_count
 where a.workspace_id = $4 and a.id = $5
   and ($6::text is null or w.name = $6::text)
 order by t.id desc
@@ -59,7 +63,7 @@ type ListAppTasksRow struct {
 	StartedAt    *time.Time
 	FinishedAt   *time.Time
 	Failure      []byte
-	ContainerID  *uuid.UUID
+	ContainerIds []uuid.UUID
 }
 
 // Like ListTasks for one app's functions: each workload's recent index
@@ -96,7 +100,7 @@ func (q *Queries) ListAppTasks(ctx context.Context, arg ListAppTasksParams) ([]L
 			&i.StartedAt,
 			&i.FinishedAt,
 			&i.Failure,
-			&i.ContainerID,
+			&i.ContainerIds,
 		); err != nil {
 			return nil, err
 		}
@@ -111,12 +115,16 @@ func (q *Queries) ListAppTasks(ctx context.Context, arg ListAppTasksParams) ([]L
 const listTasks = `-- name: ListTasks :many
 select t.id, a.name as app_name, w.name as function_name, t.release_id, r.version, t.status,
        t.attempt_count, t.max_attempts, t.parent_task_id, t.root_task_id, t.available_at,
-       t.created_at, t.started_at, t.finished_at, t.failure, latest.container_id
+       t.created_at, t.started_at, t.finished_at, t.failure,
+       -- The latest attempt's container, as zero or one element: a scalar
+       -- subquery keeps the per-row index lookup, and the array keeps sqlc
+       -- from reading it as non-null.
+       array(select at.container_id from attempts at
+             where at.task_id = t.id and at.number = t.attempt_count)::uuid[] as container_ids
 from tasks t
 join workloads w on w.id = t.workload_id
 join apps a on a.id = w.app_id
 join releases r on r.id = t.release_id
-left join attempts latest on latest.task_id = t.id and latest.number = t.attempt_count
 where t.workspace_id = $1
   and ($2::text is null or t.status = $2::text)
   and t.id < $3
@@ -147,7 +155,7 @@ type ListTasksRow struct {
 	StartedAt    *time.Time
 	FinishedAt   *time.Time
 	Failure      []byte
-	ContainerID  *uuid.UUID
+	ContainerIds []uuid.UUID
 }
 
 // Newest first below the cursor, from the workspace's recent index.
@@ -181,7 +189,7 @@ func (q *Queries) ListTasks(ctx context.Context, arg ListTasksParams) ([]ListTas
 			&i.StartedAt,
 			&i.FinishedAt,
 			&i.Failure,
-			&i.ContainerID,
+			&i.ContainerIds,
 		); err != nil {
 			return nil, err
 		}
@@ -345,12 +353,16 @@ func (q *Queries) TaskResult(ctx context.Context, arg TaskResultParams) (TaskRes
 const taskView = `-- name: TaskView :one
 select t.id, a.name as app_name, w.name as function_name, t.release_id, r.version, t.status,
        t.attempt_count, t.max_attempts, t.parent_task_id, t.root_task_id, t.available_at,
-       t.created_at, t.started_at, t.finished_at, t.failure, latest.container_id
+       t.created_at, t.started_at, t.finished_at, t.failure,
+       -- The latest attempt's container, as zero or one element: a scalar
+       -- subquery keeps the per-row index lookup, and the array keeps sqlc
+       -- from reading it as non-null.
+       array(select at.container_id from attempts at
+             where at.task_id = t.id and at.number = t.attempt_count)::uuid[] as container_ids
 from tasks t
 join workloads w on w.id = t.workload_id
 join apps a on a.id = w.app_id
 join releases r on r.id = t.release_id
-left join attempts latest on latest.task_id = t.id and latest.number = t.attempt_count
 where t.id = $1 and t.workspace_id = $2
 `
 
@@ -375,7 +387,7 @@ type TaskViewRow struct {
 	StartedAt    *time.Time
 	FinishedAt   *time.Time
 	Failure      []byte
-	ContainerID  *uuid.UUID
+	ContainerIds []uuid.UUID
 }
 
 func (q *Queries) TaskView(ctx context.Context, arg TaskViewParams) (TaskViewRow, error) {
@@ -397,7 +409,7 @@ func (q *Queries) TaskView(ctx context.Context, arg TaskViewParams) (TaskViewRow
 		&i.StartedAt,
 		&i.FinishedAt,
 		&i.Failure,
-		&i.ContainerID,
+		&i.ContainerIds,
 	)
 	return i, err
 }

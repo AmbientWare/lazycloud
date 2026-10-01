@@ -106,8 +106,8 @@ func taskFrom(row TaskViewRow) (Task, error) {
 		Parent: taskIDPtr(row.ParentTaskID), Root: taskIDPtr(row.RootTaskID),
 		CreatedAt: row.CreatedAt, StartedAt: row.StartedAt, FinishedAt: row.FinishedAt,
 	}
-	if row.ContainerID != nil {
-		c := ContainerID(*row.ContainerID)
+	if len(row.ContainerIds) > 0 {
+		c := ContainerID(row.ContainerIds[0])
 		task.Container = &c
 	}
 	if task.Status == TaskQueued && task.Attempts > 0 {

@@ -1,24 +1,32 @@
 -- name: TaskView :one
 select t.id, a.name as app_name, w.name as function_name, t.release_id, r.version, t.status,
        t.attempt_count, t.max_attempts, t.parent_task_id, t.root_task_id, t.available_at,
-       t.created_at, t.started_at, t.finished_at, t.failure, latest.container_id
+       t.created_at, t.started_at, t.finished_at, t.failure,
+       -- The latest attempt's container, as zero or one element: a scalar
+       -- subquery keeps the per-row index lookup, and the array keeps sqlc
+       -- from reading it as non-null.
+       array(select at.container_id from attempts at
+             where at.task_id = t.id and at.number = t.attempt_count)::uuid[] as container_ids
 from tasks t
 join workloads w on w.id = t.workload_id
 join apps a on a.id = w.app_id
 join releases r on r.id = t.release_id
-left join attempts latest on latest.task_id = t.id and latest.number = t.attempt_count
 where t.id = @id and t.workspace_id = @workspace_id;
 
 -- name: ListTasks :many
 -- Newest first below the cursor, from the workspace's recent index.
 select t.id, a.name as app_name, w.name as function_name, t.release_id, r.version, t.status,
        t.attempt_count, t.max_attempts, t.parent_task_id, t.root_task_id, t.available_at,
-       t.created_at, t.started_at, t.finished_at, t.failure, latest.container_id
+       t.created_at, t.started_at, t.finished_at, t.failure,
+       -- The latest attempt's container, as zero or one element: a scalar
+       -- subquery keeps the per-row index lookup, and the array keeps sqlc
+       -- from reading it as non-null.
+       array(select at.container_id from attempts at
+             where at.task_id = t.id and at.number = t.attempt_count)::uuid[] as container_ids
 from tasks t
 join workloads w on w.id = t.workload_id
 join apps a on a.id = w.app_id
 join releases r on r.id = t.release_id
-left join attempts latest on latest.task_id = t.id and latest.number = t.attempt_count
 where t.workspace_id = @workspace_id
   and (sqlc.narg(status)::text is null or t.status = sqlc.narg(status)::text)
   and t.id < @before
@@ -30,7 +38,12 @@ limit @max_rows;
 -- yields at most a page, and the pages merge.
 select t.id, a.name as app_name, w.name as function_name, t.release_id, r.version, t.status,
        t.attempt_count, t.max_attempts, t.parent_task_id, t.root_task_id, t.available_at,
-       t.created_at, t.started_at, t.finished_at, t.failure, latest.container_id
+       t.created_at, t.started_at, t.finished_at, t.failure,
+       -- The latest attempt's container, as zero or one element: a scalar
+       -- subquery keeps the per-row index lookup, and the array keeps sqlc
+       -- from reading it as non-null.
+       array(select at.container_id from attempts at
+             where at.task_id = t.id and at.number = t.attempt_count)::uuid[] as container_ids
 from workloads w
 join apps a on a.id = w.app_id
 cross join lateral (
@@ -42,7 +55,6 @@ cross join lateral (
     limit @max_rows
 ) t
 join releases r on r.id = t.release_id
-left join attempts latest on latest.task_id = t.id and latest.number = t.attempt_count
 where a.workspace_id = @workspace_id and a.id = @app_id
   and (sqlc.narg(function)::text is null or w.name = sqlc.narg(function)::text)
 order by t.id desc
