@@ -22,10 +22,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from secrets import token_hex
 
-from shared.deployments import PodRole
+from shared.api import PodRole
 from shared.ssh import SSH_LOGIN_USER, ssh_host_label
 
-from lazycloud.clients.ssh.control import SshControlClient
+from lazycloud.clients.workloads import WorkloadsClient
 from lazycloud.config import settings
 
 SSH_KEEPALIVE_INTERVAL_SECONDS = 30
@@ -91,7 +91,7 @@ class SshHostList:
 
 
 def list_ssh_hosts(
-    client: SshControlClient,
+    client: WorkloadsClient,
     *,
     app: str | None = None,
     pod: str | None = None,
@@ -99,9 +99,9 @@ def list_ssh_hosts(
 ) -> SshHostList:
     """The workspace's SSH hosts as the control plane lists them, every page."""
     hosts: list[SshPodHost] = []
-    cursor = ""
+    cursor: str | None = None
     while True:
-        page = client.hosts(app=app, pod=pod, role=role, cursor=cursor)
+        page = client.ssh_hosts(app=app, pod=pod, role=role, cursor=cursor)
         hosts.extend(
             SshPodHost(
                 alias=item.alias,
@@ -109,18 +109,18 @@ def list_ssh_hosts(
                 app=item.app,
                 host_public_key=item.host_public_key.strip(),
             )
-            for item in page.data
+            for item in page.hosts
         )
-        if not page.next:
-            return SshHostList(workspace=page.workspace, hosts=hosts)
-        cursor = page.next
+        if not page.next_cursor:
+            return SshHostList(workspace=client.workspace, hosts=hosts)
+        cursor = page.next_cursor
 
 
 @dataclass(slots=True)
 class SshAccess:
     """SSH setup for one workspace, addressed by the workspace's name."""
 
-    client: SshControlClient
+    client: WorkloadsClient
     workspace: str
     paths: SshPaths
     cli_command: tuple[str, ...]
@@ -150,7 +150,7 @@ class SshAccess:
         certificate = self.paths.certificate(self.workspace)
         if not force and self._certificate_current(certificate, public_key):
             return False
-        response = self.client.create_certificate(public_key)
+        response = self.client.create_ssh_certificate(public_key)
         _private_directory(certificate.parent)
         _write_atomic(certificate, response.certificate.strip() + "\n", _PUBLIC_FILE_MODE)
         return True

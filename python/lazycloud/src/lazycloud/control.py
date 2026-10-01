@@ -12,6 +12,7 @@ from typing_extensions import Self
 
 from lazycloud.clients.api import ApiClient
 from lazycloud.clients.storage import StorageClient
+from lazycloud.clients.workloads import WorkloadsClient
 from lazycloud.exceptions import ConfigurationError
 
 # Set by the platform in every workload container.
@@ -139,6 +140,10 @@ def storage_client(config: ControlClientConfig) -> StorageClient:
     return StorageClient(api_client(config), require_workspace(config))
 
 
+def workloads_client(config: ControlClientConfig) -> WorkloadsClient:
+    return WorkloadsClient(api_client(config), require_workspace(config))
+
+
 def require_workspace(config: ControlClientConfig) -> str:
     workspace = config.workspace.strip()
     if not workspace:
@@ -197,6 +202,7 @@ __all__ = [
     "require_workspace",
     "resolve_control_client_config",
     "storage_client",
+    "workloads_client",
     "workspace_path",
     "workspace_query",
 ]

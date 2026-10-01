@@ -1,254 +1,208 @@
 from __future__ import annotations
 
+import json
 import os
 import pty
 import termios
-from collections.abc import Iterator
-from contextlib import contextmanager
-from dataclasses import dataclass
+import threading
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager, contextmanager, nullcontext
+from dataclasses import dataclass, field
 
 import pytest
 from lazycloud.abstractions.shell import Shell, ShellSession
-from lazycloud.terminal_shell import InteractiveShell, LocalShellTerminal, ShellConnectionError
-from shared.http.errors import ErrorResponse, HttpApiError
-from shared.http.shells import (
-    CreateShellInExistingContainerResponse,
-    CreateStandaloneShellResponse,
-    ShellConnectPlanResponse,
+from lazycloud.terminal_shell import (
+    InteractiveShell,
+    LocalShellTerminal,
+    ShellConnectionError,
+    ShellWebSocket,
+    _connect_websocket,
 )
-from shared.shell_protocol import (
-    ShellAuthRequest,
-    ShellFrameDecoder,
-    ShellFrameType,
-    ShellResizeRequest,
-    encode_shell_frame,
-)
+from websockets.sync.server import ServerConnection, serve
+
+from tests.api_server import TOKEN, ApiRequest, FakeApi, Reply, error_reply, json_reply
+
+CONTAINER = "0192f0a0-0000-7000-8000-0000000000c1"
+RELEASE = "0192f0a0-0000-7000-8000-0000000000a1"
+NOW = "2026-10-01T12:00:00Z"
 
 
-@dataclass
-class FakeShellClient:
-    fail: bool = False
-
-    def create_standalone(self, stub_id: str) -> CreateStandaloneShellResponse:
-        if self.fail:
-            raise _http_error("standalone failed", status_code=404)
-        return CreateStandaloneShellResponse(
-            container_id=f"container-{stub_id}",
-            username="user",
-            password="pass",
-            websocket_ticket="wst_standalone",
-        )
-
-    def create_existing(self, container_id: str) -> CreateShellInExistingContainerResponse:
-        if self.fail:
-            raise _http_error("existing failed", status_code=503)
-        return CreateShellInExistingContainerResponse(
-            username="user",
-            password="pass",
-            stub_id="stub-existing",
-            websocket_ticket="wst_existing",
-        )
-
-    def connect_plan(self, stub_id: str, container_id: str) -> ShellConnectPlanResponse:
-        if self.fail:
-            raise _http_error("connect failed", status_code=404)
-        return ShellConnectPlanResponse(
-            route_path="/api/v1/shells/id",
-            container_id=container_id,
-            stub_id=stub_id,
-            worker_port=2222,
-            buffer_size_bytes=4096,
-            keepalive_interval_seconds=30,
-            dial_timeout_seconds=10,
-        )
-
-
-@dataclass
-class FakeWebSocket:
-    received: list[str | bytes]
-    sent: list[bytes]
-
-    def recv(self, timeout: float | None = None) -> str | bytes:
-        _ = timeout
-        if not self.received:
-            raise TimeoutError
-        return self.received.pop(0)
-
-    def send(self, message: str | bytes) -> None:
-        assert isinstance(message, bytes)
-        self.sent.append(message)
-
-
-@dataclass
-class RecordingConnector:
-    websocket: FakeWebSocket
-    url: str = ""
-    token: str = ""
-    open_timeout_seconds: float = 0
-    max_message_bytes: int = 0
-
-    @contextmanager
-    def __call__(
-        self,
-        url: str,
-        *,
-        token: str,
-        open_timeout_seconds: float,
-        max_message_bytes: int,
-    ) -> Iterator[FakeWebSocket]:
-        self.url = url
-        self.token = token
-        self.open_timeout_seconds = open_timeout_seconds
-        self.max_message_bytes = max_message_bytes
-        yield self.websocket
+def instance(state: str = "ready") -> dict[str, object]:
+    return {
+        "id": CONTAINER,
+        "release_id": RELEASE,
+        "app": "tools",
+        "name": "web",
+        "kind": "pod",
+        "state": state,
+        "created_at": NOW,
+    }
 
 
 @dataclass
 class FakeTerminal:
-    reads: list[bytes | None]
-    output: bytearray
-    active: bool = False
-    resize: bool = True
+    typed: list[bytes] = field(default_factory=lambda: [b"echo hi\r"])
+    written: bytearray = field(default_factory=bytearray)
+    resized: bool = True
 
     @property
     def term(self) -> str:
-        return "xterm-test"
+        return "xterm"
 
     @property
     def signal_exit_code(self) -> int | None:
         return None
 
-    @contextmanager
-    def activate(self) -> Iterator[None]:
-        self.active = True
-        try:
-            yield
-        finally:
-            self.active = False
+    def activate(self) -> AbstractContextManager[None]:
+        return nullcontext()
 
     def size(self) -> tuple[int, int]:
-        return (120, 44)
+        return (100, 30)
 
     def read(self, timeout_seconds: float) -> bytes | None:
-        _ = timeout_seconds
-        return self.reads.pop(0) if self.reads else None
+        return self.typed.pop(0) if self.typed else None
 
     def write(self, data: bytes) -> None:
-        self.output.extend(data)
+        self.written.extend(data)
 
     def take_resize(self) -> bool:
-        resize = self.resize
-        self.resize = False
-        return resize
+        resized, self.resized = self.resized, False
+        return resized
 
 
-def test_shell_creates_sessions_and_connect_plan() -> None:
-    shell = Shell(client=FakeShellClient())
+@contextmanager
+def shell_server(handler: Callable[[ServerConnection], None]) -> Iterator[tuple[str, list[str]]]:
+    """A WebSocket server standing in for the API's shell route; yields its URL and paths."""
+    paths: list[str] = []
 
-    standalone = shell.create_standalone("stub-1")
-    existing = shell.create_existing("container-1")
-    plan = shell.connect_plan("stub-1", "container-1")
+    def accept(connection: ServerConnection) -> None:
+        assert connection.request is not None
+        assert connection.request.headers["Authorization"] == f"Bearer {TOKEN}"
+        paths.append(connection.request.path)
+        handler(connection)
 
-    assert standalone.container_id == "container-stub-1"
-    assert standalone.stub_id == "stub-1"
-    assert existing.container_id == "container-1"
-    assert existing.stub_id == "stub-existing"
-    assert plan.worker_port == 2222
-
-
-def test_shell_propagates_http_api_errors() -> None:
-    shell = Shell(client=FakeShellClient(fail=True))
-
-    with pytest.raises(HttpApiError, match="standalone failed") as standalone_error:
-        shell.create_standalone("stub-1")
-    with pytest.raises(HttpApiError, match="existing failed") as existing_error:
-        shell.create_existing("container-1")
-    with pytest.raises(HttpApiError, match="connect failed"):
-        shell.connect_plan("stub-1", "container-1")
-    assert standalone_error.value.status_code == 404
-    assert existing_error.value.status_code == 503
+    with serve(accept, "127.0.0.1", 0) as server:
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            yield f"ws://127.0.0.1:{server.socket.getsockname()[1]}", paths
+        finally:
+            server.shutdown()
+            thread.join()
 
 
-def test_interactive_shell_authenticates_resizes_streams_and_returns_exit_code() -> None:
-    websocket = FakeWebSocket(
-        received=[
-            "OK",
-            encode_shell_frame(ShellFrameType.Ready.value),
-            encode_shell_frame(ShellFrameType.Data.value, b"remote output\r\n")
-            + encode_shell_frame(ShellFrameType.Exit.value, b"7"),
-        ],
-        sent=[],
-    )
-    connector = RecordingConnector(websocket)
-    terminal = FakeTerminal(reads=[b"echo test\n"], output=bytearray())
-    client = InteractiveShell(connector=connector, terminal=terminal)
+def redirect_to(
+    url: str, opened: list[str]
+) -> Callable[..., AbstractContextManager[ShellWebSocket]]:
+    def connector(target: str, **kwargs: object) -> AbstractContextManager[ShellWebSocket]:
+        opened.append(target)
+        path = target.split("/", 3)[3]
+        return _connect_websocket(f"{url}/{path}", **kwargs)  # type: ignore[arg-type]
 
-    exit_code = client.run(
-        endpoint="https://control.example/base",
-        workspace="workspace-1",
-        token="test-token",
-        credentials=ShellSession(
-            container_id="container-1",
-            stub_id="stub-1",
-            username="root",
-            password="secret",
-        ),
-        plan=FakeShellClient().connect_plan("stub-1", "container-1"),
-        open_timeout_seconds=12,
-    )
-
-    assert exit_code == 7
-    assert "test-token" not in connector.url
-    assert bytes(terminal.output) == b"remote output\r\n"
-    assert terminal.active is False
-    frames = [ShellFrameDecoder().feed(item)[0] for item in websocket.sent]
-    assert [item.frame_type for item in frames] == [
-        ShellFrameType.Auth.value,
-        ShellFrameType.Resize.value,
-        ShellFrameType.Data.value,
-    ]
-    auth = ShellAuthRequest.model_validate_json(frames[0].payload)
-    resize = ShellResizeRequest.model_validate_json(frames[1].payload)
-    assert (auth.username, auth.password, auth.term, auth.cols, auth.rows) == (
-        "root",
-        "secret",
-        "xterm-test",
-        120,
-        44,
-    )
-    assert (resize.cols, resize.rows) == (120, 44)
-    assert frames[2].payload == b"echo test\n"
+    return connector
 
 
-def test_interactive_shell_fails_closed_on_backend_error() -> None:
-    websocket = FakeWebSocket(
-        received=[
-            "OK",
-            encode_shell_frame(ShellFrameType.Error.value, b"credentials rejected"),
-        ],
-        sent=[],
-    )
-    terminal = FakeTerminal(reads=[], output=bytearray())
+def test_shell_waits_for_its_container_and_bridges_bytes_resizes_and_exit(
+    fake_api: FakeApi,
+) -> None:
+    attempts: list[int] = []
 
-    with pytest.raises(ShellConnectionError, match="credentials rejected"):
-        InteractiveShell(
-            connector=RecordingConnector(websocket),
-            terminal=terminal,
-        ).run(
-            endpoint="http://control.example",
-            workspace="workspace-1",
-            token="test-token",
-            credentials=ShellSession(
-                container_id="container-1",
-                stub_id="stub-1",
-                username="root",
-                password="wrong",
-            ),
-            plan=FakeShellClient().connect_plan("stub-1", "container-1"),
-            open_timeout_seconds=10,
+    @fake_api.route("POST", f"/v1/workspaces/team/containers/{CONTAINER}/connect")
+    def connect(request: ApiRequest) -> Reply:
+        attempts.append(1)
+        if len(attempts) == 1:
+            return error_reply("unavailable", "container is starting", 503)
+        return json_reply(instance())
+
+    received: list[object] = []
+
+    def handler(connection: ServerConnection) -> None:
+        connection.send(b"$ ")
+        received.append(json.loads(connection.recv()))
+        received.append(connection.recv())
+        connection.send(b"hi\r\n")
+        connection.send(json.dumps({"type": "exit", "code": 3}))
+
+    terminal = FakeTerminal()
+    opened: list[str] = []
+    attached: list[bool] = []
+    with shell_server(handler) as (url, paths):
+        shell = Shell(
+            interactive_shell=InteractiveShell(
+                connector=redirect_to(url, opened),
+                terminal=terminal,
+                on_attached=lambda: attached.append(True),
+            )
         )
+        status = shell.connect(ShellSession(container_id=CONTAINER, stub_id=RELEASE))
 
-    assert terminal.active is False
+    assert status == 3
+    assert len(attempts) == 2
+    assert fake_api.calls("POST", f"/v1/workspaces/team/containers/{CONTAINER}/connect")[
+        0
+    ].query == {"wait_seconds": ["60"]}
+    assert opened == [
+        f"{fake_api.url.replace('http', 'ws')}/v1/workspaces/team/containers/{CONTAINER}/shell"
+        "?cols=100&rows=30&term=xterm"
+    ]
+    assert paths == [
+        f"/v1/workspaces/team/containers/{CONTAINER}/shell?cols=100&rows=30&term=xterm"
+    ]
+    assert received == [{"type": "resize", "cols": 100, "rows": 30}, b"echo hi\r"]
+    assert bytes(terminal.written) == b"$ hi\r\n"
+    assert attached == [True]
+
+
+def test_shell_reports_the_servers_error_and_a_stopped_container(fake_api: FakeApi) -> None:
+    fake_api.route("POST", f"/v1/workspaces/team/containers/{CONTAINER}/connect")(
+        lambda request: json_reply(instance())
+    )
+
+    def handler(connection: ServerConnection) -> None:
+        connection.send(json.dumps({"type": "error", "message": "no shell in this image"}))
+
+    with shell_server(handler) as (url, _):
+        shell = Shell(
+            interactive_shell=InteractiveShell(
+                connector=redirect_to(url, []), terminal=FakeTerminal()
+            )
+        )
+        with pytest.raises(ShellConnectionError, match="no shell in this image"):
+            shell.connect(ShellSession(container_id=CONTAINER, stub_id=RELEASE))
+
+    fake_api.route("POST", f"/v1/workspaces/team/containers/{CONTAINER}/connect")(
+        lambda request: error_reply("conflict", "the container stopped: crashed", 409)
+    )
+    with pytest.raises(ShellConnectionError, match="stopped: the container stopped: crashed"):
+        Shell().connect(ShellSession(container_id=CONTAINER, stub_id=RELEASE))
+
+
+def test_standalone_shells_start_a_shell_instance_of_the_release(fake_api: FakeApi) -> None:
+    fake_api.route("POST", "/v1/workspaces/team/instances")(
+        lambda request: json_reply(instance("pending"), 201)
+    )
+    fake_api.route("GET", f"/v1/workspaces/team/containers/{CONTAINER}")(
+        lambda request: json_reply(
+            {
+                **instance(),
+                "function": "web",
+                "slots": 1,
+                "running_tasks": 0,
+                "cpu_millis": 1000,
+                "memory_mib": 128,
+            }
+        )
+    )
+
+    standalone = Shell().create_standalone(RELEASE)
+    existing = Shell().create_existing(CONTAINER)
+
+    assert fake_api.calls("POST", "/v1/workspaces/team/instances")[0].json() == {
+        "release_id": RELEASE,
+        "shell": True,
+    }
+    assert (standalone.container_id, standalone.stub_id) == (CONTAINER, RELEASE)
+    assert (existing.container_id, existing.stub_id) == (CONTAINER, RELEASE)
 
 
 def test_local_shell_terminal_restores_tty_state() -> None:
@@ -268,22 +222,3 @@ def test_local_shell_terminal_restores_tty_state() -> None:
     finally:
         os.close(terminal_fd)
         os.close(master_fd)
-
-
-def test_shell_session_repr_does_not_expose_password() -> None:
-    session = ShellSession(
-        container_id="container-1",
-        stub_id="stub-1",
-        username="root",
-        password="do-not-print",
-    )
-
-    assert "do-not-print" not in repr(session)
-
-
-def _http_error(detail: str, *, status_code: int) -> HttpApiError:
-    return HttpApiError(
-        detail,
-        status_code=status_code,
-        error=ErrorResponse(detail=detail),
-    )

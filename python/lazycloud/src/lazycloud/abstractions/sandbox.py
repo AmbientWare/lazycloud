@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import builtins
 import math
 import shlex
 import time
@@ -7,9 +8,30 @@ from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, NoReturn, Protocol, TypedDict
+from typing import TYPE_CHECKING, Any, TypedDict, TypeVar
+from uuid import UUID
 
-from pydantic import JsonValue
+from pydantic import BaseModel, JsonValue, ValidationError
+from shared.api import (
+    ContainerFile,
+    ContainerLifecycle,
+    ContainerState,
+    CreateInstanceRequest,
+    ErrorCode,
+    FileMatch,
+    FindInFilesRequest,
+    Instance,
+    NetworkPolicy,
+    PodKind,
+    Process,
+    ProcessRequest,
+    ReplaceInFilesRequest,
+    SandboxStatus,
+    StopReason,
+)
+from shared.api import FunctionSpec as ApiFunctionSpec
+from shared.api import Sandbox as SandboxRow
+from shared.api import SandboxStats as SandboxStatsResponse
 from shared.app_identity import SANDBOX_COMPOSE_OVERRIDE_PATH
 from shared.deployment_records import (
     DEFAULT_DISK,
@@ -23,201 +45,40 @@ from shared.deployment_records import (
 )
 from shared.deployments import DeploymentKind
 from shared.gpu import GpuInput, gpu_preference
-from shared.http import pods
-from shared.http.errors import HttpApiError
-from shared.http.pods import (
-    CreatePodRequest,
-    CreatePodResponse,
-    PodFileSearchMatch,
-    PodSandboxConnectResponse,
-    PodSandboxCreateDirectoryRequest,
-    PodSandboxCreateDirectoryResponse,
-    PodSandboxCreateImageFromFilesystemRequest,
-    PodSandboxCreateImageFromFilesystemResponse,
-    PodSandboxDeleteDirectoryResponse,
-    PodSandboxDeleteFileResponse,
-    PodSandboxDownloadFileResponse,
-    PodSandboxExecRequest,
-    PodSandboxExecResponse,
-    PodSandboxExposePortRequest,
-    PodSandboxExposePortResponse,
-    PodSandboxFindInFilesRequest,
-    PodSandboxFindInFilesResponse,
-    PodSandboxKillRequest,
-    PodSandboxKillResponse,
-    PodSandboxListFilesResponse,
-    PodSandboxListProcessesResponse,
-    PodSandboxListUrlsResponse,
-    PodSandboxReplaceInFilesRequest,
-    PodSandboxReplaceInFilesResponse,
-    PodSandboxResultResponse,
-    PodSandboxSnapshotMemoryRequest,
-    PodSandboxSnapshotMemoryResponse,
-    PodSandboxStatFileResponse,
-    PodSandboxStatusResponse,
-    PodSandboxStderrResponse,
-    PodSandboxStdoutResponse,
-    PodSandboxUpdateNetworkPermissionsRequest,
-    PodSandboxUpdateNetworkPermissionsResponse,
-    PodSandboxUpdateTTLRequest,
-    PodSandboxUpdateTTLResponse,
-    PodSandboxUploadFileResponse,
-    SandboxListRequest,
-    SandboxListResponse,
-    SandboxRow,
-    SandboxStatsRequest,
-    SandboxStatsResponse,
-    SandboxTimeline,
-    SandboxTimelineRequest,
-)
 from shared.placement import ProductRegion
-from shared.transport_retry import call_with_transient_retry
 from typing_extensions import Never, Self
 
 from lazycloud.abstractions.image import Image
 from lazycloud.abstractions.metadata import MachineInput, build_resource_metadata
 from lazycloud.abstractions.volume import VolumeExport, volume_mounts
 from lazycloud.aio import to_thread
-from lazycloud.control import ControlClientConfigMixin
-from lazycloud.exceptions import UnsupportedFeatureError
+from lazycloud.clients.api import ApiError
+from lazycloud.clients.workloads import CONNECT_WAIT_SECONDS, PROCESS_WAIT_SECONDS, WorkloadsClient
+from lazycloud.control import ControlClientConfigMixin, workloads_client
+from lazycloud.exceptions import SdkError, UnsupportedFeatureError
 from lazycloud.json_contracts import validate_json_object
+from lazycloud.session.task import retry_transient
+from lazycloud.terminal import Terminal
+
+if TYPE_CHECKING:
+    from lazycloud.abstractions.image import ImageBuildResult
+
+T = TypeVar("T")
 
 SANDBOX_CONTROL_TIMEOUT_SECONDS = 30.0
 SANDBOX_READY_TIMEOUT_SECONDS = 120.0
 SANDBOX_WAIT_POLL_INTERVAL_SECONDS = 0.5
 _DOCKER_SANDBOX_SECURITY_OPTIONS = ("systempaths=unconfined",)
-
-
-class SandboxPodClient(Protocol):
-    def create_pod(self, request: CreatePodRequest) -> CreatePodResponse: ...
-
-    def sandbox_connect(self, container_id: str) -> PodSandboxConnectResponse: ...
-
-    def sandbox_exec(
-        self,
-        container_id: str,
-        request: PodSandboxExecRequest,
-    ) -> PodSandboxExecResponse: ...
-
-    def sandbox_status(self, container_id: str, pid: int) -> PodSandboxStatusResponse: ...
-
-    def sandbox_result(
-        self, container_id: str, process_id: str, wait_seconds: float = 5.0
-    ) -> PodSandboxResultResponse: ...
-
-    def sandbox_stdout(self, container_id: str, pid: int) -> PodSandboxStdoutResponse: ...
-
-    def sandbox_stderr(self, container_id: str, pid: int) -> PodSandboxStderrResponse: ...
-
-    def sandbox_kill(
-        self,
-        container_id: str,
-        request: PodSandboxKillRequest,
-    ) -> PodSandboxKillResponse: ...
-
-    def sandbox_list_processes(self, container_id: str) -> PodSandboxListProcessesResponse: ...
-
-    def sandbox_upload_file(
-        self,
-        container_id: str,
-        container_path: str,
-        data: bytes,
-        *,
-        mode: int = 0o644,
-    ) -> PodSandboxUploadFileResponse: ...
-
-    def sandbox_download_file(
-        self,
-        container_id: str,
-        container_path: str,
-    ) -> PodSandboxDownloadFileResponse: ...
-
-    def sandbox_stat_file(
-        self,
-        container_id: str,
-        container_path: str,
-    ) -> PodSandboxStatFileResponse: ...
-
-    def sandbox_list_files(
-        self,
-        container_id: str,
-        container_path: str,
-    ) -> PodSandboxListFilesResponse: ...
-
-    def sandbox_delete_file(
-        self,
-        container_id: str,
-        container_path: str,
-    ) -> PodSandboxDeleteFileResponse: ...
-
-    def sandbox_create_directory(
-        self,
-        container_id: str,
-        request: PodSandboxCreateDirectoryRequest,
-    ) -> PodSandboxCreateDirectoryResponse: ...
-
-    def sandbox_delete_directory(
-        self,
-        container_id: str,
-        container_path: str,
-    ) -> PodSandboxDeleteDirectoryResponse: ...
-
-    def sandbox_expose_port(
-        self,
-        container_id: str,
-        request: PodSandboxExposePortRequest,
-    ) -> PodSandboxExposePortResponse: ...
-
-    def sandbox_update_network_permissions(
-        self,
-        container_id: str,
-        request: PodSandboxUpdateNetworkPermissionsRequest,
-    ) -> PodSandboxUpdateNetworkPermissionsResponse: ...
-
-    def sandbox_network_permissions(
-        self,
-        container_id: str,
-    ) -> PodSandboxUpdateNetworkPermissionsResponse: ...
-
-    def sandbox_replace_in_files(
-        self,
-        container_id: str,
-        request: PodSandboxReplaceInFilesRequest,
-    ) -> PodSandboxReplaceInFilesResponse: ...
-
-    def sandbox_find_in_files(
-        self,
-        container_id: str,
-        request: PodSandboxFindInFilesRequest,
-    ) -> PodSandboxFindInFilesResponse: ...
-
-    def sandbox_update_ttl(
-        self,
-        container_id: str,
-        request: PodSandboxUpdateTTLRequest,
-    ) -> PodSandboxUpdateTTLResponse: ...
-
-    def sandbox_terminate(self, container_id: str) -> None: ...
-
-    def sandbox_create_image_from_filesystem(
-        self,
-        container_id: str,
-        request: PodSandboxCreateImageFromFilesystemRequest,
-    ) -> PodSandboxCreateImageFromFilesystemResponse: ...
-
-    def sandbox_snapshot_memory(
-        self,
-        container_id: str,
-        request: PodSandboxSnapshotMemoryRequest,
-    ) -> PodSandboxSnapshotMemoryResponse: ...
-
-    def sandbox_list_urls(self, container_id: str) -> PodSandboxListUrlsResponse: ...
-
-    def sandbox_list(self, request: SandboxListRequest | None = None) -> SandboxListResponse: ...
-
-    def sandbox_stats(self, request: SandboxStatsRequest | None = None) -> SandboxStatsResponse: ...
-
-    def sandbox_timeline(self, request: SandboxTimelineRequest) -> SandboxTimeline: ...
+# Stop reasons that mean a sandbox failed rather than was stopped.
+_FAILED_STOP_REASONS = frozenset(
+    {
+        StopReason.load_error,
+        StopReason.start_failed,
+        StopReason.crashed,
+        StopReason.out_of_memory,
+        StopReason.host_lost,
+    }
+)
 
 
 class SandboxOptions(TypedDict, total=False):
@@ -412,11 +273,25 @@ class _SandboxCombinedStream:
         return iter(self.read().splitlines())
 
 
+class SandboxTimeline(BaseModel):
+    """When a sandbox container was created, placed, ready and stopped."""
+
+    container_id: str | None = None
+    status: SandboxStatus
+    created_at: datetime
+    scheduled_at: datetime | None = None
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    scheduling_ms: int | None = None
+    startup_ms: int | None = None
+    runtime_ms: int | None = None
+
+
 @dataclass(slots=True)
 class SandboxProcess:
     container_id: str
     pid: int
-    client: SandboxPodClient
+    client: WorkloadsClient
     process_id: str
     cwd: str = "/workspace"
     args: list[str] = field(default_factory=list)
@@ -426,28 +301,22 @@ class SandboxProcess:
     _stdout_stream: SandboxProcessStream | None = field(default=None, init=False, repr=False)
     _stderr_stream: SandboxProcessStream | None = field(default=None, init=False, repr=False)
     _logs_stream: _SandboxCombinedStream | None = field(default=None, init=False, repr=False)
-    _result: PodSandboxResultResponse | None = field(default=None, init=False, repr=False)
+    _result: Process | None = field(default=None, init=False, repr=False)
 
     def wait(self, timeout: float | None = None) -> int:
         deadline = None if timeout is None else time.monotonic() + timeout
         while True:
             response = self._poll_result(deadline, timeout)
             if not response.running:
-                return response.exit_code
+                return _exit_code(response)
 
-    def _poll_result(
-        self, deadline: float | None, timeout: float | None
-    ) -> PodSandboxResultResponse:
-        def read() -> PodSandboxResultResponse:
-            wait_seconds = (
-                5.0 if deadline is None else max(0.0, min(5.0, deadline - time.monotonic()))
-            )
-            return self._read_result(wait_seconds)
-
-        try:
-            response = call_with_transient_retry(read, deadline=deadline)
-        except HttpApiError as exc:
-            raise SandboxProcessError(str(exc)) from exc
+    def _poll_result(self, deadline: float | None, timeout: float | None) -> Process:
+        wait_seconds = (
+            PROCESS_WAIT_SECONDS
+            if deadline is None
+            else max(0.0, min(PROCESS_WAIT_SECONDS, deadline - time.monotonic()))
+        )
+        response = self._read_result(wait_seconds)
         if response.running and deadline is not None and time.monotonic() >= deadline:
             msg = f"process {self.pid} did not exit within {timeout} seconds"
             raise SandboxProcessTimeoutError(msg)
@@ -458,32 +327,37 @@ class SandboxProcess:
         response = self._read_result(0)
         return SandboxProcessResponse(
             pid=self.pid,
-            exit_code=response.exit_code,
+            exit_code=_exit_code(response),
             stdout=response.stdout,
             stderr=response.stderr,
             stdout_truncated=response.stdout_truncated,
             stderr_truncated=response.stderr_truncated,
         )
 
-    def _read_result(self, wait_seconds: float) -> PodSandboxResultResponse:
+    def _read_result(self, wait_seconds: float) -> Process:
         if self._result is not None:
             return self._result
-        response = self.client.sandbox_result(self.container_id, self.process_id, wait_seconds)
+        response = _process_call(
+            lambda: self.client.get_process(
+                UUID(self.container_id), self.process_id, wait_seconds=wait_seconds
+            ),
+            f"process {self.pid}",
+        )
         if not response.running:
             self._result = response
-            self.exit_code = response.exit_code
+            self.exit_code = _exit_code(response)
             self._status = "exited"
         return response
 
     def kill(self) -> None:
-        self.client.sandbox_kill(
-            self.container_id,
-            PodSandboxKillRequest(pid=self.pid, process_id=self.process_id),
+        _process_call(
+            lambda: self.client.kill_process(UUID(self.container_id), self.process_id),
+            f"process {self.pid}",
         )
 
     def status(self) -> tuple[int, str]:
         response = self._read_result(0)
-        return response.exit_code, "running" if response.running else "exited"
+        return _exit_code(response), "running" if response.running else "exited"
 
     @property
     def stdout(self) -> SandboxProcessStream:
@@ -523,7 +397,7 @@ class AsyncSandboxProcess:
         while True:
             response = await to_thread(self.process._poll_result, deadline, timeout)
             if not response.running:
-                return response.exit_code
+                return _exit_code(response)
 
     async def result(self, timeout: float | None = None) -> SandboxProcessResponse:
         await self.wait(timeout)
@@ -548,7 +422,7 @@ class AsyncSandboxProcess:
 @dataclass(slots=True)
 class SandboxProcessManager:
     container_id: str
-    client: SandboxPodClient
+    client: WorkloadsClient
 
     def run(
         self,
@@ -591,7 +465,9 @@ class SandboxProcessManager:
         return self._exec_command(args, cwd=cwd, env=env)
 
     def list_processes(self) -> dict[int, SandboxProcess]:
-        response = self.client.sandbox_list_processes(self.container_id)
+        response = _process_call(
+            lambda: self.client.list_processes(UUID(self.container_id)), "processes"
+        )
         return {
             item.pid: SandboxProcess(
                 container_id=self.container_id,
@@ -599,6 +475,7 @@ class SandboxProcessManager:
                 process_id=item.process_id,
                 client=self.client,
                 args=item.command.split(),
+                cwd=item.cwd or "/workspace",
             )
             for item in response.processes
         }
@@ -610,14 +487,16 @@ class SandboxProcessManager:
         cwd: str,
         env: dict[str, str] | None,
     ) -> SandboxProcess:
-        command_text, args = _command_to_text(command)
-        response = self.client.sandbox_exec(
-            self.container_id,
-            PodSandboxExecRequest(
-                command=command_text,
-                cwd=cwd,
-                env=dict(env or {}),
-            ),
+        args = _command_args_list(command)
+        try:
+            fields: dict[str, Any] = {"args": args, "cwd": cwd}
+            if env:
+                fields["env"] = dict(env)
+            request = ProcessRequest.model_validate(fields)
+        except ValidationError as exc:
+            raise SandboxProcessError(f"invalid sandbox command: {exc}") from exc
+        response = _process_call(
+            lambda: self.client.start_process(UUID(self.container_id), request), "process"
         )
         if response.pid <= 0:
             msg = "sandbox process did not return a valid pid"
@@ -685,12 +564,12 @@ class AsyncSandboxProcessManager:
 @dataclass(slots=True)
 class SandboxFileSystem:
     container_id: str
-    client: SandboxPodClient
+    client: WorkloadsClient
 
     def stat_file(self, sandbox_path: str | Path) -> SandboxFileInfo:
         path_text = _path_text(sandbox_path)
-        response = self.client.sandbox_stat_file(self.container_id, path_text)
-        return _sandbox_file_info(response.file_info, requested_path=path_text)
+        response = self._call("stat_file", path_text, self.client.stat_file)
+        return _sandbox_file_info(response, requested_path=path_text)
 
     def _write_text(self, sandbox_path: str | Path, content: str) -> None:
         self._upload_bytes(sandbox_path, content.encode("utf-8"))
@@ -699,15 +578,16 @@ class SandboxFileSystem:
         return self._download_bytes(sandbox_path).decode("utf-8")
 
     def _upload_bytes(self, path: str | Path, content: bytes, *, mode: int = 0o644) -> None:
-        self.client.sandbox_upload_file(
-            self.container_id,
+        self._call(
+            "upload_file",
             _path_text(path),
-            content,
-            mode=mode,
+            lambda container, path_text: self.client.upload_file(
+                container, path_text, content, mode=mode
+            ),
         )
 
     def _download_bytes(self, path: str | Path) -> bytes:
-        return self.client.sandbox_download_file(self.container_id, _path_text(path)).data
+        return self._call("download_file", _path_text(path), self.client.download_file).data
 
     def upload_file(self, local_path: str | Path, sandbox_path: str | Path) -> None:
         self._upload_bytes(sandbox_path, Path(local_path).read_bytes())
@@ -718,29 +598,28 @@ class SandboxFileSystem:
         target.write_bytes(self._download_bytes(sandbox_path))
 
     def create_directory(self, sandbox_path: str | Path, *, mode: int = 0o755) -> None:
-        path_text = _path_text(sandbox_path)
-        self._create_directory(path_text, mode=mode)
+        self._create_directory(sandbox_path, mode=mode)
 
     def _create_directory(self, path: str | Path, *, mode: int = 0o755) -> str:
         path_text = _path_text(path)
-        self.client.sandbox_create_directory(
-            self.container_id,
-            PodSandboxCreateDirectoryRequest(
-                container_path=path_text,
-                mode=mode,
+        self._call(
+            "create_directory",
+            path_text,
+            lambda container, selected: self.client.create_directory(
+                container, selected, mode=mode
             ),
         )
         return path_text
 
     def delete_directory(self, sandbox_path: str | Path) -> None:
-        self.client.sandbox_delete_directory(self.container_id, _path_text(sandbox_path))
+        self._call("delete_directory", _path_text(sandbox_path), self.client.delete_directory)
 
     def delete_file(self, sandbox_path: str | Path) -> None:
-        self.client.sandbox_delete_file(self.container_id, _path_text(sandbox_path))
+        self._call("delete_file", _path_text(sandbox_path), self.client.delete_file)
 
     def list_files(self, sandbox_path: str | Path) -> list[SandboxFileInfo]:
         path_text = _path_text(sandbox_path)
-        response = self.client.sandbox_list_files(self.container_id, path_text)
+        response = self._call("list_files", path_text, self.client.list_files)
         if response.truncated:
             raise SandboxFileSystemError(
                 f"{path_text} holds more entries than one listing returns",
@@ -762,14 +641,14 @@ class SandboxFileSystem:
         pattern: str,
     ) -> list[SandboxFileSearchResult]:
         path_text = _path_text(sandbox_path)
-        response = self.client.sandbox_find_in_files(
-            self.container_id,
-            PodSandboxFindInFilesRequest(
-                container_path=path_text,
-                pattern=pattern,
+        response = self._call(
+            "find_in_files",
+            path_text,
+            lambda container, selected: self.client.find_in_files(
+                container, FindInFilesRequest(path=selected, pattern=pattern)
             ),
         )
-        return _sandbox_search_results(response.results, pattern)
+        return _sandbox_search_results(response.matches, pattern)
 
     def replace_in_files(
         self,
@@ -777,15 +656,26 @@ class SandboxFileSystem:
         old_string: str,
         new_string: str,
     ) -> None:
-        path_text = _path_text(sandbox_path)
-        self.client.sandbox_replace_in_files(
-            self.container_id,
-            PodSandboxReplaceInFilesRequest(
-                container_path=path_text,
-                pattern=old_string,
-                new_string=new_string,
+        self._call(
+            "replace_in_files",
+            _path_text(sandbox_path),
+            lambda container, selected: self.client.replace_in_files(
+                container,
+                ReplaceInFilesRequest(path=selected, pattern=old_string, replacement=new_string),
             ),
         )
+
+    def _call(self, operation: str, path: str, call: Callable[[UUID, str], T]) -> T:
+        """Run one file operation; a request the API refuses as invalid names the path."""
+        try:
+            return call(UUID(self.container_id), path)
+        except ValidationError as exc:
+            raise SandboxFileSystemError(
+                f"{operation} {path}: {exc}",
+                operation=operation,
+                path=path,
+                container_id=self.container_id,
+            ) from exc
 
     @property
     def aio(self) -> AsyncSandboxFileSystem:
@@ -1374,7 +1264,7 @@ class AsyncSandboxDockerManager:
 class SandboxInstance:
     container_id: str
     stub_id: str
-    client: SandboxPodClient
+    client: WorkloadsClient
     terminated: bool = False
     _filesystem: SandboxFileSystem | None = field(default=None, init=False, repr=False)
     _process: SandboxProcessManager | None = field(default=None, init=False, repr=False)
@@ -1420,12 +1310,7 @@ class SandboxInstance:
         return self.process.run(command, timeout_seconds=timeout_seconds, cwd=cwd, env=env)
 
     def expose_port(self, port: int) -> str:
-        request = PodSandboxExposePortRequest(port=port)
-        try:
-            response = self.client.sandbox_expose_port(self.container_id, request)
-        except RuntimeError as exc:
-            raise SandboxConnectionError(str(exc)) from exc
-        return response.url
+        return self._call(lambda container: self.client.expose_port(container, port)).url
 
     def update_network_permissions(
         self,
@@ -1437,85 +1322,61 @@ class SandboxInstance:
             msg = "block_network cannot be combined with allow_list"
             raise ValueError(msg)
         try:
-            response = self.client.sandbox_update_network_permissions(
-                self.container_id,
-                PodSandboxUpdateNetworkPermissionsRequest(
-                    block_network=block_network,
-                    allow_list=list(allow_list or []),
-                ),
+            policy = NetworkPolicy.model_validate(
+                {"block_network": block_network, "allow_list": list(allow_list or [])}
             )
-        except RuntimeError as exc:
-            raise SandboxConnectionError(str(exc)) from exc
-        return SandboxNetworkPolicy(
-            block_network=response.block_network,
-            allow_list=list(response.allow_list),
-        )
+        except ValidationError as exc:
+            raise ValueError(f"invalid network permissions: {exc}") from exc
+        response = self._call(lambda container: self.client.set_network(container, policy))
+        return _network_policy(response)
 
     def network_permissions(self) -> SandboxNetworkPolicy:
-        try:
-            response = self.client.sandbox_network_permissions(self.container_id)
-        except RuntimeError as exc:
-            raise SandboxConnectionError(str(exc)) from exc
-        return SandboxNetworkPolicy(
-            block_network=response.block_network,
-            allow_list=list(response.allow_list),
-        )
+        return _network_policy(self._call(self.client.network))
 
     def list_urls(self) -> dict[int, str]:
-        try:
-            response = self.client.sandbox_list_urls(self.container_id)
-        except RuntimeError as exc:
-            raise SandboxConnectionError(str(exc)) from exc
-        return dict(response.urls)
+        response = self._call(self.client.list_ports)
+        return {item.port: item.url for item in response.ports}
 
     def update_ttl(self, ttl: int) -> None:
         if self.terminated:
             raise SandboxConnectionError("sandbox is terminated")
-        try:
-            self.client.sandbox_update_ttl(
-                self.container_id,
-                PodSandboxUpdateTTLRequest(ttl=ttl),
-            )
-        except RuntimeError as exc:
-            raise SandboxConnectionError(str(exc)) from exc
+        self._call(lambda container: self.client.set_ttl(container, ttl))
 
     def snapshot_memory(self) -> str:
-        try:
-            response = self.client.sandbox_snapshot_memory(
-                self.container_id,
-                PodSandboxSnapshotMemoryRequest(),
+        snapshot = self._call(self.client.snapshot)
+        if snapshot.failure:
+            raise SandboxConnectionError(
+                f"sandbox memory snapshot failed: {snapshot.failure}",
+                container_id=self.container_id,
+                state=snapshot.state.value,
             )
-        except RuntimeError as exc:
-            raise SandboxConnectionError(str(exc)) from exc
-        if not response.checkpoint_id:
-            raise SandboxConnectionError("sandbox memory snapshot did not return a checkpoint id")
-        return response.checkpoint_id
+        return str(snapshot.id)
 
     def create_image_from_filesystem(self) -> str:
-        try:
-            response = self.client.sandbox_create_image_from_filesystem(
-                self.container_id,
-                PodSandboxCreateImageFromFilesystemRequest(),
-            )
-        except RuntimeError as exc:
-            raise SandboxConnectionError(str(exc)) from exc
-        if not response.image_id:
-            raise SandboxConnectionError("sandbox filesystem snapshot did not return an image id")
-        return response.image_id
+        return self._call(self.client.create_filesystem_image).image_id
 
     def list_processes(self) -> list[SandboxProcessInfo]:
-        response = self.client.sandbox_list_processes(self.container_id)
-        return [_sandbox_process_info(item) for item in response.processes]
+        response = _process_call(
+            lambda: self.client.list_processes(UUID(self.container_id)), "processes"
+        )
+        return [
+            SandboxProcessInfo(pid=item.pid, command=item.command) for item in response.processes
+        ]
 
     def terminate(self) -> bool:
         if self.terminated:
             return True
-        try:
-            self.client.sandbox_terminate(self.container_id)
-        except RuntimeError as exc:
-            raise SandboxConnectionError(str(exc)) from exc
+        self._call(
+            lambda container: self.client.api.stop_container(self.client.workspace, container)
+        )
         self.terminated = True
         return True
+
+    def _call(self, call: Callable[[UUID], T]) -> T:
+        try:
+            return call(UUID(self.container_id))
+        except SdkError as exc:
+            raise SandboxConnectionError(str(exc), container_id=self.container_id) from exc
 
 
 @dataclass(slots=True)
@@ -1614,14 +1475,14 @@ class Sandbox(ControlClientConfigMixin):
     machine: MachineInput = None
     metadata: dict[str, Any] = field(default_factory=dict)
     stub_id: str = ""
-    image_id: str | None = None
     checkpoint_id: str | None = None
-    client: SandboxPodClient | None = None
+    client: WorkloadsClient | None = None
     workspace: str | None = None
     endpoint: str | None = None
     token: str | None = None
     timeout_seconds: float = SANDBOX_CONTROL_TIMEOUT_SECONDS
     ready_timeout_seconds: float = SANDBOX_READY_TIMEOUT_SECONDS
+    terminal: Terminal | None = None
 
     def __init__(
         self,
@@ -1678,7 +1539,6 @@ class Sandbox(ControlClientConfigMixin):
         self.availability_zone = availability_zone
         self.metadata = dict(metadata or {})
         self.stub_id = ""
-        self.image_id = None
         self.checkpoint_id = None
         self.client = None
         self.workspace = None
@@ -1689,14 +1549,17 @@ class Sandbox(ControlClientConfigMixin):
             "ready_timeout_seconds",
             ready_timeout_seconds,
         )
+        self.terminal = None
 
     @property
-    def control_client(self) -> SandboxPodClient:
-        from lazycloud.control_clients import pod_control_client
-
+    def control_client(self) -> WorkloadsClient:
         if self.client is None:
-            self.client = pod_control_client(self._config())
+            self.client = workloads_client(self._config())
         return self.client
+
+    @property
+    def resource_name(self) -> str:
+        return self.name
 
     def spec(self) -> DeploymentSpec:
         return DeploymentSpec(
@@ -1733,8 +1596,63 @@ class Sandbox(ControlClientConfigMixin):
             ),
         )
 
-    def prepare(self, *, workspace: str | None = None) -> NoReturn:
-        raise UnsupportedFeatureError(f"sandbox {self.name}", ["sandboxes"])
+    def handler_reference(self) -> None:
+        """A sandbox runs its command, not a handler."""
+        return None
+
+    def unsupported_options(self) -> builtins.list[str]:
+        """Declared options the platform cannot run yet, by name."""
+        from lazycloud.abstractions.pod import container_unsupported_options
+
+        return container_unsupported_options(self.volumes, self.metadata)
+
+    def require_supported(self) -> None:
+        unsupported = self.unsupported_options()
+        if unsupported:
+            raise UnsupportedFeatureError(f"sandbox {self.name}", unsupported)
+
+    def function_spec(
+        self, *, handler: object = None, source_sha256: str, image: ImageBuildResult
+    ) -> ApiFunctionSpec:
+        """The API definition of this sandbox for an uploaded source and a ready image."""
+        from lazycloud.abstractions.pod import container_function_spec
+
+        del handler
+        self.require_supported()
+        pod: dict[str, Any] = {"kind": PodKind.sandbox.value, "command": list(self.command)}
+        if self.ports:
+            pod["ports"] = _sandbox_port_mapping(self.ports)
+        return container_function_spec(
+            self,
+            label="sandbox",
+            pod=pod,
+            source_sha256=source_sha256,
+            image=image,
+            keep_warm=self.keep_warm_seconds,
+            preemptible=self.preemptible,
+            block_network=self.block_network,
+            allow_list=self.allow_list,
+        )
+
+    def prepare(self, *, workspace: str | None = None) -> str:
+        """Upload the sandbox's image and source and return the release it starts from.
+
+        Without `sync_local_dir` the sandbox's /workspace starts empty.
+        """
+        from lazycloud.session.deployment import prepare_function_release
+
+        if workspace is not None and workspace != self.workspace:
+            self.workspace = workspace
+            self.client = None
+        client = self.control_client
+        try:
+            release = prepare_function_release(
+                self, client=client.api, workspace=client.workspace, terminal=self.terminal
+            )
+        except SdkError as exc:
+            raise SandboxConnectionError(str(exc)) from exc
+        self.stub_id = str(release.id)
+        return self.stub_id
 
     def create(
         self,
@@ -1742,20 +1660,13 @@ class Sandbox(ControlClientConfigMixin):
         stub_id: str | None = None,
         timeout_seconds: float | None = None,
     ) -> SandboxInstance:
-        selected_stub_id = stub_id or self.stub_id or self.prepare()
-        response = self.control_client.create_pod(
-            CreatePodRequest(
-                stub_id=selected_stub_id,
-                image_id=self.image_id,
-                checkpoint_id=self.checkpoint_id,
+        if self.checkpoint_id:
+            return self.create_from_memory_snapshot(
+                self.checkpoint_id, timeout_seconds=timeout_seconds
             )
-        )
-        instance = self._instance_from_create_response(
-            response,
-            fallback_stub_id=selected_stub_id,
-            timeout_seconds=timeout_seconds,
-        )
-        return instance
+        selected_stub_id = stub_id or self.stub_id or self.prepare()
+        response = self._create_instance(CreateInstanceRequest(release_id=UUID(selected_stub_id)))
+        return self._instance_from_create_response(response, timeout_seconds=timeout_seconds)
 
     def create_from_memory_snapshot(
         self,
@@ -1764,15 +1675,10 @@ class Sandbox(ControlClientConfigMixin):
         stub_id: str | None = None,
         timeout_seconds: float | None = None,
     ) -> SandboxInstance:
-        selected_stub_id = stub_id or self.stub_id
-        response = self.control_client.create_pod(
-            CreatePodRequest(stub_id=selected_stub_id, checkpoint_id=snapshot_id)
-        )
-        return self._instance_from_create_response(
-            response,
-            fallback_stub_id=selected_stub_id,
-            timeout_seconds=timeout_seconds,
-        )
+        """Start a sandbox from a memory snapshot; it runs the release the snapshot was taken of."""
+        del stub_id
+        response = self._create_instance(CreateInstanceRequest(snapshot_id=UUID(snapshot_id)))
+        return self._instance_from_create_response(response, timeout_seconds=timeout_seconds)
 
     def connect(
         self,
@@ -1793,15 +1699,20 @@ class Sandbox(ControlClientConfigMixin):
         workspace: str | None = None,
         app_id: str | None = None,
         limit: int = 50,
-    ) -> list[SandboxRow]:
-        response = self.control_client.sandbox_list(
-            SandboxListRequest(
-                workspace=workspace or self._config().workspace,
-                app_id=app_id,
-                limit=limit,
+    ) -> builtins.list[SandboxRow]:
+        """Sandbox containers, newest first, up to `limit`; `app_id` is an app's name."""
+        client = self._client_for(workspace)
+        rows: builtins.list[SandboxRow] = []
+        cursor: str | None = None
+        while len(rows) < limit:
+            page = client.list_sandboxes(
+                app=app_id, limit=min(1000, limit - len(rows)), cursor=cursor
             )
-        )
-        return list(response.data)
+            rows.extend(page.sandboxes)
+            if page.next_cursor is None:
+                break
+            cursor = page.next_cursor
+        return rows
 
     def stats(
         self,
@@ -1809,9 +1720,7 @@ class Sandbox(ControlClientConfigMixin):
         workspace: str | None = None,
         app_id: str | None = None,
     ) -> SandboxStatsResponse:
-        return self.control_client.sandbox_stats(
-            SandboxStatsRequest(workspace=workspace or self._config().workspace, app_id=app_id)
-        )
+        return self._client_for(workspace).sandbox_stats(app=app_id)
 
     def timeline(
         self,
@@ -1820,24 +1729,40 @@ class Sandbox(ControlClientConfigMixin):
         workspace: str | None = None,
         container_id: str | None = None,
     ) -> SandboxTimeline:
-        return self.control_client.sandbox_timeline(
-            SandboxTimelineRequest(
-                workspace=workspace or self._config().workspace,
-                stub_id=stub_id,
-                container_id=container_id,
-            )
-        )
+        """When the release's newest sandbox, or `container_id`, was placed, ready and stopped."""
+        client = self._client_for(workspace)
+        selected = container_id or self._newest_container(client, stub_id)
+        return _timeline(client.lifecycle(UUID(selected)))
+
+    def _newest_container(self, client: WorkloadsClient, stub_id: str) -> str:
+        cursor: str | None = None
+        while True:
+            page = client.list_sandboxes(app=self._app_slug, limit=1000, cursor=cursor)
+            for row in page.sandboxes:
+                if str(row.release_id) == stub_id:
+                    return str(row.id)
+            if page.next_cursor is None:
+                raise SandboxConnectionError(f"sandbox release {stub_id} has no container")
+            cursor = page.next_cursor
+
+    def _client_for(self, workspace: str | None) -> WorkloadsClient:
+        if workspace is None or workspace == self.control_client.workspace:
+            return self.control_client
+        return WorkloadsClient(self.control_client.api, workspace)
+
+    def _create_instance(self, request: CreateInstanceRequest) -> Instance:
+        try:
+            return self.control_client.create_instance(request)
+        except SdkError as exc:
+            raise SandboxConnectionError(f"failed to create sandbox: {exc}") from exc
 
     def _instance_from_create_response(
         self,
-        response: CreatePodResponse,
+        response: Instance,
         *,
-        fallback_stub_id: str,
         timeout_seconds: float | None,
     ) -> SandboxInstance:
-        if not response.container_id:
-            raise SandboxConnectionError("failed to create sandbox")
-        container_id = response.container_id
+        container_id = str(response.id)
         try:
             ready_stub_id = self._ready_stub_id(container_id, timeout_seconds=timeout_seconds)
         except SandboxConnectionError as exc:
@@ -1846,7 +1771,7 @@ class Sandbox(ControlClientConfigMixin):
             self._raise_interrupted_create(container_id, exc)
         instance = SandboxInstance(
             container_id=container_id,
-            stub_id=ready_stub_id or response.stub_id or fallback_stub_id,
+            stub_id=ready_stub_id or str(response.release_id),
             client=self.control_client,
         )
         try:
@@ -1877,12 +1802,16 @@ class Sandbox(ControlClientConfigMixin):
             else _nonnegative_timeout("timeout_seconds", timeout_seconds)
         )
         deadline = time.monotonic() + ready_timeout_seconds
+        container = UUID(container_id)
         while True:
+            remaining = deadline - time.monotonic()
             try:
-                response = self.control_client.sandbox_connect(container_id)
-            except HttpApiError as exc:
-                state = exc.detail or str(exc)
-                if exc.status_code != 503:
+                response = self.control_client.connect(
+                    container, wait_seconds=max(0, int(min(CONNECT_WAIT_SECONDS, remaining)))
+                )
+            except ApiError as exc:
+                state = exc.message
+                if exc.code is not ErrorCode.unavailable:
                     raise SandboxConnectionError(
                         f"sandbox {container_id} readiness failed: {state}",
                         container_id=container_id,
@@ -1905,18 +1834,15 @@ class Sandbox(ControlClientConfigMixin):
                     container_id=container_id,
                     state=state,
                 ) from exc
-            if not response.stub_id:
-                state = "connect response did not include a stub_id"
-                raise SandboxConnectionError(
-                    f"sandbox {container_id} readiness failed: {state}",
-                    container_id=container_id,
-                    state=state,
-                )
-            return response.stub_id
+            return str(response.release_id)
+
+    def _terminate(self, container_id: str) -> None:
+        client = self.control_client
+        client.api.stop_container(client.workspace, UUID(container_id))
 
     def _raise_interrupted_create(self, container_id: str, interruption: BaseException) -> Never:
         try:
-            self.control_client.sandbox_terminate(container_id)
+            self._terminate(container_id)
         except Exception as cleanup_error:
             raise interruption from cleanup_error
         raise interruption
@@ -1927,7 +1853,7 @@ class Sandbox(ControlClientConfigMixin):
         readiness_error: SandboxConnectionError,
     ) -> Never:
         try:
-            self.control_client.sandbox_terminate(container_id)
+            self._terminate(container_id)
         except (OSError, RuntimeError) as cleanup_error:
             raise SandboxConnectionError(
                 f"{readiness_error}; failed to terminate sandbox {container_id}: "
@@ -1939,14 +1865,65 @@ class Sandbox(ControlClientConfigMixin):
         raise readiness_error
 
 
-def _command_to_text(command: str | Iterable[str]) -> tuple[str, list[str]]:
-    if isinstance(command, str):
-        return command, [command]
-    args = [str(item) for item in command]
+def _command_args_list(command: str | Iterable[str]) -> list[str]:
+    args = shlex.split(command) if isinstance(command, str) else [str(item) for item in command]
     if not args:
         msg = "command cannot be empty"
         raise SandboxProcessError(msg)
-    return shlex.join(args), args
+    return args
+
+
+def _process_call(call: Callable[[], T], label: str) -> T:
+    """Run a process request with transient retries; API failures raise SandboxProcessError."""
+    try:
+        return retry_transient(call, not_found=lambda: SandboxProcessError(f"{label} not found"))
+    except SandboxProcessError:
+        raise
+    except SdkError as exc:
+        raise SandboxProcessError(str(exc)) from exc
+
+
+def _exit_code(process: Process) -> int:
+    return process.exit_code if process.exit_code is not None else -1
+
+
+def _network_policy(policy: NetworkPolicy) -> SandboxNetworkPolicy:
+    return SandboxNetworkPolicy(
+        block_network=policy.block_network,
+        allow_list=[item.root for item in policy.allow_list],
+    )
+
+
+def _timeline(lifecycle: ContainerLifecycle) -> SandboxTimeline:
+    return SandboxTimeline(
+        container_id=str(lifecycle.container_id),
+        status=_sandbox_status(lifecycle),
+        created_at=lifecycle.created_at,
+        scheduled_at=lifecycle.assigned_at,
+        started_at=lifecycle.ready_at,
+        ended_at=lifecycle.stopped_at,
+        scheduling_ms=_duration_ms(lifecycle.created_at, lifecycle.assigned_at),
+        startup_ms=_duration_ms(lifecycle.created_at, lifecycle.ready_at),
+        runtime_ms=_duration_ms(lifecycle.ready_at, lifecycle.stopped_at),
+    )
+
+
+def _sandbox_status(lifecycle: ContainerLifecycle) -> SandboxStatus:
+    if lifecycle.state is ContainerState.stopped:
+        if lifecycle.stop_reason in _FAILED_STOP_REASONS:
+            return SandboxStatus.failed
+        return SandboxStatus.stopped
+    if lifecycle.state is ContainerState.ready:
+        return SandboxStatus.running
+    if lifecycle.state is ContainerState.draining:
+        return SandboxStatus.stopping
+    return SandboxStatus.pending
+
+
+def _duration_ms(start: datetime | None, end: datetime | None) -> int | None:
+    if start is None or end is None:
+        return None
+    return max(0, int((end - start).total_seconds() * 1000))
 
 
 def _cpu_value(value: CpuRequest | str) -> CpuRequest:
@@ -2052,9 +2029,7 @@ def _compose_build_override(build: JsonValue) -> JsonValue:
     return {"network": "host"}
 
 
-def _sandbox_file_info(
-    file_info: pods.PodSandboxFileInfo, *, requested_path: str
-) -> SandboxFileInfo:
+def _sandbox_file_info(file_info: ContainerFile, *, requested_path: str) -> SandboxFileInfo:
     return SandboxFileInfo(
         name=file_info.name or Path(requested_path).name,
         is_dir=file_info.is_dir,
@@ -2067,7 +2042,7 @@ def _sandbox_file_info(
     )
 
 
-def _sandbox_search_match(match: PodFileSearchMatch, text: str) -> SandboxFileSearchMatch:
+def _sandbox_search_match(match: FileMatch, text: str) -> SandboxFileSearchMatch:
     start = SandboxFilePosition(line=match.line, column=match.column)
     end = SandboxFilePosition(line=match.line, column=match.column + len(text))
     return SandboxFileSearchMatch(
@@ -2077,17 +2052,13 @@ def _sandbox_search_match(match: PodFileSearchMatch, text: str) -> SandboxFileSe
 
 
 def _sandbox_search_results(
-    matches: Iterable[PodFileSearchMatch],
+    matches: Iterable[FileMatch],
     pattern: str,
 ) -> list[SandboxFileSearchResult]:
     by_path: dict[str, list[SandboxFileSearchMatch]] = {}
     for match in matches:
         by_path.setdefault(match.path, []).append(_sandbox_search_match(match, pattern))
     return [SandboxFileSearchResult(path=path, matches=items) for path, items in by_path.items()]
-
-
-def _sandbox_process_info(process: pods.PodSandboxProcessInfo) -> SandboxProcessInfo:
-    return SandboxProcessInfo(pid=process.pid, command=process.command)
 
 
 __all__ = [
@@ -2110,7 +2081,6 @@ __all__ = [
     "SandboxFileSystemError",
     "SandboxInstance",
     "SandboxOptions",
-    "SandboxPodClient",
     "SandboxProcess",
     "SandboxProcessError",
     "SandboxProcessInfo",

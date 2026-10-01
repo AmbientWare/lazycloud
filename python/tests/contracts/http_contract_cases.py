@@ -9,10 +9,11 @@ from typing import Literal, TypedDict
 from pydantic import JsonValue, TypeAdapter, ValidationError
 from shared.http.base import HttpModel
 from shared.http.errors import ErrorResponse
-from shared.http.shells import CreateShellInExistingContainerResponse
 
 # contracts/http_contract_cases.json still carries function_invoke_response
-# cases for web; the SDK no longer generates or decodes them.
+# cases for web; the SDK no longer generates or decodes them. Its
+# create_shell_in_existing_container_response cases have no consumer left and
+# go when the corpus is regenerated.
 ContractName = Literal[
     "create_shell_in_existing_container_response",
     "error_response",
@@ -50,7 +51,6 @@ class _Arguments(argparse.Namespace):
 
 
 _MODEL_BY_CONTRACT: dict[str, type[HttpModel]] = {
-    "create_shell_in_existing_container_response": CreateShellInExistingContainerResponse,
     "error_response": ErrorResponse,
 }
 _JSON_OBJECT_ADAPTER = TypeAdapter(dict[str, JsonValue])
@@ -95,61 +95,6 @@ def load_contract_corpus() -> ContractCorpusPayload:
 
 def _input_cases() -> list[_InputCase]:
     cases = [
-        _InputCase(
-            contract="create_shell_in_existing_container_response",
-            name="valid_ticketed_session",
-            accepted=True,
-            input={
-                "username": "runner",
-                "password": "session-password",
-                "stub_id": "stub-shell",
-                "websocket_ticket": "wst_single_use",
-            },
-        ),
-        _InputCase(
-            contract="create_shell_in_existing_container_response",
-            name="missing_ticket",
-            accepted=False,
-            input={
-                "username": "runner",
-                "password": "session-password",
-                "stub_id": "stub-shell",
-            },
-        ),
-        _InputCase(
-            contract="create_shell_in_existing_container_response",
-            name="empty_ticket",
-            accepted=False,
-            input={
-                "username": "runner",
-                "password": "session-password",
-                "stub_id": "stub-shell",
-                "websocket_ticket": "",
-            },
-        ),
-        _InputCase(
-            contract="create_shell_in_existing_container_response",
-            name="null_ticket",
-            accepted=False,
-            input={
-                "username": "runner",
-                "password": "session-password",
-                "stub_id": "stub-shell",
-                "websocket_ticket": None,
-            },
-        ),
-        _InputCase(
-            contract="create_shell_in_existing_container_response",
-            name="unknown_field",
-            accepted=False,
-            input={
-                "username": "runner",
-                "password": "session-password",
-                "stub_id": "stub-shell",
-                "websocket_ticket": "wst_single_use",
-                "token": "not-a-contract-field",
-            },
-        ),
         _InputCase(
             contract="error_response",
             name="valid_detail",

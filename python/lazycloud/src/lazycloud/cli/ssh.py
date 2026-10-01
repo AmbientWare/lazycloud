@@ -5,17 +5,16 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Annotated
+from uuid import UUID
 
 import typer
-from shared.deployments import DevboxPhase, PodRole
-from shared.http.errors import HttpApiError
+from shared.api import DevboxPhase, PodRole, WorkloadState
 
 from lazycloud.cli.components.errors import ClientError
 from lazycloud.cli.components.output import emit
 from lazycloud.cli.components.progress import ConnectingIndicator
-from lazycloud.cli.control import control_config, resource_client, ssh_client
-from lazycloud.clients.resource.control import ResourceControlClient
-from lazycloud.clients.ssh.control import SshControlClient
+from lazycloud.cli.control import control_config, workloads
+from lazycloud.clients.workloads import WorkloadsClient
 from lazycloud.session.ssh import (
     SshAccess,
     SshPaths,
@@ -52,10 +51,10 @@ def ssh_connection(
     pod: str, *, app: str | None, workspace: str | None, role: PodRole | None = None
 ) -> Iterator[tuple[SshAccess, SshPodHost]]:
     with _setup_errors():
-        client = ssh_client(workspace=workspace)
+        client = workloads(workspace=workspace)
         listed = list_ssh_hosts(client, app=app, pod=pod, role=role)
         access = _access(client, listed.workspace)
-        host = _one_host(listed.hosts, pod)
+        host = _one_host(client, listed.hosts, pod, app=app)
         access.write_hosts([host])
         access.refresh_certificate()
         yield access, host
@@ -70,13 +69,8 @@ def ssh_proxy(
     config = control_config(workspace=workspace)
     if not config.token:
         raise ClientError("not logged in; run `lazycloud login`", type="not_authenticated")
-    client = SshControlClient.from_endpoint(config.endpoint, workspace=config.workspace)
-    indicator = ConnectingIndicator(
-        pod,
-        describe=_DevboxPhase(
-            ssh_client(workspace=workspace), resource_client(workspace=workspace), pod=pod, app=app
-        ),
-    ).start()
+    client = workloads(workspace=workspace)
+    indicator = ConnectingIndicator(pod, describe=_DevboxPhase(client, pod=pod, app=app)).start()
 
     def report(message: str) -> None:
         if not indicator.failed(message):
@@ -84,7 +78,7 @@ def ssh_proxy(
 
     try:
         status = bridge_stdio(
-            client.tunnel_url(pod, app=app),
+            client.ssh_tunnel_url(app, pod),
             token=config.token,
             on_first_byte=indicator.connected,
             on_failure=report,
@@ -95,13 +89,13 @@ def ssh_proxy(
 
 
 _PHASE_LABELS: dict[DevboxPhase, str] = {
-    DevboxPhase.Stopped: "waking up",
-    DevboxPhase.Queued: "waiting for a machine",
-    DevboxPhase.PullingImage: "pulling image",
-    DevboxPhase.RestoringDisk: "restoring disk",
-    DevboxPhase.Starting: "starting",
-    DevboxPhase.Running: "connecting",
-    DevboxPhase.Stopping: "saving disk",
+    DevboxPhase.stopped: "waking up",
+    DevboxPhase.queued: "waiting for a machine",
+    DevboxPhase.pulling_image: "pulling image",
+    DevboxPhase.restoring_disk: "restoring disk",
+    DevboxPhase.starting: "starting",
+    DevboxPhase.running: "connecting",
+    DevboxPhase.stopping: "saving disk",
 }
 
 
@@ -109,25 +103,24 @@ _PHASE_LABELS: dict[DevboxPhase, str] = {
 class _DevboxPhase:
     """What a devbox reports doing, for the spinner; nothing for any other pod."""
 
-    hosts: SshControlClient
-    resources: ResourceControlClient
+    client: WorkloadsClient
     pod: str
     app: str
-    _deployment_id: str | None = None
+    _deployment_id: UUID | None = None
     _resolved: bool = False
 
     def __call__(self) -> str | None:
         if not self._resolved:
             # One name-filtered lookup; a failure leaves it for the next tick.
-            listed = self.hosts.hosts(app=self.app, pod=self.pod).data
+            listed = self.client.ssh_hosts(app=self.app, pod=self.pod).hosts
             self._deployment_id = next(
-                (host.deployment_id for host in listed if host.role is PodRole.Devbox), None
+                (host.deployment_id for host in listed if host.role is PodRole.devbox), None
             )
             self._resolved = True
         if self._deployment_id is None:
             return None
-        status = self.resources.devbox(self._deployment_id)
-        if status.phase is DevboxPhase.Failed:
+        status = self.client.devbox(self._deployment_id)
+        if status.phase is DevboxPhase.failed:
             return status.phase_reason
         return _PHASE_LABELS[status.phase]
 
@@ -140,7 +133,8 @@ def ssh_cert(
 ) -> None:
     """Refresh the SSH certificate when it is missing or past half its lifetime."""
     with _setup_errors():
-        access = _access(ssh_client(workspace=workspace), workspace or control_config().workspace)
+        client = workloads(workspace=workspace)
+        access = _access(client, client.workspace)
         refreshed = access.refresh_certificate(force=force)
     if quiet:
         return
@@ -174,11 +168,14 @@ def ssh_config(
         raise typer.BadParameter("--prune needs every host, so it takes no names")
     removed: list[str] = []
     with _setup_errors():
-        client = ssh_client(workspace=workspace)
+        client = workloads(workspace=workspace)
         if pods:
             named = [list_ssh_hosts(client, app=app, pod=pod) for pod in pods]
             workspace_name = named[0].workspace
-            hosts = [_one_host(item.hosts, pod) for item, pod in zip(named, pods, strict=True)]
+            hosts = [
+                _one_host(client, item.hosts, pod, app=app)
+                for item, pod in zip(named, pods, strict=True)
+            ]
         else:
             listed = list_ssh_hosts(client, app=app)
             workspace_name = listed.workspace
@@ -220,7 +217,7 @@ def ssh_config(
     )
 
 
-def _access(client: SshControlClient, workspace_name: str) -> SshAccess:
+def _access(client: WorkloadsClient, workspace_name: str) -> SshAccess:
     return SshAccess(
         client=client,
         workspace=workspace_name,
@@ -229,7 +226,11 @@ def _access(client: SshControlClient, workspace_name: str) -> SshAccess:
     )
 
 
-def _one_host(hosts: list[SshPodHost], pod: str) -> SshPodHost:
+def _one_host(
+    client: WorkloadsClient, hosts: list[SshPodHost], pod: str, *, app: str | None
+) -> SshPodHost:
+    if not hosts:
+        raise _unreachable(client, pod, app=app)
     if len(hosts) > 1:
         raise ClientError(
             f"{pod!r} is deployed in several apps: {', '.join(host.app for host in hosts)}",
@@ -239,11 +240,27 @@ def _one_host(hosts: list[SshPodHost], pod: str) -> SshPodHost:
     return hosts[0]
 
 
-_UNREACHABLE_HINTS = {
-    "pod_not_found": "Check the name, or pass --app or --workspace.",
-    "pod_stopped": "Connect again once it is running.",
-    "pod_without_ssh": "Redeploy it as a devbox, or as a pod with ssh=True.",
-}
+def _unreachable(client: WorkloadsClient, pod: str, *, app: str | None) -> ClientError:
+    """Why no active pod by this name serves SSH, from its deployments."""
+    deployments = client.api.list_deployments(client.workspace, app=app, name=pod).deployments
+    if not deployments:
+        return ClientError(
+            f"no devbox or pod named {pod!r}",
+            type="pod_not_found",
+            hint="Check the name, or pass --app or --workspace.",
+        )
+    if all(item.state is not WorkloadState.active for item in deployments):
+        return ClientError(
+            f"{pod!r} is stopped; start it with `lazycloud deployment start {pod}` "
+            "or deploy it again",
+            type="pod_stopped",
+            hint="Connect again once it is running.",
+        )
+    return ClientError(
+        f"{pod!r} does not serve SSH; deploy it as a devbox or with ssh=True",
+        type="pod_without_ssh",
+        hint="Redeploy it as a devbox, or as a pod with ssh=True.",
+    )
 
 
 @contextmanager
@@ -252,11 +269,6 @@ def _setup_errors() -> Iterator[None]:
         yield
     except SshSetupError as exc:
         raise ClientError(str(exc), type="ssh_setup_failed") from exc
-    except HttpApiError as exc:
-        hint = _UNREACHABLE_HINTS.get(exc.code)
-        if hint is None:
-            raise
-        raise ClientError(exc.detail or str(exc), type=exc.code, hint=hint) from exc
 
 
 __all__ = ["ssh", "ssh_cert", "ssh_config", "ssh_connection", "ssh_proxy"]
