@@ -4,8 +4,15 @@ import { readNdjson } from "@/lib/api/ndjson";
 /** One output line; task, container and request logs all carry these fields. */
 export type LogLine = Schemas["ContainerLogEntry"];
 
-/** Whose output a log view shows. A request's output is complete once it exists. */
-export type LogSource = { task: string } | { container: string } | { request: string };
+/**
+ * Whose output a log view shows: a task's, the tasks a container ran, what a
+ * container wrote outside task attempts, or a request's, which is complete
+ * once it exists.
+ */
+export type LogSource =
+  { task: string } | { container: string } | { output: string } | { request: string };
+
+type StreamSource = Exclude<LogSource, { request: string }>;
 
 /** The stored lines a log view opens with. */
 export const LOG_HISTORY_LINES = 200;
@@ -17,7 +24,7 @@ const REQUEST_LOG_PAGE = 1000;
 
 function openStream(
   workspace: string,
-  source: { task: string } | { container: string },
+  source: StreamSource,
   query: { after?: number; tail?: number; follow: boolean },
   signal: AbortSignal,
 ) {
@@ -28,10 +35,19 @@ function openStream(
           ...options,
           params: { path: { workspace, task: source.task }, query },
         })
-      : api.GET("/v1/workspaces/{workspace}/containers/{container}/logs", {
-          ...options,
-          params: { path: { workspace, container: source.container }, query },
-        }),
+      : "output" in source
+        ? // Container output has no tail; the history keeps the newest lines.
+          api.GET("/v1/workspaces/{workspace}/containers/{container}/output", {
+            ...options,
+            params: {
+              path: { workspace, container: source.output },
+              query: { after: query.after, follow: query.follow },
+            },
+          })
+        : api.GET("/v1/workspaces/{workspace}/containers/{container}/logs", {
+            ...options,
+            params: { path: { workspace, container: source.container }, query },
+          }),
   ) as Promise<ReadableStream<Uint8Array>>;
 }
 
@@ -49,7 +65,10 @@ export async function readLogHistory(
     { tail: LOG_HISTORY_LINES, follow: false },
     signal,
   );
-  await readNdjson<LogLine>(body, (line) => lines.push(line));
+  await readNdjson<LogLine>(body, (line) => {
+    lines.push(line);
+    if (lines.length > LOG_HISTORY_LINES) lines.shift();
+  });
   return lines;
 }
 
@@ -84,7 +103,7 @@ async function readRequestLogTail(
 /** Whether a task or container can write no more output. */
 async function sourceFinished(
   workspace: string,
-  source: { task: string } | { container: string },
+  source: StreamSource,
   signal: AbortSignal,
 ): Promise<boolean> {
   if ("task" in source) {
@@ -98,7 +117,9 @@ async function sourceFinished(
   }
   const container = await ok(
     api.GET("/v1/workspaces/{workspace}/containers/{container}", {
-      params: { path: { workspace, container: source.container } },
+      params: {
+        path: { workspace, container: "output" in source ? source.output : source.container },
+      },
       signal,
     }),
   );
@@ -114,7 +135,7 @@ async function sourceFinished(
  */
 export async function followLogs(
   workspace: string,
-  source: { task: string } | { container: string },
+  source: StreamSource,
   after: number,
   {
     signal,

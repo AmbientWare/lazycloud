@@ -19,7 +19,7 @@ function PodInstanceDrawerRoute() {
 
   return (
     <PodInstanceDrawer
-      workspaceId={workspace.id}
+      workspace={workspace.name}
       app={app}
       workloadName={name}
       workloadKind={kind}

@@ -104,6 +104,16 @@ it("does not take a workload of another kind with the same name", async () => {
   ).rejects.toBeInstanceOf(WorkloadNotFoundError);
 });
 
+it("reads a pod's definition, and the role that makes it a devbox, from the function read", async () => {
+  stubApi(() => [{ ...greet, kind: "pod", role: "devbox" }]);
+  const workload = await testQueryClient().fetchQuery(
+    workloadQueryOptions("dev", "journey", "pod", "greet"),
+  );
+  expect(workload.deployment.role).toBe("devbox");
+  expect(workload.release.id).toBe("release-2");
+  expect(workload.http).toBeNull();
+});
+
 it("reads a scheduled function's runs from its own read, whatever the workspace holds", async () => {
   const requests = stubApi(() => [greet]);
   const workload = await testQueryClient().fetchQuery(

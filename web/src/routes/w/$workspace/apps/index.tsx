@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { SquareTerminal } from "lucide-react";
 
 import { RouteErrorFallback } from "@/components/shared/ErrorBoundary";
 import { LiveRelativeTime } from "@/components/shared/LiveTime";
@@ -82,9 +83,12 @@ function AppCard({ item, workspace }: { item: AppSummary; workspace: string }) {
   const latest = workloads[0];
   const lastDeployedAt = latest ? deployedAt(latest) : app.created_at;
   const active = app.state === "active";
+  // Devboxes are counted on their own, not as pods.
   const kindCounts = new Map<string, number>();
+  let devboxCount = 0;
   for (const workload of workloads) {
-    kindCounts.set(workload.kind, (kindCounts.get(workload.kind) ?? 0) + 1);
+    if (workload.role === "devbox") devboxCount++;
+    else kindCounts.set(workload.kind, (kindCounts.get(workload.kind) ?? 0) + 1);
   }
   const workloadKinds = [...kindCounts].sort(([left], [right]) => left.localeCompare(right));
   const activity = appRunActivity(item.activity ? [item.activity] : undefined);
@@ -166,7 +170,14 @@ function AppCard({ item, workspace }: { item: AppSummary; workspace: string }) {
               <span className="mono tabular-nums text-foreground">{count}</span>
             </span>
           ))}
-          {workloadKinds.length === 0 ? (
+          {devboxCount > 0 ? (
+            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <SquareTerminal className="size-3.5 shrink-0" aria-hidden="true" />
+              <span>{devboxCount === 1 ? "Devbox" : "Devboxes"}</span>
+              <span className="mono tabular-nums text-foreground">{devboxCount}</span>
+            </span>
+          ) : null}
+          {workloadKinds.length === 0 && devboxCount === 0 ? (
             <span className="text-xs text-muted-foreground">None</span>
           ) : null}
         </div>

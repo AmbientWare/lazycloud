@@ -1,5 +1,6 @@
+import { useState } from "react";
 import { createFileRoute, Link, Outlet } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { ArrowLeft } from "lucide-react";
 
 import { PanelErrorBoundary, RouteErrorFallback } from "@/components/shared/ErrorBoundary";
@@ -15,6 +16,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import type { Schemas } from "@/lib/api/client";
 import { countLabel } from "@/lib/format";
+import { containersQueryOptions, selectContainerList } from "@/lib/queries/containers";
 import {
   performanceQueryOptions,
   WorkloadNotFoundError,
@@ -26,9 +28,11 @@ import { requestsQueryOptions, servesRequests, tasksQueryOptions } from "@/lib/q
 import { useWorkspace } from "@/lib/workspace-context";
 
 import { CallMethods } from "./-workloads/CallMethods";
+import { DevboxActions, DevboxConnect, DevboxWorkspace } from "./-workloads/DevboxDetail";
 import { LatencyPanel, latencyHasSignal } from "./-workloads/LatencyPanel";
 import { Playground } from "./-workloads/Playground";
 import { PLAYGROUND_KINDS } from "./-workloads/playground-form";
+import { PodInstances, type PodInstanceStatusFilter } from "./-workloads/PodInstances";
 import { VersionHistory } from "./-workloads/VersionHistory";
 import { WorkloadConfiguration } from "./-workloads/WorkloadConfiguration";
 import { WorkloadOperation } from "./-workloads/WorkloadOperation";
@@ -37,6 +41,8 @@ export const Route = createFileRoute("/w/$workspace/apps/$app_/workloads/$kind/$
   component: WorkloadDetailRoute,
   errorComponent: RouteErrorFallback,
 });
+
+const OBSERVABLE_KINDS = new Set<Schemas["WorkloadKind"]>(["function", "endpoint", "asgi"]);
 
 function WorkloadDetailRoute() {
   return (
@@ -50,7 +56,18 @@ function WorkloadDetailRoute() {
 function WorkloadDetailPage() {
   const { app, kind, name } = Route.useParams();
   const { workspace } = useWorkspace();
+  const [podInstanceStatus, setPodInstanceStatus] = useState<PodInstanceStatusFilter>("active");
   const query = useQuery(workloadQueryOptions(workspace.name, app, kind, name));
+  const loaded = query.data?.deployment;
+  // Only a Pod lists its containers; a devbox is one machine whose status names it.
+  const listsInstances = loaded?.kind === "pod" && loaded.role !== "devbox";
+  const containers = useInfiniteQuery(
+    containersQueryOptions(workspace.name, {
+      deployment: loaded?.id,
+      live: podInstanceStatus === "active",
+      enabled: listsInstances,
+    }),
+  );
 
   if (query.isPending) return <WorkloadSkeleton />;
   if (query.error instanceof WorkloadNotFoundError) {
@@ -61,7 +78,13 @@ function WorkloadDetailPage() {
   const workload = query.data;
   const { deployment, release } = workload;
   const isPublic = release.spec.authorized === false;
-  const showsInvoke = workloadRunning(deployment) && PLAYGROUND_KINDS.has(deployment.kind);
+  const isPod = deployment.kind === "pod";
+  const kindFact = (
+    <span key="kind" className="flex items-center gap-1.5">
+      <StubKindIcon kind={deployment.kind} className="size-3.5" />
+      {kindLabel(workload)}
+    </span>
+  );
   const backLink = (
     <Link
       to="/w/$workspace/apps/$app"
@@ -73,16 +96,49 @@ function WorkloadDetailPage() {
     </Link>
   );
 
+  if (deployment.role === "devbox") {
+    return (
+      <WorkspacePage
+        title={<span className="mono">{deployment.name}</span>}
+        description={
+          <PageFacts
+            items={[
+              kindFact,
+              <span key="version" className="mono">
+                v{deployment.version}
+              </span>,
+              isPublic ? "Public" : "Token required",
+            ]}
+          />
+        }
+        actions={
+          <>
+            <DevboxActions workspace={workspace.name} deploymentId={deployment.id} />
+            {backLink}
+          </>
+        }
+        headerDetails={
+          <PanelErrorBoundary title="Devbox status could not be displayed">
+            <DevboxConnect workspace={workspace.name} deploymentId={deployment.id} />
+          </PanelErrorBoundary>
+        }
+        contentClassName="flex flex-col gap-3 overflow-y-auto xl:grid xl:grid-cols-[minmax(0,3fr)_minmax(22rem,2fr)] xl:overflow-hidden"
+      >
+        <DevboxWorkspace workspace={workspace.name} workload={deployment} spec={release.spec} />
+      </WorkspacePage>
+    );
+  }
+
+  const showsInvoke = workloadRunning(deployment) && PLAYGROUND_KINDS.has(deployment.kind);
+  const containerList = selectContainerList(containers.data, containers.hasNextPage);
+
   return (
     <WorkspacePage
       title={<span className="mono">{deployment.name}</span>}
       description={
         <PageFacts
           items={[
-            <span key="kind" className="flex items-center gap-1.5">
-              <StubKindIcon kind={deployment.kind} className="size-3.5" />
-              {kindLabel(workload)}
-            </span>,
+            kindFact,
             <span key="version" className="mono">
               v{deployment.version}
             </span>,
@@ -93,21 +149,26 @@ function WorkloadDetailPage() {
       }
       actions={backLink}
       headerDetails={<WorkloadOperation workspace={workspace.name} workload={workload} />}
-      contentClassName="flex flex-col gap-3 overflow-y-auto xl:grid xl:grid-cols-[minmax(20rem,2fr)_minmax(0,3fr)] xl:overflow-hidden"
+      contentClassName={
+        isPod
+          ? "flex flex-col overflow-y-auto lg:overflow-hidden"
+          : "flex flex-col gap-3 overflow-y-auto xl:grid xl:grid-cols-[minmax(20rem,2fr)_minmax(0,3fr)] xl:overflow-hidden"
+      }
     >
       <Tabs
         key={JSON.stringify([app, deployment.kind, deployment.name])}
-        defaultValue={showsInvoke && !release.spec.cron ? "invoke" : "versions"}
-        className="panel flex flex-col overflow-hidden rounded-md shrink-0 xl:min-h-0"
+        defaultValue={defaultInspectorTab(workload, showsInvoke)}
+        className={`panel flex flex-col overflow-hidden rounded-md ${isPod ? "min-h-0 flex-1" : "shrink-0 xl:min-h-0"}`}
       >
         <LinearTabsList
           ariaLabel="Workload inspector views"
           className="min-h-11 shrink-0 bg-card px-2"
         >
           {showsInvoke ? <LinearTab value="invoke">Invoke</LinearTab> : null}
+          {isPod ? <LinearTab value="instances">Instances</LinearTab> : null}
           <LinearTab value="versions">Versions</LinearTab>
           <LinearTab value="configuration">Configuration</LinearTab>
-          <LinearTab value="call">Call</LinearTab>
+          {OBSERVABLE_KINDS.has(deployment.kind) ? <LinearTab value="call">Call</LinearTab> : null}
         </LinearTabsList>
 
         {showsInvoke ? (
@@ -118,31 +179,56 @@ function WorkloadDetailPage() {
           </TabsContent>
         ) : null}
 
-        <TabsContent value="versions" className="m-0 min-h-0 flex-1 overflow-auto max-xl:flex-none">
+        {isPod ? (
+          <TabsContent value="instances" className="m-0 min-h-0 flex-1 overflow-hidden">
+            <PodInstances
+              workspace={workspace.name}
+              deployment={deployment}
+              statusFilter={podInstanceStatus}
+              onStatusFilterChange={setPodInstanceStatus}
+              containers={containerList.items}
+              loading={containers.isPending}
+              error={containers.isFetchNextPageError ? null : containers.error}
+              nextCursor={containerList.nextCursor}
+              loadingMore={containers.isFetchingNextPage}
+              loadMoreError={containers.isFetchNextPageError}
+              onLoadMore={() => void containers.fetchNextPage()}
+            />
+          </TabsContent>
+        ) : null}
+
+        <TabsContent
+          value="versions"
+          className={`m-0 min-h-0 flex-1 overflow-auto ${isPod ? "" : "max-xl:flex-none"}`}
+        >
           <VersionHistory workspace={workspace.name} workload={deployment} />
         </TabsContent>
 
         <TabsContent
           value="configuration"
-          className="m-0 min-h-0 flex-1 overflow-auto max-xl:flex-none"
+          className={`m-0 min-h-0 flex-1 overflow-auto ${isPod ? "" : "max-xl:flex-none"}`}
         >
           <WorkloadConfiguration spec={release.spec} />
         </TabsContent>
-        <TabsContent value="call" className="m-0 min-h-0 flex-1 overflow-auto max-xl:flex-none">
-          <PanelErrorBoundary title="Call methods could not be displayed">
-            <CallMethods workspace={workspace.name} workload={workload} />
-          </PanelErrorBoundary>
-        </TabsContent>
+        {OBSERVABLE_KINDS.has(deployment.kind) ? (
+          <TabsContent value="call" className="m-0 min-h-0 flex-1 overflow-auto max-xl:flex-none">
+            <PanelErrorBoundary title="Call methods could not be displayed">
+              <CallMethods workspace={workspace.name} workload={workload} />
+            </PanelErrorBoundary>
+          </TabsContent>
+        ) : null}
       </Tabs>
 
-      <Panel
-        title="Activity"
-        contentClassName="flex flex-col overflow-hidden p-0"
-        className="min-h-[24rem] shrink-0 xl:min-h-0"
-      >
-        <WorkloadLatency workspace={workspace.name} deployment={deployment} />
-        <WorkloadRuns workspaceName={workspace.name} deployment={deployment} />
-      </Panel>
+      {!isPod ? (
+        <Panel
+          title="Activity"
+          contentClassName="flex flex-col overflow-hidden p-0"
+          className="min-h-[24rem] shrink-0 xl:min-h-0"
+        >
+          <WorkloadLatency workspace={workspace.name} deployment={deployment} />
+          <WorkloadRuns workspaceName={workspace.name} deployment={deployment} />
+        </Panel>
+      ) : null}
     </WorkspacePage>
   );
 }
@@ -222,14 +308,23 @@ function WorkloadSkeleton() {
   );
 }
 
+function defaultInspectorTab({ deployment, release }: Workload, showsInvoke: boolean): string {
+  if (deployment.kind === "pod") return "instances";
+  if (showsInvoke && !release.spec.cron) return "invoke";
+  return "versions";
+}
+
 function kindLabel({ deployment, release }: Workload): string {
   // A scheduled function still reads as a schedule here: it is what the person
   // looking at the list is scanning for, even though it is a function.
   if (release.spec.cron) return "Schedule";
+  if (deployment.role === "devbox") return "Devbox";
   const labels: Record<Schemas["WorkloadKind"], string> = {
     function: "Function",
     endpoint: "Endpoint",
     asgi: "ASGI",
+    pod: "Pod",
+    sandbox: "Sandbox",
   };
   return labels[deployment.kind];
 }

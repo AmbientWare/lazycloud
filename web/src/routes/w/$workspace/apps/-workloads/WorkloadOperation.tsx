@@ -2,6 +2,7 @@ import { CopyButton } from "@/components/shared/CopyButton";
 import { Fact } from "@/components/shared/Fact";
 import { FactGrid } from "@/components/shared/Fact/FactGrid";
 import { LiveRelativeTime } from "@/components/shared/LiveTime";
+import type { Schemas } from "@/lib/api/client";
 import { invokeUrl, workloadRunning, type Workload } from "@/lib/queries/deployments";
 
 export function WorkloadOperation({
@@ -13,20 +14,39 @@ export function WorkloadOperation({
 }) {
   const { deployment, release } = workload;
   const kind = deployment.kind;
+  const invokable = kind === "function" || kind === "endpoint" || kind === "asgi";
 
   return (
     <div className="flex min-w-0 flex-wrap items-start gap-x-8 gap-y-3">
-      {workloadRunning(deployment) ? (
-        <InvokeTarget url={invokeUrl(workspace, workload)} />
-      ) : (
-        <p className="text-sm text-muted-foreground">
-          This version is stopped and cannot accept requests.
-        </p>
-      )}
+      {invokable ? (
+        workloadRunning(deployment) ? (
+          <InvokeTarget url={invokeUrl(workspace, workload)} />
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            This version is stopped and cannot accept requests.
+          </p>
+        )
+      ) : null}
       {/* A schedule is a property of the workload, not a kind of it. */}
       {release.spec.cron ? <ScheduleFacts workload={workload} /> : null}
+      {kind === "pod" ? <PodFacts pod={release.spec.pod} /> : null}
       {kind === "endpoint" || kind === "asgi" ? <HttpFacts workload={workload} /> : null}
     </div>
+  );
+}
+
+function PodFacts({ pod }: { pod: Schemas["PodSpec"] | undefined }) {
+  const ports = Object.entries(pod?.ports ?? {});
+  const command = pod?.command ?? [];
+  return (
+    <FactGrid columns={2} className="max-w-3xl">
+      <Fact
+        label="Ports"
+        value={ports.length ? ports.map(([name, port]) => `${name}:${port}`).join(", ") : "None"}
+        mono
+      />
+      <Fact label="Command" value={command.length ? command.join(" ") : "Image default"} mono />
+    </FactGrid>
   );
 }
 

@@ -119,6 +119,7 @@ function ContainerDetails({
         <StopCause
           reason={container.stop_reason}
           message={container.exit_message}
+          exitCode={container.exit_code}
           className="mt-4"
         />
       </section>

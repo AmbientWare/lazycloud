@@ -48,6 +48,20 @@ describe("container pagination", () => {
     expect(page.pages[0]?.data.map((item) => item.id)).toEqual(["one", "two"]);
   });
 
+  it("asks the server for one deployment's containers, stopped ones included", async () => {
+    const fetchMock = api(() => ({ containers: [container("one")] }));
+    await testQueryClient().fetchInfiniteQuery(
+      containersQueryOptions("workspace", { deployment: "deployment-1" }),
+    );
+
+    const request = new URL((fetchMock.mock.calls[0]?.[0] as Request).url);
+    expect(Object.fromEntries(request.searchParams)).toEqual({
+      deployment: "deployment-1",
+      live: "false",
+      limit: "100",
+    });
+  });
+
   it("bounds retained pages and refresh requests after scrolling through a long list", async () => {
     const fetchMock = api((url) => {
       const page = Number(url.searchParams.get("cursor") ?? 0);

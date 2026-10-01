@@ -14,47 +14,47 @@ import { StatusChip } from "@/components/shared/StatusChip";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { Schemas } from "@/lib/api/client";
-import type { ContainerDetail, Deployment } from "@/lib/api/schemas";
 import { StopCause } from "@/components/shared/StopCause";
 import { resourceAllocation } from "@/lib/format";
-import {
-  containerDetailQueryOptions,
-  containerMetricsQueryOptions,
-} from "@/lib/queries/containers";
+import { containerMetricsQueryOptions, containerQueryOptions } from "@/lib/queries/containers";
+import { workloadQueryOptions, type Workload } from "@/lib/queries/deployments";
 
-import { podDeploymentQueryOptions } from "./pods";
 import { podInstancePlacement, podInstanceUptime } from "./pod-instance-format";
+import { cpuRequest, memoryRequest } from "./WorkloadConfiguration";
 
 export function PodInstanceDrawer({
-  workspaceId,
+  workspace,
   app,
   workloadName,
   workloadKind,
   containerId,
   onClose,
 }: {
-  workspaceId: string;
+  workspace: string;
   app: string;
   workloadName: string;
   workloadKind: string;
   containerId: string;
   onClose: () => void;
 }) {
-  const container = useQuery(containerDetailQueryOptions(workspaceId, containerId));
-  const deployments = useQuery(podDeploymentQueryOptions(workspaceId, app, workloadName));
-  const deployment = workloadKind === "pod" ? deployments.data : undefined;
+  const container = useQuery(containerQueryOptions(workspace, containerId));
+  const deployments = useQuery(workloadQueryOptions(workspace, app, workloadKind, workloadName));
+  const workload = deployments.data?.deployment.kind === "pod" ? deployments.data : undefined;
   const member = Boolean(
-    container.data && deployment?.stub_id && container.data.stub_id === deployment.stub_id,
+    container.data &&
+    workload &&
+    container.data.app === workload.deployment.app &&
+    container.data.function === workload.deployment.name,
   );
   const metrics = useQuery({
-    ...containerMetricsQueryOptions(workspaceId, containerId, container.data?.status === "running"),
+    ...containerMetricsQueryOptions(workspace, containerId, container.data?.state === "ready"),
     enabled: member,
   });
 
   const pending = container.isPending || deployments.isPending;
   const error = container.error ?? deployments.error;
   const membershipError =
-    !pending && !error && (!container.data || !deployment || !member)
+    !pending && !error && (!container.data || !workload || !member)
       ? new Error("This instance is not part of the current Pod deployment")
       : null;
 
@@ -66,7 +66,7 @@ export function PodInstanceDrawer({
       >
         {pending ? (
           <PodInstanceDrawerSkeleton />
-        ) : error || membershipError || !container.data || !deployment ? (
+        ) : error || membershipError || !container.data || !workload ? (
           <div className="flex min-h-0 flex-1 flex-col">
             <SheetTitle className="sr-only">Pod instance</SheetTitle>
             <div className="flex min-h-0 flex-1 items-center justify-center p-4">
@@ -82,12 +82,7 @@ export function PodInstanceDrawer({
             </div>
           </div>
         ) : (
-          <PodInstanceDrawerBody
-            record={container.data}
-            deployment={deployment}
-            workloadName={workloadName}
-            metrics={metrics}
-          />
+          <PodInstanceDrawerBody record={container.data} workload={workload} metrics={metrics} />
         )}
       </SheetContent>
     </Sheet>
@@ -96,17 +91,17 @@ export function PodInstanceDrawer({
 
 function PodInstanceDrawerBody({
   record,
-  deployment,
-  workloadName,
+  workload,
   metrics,
 }: {
-  record: ContainerDetail;
-  deployment: Deployment;
-  workloadName: string;
+  record: Schemas["Container"];
+  workload: Workload;
   metrics: UseQueryResult<Schemas["ContainerMetrics"], Error>;
 }) {
-  const running = record.status === "running";
-  const resources = deployment.spec.resources;
+  const running = record.state === "ready";
+  const resources = workload.release.spec.resources;
+  const gpus = resources.gpu ?? [];
+  const gpuCount = resources.gpu_count ?? 0;
   const latestTimestamp = metrics.data?.points.at(-1)?.timestamp;
 
   return (
@@ -114,22 +109,20 @@ function PodInstanceDrawerBody({
       <DrawerHeader>
         <div className="flex min-w-0 flex-wrap items-center gap-2.5">
           <SheetTitle>Pod instance</SheetTitle>
-          <StatusChip status={record.status} live={running} />
+          <StatusChip status={record.state} live={running} />
           <div className="ml-auto">
-            {record.actions.can_shell ? (
-              <ShellButton containerId={record.id} running={running} />
-            ) : null}
+            <ShellButton containerId={record.id} running={running} />
           </div>
         </div>
         <p className="mt-1 text-xs text-muted-foreground">
-          <span className="mono text-foreground">{workloadName}</span>
+          <span className="mono text-foreground">{record.function}</span>
           <span aria-hidden="true"> · </span>
-          <span>v{deployment.version}</span>
-          {record.started_at ? (
+          <span>v{record.version ?? workload.deployment.version}</span>
+          {record.ready_at ? (
             <>
               <span aria-hidden="true"> · </span>
               <span>
-                Started <LiveRelativeTime value={record.started_at} />
+                Started <LiveRelativeTime value={record.ready_at} />
               </span>
             </>
           ) : null}
@@ -142,33 +135,33 @@ function PodInstanceDrawerBody({
           aria-label="Instance summary"
         >
           <FactGrid columns={4} className="gap-x-5 p-4">
-            <Fact
-              label="Placement"
-              value={podInstancePlacement(record)}
-              title={
-                record.runtime_machine_id ||
-                record.machine_id ||
-                record.runtime_worker_id ||
-                record.worker_id ||
-                undefined
-              }
-            />
+            <Fact label="Placement" value={podInstancePlacement(record)} title={record.host} />
             <Fact label="Uptime" value={podInstanceUptime(record)} mono />
-            <Fact label="CPU allocation" value={resourceAllocation(resources.cpu, "vCPU")} mono />
-            <Fact label="Memory allocation" value={resourceAllocation(resources.memory)} mono />
-            {resources.gpu.length > 0 ? (
+            <Fact
+              label="CPU allocation"
+              value={resourceAllocation(cpuRequest(resources), "vCPU")}
+              mono
+            />
+            <Fact
+              label="Memory allocation"
+              value={resourceAllocation(memoryRequest(resources), "MiB")}
+              mono
+            />
+            {gpus.length > 0 ? (
               <Fact
                 label="GPU allocation"
-                value={`${resources.gpu.join(" → ")}${resources.gpu_count > 1 ? ` x${resources.gpu_count}` : ""}`}
+                value={`${gpus.join(" → ")}${gpuCount > 1 ? ` x${gpuCount}` : ""}`}
                 mono
               />
             ) : null}
           </FactGrid>
           <StopCause
-            reason={record.termination_reason}
+            reason={record.stop_reason}
+            message={record.exit_message}
+            exitCode={record.exit_code}
             className="border-t border-border/80 px-4 py-3"
           />
-          {record.actions.can_shell && running ? (
+          {running ? (
             <section
               aria-label="Terminal access"
               className="flex flex-col gap-2 border-t border-border/80 bg-muted/10 p-3 sm:flex-row sm:items-center sm:px-4"

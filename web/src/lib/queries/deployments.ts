@@ -96,7 +96,10 @@ export function workloadQueryOptions(workspace: string, app: string, kind: strin
       if (!deployment) throw new WorkloadNotFoundError(name);
       const path = { workspace, app };
       switch (deployment.kind) {
-        case "function": {
+        // A pod, devbox or sandbox is a function that runs a command.
+        case "function":
+        case "pod":
+        case "sandbox": {
           const fn = await ok(
             api.GET("/v1/workspaces/{workspace}/apps/{app}/functions/{function}", {
               params: { path: { ...path, function: name } },
@@ -228,6 +231,77 @@ export function deleteDeploymentMutationOptions(workspace: string, deployment: s
       ok(
         api.DELETE(
           "/v1/workspaces/{workspace}/deployments/{deployment}",
+          deploymentPath(workspace, deployment),
+        ),
+      ),
+  };
+}
+
+/** Holds a pod at a number of containers until the next scale. */
+export function scaleDeploymentMutationOptions(workspace: string, deployment: string) {
+  return {
+    mutationFn: (containers: number) =>
+      ok(
+        api.POST("/v1/workspaces/{workspace}/deployments/{deployment}/scale", {
+          ...deploymentPath(workspace, deployment),
+          body: { containers },
+        }),
+      ),
+  };
+}
+
+const SETTLED_DEVBOX_PHASES = new Set<Schemas["DevboxPhase"]>(["running", "stopped", "failed"]);
+const SETTLED_DEVBOX_REFRESH_MS = 15_000;
+const CHANGING_DEVBOX_REFRESH_MS = 3_000;
+
+/**
+ * A devbox's status. Connections and the idle deadline change without a
+ * workspace change, so it refreshes on an interval: quickly while the devbox
+ * is changing state or the caller waits for a change it asked for, slowly
+ * once it has settled.
+ */
+export function devboxQueryOptions(
+  workspace: string,
+  deployment: string,
+  { awaitingChange = false }: { awaitingChange?: boolean } = {},
+) {
+  return queryOptions({
+    queryKey: workspaceQueryKeys.deployments.devbox(workspace, deployment),
+    queryFn: ({ signal }) =>
+      ok(
+        api.GET("/v1/workspaces/{workspace}/deployments/{deployment}/devbox", {
+          ...deploymentPath(workspace, deployment),
+          signal,
+        }),
+      ),
+    refetchInterval: (query) =>
+      !awaitingChange && query.state.data && SETTLED_DEVBOX_PHASES.has(query.state.data.phase)
+        ? SETTLED_DEVBOX_REFRESH_MS
+        : CHANGING_DEVBOX_REFRESH_MS,
+    meta: workspaceLiveQueryMeta(false),
+  });
+}
+
+/** Starts the devbox now; the server answers with its status without waiting. */
+export function startDevboxMutationOptions(workspace: string, deployment: string) {
+  return {
+    mutationFn: () =>
+      ok(
+        api.POST(
+          "/v1/workspaces/{workspace}/deployments/{deployment}/devbox/start",
+          deploymentPath(workspace, deployment),
+        ),
+      ),
+  };
+}
+
+/** Stops the devbox's container now; its deployment stays on. */
+export function stopDevboxMutationOptions(workspace: string, deployment: string) {
+  return {
+    mutationFn: () =>
+      ok(
+        api.POST(
+          "/v1/workspaces/{workspace}/deployments/{deployment}/devbox/stop",
           deploymentPath(workspace, deployment),
         ),
       ),

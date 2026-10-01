@@ -23,20 +23,20 @@ import { Tabs, TabsContent } from "@/components/ui/tabs";
 import type { Schemas } from "@/lib/api/client";
 import { formatBytes } from "@/lib/format";
 import { containerMetricsQueryOptions } from "@/lib/queries/containers";
-import { workloadRunning } from "@/lib/queries/deployments";
-import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
-
 import {
   devboxQueryOptions,
   startDevboxMutationOptions,
   stopDevboxMutationOptions,
-  type Devbox,
-  type DevboxPhase,
-} from "./pods";
+  workloadRunning,
+} from "@/lib/queries/deployments";
+import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
+
 import { VersionHistory } from "./VersionHistory";
 import { WorkloadConfiguration } from "./WorkloadConfiguration";
 
-const PHASE_LABELS: Record<DevboxPhase, string> = {
+type Devbox = Schemas["Devbox"];
+
+const PHASE_LABELS: Record<Schemas["DevboxPhase"], string> = {
   stopped: "Stopped",
   queued: "Waiting for a machine",
   pulling_image: "Pulling image",
@@ -87,43 +87,45 @@ const STOP_CONFIRM_TIMEOUT_MS = 2 * 60_000;
  * since. A woken devbox has a container other than the one being stopped, or a
  * start queued with no container, which a parked devbox only has once woken.
  */
-function stopSettled(devbox: Devbox, stoppingContainerId: string | null): boolean {
+function stopSettled(devbox: Devbox, stoppingContainerId: string | undefined): boolean {
   if (devbox.state === "stopped") return true;
-  if (devbox.container_id === null) return devbox.state === "starting";
+  if (devbox.container_id === undefined) return devbox.state === "starting";
   return devbox.container_id !== stoppingContainerId;
 }
 
 /** Shell, Start and Stop for the devbox header. */
 export function DevboxActions({
-  workspaceId,
+  workspace,
   deploymentId,
 }: {
-  workspaceId: string;
+  workspace: string;
   deploymentId: string;
 }) {
   const queryClient = useQueryClient();
   // The container a stop was asked of, held until the server answers the stop.
-  const [stopRequest, setStopRequest] = useState<{ containerId: string | null } | null>(null);
+  const [stopRequest, setStopRequest] = useState<{ containerId: string | undefined } | null>(null);
   const stopRequested = stopRequest !== null;
-  const status = useQuery(devboxQueryOptions(workspaceId, deploymentId));
+  const status = useQuery(
+    devboxQueryOptions(workspace, deploymentId, { awaitingChange: stopRequested }),
+  );
   const devbox = status.data;
-  const key = devboxQueryOptions(workspaceId, deploymentId).queryKey;
+  const key = workspaceQueryKeys.deployments.devbox(workspace, deploymentId);
   // A poll that left before the request could land after its answer and undo it.
   const cancelPolls = () => queryClient.cancelQueries({ queryKey: key });
   const start = useMutation({
-    ...startDevboxMutationOptions,
+    ...startDevboxMutationOptions(workspace, deploymentId),
     onMutate: cancelPolls,
     onSuccess: async (next) => {
       queryClient.setQueryData(key, next);
       // A start switches a stopped deployment back on.
       await queryClient.invalidateQueries({
-        queryKey: workspaceQueryKeys.deployments.root(workspaceId),
+        queryKey: workspaceQueryKeys.deployments.root(workspace),
       });
     },
     onError: () => queryClient.invalidateQueries({ queryKey: key }),
   });
   const stop = useMutation({
-    ...stopDevboxMutationOptions,
+    ...stopDevboxMutationOptions(workspace, deploymentId),
     onMutate: cancelPolls,
     onSuccess: (next) => queryClient.setQueryData(key, next),
     onError: () => {
@@ -164,7 +166,7 @@ export function DevboxActions({
         </p>
       ) : null}
       <ShellButton
-        containerId={devbox.container_id}
+        containerId={devbox.container_id ?? null}
         running={devbox.state === "running"}
         disabledReason={
           devbox.state === "starting"
@@ -217,13 +219,13 @@ export function DevboxActions({
 
 /** How to reach a devbox and what it is doing, from the server's devbox status. */
 export function DevboxConnect({
-  workspaceId,
+  workspace,
   deploymentId,
 }: {
-  workspaceId: string;
+  workspace: string;
   deploymentId: string;
 }) {
-  const status = useQuery(devboxQueryOptions(workspaceId, deploymentId));
+  const status = useQuery(devboxQueryOptions(workspace, deploymentId));
   const devbox = status.data;
 
   if (status.isError) return <PanelError message={status.error.message} />;
@@ -273,7 +275,7 @@ export function DevboxConnect({
               <p className="min-w-0 break-words text-destructive">{devbox.phase_reason}</p>
             ) : null}
             {devbox.failed_container_id ? (
-              <StartLogs workspaceId={workspaceId} containerId={devbox.failed_container_id} />
+              <StartLogs workspace={workspace} containerId={devbox.failed_container_id} />
             ) : null}
           </div>
         ) : null}
@@ -282,8 +284,8 @@ export function DevboxConnect({
   );
 }
 
-/** The failed start's container logs, in a drawer over the page. */
-function StartLogs({ workspaceId, containerId }: { workspaceId: string; containerId: string }) {
+/** What the failed start's container wrote, in a drawer over the page. */
+function StartLogs({ workspace, containerId }: { workspace: string; containerId: string }) {
   const [open, setOpen] = useState(false);
   return (
     <>
@@ -305,8 +307,8 @@ function StartLogs({ workspaceId, containerId }: { workspaceId: string; containe
           {open ? (
             <PanelErrorBoundary key={containerId} title="Logs could not be displayed">
               <LogViewer
-                workspace={workspaceId}
-                source={{ container: containerId }}
+                workspace={workspace}
+                source={{ output: containerId }}
                 className="min-h-0 flex-1"
               />
             </PanelErrorBoundary>
@@ -350,18 +352,16 @@ function idleStop(devbox: Devbox): ReactNode {
 
 /** Files, versions and configuration beside the devbox's metrics. */
 export function DevboxWorkspace({
-  workspaceId,
-  workspaceName,
+  workspace,
   workload,
   spec,
 }: {
-  workspaceId: string;
-  workspaceName: string;
+  workspace: string;
   workload: Schemas["DeployedWorkload"];
   spec: Schemas["FunctionSpec"];
 }) {
   const deploymentId = workload.id;
-  const status = useQuery(devboxQueryOptions(workspaceId, deploymentId));
+  const status = useQuery(devboxQueryOptions(workspace, deploymentId));
   const devbox = status.data;
 
   return (
@@ -406,7 +406,7 @@ export function DevboxWorkspace({
           )}
         </TabsContent>
         <TabsContent value="versions" className="m-0 min-h-0 flex-1 overflow-auto">
-          <VersionHistory workspace={workspaceName} workload={workload} />
+          <VersionHistory workspace={workspace} workload={workload} />
         </TabsContent>
         <TabsContent value="configuration" className="m-0 min-h-0 flex-1 overflow-auto">
           <WorkloadConfiguration spec={spec} />
@@ -418,12 +418,18 @@ export function DevboxWorkspace({
         className="min-h-[24rem] shrink-0 xl:min-h-0"
         contentClassName="p-4"
         action={
-          devbox?.container_id ? <MetricsUpdated workspaceId={workspaceId} devbox={devbox} /> : null
+          devbox?.container_id ? (
+            <MetricsUpdated
+              workspace={workspace}
+              containerId={devbox.container_id}
+              live={devbox.state === "running"}
+            />
+          ) : null
         }
       >
         {devbox?.container_id ? (
           <DevboxMetrics
-            workspaceId={workspaceId}
+            workspace={workspace}
             containerId={devbox.container_id}
             live={devbox.state === "running"}
           />
@@ -438,15 +444,15 @@ export function DevboxWorkspace({
 }
 
 function DevboxMetrics({
-  workspaceId,
+  workspace,
   containerId,
   live,
 }: {
-  workspaceId: string;
+  workspace: string;
   containerId: string;
   live: boolean;
 }) {
-  const metrics = useQuery(containerMetricsQueryOptions(workspaceId, containerId, live));
+  const metrics = useQuery(containerMetricsQueryOptions(workspace, containerId, live));
   if (metrics.isPending) {
     return (
       <div className="grid gap-y-5">
@@ -463,14 +469,16 @@ function DevboxMetrics({
   );
 }
 
-function MetricsUpdated({ workspaceId, devbox }: { workspaceId: string; devbox: Devbox }) {
-  const metrics = useQuery(
-    containerMetricsQueryOptions(
-      workspaceId,
-      devbox.container_id ?? "",
-      devbox.state === "running",
-    ),
-  );
+function MetricsUpdated({
+  workspace,
+  containerId,
+  live,
+}: {
+  workspace: string;
+  containerId: string;
+  live: boolean;
+}) {
+  const metrics = useQuery(containerMetricsQueryOptions(workspace, containerId, live));
   const latest = metrics.data?.points.at(-1)?.timestamp;
   if (!latest) return null;
   return (

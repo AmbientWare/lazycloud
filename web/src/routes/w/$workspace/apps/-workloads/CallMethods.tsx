@@ -23,7 +23,7 @@ export function CallMethods({ workspace, workload }: { workspace: string; worklo
   const asgi = kind === "asgi";
   const body = asgi ? undefined : exampleBody(contract);
   const method = asgi && methods.includes("GET") ? "GET" : "POST";
-  const source = sourceImport(release.spec.handler);
+  const source = release.spec.handler ? sourceImport(release.spec.handler) : null;
   const pythonRequired = pythonOnlyReason(contract);
   const url = invokeUrl(workspace, workload);
 

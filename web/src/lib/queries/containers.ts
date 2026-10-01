@@ -16,6 +16,8 @@ export type ContainerFilter = {
   app?: string;
   /** Only this workload's containers; requires `app`. */
   function?: string;
+  /** Only the containers of this workload's releases. */
+  deployment?: string;
   /** Only containers that have not stopped. */
   live?: boolean;
   enabled?: boolean;
@@ -27,6 +29,7 @@ export function containersQueryOptions(workspace: string, filter: ContainerFilte
     queryKey: workspaceQueryKeys.containers.list(workspace, {
       app: filter.app ?? null,
       function: filter.function ?? null,
+      deployment: filter.deployment ?? null,
       live,
     }),
     initialPageParam: "",
@@ -38,6 +41,7 @@ export function containersQueryOptions(workspace: string, filter: ContainerFilte
             query: {
               app: filter.app,
               function: filter.app ? filter.function : undefined,
+              deployment: filter.deployment,
               live,
               limit: 100,
               cursor: pageParam || undefined,

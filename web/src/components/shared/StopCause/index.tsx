@@ -2,7 +2,7 @@ import type { Schemas } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
 
 /** Why a container stopped, in the words its owner needs. A normal stop needs no cause. */
-const CAUSES: Record<Schemas["StopReason"], string | null> = {
+const CAUSES: Record<Exclude<Schemas["StopReason"], "exited">, string | null> = {
   stopped: null,
   load_error: "Its code failed to load",
   start_failed: "It failed to start",
@@ -10,6 +10,14 @@ const CAUSES: Record<Schemas["StopReason"], string | null> = {
   out_of_memory: "It ran out of memory",
   host_lost: "Its machine was lost",
 };
+
+function stopCause(reason: string | undefined, exitCode: number | undefined): string | null {
+  // A pod's command ended on its own; its exit code says how.
+  if (reason === "exited") {
+    return exitCode === undefined ? "Exited" : `Exited with code ${exitCode}`;
+  }
+  return reason && Object.hasOwn(CAUSES, reason) ? CAUSES[reason as keyof typeof CAUSES] : null;
+}
 
 /**
  * Why a stopped container stopped, on its own line.
@@ -22,15 +30,16 @@ const CAUSES: Record<Schemas["StopReason"], string | null> = {
 export function StopCause({
   reason,
   message,
+  exitCode,
   className,
 }: {
   /** The API's stop reason; any other value has no cause to show. */
   reason: string | undefined;
   message?: string;
+  exitCode?: number;
   className?: string;
 }) {
-  const cause =
-    reason && Object.hasOwn(CAUSES, reason) ? CAUSES[reason as Schemas["StopReason"]] : null;
+  const cause = stopCause(reason, exitCode);
   if (!cause) return null;
   return (
     <p className={cn("text-sm text-muted-foreground", className)}>

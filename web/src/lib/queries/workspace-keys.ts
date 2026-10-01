@@ -58,6 +58,8 @@ export const workspaceQueryKeys = {
       [...workspaceRoot(workspace), "deployments", "workload", app, kind, name] as const,
     versions: (workspace: string, deployment: string) =>
       [...workspaceRoot(workspace), "deployments", "versions", deployment] as const,
+    devbox: (workspace: string, deployment: string) =>
+      [...workspaceRoot(workspace), "deployments", "devbox", deployment] as const,
     performance: (workspace: string, deployment: string, windowSeconds: number) =>
       [
         ...workspaceRoot(workspace),
@@ -93,7 +95,12 @@ export const workspaceQueryKeys = {
     lists: (workspace: string) => [...workspaceRoot(workspace), "containers", "list"] as const,
     list: (
       workspace: string,
-      options: { app: string | null; function: string | null; live: boolean },
+      options: {
+        app: string | null;
+        function: string | null;
+        deployment: string | null;
+        live: boolean;
+      },
     ) => [...workspaceRoot(workspace), "containers", "list", options] as const,
     details: (workspace: string) => [...workspaceRoot(workspace), "containers", "detail"] as const,
     detail: (workspace: string, containerId: string) =>

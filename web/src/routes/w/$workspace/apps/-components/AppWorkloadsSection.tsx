@@ -116,7 +116,7 @@ export function AppWorkloadsSection({
                           {workload.name}
                         </span>
                         <span className="block text-[11px] text-muted-foreground">
-                          {formatKind(workload.kind)}
+                          {workload.role === "devbox" ? "Devbox" : formatKind(workload.kind)}
                         </span>
                       </span>
                     </span>
