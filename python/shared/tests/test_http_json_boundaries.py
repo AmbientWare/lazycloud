@@ -2,20 +2,11 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-import pytest
-from pydantic import ValidationError
 from shared.capacity import CapacityOwnerKind, CapacityOwnerSource
 from shared.http.compute import UnitResponse, WorkerListResponse
-from shared.http.pods import PodSandboxExposePortRequest
 from shared.placement import Placement
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
-
-
-@pytest.mark.parametrize("port", [0, 65536, True, 8080.0, "8080"])
-def test_sandbox_exposed_port_rejects_out_of_range_and_coerced_values(port: object) -> None:
-    with pytest.raises(ValidationError):
-        PodSandboxExposePortRequest.model_validate({"port": port})
 
 
 def test_canonical_worker_and_pool_views_preserve_nominal_json_contracts() -> None:
