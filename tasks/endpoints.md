@@ -119,6 +119,11 @@ SaaS, and the edge routes only verified ones.
   connection another server holds over `EdgeRelay` (cluster-internal
   listener, per-edge token in the `edges` table); container choice,
   admission and the response stay with the edge the client reached.
+- A workload's token policy is its active release's: once it goes private,
+  pinned `-vN`, release-id and container hosts of older public releases
+  require a token too.
+- Records and the output containers wrote are kept seven days, pruned in
+  batches by every edge.
 
 ## Handed off
 
@@ -130,9 +135,12 @@ SaaS, and the edge routes only verified ones.
 - The Team/Business plan gate on custom domains needs billing.
 - The dashboard's view of request records and logs is the web packet's; the
   API and CLI serve them now.
-- Relays are verified with two edges in one process; a multi-replica
-  deployment needs `LAZYCLOUD_EDGE_RELAY_ADDR` on the pod and
-  `LAZYCLOUD_EDGE_RELAY_ADVERTISE` set to the pod IP and port.
+- Relays are verified with two edges in one process; the Helm
+  chart binds the relay to the pod IP (IPv4), advertises it, exposes it
+  through no Service and admits only server pods to it, unverified on a
+  cluster.
+- Billing's hand-offs (AdmitCustomDomain on domain create, RecordEgress per
+  workspace) wait for billing #424.
 - gVisor needs `--host-uds` for the supervisor's HTTP socket; only runc is
   verified.
 - The reference docs say a domain may be a subdomain of a registered name;
