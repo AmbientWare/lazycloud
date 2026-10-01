@@ -8,15 +8,16 @@ import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { ContentTransition } from "@/components/shared/ContentTransition";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { Volume, VolumePathInfo } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 import { formatBytes } from "@/lib/format";
 import {
   createVolume,
   deleteVolume,
   deleteVolumePath,
+  saveUrl,
   uploadVolumeFile,
   volumeDownloadUrl,
-  volumePathQueryOptions,
+  volumeFilesQueryOptions,
   volumesQueryOptions,
 } from "@/lib/queries/storage";
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
@@ -24,20 +25,18 @@ import { cn } from "@/lib/utils";
 import { ResourceWorkloadLinks } from "./ResourceWorkloadLinks";
 
 export function VolumesTab({
-  workspaceId,
-  workspaceName,
+  workspace,
   creating,
   onCreatingChange,
 }: {
-  workspaceId: string;
-  workspaceName: string;
+  workspace: string;
   creating: boolean;
   onCreatingChange: (open: boolean) => void;
 }) {
-  const query = useQuery(volumesQueryOptions(workspaceId));
+  const query = useQuery(volumesQueryOptions(workspace));
   const [selectedName, setSelectedName] = useState("");
   const selectedVolume =
-    query.data?.volumes.find((volume) => volume.name === selectedName) ?? query.data?.volumes[0];
+    query.data?.find((volume) => volume.name === selectedName) ?? query.data?.[0];
 
   return (
     <ContentTransition
@@ -48,7 +47,7 @@ export function VolumesTab({
         <aside className="min-h-0 overflow-visible border-b border-border lg:overflow-y-auto lg:border-b-0 lg:border-r">
           {creating ? (
             <VolumeForm
-              workspaceId={workspaceId}
+              workspace={workspace}
               onCreated={(name) => {
                 onCreatingChange(false);
                 setSelectedName(name);
@@ -60,15 +59,14 @@ export function VolumesTab({
             <VolumesSkeleton />
           ) : query.isError ? (
             <PanelError message={query.error.message} />
-          ) : query.data.volumes.length === 0 && !creating ? (
+          ) : query.data.length === 0 && !creating ? (
             <PanelEmpty message="No volumes. Create one to mount in a workload." className="p-6" />
           ) : (
             <div className="divide-y divide-border/60">
-              {query.data.volumes.map((volume) => (
+              {query.data.map((volume) => (
                 <VolumeRow
                   key={volume.id}
-                  workspaceId={workspaceId}
-                  workspaceName={workspaceName}
+                  workspace={workspace}
                   volume={volume}
                   selected={selectedVolume?.name === volume.name}
                   onSelect={() => setSelectedName(volume.name)}
@@ -78,11 +76,7 @@ export function VolumesTab({
           )}
         </aside>
         {selectedVolume ? (
-          <VolumeBrowser
-            key={selectedVolume.id}
-            workspaceId={workspaceId}
-            volume={selectedVolume}
-          />
+          <VolumeBrowser key={selectedVolume.id} workspace={workspace} volume={selectedVolume} />
         ) : (
           <div className="hidden place-items-center text-sm text-muted-foreground md:grid">
             Select a volume
@@ -107,42 +101,33 @@ function VolumesSkeleton() {
 }
 
 function VolumeRow({
-  workspaceId,
-  workspaceName,
+  workspace,
   volume,
   selected,
   onSelect,
 }: {
-  workspaceId: string;
-  workspaceName: string;
-  volume: Volume;
+  workspace: string;
+  volume: Schemas["Volume"];
   selected: boolean;
   onSelect: () => void;
 }) {
   const queryClient = useQueryClient();
   const [confirming, setConfirming] = useState(false);
   const remove = useMutation({
-    mutationFn: () => deleteVolume(workspaceId, volume.name),
+    mutationFn: () => deleteVolume(workspace, volume.name),
     onSuccess: () =>
-      queryClient.invalidateQueries({
-        queryKey: workspaceQueryKeys.storage.volumes(workspaceId),
-      }),
+      queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.storage.volumes(workspace) }),
   });
 
   return (
     <div className="interactive-row group px-3 py-2.5" data-selected={selected}>
       <div className="flex min-w-0 items-center gap-2">
-        <button
-          type="button"
-          className="min-w-0 flex-1 text-left"
-          onClick={onSelect}
-          disabled={volume.deletion_requested_at !== null}
-        >
+        <button type="button" className="min-w-0 flex-1 text-left" onClick={onSelect}>
           <span className="mono block truncate text-[13px] font-medium text-foreground">
             {volume.name}
           </span>
           <span className="mt-0.5 block text-[11px] text-muted-foreground">
-            {volume.deletion_requested_at ? "Deleting · billing stopped" : formatBytes(volume.size)}
+            {formatBytes(volume.size_bytes)}
           </span>
         </button>
         {!confirming ? (
@@ -152,7 +137,6 @@ function VolumeRow({
             className="size-7 opacity-70 md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100"
             aria-label={`Delete volume ${volume.name}`}
             title="Delete volume"
-            disabled={volume.deletion_requested_at !== null}
             onClick={() => setConfirming(true)}
           >
             <Trash2 />
@@ -160,11 +144,7 @@ function VolumeRow({
         ) : null}
       </div>
       <div className="mt-1">
-        <ResourceWorkloadLinks
-          workspaceName={workspaceName}
-          workloads={volume.workloads}
-          limit={1}
-        />
+        <ResourceWorkloadLinks workspace={workspace} workloads={volume.used_by} limit={1} />
       </div>
       {confirming ? (
         <div className="mt-2 flex items-center gap-1.5">
@@ -188,43 +168,36 @@ function VolumeRow({
   );
 }
 
-function VolumeBrowser({ workspaceId, volume }: { workspaceId: string; volume: Volume }) {
+function VolumeBrowser({ workspace, volume }: { workspace: string; volume: Schemas["Volume"] }) {
   const queryClient = useQueryClient();
   const inputRef = useRef<HTMLInputElement>(null);
   const [path, setPath] = useState("");
   const [confirmPath, setConfirmPath] = useState("");
   const [transferError, setTransferError] = useState("");
-  const query = useQuery(volumePathQueryOptions(workspaceId, volume.name, path));
+  const query = useQuery(volumeFilesQueryOptions(workspace, volume.name, path));
   const upload = useMutation({
-    mutationFn: (file: File) => uploadVolumeFile(workspaceId, volume.name, path, file),
-    onSuccess: () => refreshVolumeQueries(queryClient, workspaceId, volume.name),
+    mutationFn: (file: File) => uploadVolumeFile(workspace, volume.name, path, file),
+    onSuccess: () => refreshVolumeQueries(queryClient, workspace, volume.name),
     onError: (error) => setTransferError(error.message),
   });
   const remove = useMutation({
-    mutationFn: (targetPath: string) => deleteVolumePath(workspaceId, volume.name, targetPath),
+    mutationFn: (targetPath: string) => deleteVolumePath(workspace, volume.name, targetPath),
     onSuccess: () => {
       setConfirmPath("");
-      void refreshVolumeQueries(queryClient, workspaceId, volume.name);
+      void refreshVolumeQueries(queryClient, workspace, volume.name);
     },
   });
 
-  const download = async (item: VolumePathInfo) => {
+  const download = async (item: Schemas["VolumeFile"]) => {
     setTransferError("");
     try {
-      const url = await volumeDownloadUrl(workspaceId, volume.name, item.path);
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = fileName(item.path);
-      anchor.rel = "noopener noreferrer";
-      document.body.append(anchor);
-      anchor.click();
-      anchor.remove();
+      saveUrl(await volumeDownloadUrl(workspace, volume.name, item.path), fileName(item.path));
     } catch (error) {
       setTransferError(error instanceof Error ? error.message : "Download failed");
     }
   };
 
-  const items = [...(query.data?.path_infos ?? [])].sort(byDirectoryThenName);
+  const items = [...(query.data ?? [])].sort(byDirectoryThenName);
 
   return (
     <section className="flex min-h-0 flex-col overflow-visible lg:overflow-hidden">
@@ -310,11 +283,11 @@ function VolumeBrowser({ workspaceId, volume }: { workspaceId: string; volume: V
                     <span className="mono min-w-0 flex-1 truncate text-[13px]">{itemName}</span>
                   )}
                   <span className="hidden shrink-0 text-[11px] text-muted-foreground sm:inline">
-                    <LiveRelativeTime value={item.mod_time} />
+                    <LiveRelativeTime value={item.modified_at} />
                   </span>
                   {!item.is_dir ? (
                     <span className="mono w-16 shrink-0 text-right text-[11px] text-muted-foreground">
-                      {formatBytes(item.size)}
+                      {formatBytes(item.size_bytes)}
                     </span>
                   ) : null}
                   {confirming ? (
@@ -387,23 +360,23 @@ function FileSkeleton() {
 }
 
 function VolumeForm({
-  workspaceId,
+  workspace,
   onCreated,
   onCancel,
 }: {
-  workspaceId: string;
+  workspace: string;
   onCreated: (name: string) => void;
   onCancel: () => void;
 }) {
   const queryClient = useQueryClient();
   const [name, setName] = useState("");
   const create = useMutation({
-    mutationFn: () => createVolume(workspaceId, name.trim()),
+    mutationFn: () => createVolume(workspace, name.trim()),
     onSuccess: (volume) => {
       void queryClient.invalidateQueries({
-        queryKey: workspaceQueryKeys.storage.volumes(workspaceId),
+        queryKey: workspaceQueryKeys.storage.volumes(workspace),
       });
-      onCreated(volume?.name ?? name.trim());
+      onCreated(volume.name);
     },
   });
 
@@ -437,16 +410,14 @@ function VolumeForm({
 
 function refreshVolumeQueries(
   queryClient: ReturnType<typeof useQueryClient>,
-  workspaceId: string,
-  volumeName: string,
+  workspace: string,
+  volume: string,
 ) {
   return Promise.all([
     queryClient.invalidateQueries({
-      queryKey: workspaceQueryKeys.storage.volumePath(workspaceId, volumeName),
+      queryKey: workspaceQueryKeys.storage.volumePath(workspace, volume),
     }),
-    queryClient.invalidateQueries({
-      queryKey: workspaceQueryKeys.storage.volumes(workspaceId),
-    }),
+    queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.storage.volumes(workspace) }),
   ]);
 }
 
@@ -454,7 +425,7 @@ function fileName(path: string): string {
   return path.split("/").filter(Boolean).at(-1) ?? path;
 }
 
-function byDirectoryThenName(left: VolumePathInfo, right: VolumePathInfo): number {
+function byDirectoryThenName(left: Schemas["VolumeFile"], right: Schemas["VolumeFile"]): number {
   if (left.is_dir !== right.is_dir) return left.is_dir ? -1 : 1;
   return left.path.localeCompare(right.path);
 }

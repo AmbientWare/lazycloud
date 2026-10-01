@@ -363,11 +363,7 @@ function TaskDrawerBody({
           </TabsContent>
           <TabsContent value="artifacts" className="m-0 min-h-0 flex-1 overflow-auto">
             <PanelErrorBoundary key={taskId} title="Artifacts could not be displayed">
-              <Artifacts
-                key={`${workspace.id}/${taskId}`}
-                workspaceId={workspace.id}
-                taskId={taskId}
-              />
+              <Artifacts key={`${workspace.name}/${taskId}`} taskId={taskId} />
             </PanelErrorBoundary>
           </TabsContent>
           <TabsContent value="trace" className="m-0 min-h-0 flex-1 overflow-auto">

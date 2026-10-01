@@ -5,21 +5,21 @@ import { ContentTransition } from "@/components/shared/ContentTransition";
 import { FilePreviewBody, ImagePreview, TextPreview } from "@/components/shared/FilePreview";
 import { PanelError } from "@/components/shared/PanelError";
 import { Button } from "@/components/ui/button";
-import type { ArtifactSummary } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 import { artifactContentQueryOptions } from "@/lib/queries/artifacts";
 
 export type PreviewKind = "image" | "pdf" | "text";
 
 export function ArtifactPreview({
   artifact,
-  workspaceId,
+  workspace,
   kind,
 }: {
-  artifact: ArtifactSummary;
-  workspaceId: string;
+  artifact: Schemas["Artifact"];
+  workspace: string;
   kind: PreviewKind;
 }) {
-  const query = useQuery(artifactContentQueryOptions(workspaceId, artifact));
+  const query = useQuery(artifactContentQueryOptions(workspace, artifact));
   const blob = query.data;
   const [decoded, setDecoded] = useState<{ blob: Blob; url: string; text: string | null } | null>(
     null,

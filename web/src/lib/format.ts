@@ -8,7 +8,7 @@ import {
 
 import { isKnownTaskStatus, isTerminalTaskStatus } from "@/lib/api/schemas/tasks";
 
-import type { RowValue } from "@/lib/api/resources";
+export type RowValue = string | number | boolean | null | undefined;
 
 export function displayValue(value: RowValue): string {
   if (value === null || value === undefined || value === "") return "None";

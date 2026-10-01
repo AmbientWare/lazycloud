@@ -1,305 +1,157 @@
-import { infiniteQueryOptions, queryOptions, type QueryClient } from "@tanstack/react-query";
+import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
 
-import { api, ApiError, ok, type Schemas } from "@/lib/api/client";
-import { workspaceName } from "@/lib/api/workspaces";
-import type {
-  Disk,
-  ResourceWorkloadReference,
-  SecretMasked,
-  Volume,
-  VolumePathInfo,
-} from "@/lib/api/schemas";
-import {
-  nextListCursor,
-  selectInfiniteList,
-  type InfiniteListQueryData,
-} from "@/lib/queries/infinite-list";
+import { api, ok, type Schemas } from "@/lib/api/client";
 
-import { appDirectory } from "./directory";
 import { workspaceLiveQueryMeta, workspaceQueryKeys } from "./workspace-keys";
 
-// --- Secrets (collection reads stay masked; cleartext is fetched only on demand) ---
-
-/** A secret as the list shows it: the API never returns a value outside a reveal. */
-function maskedSecret(secret: Schemas["Secret"]): SecretMasked {
-  return {
-    name: secret.name,
-    value: "********",
-    created_at: secret.created_at,
-    updated_at: secret.updated_at,
-    workloads: [],
-  };
+/** Every page of a collection; the storage tabs list all of it. */
+export async function allPages<T>(
+  read: (cursor: string | undefined) => Promise<{ items: T[]; next?: string }>,
+): Promise<T[]> {
+  const items: T[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await read(cursor);
+    items.push(...page.items);
+    cursor = page.next;
+  } while (cursor);
+  return items;
 }
 
-export function secretsQueryOptions(workspaceId: string) {
+// --- Secrets (collection reads carry no value; cleartext is fetched only on demand) ---
+
+export function secretsQueryOptions(workspace: string) {
   return queryOptions({
-    queryKey: workspaceQueryKeys.storage.secrets(workspaceId),
-    queryFn: async (): Promise<{ secrets: SecretMasked[] }> => {
-      const workspace = workspaceName(workspaceId);
-      const secrets: SecretMasked[] = [];
-      let cursor: string | undefined;
-      do {
+    queryKey: workspaceQueryKeys.storage.secrets(workspace),
+    queryFn: () =>
+      allPages(async (cursor) => {
         const page = await ok(
           api.GET("/v1/workspaces/{workspace}/secrets", {
             params: { path: { workspace }, query: { limit: 100, cursor } },
           }),
         );
-        secrets.push(...page.secrets.map(maskedSecret));
-        cursor = page.next_cursor;
-      } while (cursor);
-      return { secrets };
-    },
+        return { items: page.secrets, next: page.next_cursor };
+      }),
     meta: workspaceLiveQueryMeta(true),
   });
 }
 
-const secretPath = (workspaceId: string, name: string) => ({
-  params: { path: { workspace: workspaceName(workspaceId), secret: name } },
+const secretPath = (workspace: string, secret: string) => ({
+  params: { path: { workspace, secret } },
 });
 
-export async function createSecret(
-  workspaceId: string,
-  name: string,
-  value: string,
-): Promise<{ id: string; name: string }> {
-  const created = await ok(
+export function createSecret(workspace: string, name: string, value: string) {
+  return ok(
     api.POST("/v1/workspaces/{workspace}/secrets", {
-      params: { path: { workspace: workspaceName(workspaceId) } },
+      params: { path: { workspace } },
       body: { name, value },
     }),
   );
-  return { id: created.name, name: created.name };
 }
 
-export async function updateSecretValue(
-  workspaceId: string,
-  name: string,
-  value: string,
-): Promise<SecretMasked> {
-  return maskedSecret(
-    await ok(
-      api.PATCH("/v1/workspaces/{workspace}/secrets/{secret}", {
-        ...secretPath(workspaceId, name),
-        body: { value },
-      }),
-    ),
+export function updateSecretValue(workspace: string, name: string, value: string) {
+  return ok(
+    api.PATCH("/v1/workspaces/{workspace}/secrets/{secret}", {
+      ...secretPath(workspace, name),
+      body: { value },
+    }),
   );
 }
 
-export async function revealSecretValue(workspaceId: string, name: string): Promise<string> {
+export async function revealSecretValue(workspace: string, name: string): Promise<string> {
   const revealed = await ok(
-    api.GET("/v1/workspaces/{workspace}/secrets/{secret}/value", secretPath(workspaceId, name)),
+    api.GET("/v1/workspaces/{workspace}/secrets/{secret}/value", secretPath(workspace, name)),
   );
   return revealed.value;
 }
 
-export async function deleteSecret(workspaceId: string, name: string): Promise<unknown> {
-  await ok(
-    api.DELETE("/v1/workspaces/{workspace}/secrets/{secret}", secretPath(workspaceId, name)),
-  );
-  return {};
+export function deleteSecret(workspace: string, name: string) {
+  return ok(api.DELETE("/v1/workspaces/{workspace}/secrets/{secret}", secretPath(workspace, name)));
 }
 
 // --- Disks (created by the workloads that declare them) ---
 
 const DISK_PAGE_SIZE = 50;
 
-/**
- * A disk names only the container holding it; its workload comes from that
- * container. The API has no workload role, so a holder reads as a service.
- */
-async function viewDisk(
-  client: QueryClient,
-  workspaceId: string,
-  disk: Schemas["Disk"],
-): Promise<Disk> {
-  let workload: Disk["workload"] = null;
-  const container = disk.holder_container_id
-    ? await ok(
-        api.GET("/v1/workspaces/{workspace}/containers/{container}", {
-          params: {
-            path: { workspace: workspaceName(workspaceId), container: disk.holder_container_id },
-          },
-        }),
-      ).catch((error: unknown) => {
-        // A holder that has since been removed leaves the disk without a workload.
-        if (error instanceof ApiError && error.status === 404) return null;
-        throw error;
-      })
-    : null;
-  if (container) {
-    const app = (await appDirectory(client, workspaceId)).byName.get(container.app);
-    workload = {
-      app_id: app?.id ?? "",
-      app_name: container.app,
-      kind: "function",
-      name: container.function,
-      role: "service",
-    };
-  }
-  return {
-    id: disk.id,
-    name: disk.name,
-    size_bytes: disk.size_bytes,
-    status: disk.status,
-    generation: disk.generation,
-    stored_bytes: disk.stored_bytes,
-    holder_container_id: disk.holder_container_id ?? "",
-    workload,
-    created_at: disk.created_at,
-    updated_at: disk.updated_at,
-  };
-}
-
-export function disksQueryOptions(workspaceId: string) {
+export function disksQueryOptions(workspace: string) {
   return infiniteQueryOptions({
-    queryKey: workspaceQueryKeys.storage.disks(workspaceId),
+    queryKey: workspaceQueryKeys.storage.disks(workspace),
     initialPageParam: "",
-    queryFn: async ({ pageParam, client }): Promise<{ data: Disk[]; next: string }> => {
-      const page = await ok(
+    queryFn: ({ pageParam }) =>
+      ok(
         api.GET("/v1/workspaces/{workspace}/disks", {
           params: {
-            path: { workspace: workspaceName(workspaceId) },
+            path: { workspace },
             query: { limit: DISK_PAGE_SIZE, cursor: pageParam || undefined },
           },
         }),
-      );
-      return {
-        data: await Promise.all(page.disks.map((disk) => viewDisk(client, workspaceId, disk))),
-        next: page.next_cursor ?? "",
-      };
-    },
-    getNextPageParam: nextListCursor,
+      ),
+    getNextPageParam: (page) => page.next_cursor,
     meta: workspaceLiveQueryMeta(true),
   });
 }
 
-export function selectDiskList(
-  data: InfiniteListQueryData<Disk> | undefined,
-  hasNextPage: boolean | undefined,
-) {
-  return selectInfiniteList(data, hasNextPage, (disk) => disk.id);
-}
-
-export async function deleteDisk(workspaceId: string, name: string): Promise<null> {
-  await ok(
+export function deleteDisk(workspace: string, disk: string) {
+  return ok(
     api.DELETE("/v1/workspaces/{workspace}/disks/{disk}", {
-      params: { path: { workspace: workspaceName(workspaceId), disk: name } },
+      params: { path: { workspace, disk } },
     }),
   );
-  return null;
 }
 
 // --- Volumes ---
 
-function viewVolume(
-  volume: Schemas["Volume"],
-  workspaceId: string,
-  appIds: ReadonlyMap<string, string>,
-): Volume {
-  return {
-    id: volume.id,
-    name: volume.name,
-    size: volume.size_bytes,
-    created_at: volume.created_at,
-    // Volumes have no update time; their creation is the last change the API records.
-    updated_at: volume.created_at,
-    workspace_id: workspaceId,
-    workspace_name: workspaceName(workspaceId),
-    // A deleted volume leaves the list at once.
-    deletion_requested_at: null,
-    workloads: volume.used_by.map((workload): ResourceWorkloadReference => ({
-      app_id: appIds.get(workload.app) ?? "",
-      app_name: workload.app,
-      name: workload.name,
-      kind: workload.kind,
-      versions: [],
-      active_versions: [],
-    })),
-  };
-}
+const volumePath = (workspace: string, volume: string) => ({
+  params: { path: { workspace, volume } },
+});
 
-export function volumesQueryOptions(workspaceId: string) {
+export function volumesQueryOptions(workspace: string) {
   return queryOptions({
-    queryKey: workspaceQueryKeys.storage.volumes(workspaceId),
-    queryFn: async ({ client }): Promise<{ volumes: Volume[] }> => {
-      const workspace = workspaceName(workspaceId);
-      const volumes: Schemas["Volume"][] = [];
-      let cursor: string | undefined;
-      do {
+    queryKey: workspaceQueryKeys.storage.volumes(workspace),
+    queryFn: () =>
+      allPages(async (cursor) => {
         const page = await ok(
           api.GET("/v1/workspaces/{workspace}/volumes", {
             params: { path: { workspace }, query: { limit: 100, cursor } },
           }),
         );
-        volumes.push(...page.volumes);
-        cursor = page.next_cursor;
-      } while (cursor);
-      const apps = volumes.some((volume) => volume.used_by.length > 0)
-        ? (await appDirectory(client, workspaceId)).byName
-        : new Map<string, Schemas["App"]>();
-      const appIds = new Map([...apps].map(([name, app]) => [name, app.id]));
-      return { volumes: volumes.map((volume) => viewVolume(volume, workspaceId, appIds)) };
-    },
+        return { items: page.volumes, next: page.next_cursor };
+      }),
     meta: workspaceLiveQueryMeta(true),
   });
 }
 
 /** Creates the volume, or returns the existing one of that name. */
-export async function createVolume(workspaceId: string, name: string): Promise<Volume | null> {
-  const volume = await ok(
+export function createVolume(workspace: string, name: string) {
+  return ok(
     api.POST("/v1/workspaces/{workspace}/volumes", {
-      params: { path: { workspace: workspaceName(workspaceId) } },
+      params: { path: { workspace } },
       body: { name },
     }),
   );
-  return viewVolume(volume, workspaceId, new Map());
 }
 
 /** Refused with a conflict while a container that mounts the volume has not stopped. */
-export async function deleteVolume(
-  workspaceId: string,
-  name: string,
-): Promise<{ deleted: boolean }> {
-  await ok(
-    api.DELETE("/v1/workspaces/{workspace}/volumes/{volume}", volumePath(workspaceId, name)),
-  );
-  return { deleted: true };
+export function deleteVolume(workspace: string, name: string) {
+  return ok(api.DELETE("/v1/workspaces/{workspace}/volumes/{volume}", volumePath(workspace, name)));
 }
 
-const volumePath = (workspaceId: string, volume: string) => ({
-  params: { path: { workspace: workspaceName(workspaceId), volume } },
-});
-
-export function volumePathQueryOptions(workspaceId: string, volumeName: string, path: string) {
+export function volumeFilesQueryOptions(workspace: string, volume: string, path: string) {
   return queryOptions({
-    queryKey: workspaceQueryKeys.storage.volumePath(workspaceId, volumeName, path),
-    queryFn: async (): Promise<{ path_infos: VolumePathInfo[] }> => {
-      const files: Schemas["VolumeFile"][] = [];
-      let cursor: string | undefined;
-      do {
+    queryKey: workspaceQueryKeys.storage.volumePath(workspace, volume, path),
+    queryFn: () =>
+      allPages(async (cursor) => {
         const page = await ok(
           api.GET("/v1/workspaces/{workspace}/volumes/{volume}/files", {
             params: {
-              ...volumePath(workspaceId, volumeName).params,
+              ...volumePath(workspace, volume).params,
               query: { path: relativePath(path), limit: 1000, cursor },
             },
           }),
         );
-        files.push(...page.files);
-        cursor = page.next_cursor;
-      } while (cursor);
-      return {
-        path_infos: files.map((file) => ({
-          path: file.path,
-          size: file.size_bytes,
-          // Directories have no modification time.
-          mod_time: file.modified_at ?? "",
-          is_dir: file.is_dir,
-        })),
-      };
-    },
-    enabled: Boolean(volumeName),
+        return { items: page.files, next: page.next_cursor };
+      }),
+    enabled: Boolean(volume),
     refetchInterval: 30_000,
   });
 }
@@ -312,18 +164,18 @@ const PART_CONCURRENCY = 4;
 
 /** Upload a file into `path`, straight to the object store through presigned URLs. */
 export async function uploadVolumeFile(
-  workspaceId: string,
-  volumeName: string,
+  workspace: string,
+  volume: string,
   path: string,
   file: File,
 ): Promise<void> {
-  const target = volumePath(workspaceId, volumeName);
+  const target = volumePath(workspace, volume);
   const destination = joinRelativePath(path, file.name);
   if (file.size <= SINGLE_PUT_BYTES) {
     const presigned = await ok(
       api.POST("/v1/workspaces/{workspace}/volumes/{volume}/files/url", {
         ...target,
-        body: { path: destination, method: "put", expires_seconds: 3600, download: false },
+        body: { path: destination, method: "put", expires_seconds: 3600 },
       }),
     );
     await putBytes(presigned.url, file);
@@ -378,35 +230,38 @@ async function putBytes(url: string, body: Blob): Promise<string | null> {
 }
 
 /** Removes a file, or a directory and everything under it. */
-export async function deleteVolumePath(
-  workspaceId: string,
-  volumeName: string,
-  path: string,
-): Promise<{ deleted: string[] }> {
-  const removed = await ok(
+export function deleteVolumePath(workspace: string, volume: string, path: string) {
+  return ok(
     api.DELETE("/v1/workspaces/{workspace}/volumes/{volume}/files", {
-      params: {
-        ...volumePath(workspaceId, volumeName).params,
-        query: { path: relativePath(path) },
-      },
+      params: { ...volumePath(workspace, volume).params, query: { path: relativePath(path) } },
     }),
   );
-  return { deleted: removed.removed };
 }
 
 /** A short-lived presigned GET that browsers save as a file; it carries no session. */
 export async function volumeDownloadUrl(
-  workspaceId: string,
-  volumeName: string,
+  workspace: string,
+  volume: string,
   path: string,
 ): Promise<string> {
   const presigned = await ok(
     api.POST("/v1/workspaces/{workspace}/volumes/{volume}/files/url", {
-      ...volumePath(workspaceId, volumeName),
+      ...volumePath(workspace, volume),
       body: { path: relativePath(path), method: "get", expires_seconds: 300, download: true },
     }),
   );
   return presigned.url;
+}
+
+/** Have the browser save a presigned URL; the store's response names the file. */
+export function saveUrl(url: string, filename: string): void {
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.rel = "noopener noreferrer";
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
 }
 
 function relativePath(path: string): string {
