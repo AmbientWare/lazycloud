@@ -47,6 +47,7 @@ linters:
         host-runtime:
           files:
             - "**/internal/agent/**"
+            - "**/internal/diskengine/**"
             - "**/internal/supervisor/**"
             - "**/cmd/agent/**"
             - "**/cmd/supervisor/**"

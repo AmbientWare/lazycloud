@@ -1,49 +1,23 @@
 from __future__ import annotations
 
+import base64
 from collections.abc import Iterator, MutableMapping
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any
 
-from shared.errors import NotFoundError
-from shared.http.collections import (
-    MAX_MAP_TTL_SECONDS,
-    MapCountResponse,
-    MapDeleteResponse,
-    MapGetResponse,
-    MapKeysResponse,
-    MapSetResponse,
-)
-from shared.http.errors import HttpApiError
+from shared.api import ErrorCode, SetMapEntryRequest
 
+from lazycloud.clients.api import ApiError
+from lazycloud.clients.storage import StorageClient
 from lazycloud.control import (
-    ControlClientConfig,
     ResourceControlBinding,
     resolve_control_client_config,
+    storage_client,
 )
 from lazycloud.values import decode_value, encode_value
 
+MAX_MAP_TTL_SECONDS = 7 * 24 * 60 * 60
 _MISSING = object()
-
-
-class MapClient(Protocol):
-    def set(
-        self,
-        name: str,
-        key: str,
-        value: bytes,
-        *,
-        ttl_seconds: int = MAX_MAP_TTL_SECONDS,
-    ) -> MapSetResponse: ...
-
-    def get(self, name: str, key: str) -> MapGetResponse: ...
-
-    def delete(self, name: str, key: str) -> MapDeleteResponse: ...
-
-    def count(self, name: str) -> MapCountResponse: ...
-
-    def keys(self, name: str) -> MapKeysResponse: ...
-
-    def delete_map(self, name: str) -> None: ...
 
 
 class MapSetError(ValueError):
@@ -51,16 +25,18 @@ class MapSetError(ValueError):
 
 
 @dataclass(slots=True)
-class Map(ResourceControlBinding[MapClient], MutableMapping[str, Any]):
+class Map(ResourceControlBinding[StorageClient], MutableMapping[str, Any]):
+    """A dictionary of Python values with per-key expiry, created on the first write."""
+
     name: str
     workspace: str | None = None
-    client: MapClient | None = field(default=None, init=False, repr=False)
+    client: StorageClient | None = field(default=None, init=False, repr=False)
     endpoint: str | None = field(default=None, init=False, repr=False)
     token: str | None = field(default=None, init=False, repr=False)
     timeout_seconds: float = field(default=10.0, init=False, repr=False)
 
     @property
-    def control_client(self) -> MapClient:
+    def control_client(self) -> StorageClient:
         if self.client is None:
             config = resolve_control_client_config(
                 workspace=self.workspace,
@@ -68,7 +44,7 @@ class Map(ResourceControlBinding[MapClient], MutableMapping[str, Any]):
                 token=self.token,
                 timeout_seconds=self.timeout_seconds,
             )
-            self.client = _default_map_client(config)
+            self.client = storage_client(config)
         return self.client
 
     def set(
@@ -77,61 +53,56 @@ class Map(ResourceControlBinding[MapClient], MutableMapping[str, Any]):
         value: Any,
         ttl: int = MAX_MAP_TTL_SECONDS,
     ) -> bool:
-        effective_ttl = _normalize_ttl(ttl)
-        self.control_client.set(
-            self.name,
-            key,
-            encode_value(value),
-            ttl_seconds=effective_ttl,
+        """Write a key that expires after `ttl` seconds, at most 7 days; 0 never expires."""
+        request = SetMapEntryRequest(
+            value=base64.b64encode(encode_value(value)), ttl_seconds=_normalize_ttl(ttl)
         )
+        self.control_client.set_map_entry(self.name, key, request)
         return True
 
     def get(self, key: str, default: Any = None) -> Any:
         try:
-            response = self.control_client.get(self.name, key)
-        except HttpApiError as exc:
-            if exc.status_code == 404:
+            entry = self.control_client.get_map_entry(self.name, key)
+        except ApiError as exc:
+            if exc.code is ErrorCode.not_found:
                 return default
             raise
-        except NotFoundError:
-            return default
-        return _deserialize(response.bytes_value())
+        return decode_value(entry.value)
 
     def __getitem__(self, key: str) -> Any:
-        return self.get(key)
+        value = self.get(key, _MISSING)
+        if value is _MISSING:
+            raise KeyError(key)
+        return value
 
     def __setitem__(self, key: str, value: Any) -> None:
         self.set(key, value)
 
     def __delitem__(self, key: str) -> None:
-        if self.get(key, _MISSING) is _MISSING:
-            raise KeyError(key)
-        self.control_client.delete(self.name, key)
+        try:
+            self.control_client.delete_map_entry(self.name, key)
+        except ApiError as exc:
+            if exc.code is ErrorCode.not_found:
+                raise KeyError(key) from exc
+            raise
 
     def __contains__(self, key: object) -> bool:
         return isinstance(key, str) and self.get(key, _MISSING) is not _MISSING
 
     def __iter__(self) -> Iterator[str]:
-        response = self.control_client.keys(self.name)
-        return iter(response.keys)
+        cursor: str | None = None
+        while True:
+            page = self.control_client.list_map_keys(self.name, cursor=cursor)
+            yield from page.keys
+            if not page.next_cursor:
+                return
+            cursor = page.next_cursor
 
     def __len__(self) -> int:
-        response = self.control_client.count(self.name)
-        return response.count
+        return self.control_client.get_map(self.name).count
 
     def delete(self) -> None:
         self.control_client.delete_map(self.name)
-
-
-def _default_map_client(config: ControlClientConfig) -> MapClient:
-    from lazycloud.clients.map.control import MapControlClient
-
-    return MapControlClient.from_endpoint(
-        config.endpoint,
-        token=config.token,
-        timeout_seconds=config.timeout_seconds,
-        workspace=config.workspace,
-    )
 
 
 def _normalize_ttl(value: int) -> int:
@@ -144,12 +115,8 @@ def _normalize_ttl(value: int) -> int:
     return value
 
 
-def _deserialize(value: bytes) -> Any:
-    return decode_value(value)
-
-
 __all__ = [
+    "MAX_MAP_TTL_SECONDS",
     "Map",
-    "MapClient",
     "MapSetError",
 ]
