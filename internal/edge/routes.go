@@ -42,7 +42,7 @@ type release struct {
 	workingTree bool
 	// version is the deployed version, nil for a working-tree release.
 	version *int
-	spec    apitypes.FunctionSpec
+	spec    apitypes.WorkloadSpec
 	// capacity is the requests one container admits: workers times
 	// concurrency.
 	capacity   int
@@ -56,7 +56,7 @@ type release struct {
 }
 
 func newRelease(id, workload uuid.UUID, version *int32, rawSpec []byte) (*release, error) {
-	var spec apitypes.FunctionSpec
+	var spec apitypes.WorkloadSpec
 	if err := json.Unmarshal(rawSpec, &spec); err != nil {
 		return nil, fmt.Errorf("decode release spec: %w", err)
 	}

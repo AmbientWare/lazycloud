@@ -237,19 +237,19 @@ func rangeQuery(start, end *time.Time, windowSeconds *int) observability.RangeQu
 	return q
 }
 
-// GetDeploymentPerformance returns a deployment's latency, outcomes and
-// cold starts over time.
-func (s *Server) GetDeploymentPerformance(ctx context.Context, req GetDeploymentPerformanceRequestObject) (GetDeploymentPerformanceResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
+// GetWorkloadPerformance returns a workload's latency, outcomes and cold
+// starts over time.
+func (s *Server) GetWorkloadPerformance(ctx context.Context, req GetWorkloadPerformanceRequestObject) (GetWorkloadPerformanceResponseObject, error) {
+	ws, id, err := s.findWorkload(ctx, req.Workspace, req.App, req.Kind, req.Name)
 	if err != nil {
 		return nil, err
 	}
-	perf, err := s.owners.Observability.DeploymentPerformance(ctx, ws.ID, req.Deployment,
+	perf, err := s.owners.Observability.WorkloadPerformance(ctx, ws.ID, uuid.UUID(id),
 		rangeQuery(req.Params.Start, req.Params.End, req.Params.WindowSeconds))
 	if err != nil {
 		return nil, err
 	}
-	return GetDeploymentPerformance200JSONResponse(perf), nil
+	return GetWorkloadPerformance200JSONResponse(perf), nil
 }
 
 // GetTaskMetrics summarizes the workspace's tasks over a range.

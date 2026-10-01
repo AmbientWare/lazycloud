@@ -34,7 +34,7 @@ def sleepy(seconds: float = 0.0, version: str = "v1"):
     return {"version": version}
 `
 
-func capacitySpec(source string, workers, concurrency, maxContainers, maxPending int) apitypes.FunctionSpec {
+func capacitySpec(source string, workers, concurrency, maxContainers, maxPending int) apitypes.WorkloadSpec {
 	route := "/"
 	s := spec("sleepy", "app:sleepy", source, &apitypes.HttpSpec{Kind: apitypes.HttpKindEndpoint, Route: &route, Workers: &workers})
 	keepWarm, timeout, tpc := 30, 120, workers*concurrency

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -18,8 +19,15 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
-// WorkloadID identifies a workload, which the API calls a deployment.
+// WorkloadID identifies a workload.
 type WorkloadID uuid.UUID
+
+// WorkloadRef addresses a live workload by app, kind and name.
+type WorkloadRef struct {
+	App  string
+	Kind apitypes.WorkloadKind
+	Name string
+}
 
 // WorkloadState is a workload's desired state.
 type WorkloadState string
@@ -34,45 +42,48 @@ const (
 // number.
 var ErrVersionNotFound = errors.New("version not found")
 
-// DeploymentFilter narrows ListDeployments.
-type DeploymentFilter struct {
+// WorkloadFilter narrows ListWorkloads.
+type WorkloadFilter struct {
 	App  *string
+	Kind *apitypes.WorkloadKind
 	Name *string
+	ID   *uuid.UUID
 	// Search matches part of the app or workload name.
 	Search *string
 }
 
-// DeploymentPage is one page of deployed workloads by app and name.
-type DeploymentPage struct {
-	Deployments []apitypes.DeployedWorkload
-	Next        string
+// WorkloadPage is one page of deployed workloads by app, name and kind.
+type WorkloadPage struct {
+	Workloads []apitypes.Workload
+	Next      string
 }
 
-// ListDeployments returns deployed workloads of live apps by app and name.
-func (c *Control) ListDeployments(ctx context.Context, workspace identity.WorkspaceID, filter DeploymentFilter, limit int, cursor string) (DeploymentPage, error) {
-	afterApp, afterName, err := parseDeploymentCursor(cursor)
+// ListWorkloads returns deployed workloads of live apps by app, name and
+// kind.
+func (c *Control) ListWorkloads(ctx context.Context, workspace identity.WorkspaceID, filter WorkloadFilter, limit int, cursor string) (WorkloadPage, error) {
+	after, err := parseWorkloadCursor(cursor)
 	if err != nil {
-		return DeploymentPage{}, err
+		return WorkloadPage{}, err
 	}
 	size := pageSize(limit)
-	rows, err := c.queries.ListDeployments(ctx, ListDeploymentsParams{
-		WorkspaceID: uuid.UUID(workspace), App: filter.App, Name: filter.Name, Search: lowered(filter.Search),
-		AfterApp: afterApp, AfterName: afterName, MaxRows: size + 1,
+	rows, err := c.queries.ListWorkloads(ctx, ListWorkloadsParams{
+		WorkspaceID: uuid.UUID(workspace), App: filter.App, Kind: (*string)(filter.Kind), Name: filter.Name, ID: filter.ID,
+		Search: lowered(filter.Search), AfterApp: after[0], AfterName: after[1], AfterKind: after[2], MaxRows: size + 1,
 	})
 	if err != nil {
-		return DeploymentPage{}, fmt.Errorf("list deployments: %w", err)
+		return WorkloadPage{}, fmt.Errorf("list workloads: %w", err)
 	}
-	var page DeploymentPage
+	var page WorkloadPage
 	if len(rows) > int(size) {
 		rows = rows[:size]
 		last := rows[len(rows)-1]
-		page.Next = last.AppName + "/" + last.Name
+		page.Next = last.AppName + "/" + last.Name + "/" + last.Kind
 	}
-	page.Deployments = make([]apitypes.DeployedWorkload, len(rows))
+	page.Workloads = make([]apitypes.Workload, len(rows))
 	for n, row := range rows {
 		release := row.ReleaseID
 		deployed := row.DeployedAt
-		page.Deployments[n] = workloadOut(WorkloadViewRow{
+		page.Workloads[n] = workloadOut(WorkloadViewRow{
 			ID: row.ID, AppName: row.AppName, Name: row.Name, Kind: row.Kind, DesiredState: row.DesiredState,
 			AppState: row.AppState, Version: row.Version, ReleaseID: &release, CreatedAt: row.CreatedAt, DeployedAt: &deployed,
 			RunningContainers: row.RunningContainers,
@@ -81,51 +92,74 @@ func (c *Control) ListDeployments(ctx context.Context, workspace identity.Worksp
 	return page, nil
 }
 
-// The cursor is "<app>/<name>" of the last row; neither name contains "/".
-func parseDeploymentCursor(cursor string) (string, string, error) {
+// The cursor is "<app>/<name>/<kind>" of the last row; no part contains "/".
+func parseWorkloadCursor(cursor string) ([3]string, error) {
+	var after [3]string
 	if cursor == "" {
-		return "", "", nil
+		return after, nil
 	}
-	app, name, ok := strings.Cut(cursor, "/")
-	if !ok || app == "" || name == "" {
-		return "", "", ErrInvalidCursor
+	parts := strings.Split(cursor, "/")
+	if len(parts) != len(after) || slices.Contains(parts, "") {
+		return after, ErrInvalidCursor
 	}
-	return app, name, nil
+	copy(after[:], parts)
+	return after, nil
 }
 
-// GetDeployment reads a workload, deleted ones included.
-func (c *Control) GetDeployment(ctx context.Context, workspace identity.WorkspaceID, id WorkloadID) (apitypes.DeployedWorkload, error) {
+// FindWorkload resolves a live workload of a live app.
+func (c *Control) FindWorkload(ctx context.Context, workspace identity.WorkspaceID, ref WorkloadRef) (WorkloadID, error) {
+	id, err := c.queries.FindWorkload(ctx, FindWorkloadParams{
+		WorkspaceID: uuid.UUID(workspace), AppName: ref.App, Kind: string(ref.Kind), Name: ref.Name,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return WorkloadID{}, ErrNotFound
+	}
+	if err != nil {
+		return WorkloadID{}, fmt.Errorf("find workload: %w", err)
+	}
+	return WorkloadID(id), nil
+}
+
+// GetWorkload reads a workload, deleted ones included.
+func (c *Control) GetWorkload(ctx context.Context, workspace identity.WorkspaceID, id WorkloadID) (apitypes.Workload, error) {
 	return c.workloadView(ctx, c.queries, workspace, id)
 }
 
-// ActiveRelease reads the release a workload of any kind runs; ErrNotFound
-// when it has none.
-func (c *Control) ActiveRelease(ctx context.Context, workspace identity.WorkspaceID, id WorkloadID) (apitypes.Release, error) {
-	row, err := c.queries.WorkloadActiveRelease(ctx, WorkloadActiveReleaseParams{WorkspaceID: uuid.UUID(workspace), ID: uuid.UUID(id)})
+// Release reads the release the workload's active version runs, or the one
+// of version; ErrVersionNotFound when there is none.
+func (c *Control) Release(ctx context.Context, workspace identity.WorkspaceID, id WorkloadID, version *int) (apitypes.Release, error) {
+	params := WorkloadReleaseParams{WorkspaceID: uuid.UUID(workspace), ID: uuid.UUID(id)}
+	if version != nil {
+		if *version < 1 || *version > math.MaxInt32 {
+			return apitypes.Release{}, ErrVersionNotFound
+		}
+		params.Version = ptr(int32(*version))
+	}
+	row, err := c.queries.WorkloadRelease(ctx, params)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return apitypes.Release{}, ErrNotFound
+		return apitypes.Release{}, ErrVersionNotFound
 	}
 	if err != nil {
-		return apitypes.Release{}, fmt.Errorf("read active release: %w", err)
+		return apitypes.Release{}, fmt.Errorf("read release: %w", err)
 	}
-	var spec apitypes.FunctionSpec
+	var spec apitypes.WorkloadSpec
 	if err := json.Unmarshal(row.Spec, &spec); err != nil {
 		return apitypes.Release{}, fmt.Errorf("decode release spec: %w", err)
 	}
-	return apitypes.Release{Id: row.ID, Function: row.Name, Version: versionOf(row.Version), CreatedAt: row.CreatedAt, Spec: spec}, nil
+	return apitypes.Release{Id: row.ID, Name: row.Name, Version: versionOf(row.Version), CreatedAt: row.CreatedAt, Spec: spec}, nil
 }
 
-// StopDeployment stops admission to the workload. Planning drains its
+// StopWorkload stops admission to the workload. Planning drains its
 // deployed releases and cancels their queued tasks; running tasks finish.
-func (c *Control) StopDeployment(ctx context.Context, workspace identity.WorkspaceID, id WorkloadID) (apitypes.DeployedWorkload, error) {
+func (c *Control) StopWorkload(ctx context.Context, workspace identity.WorkspaceID, id WorkloadID) (apitypes.Workload, error) {
 	return c.changeWorkload(ctx, workspace, id, func(ctx context.Context, q *Queries, row LockWorkloadRow) error {
 		return applyWorkloadState(ctx, q, row, WorkloadStopped)
 	})
 }
 
-// StartDeployment lets the workload admit tasks again. With a version, that
+// StartWorkload lets the workload admit tasks again. With a version, that
 // deployed version becomes active first, which rolls back or forward.
-func (c *Control) StartDeployment(ctx context.Context, workspace identity.WorkspaceID, id WorkloadID, version *int) (apitypes.DeployedWorkload, error) {
+func (c *Control) StartWorkload(ctx context.Context, workspace identity.WorkspaceID, id WorkloadID, version *int) (apitypes.Workload, error) {
 	return c.changeWorkload(ctx, workspace, id, func(ctx context.Context, q *Queries, row LockWorkloadRow) error {
 		if version != nil {
 			if *version < 1 || *version > math.MaxInt32 {
@@ -150,10 +184,10 @@ func (c *Control) StartDeployment(ctx context.Context, workspace identity.Worksp
 	})
 }
 
-// DeleteDeployment deletes the workload and every version of it. Planning
+// DeleteWorkload deletes the workload and every version of it. Planning
 // retires its releases: containers stop and queued and running tasks are
 // cancelled. The name is free for a later deploy.
-func (c *Control) DeleteDeployment(ctx context.Context, workspace identity.WorkspaceID, id WorkloadID) (apitypes.DeployedWorkload, error) {
+func (c *Control) DeleteWorkload(ctx context.Context, workspace identity.WorkspaceID, id WorkloadID) (apitypes.Workload, error) {
 	return c.changeWorkload(ctx, workspace, id, func(ctx context.Context, q *Queries, row LockWorkloadRow) error {
 		return applyWorkloadState(ctx, q, row, WorkloadDeleted)
 	})
@@ -163,8 +197,8 @@ func (c *Control) DeleteDeployment(ctx context.Context, workspace identity.Works
 // wakes planning in the same transaction.
 func (c *Control) changeWorkload(ctx context.Context, workspace identity.WorkspaceID, id WorkloadID,
 	change func(context.Context, *Queries, LockWorkloadRow) error,
-) (apitypes.DeployedWorkload, error) {
-	var out apitypes.DeployedWorkload
+) (apitypes.Workload, error) {
+	var out apitypes.Workload
 	err := pgx.BeginFunc(ctx, c.pool, func(tx pgx.Tx) error {
 		q := c.queries.WithTx(tx)
 		row, err := q.LockWorkload(ctx, LockWorkloadParams{WorkspaceID: uuid.UUID(workspace), ID: uuid.UUID(id)})
@@ -187,7 +221,7 @@ func (c *Control) changeWorkload(ctx context.Context, workspace identity.Workspa
 		return err
 	})
 	if err != nil {
-		return apitypes.DeployedWorkload{}, fmt.Errorf("change deployment %s: %w", uuid.UUID(id), err)
+		return apitypes.Workload{}, fmt.Errorf("change workload %s: %w", uuid.UUID(id), err)
 	}
 	return out, nil
 }
@@ -202,20 +236,20 @@ func applyWorkloadState(ctx context.Context, q *Queries, row LockWorkloadRow, st
 	return nil
 }
 
-func (c *Control) workloadView(ctx context.Context, q *Queries, workspace identity.WorkspaceID, id WorkloadID) (apitypes.DeployedWorkload, error) {
+func (c *Control) workloadView(ctx context.Context, q *Queries, workspace identity.WorkspaceID, id WorkloadID) (apitypes.Workload, error) {
 	row, err := q.WorkloadView(ctx, WorkloadViewParams{WorkspaceID: uuid.UUID(workspace), ID: uuid.UUID(id)})
 	if errors.Is(err, pgx.ErrNoRows) {
-		return apitypes.DeployedWorkload{}, ErrNotFound
+		return apitypes.Workload{}, ErrNotFound
 	}
 	if err != nil {
-		return apitypes.DeployedWorkload{}, fmt.Errorf("read workload: %w", err)
+		return apitypes.Workload{}, fmt.Errorf("read workload: %w", err)
 	}
 	return workloadOut(row), nil
 }
 
-func workloadOut(row WorkloadViewRow) apitypes.DeployedWorkload {
+func workloadOut(row WorkloadViewRow) apitypes.Workload {
 	appState := apitypes.AppState(row.AppState)
-	return apitypes.DeployedWorkload{
+	return apitypes.Workload{
 		Id: row.ID, App: row.AppName, Name: row.Name, Kind: apitypes.WorkloadKind(row.Kind),
 		State: apitypes.WorkloadState(row.DesiredState), AppState: &appState,
 		Version: versionOf(row.Version), ReleaseId: row.ReleaseID,

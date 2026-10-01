@@ -7,7 +7,6 @@ package edge
 
 import (
 	"context"
-	"time"
 
 	"github.com/google/uuid"
 )
@@ -21,72 +20,6 @@ func (q *Queries) ContainerRelease(ctx context.Context, id uuid.UUID) (uuid.UUID
 	var release_id uuid.UUID
 	err := row.Scan(&release_id)
 	return release_id, err
-}
-
-const describeWorkload = `-- name: DescribeWorkload :one
-select w.name, w.kind, w.desired_state, a.name as app_name, r.subdomain, r.hostname,
-       coalesce(d.phase = 'ready', false)::bool as hostname_ready,
-       rel.id as release_id, rel.version, rel.spec, rel.created_at
-from workloads w
-join apps a on a.id = w.app_id
-join http_routes r on r.workload_id = w.id
-join releases rel on rel.id = coalesce(
-    (select v.id from releases v where v.workload_id = w.id and v.version = $1::int),
-    case when $1::int is null then w.active_release_id end)
-left join custom_domains d on d.hostname = r.hostname and exists (
-    select 1 from workspace_members m
-    where m.workspace_id = a.workspace_id and m.user_id = d.user_id and m.role = 'owner'
-)
-where a.workspace_id = $2 and a.name = $3 and w.kind = $4 and w.name = $5
-  and a.state <> 'deleted' and w.desired_state <> 'deleted'
-`
-
-type DescribeWorkloadParams struct {
-	Version     *int32
-	WorkspaceID uuid.UUID
-	AppName     string
-	Kind        string
-	Name        string
-}
-
-type DescribeWorkloadRow struct {
-	Name          string
-	Kind          string
-	DesiredState  string
-	AppName       string
-	Subdomain     string
-	Hostname      *string
-	HostnameReady bool
-	ReleaseID     uuid.UUID
-	Version       *int32
-	Spec          []byte
-	CreatedAt     time.Time
-}
-
-// A deployed HTTP workload with the active release, or the given version.
-func (q *Queries) DescribeWorkload(ctx context.Context, arg DescribeWorkloadParams) (DescribeWorkloadRow, error) {
-	row := q.db.QueryRow(ctx, describeWorkload,
-		arg.Version,
-		arg.WorkspaceID,
-		arg.AppName,
-		arg.Kind,
-		arg.Name,
-	)
-	var i DescribeWorkloadRow
-	err := row.Scan(
-		&i.Name,
-		&i.Kind,
-		&i.DesiredState,
-		&i.AppName,
-		&i.Subdomain,
-		&i.Hostname,
-		&i.HostnameReady,
-		&i.ReleaseID,
-		&i.Version,
-		&i.Spec,
-		&i.CreatedAt,
-	)
-	return i, err
 }
 
 const releaseOfVersion = `-- name: ReleaseOfVersion :one
@@ -238,4 +171,31 @@ func (q *Queries) Routes(ctx context.Context) ([]RoutesRow, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+const workloadRoute = `-- name: WorkloadRoute :one
+select r.subdomain, r.hostname, coalesce(d.phase = 'ready', false)::bool as hostname_ready
+from http_routes r
+join workloads w on w.id = r.workload_id
+join apps a on a.id = w.app_id
+left join custom_domains d on d.hostname = r.hostname and exists (
+    select 1 from workspace_members m
+    where m.workspace_id = a.workspace_id and m.user_id = d.user_id and m.role = 'owner'
+)
+where r.workload_id = $1
+`
+
+type WorkloadRouteRow struct {
+	Subdomain     string
+	Hostname      *string
+	HostnameReady bool
+}
+
+// Where a deployed HTTP workload answers: its subdomain and, once ready, its
+// custom hostname.
+func (q *Queries) WorkloadRoute(ctx context.Context, workloadID uuid.UUID) (WorkloadRouteRow, error) {
+	row := q.db.QueryRow(ctx, workloadRoute, workloadID)
+	var i WorkloadRouteRow
+	err := row.Scan(&i.Subdomain, &i.Hostname, &i.HostnameReady)
+	return i, err
 }

@@ -77,12 +77,13 @@ func TestWorkloadsAnswerOnTheAPIHostWithTheSession(t *testing.T) {
 	p.deploy("web", asgiSpec(source, "service", "web:service", apitypes.HttpKindAsgi, 8))
 	session := p.session()
 
-	var endpoint apitypes.HttpWorkload
-	if status := p.apiCall(http.MethodGet, "/v1/workspaces/ws/apps/api_demo/endpoints/count_words", nil, &endpoint); status != http.StatusOK {
+	var detail apitypes.WorkloadDetail
+	if status := p.apiCall(http.MethodGet, "/v1/workspaces/ws/apps/api_demo/workloads/endpoint/count_words", nil, &detail); status != http.StatusOK || detail.Http == nil {
 		t.Fatalf("describe: %d", status)
 	}
-	if endpoint.InvokePath != "/v1/workspaces/ws/apps/api_demo/endpoints/count_words/invoke" ||
-		endpoint.VersionInvokePath != "/v1/workspaces/ws/apps/api_demo/endpoints/count_words/versions/1/invoke" {
+	endpoint := *detail.Http
+	if endpoint.InvokePath != "/v1/workspaces/ws/apps/api_demo/workloads/endpoint/count_words/invoke" ||
+		endpoint.VersionInvokePath != "/v1/workspaces/ws/apps/api_demo/workloads/endpoint/count_words/versions/1/invoke" {
 		t.Fatalf("invoke paths %q %q", endpoint.InvokePath, endpoint.VersionInvokePath)
 	}
 	for _, path := range []string{endpoint.InvokePath, endpoint.VersionInvokePath} {
@@ -109,7 +110,7 @@ func TestWorkloadsAnswerOnTheAPIHostWithTheSession(t *testing.T) {
 
 	// An ASGI route sees neither the session nor a token, only the app's own
 	// cookies and where it is mounted.
-	base := "/v1/workspaces/ws/apps/web/asgi/service/invoke"
+	base := "/v1/workspaces/ws/apps/web/workloads/asgi/service/invoke"
 	resp = p.browser(http.MethodGet, base+"/headers", session, "", false)
 	body := readAll(t, resp)
 	var seen struct {
@@ -141,7 +142,7 @@ func TestWorkloadsAnswerOnTheAPIHostWithTheSession(t *testing.T) {
 	if _, err := p.pool.Exec(t.Context(), `insert into workspaces (name) values ('other')`); err != nil {
 		t.Fatal(err)
 	}
-	resp = p.browser(http.MethodGet, "/v1/workspaces/other/apps/web/asgi/service/invoke/headers", session, "", false)
+	resp = p.browser(http.MethodGet, "/v1/workspaces/other/apps/web/workloads/asgi/service/invoke/headers", session, "", false)
 	if readAll(t, resp); resp.StatusCode != http.StatusForbidden && resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("another workspace's path: %d", resp.StatusCode)
 	}

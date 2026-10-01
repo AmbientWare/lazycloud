@@ -38,39 +38,6 @@ func invocationQuery(ctx context.Context) url.Values {
 	return out
 }
 
-func (s *Server) describe(ctx context.Context, workspace, app string, kind apitypes.WorkloadKind, name string, version *int) (apitypes.HttpWorkload, error) {
-	ws, err := s.workspace(ctx, workspace)
-	if err != nil {
-		return apitypes.HttpWorkload{}, err
-	}
-	out, err := s.owners.Edge.Describe(ctx, ws.ID, app, kind, name, version)
-	if err != nil {
-		return apitypes.HttpWorkload{}, err //nolint:wrapcheck // the edge's typed errors map to responses
-	}
-	out.InvokePath = edge.InvokePath(ws.Name, app, kind, name, nil)
-	out.VersionInvokePath = edge.InvokePath(ws.Name, app, kind, name, out.Release.Version)
-	out.Release.InvokePath = &out.InvokePath
-	return out, nil
-}
-
-// GetEndpoint returns an endpoint and its URLs.
-func (s *Server) GetEndpoint(ctx context.Context, req GetEndpointRequestObject) (GetEndpointResponseObject, error) {
-	out, err := s.describe(ctx, req.Workspace, req.App, apitypes.WorkloadKindEndpoint, req.Endpoint, req.Params.Version)
-	if err != nil {
-		return nil, err
-	}
-	return GetEndpoint200JSONResponse(out), nil
-}
-
-// GetAsgi returns an ASGI or realtime app and its URLs.
-func (s *Server) GetAsgi(ctx context.Context, req GetAsgiRequestObject) (GetAsgiResponseObject, error) {
-	out, err := s.describe(ctx, req.Workspace, req.App, apitypes.WorkloadKindAsgi, req.Endpoint, req.Params.Version)
-	if err != nil {
-		return nil, err
-	}
-	return GetAsgi200JSONResponse(out), nil
-}
-
 func invokeWait(wait *int) time.Duration {
 	if wait == nil {
 		return edge.InvokeWait
@@ -98,7 +65,7 @@ func (s *Server) InvokeFunction(ctx context.Context, req InvokeFunctionRequestOb
 	if err != nil {
 		return nil, err
 	}
-	out, err := s.invoke(ctx, ws, req.App, req.Function, nil, req.Body, req.Params.WaitSeconds)
+	out, err := s.invoke(ctx, ws, req.App, req.Name, nil, req.Body, req.Params.WaitSeconds)
 	if err != nil {
 		return nil, err
 	}
@@ -107,15 +74,15 @@ func (s *Server) InvokeFunction(ctx context.Context, req InvokeFunctionRequestOb
 
 // InvokeFunctionVersion runs one version of the function.
 func (s *Server) InvokeFunctionVersion(ctx context.Context, req InvokeFunctionVersionRequestObject) (InvokeFunctionVersionResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
+	ws, id, err := s.findWorkload(ctx, req.Workspace, req.App, apitypes.WorkloadKindFunction, req.Name)
 	if err != nil {
 		return nil, err
 	}
-	release, err := s.owners.Execution.FunctionRelease(ctx, ws.ID, req.App, req.Function, req.Version)
+	release, err := s.owners.Control.Release(ctx, ws.ID, id, &req.Version)
 	if err != nil {
 		return nil, err
 	}
-	out, err := s.invoke(ctx, ws, req.App, req.Function, &release, req.Body, req.Params.WaitSeconds)
+	out, err := s.invoke(ctx, ws, req.App, req.Name, &release.Id, req.Body, req.Params.WaitSeconds)
 	if err != nil {
 		return nil, err
 	}

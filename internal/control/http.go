@@ -19,24 +19,29 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 )
 
-// KindOf is the workload kind a definition deploys as.
-func KindOf(spec apitypes.FunctionSpec) apitypes.WorkloadKind {
-	if spec.Pod != nil {
-		if spec.Pod.Kind == apitypes.PodKindSandbox {
-			return apitypes.WorkloadKindSandbox
-		}
-		return apitypes.WorkloadKindPod
+// checkKind refuses a definition whose kind disagrees with its sections: a
+// function has neither http nor pod, an endpoint or ASGI app has http of its
+// kind, and a pod or sandbox has pod of its kind. A devbox is a pod and a
+// realtime app is an ASGI app.
+func checkKind(spec apitypes.WorkloadSpec) error {
+	http, pod := spec.Http, spec.Pod
+	var ok bool
+	switch spec.Kind {
+	case apitypes.WorkloadKindFunction:
+		ok = http == nil && pod == nil
+	case apitypes.WorkloadKindEndpoint:
+		ok = pod == nil && http != nil && http.Kind == apitypes.HttpKindEndpoint
+	case apitypes.WorkloadKindAsgi:
+		ok = pod == nil && http != nil && (http.Kind == apitypes.HttpKindAsgi || http.Kind == apitypes.HttpKindRealtime)
+	case apitypes.WorkloadKindPod:
+		ok = http == nil && pod != nil && pod.Kind != apitypes.PodKindSandbox
+	case apitypes.WorkloadKindSandbox:
+		ok = http == nil && pod != nil && pod.Kind == apitypes.PodKindSandbox
 	}
-	if spec.Http == nil {
-		return apitypes.WorkloadKindFunction
+	if !ok {
+		return &InvalidSpecError{Function: spec.Name, Reason: fmt.Sprintf("kind %q does not match its http and pod sections", spec.Kind)}
 	}
-	switch spec.Http.Kind {
-	case apitypes.HttpKindEndpoint:
-		return apitypes.WorkloadKindEndpoint
-	case apitypes.HttpKindAsgi, apitypes.HttpKindRealtime:
-		return apitypes.WorkloadKindAsgi
-	}
-	return apitypes.WorkloadKindFunction
+	return nil
 }
 
 // RouteConflictError means another workload already answers on the
@@ -61,7 +66,7 @@ var defaultMethods = []apitypes.HttpMethod{apitypes.HttpMethodGET, apitypes.Http
 
 // resolveHTTP fills the HTTP defaults of a resolved spec. Methods apply only
 // to endpoints, which answer on their route; ASGI apps own every path.
-func resolveHTTP(spec apitypes.FunctionSpec, out *apitypes.FunctionSpec) error {
+func resolveHTTP(spec apitypes.WorkloadSpec, out *apitypes.WorkloadSpec) error {
 	out.Authorized = orDefault(spec.Authorized, true)
 	if spec.Http == nil {
 		return nil
@@ -152,7 +157,7 @@ func Subdomain(workspace uuid.UUID, app, name string, kind apitypes.WorkloadKind
 // claimWorkloadRoute records the subdomain and custom hostname the workload answers
 // on, in the deploy transaction. A custom hostname must be registered by an
 // owner of the workspace.
-func claimWorkloadRoute(ctx context.Context, tx pgx.Tx, q *Queries, workspace, workload uuid.UUID, app string, spec apitypes.FunctionSpec) error {
+func claimWorkloadRoute(ctx context.Context, tx pgx.Tx, q *Queries, workspace, workload uuid.UUID, app string, spec apitypes.WorkloadSpec) error {
 	var hostname *string
 	if spec.Http != nil && spec.Http.Domain != nil {
 		if err := billing.AdmitCustomDomain(ctx, tx, workspace); err != nil {
@@ -170,7 +175,7 @@ func claimWorkloadRoute(ctx context.Context, tx pgx.Tx, q *Queries, workspace, w
 		}
 		hostname = spec.Http.Domain
 	}
-	subdomain := Subdomain(workspace, app, spec.Name, KindOf(spec))
+	subdomain := Subdomain(workspace, app, spec.Name, spec.Kind)
 	if err := q.FreeDeletedRoutes(ctx, FreeDeletedRoutesParams{Subdomain: subdomain, Hostname: hostname}); err != nil {
 		return fmt.Errorf("free deleted routes: %w", err)
 	}

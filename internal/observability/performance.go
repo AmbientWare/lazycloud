@@ -28,16 +28,16 @@ func (q RangeQuery) width() time.Duration {
 	return q.Width
 }
 
-// DeploymentPerformance buckets a deployment's tasks by submission time:
+// WorkloadPerformance buckets a workload's tasks by submission time:
 // run time percentiles of finished tasks, outcomes and the containers
 // started for it. Buckets without either are left out. The default range is
 // the last 24 hours.
-func (o *Observability) DeploymentPerformance(ctx context.Context, ws identity.WorkspaceID, deployment uuid.UUID, q RangeQuery) (apitypes.DeploymentPerformance, error) {
-	if _, err := o.queries.WorkloadInWorkspace(ctx, WorkloadInWorkspaceParams{ID: deployment, WorkspaceID: uuid.UUID(ws)}); err != nil {
+func (o *Observability) WorkloadPerformance(ctx context.Context, ws identity.WorkspaceID, workload uuid.UUID, q RangeQuery) (apitypes.WorkloadPerformance, error) {
+	if _, err := o.queries.WorkloadInWorkspace(ctx, WorkloadInWorkspaceParams{ID: workload, WorkspaceID: uuid.UUID(ws)}); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return apitypes.DeploymentPerformance{}, ErrNotFound
+			return apitypes.WorkloadPerformance{}, ErrNotFound
 		}
-		return apitypes.DeploymentPerformance{}, fmt.Errorf("read deployment: %w", err)
+		return apitypes.WorkloadPerformance{}, fmt.Errorf("read workload: %w", err)
 	}
 	width := q.width()
 	start := q.Start
@@ -51,16 +51,16 @@ func (o *Observability) DeploymentPerformance(ctx context.Context, ws identity.W
 	}
 	s, err := alignedSpan(start, q.End, width, 0, time.Now())
 	if err != nil {
-		return apitypes.DeploymentPerformance{}, err
+		return apitypes.WorkloadPerformance{}, err
 	}
 	rows, err := o.queries.DeploymentPerformance(ctx, DeploymentPerformanceParams{
-		BucketWidth: s.interval(), WorkloadID: deployment, FromID: s.fromID(), ToID: s.toID(), StartAt: s.start, EndAt: s.end,
+		BucketWidth: s.interval(), WorkloadID: workload, FromID: s.fromID(), ToID: s.toID(), StartAt: s.start, EndAt: s.end,
 	})
 	if err != nil {
-		return apitypes.DeploymentPerformance{}, fmt.Errorf("read deployment performance: %w", err)
+		return apitypes.WorkloadPerformance{}, fmt.Errorf("read workload performance: %w", err)
 	}
-	out := apitypes.DeploymentPerformance{
-		DeploymentId: deployment, WindowSeconds: int(width / time.Second), Start: s.start, End: s.end,
+	out := apitypes.WorkloadPerformance{
+		WorkloadId: workload, WindowSeconds: int(width / time.Second), Start: s.start, End: s.end,
 		Buckets: make([]apitypes.PerformanceBucket, 0, len(rows)),
 	}
 	for _, r := range rows {

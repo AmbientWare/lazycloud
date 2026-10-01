@@ -149,7 +149,7 @@ type RetryPolicy struct {
 
 // RetryPolicyOf resolves spec defaults: without a policy a function gets one
 // attempt.
-func RetryPolicyOf(spec apitypes.FunctionSpec) RetryPolicy {
+func RetryPolicyOf(spec apitypes.WorkloadSpec) RetryPolicy {
 	if spec.RetryPolicy == nil {
 		return RetryPolicy{MaxAttempts: 1}
 	}

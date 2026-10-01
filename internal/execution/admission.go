@@ -134,7 +134,7 @@ func (e *Execution) SubmitInTx(ctx context.Context, tx pgx.Tx, req SubmitRequest
 		if !accepting(fn, req.Release != nil) {
 			return ErrNotAccepting
 		}
-		var spec apitypes.FunctionSpec
+		var spec apitypes.WorkloadSpec
 		if err := json.Unmarshal(fn.Spec, &spec); err != nil {
 			return fmt.Errorf("decode release spec: %w", err)
 		}

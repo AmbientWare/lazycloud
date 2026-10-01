@@ -33,6 +33,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/images"
 	"github.com/AmbientWare/lazycloud/internal/notifications"
 	"github.com/AmbientWare/lazycloud/internal/observability"
+	"github.com/AmbientWare/lazycloud/internal/schedules"
 	"github.com/AmbientWare/lazycloud/internal/storage"
 	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
@@ -102,7 +103,7 @@ func newEnvWith(t *testing.T, changesConfig observability.ChangesConfig) *env {
 		Execution: e, Notifications: notifications.NewNotifications(pool, nil, logger), Listener: listener, Billing: bill,
 		Images:        images.NewImages(pool, e, images.Config{Registry: "registry.example.com", Repository: "lazycloud"}),
 		Observability: observability.NewObservability(pool, observability.Config{}, logger), Changes: changes,
-		Compute: comp,
+		Compute: comp, Schedules: schedules.NewSchedules(pool, e),
 	}, api.Config{PublicURL: dashboardURL, ResendWebhookSecret: webhookSecret, ClientReleaseVersion: "9.9.9", AgentDistDir: dist}, logger)
 	if err != nil {
 		t.Fatal(err)
@@ -210,14 +211,14 @@ func (e *env) deploy() {
 		apitypes.SourceUploadRequest{Sha256: digest, SizeBytes: int64(len(archive))}, &upload); status != 200 || !upload.Present {
 		e.t.Fatalf("source registration: %d %+v", status, upload)
 	}
-	spec := apitypes.FunctionSpec{
-		Name: "summarize_sales", Handler: new("reports:summarize_sales"),
+	spec := apitypes.WorkloadSpec{
+		Kind: apitypes.WorkloadKindFunction, Name: "summarize_sales", Handler: new("reports:summarize_sales"),
 		Source: apitypes.SourceRef{Sha256: digest}, Image: apitypes.ImageSpec{PythonVersion: apitypes.N312},
 		Resources: apitypes.Resources{CpuMillis: 1000, MemoryMib: 512},
 	}
 	var d apitypes.Deployment
 	if status := e.do("POST", "/v1/workspaces/acme/apps/reports/deployments", e.owner,
-		apitypes.DeploymentRequest{Functions: []apitypes.FunctionSpec{spec}}, &d); status != 200 || len(d.Releases) != 1 {
+		apitypes.DeploymentRequest{Workloads: []apitypes.WorkloadSpec{spec}}, &d); status != 200 || len(d.Releases) != 1 {
 		e.t.Fatalf("deploy: %d %+v", status, d)
 	}
 }
@@ -235,12 +236,12 @@ func TestAuthenticationAuthorizationAndValidation(t *testing.T) {
 	if status := e.do("GET", "/v1/me", e.owner, nil, &me); status != 200 || len(me.Workspaces) != 1 || me.User.Email != "owner@example.com" {
 		t.Fatalf("me: %d %+v", status, me)
 	}
-	path := "/v1/workspaces/acme/apps/reports/functions/summarize_sales"
+	path := "/v1/workspaces/acme/apps/reports/workloads/function/summarize_sales"
 	if status := e.do("GET", path, e.outsider, nil, &apiErr); status != 403 || apiErr.Code != apitypes.Forbidden {
 		t.Fatalf("outsider: %d %+v", status, apiErr)
 	}
 	if status := e.do("GET", path, e.owner, nil, &apiErr); status != 404 || apiErr.Code != apitypes.NotFound {
-		t.Fatalf("missing function: %d %+v", status, apiErr)
+		t.Fatalf("missing workload: %d %+v", status, apiErr)
 	}
 	// The schema rejects a malformed digest before any handler runs.
 	if status := e.do("POST", "/v1/workspaces/acme/sources", e.owner,
@@ -249,11 +250,11 @@ func TestAuthenticationAuthorizationAndValidation(t *testing.T) {
 	}
 	// Deploying a source that was never uploaded is refused.
 	spec := map[string]any{
-		"name": "f", "handler": "m:f", "source": map[string]any{"sha256": strings.Repeat("0", 64)},
+		"kind": "function", "name": "f", "handler": "m:f", "source": map[string]any{"sha256": strings.Repeat("0", 64)},
 		"image": map[string]any{"python_version": "3.12"}, "resources": map[string]any{"cpu_millis": 1000, "memory_mib": 512},
 	}
 	if status := e.do("POST", "/v1/workspaces/acme/apps/reports/deployments", e.owner,
-		map[string]any{"functions": []any{spec}}, &apiErr); status != 400 || !strings.Contains(apiErr.Message, "not uploaded") {
+		map[string]any{"workloads": []any{spec}}, &apiErr); status != 400 || !strings.Contains(apiErr.Message, "not uploaded") {
 		t.Fatalf("missing source: %d %+v", status, apiErr)
 	}
 }
@@ -301,7 +302,7 @@ select host.id, ctr.id from host, ctr`).Scan(&hostID, &containerID)
 func TestSubmitWaitFollowLogsAndResult(t *testing.T) {
 	e := newEnv(t)
 	e.deploy()
-	fnPath := "/v1/workspaces/acme/apps/reports/functions/summarize_sales"
+	fnPath := "/v1/workspaces/acme/apps/reports/workloads/function/summarize_sales"
 	// A value beyond float64 precision passes through unchanged.
 	raw := json.RawMessage(`{"args": [[1200, 3500, 800], 9007199254740993], "kwargs": {}}`)
 	var submitted apitypes.SubmitTasksResponse

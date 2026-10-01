@@ -31,8 +31,9 @@ select id from ws`, testSource).Scan(&ws)
 	return pool, identity.WorkspaceID(ws)
 }
 
-func function(name string) apitypes.FunctionSpec {
-	return apitypes.FunctionSpec{
+func function(name string) apitypes.WorkloadSpec {
+	return apitypes.WorkloadSpec{
+		Kind:      apitypes.WorkloadKindFunction,
 		Name:      name,
 		Handler:   new("app:" + name),
 		Source:    apitypes.SourceRef{Sha256: testSource},
@@ -41,9 +42,19 @@ func function(name string) apitypes.FunctionSpec {
 	}
 }
 
-func deploy(t *testing.T, c *Control, ws identity.WorkspaceID, prune bool, specs ...apitypes.FunctionSpec) apitypes.Deployment {
+// functionRelease reads the release the live function name of app reports runs.
+func functionRelease(t *testing.T, c *Control, ws identity.WorkspaceID, name string) (apitypes.Release, error) {
 	t.Helper()
-	d, err := c.Deploy(t.Context(), ws, "reports", apitypes.DeploymentRequest{Functions: specs, Prune: &prune})
+	id, err := c.FindWorkload(t.Context(), ws, WorkloadRef{App: "reports", Kind: apitypes.WorkloadKindFunction, Name: name})
+	if err != nil {
+		return apitypes.Release{}, err
+	}
+	return c.Release(t.Context(), ws, id, nil)
+}
+
+func deploy(t *testing.T, c *Control, ws identity.WorkspaceID, prune bool, specs ...apitypes.WorkloadSpec) apitypes.Deployment {
+	t.Helper()
+	d, err := c.Deploy(t.Context(), ws, "reports", apitypes.DeploymentRequest{Workloads: specs, Prune: &prune})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,19 +89,19 @@ func TestDeployVersionsOnlyChangedSpecs(t *testing.T) {
 		t.Fatalf("changed deploy: summarize v%d, export reused %v; want v2 and reuse",
 			*next.Releases[0].Version, next.Releases[1].Id == first.Releases[1].Id)
 	}
-	got, err := c.GetFunction(t.Context(), ws, "reports", "summarize")
+	got, err := functionRelease(t, c, ws, "summarize")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.ActiveRelease.Id != next.Releases[0].Id || *got.ActiveRelease.Spec.Concurrency != 4 {
-		t.Fatalf("active release %v, want %v", got.ActiveRelease.Id, next.Releases[0].Id)
+	if got.Id != next.Releases[0].Id || *got.Spec.Concurrency != 4 {
+		t.Fatalf("active release %v, want %v", got.Id, next.Releases[0].Id)
 	}
 
 	pruned := deploy(t, c, ws, true, changed)
 	if len(pruned.Pruned) != 1 || pruned.Pruned[0] != "export" || pruned.RemovedVersions != 1 {
 		t.Fatalf("pruned %v removing %d versions, want [export] removing 1", pruned.Pruned, pruned.RemovedVersions)
 	}
-	if _, err := c.GetFunction(t.Context(), ws, "reports", "export"); !errors.Is(err, ErrNotFound) {
+	if _, err := functionRelease(t, c, ws, "export"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("pruned function read error %v, want not found", err)
 	}
 	// A pruned function is deleted, so deploying it again starts over.
@@ -98,8 +109,8 @@ func TestDeployVersionsOnlyChangedSpecs(t *testing.T) {
 	if again.Releases[0].Id == first.Releases[1].Id || *again.Releases[0].Version != 1 {
 		t.Fatalf("redeploying a pruned function reused %v at v%d", again.Releases[0].Id, *again.Releases[0].Version)
 	}
-	if export, _ := c.GetFunction(t.Context(), ws, "reports", "export"); export.State != apitypes.FunctionStateActive {
-		t.Fatalf("redeployed function state %v, want active", export.State)
+	if _, err := functionRelease(t, c, ws, "export"); err != nil {
+		t.Fatalf("redeployed function: %v", err)
 	}
 }
 
@@ -113,7 +124,7 @@ func TestConcurrentDeploysKeepVersionsDistinct(t *testing.T) {
 		wg.Go(func() {
 			spec := function("summarize")
 			spec.KeepWarmSeconds = new(n)
-			_, err := c.Deploy(t.Context(), ws, "reports", apitypes.DeploymentRequest{Functions: []apitypes.FunctionSpec{spec}})
+			_, err := c.Deploy(t.Context(), ws, "reports", apitypes.DeploymentRequest{Workloads: []apitypes.WorkloadSpec{spec}})
 			errs <- err
 		})
 	}
@@ -139,7 +150,7 @@ func TestDeployRequiresRegisteredSourceAndChangesNothing(t *testing.T) {
 	missing := function("export")
 	missing.Source.Sha256 = strings.Repeat("cd", 32)
 	_, err := c.Deploy(t.Context(), ws, "reports", apitypes.DeploymentRequest{
-		Functions: []apitypes.FunctionSpec{function("summarize"), missing},
+		Workloads: []apitypes.WorkloadSpec{function("summarize"), missing},
 	})
 	var sourceErr *SourceMissingError
 	if !errors.As(err, &sourceErr) || sourceErr.Function != "export" {

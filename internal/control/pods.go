@@ -19,7 +19,7 @@ const (
 
 // resolvePod checks and fills the pod section of a resolved spec. A spec
 // without one must name a handler.
-func resolvePod(spec apitypes.FunctionSpec, out *apitypes.FunctionSpec) error {
+func resolvePod(spec apitypes.WorkloadSpec, out *apitypes.WorkloadSpec) error {
 	invalid := func(reason string) error { return &InvalidSpecError{Function: spec.Name, Reason: reason} }
 	if err := resolveDisks(spec, out); err != nil {
 		return err
@@ -150,7 +150,7 @@ func resolvePod(spec apitypes.FunctionSpec, out *apitypes.FunctionSpec) error {
 
 // resolveDisks checks disk declarations; a workload with one runs one
 // container at a time.
-func resolveDisks(spec apitypes.FunctionSpec, out *apitypes.FunctionSpec) error {
+func resolveDisks(spec apitypes.WorkloadSpec, out *apitypes.WorkloadSpec) error {
 	if spec.Disks == nil || len(*spec.Disks) == 0 {
 		out.Disks = nil
 		return nil

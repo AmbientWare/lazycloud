@@ -36,23 +36,18 @@ left join previews p on p.release_id = rel.id
 left join releases ar on ar.id = w.active_release_id
 where rel.id = @id;
 
--- name: DescribeWorkload :one
--- A deployed HTTP workload with the active release, or the given version.
-select w.name, w.kind, w.desired_state, a.name as app_name, r.subdomain, r.hostname,
-       coalesce(d.phase = 'ready', false)::bool as hostname_ready,
-       rel.id as release_id, rel.version, rel.spec, rel.created_at
-from workloads w
+-- name: WorkloadRoute :one
+-- Where a deployed HTTP workload answers: its subdomain and, once ready, its
+-- custom hostname.
+select r.subdomain, r.hostname, coalesce(d.phase = 'ready', false)::bool as hostname_ready
+from http_routes r
+join workloads w on w.id = r.workload_id
 join apps a on a.id = w.app_id
-join http_routes r on r.workload_id = w.id
-join releases rel on rel.id = coalesce(
-    (select v.id from releases v where v.workload_id = w.id and v.version = sqlc.narg(version)::int),
-    case when sqlc.narg(version)::int is null then w.active_release_id end)
 left join custom_domains d on d.hostname = r.hostname and exists (
     select 1 from workspace_members m
     where m.workspace_id = a.workspace_id and m.user_id = d.user_id and m.role = 'owner'
 )
-where a.workspace_id = @workspace_id and a.name = @app_name and w.kind = @kind and w.name = @name
-  and a.state <> 'deleted' and w.desired_state <> 'deleted';
+where r.workload_id = @workload_id;
 
 -- name: ReleaseOfVersion :one
 select id from releases where workload_id = @workload_id and version = @version;

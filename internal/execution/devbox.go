@@ -23,7 +23,7 @@ type PodView struct {
 	App      string
 	// Ambiguous means another app has a pod of the same name.
 	Ambiguous bool
-	Spec      apitypes.FunctionSpec
+	Spec      apitypes.WorkloadSpec
 	Active    bool
 	Phase     apitypes.DevboxPhase
 	Reason    string
@@ -38,7 +38,7 @@ type PodView struct {
 
 // PodView reads a pod deployment of the workspace. savingDisk says the
 // pod's disk is still held by a stopped container that is saving it.
-func (e *Execution) PodView(ctx context.Context, workspace identity.WorkspaceID, workload uuid.UUID, savingDisk func(apitypes.FunctionSpec) (bool, error)) (PodView, error) {
+func (e *Execution) PodView(ctx context.Context, workspace identity.WorkspaceID, workload uuid.UUID, savingDisk func(apitypes.WorkloadSpec) (bool, error)) (PodView, error) {
 	row, err := e.queries.DevboxWorkload(ctx, DevboxWorkloadParams{ID: workload, WorkspaceID: uuid.UUID(workspace)})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return PodView{}, ErrNotFound

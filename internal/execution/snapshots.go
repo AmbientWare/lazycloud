@@ -219,7 +219,7 @@ func (e *Execution) workloadCommands(ctx context.Context, host compute.HostID, o
 			Deadline: row.CreatedAt.Add(SnapshotDeadline),
 		}
 		if row.Automatic {
-			var spec apitypes.FunctionSpec
+			var spec apitypes.WorkloadSpec
 			if err := json.Unmarshal(row.Spec, &spec); err != nil {
 				return fmt.Errorf("decode release spec: %w", err)
 			}
