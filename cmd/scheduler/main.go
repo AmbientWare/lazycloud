@@ -20,6 +20,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/identity"
+	"github.com/AmbientWare/lazycloud/internal/images"
 	"github.com/AmbientWare/lazycloud/internal/notifications"
 	"github.com/AmbientWare/lazycloud/internal/scheduling"
 )
@@ -31,6 +32,9 @@ const (
 	// hostLossTick paces host-loss detection; hosts are lost after
 	// compute.LivenessTimeout, so detection lags by at most this much.
 	hostLossTick = 5 * time.Second
+	// buildRecoveryTick paces build deadlines; container stops wake recovery
+	// at once.
+	buildRecoveryTick = 10 * time.Second
 	// contendedRetry reruns a pass that found its lock held, because the
 	// holder may have read state before this replica's change committed.
 	contendedRetry = 100 * time.Millisecond
@@ -63,7 +67,12 @@ func run(logger *slog.Logger) error {
 
 	exec := execution.NewExecution(pool)
 	sched := scheduling.NewScheduling(pool, logger)
-	listener := database.NewListener(pool, logger, database.ChannelExecution, notifications.Channel, identity.ChannelWorkspace)
+	// Build recovery needs no registry: it only reads and moves build state.
+	im := images.NewImages(pool, exec, images.Config{}, nil)
+	listener := database.NewListener(pool, logger, database.ChannelExecution, database.ChannelImageBuild,
+		notifications.Channel, identity.ChannelWorkspace)
+	buildWake, cancelBuildWake := listener.Subscribe(database.ChannelImageBuild, "")
+	defer cancelBuildWake()
 	accounts, cancelAccounts, err := newAccountLoops(pool, exec, listener, logger)
 	if err != nil {
 		return err
@@ -118,6 +127,14 @@ func run(logger *slog.Logger) error {
 		return loop(ctx, hostLossTick, nil, nil, func(ctx context.Context) bool {
 			if _, err := exec.ReleaseLostHosts(ctx, logger); err != nil {
 				logger.ErrorContext(ctx, "host loss pass", "error", err)
+			}
+			return false
+		})
+	})
+	group.Go(func() error {
+		return loop(ctx, buildRecoveryTick, buildWake, nil, func(ctx context.Context) bool {
+			if _, err := im.Recover(ctx, logger); err != nil {
+				logger.ErrorContext(ctx, "image build recovery pass", "error", err)
 			}
 			return false
 		})

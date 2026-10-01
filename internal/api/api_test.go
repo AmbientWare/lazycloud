@@ -266,7 +266,7 @@ func TestSubmitWaitFollowLogsAndResult(t *testing.T) {
 	var submitted apitypes.SubmitTasksResponse
 	if status := e.do("POST", fnPath+"/tasks", e.owner, apitypes.SubmitTasksRequest{
 		Inputs: []apitypes.Payload{{Encoding: apitypes.Json, Value: &raw}},
-	}, &submitted); status != 201 || len(submitted.Tasks) != 1 || submitted.Tasks[0].Status != apitypes.Queued {
+	}, &submitted); status != 201 || len(submitted.Tasks) != 1 || submitted.Tasks[0].Status != apitypes.TaskStatusQueued {
 		t.Fatalf("submit: %d %+v", status, submitted)
 	}
 	taskPath := "/v1/workspaces/acme/tasks/" + submitted.Tasks[0].Id.String()
@@ -317,7 +317,7 @@ func TestSubmitWaitFollowLogsAndResult(t *testing.T) {
 	}
 	select {
 	case task := <-waited:
-		if task.Status != apitypes.Succeeded {
+		if task.Status != apitypes.TaskStatusSucceeded {
 			t.Fatalf("waited task %+v", task)
 		}
 	case <-time.After(10 * time.Second):

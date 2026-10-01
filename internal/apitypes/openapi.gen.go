@@ -30,31 +30,31 @@ func (e AppState) Valid() bool {
 
 // Defines values for DeliveryState.
 const (
-	DeliveryBounced    DeliveryState = "bounced"
-	DeliveryComplained DeliveryState = "complained"
-	DeliveryDelivered  DeliveryState = "delivered"
-	DeliveryDiscarded  DeliveryState = "discarded"
-	DeliveryFailed     DeliveryState = "failed"
-	DeliveryQueued     DeliveryState = "queued"
-	DeliverySent       DeliveryState = "sent"
+	DeliveryStateBounced    DeliveryState = "bounced"
+	DeliveryStateComplained DeliveryState = "complained"
+	DeliveryStateDelivered  DeliveryState = "delivered"
+	DeliveryStateDiscarded  DeliveryState = "discarded"
+	DeliveryStateFailed     DeliveryState = "failed"
+	DeliveryStateQueued     DeliveryState = "queued"
+	DeliveryStateSent       DeliveryState = "sent"
 )
 
 // Valid indicates whether the value is a known member of the DeliveryState enum.
 func (e DeliveryState) Valid() bool {
 	switch e {
-	case DeliveryBounced:
+	case DeliveryStateBounced:
 		return true
-	case DeliveryComplained:
+	case DeliveryStateComplained:
 		return true
-	case DeliveryDelivered:
+	case DeliveryStateDelivered:
 		return true
-	case DeliveryDiscarded:
+	case DeliveryStateDiscarded:
 		return true
-	case DeliveryFailed:
+	case DeliveryStateFailed:
 		return true
-	case DeliveryQueued:
+	case DeliveryStateQueued:
 		return true
-	case DeliverySent:
+	case DeliveryStateSent:
 		return true
 	default:
 		return false
@@ -123,6 +123,7 @@ const (
 	TaskNotFinished     ErrorCode = "task_not_finished"
 	TooManyPendingTasks ErrorCode = "too_many_pending_tasks"
 	Unauthenticated     ErrorCode = "unauthenticated"
+	Unavailable         ErrorCode = "unavailable"
 	Unsupported         ErrorCode = "unsupported"
 )
 
@@ -146,6 +147,8 @@ func (e ErrorCode) Valid() bool {
 	case TooManyPendingTasks:
 		return true
 	case Unauthenticated:
+		return true
+	case Unavailable:
 		return true
 	case Unsupported:
 		return true
@@ -202,6 +205,87 @@ func (e FunctionState) Valid() bool {
 	}
 }
 
+// Defines values for ImageArchitecture.
+const (
+	ImageArchitectureAmd64 ImageArchitecture = "amd64"
+	ImageArchitectureArm64 ImageArchitecture = "arm64"
+)
+
+// Valid indicates whether the value is a known member of the ImageArchitecture enum.
+func (e ImageArchitecture) Valid() bool {
+	switch e {
+	case ImageArchitectureAmd64:
+		return true
+	case ImageArchitectureArm64:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ImageBuildPhase.
+const (
+	ImageBuildPhaseBuilding ImageBuildPhase = "building"
+	ImageBuildPhaseFinished ImageBuildPhase = "finished"
+	ImageBuildPhaseQueued   ImageBuildPhase = "queued"
+	ImageBuildPhaseStarting ImageBuildPhase = "starting"
+)
+
+// Valid indicates whether the value is a known member of the ImageBuildPhase enum.
+func (e ImageBuildPhase) Valid() bool {
+	switch e {
+	case ImageBuildPhaseBuilding:
+		return true
+	case ImageBuildPhaseFinished:
+		return true
+	case ImageBuildPhaseQueued:
+		return true
+	case ImageBuildPhaseStarting:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ImageBuildStatus.
+const (
+	ImageBuildStatusBuilding  ImageBuildStatus = "building"
+	ImageBuildStatusFailed    ImageBuildStatus = "failed"
+	ImageBuildStatusSucceeded ImageBuildStatus = "succeeded"
+)
+
+// Valid indicates whether the value is a known member of the ImageBuildStatus enum.
+func (e ImageBuildStatus) Valid() bool {
+	switch e {
+	case ImageBuildStatusBuilding:
+		return true
+	case ImageBuildStatusFailed:
+		return true
+	case ImageBuildStatusSucceeded:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ImageDefinitionArchitecture.
+const (
+	ImageDefinitionArchitectureAmd64 ImageDefinitionArchitecture = "amd64"
+	ImageDefinitionArchitectureArm64 ImageDefinitionArchitecture = "arm64"
+)
+
+// Valid indicates whether the value is a known member of the ImageDefinitionArchitecture enum.
+func (e ImageDefinitionArchitecture) Valid() bool {
+	switch e {
+	case ImageDefinitionArchitectureAmd64:
+		return true
+	case ImageDefinitionArchitectureArm64:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ImageSpecPythonVersion.
 const (
 	N310 ImageSpecPythonVersion = "3.10"
@@ -223,6 +307,39 @@ func (e ImageSpecPythonVersion) Valid() bool {
 	case N313:
 		return true
 	case N314:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ImageStepKind.
+const (
+	Micromamba            ImageStepKind = "micromamba"
+	MicromambaEnvironment ImageStepKind = "micromamba_environment"
+	Pip                   ImageStepKind = "pip"
+	PoetryProject         ImageStepKind = "poetry_project"
+	Pyproject             ImageStepKind = "pyproject"
+	Shell                 ImageStepKind = "shell"
+	UvProject             ImageStepKind = "uv_project"
+)
+
+// Valid indicates whether the value is a known member of the ImageStepKind enum.
+func (e ImageStepKind) Valid() bool {
+	switch e {
+	case Micromamba:
+		return true
+	case MicromambaEnvironment:
+		return true
+	case Pip:
+		return true
+	case PoetryProject:
+		return true
+	case Pyproject:
+		return true
+	case Shell:
+		return true
+	case UvProject:
 		return true
 	default:
 		return false
@@ -306,25 +423,25 @@ func (e RetryPolicyBackoff) Valid() bool {
 
 // Defines values for TaskStatus.
 const (
-	Cancelled TaskStatus = "cancelled"
-	Failed    TaskStatus = "failed"
-	Queued    TaskStatus = "queued"
-	Running   TaskStatus = "running"
-	Succeeded TaskStatus = "succeeded"
+	TaskStatusCancelled TaskStatus = "cancelled"
+	TaskStatusFailed    TaskStatus = "failed"
+	TaskStatusQueued    TaskStatus = "queued"
+	TaskStatusRunning   TaskStatus = "running"
+	TaskStatusSucceeded TaskStatus = "succeeded"
 )
 
 // Valid indicates whether the value is a known member of the TaskStatus enum.
 func (e TaskStatus) Valid() bool {
 	switch e {
-	case Cancelled:
+	case TaskStatusCancelled:
 		return true
-	case Failed:
+	case TaskStatusFailed:
 		return true
-	case Queued:
+	case TaskStatusQueued:
 		return true
-	case Running:
+	case TaskStatusRunning:
 		return true
-	case Succeeded:
+	case TaskStatusSucceeded:
 		return true
 	default:
 		return false
@@ -554,13 +671,116 @@ type FunctionSpec struct {
 	TimeoutSeconds *int         `json:"timeout_seconds,omitempty"`
 }
 
+// Image defines model for Image.
+type Image struct {
+	Architecture  ImageArchitecture `json:"architecture"`
+	CreatedAt     time.Time         `json:"created_at"`
+	Id            ImageId           `json:"id"`
+	PythonVersion string            `json:"python_version"`
+
+	// Ready The image is published and can be deployed.
+	Ready   bool       `json:"ready"`
+	ReadyAt *time.Time `json:"ready_at,omitempty"`
+}
+
+// ImageArchitecture defines model for ImageArchitecture.
+type ImageArchitecture string
+
+// ImageBuild defines model for ImageBuild.
+type ImageBuild struct {
+	// Attempt Build containers started so far, at most 2.
+	Attempt    int                `json:"attempt"`
+	CreatedAt  time.Time          `json:"created_at"`
+	Failure    *string            `json:"failure,omitempty"`
+	FinishedAt *time.Time         `json:"finished_at,omitempty"`
+	Id         openapi_types.UUID `json:"id"`
+	ImageId    ImageId            `json:"image_id"`
+
+	// Phase queued waits for a host with room, starting prepares the build container, building runs the build and finished means the status is final.
+	Phase  ImageBuildPhase  `json:"phase"`
+	Status ImageBuildStatus `json:"status"`
+}
+
+// ImageBuildLogEntry defines model for ImageBuildLogEntry.
+type ImageBuildLogEntry struct {
+	Attempt int `json:"attempt"`
+
+	// Data One line of build output without its trailing newline.
+	Data string    `json:"data"`
+	Id   int64     `json:"id"`
+	Time time.Time `json:"time"`
+}
+
+// ImageBuildPhase queued waits for a host with room, starting prepares the build container, building runs the build and finished means the status is final.
+type ImageBuildPhase string
+
+// ImageBuildStatus defines model for ImageBuildStatus.
+type ImageBuildStatus string
+
+// ImageDefinition What an image contains. Steps run in order after python_packages and before commands.
+type ImageDefinition struct {
+	Architecture *ImageDefinitionArchitecture `json:"architecture,omitempty"`
+
+	// BaseImage A registry image to start from.
+	BaseImage *string `json:"base_image,omitempty"`
+
+	// BaseImageCredentials Registry credentials by environment variable name.
+	BaseImageCredentials *map[string]string `json:"base_image_credentials,omitempty"`
+	Commands             *[]string          `json:"commands,omitempty"`
+	Context              *SourceRef         `json:"context,omitempty"`
+
+	// Dockerfile A Dockerfile that replaces the base image and Python setup.
+	Dockerfile *string            `json:"dockerfile,omitempty"`
+	Env        *map[string]string `json:"env,omitempty"`
+
+	// Gpu The GPU model the build runs on.
+	Gpu *string `json:"gpu,omitempty"`
+
+	// Micromamba Micromamba provides Python and the base environment.
+	Micromamba     *bool     `json:"micromamba,omitempty"`
+	PythonPackages *[]string `json:"python_packages,omitempty"`
+
+	// PythonVersion A supported minor release or an exact patch release.
+	PythonVersion string `json:"python_version"`
+
+	// Secrets Workspace secrets the build reads as build arguments.
+	Secrets *[]string    `json:"secrets,omitempty"`
+	Steps   *[]ImageStep `json:"steps,omitempty"`
+}
+
+// ImageDefinitionArchitecture defines model for ImageDefinition.Architecture.
+type ImageDefinitionArchitecture string
+
+// ImageId defines model for ImageId.
+type ImageId = string
+
+// ImageResolution defines model for ImageResolution.
+type ImageResolution struct {
+	Build *ImageBuild `json:"build,omitempty"`
+	Image Image       `json:"image"`
+}
+
 // ImageSpec defines model for ImageSpec.
 type ImageSpec struct {
+	ImageId *ImageId `json:"image_id,omitempty"`
+
+	// PythonVersion The Python minor version the runtime is mounted for.
 	PythonVersion ImageSpecPythonVersion `json:"python_version"`
 }
 
-// ImageSpecPythonVersion defines model for ImageSpec.PythonVersion.
+// ImageSpecPythonVersion The Python minor version the runtime is mounted for.
 type ImageSpecPythonVersion string
+
+// ImageStep shell runs command. pip and micromamba install args. Project kinds install the project at args[0] with extras args[1:] and groups. micromamba_environment creates the environment from the file at args[0].
+type ImageStep struct {
+	Args    *[]string     `json:"args,omitempty"`
+	Command *string       `json:"command,omitempty"`
+	Groups  *[]string     `json:"groups,omitempty"`
+	Kind    ImageStepKind `json:"kind"`
+}
+
+// ImageStepKind defines model for ImageStepKind.
+type ImageStepKind string
 
 // Invitation defines model for Invitation.
 type Invitation struct {
@@ -868,6 +1088,12 @@ type AppPath = AppName
 // FunctionPath defines model for FunctionPath.
 type FunctionPath = WorkloadName
 
+// ImageBuildPath defines model for ImageBuildPath.
+type ImageBuildPath = openapi_types.UUID
+
+// ImagePath defines model for ImagePath.
+type ImagePath = ImageId
+
 // InvitationPath defines model for InvitationPath.
 type InvitationPath = openapi_types.UUID
 
@@ -902,6 +1128,27 @@ type ListWorkspacesParams struct {
 
 	// Cursor The `next_cursor` of the previous page.
 	Cursor *Name `form:"cursor,omitempty" json:"cursor,omitempty"`
+}
+
+// GetImageBuildParams defines parameters for GetImageBuild.
+type GetImageBuildParams struct {
+	// WaitSeconds Hold the request until the build finishes or this many seconds pass.
+	WaitSeconds *int `form:"wait_seconds,omitempty" json:"wait_seconds,omitempty"`
+}
+
+// StreamImageBuildLogsParams defines parameters for StreamImageBuildLogs.
+type StreamImageBuildLogsParams struct {
+	// After Return entries with an id greater than this.
+	After *int64 `form:"after,omitempty" json:"after,omitempty"`
+
+	// Follow Keep the stream open until the build finishes.
+	Follow *bool `form:"follow,omitempty" json:"follow,omitempty"`
+}
+
+// BuildImageParams defines parameters for BuildImage.
+type BuildImageParams struct {
+	// Force Build again even when the image is ready.
+	Force *bool `form:"force,omitempty" json:"force,omitempty"`
 }
 
 // GetTaskParams defines parameters for GetTask.
@@ -939,6 +1186,12 @@ type DeployAppJSONRequestBody = DeploymentRequest
 
 // SubmitTasksJSONRequestBody defines body for SubmitTasks for application/json ContentType.
 type SubmitTasksJSONRequestBody = SubmitTasksRequest
+
+// BuildImageJSONRequestBody defines body for BuildImage for application/json ContentType.
+type BuildImageJSONRequestBody = ImageDefinition
+
+// ResolveImageJSONRequestBody defines body for ResolveImage for application/json ContentType.
+type ResolveImageJSONRequestBody = ImageDefinition
 
 // CreateInvitationJSONRequestBody defines body for CreateInvitation for application/json ContentType.
 type CreateInvitationJSONRequestBody = InvitationRequest

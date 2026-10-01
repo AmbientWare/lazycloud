@@ -240,7 +240,7 @@ func TestIdentityOperationsOverHTTP(t *testing.T) {
 		t.Fatalf("member creates workspace: %d %+v", status, apiErr)
 	}
 	var inv apitypes.Invitation
-	if status := e.do("POST", "/v1/workspaces/acme/invitations", e.owner, map[string]string{"email": "new@example.com"}, &inv); status != 201 || inv.Role != apitypes.InvitationRoleMember || inv.Delivery != apitypes.DeliveryQueued {
+	if status := e.do("POST", "/v1/workspaces/acme/invitations", e.owner, map[string]string{"email": "new@example.com"}, &inv); status != 201 || inv.Role != apitypes.InvitationRoleMember || inv.Delivery != apitypes.DeliveryStateQueued {
 		t.Fatalf("invite: %d %+v", status, inv)
 	}
 	if status := e.do("GET", "/v1/workspaces/acme/invitations", e.outsider, nil, &apiErr); status != 403 {

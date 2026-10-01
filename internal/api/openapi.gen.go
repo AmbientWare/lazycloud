@@ -90,6 +90,21 @@ type ServerInterface interface {
 	// SubmitTasks Admit one task per input against the function's active release
 	// (POST /v1/workspaces/{workspace}/apps/{app}/functions/{function}/tasks)
 	SubmitTasks(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, app AppPath, function FunctionPath)
+	// GetImageBuild Read a build, optionally waiting until it finishes
+	// (GET /v1/workspaces/{workspace}/image-builds/{build})
+	GetImageBuild(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, build ImageBuildPath, params GetImageBuildParams)
+	// StreamImageBuildLogs Build output after a cursor, one JSON ImageBuildLogEntry per line
+	// (GET /v1/workspaces/{workspace}/image-builds/{build}/logs)
+	StreamImageBuildLogs(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, build ImageBuildPath, params StreamImageBuildLogsParams)
+	// BuildImage Resolve a definition and build its image unless it is ready
+	// (POST /v1/workspaces/{workspace}/images)
+	BuildImage(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, params BuildImageParams)
+	// ResolveImage Resolve a definition to its image without starting a build
+	// (POST /v1/workspaces/{workspace}/images/resolve)
+	ResolveImage(w http.ResponseWriter, r *http.Request, workspace WorkspacePath)
+	// GetImage An image the workspace resolved
+	// (GET /v1/workspaces/{workspace}/images/{image})
+	GetImage(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, image ImagePath)
 	// ListInvitations Open invitations with their email delivery state; administrators only
 	// (GET /v1/workspaces/{workspace}/invitations)
 	ListInvitations(w http.ResponseWriter, r *http.Request, workspace WorkspacePath)
@@ -709,6 +724,224 @@ func (siw *ServerInterfaceWrapper) SubmitTasks(w http.ResponseWriter, r *http.Re
 	handler.ServeHTTP(w, r)
 }
 
+// GetImageBuild operation middleware
+func (siw *ServerInterfaceWrapper) GetImageBuild(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "workspace" -------------
+	var workspace WorkspacePath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "workspace", r.PathValue("workspace"), &workspace, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "build" -------------
+	var build ImageBuildPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "build", r.PathValue("build"), &build, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "build", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetImageBuildParams
+
+	// ------------- Optional query parameter "wait_seconds" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "wait_seconds", r.URL.Query(), &params.WaitSeconds, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "wait_seconds"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "wait_seconds", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetImageBuild(w, r, workspace, build, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// StreamImageBuildLogs operation middleware
+func (siw *ServerInterfaceWrapper) StreamImageBuildLogs(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "workspace" -------------
+	var workspace WorkspacePath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "workspace", r.PathValue("workspace"), &workspace, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "build" -------------
+	var build ImageBuildPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "build", r.PathValue("build"), &build, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "build", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params StreamImageBuildLogsParams
+
+	// ------------- Optional query parameter "after" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "after", r.URL.Query(), &params.After, runtime.BindQueryParameterOptions{Type: "integer", Format: "int64"})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "after"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "after", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "follow" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "follow", r.URL.Query(), &params.Follow, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "follow"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "follow", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.StreamImageBuildLogs(w, r, workspace, build, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// BuildImage operation middleware
+func (siw *ServerInterfaceWrapper) BuildImage(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "workspace" -------------
+	var workspace WorkspacePath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "workspace", r.PathValue("workspace"), &workspace, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params BuildImageParams
+
+	// ------------- Optional query parameter "force" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "force", r.URL.Query(), &params.Force, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "force"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "force", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.BuildImage(w, r, workspace, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ResolveImage operation middleware
+func (siw *ServerInterfaceWrapper) ResolveImage(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "workspace" -------------
+	var workspace WorkspacePath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "workspace", r.PathValue("workspace"), &workspace, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ResolveImage(w, r, workspace)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetImage operation middleware
+func (siw *ServerInterfaceWrapper) GetImage(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "workspace" -------------
+	var workspace WorkspacePath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "workspace", r.PathValue("workspace"), &workspace, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "image" -------------
+	var image ImagePath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "image", r.PathValue("image"), &image, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "image", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetImage(w, r, workspace, image)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ListInvitations operation middleware
 func (siw *ServerInterfaceWrapper) ListInvitations(w http.ResponseWriter, r *http.Request) {
 
@@ -1291,6 +1524,11 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/workspaces/{workspace}/tasks/{task}/result", wrapper.GetTaskResult)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/workspaces/{workspace}/tasks/{task}/logs", wrapper.StreamTaskLogs)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/workspaces/{workspace}/tasks/{task}/cancel", wrapper.CancelTask)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/workspaces/{workspace}/images/resolve", wrapper.ResolveImage)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/workspaces/{workspace}/images", wrapper.BuildImage)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/workspaces/{workspace}/images/{image}", wrapper.GetImage)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/workspaces/{workspace}/image-builds/{build}", wrapper.GetImageBuild)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/workspaces/{workspace}/image-builds/{build}/logs", wrapper.StreamImageBuildLogs)
 
 	return m
 }
@@ -2104,6 +2342,238 @@ func (response SubmitTasksdefaultJSONResponse) VisitSubmitTasksResponse(w http.R
 	return err
 }
 
+type GetImageBuildRequestObject struct {
+	Workspace WorkspacePath  `json:"workspace"`
+	Build     ImageBuildPath `json:"build"`
+	Params    GetImageBuildParams
+}
+
+type GetImageBuildResponseObject interface {
+	VisitGetImageBuildResponse(w http.ResponseWriter) error
+}
+
+type GetImageBuild200JSONResponse ImageBuild
+
+func (response GetImageBuild200JSONResponse) VisitGetImageBuildResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetImageBuilddefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetImageBuilddefaultJSONResponse) VisitGetImageBuildResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StreamImageBuildLogsRequestObject struct {
+	Workspace WorkspacePath  `json:"workspace"`
+	Build     ImageBuildPath `json:"build"`
+	Params    StreamImageBuildLogsParams
+}
+
+type StreamImageBuildLogsResponseObject interface {
+	VisitStreamImageBuildLogsResponse(w http.ResponseWriter) error
+}
+
+type StreamImageBuildLogs200ApplicationxNdjsonResponse struct {
+	Body          io.Reader
+	ContentLength int64
+}
+
+func (response StreamImageBuildLogs200ApplicationxNdjsonResponse) VisitStreamImageBuildLogsResponse(w http.ResponseWriter) error {
+
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	if response.ContentLength != 0 {
+		w.Header().Set("Content-Length", fmt.Sprint(response.ContentLength))
+	}
+	w.WriteHeader(200)
+
+	if closer, ok := response.Body.(io.ReadCloser); ok {
+		defer closer.Close()
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		// If w doesn't support flushing, fall back to io.Copy.
+		_, err := io.Copy(w, response.Body)
+		return err
+	}
+	// text/event-stream messages are typically small; use a
+	// modest buffer and flush after each chunk so clients see
+	// events immediately instead of waiting on OS buffering.
+	buf := make([]byte, 4096)
+	for {
+		n, err := response.Body.Read(buf)
+		if n > 0 {
+			if _, writeErr := w.Write(buf[:n]); writeErr != nil {
+				return writeErr
+			}
+			flusher.Flush()
+		}
+		if err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
+	}
+}
+
+type StreamImageBuildLogsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response StreamImageBuildLogsdefaultJSONResponse) VisitStreamImageBuildLogsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type BuildImageRequestObject struct {
+	Workspace WorkspacePath `json:"workspace"`
+	Params    BuildImageParams
+	Body      *BuildImageJSONRequestBody
+}
+
+type BuildImageResponseObject interface {
+	VisitBuildImageResponse(w http.ResponseWriter) error
+}
+
+type BuildImage200JSONResponse ImageResolution
+
+func (response BuildImage200JSONResponse) VisitBuildImageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type BuildImagedefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response BuildImagedefaultJSONResponse) VisitBuildImageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResolveImageRequestObject struct {
+	Workspace WorkspacePath `json:"workspace"`
+	Body      *ResolveImageJSONRequestBody
+}
+
+type ResolveImageResponseObject interface {
+	VisitResolveImageResponse(w http.ResponseWriter) error
+}
+
+type ResolveImage200JSONResponse ImageResolution
+
+func (response ResolveImage200JSONResponse) VisitResolveImageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResolveImagedefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ResolveImagedefaultJSONResponse) VisitResolveImageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetImageRequestObject struct {
+	Workspace WorkspacePath `json:"workspace"`
+	Image     ImagePath     `json:"image"`
+}
+
+type GetImageResponseObject interface {
+	VisitGetImageResponse(w http.ResponseWriter) error
+}
+
+type GetImage200JSONResponse Image
+
+func (response GetImage200JSONResponse) VisitGetImageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetImagedefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetImagedefaultJSONResponse) VisitGetImageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type ListInvitationsRequestObject struct {
 	Workspace WorkspacePath `json:"workspace"`
 }
@@ -2667,6 +3137,21 @@ type StrictServerInterface interface {
 	// SubmitTasks Admit one task per input against the function's active release
 	// (POST /v1/workspaces/{workspace}/apps/{app}/functions/{function}/tasks)
 	SubmitTasks(ctx context.Context, request SubmitTasksRequestObject) (SubmitTasksResponseObject, error)
+	// GetImageBuild Read a build, optionally waiting until it finishes
+	// (GET /v1/workspaces/{workspace}/image-builds/{build})
+	GetImageBuild(ctx context.Context, request GetImageBuildRequestObject) (GetImageBuildResponseObject, error)
+	// StreamImageBuildLogs Build output after a cursor, one JSON ImageBuildLogEntry per line
+	// (GET /v1/workspaces/{workspace}/image-builds/{build}/logs)
+	StreamImageBuildLogs(ctx context.Context, request StreamImageBuildLogsRequestObject) (StreamImageBuildLogsResponseObject, error)
+	// BuildImage Resolve a definition and build its image unless it is ready
+	// (POST /v1/workspaces/{workspace}/images)
+	BuildImage(ctx context.Context, request BuildImageRequestObject) (BuildImageResponseObject, error)
+	// ResolveImage Resolve a definition to its image without starting a build
+	// (POST /v1/workspaces/{workspace}/images/resolve)
+	ResolveImage(ctx context.Context, request ResolveImageRequestObject) (ResolveImageResponseObject, error)
+	// GetImage An image the workspace resolved
+	// (GET /v1/workspaces/{workspace}/images/{image})
+	GetImage(ctx context.Context, request GetImageRequestObject) (GetImageResponseObject, error)
 	// ListInvitations Open invitations with their email delivery state; administrators only
 	// (GET /v1/workspaces/{workspace}/invitations)
 	ListInvitations(ctx context.Context, request ListInvitationsRequestObject) (ListInvitationsResponseObject, error)
@@ -3332,6 +3817,156 @@ func (sh *strictHandler) SubmitTasks(w http.ResponseWriter, r *http.Request, wor
 	}
 }
 
+// GetImageBuild operation middleware
+func (sh *strictHandler) GetImageBuild(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, build ImageBuildPath, params GetImageBuildParams) {
+	var request GetImageBuildRequestObject
+
+	request.Workspace = workspace
+	request.Build = build
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetImageBuild(ctx, request.(GetImageBuildRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetImageBuild")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetImageBuildResponseObject); ok {
+		if err := validResponse.VisitGetImageBuildResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// StreamImageBuildLogs operation middleware
+func (sh *strictHandler) StreamImageBuildLogs(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, build ImageBuildPath, params StreamImageBuildLogsParams) {
+	var request StreamImageBuildLogsRequestObject
+
+	request.Workspace = workspace
+	request.Build = build
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.StreamImageBuildLogs(ctx, request.(StreamImageBuildLogsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "StreamImageBuildLogs")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(StreamImageBuildLogsResponseObject); ok {
+		if err := validResponse.VisitStreamImageBuildLogsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// BuildImage operation middleware
+func (sh *strictHandler) BuildImage(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, params BuildImageParams) {
+	var request BuildImageRequestObject
+
+	request.Workspace = workspace
+	request.Params = params
+
+	var body BuildImageJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.BuildImage(ctx, request.(BuildImageRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "BuildImage")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(BuildImageResponseObject); ok {
+		if err := validResponse.VisitBuildImageResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ResolveImage operation middleware
+func (sh *strictHandler) ResolveImage(w http.ResponseWriter, r *http.Request, workspace WorkspacePath) {
+	var request ResolveImageRequestObject
+
+	request.Workspace = workspace
+
+	var body ResolveImageJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ResolveImage(ctx, request.(ResolveImageRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ResolveImage")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ResolveImageResponseObject); ok {
+		if err := validResponse.VisitResolveImageResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetImage operation middleware
+func (sh *strictHandler) GetImage(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, image ImagePath) {
+	var request GetImageRequestObject
+
+	request.Workspace = workspace
+	request.Image = image
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetImage(ctx, request.(GetImageRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetImage")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetImageResponseObject); ok {
+		if err := validResponse.VisitGetImageResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // ListInvitations operation middleware
 func (sh *strictHandler) ListInvitations(w http.ResponseWriter, r *http.Request, workspace WorkspacePath) {
 	var request ListInvitationsRequestObject
@@ -3680,113 +4315,135 @@ func (sh *strictHandler) GetTaskResult(w http.ResponseWriter, r *http.Request, w
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"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",
+	"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",
+	"MFD3yDBelGmAwgad0QGM8X8HAA==",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,

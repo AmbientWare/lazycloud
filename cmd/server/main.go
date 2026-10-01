@@ -32,6 +32,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/hostsession"
 	"github.com/AmbientWare/lazycloud/internal/identity"
+	"github.com/AmbientWare/lazycloud/internal/images"
 	"github.com/AmbientWare/lazycloud/internal/notifications"
 	"github.com/AmbientWare/lazycloud/internal/storage"
 )
@@ -100,6 +101,7 @@ type serveConfig struct {
 	imageTemplate string
 	identity      identity.Config
 	api           api.Config
+	images        images.Config
 }
 
 func serve(ctx context.Context, args []string) error {
@@ -116,8 +118,18 @@ func serve(ctx context.Context, args []string) error {
 	fs.StringVar(&cfg.identity.PublicURL, "public-url", env("LAZYCLOUD_PUBLIC_URL", "http://127.0.0.1:8080"), "dashboard origin for sign-in, device login and invitation links (LAZYCLOUD_PUBLIC_URL)")
 	fs.StringVar(&cfg.identity.GitHub.ClientID, "github-client-id", env("LAZYCLOUD_GITHUB_CLIENT_ID", ""), "GitHub App client id for dashboard sign-in (LAZYCLOUD_GITHUB_CLIENT_ID)")
 	fs.StringVar(&cfg.api.ClientReleaseVersion, "client-release-version", env("LAZYCLOUD_CLIENT_RELEASE_VERSION", ""), "CLI version older clients are told to update to (LAZYCLOUD_CLIENT_RELEASE_VERSION)")
+	fs.StringVar(&cfg.images.Registry, "image-registry", env("LAZYCLOUD_IMAGE_REGISTRY", ""), "registry host[:port] that builds publish to (LAZYCLOUD_IMAGE_REGISTRY)")
+	fs.StringVar(&cfg.images.Repository, "image-repository", env("LAZYCLOUD_IMAGE_REPOSITORY", "lazycloud"), "path under the registry for images and build cache (LAZYCLOUD_IMAGE_REPOSITORY)")
+	fs.BoolVar(&cfg.images.Insecure, "image-registry-insecure", env("LAZYCLOUD_IMAGE_REGISTRY_INSECURE", "") == "true", "the image registry speaks plain HTTP (LAZYCLOUD_IMAGE_REGISTRY_INSECURE)")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
+	}
+	if cfg.images.Registry == "" {
+		return errors.New("the image registry is required: set LAZYCLOUD_IMAGE_REGISTRY or -image-registry")
+	}
+	cfg.images.ManagedBase = cfg.imageTemplate
+	if user := os.Getenv("LAZYCLOUD_IMAGE_REGISTRY_USERNAME"); user != "" {
+		cfg.images.Auth = &images.Auth{Username: user, Password: os.Getenv("LAZYCLOUD_IMAGE_REGISTRY_PASSWORD")}
 	}
 	// Secrets stay out of the process arguments.
 	cfg.identity.GitHub.ClientSecret = os.Getenv("LAZYCLOUD_GITHUB_CLIENT_SECRET")
@@ -138,21 +150,22 @@ func serve(ctx context.Context, args []string) error {
 }
 
 func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, logger *slog.Logger) error {
-	listener := database.NewListener(pool, logger, database.ChannelHost, database.ChannelTask, database.ChannelClaim)
+	listener := database.NewListener(pool, logger, database.ChannelHost, database.ChannelTask, database.ChannelClaim, database.ChannelImageBuild, database.ChannelImageBuildLog)
 	store := storage.NewStorage(pool, cfg.objectStore)
 	exec := execution.NewExecution(pool)
+	im := images.NewImages(pool, exec, cfg.images, nil)
 	ident := identity.NewIdentity(pool, cfg.identity)
 	if cfg.identity.GitHub.ClientID == "" || cfg.identity.GitHub.ClientSecret == "" {
 		logger.WarnContext(ctx, "dashboard sign-in is unavailable: set LAZYCLOUD_GITHUB_CLIENT_ID and LAZYCLOUD_GITHUB_CLIENT_SECRET")
 	}
 	handler, err := api.NewHandler(api.Owners{
 		Identity: ident, Control: control.NewControl(pool), Storage: store,
-		Execution: exec, Notifications: notifications.NewNotifications(pool, nil, logger), Listener: listener,
+		Execution: exec, Images: im, Notifications: notifications.NewNotifications(pool, nil, logger), Listener: listener,
 	}, cfg.api, logger)
 	if err != nil {
 		return err
 	}
-	hosts := hostsession.NewServer(compute.NewCompute(pool), exec, store, listener, hostsession.Config{
+	hosts := hostsession.NewServer(compute.NewCompute(pool), exec, store, im, listener, hostsession.Config{
 		ImageTemplate: cfg.imageTemplate, TouchInterval: 10 * time.Second,
 	}, logger)
 	grpcServer := grpc.NewServer(hosts.ServerOptions()...)

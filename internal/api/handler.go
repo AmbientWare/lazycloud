@@ -17,6 +17,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/identity"
+	"github.com/AmbientWare/lazycloud/internal/images"
 	"github.com/AmbientWare/lazycloud/internal/notifications"
 	"github.com/AmbientWare/lazycloud/internal/storage"
 )
@@ -31,9 +32,10 @@ type Owners struct {
 	Control       *control.Control
 	Storage       *storage.Storage
 	Execution     *execution.Execution
+	Images        *images.Images
 	Notifications *notifications.Notifications
-	// Listener wakes waits on task changes. It must listen on
-	// database.ChannelTask.
+	// Listener wakes waits on task and image build changes. It must listen
+	// on database.ChannelTask, ChannelImageBuild and ChannelImageBuildLog.
 	Listener *database.Listener
 }
 
@@ -206,6 +208,7 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		invalidSpec   *control.InvalidSpecError
 		sourceMissing *control.SourceMissingError
 		tooLarge      *http.MaxBytesError
+		invalidImage  *images.InvalidError
 		conflict      *identity.ConflictError
 		invalid       *identity.InvalidError
 		roleErr       *identity.RoleError
@@ -228,7 +231,8 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, invalid.Error())
 	case errors.Is(err, identity.ErrExists):
 		writeJSONError(w, http.StatusConflict, apitypes.Conflict, "a workspace with that name already exists")
-	case errors.Is(err, identity.ErrNotFound), errors.Is(err, control.ErrNotFound), errors.Is(err, execution.ErrNotFound):
+	case errors.Is(err, identity.ErrNotFound), errors.Is(err, control.ErrNotFound), errors.Is(err, execution.ErrNotFound),
+		errors.Is(err, images.ErrNotFound):
 		writeJSONError(w, http.StatusNotFound, apitypes.NotFound, "not found")
 	case errors.Is(err, execution.ErrNoResult):
 		writeJSONError(w, http.StatusNotFound, apitypes.NotFound, "the task finished without a result")
@@ -238,6 +242,14 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, sourceMissing.Error())
 	case errors.Is(err, storage.ErrInvalidDigest), errors.Is(err, errInvalidRequest):
 		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, err.Error())
+	case errors.As(err, &invalidImage):
+		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, err.Error())
+	case errors.Is(err, images.ErrUnsupported):
+		writeJSONError(w, http.StatusBadRequest, apitypes.Unsupported, err.Error())
+	case errors.Is(err, images.ErrNotReady):
+		writeJSONError(w, http.StatusConflict, apitypes.Conflict, err.Error())
+	case errors.Is(err, images.ErrRegistryUnavailable):
+		writeJSONError(w, http.StatusServiceUnavailable, apitypes.Unavailable, err.Error())
 	case errors.As(err, &tooLarge), errors.Is(err, execution.ErrPayloadTooLarge):
 		writeJSONError(w, http.StatusRequestEntityTooLarge, apitypes.PayloadTooLarge, "the request or a payload in it is too large")
 	case errors.As(err, &tooMany):
