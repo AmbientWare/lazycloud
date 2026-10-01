@@ -61,6 +61,14 @@ Migration `migrations/0003_control.sql`. Protobuf fields 60-69.
   exit code.
 - `capacity_limit` and `provisioning_compute` are defined but not produced
   until compute provisions hosts and enforces limits.
+- `deployment stop NAME-vN` is refused unless N is the active version, and
+  `delete NAME-vN` is always refused: stop and delete act on the workload.
+- `task result` shows the decoded value, as slice 1 did.
+- `app export --json` lists each function's `release_id` instead of an
+  invoke URL, and an app without deployed functions is an error.
+- A deploy may list no function only with prune, which deletes every
+  deployed function, as the reference's prune of an empty app did.
+- Upstream tasks must be in the submitting workspace.
 
 ## Plan
 
@@ -76,10 +84,48 @@ Migration `migrations/0003_control.sql`. Protobuf fields 60-69.
 
 ## Progress
 
-- [ ] Contract and migration
-- [ ] Go owners and API
-- [ ] Python SDK and CLI
-- [ ] App export
-- [ ] Integrated run and measurements
+- [x] Contract and migration
+- [x] Go owners and API
+- [x] Python SDK and CLI
+- [x] App export
+- [x] Integrated run and measurements
 
 ## Evidence
+
+Owner tests against PostgreSQL: control `lifecycle_test.go` (app pause,
+resume, delete and name reuse; deployment stop, start on a version,
+versions paging, delete; plan actions; working-tree release reuse; prune of
+everything), execution `dependencies_test.go` (dependents wait, receive the
+upstream result in the claim, fail transitively, oversized inputs fail),
+`task_views_test.go` (pending reasons, task paging and filters, stop, rerun,
+parent and root, container stop, deletion cancels running work,
+working-tree release of a stopped workload, logs by workload and container
+with tail), `list_cost_test.go`; API `control_test.go` (authorization,
+routing, validation). Python: `test_cli_control.py`, `test_app_export.py`,
+the task and dependency tests in `test_sdk_platform_api.py`, runner
+`test_dependency_frames_resolve_upstream_results_for_the_next_invoke`.
+
+Integrated run on a private stack (server, scheduler, agent with runc, one
+24-CPU host, PostgreSQL 18, Garage), SDK and CLI from this branch:
+
+| Scenario | Result |
+| --- | --- |
+| Cold `.remote()` from a working tree, nothing deployed | 1.04 s, Image/Source/Runtime/Task rows |
+| Warm `.remote()` (100 calls, output off) | p50 10.3 ms, p95 13.3 ms (slice 1: 9-14, 12-18) |
+| `double.spawn(double.spawn(1)).get()` | p50 13.8 ms, p95 17.8 ms |
+| Nested FunctionCalls in a list argument | resolved to results in the container |
+| Pending card behind a busy container | `capacity_busy` after 5 s; callback saw starting_container, capacity_busy, None |
+| `container stop` of a running container | draining at once, slot killed, stopped 0.12 s later, task retried on a new container |
+| `app delete` with running and queued tasks | both cancelled, no live container 0.22 s later |
+| Ctrl-C during `lazycloud run` | task cancelled |
+| List tasks / app tasks / containers (page 100) | p50 1.3 / 1.6 / 0.8 ms over HTTP |
+
+`list_cost_test.go` with 10,000 finished tasks: a 101-row task page reads
+311 buffers in 0.2 ms, the live-container page 7 buffers, pending facts 7,
+with no sequential scan of tasks, attempts or containers.
+
+Gaps: calls from inside a container need the workload-runtime container API
+for credentials; endpoint invoke URLs, `serve`, ASGI export and container
+checkpoints belong to other packets. A status filter on the task listing
+reads the workspace's recent index and filters, which grows with history
+between matches.
