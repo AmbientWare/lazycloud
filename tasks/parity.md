@@ -3,7 +3,8 @@
 Every user-visible capability of the reference at 9e259ce75. The rewrite
 matches each one (update.md, "Same product, better implementation"). Check an
 item when the rewrite provides it and its area's acceptance covers it; record
-intentional differences in the area's task file.
+intentional differences in the area's task file. `[-]` marks an item the user
+decided not to rebuild.
 
 Path prefixes, all absolute:
 - `R` = /home/cmclean/.t3/worktrees/lazycloud/t3code-9782b237
@@ -256,7 +257,7 @@ Scope notes:
 - [ ] Nested routes: task drawer `/apps/$appId/tasks/$taskId`, workload task drawer, pod instance drawer `/instances/$containerId` (WEB/routes/w/$workspace/apps/*.tsx)
 - [ ] Tasks page: infinite list with filters App/Status/Type/Workload and Clear; `/tasks/$taskId` drawer (WEB/routes/w/$workspace/tasks.tsx, tasks.$taskId.tsx)
 - [ ] Storage page tabs: Volumes, Artifacts, Disks, Secrets, Queues, Maps (WEB/routes/w/$workspace/storage/index.tsx)
-- [ ] Admin settings (platform admins): Users (search, role/status filters, set role, disable/enable, grant/revoke complimentary) and Fleet (markets, nodes, capacity, warm/reserve) (WEB/components/shared/SettingsDialog/AdminSettings/UsersSettings.tsx, FleetSettings.tsx)
+- [-] Admin settings (platform admins): Users (search, role/status filters, set role, disable/enable, grant/revoke complimentary) and Fleet (markets, nodes, capacity, warm/reserve) (WEB/components/shared/SettingsDialog/AdminSettings/UsersSettings.tsx, FleetSettings.tsx) — dropped: unused (user decision)
 - [ ] Root error page with "Reload dashboard" / "Try again" (WEB/routes/__root.tsx)
 - [ ] Marketing home, `/pricing`, `/legal/terms`, `/legal/privacy` (WEB/routes/index.lazy.tsx, pricing.lazy.tsx, legal/*)
 

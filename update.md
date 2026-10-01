@@ -80,8 +80,10 @@ requiring explicit scope and authorization.
 
 - Go owns platform backend decisions, orchestration and host runtime.
 - Python owns deployment authoring, SDK/CLI workflows and execution of Python user
-  code. The public CLI is in python/lazycloud. The former apps/cli was the internal
-  admin CLI; rebuild its supported operations through administration contracts.
+  code. The public CLI is in python/lazycloud and is the only CLI. The
+  reference's internal admin CLI and dashboard admin settings were mostly
+  unused and are not rebuilt. The server binary keeps its bootstrap
+  subcommands and a handful of operator commands that earn their place.
 - TypeScript owns the existing frontend. Future TypeScript and Go SDKs should use
   the same public protocol without depending on Python implementation details.
 - The Python shared package supports retained consumers. Reduce it as contracts
@@ -149,7 +151,7 @@ create another container lifecycle.
 
 Begin with the smallest deployable set justified by workloads:
 
-- Server: public/admin APIs and necessary ingress, composed from domain owners.
+- Server: public APIs and necessary ingress, composed from domain owners.
 - Scheduler: durable due-work processing, scaling, placement and fleet loops.
 - Agent: machine connection and local runtime supervision.
 - Python runner: user execution inside its container over the local runner protocol.
@@ -331,7 +333,7 @@ Define clear new resource APIs, error semantics, pagination, streaming, deadline
 authorization and identifiers. Coordinate the Python SDK, CLI, runner and web with
 the new definitions; their old models are references, not permanent constraints.
 
-Use HTTP/JSON with OpenAPI for public administration and SDK operations, ordinary
+Use HTTP/JSON with OpenAPI for public management and SDK operations, ordinary
 HTTP/WebSocket forwarding for workload traffic, and a typed internal host protocol.
 Each wire contract has one source. Generate bindings at actual language boundaries
 rather than copying schemas manually. Do not expose internal Go types directly.
@@ -472,6 +474,6 @@ Update the assigned checklist item only when its completion requirements are met
 - [ ] Notifications
 - [ ] Python SDK and public CLI integration
 - [ ] Web API integration and data flow
-- [ ] Operations and administration
+- [ ] Operations (packaging, deployment, release CI, a few operator commands)
 - [ ] Local development, CI and deployment
 - [ ] Platform acceptance, scale evidence and cutover
