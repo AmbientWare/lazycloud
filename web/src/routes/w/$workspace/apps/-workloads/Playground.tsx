@@ -33,14 +33,14 @@ import {
 export function Playground({
   workspaceId,
   workspaceName,
-  appId,
+  app,
   workloadName,
   workloadKind,
   deploymentId,
 }: {
   workspaceId: string;
   workspaceName: string;
-  appId: string;
+  app: string;
   workloadName: string;
   workloadKind: string;
   deploymentId: string;
@@ -67,7 +67,7 @@ export function Playground({
       manifest={manifest.data}
       workspaceId={workspaceId}
       workspaceName={workspaceName}
-      appId={appId}
+      app={app}
       workloadName={workloadName}
       workloadKind={workloadKind}
     />
@@ -78,14 +78,14 @@ function PlaygroundForm({
   manifest,
   workspaceId,
   workspaceName,
-  appId,
+  app,
   workloadName,
   workloadKind,
 }: {
   manifest: DeploymentManifest;
   workspaceId: string;
   workspaceName: string;
-  appId: string;
+  app: string;
   workloadName: string;
   workloadKind: string;
 }) {
@@ -174,7 +174,7 @@ function PlaygroundForm({
           error={invoke.isError ? invoke.error : null}
           workspaceId={workspaceId}
           workspaceName={workspaceName}
-          appId={appId}
+          app={app}
           workloadName={workloadName}
           workloadKind={workloadKind}
         />
@@ -232,7 +232,7 @@ function InvokeOutcome({
   error,
   workspaceId,
   workspaceName,
-  appId,
+  app,
   workloadName,
   workloadKind,
 }: {
@@ -240,7 +240,7 @@ function InvokeOutcome({
   error: Error | null;
   workspaceId: string;
   workspaceName: string;
-  appId: string;
+  app: string;
   workloadName: string;
   workloadKind: string;
 }) {
@@ -262,7 +262,7 @@ function InvokeOutcome({
         meta={meta}
         workspaceId={workspaceId}
         workspaceName={workspaceName}
-        appId={appId}
+        app={app}
         workloadName={workloadName}
         workloadKind={workloadKind}
       />
@@ -293,7 +293,7 @@ function TaskInvokeOutcome({
   meta,
   workspaceId,
   workspaceName,
-  appId,
+  app,
   workloadName,
   workloadKind,
 }: {
@@ -301,7 +301,7 @@ function TaskInvokeOutcome({
   meta: ReactNode;
   workspaceId: string;
   workspaceName: string;
-  appId: string;
+  app: string;
   workloadName: string;
   workloadKind: string;
 }) {
@@ -315,10 +315,10 @@ function TaskInvokeOutcome({
           <StatusChip status={task.data.status} live={task.data.status === "running"} />
         ) : null}
         <Link
-          to="/w/$workspace/apps/$appId/workloads/$kind/$name/tasks/$taskId"
+          to="/w/$workspace/apps/$app/workloads/$kind/$name/tasks/$taskId"
           params={{
             workspace: workspaceName,
-            appId,
+            app,
             kind: workloadKind,
             name: workloadName,
             taskId,

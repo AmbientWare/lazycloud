@@ -28,11 +28,11 @@ import type { WorkloadGroup } from "../-workloads/grouping";
 export function WorkloadRowActions({
   group,
   workspaceId,
-  appId,
+  app,
 }: {
   group: WorkloadGroup;
   workspaceId: string;
-  appId: string;
+  app: string;
 }) {
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const queryClient = useQueryClient();
@@ -49,7 +49,7 @@ export function WorkloadRowActions({
           queryKey: workspaceQueryKeys.deployments.root(workspaceId),
         }),
         queryClient.invalidateQueries({
-          queryKey: workspaceQueryKeys.apps.detail(workspaceId, appId),
+          queryKey: workspaceQueryKeys.apps.detail(workspaceId, app),
         }),
         queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.apps.summaries(workspaceId) }),
         queryClient.invalidateQueries({

@@ -27,14 +27,14 @@ import { podInstancePlacement, podInstanceUptime } from "./pod-instance-format";
 
 export function PodInstanceDrawer({
   workspaceId,
-  appId,
+  app,
   workloadName,
   workloadKind,
   containerId,
   onClose,
 }: {
   workspaceId: string;
-  appId: string;
+  app: string;
   workloadName: string;
   workloadKind: string;
   containerId: string;
@@ -42,10 +42,14 @@ export function PodInstanceDrawer({
 }) {
   const container = useQuery(containerQueryOptions(workspaceId, containerId));
   const deployments = useInfiniteQuery(
-    deploymentsInfiniteQueryOptions(workspaceId, { appId, kind: workloadKind, name: workloadName }),
+    deploymentsInfiniteQueryOptions(workspaceId, {
+      appId: app,
+      kind: workloadKind,
+      name: workloadName,
+    }),
   );
   const deploymentList = selectDeploymentList(deployments.data, deployments.hasNextPage);
-  const group = findWorkloadGroup(deploymentList.items, appId, workloadKind, workloadName);
+  const group = findWorkloadGroup(deploymentList.items, app, workloadKind, workloadName);
   const deployment = group?.kind === "pod" ? currentDeployment(group) : undefined;
   const member = Boolean(
     container.data && deployment?.stub_id && container.data.stub_id === deployment.stub_id,

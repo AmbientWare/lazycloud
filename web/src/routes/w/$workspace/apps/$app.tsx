@@ -22,26 +22,30 @@ import { AppSandboxesSection } from "./-components/AppSandboxesSection";
 import { AppWorkloadsSection } from "./-components/AppWorkloadsSection";
 import { groupDeploymentsByWorkload } from "./-workloads/grouping";
 
-export const Route = createFileRoute("/w/$workspace/apps/$appId")({
+export const Route = createFileRoute("/w/$workspace/apps/$app")({
   component: AppDetailPage,
   errorComponent: RouteErrorFallback,
 });
 
 function AppDetailPage() {
-  const { appId } = Route.useParams();
+  const { app } = Route.useParams();
   const { workspace } = useWorkspace();
-  const app = useQuery(appQueryOptions(workspace.id, appId));
-  const deployments = useInfiniteQuery(deploymentsInfiniteQueryOptions(workspace.id, { appId }));
-  const containers = useInfiniteQuery(containersQueryOptions(workspace.id, { appId }));
-  const activity = useQuery(taskBucketsQueryOptions(workspace.id, 3600, { appId }));
-  const tasks = useQuery(tasksQueryOptions(workspace.id, { limit: 15, appId, rootOnly: true }));
-  const sandboxes = useQuery(sandboxesQueryOptions(workspace.id, { limit: 50, appId }));
+  const appRecord = useQuery(appQueryOptions(workspace.id, app));
+  const deployments = useInfiniteQuery(
+    deploymentsInfiniteQueryOptions(workspace.id, { appId: app }),
+  );
+  const containers = useInfiniteQuery(containersQueryOptions(workspace.id, { appId: app }));
+  const activity = useQuery(taskBucketsQueryOptions(workspace.id, 3600, { appId: app }));
+  const tasks = useQuery(
+    tasksQueryOptions(workspace.id, { limit: 15, appId: app, rootOnly: true }),
+  );
+  const sandboxes = useQuery(sandboxesQueryOptions(workspace.id, { limit: 50, appId: app }));
 
   const deploymentList = selectDeploymentList(deployments.data, deployments.hasNextPage);
   const deploymentRows = deploymentList.items;
-  const workloadGroups = groupDeploymentsByWorkload(deploymentRows, appId);
+  const workloadGroups = groupDeploymentsByWorkload(deploymentRows, app);
   const activeWorkloads = workloadGroups.filter((group) => group.active).length;
-  const latestDeployment = newestDeployment(deploymentRows, appId);
+  const latestDeployment = newestDeployment(deploymentRows, app);
   const containerList = selectContainerList(containers.data, containers.hasNextPage);
   const runningContainers = containerList.items.filter(
     (item) => item.container.status === "running",
@@ -56,9 +60,15 @@ function AppDetailPage() {
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <WorkspacePage
-        title={app.data ? app.data.name : <Skeleton className="h-6 w-48" aria-hidden="true" />}
+        title={
+          appRecord.data ? (
+            appRecord.data.name
+          ) : (
+            <Skeleton className="h-6 w-48" aria-hidden="true" />
+          )
+        }
         description={
-          app.data && deployments.data ? (
+          appRecord.data && deployments.data ? (
             <AppDetailFacts
               latestDeployment={latestDeployment}
               workloadCount={workloadGroups.length}
@@ -67,9 +77,9 @@ function AppDetailPage() {
           ) : null
         }
         actions={
-          app.data ? (
+          appRecord.data ? (
             <AppLifecycleActions
-              app={app.data}
+              app={appRecord.data}
               workspaceId={workspace.id}
               workspaceName={workspace.name}
             />
@@ -77,14 +87,14 @@ function AppDetailPage() {
         }
         contentClassName="overflow-y-auto lg:overflow-hidden"
       >
-        {app.isError ? (
-          <PanelError message={app.error.message} layout="framed" />
+        {appRecord.isError ? (
+          <PanelError message={appRecord.error.message} layout="framed" />
         ) : (
           <div className="grid min-h-full gap-3 lg:h-full lg:min-h-0 lg:grid-cols-[minmax(0,1.45fr)_minmax(19rem,0.8fr)] lg:overflow-hidden">
             <AppWorkloadsSection
               workspaceId={workspace.id}
               workspaceName={workspace.name}
-              appId={appId}
+              app={app}
               deployments={deploymentRows}
               containers={containerList.items.map((item) => item.container)}
               pending={deployments.isPending || containers.isPending}
@@ -110,7 +120,7 @@ function AppDetailPage() {
               />
               <AppRecentTasksSection
                 workspaceName={workspace.name}
-                appId={appId}
+                app={app}
                 tasks={tasks.data?.data}
                 pending={tasks.isPending}
                 error={queryError(tasks.error)}
@@ -132,10 +142,10 @@ function AppDetailPage() {
 
 function newestDeployment(
   deployments: Deployment[] | undefined,
-  appId: string,
+  app: string,
 ): Deployment | undefined {
   return (deployments ?? [])
-    .filter((deployment) => deployment.app_id === appId)
+    .filter((deployment) => deployment.app_id === app)
     .slice()
     .sort((left, right) => right.created_at.localeCompare(left.created_at))[0];
 }

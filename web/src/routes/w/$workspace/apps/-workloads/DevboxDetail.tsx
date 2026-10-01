@@ -352,7 +352,7 @@ function idleStop(devbox: Devbox): ReactNode {
 export function DevboxWorkspace({
   workspaceId,
   workspaceName,
-  appId,
+  app,
   group,
   deploymentId,
   nextCursor,
@@ -362,7 +362,7 @@ export function DevboxWorkspace({
 }: {
   workspaceId: string;
   workspaceName: string;
-  appId: string;
+  app: string;
   group: WorkloadGroup;
   deploymentId: string;
   nextCursor: string | undefined;
@@ -417,7 +417,7 @@ export function DevboxWorkspace({
         <TabsContent value="versions" className="m-0 min-h-0 flex-1 overflow-auto">
           <VersionHistory
             group={group}
-            appId={appId}
+            app={app}
             workspaceId={workspaceId}
             workspaceName={workspaceName}
             nextCursor={nextCursor}
