@@ -14,16 +14,22 @@ import os
 import pickle
 import socket
 import sys
+import threading
+import time
 import traceback
 from collections.abc import Callable
 from typing import Annotated, Any
 
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 from shared.errors import InvalidInputError
+from shared.lifecycle import LifecycleHookName, LifecycleHooks, LifecycleTaskContext
 from shared.serialization import to_json_value
 from shared.task_context import task_context
+from shared.tasks import TaskStatus
 
+from runner import routed_output
 from runner.handler_loading import load_handler
+from runner.hooks import hooks_from_frame, run_startup_hooks, run_task_hooks, startup_context
 from runner.invocation import cloudpickle_bytes, invoke_handler
 from runner.protocol_models import (
     Arguments,
@@ -33,7 +39,9 @@ from runner.protocol_models import (
     Load,
     Loaded,
     LoadFailed,
+    Output,
     RunnerError,
+    Stream,
     Succeeded,
 )
 
@@ -57,6 +65,8 @@ class Connection:
 
     def __init__(self, sock: socket.socket) -> None:
         self._sock = sock
+        # Attempt threads send concurrently; a frame is never interleaved.
+        self._send_lock = threading.Lock()
 
     def receive(self) -> tuple[Load | Invoke, bytearray] | None:
         """Read one frame, or None when the supervisor closed between frames."""
@@ -80,11 +90,12 @@ class Connection:
 
     def send(self, header: BaseModel, payload: bytes = b"") -> None:
         encoded = header.model_dump_json(exclude_none=True).encode()
-        self._sock.sendall(
-            len(encoded).to_bytes(4, "big") + encoded + len(payload).to_bytes(4, "big")
-        )
-        if payload:
-            self._sock.sendall(payload)
+        with self._send_lock:
+            self._sock.sendall(
+                len(encoded).to_bytes(4, "big") + encoded + len(payload).to_bytes(4, "big")
+            )
+            if payload:
+                self._sock.sendall(payload)
 
     def _read_prefix(self) -> bytearray | None:
         """The next frame's header length bytes, or None on a clean close."""
@@ -115,8 +126,10 @@ def serve(connection: Connection) -> int:
     load, _ = frame
     if not isinstance(load, Load):
         raise ProtocolError("expected load as the first frame")
+    hooks = hooks_from_frame(load.hooks)
     try:
         handler = load_handler(load.handler)
+        run_startup_hooks(hooks, load.handler)
     except KeyboardInterrupt:
         raise
     except BaseException as exc:
@@ -125,32 +138,135 @@ def serve(connection: Connection) -> int:
         return LOAD_FAILED_EXIT
     _flush_output()
     connection.send(Loaded(type="loaded"))
+    attempt = _Attempts(handler, hooks, load.handler)
+    if load.concurrency > 1:
+        return _serve_threads(connection, attempt, load.concurrency)
     while (frame := connection.receive()) is not None:
         invoke, payload = frame
         if not isinstance(invoke, Invoke):
             raise ProtocolError("load after the handler loaded")
-        reply, result = _attempt(handler, invoke, payload)
+        reply, result = attempt.run(invoke, payload)
         _flush_output()
         connection.send(reply, result)
     return 0
 
 
-def _attempt(
-    handler: Callable[..., Any], invoke: Invoke, payload: bytearray
-) -> tuple[Succeeded | Failed, bytes]:
-    encoding = invoke.input_encoding
+def _serve_threads(connection: Connection, attempt: _Attempts, concurrency: int) -> int:
+    """Run up to `concurrency` attempts at once, one thread each, sending each
+    attempt's output as frames. Closing the socket ends the process; the
+    supervisor closes it only once no attempt runs."""
+
+    routed_output.install()
+
+    def send_output(attempt_id: str, stream: Stream, data: str) -> None:
+        connection.send(Output(type="output", attempt_id=attempt_id, stream=stream, data=data))
+
+    def run(invoke: Invoke, payload: bytearray) -> None:
+        with routed_output.attempt_output(invoke.attempt_id, send_output):
+            reply, result = attempt.run(invoke, payload)
+        connection.send(reply, result)
+
+    running = threading.BoundedSemaphore(concurrency)
+    while (frame := connection.receive()) is not None:
+        invoke, payload = frame
+        if not isinstance(invoke, Invoke):
+            raise ProtocolError("load after the handler loaded")
+        if not running.acquire(blocking=False):
+            raise ProtocolError(f"more than {concurrency} attempts at once")
+
+        def worker(invoke: Invoke = invoke, payload: bytearray = payload) -> None:
+            try:
+                run(invoke, payload)
+            finally:
+                running.release()
+
+        threading.Thread(target=worker, name=f"attempt-{invoke.attempt_id}", daemon=True).start()
+    return 0
+
+
+class _Attempts:
+    """Runs attempts of one handler with its lifecycle hooks."""
+
+    def __init__(self, handler: Callable[..., Any], hooks: LifecycleHooks, reference: str) -> None:
+        self._handler = handler
+        self._hooks = hooks
+        self._startup = startup_context(reference)
+
+    def run(self, invoke: Invoke, payload: bytearray) -> tuple[Succeeded | Failed, bytes]:
+        """Run the handler between its hooks: on_running; then on_success or
+        on_error followed by on_retry or on_failure; then on_finish. Hooks run
+        before the outcome is sent, so their output is the attempt's and the
+        attempt's deadline covers them."""
+
+        encoding = invoke.input_encoding
+        root = invoke.root_task_id or invoke.task_id
+        context = LifecycleTaskContext(
+            hook=LifecycleHookName.Running,
+            task_id=invoke.task_id,
+            status=TaskStatus.Running,
+            root_task_id=root,
+            parent_task_id=invoke.parent_task_id or "",
+            workspace_name=self._startup.workspace_name,
+            container_id=self._startup.container_id,
+            container_hostname=self._startup.container_hostname,
+            handler=self._startup.handler,
+            attempt_number=invoke.attempt_number,
+            max_attempts=invoke.max_attempts,
+        )
+        started = time.monotonic()
+        with task_context(invoke.task_id, root):
+            run_task_hooks(self._hooks, LifecycleHookName.Running, context)
+            try:
+                args, kwargs = _decode_arguments(encoding, payload)
+                result = invoke_handler(self._handler, args, kwargs, encoding=encoding)
+                encoded = _encode_result(result, encoding)
+            except KeyboardInterrupt:
+                raise
+            except BaseException as exc:
+                self._failed(context, exc, time.monotonic() - started)
+                failed = Failed(
+                    type="failed", attempt_id=invoke.attempt_id, error=_runner_error(exc)
+                )
+                return failed, _exception_payload(exc)
+            done = context.model_copy(
+                update={
+                    "status": TaskStatus.Complete,
+                    "duration_seconds": time.monotonic() - started,
+                    "result_available": True,
+                }
+            )
+            run_task_hooks(self._hooks, LifecycleHookName.Success, done)
+            run_task_hooks(self._hooks, LifecycleHookName.Finish, done)
+        succeeded = Succeeded(
+            type="succeeded", attempt_id=invoke.attempt_id, result_encoding=encoding
+        )
+        return succeeded, encoded
+
+    def _failed(self, context: LifecycleTaskContext, exc: BaseException, duration: float) -> None:
+        failed = context.model_copy(
+            update={
+                "status": TaskStatus.Failed,
+                "duration_seconds": duration,
+                "error_type": type(exc).__name__,
+                "error_message": _message(exc),
+            }
+        )
+        run_task_hooks(self._hooks, LifecycleHookName.Error, failed)
+        # The platform retries a raised exception while attempts remain.
+        if context.attempt_number < context.max_attempts:
+            final = failed.model_copy(update={"status": TaskStatus.Retry, "retry_scheduled": True})
+            run_task_hooks(self._hooks, LifecycleHookName.Retry, final)
+        else:
+            final = failed
+            run_task_hooks(self._hooks, LifecycleHookName.Failure, final)
+        run_task_hooks(self._hooks, LifecycleHookName.Finish, final)
+
+
+def _message(exc: BaseException) -> str:
     try:
-        args, kwargs = _decode_arguments(encoding, payload)
-        with task_context(invoke.task_id):
-            result = invoke_handler(handler, args, kwargs, encoding=encoding)
-        encoded = _encode_result(result, encoding)
-    except KeyboardInterrupt:
-        raise
-    except BaseException as exc:
-        failed = Failed(type="failed", attempt_id=invoke.attempt_id, error=_runner_error(exc))
-        return failed, _exception_payload(exc)
-    succeeded = Succeeded(type="succeeded", attempt_id=invoke.attempt_id, result_encoding=encoding)
-    return succeeded, encoded
+        return str(exc)
+    except Exception:
+        return f"<unprintable {type(exc).__name__}>"
 
 
 def _decode_arguments(
