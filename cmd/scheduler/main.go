@@ -44,7 +44,7 @@ import (
 
 const (
 	// tick bounds how long a missed wake delays planning, placement and
-	// attempt deadlines.
+	// attempt deadlines while work is live; safetyTick bounds it otherwise.
 	tick = time.Second
 	// leaderLock names the session advisory lock the leader holds.
 	leaderLock = "scheduler_leader"

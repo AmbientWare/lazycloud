@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
 	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
@@ -20,31 +22,9 @@ import (
 // loops and health server on shutdown.
 func TestSchedulerReadinessAndShutdown(t *testing.T) {
 	pool := dbtest.New(t)
-	key := filepath.Join(t.TempDir(), "secrets.key")
-	secret := make([]byte, 32)
-	_, _ = rand.Read(secret)
-	if err := os.WriteFile(key, secret, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	store := storagetest.Config()
 	addr := freeAddr(t)
-	for name, value := range map[string]string{
-		"LAZYCLOUD_DATABASE_URL":                   pool.Config().ConnString(),
-		"LAZYCLOUD_SECRETS_KEY_FILE":               key,
-		"LAZYCLOUD_HEALTH_ADDR":                    addr,
-		"LAZYCLOUD_OBJECT_STORE_ENDPOINT":          store.Endpoint,
-		"LAZYCLOUD_OBJECT_STORE_REGION":            store.Region,
-		"LAZYCLOUD_OBJECT_STORE_BUCKET":            store.Bucket,
-		"LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID":     store.AccessKeyID,
-		"LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY": store.SecretAccessKey,
-		"LAZYCLOUD_WORKSPACE_BUCKET_PROVIDER":      string(store.Workspaces.Provider),
-		"LAZYCLOUD_WORKSPACE_BUCKET_PREFIX":        store.Workspaces.Prefix,
-		"LAZYCLOUD_GARAGE_ADMIN_URL":               store.Workspaces.GarageAdminURL,
-		"LAZYCLOUD_GARAGE_ADMIN_TOKEN":             store.Workspaces.GarageAdminToken,
-		"LAZYCLOUD_RESEND_API_KEY":                 "",
-	} {
-		t.Setenv(name, value)
-	}
+	schedulerEnv(t, pool)
+	t.Setenv("LAZYCLOUD_HEALTH_ADDR", addr)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -114,6 +94,35 @@ func TestPassesEndAtTheirDeadlineAndProgressBeats(t *testing.T) {
 	}
 	if starting, stalled := beats.check(time.Now()); len(starting)+len(stalled) != 0 {
 		t.Fatalf("starting %v stalled %v after a cut-off pass", starting, stalled)
+	}
+}
+
+// schedulerEnv points the scheduler at pool, a fresh secrets key and the test
+// object store, with email delivery off.
+func schedulerEnv(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	key := filepath.Join(t.TempDir(), "secrets.key")
+	secret := make([]byte, 32)
+	_, _ = rand.Read(secret)
+	if err := os.WriteFile(key, secret, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := storagetest.Config()
+	for name, value := range map[string]string{
+		"LAZYCLOUD_DATABASE_URL":                   pool.Config().ConnString(),
+		"LAZYCLOUD_SECRETS_KEY_FILE":               key,
+		"LAZYCLOUD_OBJECT_STORE_ENDPOINT":          store.Endpoint,
+		"LAZYCLOUD_OBJECT_STORE_REGION":            store.Region,
+		"LAZYCLOUD_OBJECT_STORE_BUCKET":            store.Bucket,
+		"LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID":     store.AccessKeyID,
+		"LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY": store.SecretAccessKey,
+		"LAZYCLOUD_WORKSPACE_BUCKET_PROVIDER":      string(store.Workspaces.Provider),
+		"LAZYCLOUD_WORKSPACE_BUCKET_PREFIX":        store.Workspaces.Prefix,
+		"LAZYCLOUD_GARAGE_ADMIN_URL":               store.Workspaces.GarageAdminURL,
+		"LAZYCLOUD_GARAGE_ADMIN_TOKEN":             store.Workspaces.GarageAdminToken,
+		"LAZYCLOUD_RESEND_API_KEY":                 "",
+	} {
+		t.Setenv(name, value)
 	}
 }
 
