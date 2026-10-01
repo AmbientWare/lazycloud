@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/compute"
@@ -168,17 +170,10 @@ func SnapshotFailure(s Snapshot) error {
 	if s.Failure == nil {
 		return &ConflictError{Reason: "the snapshot failed"}
 	}
-	if reason, ok := cutPrefix(*s.Failure, unsupportedPrefix); ok {
+	if reason, ok := strings.CutPrefix(*s.Failure, unsupportedPrefix); ok {
 		return &UnsupportedError{Reason: reason}
 	}
 	return &ConflictError{Reason: "the snapshot failed: " + *s.Failure}
-}
-
-func cutPrefix(s, prefix string) (string, bool) {
-	if len(s) >= len(prefix) && s[:len(prefix)] == prefix {
-		return s[len(prefix):], true
-	}
-	return s, false
 }
 
 // SnapshotCommand asks a host to snapshot a container.
@@ -386,38 +381,37 @@ func (e *Execution) WaitFilesystemImage(ctx context.Context, listener *database.
 	}
 }
 
-// FinishFilesystemImage records the host's outcome once; register makes the
-// published reference an image of the workspace and returns its id.
+// FinishFilesystemImage records the host's outcome once. register makes
+// the published reference an image of the workspace, outside this
+// transaction, and returns its id.
 func (e *Execution) FinishFilesystemImage(ctx context.Context, host compute.HostID, container ContainerID, request uuid.UUID, failure string, register func(identity.WorkspaceID) (string, error)) error {
-	return pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
-		q := e.queries.WithTx(tx)
-		params := FinishFilesystemImageParams{ID: request, ContainerID: uuid.UUID(container), HostID: hostUUID(host), State: "failed"}
-		if failure != "" {
-			params.Failure = &failure
-		} else {
-			view, err := q.FilesystemImageView(ctx, request)
-			if errors.Is(err, pgx.ErrNoRows) {
-				return ErrStaleSnapshot
-			}
-			if err != nil {
-				return fmt.Errorf("read filesystem image: %w", err)
-			}
-			if view.State != "publishing" {
-				return ErrStaleSnapshot
-			}
-			ws, err := e.workspaceOfContainer(ctx, q, container)
-			if err != nil {
-				return err
-			}
-			image, err := register(ws)
-			if err != nil {
-				reason := "register image: " + err.Error()
-				params.Failure = &reason
-			} else {
-				params.State, params.ImageID = "published", &image
-			}
+	params := FinishFilesystemImageParams{ID: request, ContainerID: uuid.UUID(container), HostID: hostUUID(host), State: "failed"}
+	if failure == "" {
+		view, err := e.queries.FilesystemImageView(ctx, request)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrStaleSnapshot
 		}
-		if _, err := q.FinishFilesystemImage(ctx, params); errors.Is(err, pgx.ErrNoRows) {
+		if err != nil {
+			return fmt.Errorf("read filesystem image: %w", err)
+		}
+		if view.State != "publishing" {
+			return ErrStaleSnapshot
+		}
+		ws, err := e.workspaceOfContainer(ctx, e.queries, container)
+		if err != nil {
+			return err
+		}
+		if image, err := register(ws); err != nil {
+			failure = "register image: " + err.Error()
+		} else {
+			params.State, params.ImageID = "published", &image
+		}
+	}
+	if failure != "" {
+		params.Failure = &failure
+	}
+	return pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
+		if _, err := e.queries.WithTx(tx).FinishFilesystemImage(ctx, params); errors.Is(err, pgx.ErrNoRows) {
 			return ErrStaleSnapshot
 		} else if err != nil {
 			return fmt.Errorf("finish filesystem image: %w", err)
@@ -432,4 +426,9 @@ func (e *Execution) workspaceOfContainer(ctx context.Context, q *Queries, contai
 		return identity.WorkspaceID{}, fmt.Errorf("read container: %w", err)
 	}
 	return identity.WorkspaceID(route.WorkspaceID), nil
+}
+
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }

@@ -1,8 +1,10 @@
 -- name: StartingContainersOnHost :many
 select c.id, c.workspace_id, w.name as workspace_name, c.slots, c.cpu_millis, c.memory_bytes,
-       r.spec, r.source_sha256
+       r.spec, r.source_sha256, c.purpose, c.command, c.block_network, c.allow_list,
+       r.workload_id, wl.kind as workload_kind
 from containers c
 join releases r on r.id = c.release_id
+join workloads wl on wl.id = r.workload_id
 join workspaces w on w.id = c.workspace_id
 where c.host_id = @host_id and c.state = 'starting'
 order by c.id;

@@ -314,7 +314,7 @@ where c.workspace_id = @workspace_id and w.kind = 'sandbox'
   and (sqlc.narg('app')::text is null or a.name = sqlc.narg('app'));
 
 -- name: SandboxCreatedDays :many
-select date_trunc('day', c.created_at at time zone 'UTC')::timestamp as day, count(*)::int as created
+select (date_trunc('day', c.created_at at time zone 'UTC') at time zone 'UTC')::timestamptz as day, count(*)::int as created
 from containers c
 join releases r on r.id = c.release_id
 join workloads w on w.id = r.workload_id

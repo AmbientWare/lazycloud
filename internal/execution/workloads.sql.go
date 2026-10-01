@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const containerNetwork = `-- name: ContainerNetwork :one
@@ -855,7 +854,7 @@ func (q *Queries) ReadyPodContainers(ctx context.Context, workloadID uuid.UUID) 
 }
 
 const sandboxCreatedDays = `-- name: SandboxCreatedDays :many
-select date_trunc('day', c.created_at at time zone 'UTC')::timestamp as day, count(*)::int as created
+select (date_trunc('day', c.created_at at time zone 'UTC') at time zone 'UTC')::timestamptz as day, count(*)::int as created
 from containers c
 join releases r on r.id = c.release_id
 join workloads w on w.id = r.workload_id
@@ -872,7 +871,7 @@ type SandboxCreatedDaysParams struct {
 }
 
 type SandboxCreatedDaysRow struct {
-	Day     pgtype.Timestamp
+	Day     time.Time
 	Created int32
 }
 

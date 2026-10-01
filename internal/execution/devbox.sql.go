@@ -16,7 +16,8 @@ const devboxContainer = `-- name: DevboxContainer :one
 select c.id, c.state, c.host_id, c.keep_warm_seconds, c.active_until,
        coalesce(array(select st.stage from container_startup_stages st where st.container_id = c.id), '{}')::text[] as stages,
        (select count(*) from container_leases l where l.container_id = c.id and l.expires_at > now())::int as connections,
-       (select max(l.expires_at) from container_leases l where l.container_id = c.id)::timestamptz as last_connection
+       coalesce((select max(l.expires_at) from container_leases l where l.container_id = c.id), c.created_at)::timestamptz
+           as last_connection
 from containers c
 join releases r on r.id = c.release_id
 where r.workload_id = $1 and c.purpose = 'serve' and c.state <> 'stopped'
