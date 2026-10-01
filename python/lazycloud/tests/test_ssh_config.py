@@ -3,7 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from lazycloud.clients.ssh.control import SshControlClient
+from lazycloud.clients.api import ApiClient
+from lazycloud.clients.workloads import WorkloadsClient
 from lazycloud.session.ssh import SshAccess, SshPaths, SshPodHost, SshSetupError
 from shared.ssh import ssh_host_alias
 
@@ -17,7 +18,7 @@ def _host(app: str, pod: str, key: str) -> SshPodHost:
 
 def test_pods_sharing_a_name_across_apps_get_separate_hosts_and_pins(tmp_path: Path) -> None:
     access = SshAccess(
-        client=SshControlClient.from_endpoint("http://127.0.0.1:1"),
+        client=WorkloadsClient(ApiClient(endpoint="http://127.0.0.1:1"), "acme"),
         workspace="acme",
         paths=SshPaths(root=tmp_path),
         cli_command=("lazycloud",),
@@ -40,7 +41,7 @@ def test_pods_sharing_a_name_across_apps_get_separate_hosts_and_pins(tmp_path: P
 
 def test_a_full_sync_removes_only_this_workspaces_stale_hosts(tmp_path: Path) -> None:
     paths = SshPaths(root=tmp_path)
-    client = SshControlClient.from_endpoint("http://127.0.0.1:1")
+    client = WorkloadsClient(ApiClient(endpoint="http://127.0.0.1:1"), "acme")
     acme = SshAccess(client=client, workspace="acme", paths=paths, cli_command=("lazycloud",))
     other = SshAccess(client=client, workspace="other", paths=paths, cli_command=("lazycloud",))
     acme.write_hosts([_host("dev", "box", _KEY), _host("dev", "gone", _OTHER_KEY)])

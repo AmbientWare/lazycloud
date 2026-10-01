@@ -228,14 +228,6 @@ func (e *Execution) ListTasks(ctx context.Context, workspace identity.WorkspaceI
 	return page, nil
 }
 
-func int32Of(v *int) *int32 {
-	if v == nil {
-		return nil
-	}
-	n := int32(*v) //nolint:gosec // Versions are small positive integers.
-	return &n
-}
-
 // maxPage bounds every page of a listing.
 const maxPage = 1000
 

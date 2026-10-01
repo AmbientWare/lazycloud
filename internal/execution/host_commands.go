@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/identity"
@@ -31,6 +33,12 @@ type StartCommand struct {
 	// reservations.
 	CPULimitMillis   int64
 	MemoryLimitBytes int64
+	Purpose          ContainerPurpose
+	Workload         uuid.UUID
+	Kind             apitypes.WorkloadKind
+	// Command replaces the pod's command for an instance.
+	Command []string
+	Network NetworkPolicy
 }
 
 // StopCommand asks a host to stop a container.
@@ -53,9 +61,12 @@ type CancelCommand struct {
 // derived again after every wake and reconnect, so hosts apply them
 // idempotently.
 type HostCommands struct {
-	Start  []StartCommand
-	Stop   []StopCommand
-	Cancel []CancelCommand
+	Start    []StartCommand
+	Stop     []StopCommand
+	Cancel   []CancelCommand
+	Snapshot []SnapshotCommand
+	Publish  []PublishCommand
+	Network  []NetworkCommand
 }
 
 // HostCommands derives the host's commands: start every container assigned
@@ -81,6 +92,8 @@ func (e *Execution) HostCommands(ctx context.Context, host compute.HostID) (Host
 			CPUMillis: row.CpuMillis, MemoryBytes: row.MemoryBytes,
 			CPULimitMillis:   cpuLimitMillis(spec.Resources),
 			MemoryLimitBytes: memoryLimitMiB(spec.Resources) << 20,
+			Purpose:          ContainerPurpose(row.Purpose), Workload: row.WorkloadID, Kind: apitypes.WorkloadKind(row.WorkloadKind),
+			Command: row.Command, Network: NetworkPolicy{Block: row.BlockNetwork, Allow: row.AllowList},
 		})
 	}
 	idle, err := e.queries.IdleDrainingContainersOnHost(ctx, hostUUID(host))
@@ -100,6 +113,9 @@ func (e *Execution) HostCommands(ctx context.Context, host compute.HostID) (Host
 		out.Cancel = append(out.Cancel, CancelCommand{
 			Container: ContainerID(row.ContainerID), Attempt: AttemptID(row.ID), Reason: AttemptState(row.State),
 		})
+	}
+	if err := e.workloadCommands(ctx, host, &out); err != nil {
+		return out, err
 	}
 	return out, nil
 }

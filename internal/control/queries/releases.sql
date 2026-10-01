@@ -3,7 +3,7 @@
 -- deploy it never reactivates a stopped workload. The no-op update locks the
 -- row, so concurrent prepares of one definition insert one release.
 insert into workloads (app_id, kind, name, desired_state)
-values (@app_id, 'function', @name, 'active')
+values (@app_id, @kind, @name, 'active')
 on conflict (app_id, kind, name) where desired_state <> 'deleted' do update set name = excluded.name
 returning id, active_release_id, desired_state;
 

@@ -17,11 +17,13 @@ select c.id, a.name as app_name, w.name as function_name, r.id as release_id, r.
        c.stop_reason, c.exit_message, c.slots, c.cpu_millis, c.memory_bytes,
        c.created_at, c.ready_at, c.stopped_at,
        (select count(*) from attempts at where at.container_id = c.id and at.state = 'running')::int as running,
+       w.kind, c.purpose, c.exit_code, c.gpu_count, h.name as host_name,
        coalesce(r.spec #>> '{image,reference}', '')::text as image
 from containers c
 join releases r on r.id = c.release_id
 join workloads w on w.id = r.workload_id
 join apps a on a.id = w.app_id
+left join hosts h on h.id = c.host_id
 where c.workspace_id = $1 and c.id = $2
 `
 
@@ -46,6 +48,11 @@ type ContainerViewRow struct {
 	ReadyAt      *time.Time
 	StoppedAt    *time.Time
 	Running      int32
+	Kind         string
+	Purpose      string
+	ExitCode     *int32
+	GpuCount     int32
+	HostName     *string
 	Image        string
 }
 
@@ -68,6 +75,11 @@ func (q *Queries) ContainerView(ctx context.Context, arg ContainerViewParams) (C
 		&i.ReadyAt,
 		&i.StoppedAt,
 		&i.Running,
+		&i.Kind,
+		&i.Purpose,
+		&i.ExitCode,
+		&i.GpuCount,
+		&i.HostName,
 		&i.Image,
 	)
 	return i, err
@@ -88,17 +100,20 @@ select c.id, a.name as app_name, w.name as function_name, r.id as release_id, r.
        c.stop_reason, c.exit_message, c.slots, c.cpu_millis, c.memory_bytes,
        c.created_at, c.ready_at, c.stopped_at,
        (select count(*) from attempts at where at.container_id = c.id and at.state = 'running')::int as running,
+       w.kind, c.purpose, c.exit_code, c.gpu_count, h.name as host_name,
        coalesce(r.spec #>> '{image,reference}', '')::text as image
 from containers c
 join releases r on r.id = c.release_id
 join workloads w on w.id = r.workload_id
 join apps a on a.id = w.app_id
+left join hosts h on h.id = c.host_id
 where c.workspace_id = $1
   and ($2::text is null or a.name = $2::text)
   and ($3::text is null or w.name = $3::text)
   and c.id < $4
+  and ($5::uuid is null or r.workload_id = $5)
 order by c.id desc
-limit $5
+limit $6
 `
 
 type ListContainersParams struct {
@@ -106,6 +121,7 @@ type ListContainersParams struct {
 	App         *string
 	Function    *string
 	Before      uuid.UUID
+	WorkloadID  *uuid.UUID
 	MaxRows     int32
 }
 
@@ -125,6 +141,11 @@ type ListContainersRow struct {
 	ReadyAt      *time.Time
 	StoppedAt    *time.Time
 	Running      int32
+	Kind         string
+	Purpose      string
+	ExitCode     *int32
+	GpuCount     int32
+	HostName     *string
 	Image        string
 }
 
@@ -135,6 +156,7 @@ func (q *Queries) ListContainers(ctx context.Context, arg ListContainersParams) 
 		arg.App,
 		arg.Function,
 		arg.Before,
+		arg.WorkloadID,
 		arg.MaxRows,
 	)
 	if err != nil {
@@ -160,6 +182,11 @@ func (q *Queries) ListContainers(ctx context.Context, arg ListContainersParams) 
 			&i.ReadyAt,
 			&i.StoppedAt,
 			&i.Running,
+			&i.Kind,
+			&i.Purpose,
+			&i.ExitCode,
+			&i.GpuCount,
+			&i.HostName,
 			&i.Image,
 		); err != nil {
 			return nil, err
@@ -177,18 +204,21 @@ select c.id, a.name as app_name, w.name as function_name, r.id as release_id, r.
        c.stop_reason, c.exit_message, c.slots, c.cpu_millis, c.memory_bytes,
        c.created_at, c.ready_at, c.stopped_at,
        (select count(*) from attempts at where at.container_id = c.id and at.state = 'running')::int as running,
+       w.kind, c.purpose, c.exit_code, c.gpu_count, h.name as host_name,
        coalesce(r.spec #>> '{image,reference}', '')::text as image
 from containers c
 join releases r on r.id = c.release_id
 join workloads w on w.id = r.workload_id
 join apps a on a.id = w.app_id
+left join hosts h on h.id = c.host_id
 where c.workspace_id = $1
   and c.state <> 'stopped'
   and ($2::text is null or a.name = $2::text)
   and ($3::text is null or w.name = $3::text)
   and c.id < $4
+  and ($5::uuid is null or r.workload_id = $5)
 order by c.id desc
-limit $5
+limit $6
 `
 
 type ListLiveContainersParams struct {
@@ -196,6 +226,7 @@ type ListLiveContainersParams struct {
 	App         *string
 	Function    *string
 	Before      uuid.UUID
+	WorkloadID  *uuid.UUID
 	MaxRows     int32
 }
 
@@ -215,6 +246,11 @@ type ListLiveContainersRow struct {
 	ReadyAt      *time.Time
 	StoppedAt    *time.Time
 	Running      int32
+	Kind         string
+	Purpose      string
+	ExitCode     *int32
+	GpuCount     int32
+	HostName     *string
 	Image        string
 }
 
@@ -226,6 +262,7 @@ func (q *Queries) ListLiveContainers(ctx context.Context, arg ListLiveContainers
 		arg.App,
 		arg.Function,
 		arg.Before,
+		arg.WorkloadID,
 		arg.MaxRows,
 	)
 	if err != nil {
@@ -251,6 +288,11 @@ func (q *Queries) ListLiveContainers(ctx context.Context, arg ListLiveContainers
 			&i.ReadyAt,
 			&i.StoppedAt,
 			&i.Running,
+			&i.Kind,
+			&i.Purpose,
+			&i.ExitCode,
+			&i.GpuCount,
+			&i.HostName,
 			&i.Image,
 		); err != nil {
 			return nil, err

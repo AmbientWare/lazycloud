@@ -1003,6 +1003,10 @@ paths:
           in: query
           description: Only the containers of this workload of `app`; requires it.
           schema: { $ref: "#/components/schemas/WorkloadName" }
+        - name: deployment
+          in: query
+          description: Only containers of this workload's releases.
+          schema: { type: string, format: uuid }
         - $ref: "#/components/parameters/PageLimit"
         - $ref: "#/components/parameters/Cursor"
       responses:
@@ -3165,6 +3169,648 @@ paths:
         "204": { description: Removed }
         default: { $ref: "#/components/responses/Error" }
 
+  # Workloads: pods, devboxes, sandboxes, shells and SSH.
+
+  /v1/workspaces/{workspace}/deployments/{deployment}/scale:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/DeploymentPath"
+    post:
+      operationId: scaleDeployment
+      tags: [workloads]
+      summary: Hold a pod at a number of containers
+      description: >-
+        The count holds until the next scale, whatever the pod's
+        connections. Only an active pod of an active app scales; a pod with a
+        disk runs at most one container, and an always-on pod (keep_warm -1)
+        cannot scale to zero.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ScaleRequest" }
+      responses:
+        "200":
+          description: The deployment after the change
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeployedWorkload" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/deployments/{deployment}/devbox:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/DeploymentPath"
+    get:
+      operationId: getDevbox
+      tags: [workloads]
+      summary: How to reach a devbox and what it is doing
+      responses:
+        "200":
+          description: The devbox
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Devbox" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/deployments/{deployment}/devbox/start:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/DeploymentPath"
+    post:
+      operationId: startDevbox
+      tags: [workloads]
+      summary: Start the devbox now, activating its deployment if it is stopped
+      responses:
+        "200":
+          description: The devbox after the request
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Devbox" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/deployments/{deployment}/devbox/stop:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/DeploymentPath"
+    post:
+      operationId: stopDevbox
+      tags: [workloads]
+      summary: Stop the devbox's container until the next connection or start
+      description: The deployment stays active; the root disk is saved as the container stops.
+      responses:
+        "200":
+          description: The devbox after the request
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Devbox" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/instances:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+    post:
+      operationId: createInstance
+      tags: [workloads]
+      summary: Start a container of a release outside its deployment's count
+      description: >-
+        An instance of a pod or sandbox release, a shell container of any
+        release, or a sandbox restored from a memory snapshot. It is placed
+        like any container and stops once its lifetime passes with no open
+        connection, or when it is stopped.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateInstanceRequest" }
+      responses:
+        "201":
+          description: The pending container
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Instance" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/containers/{container}/connect:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/ContainerPath"
+    post:
+      operationId: connectContainer
+      tags: [workloads]
+      summary: Wait until the container is ready
+      description: >-
+        Answers with the container once it is ready, with `unavailable` while
+        it is still starting after wait_seconds, and with `conflict` once it
+        has stopped.
+      parameters:
+        - name: wait_seconds
+          in: query
+          schema: { type: integer, minimum: 0, maximum: 60, default: 0 }
+      responses:
+        "200":
+          description: The ready container
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Instance" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/containers/{container}/output:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/ContainerPath"
+    get:
+      operationId: streamContainerOutput
+      tags: [workloads]
+      summary: What the container wrote outside task attempts, one JSON ContainerLogEntry per line
+      description: >-
+        A followed stream ends once the container has stopped and its output
+        is drained, and writes a blank line after 15 seconds without output.
+      parameters:
+        - $ref: "#/components/parameters/LogAfter"
+        - name: follow
+          in: query
+          schema: { type: boolean, default: false }
+      responses:
+        "200":
+          description: Newline-delimited ContainerLogEntry objects
+          content:
+            application/x-ndjson:
+              schema: { type: string, format: binary }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/containers/{container}/processes:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/ContainerPath"
+    get:
+      operationId: listProcesses
+      tags: [workloads]
+      summary: Processes started through the API, with those that exited in the last five minutes
+      responses:
+        "200":
+          description: The processes by pid
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProcessList" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: startProcess
+      tags: [workloads]
+      summary: Start a process in the container
+      description: >-
+        args run directly, without a shell, in their own process group, with
+        the container's environment plus env.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProcessRequest" }
+      responses:
+        "201":
+          description: The started process
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Process" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/containers/{container}/processes/{process}:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/ContainerPath"
+      - $ref: "#/components/parameters/ProcessPath"
+    get:
+      operationId: getProcess
+      tags: [workloads]
+      summary: A process's state and the first 256 KiB of each output stream
+      description: A result stays readable for five minutes after the process exits.
+      parameters:
+        - name: wait_seconds
+          in: query
+          description: Hold the request until the process exits or this many seconds pass.
+          schema: { type: number, minimum: 0, maximum: 5, default: 0 }
+      responses:
+        "200":
+          description: The process
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Process" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/containers/{container}/processes/{process}/kill:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/ContainerPath"
+      - $ref: "#/components/parameters/ProcessPath"
+    post:
+      operationId: killProcess
+      tags: [workloads]
+      summary: Signal the process's group; a process that already exited is not an error
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/KillRequest" }
+      responses:
+        "204": { description: Signalled }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/containers/{container}/files:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/ContainerPath"
+      - $ref: "#/components/parameters/ContainerFilePath"
+    get:
+      operationId: listContainerFiles
+      tags: [workloads]
+      summary: A directory's entries by name, or the one entry of a file
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 10000, default: 10000 }
+      responses:
+        "200":
+          description: The entries
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ContainerFileList" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteContainerFile
+      tags: [workloads]
+      summary: Delete a file; a missing one is not an error and a directory is refused
+      responses:
+        "204": { description: Deleted }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/containers/{container}/files/stat:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/ContainerPath"
+      - $ref: "#/components/parameters/ContainerFilePath"
+    get:
+      operationId: statContainerFile
+      tags: [workloads]
+      responses:
+        "200":
+          description: The file, following symbolic links
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ContainerFile" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/containers/{container}/files/content:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/ContainerPath"
+      - $ref: "#/components/parameters/ContainerFilePath"
+    get:
+      operationId: downloadContainerFile
+      tags: [workloads]
+      summary: A file's bytes
+      description: >-
+        A file larger than max_bytes is refused unless truncate asks for its
+        first max_bytes; the response then carries `Lazycloud-Truncated:
+        true`.
+      parameters:
+        # Defaults to 64 MiB. No schema default: the request validator would
+        # write it back into the query as a float.
+        - name: max_bytes
+          in: query
+          schema: { type: integer, format: int64, minimum: 1, maximum: 67108864 }
+        - name: truncate
+          in: query
+          schema: { type: boolean, default: false }
+      responses:
+        "200":
+          description: The file's bytes
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        default: { $ref: "#/components/responses/Error" }
+    put:
+      operationId: uploadContainerFile
+      tags: [workloads]
+      summary: Write a file and its parent directories; the replace is atomic
+      parameters:
+        - name: mode
+          in: query
+          description: Permission bits, such as 420 for 0644.
+          schema: { type: integer, minimum: 0, maximum: 4095, default: 420 }
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary }
+      responses:
+        "204": { description: Written }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/containers/{container}/files/find:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/ContainerPath"
+    post:
+      operationId: findInContainerFiles
+      tags: [workloads]
+      summary: Every occurrence of a literal string in the UTF-8 files under a path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FindInFilesRequest" }
+      responses:
+        "200":
+          description: The matches
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FileMatches" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/containers/{container}/files/replace:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/ContainerPath"
+    post:
+      operationId: replaceInContainerFiles
+      tags: [workloads]
+      summary: Replace every occurrence of a literal string in the UTF-8 files under a path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReplaceInFilesRequest" }
+      responses:
+        "200":
+          description: What changed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReplacedFiles" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/containers/{container}/directories:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/ContainerPath"
+      - $ref: "#/components/parameters/ContainerFilePath"
+    post:
+      operationId: createContainerDirectory
+      tags: [workloads]
+      summary: Create a directory and its parents
+      parameters:
+        - name: mode
+          in: query
+          schema: { type: integer, minimum: 0, maximum: 4095, default: 493 }
+      responses:
+        "204": { description: Created }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteContainerDirectory
+      tags: [workloads]
+      summary: Delete a directory and everything in it; a missing one is not an error
+      responses:
+        "204": { description: Deleted }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/containers/{container}/ports:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/ContainerPath"
+    get:
+      operationId: listContainerPorts
+      tags: [workloads]
+      summary: The container's exposed ports and their URLs
+      responses:
+        "200":
+          description: The ports
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ContainerPortList" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: exposeContainerPort
+      tags: [workloads]
+      summary: Answer HTTP on a port the container listens on, for as long as it runs
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ExposePortRequest" }
+      responses:
+        "200":
+          description: The port's URL
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ContainerPort" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/containers/{container}/network:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/ContainerPath"
+    get:
+      operationId: getContainerNetwork
+      tags: [workloads]
+      responses:
+        "200":
+          description: The container's outbound network policy
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NetworkPolicy" }
+        default: { $ref: "#/components/responses/Error" }
+    put:
+      operationId: setContainerNetwork
+      tags: [workloads]
+      summary: Block outbound traffic, limit it to CIDR ranges, or open it
+      description: An allow list wins over block_network.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NetworkPolicy" }
+      responses:
+        "200":
+          description: The policy in force
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NetworkPolicy" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/containers/{container}/ttl:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/ContainerPath"
+    put:
+      operationId: setContainerTtl
+      tags: [workloads]
+      summary: Keep an instance up for ttl more idle seconds, or without a limit for 0 or -1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TtlRequest" }
+      responses:
+        "200":
+          description: The instance's lifetime
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Ttl" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/containers/{container}/snapshots:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/ContainerPath"
+    post:
+      operationId: snapshotContainer
+      tags: [workloads]
+      summary: Checkpoint the container's memory and filesystem; it keeps running
+      description: >-
+        Answers once the snapshot is stored, or with its failure. A host that
+        cannot checkpoint fails it with `unsupported`.
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SnapshotRequest" }
+      responses:
+        "201":
+          description: The stored snapshot
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MemorySnapshot" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/containers/{container}/filesystem-images:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/ContainerPath"
+    post:
+      operationId: createFilesystemImage
+      tags: [workloads]
+      summary: Publish the container's filesystem, without its mounts, as an image
+      description: Answers once the image is published; `Image.from_id` reuses it.
+      responses:
+        "201":
+          description: The image
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FilesystemImage" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/containers/{container}/shell:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/ContainerPath"
+    get:
+      operationId: openContainerShell
+      tags: [workloads]
+      summary: An interactive login shell in the container, over a WebSocket
+      description: >-
+        Binary messages carry terminal bytes both ways. Text messages are
+        JSON: the client sends `{"type": "resize", "cols": N, "rows": N}`;
+        the server sends `{"type": "exit", "code": N}` when the shell ends and
+        `{"type": "error", "message": "..."}` when it cannot start. A browser
+        session must send the dashboard's Origin.
+      parameters:
+        - name: cols
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 80 }
+        - name: rows
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 24 }
+        - name: term
+          in: query
+          schema: { type: string, pattern: "^[A-Za-z0-9._+-]{1,64}$", default: xterm-256color }
+      responses:
+        "101": { description: Switching to the WebSocket protocol }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/sandboxes:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+    get:
+      operationId: listSandboxes
+      tags: [workloads]
+      summary: Sandbox containers, newest first
+      parameters:
+        - name: app
+          in: query
+          schema: { $ref: "#/components/schemas/AppName" }
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: One page of sandboxes
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SandboxPage" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/sandboxes/stats:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+    get:
+      operationId: getSandboxStats
+      tags: [workloads]
+      parameters:
+        - name: app
+          in: query
+          schema: { $ref: "#/components/schemas/AppName" }
+      responses:
+        "200":
+          description: Counts of the workspace's sandboxes
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SandboxStats" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/ssh/certificates:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+    post:
+      operationId: createSshCertificate
+      tags: [workloads]
+      summary: Sign a public key for 12 hours of SSH as root to the workspace's pods
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SshCertificateRequest" }
+      responses:
+        "201":
+          description: The certificate
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SshCertificate" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/ssh/hosts:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+    get:
+      operationId: listSshHosts
+      tags: [workloads]
+      summary: Active pods and devboxes that serve SSH, by app and name
+      parameters:
+        - name: app
+          in: query
+          schema: { $ref: "#/components/schemas/AppName" }
+        - name: pod
+          in: query
+          schema: { $ref: "#/components/schemas/WorkloadName" }
+        - name: role
+          in: query
+          schema: { $ref: "#/components/schemas/PodRole" }
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: One page of hosts
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SshHostPage" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/apps/{app}/pods/{pod}/ssh:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/AppPath"
+      - name: pod
+        in: path
+        required: true
+        schema: { $ref: "#/components/schemas/WorkloadName" }
+    get:
+      operationId: openSshTunnel
+      tags: [workloads]
+      summary: A WebSocket carrying an SSH connection to the pod, starting it when it is stopped
+      description: >-
+        The socket opens at once and carries the connection's bytes as
+        binary messages once a container is ready, up to 175 seconds later.
+        It closes with 1008 when the pod does not exist, is stopped or serves
+        no SSH, and with 1013 when no container became ready.
+      responses:
+        "101": { description: Switching to the WebSocket protocol }
+        default: { $ref: "#/components/responses/Error" }
+
 components:
   securitySchemes:
     bearer:
@@ -3350,6 +3996,17 @@ components:
       in: path
       required: true
       schema: { $ref: "#/components/schemas/MapKey" }
+    ProcessPath:
+      name: process
+      in: path
+      required: true
+      schema: { type: string, pattern: "^[A-Za-z0-9_-]{1,64}$" }
+    ContainerFilePath:
+      name: path
+      in: query
+      required: true
+      description: A path in the container; a relative one is under /workspace.
+      schema: { type: string, minLength: 1, maxLength: 4096 }
     CostStart:
       name: start
       in: query
@@ -3822,11 +4479,11 @@ components:
 
     FunctionSpec:
       type: object
-      required: [name, handler, source, image, resources]
+      required: [name, source, image, resources]
       properties:
         name: { $ref: "#/components/schemas/WorkloadName" }
         handler:
-          description: "module:qualname within the source archive"
+          description: "module:qualname within the source archive; pods have none"
           type: string
           pattern: "^[A-Za-z_][A-Za-z0-9_.]*:[A-Za-z_][A-Za-z0-9_.]*$"
         source:
@@ -3907,6 +4564,19 @@ components:
         authorized:
           description: Whether requests to the workload's URLs need a token.
           type: boolean
+        pod:
+          $ref: "#/components/schemas/PodSpec"
+        disks:
+          description: Durable disks; a workload with one runs at most one container.
+          type: array
+          maxItems: 8
+          items: { $ref: "#/components/schemas/DiskMountSpec" }
+        docker_enabled:
+          description: Run a Docker daemon in each container; the image must include Docker.
+          type: boolean
+          default: false
+        checkpoint:
+          $ref: "#/components/schemas/CheckpointSpec"
 
     SourceRef:
       type: object
@@ -4959,9 +5629,12 @@ components:
           type: string
 
     WorkloadKind:
-      description: A function runs tasks; an endpoint or ASGI app serves HTTP. Realtime apps are ASGI apps.
+      description: >-
+        A function runs tasks; an endpoint or ASGI app serves HTTP, and
+        realtime apps are ASGI apps. A pod runs a command, and a devbox is a
+        pod; a sandbox runs instances its owner creates.
       type: string
-      enum: [function, endpoint, asgi]
+      enum: [function, endpoint, asgi, pod, sandbox]
 
     DeploymentPlanRequest:
       type: object
@@ -5030,6 +5703,11 @@ components:
           description: When the active version was deployed.
           type: string
           format: date-time
+        role: { $ref: "#/components/schemas/PodRole" }
+        scaling: { $ref: "#/components/schemas/Scaling" }
+        url:
+          description: Where a pod or HTTP workload answers.
+          type: string
 
     DeploymentPage:
       type: object
@@ -5105,7 +5783,8 @@ components:
 
     StopReason:
       type: string
-      enum: [stopped, load_error, start_failed, crashed, out_of_memory, host_lost]
+      description: exited means a pod's command ended on its own; exit_code says how.
+      enum: [stopped, load_error, start_failed, crashed, out_of_memory, host_lost, exited]
 
     Container:
       type: object
@@ -5133,6 +5812,23 @@ components:
         created_at: { type: string, format: date-time }
         ready_at: { type: string, format: date-time }
         stopped_at: { type: string, format: date-time }
+        kind: { $ref: "#/components/schemas/WorkloadKind" }
+        purpose: { $ref: "#/components/schemas/ContainerPurpose" }
+        exit_code:
+          description: How the container's command exited, once it has.
+          type: integer
+        host:
+          description: The name of the host the container was placed on.
+          type: string
+        gpu_count: { type: integer }
+
+    ContainerPurpose:
+      description: >-
+        serve containers are the ones a deployment's count asks for; an
+        instance or shell was started on request and has its own lifetime.
+      type: string
+      enum: [serve, instance, shell]
+      x-enum-varnames: [ContainerPurposeServe, ContainerPurposeInstance, ContainerPurposeShell]
 
     ContainerPage:
       type: object
@@ -7100,3 +7796,562 @@ components:
         intervals:
           type: array
           items: { $ref: "#/components/schemas/UsageCostInterval" }
+
+    # Workloads: pods, devboxes, sandboxes, shells and SSH.
+
+    PodKind:
+      description: A devbox is a pod reached over SSH whose root filesystem is a disk.
+      type: string
+      enum: [pod, devbox, sandbox]
+
+    PodRole:
+      type: string
+      enum: [pod, devbox]
+
+    PodSpec:
+      description: >-
+        Makes the workload run a command instead of a handler: a pod, a
+        devbox or a sandbox. keep_warm_seconds is the idle time before a
+        container stops; deploy fills 600 for pods and sandboxes and 1800 for
+        devboxes.
+      type: object
+      required: [kind]
+      properties:
+        kind: { $ref: "#/components/schemas/PodKind" }
+        # Empty runs the image's own entrypoint and command; a devbox keeps
+        # running without one.
+        command:
+          description: What the container runs.
+          type: array
+          maxItems: 1024
+          items: { type: string, maxLength: 65536 }
+        ports:
+          description: Ports the command listens on, by name. A sandbox exposes them at start.
+          type: object
+          maxProperties: 32
+          additionalProperties: { type: integer, minimum: 1, maximum: 65535 }
+        tcp:
+          description: Serve the first port as raw TCP behind TLS with SNI.
+          type: boolean
+          default: false
+        # No schema default: a devbox's unset ssh resolves to true.
+        ssh:
+          description: Serve SSH through `lazycloud ssh`; always on for a devbox.
+          type: boolean
+        health_check:
+          $ref: "#/components/schemas/HealthCheck"
+        block_network:
+          type: boolean
+          default: false
+        allow_list:
+          description: The only outbound destinations, as CIDR ranges; wins over block_network.
+          type: array
+          maxItems: 10
+          items: { type: string, maxLength: 64 }
+
+    HealthCheck:
+      description: An HTTP GET that must answer 2xx or 3xx before the container takes traffic.
+      type: object
+      required: [path]
+      properties:
+        path:
+          type: string
+          pattern: "^/[^\\s]*$"
+          maxLength: 2048
+        port:
+          description: Defaults to the first port.
+          type: integer
+          minimum: 1
+          maximum: 65535
+
+    CheckpointSpec:
+      description: >-
+        Snapshot the first ready container's memory and start later ones
+        from it. A pod is snapshotted once readiness_path on readiness_port
+        answers.
+      type: object
+      properties:
+        readiness_path:
+          type: string
+          pattern: "^/[^\\s]*$"
+          maxLength: 2048
+        readiness_port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+        readiness_timeout_seconds:
+          type: integer
+          minimum: 1
+          maximum: 3600
+          default: 600
+        readiness_interval_seconds:
+          type: number
+          minimum: 0.1
+          maximum: 60
+          default: 1
+
+    DiskMountSpec:
+      type: object
+      required: [name, size_bytes, mount_path]
+      properties:
+        name: { $ref: "#/components/schemas/DiskName" }
+        size_bytes:
+          description: Whole 4096-byte blocks from 1 GiB to 1 TiB.
+          type: integer
+          format: int64
+          minimum: 1073741824
+          maximum: 1099511627776
+        mount_path:
+          description: An absolute path; a devbox's root disk mounts at /.
+          type: string
+          pattern: "^/"
+          maxLength: 1024
+
+    Scaling:
+      description: The containers a pod keeps, from min to max; a scale sets both.
+      type: object
+      required: [min_containers, max_containers]
+      properties:
+        min_containers: { type: integer }
+        max_containers: { type: integer }
+
+    ScaleRequest:
+      type: object
+      required: [containers]
+      properties:
+        containers:
+          type: integer
+          minimum: 0
+          maximum: 1000
+
+    DevboxState:
+      type: string
+      enum: [running, starting, stopped]
+
+    DevboxPhase:
+      type: string
+      enum: [stopped, queued, pulling_image, restoring_disk, starting, running, stopping, failed]
+
+    Devbox:
+      type: object
+      required: [deployment_id, name, app, ssh_command, ssh_host, state, phase, open_connections]
+      properties:
+        deployment_id: { type: string, format: uuid }
+        name: { $ref: "#/components/schemas/WorkloadName" }
+        app: { $ref: "#/components/schemas/AppName" }
+        ssh_command:
+          description: The CLI command that connects, with --app when the name is shared.
+          type: string
+        ssh_host:
+          description: The host `lazycloud ssh-config` writes for it.
+          type: string
+        state: { $ref: "#/components/schemas/DevboxState" }
+        phase: { $ref: "#/components/schemas/DevboxPhase" }
+        phase_reason:
+          description: Why the last start failed.
+          type: string
+        container_id: { type: string, format: uuid }
+        failed_container_id:
+          description: The container whose start failed; its logs say why.
+          type: string
+          format: uuid
+        open_connections: { type: integer }
+        idle_deadline:
+          description: When it stops if nothing connects; absent while connected or always on.
+          type: string
+          format: date-time
+        disk: { $ref: "#/components/schemas/DevboxDisk" }
+        resources: { $ref: "#/components/schemas/Resources" }
+
+    DevboxDisk:
+      type: object
+      required: [name, size_bytes, stored_bytes, generation, status]
+      properties:
+        name: { $ref: "#/components/schemas/DiskName" }
+        size_bytes: { type: integer, format: int64 }
+        stored_bytes: { type: integer, format: int64 }
+        generation: { type: integer, format: int64 }
+        status: { $ref: "#/components/schemas/DiskStatus" }
+
+    CreateInstanceRequest:
+      description: Names a release, or a memory snapshot whose release the instance runs.
+      type: object
+      properties:
+        release_id: { type: string, format: uuid }
+        snapshot_id: { type: string, format: uuid }
+        command:
+          description: Run this instead of the pod's command.
+          type: array
+          maxItems: 1024
+          items: { type: string, maxLength: 65536 }
+        # Defaults to the release's keep_warm_seconds; -1 keeps the instance
+        # up until it is stopped.
+        timeout_seconds:
+          description: Seconds the instance stays up without connections or calls.
+          type: integer
+          minimum: -1
+          maximum: 604800
+        # The container stops 30 seconds after the last shell closes.
+        shell:
+          description: Start an idle container of the release for shells.
+          type: boolean
+          default: false
+
+    Instance:
+      type: object
+      required: [id, release_id, app, name, kind, state, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        release_id: { type: string, format: uuid }
+        app: { $ref: "#/components/schemas/AppName" }
+        name: { $ref: "#/components/schemas/WorkloadName" }
+        kind: { $ref: "#/components/schemas/WorkloadKind" }
+        state: { $ref: "#/components/schemas/ContainerState" }
+        url:
+          description: The first port's URL, when the instance has ports.
+          type: string
+        timeout_seconds:
+          description: The idle lifetime; -1 is none.
+          type: integer
+        expires_at:
+          description: When the instance stops unless something keeps it up.
+          type: string
+          format: date-time
+        stop_reason: { $ref: "#/components/schemas/StopReason" }
+        exit_message: { type: string }
+        exit_code: { type: integer }
+        created_at: { type: string, format: date-time }
+        ready_at: { type: string, format: date-time }
+
+    ProcessRequest:
+      type: object
+      required: [args]
+      properties:
+        args:
+          type: array
+          minItems: 1
+          maxItems: 4096
+          items: { type: string, maxLength: 131072 }
+        cwd:
+          type: string
+          maxLength: 4096
+          default: /workspace
+        env:
+          type: object
+          maxProperties: 1024
+          additionalProperties: { type: string, maxLength: 131072 }
+
+    Process:
+      description: >-
+        exit_code is 128+N for a process signal N ended. Each stream keeps
+        its first 256 KiB; truncated also marks output lost to the
+        container's 64 MiB output budget or still being written one second
+        after the exit.
+      type: object
+      required: [process_id, pid, command, running, stdout, stderr, stdout_truncated, stderr_truncated]
+      properties:
+        process_id: { type: string }
+        pid: { type: integer }
+        command: { type: string }
+        cwd: { type: string }
+        running: { type: boolean }
+        exit_code: { type: integer }
+        stdout: { type: string }
+        stderr: { type: string }
+        stdout_truncated: { type: boolean }
+        stderr_truncated: { type: boolean }
+        expires_at:
+          description: When an exited process's result is forgotten.
+          type: string
+          format: date-time
+
+    ProcessSummary:
+      type: object
+      required: [process_id, pid, command, running]
+      properties:
+        process_id: { type: string }
+        pid: { type: integer }
+        command: { type: string }
+        cwd: { type: string }
+        running: { type: boolean }
+        exit_code: { type: integer }
+
+    ProcessList:
+      type: object
+      required: [processes]
+      properties:
+        processes:
+          type: array
+          items: { $ref: "#/components/schemas/ProcessSummary" }
+
+    KillRequest:
+      type: object
+      properties:
+        signal:
+          type: string
+          enum: [TERM, KILL, INT, HUP, QUIT, USR1, USR2]
+          x-enum-varnames: [SignalTERM, SignalKILL, SignalINT, SignalHUP, SignalQUIT, SignalUSR1, SignalUSR2]
+          default: TERM
+
+    ContainerFile:
+      type: object
+      required: [name, mode, size, owner, group, is_dir, permissions]
+      properties:
+        name: { type: string }
+        mode:
+          description: The raw st_mode, file type bits included.
+          type: integer
+          format: int64
+        size: { type: integer, format: int64 }
+        mod_time: { type: string, format: date-time }
+        owner:
+          description: The owner's uid.
+          type: string
+        group:
+          description: The group's gid.
+          type: string
+        is_dir: { type: boolean }
+        permissions:
+          description: The permission bits, mode & 0777.
+          type: integer
+
+    ContainerFileList:
+      type: object
+      required: [files, truncated]
+      properties:
+        files:
+          type: array
+          items: { $ref: "#/components/schemas/ContainerFile" }
+        truncated:
+          description: Only the first limit entries by name are listed.
+          type: boolean
+
+    FindInFilesRequest:
+      type: object
+      required: [path, pattern]
+      properties:
+        path: { type: string, minLength: 1, maxLength: 4096 }
+        pattern: { type: string, minLength: 1, maxLength: 65536 }
+
+    FileMatch:
+      type: object
+      required: [path, line, column, text]
+      properties:
+        path: { type: string }
+        line:
+          description: 1-based.
+          type: integer
+        column:
+          description: 1-based, in characters.
+          type: integer
+        text: { type: string }
+
+    FileMatches:
+      type: object
+      required: [matches, truncated]
+      properties:
+        matches:
+          type: array
+          items: { $ref: "#/components/schemas/FileMatch" }
+        truncated:
+          description: The search stopped at 10,000 matches.
+          type: boolean
+
+    ReplaceInFilesRequest:
+      type: object
+      required: [path, pattern, replacement]
+      properties:
+        path: { type: string, minLength: 1, maxLength: 4096 }
+        pattern: { type: string, minLength: 1, maxLength: 65536 }
+        replacement: { type: string, maxLength: 65536 }
+
+    ReplacedFiles:
+      type: object
+      required: [files, replacements]
+      properties:
+        files:
+          description: Files that changed.
+          type: integer
+        replacements: { type: integer }
+
+    ExposePortRequest:
+      type: object
+      required: [port]
+      properties:
+        port: { type: integer, minimum: 1, maximum: 65535 }
+
+    ContainerPort:
+      type: object
+      required: [port, url]
+      properties:
+        port: { type: integer }
+        url: { type: string }
+
+    ContainerPortList:
+      type: object
+      required: [ports]
+      properties:
+        ports:
+          type: array
+          items: { $ref: "#/components/schemas/ContainerPort" }
+
+    NetworkPolicy:
+      type: object
+      required: [block_network, allow_list]
+      properties:
+        block_network: { type: boolean }
+        allow_list:
+          description: IPv4 or IPv6 CIDR ranges.
+          type: array
+          maxItems: 10
+          items: { type: string, maxLength: 64 }
+
+    TtlRequest:
+      type: object
+      required: [ttl]
+      properties:
+        ttl:
+          type: integer
+          minimum: -1
+          maximum: 604800
+
+    Ttl:
+      type: object
+      required: [ttl]
+      properties:
+        ttl: { type: integer }
+        expires_at: { type: string, format: date-time }
+
+    SnapshotRequest:
+      type: object
+      properties:
+        snapshot_id:
+          description: The id the snapshot takes; a new one by default.
+          type: string
+          format: uuid
+
+    MemorySnapshotState:
+      type: string
+      enum: [pending, available, failed]
+
+    MemorySnapshot:
+      type: object
+      required: [id, container_id, release_id, state, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        container_id: { type: string, format: uuid }
+        release_id: { type: string, format: uuid }
+        state: { $ref: "#/components/schemas/MemorySnapshotState" }
+        failure: { type: string }
+        size_bytes: { type: integer, format: int64 }
+        created_at: { type: string, format: date-time }
+
+    FilesystemImage:
+      type: object
+      required: [image_id]
+      properties:
+        image_id: { $ref: "#/components/schemas/ImageId" }
+
+    SandboxStatus:
+      type: string
+      enum: [pending, running, stopping, stopped, failed]
+
+    Sandbox:
+      type: object
+      required: [id, release_id, app, name, status, created_at, gpu]
+      properties:
+        id:
+          description: The sandbox's container id, which `Sandbox.connect` takes.
+          type: string
+          format: uuid
+        release_id: { type: string, format: uuid }
+        app: { $ref: "#/components/schemas/AppName" }
+        name: { $ref: "#/components/schemas/WorkloadName" }
+        status: { $ref: "#/components/schemas/SandboxStatus" }
+        gpu:
+          type: array
+          items: { $ref: "#/components/schemas/GpuType" }
+        created_at: { type: string, format: date-time }
+        ready_at: { type: string, format: date-time }
+        stopped_at: { type: string, format: date-time }
+        time_to_started_ms: { type: integer, format: int64 }
+        lifetime_ms: { type: integer, format: int64 }
+
+    SandboxPage:
+      type: object
+      required: [sandboxes]
+      properties:
+        sandboxes:
+          type: array
+          items: { $ref: "#/components/schemas/Sandbox" }
+        next_cursor: { type: string }
+
+    SandboxStats:
+      type: object
+      required: [concurrent, total_created, rate_per_second, status_counts, created_buckets]
+      properties:
+        concurrent:
+          description: Sandboxes pending, running or stopping.
+          type: integer
+        total_created: { type: integer }
+        rate_per_second:
+          description: Sandboxes created in the last 24 hours, per second.
+          type: number
+        status_counts:
+          type: object
+          additionalProperties: { type: integer }
+        created_buckets:
+          description: Sandboxes created per UTC day, for the last 30 days.
+          type: array
+          items: { $ref: "#/components/schemas/SandboxCreatedBucket" }
+
+    SandboxCreatedBucket:
+      type: object
+      required: [timestamp, count]
+      properties:
+        timestamp: { type: string, format: date-time }
+        count: { type: integer }
+
+    SshCertificateRequest:
+      type: object
+      required: [public_key]
+      properties:
+        public_key:
+          description: An ssh-ed25519 public key line.
+          type: string
+          pattern: "^ssh-ed25519 "
+          maxLength: 4096
+
+    SshCertificate:
+      type: object
+      required: [certificate, principal, expires_at]
+      properties:
+        certificate:
+          description: The OpenSSH certificate line.
+          type: string
+        principal: { type: string }
+        expires_at: { type: string, format: date-time }
+
+    SshHost:
+      type: object
+      required: [app, pod, role, deployment_id, alias, host_public_key]
+      properties:
+        app: { $ref: "#/components/schemas/AppName" }
+        pod: { $ref: "#/components/schemas/WorkloadName" }
+        role: { $ref: "#/components/schemas/PodRole" }
+        deployment_id: { type: string, format: uuid }
+        alias:
+          description: lazycloud-<workspace>-<app>-<pod>, lowercased with other characters as -.
+          type: string
+        host_public_key:
+          description: The pod's ssh-ed25519 host key, for known_hosts.
+          type: string
+
+    SshHostPage:
+      type: object
+      required: [hosts]
+      properties:
+        hosts:
+          type: array
+          items: { $ref: "#/components/schemas/SshHost" }
+        next_cursor: { type: string }

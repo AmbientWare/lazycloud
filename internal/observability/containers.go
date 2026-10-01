@@ -228,6 +228,8 @@ const (
 	StageSource  StartupStageKind = "source"
 	StageCreate  StartupStageKind = "create"
 	StageRuntime StartupStageKind = "runtime"
+	// StageDisk is leasing and restoring the container's disks.
+	StageDisk StartupStageKind = "disk"
 )
 
 // StartupStage is how long one stage took.

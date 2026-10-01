@@ -36,7 +36,7 @@ func (c *Control) PrepareRelease(ctx context.Context, workspace identity.Workspa
 		if err := requireSources(ctx, q, workspace, []resolvedFunction{f}); err != nil {
 			return err
 		}
-		workload, err := q.EnsureWorkload(ctx, EnsureWorkloadParams{AppID: appRow.ID, Name: function})
+		workload, err := q.EnsureWorkload(ctx, EnsureWorkloadParams{AppID: appRow.ID, Kind: string(KindOf(f.spec)), Name: function})
 		if err != nil {
 			return fmt.Errorf("ensure workload: %w", err)
 		}

@@ -866,6 +866,8 @@ class WorkloadKind(str, Enum):
     function = "function"
     endpoint = "endpoint"
     asgi = "asgi"
+    pod = "pod"
+    sandbox = "sandbox"
 
 
 class WorkloadIdentity(BaseModel):
@@ -878,32 +880,6 @@ class DeploymentPlanItem(BaseModel):
     name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
     action: DeploymentPlanAction
     versions: Annotated[int, Field(description="Versions the workload has now.")]
-
-
-class DeployedWorkload(BaseModel):
-    id: UUID
-    app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
-    name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
-    kind: WorkloadKind
-    state: WorkloadState
-    app_state: AppState | None = None
-    running_containers: Annotated[
-        int,
-        Field(
-            description="Containers of the workload's releases that are ready or draining.", ge=0
-        ),
-    ]
-    version: Annotated[int | None, Field(description="The active version.")] = None
-    release_id: Annotated[UUID | None, Field(description="The active release.")] = None
-    created_at: AwareDatetime
-    deployed_at: Annotated[
-        AwareDatetime | None, Field(description="When the active version was deployed.")
-    ] = None
-
-
-class DeploymentPage(BaseModel):
-    deployments: list[DeployedWorkload]
-    next_cursor: str | None = None
 
 
 class StartDeploymentRequest(BaseModel):
@@ -951,35 +927,13 @@ class StopReason(str, Enum):
     crashed = "crashed"
     out_of_memory = "out_of_memory"
     host_lost = "host_lost"
+    exited = "exited"
 
 
-class Container(BaseModel):
-    id: UUID
-    app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
-    function: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
-    release_id: UUID
-    version: Annotated[
-        int | None,
-        Field(
-            description="The deployed version of the release; absent for a working-tree release."
-        ),
-    ] = None
-    state: ContainerState
-    stop_reason: StopReason | None = None
-    exit_message: str | None = None
-    slots: int
-    running_tasks: Annotated[int, Field(description="Attempts running now.")]
-    cpu_millis: int
-    memory_mib: int
-    image: Annotated[str | None, Field(description="The image reference the release runs.")] = None
-    created_at: AwareDatetime
-    ready_at: AwareDatetime | None = None
-    stopped_at: AwareDatetime | None = None
-
-
-class ContainerPage(BaseModel):
-    containers: list[Container]
-    next_cursor: str | None = None
+class ContainerPurpose(str, Enum):
+    ContainerPurposeServe = "serve"
+    ContainerPurposeInstance = "instance"
+    ContainerPurposeShell = "shell"
 
 
 class ImageArchitecture(str, Enum):
@@ -2416,6 +2370,371 @@ class UsageCostDimension(BaseModel):
     cost_nanos: int
 
 
+class PodKind(str, Enum):
+    pod = "pod"
+    devbox = "devbox"
+    sandbox = "sandbox"
+
+
+class PodRole(str, Enum):
+    pod = "pod"
+    devbox = "devbox"
+
+
+class CommandItem(RootModel[str]):
+    root: Annotated[str, Field(max_length=65536)]
+
+
+PortsAdditionalProperty = TypeAliasType(
+    "PortsAdditionalProperty", Annotated[int, Field(ge=1, le=65535)]
+)
+
+
+class AllowListItem(RootModel[str]):
+    root: Annotated[str, Field(max_length=64)]
+
+
+class HealthCheck(BaseModel):
+    path: Annotated[str, Field(max_length=2048, pattern="^/[^\\s]*$")]
+    port: Annotated[
+        int | None, Field(description="Defaults to the first port.", ge=1, le=65535)
+    ] = None
+
+
+class CheckpointSpec(BaseModel):
+    readiness_path: Annotated[str | None, Field(max_length=2048, pattern="^/[^\\s]*$")] = None
+    readiness_port: Annotated[int | None, Field(ge=1, le=65535)] = None
+    readiness_timeout_seconds: Annotated[int, Field(ge=1, le=3600)] = 600
+    readiness_interval_seconds: Annotated[float, Field(ge=0.1, le=60.0)] = 1
+
+
+class DiskMountSpec(BaseModel):
+    name: Annotated[str, Field(pattern="^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")]
+    size_bytes: Annotated[
+        int,
+        Field(
+            description="Whole 4096-byte blocks from 1 GiB to 1 TiB.",
+            ge=1073741824,
+            le=1099511627776,
+        ),
+    ]
+    mount_path: Annotated[
+        str,
+        Field(
+            description="An absolute path; a devbox's root disk mounts at /.",
+            max_length=1024,
+            pattern="^/",
+        ),
+    ]
+
+
+class Scaling(BaseModel):
+    min_containers: int
+    max_containers: int
+
+
+class ScaleRequest(BaseModel):
+    containers: Annotated[int, Field(ge=0, le=1000)]
+
+
+class DevboxState(str, Enum):
+    running = "running"
+    starting = "starting"
+    stopped = "stopped"
+
+
+class DevboxPhase(str, Enum):
+    stopped = "stopped"
+    queued = "queued"
+    pulling_image = "pulling_image"
+    restoring_disk = "restoring_disk"
+    starting = "starting"
+    running = "running"
+    stopping = "stopping"
+    failed = "failed"
+
+
+class DevboxDisk(BaseModel):
+    name: Annotated[str, Field(pattern="^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")]
+    size_bytes: int
+    stored_bytes: int
+    generation: int
+    status: DiskStatus
+
+
+class CreateInstanceRequest(BaseModel):
+    release_id: UUID | None = None
+    snapshot_id: UUID | None = None
+    command: Annotated[
+        list[CommandItem] | None,
+        Field(description="Run this instead of the pod's command.", max_length=1024),
+    ] = None
+    timeout_seconds: Annotated[
+        int | None,
+        Field(
+            description="Seconds the instance stays up without connections or calls.",
+            ge=-1,
+            le=604800,
+        ),
+    ] = None
+    shell: Annotated[
+        bool, Field(description="Start an idle container of the release for shells.")
+    ] = False
+
+
+class Instance(BaseModel):
+    id: UUID
+    release_id: UUID
+    app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
+    name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
+    kind: WorkloadKind
+    state: ContainerState
+    url: Annotated[
+        str | None, Field(description="The first port's URL, when the instance has ports.")
+    ] = None
+    timeout_seconds: Annotated[int | None, Field(description="The idle lifetime; -1 is none.")] = (
+        None
+    )
+    expires_at: Annotated[
+        AwareDatetime | None,
+        Field(description="When the instance stops unless something keeps it up."),
+    ] = None
+    stop_reason: StopReason | None = None
+    exit_message: str | None = None
+    exit_code: int | None = None
+    created_at: AwareDatetime
+    ready_at: AwareDatetime | None = None
+
+
+class Arg1(RootModel[str]):
+    root: Annotated[str, Field(max_length=131072)]
+
+
+EnvAdditionalProperty1 = TypeAliasType(
+    "EnvAdditionalProperty1", Annotated[str, Field(max_length=131072)]
+)
+
+
+class ProcessRequest(BaseModel):
+    args: Annotated[list[Arg1], Field(max_length=4096, min_length=1)]
+    cwd: Annotated[str, Field(max_length=4096)] = "/workspace"
+    env: Annotated[dict[str, EnvAdditionalProperty1] | None, Field(max_length=1024)] = None
+
+
+class Process(BaseModel):
+    process_id: str
+    pid: int
+    command: str
+    cwd: str | None = None
+    running: bool
+    exit_code: int | None = None
+    stdout: str
+    stderr: str
+    stdout_truncated: bool
+    stderr_truncated: bool
+    expires_at: Annotated[
+        AwareDatetime | None, Field(description="When an exited process's result is forgotten.")
+    ] = None
+
+
+class ProcessSummary(BaseModel):
+    process_id: str
+    pid: int
+    command: str
+    cwd: str | None = None
+    running: bool
+    exit_code: int | None = None
+
+
+class ProcessList(BaseModel):
+    processes: list[ProcessSummary]
+
+
+class Signal(str, Enum):
+    SignalTERM = "TERM"
+    SignalKILL = "KILL"
+    SignalINT = "INT"
+    SignalHUP = "HUP"
+    SignalQUIT = "QUIT"
+    SignalUSR1 = "USR1"
+    SignalUSR2 = "USR2"
+
+
+class KillRequest(BaseModel):
+    signal: Signal = Signal.SignalTERM
+
+
+class ContainerFile(BaseModel):
+    name: str
+    mode: Annotated[int, Field(description="The raw st_mode, file type bits included.")]
+    size: int
+    mod_time: AwareDatetime | None = None
+    owner: Annotated[str, Field(description="The owner's uid.")]
+    group: Annotated[str, Field(description="The group's gid.")]
+    is_dir: bool
+    permissions: Annotated[int, Field(description="The permission bits, mode & 0777.")]
+
+
+class ContainerFileList(BaseModel):
+    files: list[ContainerFile]
+    truncated: Annotated[
+        bool, Field(description="Only the first limit entries by name are listed.")
+    ]
+
+
+class FindInFilesRequest(BaseModel):
+    path: Annotated[str, Field(max_length=4096, min_length=1)]
+    pattern: Annotated[str, Field(max_length=65536, min_length=1)]
+
+
+class FileMatch(BaseModel):
+    path: str
+    line: Annotated[int, Field(description="1-based.")]
+    column: Annotated[int, Field(description="1-based, in characters.")]
+    text: str
+
+
+class FileMatches(BaseModel):
+    matches: list[FileMatch]
+    truncated: Annotated[bool, Field(description="The search stopped at 10,000 matches.")]
+
+
+class ReplaceInFilesRequest(BaseModel):
+    path: Annotated[str, Field(max_length=4096, min_length=1)]
+    pattern: Annotated[str, Field(max_length=65536, min_length=1)]
+    replacement: Annotated[str, Field(max_length=65536)]
+
+
+class ReplacedFiles(BaseModel):
+    files: Annotated[int, Field(description="Files that changed.")]
+    replacements: int
+
+
+class ExposePortRequest(BaseModel):
+    port: Annotated[int, Field(ge=1, le=65535)]
+
+
+class ContainerPort(BaseModel):
+    port: int
+    url: str
+
+
+class ContainerPortList(BaseModel):
+    ports: list[ContainerPort]
+
+
+class NetworkPolicy(BaseModel):
+    block_network: bool
+    allow_list: Annotated[
+        list[AllowListItem], Field(description="IPv4 or IPv6 CIDR ranges.", max_length=10)
+    ]
+
+
+class TtlRequest(BaseModel):
+    ttl: Annotated[int, Field(ge=-1, le=604800)]
+
+
+class Ttl(BaseModel):
+    ttl: int
+    expires_at: AwareDatetime | None = None
+
+
+class SnapshotRequest(BaseModel):
+    snapshot_id: Annotated[
+        UUID | None, Field(description="The id the snapshot takes; a new one by default.")
+    ] = None
+
+
+class MemorySnapshotState(str, Enum):
+    pending = "pending"
+    available = "available"
+    failed = "failed"
+
+
+class MemorySnapshot(BaseModel):
+    id: UUID
+    container_id: UUID
+    release_id: UUID
+    state: MemorySnapshotState
+    failure: str | None = None
+    size_bytes: int | None = None
+    created_at: AwareDatetime
+
+
+class FilesystemImage(BaseModel):
+    image_id: Annotated[str, Field(pattern="^img_[0-9a-f]{24}$")]
+
+
+class SandboxStatus(str, Enum):
+    pending = "pending"
+    running = "running"
+    stopping = "stopping"
+    stopped = "stopped"
+    failed = "failed"
+
+
+class Sandbox(BaseModel):
+    id: Annotated[
+        UUID, Field(description="The sandbox's container id, which `Sandbox.connect` takes.")
+    ]
+    release_id: UUID
+    app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
+    name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
+    status: SandboxStatus
+    gpu: list[GpuType]
+    created_at: AwareDatetime
+    ready_at: AwareDatetime | None = None
+    stopped_at: AwareDatetime | None = None
+    time_to_started_ms: int | None = None
+    lifetime_ms: int | None = None
+
+
+class SandboxPage(BaseModel):
+    sandboxes: list[Sandbox]
+    next_cursor: str | None = None
+
+
+class SandboxCreatedBucket(BaseModel):
+    timestamp: AwareDatetime
+    count: int
+
+
+class SshCertificateRequest(BaseModel):
+    public_key: Annotated[
+        str,
+        Field(
+            description="An ssh-ed25519 public key line.", max_length=4096, pattern="^ssh-ed25519 "
+        ),
+    ]
+
+
+class SshCertificate(BaseModel):
+    certificate: Annotated[str, Field(description="The OpenSSH certificate line.")]
+    principal: str
+    expires_at: AwareDatetime
+
+
+class SshHost(BaseModel):
+    app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
+    pod: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
+    role: PodRole
+    deployment_id: UUID
+    alias: Annotated[
+        str,
+        Field(
+            description="lazycloud-<workspace>-<app>-<pod>, lowercased with other characters as -."
+        ),
+    ]
+    host_public_key: Annotated[
+        str, Field(description="The pod's ssh-ed25519 host key, for known_hosts.")
+    ]
+
+
+class SshHostPage(BaseModel):
+    hosts: list[SshHost]
+    next_cursor: str | None = None
+
+
 class Error(BaseModel):
     code: ErrorCode
     message: str
@@ -2618,6 +2937,73 @@ class DeploymentPlan(BaseModel):
     ]
 
 
+class DeployedWorkload(BaseModel):
+    id: UUID
+    app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
+    name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
+    kind: WorkloadKind
+    state: WorkloadState
+    app_state: AppState | None = None
+    running_containers: Annotated[
+        int,
+        Field(
+            description="Containers of the workload's releases that are ready or draining.", ge=0
+        ),
+    ]
+    version: Annotated[int | None, Field(description="The active version.")] = None
+    release_id: Annotated[UUID | None, Field(description="The active release.")] = None
+    created_at: AwareDatetime
+    deployed_at: Annotated[
+        AwareDatetime | None, Field(description="When the active version was deployed.")
+    ] = None
+    role: PodRole | None = None
+    scaling: Scaling | None = None
+    url: Annotated[str | None, Field(description="Where a pod or HTTP workload answers.")] = None
+
+
+class DeploymentPage(BaseModel):
+    deployments: list[DeployedWorkload]
+    next_cursor: str | None = None
+
+
+class Container(BaseModel):
+    id: UUID
+    app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
+    function: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
+    release_id: UUID
+    version: Annotated[
+        int | None,
+        Field(
+            description="The deployed version of the release; absent for a working-tree release."
+        ),
+    ] = None
+    state: ContainerState
+    stop_reason: StopReason | None = None
+    exit_message: str | None = None
+    slots: int
+    running_tasks: Annotated[int, Field(description="Attempts running now.")]
+    cpu_millis: int
+    memory_mib: int
+    image: Annotated[str | None, Field(description="The image reference the release runs.")] = None
+    created_at: AwareDatetime
+    ready_at: AwareDatetime | None = None
+    stopped_at: AwareDatetime | None = None
+    kind: WorkloadKind | None = None
+    purpose: ContainerPurpose | None = None
+    exit_code: Annotated[
+        int | None, Field(description="How the container's command exited, once it has.")
+    ] = None
+    host: Annotated[
+        str | None, Field(description="The name of the host the container was placed on.")
+    ] = None
+    gpu_count: int | None = None
+
+
+class ContainerPage(BaseModel):
+    containers: list[Container]
+    next_cursor: str | None = None
+
+
 class ImageDefinition(BaseModel):
     python_version: Annotated[
         str,
@@ -2784,6 +3170,74 @@ class UsageCostSeries(BaseModel):
     intervals: list[UsageCostInterval]
 
 
+class PodSpec(BaseModel):
+    kind: PodKind
+    command: Annotated[
+        list[CommandItem] | None, Field(description="What the container runs.", max_length=1024)
+    ] = None
+    ports: Annotated[
+        dict[str, PortsAdditionalProperty] | None,
+        Field(
+            description="Ports the command listens on, by name. A sandbox exposes them at start.",
+            max_length=32,
+        ),
+    ] = None
+    tcp: Annotated[
+        bool, Field(description="Serve the first port as raw TCP behind TLS with SNI.")
+    ] = False
+    ssh: Annotated[
+        bool | None, Field(description="Serve SSH through `lazycloud ssh`; always on for a devbox.")
+    ] = None
+    health_check: HealthCheck | None = None
+    block_network: bool = False
+    allow_list: Annotated[
+        list[AllowListItem] | None,
+        Field(
+            description="The only outbound destinations, as CIDR ranges; wins over block_network.",
+            max_length=10,
+        ),
+    ] = None
+
+
+class Devbox(BaseModel):
+    deployment_id: UUID
+    name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
+    app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
+    ssh_command: Annotated[
+        str, Field(description="The CLI command that connects, with --app when the name is shared.")
+    ]
+    ssh_host: Annotated[str, Field(description="The host `lazycloud ssh-config` writes for it.")]
+    state: DevboxState
+    phase: DevboxPhase
+    phase_reason: Annotated[str | None, Field(description="Why the last start failed.")] = None
+    container_id: UUID | None = None
+    failed_container_id: Annotated[
+        UUID | None, Field(description="The container whose start failed; its logs say why.")
+    ] = None
+    open_connections: int
+    idle_deadline: Annotated[
+        AwareDatetime | None,
+        Field(
+            description="When it stops if nothing connects; absent while connected or always on."
+        ),
+    ] = None
+    disk: DevboxDisk | None = None
+    resources: Resources | None = None
+
+
+class SandboxStats(BaseModel):
+    concurrent: Annotated[int, Field(description="Sandboxes pending, running or stopping.")]
+    total_created: int
+    rate_per_second: Annotated[
+        float, Field(description="Sandboxes created in the last 24 hours, per second.")
+    ]
+    status_counts: dict[str, int]
+    created_buckets: Annotated[
+        list[SandboxCreatedBucket],
+        Field(description="Sandboxes created per UTC day, for the last 30 days."),
+    ]
+
+
 class Me(BaseModel):
     user: User
     workspaces: list[Workspace]
@@ -2792,12 +3246,12 @@ class Me(BaseModel):
 class FunctionSpec(BaseModel):
     name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
     handler: Annotated[
-        str,
+        str | None,
         Field(
-            description="module:qualname within the source archive",
+            description="module:qualname within the source archive; pods have none",
             pattern="^[A-Za-z_][A-Za-z0-9_.]*:[A-Za-z_][A-Za-z0-9_.]*$",
         ),
-    ]
+    ] = None
     source: SourceRef
     image: ImageSpec
     resources: Resources
@@ -2848,6 +3302,19 @@ class FunctionSpec(BaseModel):
     authorized: Annotated[
         bool | None, Field(description="Whether requests to the workload's URLs need a token.")
     ] = None
+    pod: PodSpec | None = None
+    disks: Annotated[
+        list[DiskMountSpec] | None,
+        Field(
+            description="Durable disks; a workload with one runs at most one container.",
+            max_length=8,
+        ),
+    ] = None
+    docker_enabled: Annotated[
+        bool,
+        Field(description="Run a Docker daemon in each container; the image must include Docker."),
+    ] = False
+    checkpoint: CheckpointSpec | None = None
 
 
 class Release(BaseModel):

@@ -7,7 +7,7 @@ with candidates as (
     union
     select t.release_id from tasks t where t.status = 'running' and t.release_id > @after_id
     union
-    select c.release_id from containers c where c.state <> 'stopped' and c.release_id > @after_id
+    select c.release_id from containers c where c.state <> 'stopped' and c.purpose = 'serve' and c.release_id > @after_id
     union
     select w.active_release_id
     from workloads w
@@ -82,7 +82,7 @@ cross join lateral (
            count(*) filter (where c.state = 'starting') as starting,
            count(*) filter (where c.state = 'ready') as ready,
            count(*) filter (where c.state = 'draining') as draining
-    from containers c where c.release_id = r.id and c.state <> 'stopped'
+    from containers c where c.release_id = r.id and c.state <> 'stopped' and c.purpose = 'serve'
 ) c
 order by r.id;
 
@@ -100,7 +100,7 @@ update containers
 set state = 'stopped', stop_reason = 'stopped', exit_message = 'demand ended', stopped_at = now()
 where id in (
     select p.id from containers p
-    where p.release_id = @release_id::uuid and p.state = 'pending'
+    where p.release_id = @release_id::uuid and p.state = 'pending' and p.purpose = 'serve'
     order by p.created_at desc, p.id desc
     limit @count
     for update skip locked
@@ -116,6 +116,7 @@ select c.id
 from containers c
 where c.release_id = @release_id::uuid
   and c.state = 'ready'
+  and c.purpose = 'serve'
   and not exists (select 1 from attempts a where a.container_id = c.id and a.state = 'running')
   and coalesce((select max(a.finished_at) from attempts a where a.container_id = c.id), c.ready_at)
       < now() - make_interval(secs => @keep_warm_seconds::float8)

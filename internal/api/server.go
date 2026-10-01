@@ -82,6 +82,9 @@ func (s *Server) DeployApp(ctx context.Context, req DeployAppRequestObject) (Dep
 			path := edge.InvokePath(ws.Name, req.App, control.KindOf(release.Spec), release.Function, nil)
 			deployment.Releases[n].Url, deployment.Releases[n].InvokePath = &url, &path
 		}
+		if url := s.owners.Edge.PodURL(release.Id, release.Spec); release.Spec.Pod != nil && url != "" {
+			deployment.Releases[n].Url = &url
+		}
 	}
 	return DeployApp200JSONResponse(deployment), nil
 }

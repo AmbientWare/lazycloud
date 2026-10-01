@@ -64,7 +64,7 @@ func httpFromLabels(labels map[string]string) *hostproto.HttpServing {
 // pidsLimit bounds processes per container.
 const pidsLimit = 4096
 
-func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostproto.StartContainer, runtime string, binds []mount.Mount, workspaces []string, gpus []string) error {
+func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostproto.StartContainer, runtime string, binds []mount.Mount, workspaces []string, gpus []string, restore *restorePoint) error {
 	env := make([]string, 0, len(spec.GetEnvironment())+len(spec.GetSecrets())+8)
 	for _, key := range slices.Sorted(maps.Keys(spec.GetEnvironment())) {
 		env = append(env, key+"="+spec.GetEnvironment()[key])
@@ -74,8 +74,10 @@ func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostprot
 		env = append(env, key+"="+spec.GetSecrets()[key])
 	}
 	// Platform variables come last so they win over user values.
+	if runtime != "" {
+		env = append(env, "PYTHONPATH="+containerRuntimeDir)
+	}
 	env = append(env,
-		"PYTHONPATH="+containerRuntimeDir,
 		"PYTHONUNBUFFERED=1",
 		supervisor.SocketEnv+"="+containerLinkDir+"/"+linkSocketName,
 		supervisor.APISocketEnv+"="+containerAPISocket,
@@ -95,6 +97,9 @@ func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostprot
 	labels[labelHandler] = c.handler
 	labels[labelSlots] = strconv.Itoa(c.slots)
 	httpLabels(labels, c.http)
+	if err := c.podLabels(labels); err != nil {
+		return err
+	}
 	if len(workspaces) > 0 {
 		labels[labelWorkspaces] = strings.Join(workspaces, ",")
 	}
@@ -103,6 +108,36 @@ func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostprot
 		labels[labelGPUs] = strings.Join(gpus, ",")
 	}
 
+	mounts := []mount.Mount{
+		{Type: mount.TypeBind, Source: a.cfg.SupervisorPath, Target: containerSupervisor, ReadOnly: true},
+		{Type: mount.TypeBind, Source: c.linkDir(), Target: containerLinkDir},
+		// Any container user may create the API socket here.
+		{Type: mount.TypeTmpfs, Target: containerAPIDir, TmpfsOptions: &mount.TmpfsOptions{SizeBytes: 1 << 20, Mode: 0o1777}},
+	}
+	if runtime != "" {
+		mounts = append(mounts, mount.Mount{Type: mount.TypeBind, Source: runtime, Target: containerRuntimeDir, ReadOnly: true})
+	}
+	workingDir, user := containerWorkspace, containerUser()
+	var capAdd, securityOpt []string
+	if spec.GetPod().GetDevbox() {
+		// The supervisor binds the system directories into the root disk
+		// and switches into it, which takes root and CAP_SYS_ADMIN, and an
+		// AppArmor profile that allows mounts.
+		workingDir, user = "/", "0"
+		capAdd = append(capAdd, "SYS_ADMIN")
+		securityOpt = append(securityOpt, "apparmor=unconfined")
+	} else {
+		mounts = append(mounts, mount.Mount{Type: mount.TypeBind, Source: c.workspaceDir(), Target: containerWorkspace})
+	}
+	if c.docker {
+		// A Docker daemon needs cgroups, mounts, iptables and device nodes
+		// that only a privileged container has under runc. That gives the
+		// workload the host kernel's full privilege: it can escape the
+		// container, so runc hosts must only run trusted tenants' Docker
+		// workloads. gVisor confines a privileged container to its sandbox
+		// kernel.
+		user = "0"
+	}
 	limit := int64(pidsLimit)
 	resources := spec.GetResources()
 	options := client.ContainerCreateOptions{
@@ -113,35 +148,63 @@ func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostprot
 			Cmd:        []string{},
 			Env:        env,
 			Labels:     labels,
-			WorkingDir: containerWorkspace,
-			User:       containerUser(),
+			WorkingDir: workingDir,
+			User:       user,
 		},
 		HostConfig: &containertypes.HostConfig{
-			Runtime: a.cfg.OCIRuntime,
-			Mounts: append([]mount.Mount{
-				{Type: mount.TypeBind, Source: runtime, Target: containerRuntimeDir, ReadOnly: true},
-				{Type: mount.TypeBind, Source: a.cfg.SupervisorPath, Target: containerSupervisor, ReadOnly: true},
-				{Type: mount.TypeBind, Source: c.workspaceDir(), Target: containerWorkspace},
-				{Type: mount.TypeBind, Source: c.linkDir(), Target: containerLinkDir},
-				// Any container user may create the API socket here.
-				{Type: mount.TypeTmpfs, Target: containerAPIDir, TmpfsOptions: &mount.TmpfsOptions{SizeBytes: 1 << 20, Mode: 0o1777}},
-			}, binds...),
-			Resources:  containerResources(resources, a.capacity, limit, gpus),
-			StorageOpt: a.diskLimit(resources),
+			Runtime:     a.cfg.OCIRuntime,
+			Privileged:  c.docker,
+			CapAdd:      capAdd,
+			SecurityOpt: securityOpt,
+			Mounts:      append(mounts, binds...),
+			Resources:   containerResources(resources, a.capacity, limit, gpus),
+			StorageOpt:  a.diskLimit(resources),
 		},
 	}
-	_, err = a.docker.ContainerCreate(ctx, options)
-	if cerrdefs.IsConflict(err) {
-		// A container of this id left behind by an earlier failed start.
+	id, err := a.createContainer(ctx, c.dockerName(), options)
+	if err != nil {
+		return err
+	}
+	if restore != nil {
+		err := a.restoreInto(ctx, id, restore)
+		if err == nil {
+			c.log.Info("container restored from a snapshot", "snapshot_id", restore.snapshot)
+			return nil
+		}
+		if !restore.automatic {
+			return fmt.Errorf("restore snapshot %s: %w", restore.snapshot, err)
+		}
+		// A failed restore can leave the container half started; a cold
+		// start begins from a new one.
+		c.coldStart(restore.snapshot, err)
 		if err := a.removeContainer(ctx, c.dockerName()); err != nil {
 			return err
 		}
-		_, err = a.docker.ContainerCreate(ctx, options)
+		if _, err := a.createContainer(ctx, c.dockerName(), options); err != nil {
+			return err
+		}
+	}
+	return a.startDocker(ctx, c.dockerName(), client.ContainerStartOptions{})
+}
+
+// createContainer creates a container, replacing one of the same name left
+// behind by an earlier failed start.
+func (a *Agent) createContainer(ctx context.Context, name string, options client.ContainerCreateOptions) (string, error) {
+	created, err := a.docker.ContainerCreate(ctx, options)
+	if cerrdefs.IsConflict(err) {
+		if err := a.removeContainer(ctx, name); err != nil {
+			return "", err
+		}
+		created, err = a.docker.ContainerCreate(ctx, options)
 	}
 	if err != nil {
-		return fmt.Errorf("create container: %w", err)
+		return "", fmt.Errorf("create container: %w", err)
 	}
-	if _, err := a.docker.ContainerStart(ctx, c.dockerName(), client.ContainerStartOptions{}); err != nil {
+	return created.ID, nil
+}
+
+func (a *Agent) startDocker(ctx context.Context, name string, options client.ContainerStartOptions) error {
+	if _, err := a.docker.ContainerStart(ctx, name, options); err != nil {
 		return fmt.Errorf("start container: %w", err)
 	}
 	return nil
@@ -201,7 +264,15 @@ func (a *Agent) adopt(ctx context.Context) error {
 	}
 	a.volumes.adopt(list.Items)
 	for _, summary := range list.Items {
-		if kind := summary.Labels[labelKind]; kind == kindMount || kind == kindBucket {
+		switch summary.Labels[labelKind] {
+		case kindMount, kindBucket:
+			continue
+		case kindNetfilter:
+			// A policy helper the previous agent left; the container's
+			// pending policy is applied again below.
+			if err := a.removeContainer(ctx, summary.ID); err != nil {
+				return err
+			}
 			continue
 		}
 		id := summary.Labels[labelContainer]
@@ -213,6 +284,9 @@ func (a *Agent) adopt(ctx context.Context) error {
 			c := a.newContainer(id, summary.Labels[labelHandler], slots, httpFromLabels(summary.Labels), hostproto.ContainerPhase_CONTAINER_PHASE_STARTING)
 			if err := json.Unmarshal([]byte(summary.Labels[labelRuntime]), &c.runtime); err != nil {
 				c.log.Warn("container has no readable runtime label", "error", err)
+			}
+			if err := c.podFromLabels(summary.Labels); err != nil {
+				c.log.Error("container has no readable pod configuration", "error", err)
 			}
 			l, err := listenLink(ctx, c, c.linkDir())
 			if err != nil {
@@ -229,6 +303,7 @@ func (a *Agent) adopt(ctx context.Context) error {
 				a.goOwned(func(context.Context) { c.publishLoop(c.work) }) //nolint:contextcheck // Publishing lasts as long as the container's work.
 			}
 			l.serve()
+			c.resumeNetwork()
 			c.watchUsage(ctx)
 			a.track(c)
 			a.goOwned(c.watch)

@@ -208,8 +208,12 @@ func run(ctx context.Context, logger *slog.Logger) error {
 			if err != nil {
 				logger.ErrorContext(ctx, "serving planning pass", "error", err)
 			}
-			result.Skipped = result.Skipped || serving.Skipped
-			result.Created += serving.Created
+			pods, err := exec.PlanPods(ctx, logger)
+			if err != nil {
+				logger.ErrorContext(ctx, "pod planning pass", "error", err)
+			}
+			result.Skipped = result.Skipped || serving.Skipped || pods.Skipped
+			result.Created += serving.Created + pods.Created
 			if result.Created > 0 {
 				select {
 				case placeNow <- struct{}{}:
@@ -226,6 +230,17 @@ func run(ctx context.Context, logger *slog.Logger) error {
 				logger.ErrorContext(ctx, "placement pass", "error", err)
 			}
 			return result.Skipped
+		}))
+	})
+	group.Go(func() error {
+		return loop(ctx, tick, nil, nil, every("workloads", tick, func(ctx context.Context) bool {
+			if _, err := exec.StopIdle(ctx, logger); err != nil {
+				logger.ErrorContext(ctx, "idle instance pass", "error", err)
+			}
+			if err := exec.TakeAutomaticSnapshots(ctx, logger); err != nil {
+				logger.ErrorContext(ctx, "snapshot pass", "error", err)
+			}
+			return false
 		}))
 	})
 	group.Go(func() error {

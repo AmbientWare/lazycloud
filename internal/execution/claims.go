@@ -109,7 +109,9 @@ func (e *Execution) claimOnce(ctx context.Context, host compute.HostID, containe
 		if c.HostID == nil || *c.HostID != uuid.UUID(host) {
 			return ErrNotAssigned
 		}
-		if ContainerState(c.State) != ContainerReady {
+		// An instance or shell container of a function's release runs no
+		// tasks.
+		if ContainerState(c.State) != ContainerReady || ContainerPurpose(c.Purpose) != PurposeServe {
 			return nil
 		}
 		running, err := q.CountRunningAttemptsOnContainer(ctx, uuid.UUID(container))

@@ -63,11 +63,16 @@ type hostServer struct {
 	enrolls     chan *hostproto.EnrollRequest
 	completions chan *hostproto.CompleteTaskRequest
 	builds      chan *hostproto.CompleteImageBuildRequest
+	snapshots   chan *hostproto.CompleteSnapshotRequest
+	filesystems chan *hostproto.CompleteFilesystemImageRequest
+	data        *dataServer
 
 	mu      sync.Mutex
 	queued  map[string][]*hostproto.ClaimedTask
 	changed chan struct{}
 	logs    []*hostproto.LogLine
+	// containerLogs holds each container's logged lines.
+	containerLogs map[string][]string
 	// buildLogs holds image build output in arrival order.
 	buildLogs []string
 	// appendDelay makes AppendLogs a slow consumer.
@@ -87,12 +92,16 @@ type serverSession struct {
 func newHostServer() *hostServer {
 	return &hostServer{
 		joinToken: "lc_join", hostID: uuid.NewString(), hostToken: "lc_host_" + uuid.NewString(),
-		sessions:    make(chan *serverSession, 8),
-		enrolls:     make(chan *hostproto.EnrollRequest, 8),
-		completions: make(chan *hostproto.CompleteTaskRequest, 64),
-		builds:      make(chan *hostproto.CompleteImageBuildRequest, 8),
-		queued:      map[string][]*hostproto.ClaimedTask{},
-		changed:     make(chan struct{}),
+		sessions:      make(chan *serverSession, 8),
+		enrolls:       make(chan *hostproto.EnrollRequest, 8),
+		completions:   make(chan *hostproto.CompleteTaskRequest, 64),
+		builds:        make(chan *hostproto.CompleteImageBuildRequest, 8),
+		snapshots:     make(chan *hostproto.CompleteSnapshotRequest, 8),
+		filesystems:   make(chan *hostproto.CompleteFilesystemImageRequest, 8),
+		data:          &dataServer{calls: make(chan *forwardCall, 64)},
+		queued:        map[string][]*hostproto.ClaimedTask{},
+		containerLogs: map[string][]string{},
+		changed:       make(chan struct{}),
 	}
 }
 
@@ -132,6 +141,7 @@ func (s *hostServer) serve(t *testing.T, address string) (*grpc.Server, string) 
 		}),
 	)
 	hostproto.RegisterHostServiceServer(server, s)
+	hostproto.RegisterHostDataServer(server, s.data)
 	go func() { _ = server.Serve(listener) }()
 	return server, listener.Addr().String()
 }
@@ -220,6 +230,9 @@ func (s *hostServer) AppendLogs(_ context.Context, r *hostproto.AppendLogsReques
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.logs = append(s.logs, r.GetLines()...)
+	for _, line := range r.GetLines() {
+		s.containerLogs[r.GetContainerId()] = append(s.containerLogs[r.GetContainerId()], line.GetData())
+	}
 	return &hostproto.AppendLogsResponse{}, nil
 }
 

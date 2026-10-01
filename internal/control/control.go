@@ -112,7 +112,10 @@ func Resolve(spec apitypes.FunctionSpec) (apitypes.FunctionSpec, error) {
 	if err := resolveRuntime(spec, &out); err != nil {
 		return out, err
 	}
-	return out, resolveHTTP(spec, &out)
+	if err := resolveHTTP(spec, &out); err != nil {
+		return out, err
+	}
+	return out, resolvePod(spec, &out)
 }
 
 func orDefault[T any](v *T, def T) *T {

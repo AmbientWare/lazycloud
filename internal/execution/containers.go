@@ -22,6 +22,8 @@ type ContainerExit struct {
 	Message string
 	// LoadError is the handler import failure for StopLoadError.
 	LoadError *Failure
+	// ExitCode is how a pod's command exited, for StopExited.
+	ExitCode *int
 }
 
 // containerExited stops a container in tx. Its running attempts are lost and
@@ -40,7 +42,7 @@ func (e *Execution) containerExited(ctx context.Context, tx pgx.Tx, container Co
 	}
 	message := exit.Message
 	if err := q.StopContainer(ctx, StopContainerParams{
-		ID: row.ID, StopReason: ptr(string(exit.Reason)), ExitMessage: &message,
+		ID: row.ID, StopReason: ptr(string(exit.Reason)), ExitMessage: &message, ExitCode: int32Of(exit.ExitCode),
 	}); err != nil {
 		return fmt.Errorf("stop container: %w", err)
 	}
@@ -83,7 +85,7 @@ func (e *Execution) containerExited(ctx context.Context, tx pgx.Tx, container Co
 		if failures >= startFailureLimit {
 			failQueued = &Failure{Kind: FailureStartFailed, Message: exit.Message}
 		}
-	case StopRequested, StopCrashed, StopOutOfMemory, StopHostLost:
+	case StopRequested, StopCrashed, StopOutOfMemory, StopHostLost, StopExited:
 	}
 	if failQueued != nil {
 		encoded, err := json.Marshal(failQueued)
@@ -123,3 +125,11 @@ func (e *Execution) notifyStopped(ctx context.Context, tx pgx.Tx, host *uuid.UUI
 }
 
 func ptr[T any](v T) *T { return &v }
+
+func int32Of(v *int) *int32 {
+	if v == nil {
+		return nil
+	}
+	n := int32(*v) //nolint:gosec // Exit codes and versions fit.
+	return &n
+}

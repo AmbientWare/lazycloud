@@ -2836,6 +2836,602 @@ export interface paths {
         patch: operations["updateMachine"];
         trace?: never;
     };
+    "/v1/workspaces/{workspace}/deployments/{deployment}/scale": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                /** @description The workload id. */
+                deployment: components["parameters"]["DeploymentPath"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Hold a pod at a number of containers
+         * @description The count holds until the next scale, whatever the pod's connections. Only an active pod of an active app scales; a pod with a disk runs at most one container, and an always-on pod (keep_warm -1) cannot scale to zero.
+         */
+        post: operations["scaleDeployment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/deployments/{deployment}/devbox": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                /** @description The workload id. */
+                deployment: components["parameters"]["DeploymentPath"];
+            };
+            cookie?: never;
+        };
+        /** How to reach a devbox and what it is doing */
+        get: operations["getDevbox"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/deployments/{deployment}/devbox/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                /** @description The workload id. */
+                deployment: components["parameters"]["DeploymentPath"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start the devbox now, activating its deployment if it is stopped */
+        post: operations["startDevbox"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/deployments/{deployment}/devbox/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                /** @description The workload id. */
+                deployment: components["parameters"]["DeploymentPath"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stop the devbox's container until the next connection or start
+         * @description The deployment stays active; the root disk is saved as the container stops.
+         */
+        post: operations["stopDevbox"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/instances": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start a container of a release outside its deployment's count
+         * @description An instance of a pod or sandbox release, a shell container of any release, or a sandbox restored from a memory snapshot. It is placed like any container and stops once its lifetime passes with no open connection, or when it is stopped.
+         */
+        post: operations["createInstance"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/containers/{container}/connect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                container: components["parameters"]["ContainerPath"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Wait until the container is ready
+         * @description Answers with the container once it is ready, with `unavailable` while it is still starting after wait_seconds, and with `conflict` once it has stopped.
+         */
+        post: operations["connectContainer"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/containers/{container}/output": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                container: components["parameters"]["ContainerPath"];
+            };
+            cookie?: never;
+        };
+        /**
+         * What the container wrote outside task attempts, one JSON ContainerLogEntry per line
+         * @description A followed stream ends once the container has stopped and its output is drained, and writes a blank line after 15 seconds without output.
+         */
+        get: operations["streamContainerOutput"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/containers/{container}/processes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                container: components["parameters"]["ContainerPath"];
+            };
+            cookie?: never;
+        };
+        /** Processes started through the API, with those that exited in the last five minutes */
+        get: operations["listProcesses"];
+        put?: never;
+        /**
+         * Start a process in the container
+         * @description args run directly, without a shell, in their own process group, with the container's environment plus env.
+         */
+        post: operations["startProcess"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/containers/{container}/processes/{process}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                container: components["parameters"]["ContainerPath"];
+                process: components["parameters"]["ProcessPath"];
+            };
+            cookie?: never;
+        };
+        /**
+         * A process's state and the first 256 KiB of each output stream
+         * @description A result stays readable for five minutes after the process exits.
+         */
+        get: operations["getProcess"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/containers/{container}/processes/{process}/kill": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                container: components["parameters"]["ContainerPath"];
+                process: components["parameters"]["ProcessPath"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Signal the process's group; a process that already exited is not an error */
+        post: operations["killProcess"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/containers/{container}/files": {
+        parameters: {
+            query: {
+                /** @description A path in the container; a relative one is under /workspace. */
+                path: components["parameters"]["ContainerFilePath"];
+            };
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                container: components["parameters"]["ContainerPath"];
+            };
+            cookie?: never;
+        };
+        /** A directory's entries by name, or the one entry of a file */
+        get: operations["listContainerFiles"];
+        put?: never;
+        post?: never;
+        /** Delete a file; a missing one is not an error and a directory is refused */
+        delete: operations["deleteContainerFile"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/containers/{container}/files/stat": {
+        parameters: {
+            query: {
+                /** @description A path in the container; a relative one is under /workspace. */
+                path: components["parameters"]["ContainerFilePath"];
+            };
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                container: components["parameters"]["ContainerPath"];
+            };
+            cookie?: never;
+        };
+        get: operations["statContainerFile"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/containers/{container}/files/content": {
+        parameters: {
+            query: {
+                /** @description A path in the container; a relative one is under /workspace. */
+                path: components["parameters"]["ContainerFilePath"];
+            };
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                container: components["parameters"]["ContainerPath"];
+            };
+            cookie?: never;
+        };
+        /**
+         * A file's bytes
+         * @description A file larger than max_bytes is refused unless truncate asks for its first max_bytes; the response then carries `Lazycloud-Truncated: true`.
+         */
+        get: operations["downloadContainerFile"];
+        /** Write a file and its parent directories; the replace is atomic */
+        put: operations["uploadContainerFile"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/containers/{container}/files/find": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                container: components["parameters"]["ContainerPath"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Every occurrence of a literal string in the UTF-8 files under a path */
+        post: operations["findInContainerFiles"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/containers/{container}/files/replace": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                container: components["parameters"]["ContainerPath"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Replace every occurrence of a literal string in the UTF-8 files under a path */
+        post: operations["replaceInContainerFiles"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/containers/{container}/directories": {
+        parameters: {
+            query: {
+                /** @description A path in the container; a relative one is under /workspace. */
+                path: components["parameters"]["ContainerFilePath"];
+            };
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                container: components["parameters"]["ContainerPath"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create a directory and its parents */
+        post: operations["createContainerDirectory"];
+        /** Delete a directory and everything in it; a missing one is not an error */
+        delete: operations["deleteContainerDirectory"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/containers/{container}/ports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                container: components["parameters"]["ContainerPath"];
+            };
+            cookie?: never;
+        };
+        /** The container's exposed ports and their URLs */
+        get: operations["listContainerPorts"];
+        put?: never;
+        /** Answer HTTP on a port the container listens on, for as long as it runs */
+        post: operations["exposeContainerPort"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/containers/{container}/network": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                container: components["parameters"]["ContainerPath"];
+            };
+            cookie?: never;
+        };
+        get: operations["getContainerNetwork"];
+        /**
+         * Block outbound traffic, limit it to CIDR ranges, or open it
+         * @description An allow list wins over block_network.
+         */
+        put: operations["setContainerNetwork"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/containers/{container}/ttl": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                container: components["parameters"]["ContainerPath"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** Keep an instance up for ttl more idle seconds, or without a limit for 0 or -1 */
+        put: operations["setContainerTtl"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/containers/{container}/snapshots": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                container: components["parameters"]["ContainerPath"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Checkpoint the container's memory and filesystem; it keeps running
+         * @description Answers once the snapshot is stored, or with its failure. A host that cannot checkpoint fails it with `unsupported`.
+         */
+        post: operations["snapshotContainer"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/containers/{container}/filesystem-images": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                container: components["parameters"]["ContainerPath"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Publish the container's filesystem, without its mounts, as an image
+         * @description Answers once the image is published; `Image.from_id` reuses it.
+         */
+        post: operations["createFilesystemImage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/containers/{container}/shell": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                container: components["parameters"]["ContainerPath"];
+            };
+            cookie?: never;
+        };
+        /**
+         * An interactive login shell in the container, over a WebSocket
+         * @description Binary messages carry terminal bytes both ways. Text messages are JSON: the client sends `{"type": "resize", "cols": N, "rows": N}`; the server sends `{"type": "exit", "code": N}` when the shell ends and `{"type": "error", "message": "..."}` when it cannot start. A browser session must send the dashboard's Origin.
+         */
+        get: operations["openContainerShell"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/sandboxes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+            };
+            cookie?: never;
+        };
+        /** Sandbox containers, newest first */
+        get: operations["listSandboxes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/sandboxes/stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+            };
+            cookie?: never;
+        };
+        get: operations["getSandboxStats"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/ssh/certificates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Sign a public key for 12 hours of SSH as root to the workspace's pods */
+        post: operations["createSshCertificate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/ssh/hosts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+            };
+            cookie?: never;
+        };
+        /** Active pods and devboxes that serve SSH, by app and name */
+        get: operations["listSshHosts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/apps/{app}/pods/{pod}/ssh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                app: components["parameters"]["AppPath"];
+                pod: components["schemas"]["WorkloadName"];
+            };
+            cookie?: never;
+        };
+        /**
+         * A WebSocket carrying an SSH connection to the pod, starting it when it is stopped
+         * @description The socket opens at once and carries the connection's bytes as binary messages once a container is ready, up to 175 seconds later. It closes with 1008 when the pod does not exist, is stopped or serves no SSH, and with 1013 when no container became ready.
+         */
+        get: operations["openSshTunnel"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -3134,8 +3730,8 @@ export interface components {
         };
         FunctionSpec: {
             name: components["schemas"]["WorkloadName"];
-            /** @description module:qualname within the source archive */
-            handler: string;
+            /** @description module:qualname within the source archive; pods have none */
+            handler?: string;
             source: components["schemas"]["SourceRef"];
             image: components["schemas"]["ImageSpec"];
             resources: components["schemas"]["Resources"];
@@ -3176,6 +3772,15 @@ export interface components {
             http?: components["schemas"]["HttpSpec"];
             /** @description Whether requests to the workload's URLs need a token. */
             authorized?: boolean;
+            pod?: components["schemas"]["PodSpec"];
+            /** @description Durable disks; a workload with one runs at most one container. */
+            disks?: components["schemas"]["DiskMountSpec"][];
+            /**
+             * @description Run a Docker daemon in each container; the image must include Docker.
+             * @default false
+             */
+            docker_enabled?: boolean;
+            checkpoint?: components["schemas"]["CheckpointSpec"];
         };
         SourceRef: {
             sha256: components["schemas"]["Sha256"];
@@ -3814,10 +4419,10 @@ export interface components {
             next_cursor?: string;
         };
         /**
-         * @description A function runs tasks; an endpoint or ASGI app serves HTTP. Realtime apps are ASGI apps.
+         * @description A function runs tasks; an endpoint or ASGI app serves HTTP, and realtime apps are ASGI apps. A pod runs a command, and a devbox is a pod; a sandbox runs instances its owner creates.
          * @enum {string}
          */
-        WorkloadKind: "function" | "endpoint" | "asgi";
+        WorkloadKind: "function" | "endpoint" | "asgi" | "pod" | "sandbox";
         DeploymentPlanRequest: {
             workloads: components["schemas"]["WorkloadIdentity"][];
             /** @default false */
@@ -3864,6 +4469,10 @@ export interface components {
              * @description When the active version was deployed.
              */
             deployed_at?: string;
+            role?: components["schemas"]["PodRole"];
+            scaling?: components["schemas"]["Scaling"];
+            /** @description Where a pod or HTTP workload answers. */
+            url?: string;
         };
         DeploymentPage: {
             deployments: components["schemas"]["DeployedWorkload"][];
@@ -3900,8 +4509,11 @@ export interface components {
         };
         /** @enum {string} */
         ContainerState: "pending" | "starting" | "ready" | "draining" | "stopped";
-        /** @enum {string} */
-        StopReason: "stopped" | "load_error" | "start_failed" | "crashed" | "out_of_memory" | "host_lost";
+        /**
+         * @description exited means a pod's command ended on its own; exit_code says how.
+         * @enum {string}
+         */
+        StopReason: "stopped" | "load_error" | "start_failed" | "crashed" | "out_of_memory" | "host_lost" | "exited";
         Container: {
             /** Format: uuid */
             id: string;
@@ -3929,7 +4541,19 @@ export interface components {
             ready_at?: string;
             /** Format: date-time */
             stopped_at?: string;
+            kind?: components["schemas"]["WorkloadKind"];
+            purpose?: components["schemas"]["ContainerPurpose"];
+            /** @description How the container's command exited, once it has. */
+            exit_code?: number;
+            /** @description The name of the host the container was placed on. */
+            host?: string;
+            gpu_count?: number;
         };
+        /**
+         * @description serve containers are the ones a deployment's count asks for; an instance or shell was started on request and has its own lifetime.
+         * @enum {string}
+         */
+        ContainerPurpose: "serve" | "instance" | "shell";
         ContainerPage: {
             containers: components["schemas"]["Container"][];
             next_cursor?: string;
@@ -5319,6 +5943,369 @@ export interface components {
             subscription_credit_nanos: number;
             intervals: components["schemas"]["UsageCostInterval"][];
         };
+        /**
+         * @description A devbox is a pod reached over SSH whose root filesystem is a disk.
+         * @enum {string}
+         */
+        PodKind: "pod" | "devbox" | "sandbox";
+        /** @enum {string} */
+        PodRole: "pod" | "devbox";
+        /** @description Makes the workload run a command instead of a handler: a pod, a devbox or a sandbox. keep_warm_seconds is the idle time before a container stops; deploy fills 600 for pods and sandboxes and 1800 for devboxes. */
+        PodSpec: {
+            kind: components["schemas"]["PodKind"];
+            /** @description What the container runs. */
+            command?: string[];
+            /** @description Ports the command listens on, by name. A sandbox exposes them at start. */
+            ports?: {
+                [key: string]: number;
+            };
+            /**
+             * @description Serve the first port as raw TCP behind TLS with SNI.
+             * @default false
+             */
+            tcp?: boolean;
+            /** @description Serve SSH through `lazycloud ssh`; always on for a devbox. */
+            ssh?: boolean;
+            health_check?: components["schemas"]["HealthCheck"];
+            /** @default false */
+            block_network?: boolean;
+            /** @description The only outbound destinations, as CIDR ranges; wins over block_network. */
+            allow_list?: string[];
+        };
+        /** @description An HTTP GET that must answer 2xx or 3xx before the container takes traffic. */
+        HealthCheck: {
+            path: string;
+            /** @description Defaults to the first port. */
+            port?: number;
+        };
+        /** @description Snapshot the first ready container's memory and start later ones from it. A pod is snapshotted once readiness_path on readiness_port answers. */
+        CheckpointSpec: {
+            readiness_path?: string;
+            readiness_port?: number;
+            /** @default 600 */
+            readiness_timeout_seconds?: number;
+            /** @default 1 */
+            readiness_interval_seconds?: number;
+        };
+        DiskMountSpec: {
+            name: components["schemas"]["DiskName"];
+            /**
+             * Format: int64
+             * @description Whole 4096-byte blocks from 1 GiB to 1 TiB.
+             */
+            size_bytes: number;
+            /** @description An absolute path; a devbox's root disk mounts at /. */
+            mount_path: string;
+        };
+        /** @description The containers a pod keeps, from min to max; a scale sets both. */
+        Scaling: {
+            min_containers: number;
+            max_containers: number;
+        };
+        ScaleRequest: {
+            containers: number;
+        };
+        /** @enum {string} */
+        DevboxState: "running" | "starting" | "stopped";
+        /** @enum {string} */
+        DevboxPhase: "stopped" | "queued" | "pulling_image" | "restoring_disk" | "starting" | "running" | "stopping" | "failed";
+        Devbox: {
+            /** Format: uuid */
+            deployment_id: string;
+            name: components["schemas"]["WorkloadName"];
+            app: components["schemas"]["AppName"];
+            /** @description The CLI command that connects, with --app when the name is shared. */
+            ssh_command: string;
+            /** @description The host `lazycloud ssh-config` writes for it. */
+            ssh_host: string;
+            state: components["schemas"]["DevboxState"];
+            phase: components["schemas"]["DevboxPhase"];
+            /** @description Why the last start failed. */
+            phase_reason?: string;
+            /** Format: uuid */
+            container_id?: string;
+            /**
+             * Format: uuid
+             * @description The container whose start failed; its logs say why.
+             */
+            failed_container_id?: string;
+            open_connections: number;
+            /**
+             * Format: date-time
+             * @description When it stops if nothing connects; absent while connected or always on.
+             */
+            idle_deadline?: string;
+            disk?: components["schemas"]["DevboxDisk"];
+            resources?: components["schemas"]["Resources"];
+        };
+        DevboxDisk: {
+            name: components["schemas"]["DiskName"];
+            /** Format: int64 */
+            size_bytes: number;
+            /** Format: int64 */
+            stored_bytes: number;
+            /** Format: int64 */
+            generation: number;
+            status: components["schemas"]["DiskStatus"];
+        };
+        /** @description Names a release, or a memory snapshot whose release the instance runs. */
+        CreateInstanceRequest: {
+            /** Format: uuid */
+            release_id?: string;
+            /** Format: uuid */
+            snapshot_id?: string;
+            /** @description Run this instead of the pod's command. */
+            command?: string[];
+            /** @description Seconds the instance stays up without connections or calls. */
+            timeout_seconds?: number;
+            /**
+             * @description Start an idle container of the release for shells.
+             * @default false
+             */
+            shell?: boolean;
+        };
+        Instance: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            release_id: string;
+            app: components["schemas"]["AppName"];
+            name: components["schemas"]["WorkloadName"];
+            kind: components["schemas"]["WorkloadKind"];
+            state: components["schemas"]["ContainerState"];
+            /** @description The first port's URL, when the instance has ports. */
+            url?: string;
+            /** @description The idle lifetime; -1 is none. */
+            timeout_seconds?: number;
+            /**
+             * Format: date-time
+             * @description When the instance stops unless something keeps it up.
+             */
+            expires_at?: string;
+            stop_reason?: components["schemas"]["StopReason"];
+            exit_message?: string;
+            exit_code?: number;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            ready_at?: string;
+        };
+        ProcessRequest: {
+            args: string[];
+            /** @default /workspace */
+            cwd?: string;
+            env?: {
+                [key: string]: string;
+            };
+        };
+        /** @description exit_code is 128+N for a process signal N ended. Each stream keeps its first 256 KiB; truncated also marks output lost to the container's 64 MiB output budget or still being written one second after the exit. */
+        Process: {
+            process_id: string;
+            pid: number;
+            command: string;
+            cwd?: string;
+            running: boolean;
+            exit_code?: number;
+            stdout: string;
+            stderr: string;
+            stdout_truncated: boolean;
+            stderr_truncated: boolean;
+            /**
+             * Format: date-time
+             * @description When an exited process's result is forgotten.
+             */
+            expires_at?: string;
+        };
+        ProcessSummary: {
+            process_id: string;
+            pid: number;
+            command: string;
+            cwd?: string;
+            running: boolean;
+            exit_code?: number;
+        };
+        ProcessList: {
+            processes: components["schemas"]["ProcessSummary"][];
+        };
+        KillRequest: {
+            /**
+             * @default TERM
+             * @enum {string}
+             */
+            signal?: "TERM" | "KILL" | "INT" | "HUP" | "QUIT" | "USR1" | "USR2";
+        };
+        ContainerFile: {
+            name: string;
+            /**
+             * Format: int64
+             * @description The raw st_mode, file type bits included.
+             */
+            mode: number;
+            /** Format: int64 */
+            size: number;
+            /** Format: date-time */
+            mod_time?: string;
+            /** @description The owner's uid. */
+            owner: string;
+            /** @description The group's gid. */
+            group: string;
+            is_dir: boolean;
+            /** @description The permission bits, mode & 0777. */
+            permissions: number;
+        };
+        ContainerFileList: {
+            files: components["schemas"]["ContainerFile"][];
+            /** @description Only the first limit entries by name are listed. */
+            truncated: boolean;
+        };
+        FindInFilesRequest: {
+            path: string;
+            pattern: string;
+        };
+        FileMatch: {
+            path: string;
+            /** @description 1-based. */
+            line: number;
+            /** @description 1-based, in characters. */
+            column: number;
+            text: string;
+        };
+        FileMatches: {
+            matches: components["schemas"]["FileMatch"][];
+            /** @description The search stopped at 10,000 matches. */
+            truncated: boolean;
+        };
+        ReplaceInFilesRequest: {
+            path: string;
+            pattern: string;
+            replacement: string;
+        };
+        ReplacedFiles: {
+            /** @description Files that changed. */
+            files: number;
+            replacements: number;
+        };
+        ExposePortRequest: {
+            port: number;
+        };
+        ContainerPort: {
+            port: number;
+            url: string;
+        };
+        ContainerPortList: {
+            ports: components["schemas"]["ContainerPort"][];
+        };
+        NetworkPolicy: {
+            block_network: boolean;
+            /** @description IPv4 or IPv6 CIDR ranges. */
+            allow_list: string[];
+        };
+        TtlRequest: {
+            ttl: number;
+        };
+        Ttl: {
+            ttl: number;
+            /** Format: date-time */
+            expires_at?: string;
+        };
+        SnapshotRequest: {
+            /**
+             * Format: uuid
+             * @description The id the snapshot takes; a new one by default.
+             */
+            snapshot_id?: string;
+        };
+        /** @enum {string} */
+        MemorySnapshotState: "pending" | "available" | "failed";
+        MemorySnapshot: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            container_id: string;
+            /** Format: uuid */
+            release_id: string;
+            state: components["schemas"]["MemorySnapshotState"];
+            failure?: string;
+            /** Format: int64 */
+            size_bytes?: number;
+            /** Format: date-time */
+            created_at: string;
+        };
+        FilesystemImage: {
+            image_id: components["schemas"]["ImageId"];
+        };
+        /** @enum {string} */
+        SandboxStatus: "pending" | "running" | "stopping" | "stopped" | "failed";
+        Sandbox: {
+            /**
+             * Format: uuid
+             * @description The sandbox's container id, which `Sandbox.connect` takes.
+             */
+            id: string;
+            /** Format: uuid */
+            release_id: string;
+            app: components["schemas"]["AppName"];
+            name: components["schemas"]["WorkloadName"];
+            status: components["schemas"]["SandboxStatus"];
+            gpu: components["schemas"]["GpuType"][];
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            ready_at?: string;
+            /** Format: date-time */
+            stopped_at?: string;
+            /** Format: int64 */
+            time_to_started_ms?: number;
+            /** Format: int64 */
+            lifetime_ms?: number;
+        };
+        SandboxPage: {
+            sandboxes: components["schemas"]["Sandbox"][];
+            next_cursor?: string;
+        };
+        SandboxStats: {
+            /** @description Sandboxes pending, running or stopping. */
+            concurrent: number;
+            total_created: number;
+            /** @description Sandboxes created in the last 24 hours, per second. */
+            rate_per_second: number;
+            status_counts: {
+                [key: string]: number;
+            };
+            /** @description Sandboxes created per UTC day, for the last 30 days. */
+            created_buckets: components["schemas"]["SandboxCreatedBucket"][];
+        };
+        SandboxCreatedBucket: {
+            /** Format: date-time */
+            timestamp: string;
+            count: number;
+        };
+        SshCertificateRequest: {
+            /** @description An ssh-ed25519 public key line. */
+            public_key: string;
+        };
+        SshCertificate: {
+            /** @description The OpenSSH certificate line. */
+            certificate: string;
+            principal: string;
+            /** Format: date-time */
+            expires_at: string;
+        };
+        SshHost: {
+            app: components["schemas"]["AppName"];
+            pod: components["schemas"]["WorkloadName"];
+            role: components["schemas"]["PodRole"];
+            /** Format: uuid */
+            deployment_id: string;
+            /** @description lazycloud-<workspace>-<app>-<pod>, lowercased with other characters as -. */
+            alias: string;
+            /** @description The pod's ssh-ed25519 host key, for known_hosts. */
+            host_public_key: string;
+        };
+        SshHostPage: {
+            hosts: components["schemas"]["SshHost"][];
+            next_cursor?: string;
+        };
     };
     responses: {
         /** @description A typed error */
@@ -5377,6 +6364,9 @@ export interface components {
         QueuePath: components["schemas"]["CollectionName"];
         MapPath: components["schemas"]["CollectionName"];
         MapKeyPath: components["schemas"]["MapKey"];
+        ProcessPath: string;
+        /** @description A path in the container; a relative one is under /workspace. */
+        ContainerFilePath: string;
         CostStart: string;
         /** @description After start, and at most 400 days later. */
         CostEnd: string;
@@ -6762,6 +7752,8 @@ export interface operations {
                 app?: components["schemas"]["AppName"];
                 /** @description Only the containers of this workload of `app`; requires it. */
                 function?: components["schemas"]["WorkloadName"];
+                /** @description Only containers of this workload's releases. */
+                deployment?: string;
                 limit?: components["parameters"]["PageLimit"];
                 /** @description The next_cursor of the previous page. */
                 cursor?: components["parameters"]["Cursor"];
@@ -9695,6 +10687,888 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["Machine"];
                 };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    scaleDeployment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                /** @description The workload id. */
+                deployment: components["parameters"]["DeploymentPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScaleRequest"];
+            };
+        };
+        responses: {
+            /** @description The deployment after the change */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeployedWorkload"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getDevbox: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                /** @description The workload id. */
+                deployment: components["parameters"]["DeploymentPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The devbox */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Devbox"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    startDevbox: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                /** @description The workload id. */
+                deployment: components["parameters"]["DeploymentPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The devbox after the request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Devbox"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    stopDevbox: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                /** @description The workload id. */
+                deployment: components["parameters"]["DeploymentPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The devbox after the request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Devbox"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createInstance: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateInstanceRequest"];
+            };
+        };
+        responses: {
+            /** @description The pending container */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Instance"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    connectContainer: {
+        parameters: {
+            query?: {
+                wait_seconds?: number;
+            };
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                container: components["parameters"]["ContainerPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The ready container */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Instance"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    streamContainerOutput: {
+        parameters: {
+            query?: {
+                /** @description Return entries with an id greater than this. */
+                after?: components["parameters"]["LogAfter"];
+                follow?: boolean;
+            };
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                container: components["parameters"]["ContainerPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Newline-delimited ContainerLogEntry objects */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/x-ndjson": string;
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listProcesses: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                container: components["parameters"]["ContainerPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The processes by pid */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProcessList"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    startProcess: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                container: components["parameters"]["ContainerPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProcessRequest"];
+            };
+        };
+        responses: {
+            /** @description The started process */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Process"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getProcess: {
+        parameters: {
+            query?: {
+                /** @description Hold the request until the process exits or this many seconds pass. */
+                wait_seconds?: number;
+            };
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                container: components["parameters"]["ContainerPath"];
+                process: components["parameters"]["ProcessPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The process */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Process"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    killProcess: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                container: components["parameters"]["ContainerPath"];
+                process: components["parameters"]["ProcessPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["KillRequest"];
+            };
+        };
+        responses: {
+            /** @description Signalled */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listContainerFiles: {
+        parameters: {
+            query: {
+                /** @description A path in the container; a relative one is under /workspace. */
+                path: components["parameters"]["ContainerFilePath"];
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                container: components["parameters"]["ContainerPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The entries */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContainerFileList"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteContainerFile: {
+        parameters: {
+            query: {
+                /** @description A path in the container; a relative one is under /workspace. */
+                path: components["parameters"]["ContainerFilePath"];
+            };
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                container: components["parameters"]["ContainerPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    statContainerFile: {
+        parameters: {
+            query: {
+                /** @description A path in the container; a relative one is under /workspace. */
+                path: components["parameters"]["ContainerFilePath"];
+            };
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                container: components["parameters"]["ContainerPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file, following symbolic links */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContainerFile"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    downloadContainerFile: {
+        parameters: {
+            query: {
+                /** @description A path in the container; a relative one is under /workspace. */
+                path: components["parameters"]["ContainerFilePath"];
+                max_bytes?: number;
+                truncate?: boolean;
+            };
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                container: components["parameters"]["ContainerPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file's bytes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    uploadContainerFile: {
+        parameters: {
+            query: {
+                /** @description A path in the container; a relative one is under /workspace. */
+                path: components["parameters"]["ContainerFilePath"];
+                /** @description Permission bits, such as 420 for 0644. */
+                mode?: number;
+            };
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                container: components["parameters"]["ContainerPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": string;
+            };
+        };
+        responses: {
+            /** @description Written */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    findInContainerFiles: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                container: components["parameters"]["ContainerPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FindInFilesRequest"];
+            };
+        };
+        responses: {
+            /** @description The matches */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FileMatches"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    replaceInContainerFiles: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                container: components["parameters"]["ContainerPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReplaceInFilesRequest"];
+            };
+        };
+        responses: {
+            /** @description What changed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReplacedFiles"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createContainerDirectory: {
+        parameters: {
+            query: {
+                /** @description A path in the container; a relative one is under /workspace. */
+                path: components["parameters"]["ContainerFilePath"];
+                mode?: number;
+            };
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                container: components["parameters"]["ContainerPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Created */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteContainerDirectory: {
+        parameters: {
+            query: {
+                /** @description A path in the container; a relative one is under /workspace. */
+                path: components["parameters"]["ContainerFilePath"];
+            };
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                container: components["parameters"]["ContainerPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listContainerPorts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                container: components["parameters"]["ContainerPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The ports */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContainerPortList"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    exposeContainerPort: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                container: components["parameters"]["ContainerPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExposePortRequest"];
+            };
+        };
+        responses: {
+            /** @description The port's URL */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContainerPort"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getContainerNetwork: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                container: components["parameters"]["ContainerPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The container's outbound network policy */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NetworkPolicy"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    setContainerNetwork: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                container: components["parameters"]["ContainerPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NetworkPolicy"];
+            };
+        };
+        responses: {
+            /** @description The policy in force */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NetworkPolicy"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    setContainerTtl: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                container: components["parameters"]["ContainerPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TtlRequest"];
+            };
+        };
+        responses: {
+            /** @description The instance's lifetime */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Ttl"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    snapshotContainer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                container: components["parameters"]["ContainerPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["SnapshotRequest"];
+            };
+        };
+        responses: {
+            /** @description The stored snapshot */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemorySnapshot"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createFilesystemImage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                container: components["parameters"]["ContainerPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The image */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FilesystemImage"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    openContainerShell: {
+        parameters: {
+            query?: {
+                cols?: number;
+                rows?: number;
+                term?: string;
+            };
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                container: components["parameters"]["ContainerPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Switching to the WebSocket protocol */
+            101: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listSandboxes: {
+        parameters: {
+            query?: {
+                app?: components["schemas"]["AppName"];
+                limit?: components["parameters"]["Limit"];
+                /** @description The next_cursor of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of sandboxes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SandboxPage"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getSandboxStats: {
+        parameters: {
+            query?: {
+                app?: components["schemas"]["AppName"];
+            };
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Counts of the workspace's sandboxes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SandboxStats"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createSshCertificate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SshCertificateRequest"];
+            };
+        };
+        responses: {
+            /** @description The certificate */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SshCertificate"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listSshHosts: {
+        parameters: {
+            query?: {
+                app?: components["schemas"]["AppName"];
+                pod?: components["schemas"]["WorkloadName"];
+                role?: components["schemas"]["PodRole"];
+                limit?: components["parameters"]["Limit"];
+                /** @description The next_cursor of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of hosts */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SshHostPage"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    openSshTunnel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                app: components["parameters"]["AppPath"];
+                pod: components["schemas"]["WorkloadName"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Switching to the WebSocket protocol */
+            101: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             default: components["responses"]["Error"];
         };

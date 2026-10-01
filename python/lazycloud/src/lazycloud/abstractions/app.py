@@ -37,7 +37,7 @@ from lazycloud.abstractions.metadata import (
 from lazycloud.abstractions.volume import VolumeExport, volume_mounts
 from lazycloud.agent_harness import AgentHarness, agent_install_commands
 from lazycloud.control import resolve_control_client_config
-from lazycloud.exceptions import SdkError, UnsupportedFeatureError
+from lazycloud.exceptions import SdkError
 
 if TYPE_CHECKING:
     from shared.api import Deployment
@@ -1000,31 +1000,23 @@ class App:
     def deployment_target(
         self, *, prune: bool = False, resource: str | None = None
     ) -> AppFunctions:
-        """The functions a deployment of this app makes current.
+        """The functions, endpoints, ASGI apps, pods and devboxes a deployment makes current.
 
-        Raises for resources the platform cannot deploy yet, naming each.
+        Sandboxes are never deployed; each `create()` prepares its own release.
         """
-        from lazycloud.abstractions.endpoint import ASGI, Endpoint
-        from lazycloud.abstractions.function import Function
-        from lazycloud.session.deployment import AppFunctions
+        from lazycloud.session.deployment import AppFunctions, Workload
 
         if prune and resource is not None:
             raise AppOperationError("pruning requires the complete app without a resource selector")
         selected = (
-            self._select_many(resource=resource, method="deploy") if resource else self.resources
+            self._select_many(resource=resource, method="deploy")
+            if resource
+            else tuple(item for item in self.resources if callable(getattr(item, "deploy", None)))
         )
-        functions: list[Function[..., Any]] = []
-        unsupported: list[str] = []
-        for item in selected:
-            if isinstance(item, Function | Endpoint | ASGI):
-                functions.append(cast("Function[..., Any]", item))
-            else:
-                unsupported.append(_resource_selector(item))
-        if unsupported:
-            raise UnsupportedFeatureError(f"app {self.slug}", unsupported)
-        if not functions:
+        if not selected:
             raise AppOperationError(f"app {self.slug} has no functions to deploy")
-        return AppFunctions(app=self.slug, functions=tuple(functions), prune=prune)
+        workloads = tuple(cast("Workload", item) for item in selected)
+        return AppFunctions(app=self.slug, functions=workloads, prune=prune)
 
     def serve(
         self,

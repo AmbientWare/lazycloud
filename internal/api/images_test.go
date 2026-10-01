@@ -29,7 +29,7 @@ insert into workspace_images (workspace_id, image_digest) select ws.id, img.dige
 	imageID := "img_000000000000000000000001"
 	forged := "docker.io/attacker/image@sha256:" + strings.Repeat("f", 64)
 	spec := apitypes.FunctionSpec{
-		Name: "summarize_sales", Handler: "reports:summarize_sales", Source: apitypes.SourceRef{Sha256: source},
+		Name: "summarize_sales", Handler: new("reports:summarize_sales"), Source: apitypes.SourceRef{Sha256: source},
 		Image:     apitypes.ImageSpec{PythonVersion: apitypes.N312, ImageId: &imageID, Reference: &forged},
 		Resources: apitypes.Resources{CpuMillis: 1000, MemoryMib: 512},
 	}

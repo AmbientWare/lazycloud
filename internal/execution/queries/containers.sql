@@ -3,7 +3,8 @@ select id, release_id, image_build_id, state, host_id from containers where id =
 
 -- name: StopContainer :exec
 update containers
-set state = 'stopped', stop_reason = @stop_reason, exit_message = @exit_message, stopped_at = now()
+set state = 'stopped', stop_reason = @stop_reason, exit_message = @exit_message, exit_code = sqlc.narg('exit_code'),
+    stopped_at = now()
 where id = @id;
 
 -- name: RunningAttemptsOnContainer :many

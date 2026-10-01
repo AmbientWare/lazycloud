@@ -18,17 +18,16 @@ from shared.api import (
     ComputeInstancePage,
     ComputeWorkloadPage,
     Container,
-    ContainerState,
     MachineJoinRequest,
     MachineUpdate,
     StopReason,
 )
-from shared.http.gateway import CheckpointContainerRequest
 
 from lazycloud._terminal.cards import notice_card, result_card
 from lazycloud._terminal.formatting import duration
 from lazycloud._terminal.streams import console
 from lazycloud._terminal.theme import state_style, styled
+from lazycloud.abstractions.pod import PodOperationError, attach_container
 from lazycloud.cli.components.output import (
     emit,
     json_default,
@@ -37,15 +36,16 @@ from lazycloud.cli.components.output import (
     table,
     write_stream,
 )
-from lazycloud.cli.control import (
-    api_session,
-    gateway_client,
-)
+from lazycloud.cli.control import api_session
 from lazycloud.cli.machine_join import agent_join_interrupted, build_machine_join_command
 from lazycloud.clients.aws import create_connection_stack
 from lazycloud.clients.compute import ComputeApi
-from lazycloud.control import api_client, require_workspace, resolve_control_client_config
-from lazycloud.session.task import follow_log_stream
+from lazycloud.control import (
+    api_client,
+    require_workspace,
+    resolve_control_client_config,
+    workloads_client,
+)
 
 container_app = typer.Typer(help="Inspect and manage containers.")
 machine_app = typer.Typer(help="Manage self-hosted machines.")
@@ -482,28 +482,38 @@ def container_attach(
     container_id: str,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
-    client, selected_workspace = api_session(workspace=workspace)
-    container = _container_uuid(container_id)
-    chunks: list[str] = []
+    client = workloads_client(resolve_control_client_config(workspace=workspace))
     json_output = json_output_enabled(ctx)
-    for entry in follow_log_stream(
-        lambda after: client.stream_container_logs(
-            selected_workspace, container, after=after, follow=True
+    try:
+        attached = attach_container(
+            client,
+            _container_uuid(container_id),
+            write=None if json_output else write_stream,
         )
-    ):
-        line = entry.data if entry.data.endswith("\n") else f"{entry.data}\n"
-        chunks.append(line)
-        if not json_output:
-            write_stream(line)
-    finished = client.get_container(selected_workspace, container)
-    if finished.state is not ContainerState.stopped or finished.stop_reason is None:
-        raise typer.BadParameter("container attach stream ended before the container completed")
-    reason = finished.stop_reason
+    except PodOperationError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    finished = client.api.get_container(client.workspace, _container_uuid(container_id))
+    payload = {**finished.model_dump(mode="json"), "output": attached.output}
+    if attached.exit_code is not None:
+        emit(
+            ctx,
+            payload=payload,
+            view=result_card(
+                {"exit_code": attached.exit_code},
+                title="Container finished",
+                tone="success" if attached.exit_code == 0 else "warning",
+            ),
+        )
+        if attached.exit_code != 0:
+            raise typer.Exit(attached.exit_code)
+        return
+    # A function container reports how it stopped rather than an exit code.
+    reason = attached.stop_reason
     emit(
         ctx,
-        payload={**finished.model_dump(mode="json"), "output": "".join(chunks)},
+        payload=payload,
         view=result_card(
-            {"exit": reason.value},
+            {"exit": reason.value if reason is not None else "Not reported"},
             title="Container finished",
             tone="success" if reason is StopReason.stopped else "warning",
         ),
@@ -519,16 +529,13 @@ def container_checkpoint(
     checkpoint_id: Annotated[str | None, typer.Option("--checkpoint-id")] = None,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
-    response = gateway_client(workspace=workspace).checkpoint_container(
-        CheckpointContainerRequest(container_id=container_id, checkpoint_id=checkpoint_id)
-    )
+    client = workloads_client(resolve_control_client_config(workspace=workspace))
+    snapshot_id = _uuid(checkpoint_id, "checkpoint id") if checkpoint_id else None
+    response = client.snapshot(_container_uuid(container_id), snapshot_id=snapshot_id)
     emit(
         ctx,
         payload=response.model_dump(mode="json"),
-        view=notice_card(
-            f"Created checkpoint {response.checkpoint_id}.",
-            tone="success",
-        ),
+        view=notice_card(f"Created checkpoint {response.id}.", tone="success"),
     )
 
 
@@ -554,10 +561,14 @@ def container_stop(
 
 
 def _container_uuid(value: str) -> UUID:
+    return _uuid(value, "container id")
+
+
+def _uuid(value: str, label: str) -> UUID:
     try:
         return UUID(value)
     except ValueError:
-        raise typer.BadParameter(f"not a container id: {value}") from None
+        raise typer.BadParameter(f"not a {label}: {value}") from None
 
 
 @machine_app.command("list", help="List joined machines.")

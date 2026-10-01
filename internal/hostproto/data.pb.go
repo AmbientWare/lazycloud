@@ -268,6 +268,8 @@ type RequestHead struct {
 	//
 	//	*RequestHead_Http
 	//	*RequestHead_Sync
+	//	*RequestHead_Control
+	//	*RequestHead_Port
 	Kind          isRequestHead_Kind `protobuf_oneof:"kind"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -335,6 +337,24 @@ func (x *RequestHead) GetSync() *WorkspaceSync {
 	return nil
 }
 
+func (x *RequestHead) GetControl() *HttpRequest {
+	if x != nil {
+		if x, ok := x.Kind.(*RequestHead_Control); ok {
+			return x.Control
+		}
+	}
+	return nil
+}
+
+func (x *RequestHead) GetPort() *PortRequest {
+	if x != nil {
+		if x, ok := x.Kind.(*RequestHead_Port); ok {
+			return x.Port
+		}
+	}
+	return nil
+}
+
 type isRequestHead_Kind interface {
 	isRequestHead_Kind()
 }
@@ -347,9 +367,76 @@ type RequestHead_Sync struct {
 	Sync *WorkspaceSync `protobuf:"bytes,3,opt,name=sync,proto3,oneof"`
 }
 
+type RequestHead_Control struct {
+	// A request to the supervisor's control API: processes, files, shells,
+	// and tunnels to SSH or a port after an upgrade.
+	Control *HttpRequest `protobuf:"bytes,90,opt,name=control,proto3,oneof"`
+}
+
+type RequestHead_Port struct {
+	// A request to a port the container listens on.
+	Port *PortRequest `protobuf:"bytes,91,opt,name=port,proto3,oneof"`
+}
+
 func (*RequestHead_Http) isRequestHead_Kind() {}
 
 func (*RequestHead_Sync) isRequestHead_Kind() {}
+
+func (*RequestHead_Control) isRequestHead_Kind() {}
+
+func (*RequestHead_Port) isRequestHead_Kind() {}
+
+type PortRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Port          int32                  `protobuf:"varint,1,opt,name=port,proto3" json:"port,omitempty"`
+	Http          *HttpRequest           `protobuf:"bytes,2,opt,name=http,proto3" json:"http,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PortRequest) Reset() {
+	*x = PortRequest{}
+	mi := &file_host_v1_data_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PortRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PortRequest) ProtoMessage() {}
+
+func (x *PortRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_host_v1_data_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PortRequest.ProtoReflect.Descriptor instead.
+func (*PortRequest) Descriptor() ([]byte, []int) {
+	return file_host_v1_data_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *PortRequest) GetPort() int32 {
+	if x != nil {
+		return x.Port
+	}
+	return 0
+}
+
+func (x *PortRequest) GetHttp() *HttpRequest {
+	if x != nil {
+		return x.Http
+	}
+	return nil
+}
 
 // HttpRequest is forwarded to the container's supervisor. Hop-by-hop headers
 // are already removed, except Connection and Upgrade on an upgrade request.
@@ -366,7 +453,7 @@ type HttpRequest struct {
 
 func (x *HttpRequest) Reset() {
 	*x = HttpRequest{}
-	mi := &file_host_v1_data_proto_msgTypes[4]
+	mi := &file_host_v1_data_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -378,7 +465,7 @@ func (x *HttpRequest) String() string {
 func (*HttpRequest) ProtoMessage() {}
 
 func (x *HttpRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_host_v1_data_proto_msgTypes[4]
+	mi := &file_host_v1_data_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -391,7 +478,7 @@ func (x *HttpRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HttpRequest.ProtoReflect.Descriptor instead.
 func (*HttpRequest) Descriptor() ([]byte, []int) {
-	return file_host_v1_data_proto_rawDescGZIP(), []int{4}
+	return file_host_v1_data_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *HttpRequest) GetMethod() string {
@@ -432,7 +519,7 @@ type Header struct {
 
 func (x *Header) Reset() {
 	*x = Header{}
-	mi := &file_host_v1_data_proto_msgTypes[5]
+	mi := &file_host_v1_data_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -444,7 +531,7 @@ func (x *Header) String() string {
 func (*Header) ProtoMessage() {}
 
 func (x *Header) ProtoReflect() protoreflect.Message {
-	mi := &file_host_v1_data_proto_msgTypes[5]
+	mi := &file_host_v1_data_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -457,7 +544,7 @@ func (x *Header) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Header.ProtoReflect.Descriptor instead.
 func (*Header) Descriptor() ([]byte, []int) {
-	return file_host_v1_data_proto_rawDescGZIP(), []int{5}
+	return file_host_v1_data_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *Header) GetName() string {
@@ -486,7 +573,7 @@ type WorkspaceSync struct {
 
 func (x *WorkspaceSync) Reset() {
 	*x = WorkspaceSync{}
-	mi := &file_host_v1_data_proto_msgTypes[6]
+	mi := &file_host_v1_data_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -498,7 +585,7 @@ func (x *WorkspaceSync) String() string {
 func (*WorkspaceSync) ProtoMessage() {}
 
 func (x *WorkspaceSync) ProtoReflect() protoreflect.Message {
-	mi := &file_host_v1_data_proto_msgTypes[6]
+	mi := &file_host_v1_data_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -511,7 +598,7 @@ func (x *WorkspaceSync) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WorkspaceSync.ProtoReflect.Descriptor instead.
 func (*WorkspaceSync) Descriptor() ([]byte, []int) {
-	return file_host_v1_data_proto_rawDescGZIP(), []int{6}
+	return file_host_v1_data_proto_rawDescGZIP(), []int{7}
 }
 
 type End struct {
@@ -522,7 +609,7 @@ type End struct {
 
 func (x *End) Reset() {
 	*x = End{}
-	mi := &file_host_v1_data_proto_msgTypes[7]
+	mi := &file_host_v1_data_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -534,7 +621,7 @@ func (x *End) String() string {
 func (*End) ProtoMessage() {}
 
 func (x *End) ProtoReflect() protoreflect.Message {
-	mi := &file_host_v1_data_proto_msgTypes[7]
+	mi := &file_host_v1_data_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -547,7 +634,7 @@ func (x *End) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use End.ProtoReflect.Descriptor instead.
 func (*End) Descriptor() ([]byte, []int) {
-	return file_host_v1_data_proto_rawDescGZIP(), []int{7}
+	return file_host_v1_data_proto_rawDescGZIP(), []int{8}
 }
 
 // ForwardUp flows from the agent to the edge: a head or an error, then body
@@ -568,7 +655,7 @@ type ForwardUp struct {
 
 func (x *ForwardUp) Reset() {
 	*x = ForwardUp{}
-	mi := &file_host_v1_data_proto_msgTypes[8]
+	mi := &file_host_v1_data_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -580,7 +667,7 @@ func (x *ForwardUp) String() string {
 func (*ForwardUp) ProtoMessage() {}
 
 func (x *ForwardUp) ProtoReflect() protoreflect.Message {
-	mi := &file_host_v1_data_proto_msgTypes[8]
+	mi := &file_host_v1_data_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -593,7 +680,7 @@ func (x *ForwardUp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ForwardUp.ProtoReflect.Descriptor instead.
 func (*ForwardUp) Descriptor() ([]byte, []int) {
-	return file_host_v1_data_proto_rawDescGZIP(), []int{8}
+	return file_host_v1_data_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *ForwardUp) GetBody() isForwardUp_Body {
@@ -692,7 +779,7 @@ type ResponseHead struct {
 
 func (x *ResponseHead) Reset() {
 	*x = ResponseHead{}
-	mi := &file_host_v1_data_proto_msgTypes[9]
+	mi := &file_host_v1_data_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -704,7 +791,7 @@ func (x *ResponseHead) String() string {
 func (*ResponseHead) ProtoMessage() {}
 
 func (x *ResponseHead) ProtoReflect() protoreflect.Message {
-	mi := &file_host_v1_data_proto_msgTypes[9]
+	mi := &file_host_v1_data_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -717,7 +804,7 @@ func (x *ResponseHead) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResponseHead.ProtoReflect.Descriptor instead.
 func (*ResponseHead) Descriptor() ([]byte, []int) {
-	return file_host_v1_data_proto_rawDescGZIP(), []int{9}
+	return file_host_v1_data_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *ResponseHead) GetStatus() int32 {
@@ -744,7 +831,7 @@ type ForwardError struct {
 
 func (x *ForwardError) Reset() {
 	*x = ForwardError{}
-	mi := &file_host_v1_data_proto_msgTypes[10]
+	mi := &file_host_v1_data_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -756,7 +843,7 @@ func (x *ForwardError) String() string {
 func (*ForwardError) ProtoMessage() {}
 
 func (x *ForwardError) ProtoReflect() protoreflect.Message {
-	mi := &file_host_v1_data_proto_msgTypes[10]
+	mi := &file_host_v1_data_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -769,7 +856,7 @@ func (x *ForwardError) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ForwardError.ProtoReflect.Descriptor instead.
 func (*ForwardError) Descriptor() ([]byte, []int) {
-	return file_host_v1_data_proto_rawDescGZIP(), []int{10}
+	return file_host_v1_data_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *ForwardError) GetKind() ForwardErrorKind {
@@ -796,7 +883,7 @@ type SyncResult struct {
 
 func (x *SyncResult) Reset() {
 	*x = SyncResult{}
-	mi := &file_host_v1_data_proto_msgTypes[11]
+	mi := &file_host_v1_data_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -808,7 +895,7 @@ func (x *SyncResult) String() string {
 func (*SyncResult) ProtoMessage() {}
 
 func (x *SyncResult) ProtoReflect() protoreflect.Message {
-	mi := &file_host_v1_data_proto_msgTypes[11]
+	mi := &file_host_v1_data_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -821,7 +908,7 @@ func (x *SyncResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SyncResult.ProtoReflect.Descriptor instead.
 func (*SyncResult) Descriptor() ([]byte, []int) {
-	return file_host_v1_data_proto_rawDescGZIP(), []int{11}
+	return file_host_v1_data_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *SyncResult) GetWritten() int32 {
@@ -850,12 +937,17 @@ const file_host_v1_data_proto_rawDesc = "" +
 	"\x04head\x18\x01 \x01(\v2\x1e.lazycloud.host.v1.RequestHeadH\x00R\x04head\x12\x14\n" +
 	"\x04data\x18\x02 \x01(\fH\x00R\x04data\x12*\n" +
 	"\x03end\x18\x03 \x01(\v2\x16.lazycloud.host.v1.EndH\x00R\x03endB\x06\n" +
-	"\x04body\"\xa6\x01\n" +
+	"\x04body\"\x98\x02\n" +
 	"\vRequestHead\x12!\n" +
 	"\fcontainer_id\x18\x01 \x01(\tR\vcontainerId\x124\n" +
 	"\x04http\x18\x02 \x01(\v2\x1e.lazycloud.host.v1.HttpRequestH\x00R\x04http\x126\n" +
-	"\x04sync\x18\x03 \x01(\v2 .lazycloud.host.v1.WorkspaceSyncH\x00R\x04syncB\x06\n" +
-	"\x04kind\"\x80\x01\n" +
+	"\x04sync\x18\x03 \x01(\v2 .lazycloud.host.v1.WorkspaceSyncH\x00R\x04sync\x12:\n" +
+	"\acontrol\x18Z \x01(\v2\x1e.lazycloud.host.v1.HttpRequestH\x00R\acontrol\x124\n" +
+	"\x04port\x18[ \x01(\v2\x1e.lazycloud.host.v1.PortRequestH\x00R\x04portB\x06\n" +
+	"\x04kind\"U\n" +
+	"\vPortRequest\x12\x12\n" +
+	"\x04port\x18\x01 \x01(\x05R\x04port\x122\n" +
+	"\x04http\x18\x02 \x01(\v2\x1e.lazycloud.host.v1.HttpRequestR\x04http\"\x80\x01\n" +
 	"\vHttpRequest\x12\x16\n" +
 	"\x06method\x18\x01 \x01(\tR\x06method\x12\x10\n" +
 	"\x03uri\x18\x02 \x01(\tR\x03uri\x12\x12\n" +
@@ -907,45 +999,49 @@ func file_host_v1_data_proto_rawDescGZIP() []byte {
 }
 
 var file_host_v1_data_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_host_v1_data_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
+var file_host_v1_data_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
 var file_host_v1_data_proto_goTypes = []any{
 	(ForwardErrorKind)(0), // 0: lazycloud.host.v1.ForwardErrorKind
 	(*ListenRequest)(nil), // 1: lazycloud.host.v1.ListenRequest
 	(*ListenEvent)(nil),   // 2: lazycloud.host.v1.ListenEvent
 	(*ForwardDown)(nil),   // 3: lazycloud.host.v1.ForwardDown
 	(*RequestHead)(nil),   // 4: lazycloud.host.v1.RequestHead
-	(*HttpRequest)(nil),   // 5: lazycloud.host.v1.HttpRequest
-	(*Header)(nil),        // 6: lazycloud.host.v1.Header
-	(*WorkspaceSync)(nil), // 7: lazycloud.host.v1.WorkspaceSync
-	(*End)(nil),           // 8: lazycloud.host.v1.End
-	(*ForwardUp)(nil),     // 9: lazycloud.host.v1.ForwardUp
-	(*ResponseHead)(nil),  // 10: lazycloud.host.v1.ResponseHead
-	(*ForwardError)(nil),  // 11: lazycloud.host.v1.ForwardError
-	(*SyncResult)(nil),    // 12: lazycloud.host.v1.SyncResult
+	(*PortRequest)(nil),   // 5: lazycloud.host.v1.PortRequest
+	(*HttpRequest)(nil),   // 6: lazycloud.host.v1.HttpRequest
+	(*Header)(nil),        // 7: lazycloud.host.v1.Header
+	(*WorkspaceSync)(nil), // 8: lazycloud.host.v1.WorkspaceSync
+	(*End)(nil),           // 9: lazycloud.host.v1.End
+	(*ForwardUp)(nil),     // 10: lazycloud.host.v1.ForwardUp
+	(*ResponseHead)(nil),  // 11: lazycloud.host.v1.ResponseHead
+	(*ForwardError)(nil),  // 12: lazycloud.host.v1.ForwardError
+	(*SyncResult)(nil),    // 13: lazycloud.host.v1.SyncResult
 }
 var file_host_v1_data_proto_depIdxs = []int32{
 	4,  // 0: lazycloud.host.v1.ForwardDown.head:type_name -> lazycloud.host.v1.RequestHead
-	8,  // 1: lazycloud.host.v1.ForwardDown.end:type_name -> lazycloud.host.v1.End
-	5,  // 2: lazycloud.host.v1.RequestHead.http:type_name -> lazycloud.host.v1.HttpRequest
-	7,  // 3: lazycloud.host.v1.RequestHead.sync:type_name -> lazycloud.host.v1.WorkspaceSync
-	6,  // 4: lazycloud.host.v1.HttpRequest.headers:type_name -> lazycloud.host.v1.Header
-	10, // 5: lazycloud.host.v1.ForwardUp.head:type_name -> lazycloud.host.v1.ResponseHead
-	8,  // 6: lazycloud.host.v1.ForwardUp.end:type_name -> lazycloud.host.v1.End
-	11, // 7: lazycloud.host.v1.ForwardUp.error:type_name -> lazycloud.host.v1.ForwardError
-	12, // 8: lazycloud.host.v1.ForwardUp.synced:type_name -> lazycloud.host.v1.SyncResult
-	6,  // 9: lazycloud.host.v1.ResponseHead.headers:type_name -> lazycloud.host.v1.Header
-	0,  // 10: lazycloud.host.v1.ForwardError.kind:type_name -> lazycloud.host.v1.ForwardErrorKind
-	1,  // 11: lazycloud.host.v1.HostData.Listen:input_type -> lazycloud.host.v1.ListenRequest
-	9,  // 12: lazycloud.host.v1.HostData.Forward:input_type -> lazycloud.host.v1.ForwardUp
-	3,  // 13: lazycloud.host.v1.EdgeRelay.Forward:input_type -> lazycloud.host.v1.ForwardDown
-	2,  // 14: lazycloud.host.v1.HostData.Listen:output_type -> lazycloud.host.v1.ListenEvent
-	3,  // 15: lazycloud.host.v1.HostData.Forward:output_type -> lazycloud.host.v1.ForwardDown
-	9,  // 16: lazycloud.host.v1.EdgeRelay.Forward:output_type -> lazycloud.host.v1.ForwardUp
-	14, // [14:17] is the sub-list for method output_type
-	11, // [11:14] is the sub-list for method input_type
-	11, // [11:11] is the sub-list for extension type_name
-	11, // [11:11] is the sub-list for extension extendee
-	0,  // [0:11] is the sub-list for field type_name
+	9,  // 1: lazycloud.host.v1.ForwardDown.end:type_name -> lazycloud.host.v1.End
+	6,  // 2: lazycloud.host.v1.RequestHead.http:type_name -> lazycloud.host.v1.HttpRequest
+	8,  // 3: lazycloud.host.v1.RequestHead.sync:type_name -> lazycloud.host.v1.WorkspaceSync
+	6,  // 4: lazycloud.host.v1.RequestHead.control:type_name -> lazycloud.host.v1.HttpRequest
+	5,  // 5: lazycloud.host.v1.RequestHead.port:type_name -> lazycloud.host.v1.PortRequest
+	6,  // 6: lazycloud.host.v1.PortRequest.http:type_name -> lazycloud.host.v1.HttpRequest
+	7,  // 7: lazycloud.host.v1.HttpRequest.headers:type_name -> lazycloud.host.v1.Header
+	11, // 8: lazycloud.host.v1.ForwardUp.head:type_name -> lazycloud.host.v1.ResponseHead
+	9,  // 9: lazycloud.host.v1.ForwardUp.end:type_name -> lazycloud.host.v1.End
+	12, // 10: lazycloud.host.v1.ForwardUp.error:type_name -> lazycloud.host.v1.ForwardError
+	13, // 11: lazycloud.host.v1.ForwardUp.synced:type_name -> lazycloud.host.v1.SyncResult
+	7,  // 12: lazycloud.host.v1.ResponseHead.headers:type_name -> lazycloud.host.v1.Header
+	0,  // 13: lazycloud.host.v1.ForwardError.kind:type_name -> lazycloud.host.v1.ForwardErrorKind
+	1,  // 14: lazycloud.host.v1.HostData.Listen:input_type -> lazycloud.host.v1.ListenRequest
+	10, // 15: lazycloud.host.v1.HostData.Forward:input_type -> lazycloud.host.v1.ForwardUp
+	3,  // 16: lazycloud.host.v1.EdgeRelay.Forward:input_type -> lazycloud.host.v1.ForwardDown
+	2,  // 17: lazycloud.host.v1.HostData.Listen:output_type -> lazycloud.host.v1.ListenEvent
+	3,  // 18: lazycloud.host.v1.HostData.Forward:output_type -> lazycloud.host.v1.ForwardDown
+	10, // 19: lazycloud.host.v1.EdgeRelay.Forward:output_type -> lazycloud.host.v1.ForwardUp
+	17, // [17:20] is the sub-list for method output_type
+	14, // [14:17] is the sub-list for method input_type
+	14, // [14:14] is the sub-list for extension type_name
+	14, // [14:14] is the sub-list for extension extendee
+	0,  // [0:14] is the sub-list for field type_name
 }
 
 func init() { file_host_v1_data_proto_init() }
@@ -961,8 +1057,10 @@ func file_host_v1_data_proto_init() {
 	file_host_v1_data_proto_msgTypes[3].OneofWrappers = []any{
 		(*RequestHead_Http)(nil),
 		(*RequestHead_Sync)(nil),
+		(*RequestHead_Control)(nil),
+		(*RequestHead_Port)(nil),
 	}
-	file_host_v1_data_proto_msgTypes[8].OneofWrappers = []any{
+	file_host_v1_data_proto_msgTypes[9].OneofWrappers = []any{
 		(*ForwardUp_Head)(nil),
 		(*ForwardUp_Data)(nil),
 		(*ForwardUp_End)(nil),
@@ -975,7 +1073,7 @@ func file_host_v1_data_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_host_v1_data_proto_rawDesc), len(file_host_v1_data_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   12,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

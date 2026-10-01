@@ -10,6 +10,8 @@ from shared.api import (
     Deployment,
     DeploymentPlan,
     DeploymentPlanRequest,
+    PodKind,
+    Release,
     WorkloadIdentity,
     WorkloadKind,
 )
@@ -20,10 +22,10 @@ from lazycloud._terminal.streams import console
 from lazycloud.abstractions.app import App
 from lazycloud.abstractions.endpoint import ASGI, Endpoint
 from lazycloud.abstractions.function import Function
+from lazycloud.abstractions.pod import Pod
 from lazycloud.abstractions.shell import Shell, ShellSession
 from lazycloud.cli.apps import app_name
 from lazycloud.cli.components.context import current_workspace
-from lazycloud.cli.components.errors import ClientError
 from lazycloud.cli.components.output import (
     emit,
     json_output_enabled,
@@ -48,7 +50,12 @@ from lazycloud.control import (
     require_workspace,
     resolve_control_client_config,
 )
-from lazycloud.session.deployment import AppFunctions, DeploymentClient, deploy_functions
+from lazycloud.session.deployment import (
+    AppFunctions,
+    DeploymentClient,
+    Workload,
+    deploy_functions,
+)
 from lazycloud.terminal_shell import InteractiveShell
 
 deployment_app = typer.Typer(help="Manage deployments.")
@@ -114,13 +121,13 @@ def deploy(
         target = loaded[0]
         attach_terminal(target)
         if diff:
-            if not isinstance(target, Function | Endpoint | ASGI):
+            if not isinstance(target, Function | Endpoint | ASGI | Pod):
                 raise typer.BadParameter("--diff requires an app or a decorated workload")
-            workload = cast("Function[..., Any]", target)
+            workload = cast("Workload", target)
             plan = _plan(client, selected_workspace, AppFunctions(workload._app_slug, (workload,)))
             _emit_deployment_plans(ctx, [plan])
             return
-        if not isinstance(target, Function | Endpoint | ASGI):
+        if not isinstance(target, Function | Endpoint | ASGI | Pod):
             invoke_handler_method(
                 target,
                 "deploy",
@@ -128,17 +135,31 @@ def deploy(
             )
             return
         deployment = target.deploy(workspace=selected_workspace, source_root=source_root)
-    summary: dict[str, JsonValue] = {"name": handler[0]}
     release = next(item for item in deployment.releases if item.function == target.resource_name)
+    emit(
+        ctx,
+        payload=deployment.model_dump(mode="json"),
+        view=result_card(
+            _release_summary(handler[0], release), title="Deployment created", tone="success"
+        ),
+    )
+
+
+def _release_summary(name: str, release: Release) -> dict[str, JsonValue]:
+    summary: dict[str, JsonValue] = {"name": name}
     if release.version is not None:
         summary["version"] = release.version
     if release.url:
         summary["url"] = release.url
-    emit(
-        ctx,
-        payload=deployment.model_dump(mode="json"),
-        view=result_card(summary, title="Deployment created", tone="success"),
-    )
+    spec = release.spec
+    if spec.pod is not None and spec.pod.kind is not PodKind.sandbox:
+        summary["role"] = spec.pod.kind.value
+        if spec.keep_warm_seconds is not None:
+            summary["keep_warm"] = (
+                "always" if spec.keep_warm_seconds == -1 else f"{spec.keep_warm_seconds}s"
+            )
+        summary["preemptible"] = spec.placement.preemptible if spec.placement else True
+    return summary
 
 
 def _plan(client: ApiClient, workspace: str, target: AppFunctions) -> DeploymentPlan:
@@ -153,6 +174,8 @@ def _plan(client: ApiClient, workspace: str, target: AppFunctions) -> Deployment
 
 
 def _workload_kind(workload: object) -> WorkloadKind:
+    if isinstance(workload, Pod):
+        return WorkloadKind.pod
     if isinstance(workload, Endpoint):
         return WorkloadKind.endpoint
     if isinstance(workload, ASGI):
@@ -193,6 +216,13 @@ def _emit_app_deployments(
         urls: list[JsonValue] = [release.url for release in deployment.releases if release.url]
         if urls:
             summary["urls"] = urls
+        devboxes: list[JsonValue] = [
+            release.function
+            for release in deployment.releases
+            if release.spec.pod is not None and release.spec.pod.kind is PodKind.devbox
+        ]
+        if devboxes:
+            summary["devboxes"] = devboxes
         if target.prune:
             summary["removed_versions"] = deployment.removed_versions
         summaries.append(summary)
@@ -274,12 +304,11 @@ def deployment_scale(
     containers: Annotated[int, typer.Option("--containers", min=0)],
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
-    DeploymentClient(workspace=workspace).get(deployment_id_or_name)
-    # Every deployment is a function, which scales with its queue.
-    raise ClientError(
-        "only pod deployments can be scaled directly",
-        type="invalid_input",
-        title="Invalid input",
+    response = DeploymentClient(workspace=workspace).scale(deployment_id_or_name, containers)
+    emit(
+        ctx,
+        payload=response.model_dump(mode="json"),
+        view=notice_card(f"Set {response.name} to {containers} containers.", tone="success"),
     )
 
 
@@ -323,7 +352,9 @@ def run(
         payload_args = [parse_json_argument(item) for item in args[1:]]
         target = apply_handler_reference(user_object, args[0])
         attach_terminal(target)
-        if isinstance(target, Function):
+        if isinstance(target, Pod):
+            response = target.run(*args[1:], workspace=workspace)
+        elif isinstance(target, Function):
             if json_output_enabled(ctx):
                 response = target.run_task(target.submit_json(payload_args, {}))
             else:

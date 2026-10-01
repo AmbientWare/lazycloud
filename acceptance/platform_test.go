@@ -416,7 +416,7 @@ func (p *platform) call(method, url string, body string) (int, http.Header, stri
 
 func spec(name, handler, source string, http *apitypes.HttpSpec) apitypes.FunctionSpec {
 	return apitypes.FunctionSpec{
-		Name: name, Handler: handler, Source: apitypes.SourceRef{Sha256: source},
+		Name: name, Handler: new(handler), Source: apitypes.SourceRef{Sha256: source},
 		Image:     apitypes.ImageSpec{PythonVersion: apitypes.N312},
 		Resources: apitypes.Resources{CpuMillis: 250, MemoryMib: 256},
 		Http:      http,

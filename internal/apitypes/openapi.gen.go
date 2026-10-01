@@ -571,6 +571,27 @@ func (e ContainerLogEntryStream) Valid() bool {
 	}
 }
 
+// Defines values for ContainerPurpose.
+const (
+	ContainerPurposeInstance ContainerPurpose = "instance"
+	ContainerPurposeServe    ContainerPurpose = "serve"
+	ContainerPurposeShell    ContainerPurpose = "shell"
+)
+
+// Valid indicates whether the value is a known member of the ContainerPurpose enum.
+func (e ContainerPurpose) Valid() bool {
+	switch e {
+	case ContainerPurposeInstance:
+		return true
+	case ContainerPurposeServe:
+		return true
+	case ContainerPurposeShell:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ContainerState.
 const (
 	ContainerStateDraining ContainerState = "draining"
@@ -694,6 +715,63 @@ func (e DeploymentPlanAction) Valid() bool {
 	case Remove:
 		return true
 	case Retain:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DevboxPhase.
+const (
+	DevboxPhaseFailed        DevboxPhase = "failed"
+	DevboxPhasePullingImage  DevboxPhase = "pulling_image"
+	DevboxPhaseQueued        DevboxPhase = "queued"
+	DevboxPhaseRestoringDisk DevboxPhase = "restoring_disk"
+	DevboxPhaseRunning       DevboxPhase = "running"
+	DevboxPhaseStarting      DevboxPhase = "starting"
+	DevboxPhaseStopped       DevboxPhase = "stopped"
+	DevboxPhaseStopping      DevboxPhase = "stopping"
+)
+
+// Valid indicates whether the value is a known member of the DevboxPhase enum.
+func (e DevboxPhase) Valid() bool {
+	switch e {
+	case DevboxPhaseFailed:
+		return true
+	case DevboxPhasePullingImage:
+		return true
+	case DevboxPhaseQueued:
+		return true
+	case DevboxPhaseRestoringDisk:
+		return true
+	case DevboxPhaseRunning:
+		return true
+	case DevboxPhaseStarting:
+		return true
+	case DevboxPhaseStopped:
+		return true
+	case DevboxPhaseStopping:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DevboxState.
+const (
+	DevboxStateRunning  DevboxState = "running"
+	DevboxStateStarting DevboxState = "starting"
+	DevboxStateStopped  DevboxState = "stopped"
+)
+
+// Valid indicates whether the value is a known member of the DevboxState enum.
+func (e DevboxState) Valid() bool {
+	switch e {
+	case DevboxStateRunning:
+		return true
+	case DevboxStateStarting:
+		return true
+	case DevboxStateStopped:
 		return true
 	default:
 		return false
@@ -1258,6 +1336,39 @@ func (e InvitationRole) Valid() bool {
 	}
 }
 
+// Defines values for KillRequestSignal.
+const (
+	SignalHUP  KillRequestSignal = "HUP"
+	SignalINT  KillRequestSignal = "INT"
+	SignalKILL KillRequestSignal = "KILL"
+	SignalQUIT KillRequestSignal = "QUIT"
+	SignalTERM KillRequestSignal = "TERM"
+	SignalUSR1 KillRequestSignal = "USR1"
+	SignalUSR2 KillRequestSignal = "USR2"
+)
+
+// Valid indicates whether the value is a known member of the KillRequestSignal enum.
+func (e KillRequestSignal) Valid() bool {
+	switch e {
+	case SignalHUP:
+		return true
+	case SignalINT:
+		return true
+	case SignalKILL:
+		return true
+	case SignalQUIT:
+		return true
+	case SignalTERM:
+		return true
+	case SignalUSR1:
+		return true
+	case SignalUSR2:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for LifecycleStageKind.
 const (
 	LifecycleStageKindCreate    LifecycleStageKind = "create"
@@ -1447,6 +1558,27 @@ func (e MachineLifecycle) Valid() bool {
 	}
 }
 
+// Defines values for MemorySnapshotState.
+const (
+	MemorySnapshotStateAvailable MemorySnapshotState = "available"
+	MemorySnapshotStateFailed    MemorySnapshotState = "failed"
+	MemorySnapshotStatePending   MemorySnapshotState = "pending"
+)
+
+// Valid indicates whether the value is a known member of the MemorySnapshotState enum.
+func (e MemorySnapshotState) Valid() bool {
+	switch e {
+	case MemorySnapshotStateAvailable:
+		return true
+	case MemorySnapshotStateFailed:
+		return true
+	case MemorySnapshotStatePending:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for PayloadEncoding.
 const (
 	PayloadEncodingCloudpickle PayloadEncoding = "cloudpickle"
@@ -1498,6 +1630,45 @@ func (e PlatformRole) Valid() bool {
 	case PlatformRoleAdministrator:
 		return true
 	case PlatformRoleMember:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PodKind.
+const (
+	PodKindDevbox  PodKind = "devbox"
+	PodKindPod     PodKind = "pod"
+	PodKindSandbox PodKind = "sandbox"
+)
+
+// Valid indicates whether the value is a known member of the PodKind enum.
+func (e PodKind) Valid() bool {
+	switch e {
+	case PodKindDevbox:
+		return true
+	case PodKindPod:
+		return true
+	case PodKindSandbox:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PodRole.
+const (
+	PodRoleDevbox PodRole = "devbox"
+	PodRolePod    PodRole = "pod"
+)
+
+// Valid indicates whether the value is a known member of the PodRole enum.
+func (e PodRole) Valid() bool {
+	switch e {
+	case PodRoleDevbox:
+		return true
+	case PodRolePod:
 		return true
 	default:
 		return false
@@ -1681,6 +1852,33 @@ func (e RetryPolicyBackoff) Valid() bool {
 	}
 }
 
+// Defines values for SandboxStatus.
+const (
+	SandboxStatusFailed   SandboxStatus = "failed"
+	SandboxStatusPending  SandboxStatus = "pending"
+	SandboxStatusRunning  SandboxStatus = "running"
+	SandboxStatusStopped  SandboxStatus = "stopped"
+	SandboxStatusStopping SandboxStatus = "stopping"
+)
+
+// Valid indicates whether the value is a known member of the SandboxStatus enum.
+func (e SandboxStatus) Valid() bool {
+	switch e {
+	case SandboxStatusFailed:
+		return true
+	case SandboxStatusPending:
+		return true
+	case SandboxStatusRunning:
+		return true
+	case SandboxStatusStopped:
+		return true
+	case SandboxStatusStopping:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ScheduleTimezone.
 const (
 	UTC ScheduleTimezone = "UTC"
@@ -1699,6 +1897,7 @@ func (e ScheduleTimezone) Valid() bool {
 // Defines values for StopReason.
 const (
 	StopReasonCrashed     StopReason = "crashed"
+	StopReasonExited      StopReason = "exited"
 	StopReasonHostLost    StopReason = "host_lost"
 	StopReasonLoadError   StopReason = "load_error"
 	StopReasonOutOfMemory StopReason = "out_of_memory"
@@ -1710,6 +1909,8 @@ const (
 func (e StopReason) Valid() bool {
 	switch e {
 	case StopReasonCrashed:
+		return true
+	case StopReasonExited:
 		return true
 	case StopReasonHostLost:
 		return true
@@ -2004,6 +2205,8 @@ const (
 	WorkloadKindAsgi     WorkloadKind = "asgi"
 	WorkloadKindEndpoint WorkloadKind = "endpoint"
 	WorkloadKindFunction WorkloadKind = "function"
+	WorkloadKindPod      WorkloadKind = "pod"
+	WorkloadKindSandbox  WorkloadKind = "sandbox"
 )
 
 // Valid indicates whether the value is a known member of the WorkloadKind enum.
@@ -2014,6 +2217,10 @@ func (e WorkloadKind) Valid() bool {
 	case WorkloadKindEndpoint:
 		return true
 	case WorkloadKindFunction:
+		return true
+	case WorkloadKindPod:
+		return true
+	case WorkloadKindSandbox:
 		return true
 	default:
 		return false
@@ -2561,6 +2768,14 @@ type ChangeResetReason string
 // ChangeTopic defines model for ChangeTopic.
 type ChangeTopic string
 
+// CheckpointSpec Snapshot the first ready container's memory and start later ones from it. A pod is snapshotted once readiness_path on readiness_port answers.
+type CheckpointSpec struct {
+	ReadinessIntervalSeconds *float32 `json:"readiness_interval_seconds,omitempty"`
+	ReadinessPath            *string  `json:"readiness_path,omitempty"`
+	ReadinessPort            *int     `json:"readiness_port,omitempty"`
+	ReadinessTimeoutSeconds  *int     `json:"readiness_timeout_seconds,omitempty"`
+}
+
 // CloudBucketSpec defines model for CloudBucketSpec.
 type CloudBucketSpec struct {
 	// AccessKeySecret The workspace secret holding the access key id.
@@ -2732,16 +2947,29 @@ type ConcurrencyLimits struct {
 
 // Container defines model for Container.
 type Container struct {
-	App         AppName            `json:"app"`
-	CpuMillis   int64              `json:"cpu_millis"`
-	CreatedAt   time.Time          `json:"created_at"`
-	ExitMessage *string            `json:"exit_message,omitempty"`
-	Function    WorkloadName       `json:"function"`
-	Id          openapi_types.UUID `json:"id"`
+	App       AppName   `json:"app"`
+	CpuMillis int64     `json:"cpu_millis"`
+	CreatedAt time.Time `json:"created_at"`
+
+	// ExitCode How the container's command exited, once it has.
+	ExitCode    *int         `json:"exit_code,omitempty"`
+	ExitMessage *string      `json:"exit_message,omitempty"`
+	Function    WorkloadName `json:"function"`
+	GpuCount    *int         `json:"gpu_count,omitempty"`
+
+	// Host The name of the host the container was placed on.
+	Host *string            `json:"host,omitempty"`
+	Id   openapi_types.UUID `json:"id"`
 
 	// Image The image reference the release runs.
-	Image     *string            `json:"image,omitempty"`
-	MemoryMib int64              `json:"memory_mib"`
+	Image *string `json:"image,omitempty"`
+
+	// Kind A function runs tasks; an endpoint or ASGI app serves HTTP, and realtime apps are ASGI apps. A pod runs a command, and a devbox is a pod; a sandbox runs instances its owner creates.
+	Kind      *WorkloadKind `json:"kind,omitempty"`
+	MemoryMib int64         `json:"memory_mib"`
+
+	// Purpose serve containers are the ones a deployment's count asks for; an instance or shell was started on request and has its own lifetime.
+	Purpose   *ContainerPurpose  `json:"purpose,omitempty"`
 	ReadyAt   *time.Time         `json:"ready_at,omitempty"`
 	ReleaseId openapi_types.UUID `json:"release_id"`
 
@@ -2749,8 +2977,10 @@ type Container struct {
 	RunningTasks int            `json:"running_tasks"`
 	Slots        int            `json:"slots"`
 	State        ContainerState `json:"state"`
-	StopReason   *StopReason    `json:"stop_reason,omitempty"`
-	StoppedAt    *time.Time     `json:"stopped_at,omitempty"`
+
+	// StopReason exited means a pod's command ended on its own; exit_code says how.
+	StopReason *StopReason `json:"stop_reason,omitempty"`
+	StoppedAt  *time.Time  `json:"stopped_at,omitempty"`
 
 	// Version The deployed version of the release; absent for a working-tree release.
 	Version *int `json:"version,omitempty"`
@@ -2763,6 +2993,33 @@ type ContainerCounts struct {
 
 	// Running Ready or draining.
 	Running int `json:"running"`
+}
+
+// ContainerFile defines model for ContainerFile.
+type ContainerFile struct {
+	// Group The group's gid.
+	Group   string     `json:"group"`
+	IsDir   bool       `json:"is_dir"`
+	ModTime *time.Time `json:"mod_time,omitempty"`
+
+	// Mode The raw st_mode, file type bits included.
+	Mode int64  `json:"mode"`
+	Name string `json:"name"`
+
+	// Owner The owner's uid.
+	Owner string `json:"owner"`
+
+	// Permissions The permission bits, mode & 0777.
+	Permissions int   `json:"permissions"`
+	Size        int64 `json:"size"`
+}
+
+// ContainerFileList defines model for ContainerFileList.
+type ContainerFileList struct {
+	Files []ContainerFile `json:"files"`
+
+	// Truncated Only the first limit entries by name are listed.
+	Truncated bool `json:"truncated"`
 }
 
 // ContainerLifecycle defines model for ContainerLifecycle.
@@ -2779,10 +3036,12 @@ type ContainerLifecycle struct {
 	ReadyAt *time.Time `json:"ready_at,omitempty"`
 
 	// Stages In the order they began.
-	Stages     []LifecycleStage `json:"stages"`
-	State      ContainerState   `json:"state"`
-	StopReason *StopReason      `json:"stop_reason,omitempty"`
-	StoppedAt  *time.Time       `json:"stopped_at,omitempty"`
+	Stages []LifecycleStage `json:"stages"`
+	State  ContainerState   `json:"state"`
+
+	// StopReason exited means a pod's command ended on its own; exit_code says how.
+	StopReason *StopReason `json:"stop_reason,omitempty"`
+	StoppedAt  *time.Time  `json:"stopped_at,omitempty"`
 }
 
 // ContainerLifecycleList defines model for ContainerLifecycleList.
@@ -2851,6 +3110,20 @@ type ContainerPage struct {
 	NextCursor *string     `json:"next_cursor,omitempty"`
 }
 
+// ContainerPort defines model for ContainerPort.
+type ContainerPort struct {
+	Port int    `json:"port"`
+	Url  string `json:"url"`
+}
+
+// ContainerPortList defines model for ContainerPortList.
+type ContainerPortList struct {
+	Ports []ContainerPort `json:"ports"`
+}
+
+// ContainerPurpose serve containers are the ones a deployment's count asks for; an instance or shell was started on request and has its own lifetime.
+type ContainerPurpose string
+
 // ContainerState defines model for ContainerState.
 type ContainerState string
 
@@ -2862,6 +3135,20 @@ type CreateArtifactRequest struct {
 	Filename  string             `json:"filename"`
 	SizeBytes int64              `json:"size_bytes"`
 	TaskId    openapi_types.UUID `json:"task_id"`
+}
+
+// CreateInstanceRequest Names a release, or a memory snapshot whose release the instance runs.
+type CreateInstanceRequest struct {
+	// Command Run this instead of the pod's command.
+	Command   *[]string           `json:"command,omitempty"`
+	ReleaseId *openapi_types.UUID `json:"release_id,omitempty"`
+
+	// Shell Start an idle container of the release for shells.
+	Shell      *bool               `json:"shell,omitempty"`
+	SnapshotId *openapi_types.UUID `json:"snapshot_id,omitempty"`
+
+	// TimeoutSeconds Seconds the instance stays up without connections or calls.
+	TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
 }
 
 // CreateVolumeRequest defines model for CreateVolumeRequest.
@@ -2945,18 +3232,25 @@ type DeployedWorkload struct {
 	DeployedAt *time.Time         `json:"deployed_at,omitempty"`
 	Id         openapi_types.UUID `json:"id"`
 
-	// Kind A function runs tasks; an endpoint or ASGI app serves HTTP. Realtime apps are ASGI apps.
+	// Kind A function runs tasks; an endpoint or ASGI app serves HTTP, and realtime apps are ASGI apps. A pod runs a command, and a devbox is a pod; a sandbox runs instances its owner creates.
 	Kind WorkloadKind `json:"kind"`
 	Name WorkloadName `json:"name"`
 
 	// ReleaseId The active release.
 	ReleaseId *openapi_types.UUID `json:"release_id,omitempty"`
+	Role      *PodRole            `json:"role,omitempty"`
 
 	// RunningContainers Containers of the workload's releases that are ready or draining.
 	RunningContainers int `json:"running_containers"`
 
+	// Scaling The containers a pod keeps, from min to max; a scale sets both.
+	Scaling *Scaling `json:"scaling,omitempty"`
+
 	// State Desired state. A paused app stops its active workloads too.
 	State WorkloadState `json:"state"`
+
+	// Url Where a pod or HTTP workload answers.
+	Url *string `json:"url,omitempty"`
 
 	// Version The active version.
 	Version *int `json:"version,omitempty"`
@@ -3006,7 +3300,7 @@ type DeploymentPlanItem struct {
 	// Action `add` deploys a new workload, `redeploy` deploys one that exists, `retain` leaves an omitted one deployed and `remove` deletes an omitted one with prune.
 	Action DeploymentPlanAction `json:"action"`
 
-	// Kind A function runs tasks; an endpoint or ASGI app serves HTTP. Realtime apps are ASGI apps.
+	// Kind A function runs tasks; an endpoint or ASGI app serves HTTP, and realtime apps are ASGI apps. A pod runs a command, and a devbox is a pod; a sandbox runs instances its owner creates.
 	Kind WorkloadKind `json:"kind"`
 	Name WorkloadName `json:"name"`
 
@@ -3028,6 +3322,51 @@ type DeploymentRequest struct {
 	// Prune Delete every function of the app that is not listed.
 	Prune *bool `json:"prune,omitempty"`
 }
+
+// Devbox defines model for Devbox.
+type Devbox struct {
+	App          AppName             `json:"app"`
+	ContainerId  *openapi_types.UUID `json:"container_id,omitempty"`
+	DeploymentId openapi_types.UUID  `json:"deployment_id"`
+	Disk         *DevboxDisk         `json:"disk,omitempty"`
+
+	// FailedContainerId The container whose start failed; its logs say why.
+	FailedContainerId *openapi_types.UUID `json:"failed_container_id,omitempty"`
+
+	// IdleDeadline When it stops if nothing connects; absent while connected or always on.
+	IdleDeadline    *time.Time   `json:"idle_deadline,omitempty"`
+	Name            WorkloadName `json:"name"`
+	OpenConnections int          `json:"open_connections"`
+	Phase           DevboxPhase  `json:"phase"`
+
+	// PhaseReason Why the last start failed.
+	PhaseReason *string `json:"phase_reason,omitempty"`
+
+	// Resources Reservations the container always keeps. CPU above the reservation is shared up to `cpu_limit_millis`, by default the reservation plus 16 cores. Memory above the reservation is allowed up to `memory_limit_mib`, by default four times the reservation, at least 1 GiB and at most 8 GiB above it; the container is killed beyond it.
+	Resources *Resources `json:"resources,omitempty"`
+
+	// SshCommand The CLI command that connects, with --app when the name is shared.
+	SshCommand string `json:"ssh_command"`
+
+	// SshHost The host `lazycloud ssh-config` writes for it.
+	SshHost string      `json:"ssh_host"`
+	State   DevboxState `json:"state"`
+}
+
+// DevboxDisk defines model for DevboxDisk.
+type DevboxDisk struct {
+	Generation  int64      `json:"generation"`
+	Name        DiskName   `json:"name"`
+	SizeBytes   int64      `json:"size_bytes"`
+	Status      DiskStatus `json:"status"`
+	StoredBytes int64      `json:"stored_bytes"`
+}
+
+// DevboxPhase defines model for DevboxPhase.
+type DevboxPhase string
+
+// DevboxState defines model for DevboxState.
+type DevboxState string
 
 // DeviceCode defines model for DeviceCode.
 type DeviceCode struct {
@@ -3100,6 +3439,16 @@ type Disk struct {
 	// StoredBytes Bytes the disk's published generations occupy in the object store.
 	StoredBytes int64     `json:"stored_bytes"`
 	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// DiskMountSpec defines model for DiskMountSpec.
+type DiskMountSpec struct {
+	// MountPath An absolute path; a devbox's root disk mounts at /.
+	MountPath string   `json:"mount_path"`
+	Name      DiskName `json:"name"`
+
+	// SizeBytes Whole 4096-byte blocks from 1 GiB to 1 TiB.
+	SizeBytes int64 `json:"size_bytes"`
 }
 
 // DiskName defines model for DiskName.
@@ -3183,8 +3532,43 @@ type Error struct {
 // ErrorCode defines model for ErrorCode.
 type ErrorCode string
 
+// ExposePortRequest defines model for ExposePortRequest.
+type ExposePortRequest struct {
+	Port int `json:"port"`
+}
+
 // FailureKind defines model for FailureKind.
 type FailureKind string
+
+// FileMatch defines model for FileMatch.
+type FileMatch struct {
+	// Column 1-based, in characters.
+	Column int `json:"column"`
+
+	// Line 1-based.
+	Line int    `json:"line"`
+	Path string `json:"path"`
+	Text string `json:"text"`
+}
+
+// FileMatches defines model for FileMatches.
+type FileMatches struct {
+	Matches []FileMatch `json:"matches"`
+
+	// Truncated The search stopped at 10,000 matches.
+	Truncated bool `json:"truncated"`
+}
+
+// FilesystemImage defines model for FilesystemImage.
+type FilesystemImage struct {
+	ImageId ImageId `json:"image_id"`
+}
+
+// FindInFilesRequest defines model for FindInFilesRequest.
+type FindInFilesRequest struct {
+	Path    string `json:"path"`
+	Pattern string `json:"pattern"`
+}
 
 // FleetCapacity defines model for FleetCapacity.
 type FleetCapacity struct {
@@ -3306,6 +3690,9 @@ type FunctionSpec struct {
 	// CallbackUrl Receives a signed POST when a task is retried or finishes.
 	CallbackUrl *string `json:"callback_url,omitempty"`
 
+	// Checkpoint Snapshot the first ready container's memory and start later ones from it. A pod is snapshotted once readiness_path on readiness_port answers.
+	Checkpoint *CheckpointSpec `json:"checkpoint,omitempty"`
+
 	// ClientContract The signature `lazycloud app export` types clients from.
 	ClientContract *json.RawMessage `json:"client_contract,omitempty"`
 
@@ -3313,11 +3700,17 @@ type FunctionSpec struct {
 	Concurrency *int `json:"concurrency,omitempty"`
 
 	// Cron Run the function on this UTC schedule.
-	Cron        *string            `json:"cron,omitempty"`
-	Environment *map[string]string `json:"environment,omitempty"`
+	Cron *string `json:"cron,omitempty"`
 
-	// Handler module:qualname within the source archive
-	Handler string `json:"handler"`
+	// Disks Durable disks; a workload with one runs at most one container.
+	Disks *[]DiskMountSpec `json:"disks,omitempty"`
+
+	// DockerEnabled Run a Docker daemon in each container; the image must include Docker.
+	DockerEnabled *bool              `json:"docker_enabled,omitempty"`
+	Environment   *map[string]string `json:"environment,omitempty"`
+
+	// Handler module:qualname within the source archive; pods have none
+	Handler *string `json:"handler,omitempty"`
 
 	// Http Makes the workload answer HTTP. Its slots are `workers` processes, each handling `concurrency` requests at once.
 	Http  *HttpSpec `json:"http,omitempty"`
@@ -3336,6 +3729,9 @@ type FunctionSpec struct {
 
 	// Placement Where a workload's containers may run.
 	Placement *Placement `json:"placement,omitempty"`
+
+	// Pod Makes the workload run a command instead of a handler: a pod, a devbox or a sandbox. keep_warm_seconds is the idle time before a container stops; deploy fills 600 for pods and sandboxes and 1800 for devboxes.
+	Pod *PodSpec `json:"pod,omitempty"`
 
 	// Resources Reservations the container always keeps. CPU above the reservation is shared up to `cpu_limit_millis`, by default the reservation plus 16 cores. Memory above the reservation is allowed up to `memory_limit_mib`, by default four times the reservation, at least 1 GiB and at most 8 GiB above it; the container is killed beyond it.
 	Resources   Resources    `json:"resources"`
@@ -3358,6 +3754,14 @@ type GpuRate struct {
 
 // GpuType A GPU model, or any for whatever model has capacity. A100 is not a model: name A100-40 or A100-80.
 type GpuType string
+
+// HealthCheck An HTTP GET that must answer 2xx or 3xx before the container takes traffic.
+type HealthCheck struct {
+	Path string `json:"path"`
+
+	// Port Defaults to the first port.
+	Port *int `json:"port,omitempty"`
+}
 
 // HookReferences defines model for HookReferences.
 type HookReferences = []string
@@ -3392,7 +3796,7 @@ type HttpRequest struct {
 	DurationMs  int64               `json:"duration_ms"`
 	Id          openapi_types.UUID  `json:"id"`
 
-	// Kind A function runs tasks; an endpoint or ASGI app serves HTTP. Realtime apps are ASGI apps.
+	// Kind A function runs tasks; an endpoint or ASGI app serves HTTP, and realtime apps are ASGI apps. A pod runs a command, and a devbox is a pod; a sandbox runs instances its owner creates.
 	Kind          WorkloadKind       `json:"kind"`
 	Method        string             `json:"method"`
 	Name          WorkloadName       `json:"name"`
@@ -3570,6 +3974,34 @@ type ImageStep struct {
 // ImageStepKind defines model for ImageStepKind.
 type ImageStepKind string
 
+// Instance defines model for Instance.
+type Instance struct {
+	App         AppName   `json:"app"`
+	CreatedAt   time.Time `json:"created_at"`
+	ExitCode    *int      `json:"exit_code,omitempty"`
+	ExitMessage *string   `json:"exit_message,omitempty"`
+
+	// ExpiresAt When the instance stops unless something keeps it up.
+	ExpiresAt *time.Time         `json:"expires_at,omitempty"`
+	Id        openapi_types.UUID `json:"id"`
+
+	// Kind A function runs tasks; an endpoint or ASGI app serves HTTP, and realtime apps are ASGI apps. A pod runs a command, and a devbox is a pod; a sandbox runs instances its owner creates.
+	Kind      WorkloadKind       `json:"kind"`
+	Name      WorkloadName       `json:"name"`
+	ReadyAt   *time.Time         `json:"ready_at,omitempty"`
+	ReleaseId openapi_types.UUID `json:"release_id"`
+	State     ContainerState     `json:"state"`
+
+	// StopReason exited means a pod's command ended on its own; exit_code says how.
+	StopReason *StopReason `json:"stop_reason,omitempty"`
+
+	// TimeoutSeconds The idle lifetime; -1 is none.
+	TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
+
+	// Url The first port's URL, when the instance has ports.
+	Url *string `json:"url,omitempty"`
+}
+
 // Invitation defines model for Invitation.
 type Invitation struct {
 	CreatedAt time.Time `json:"created_at"`
@@ -3627,6 +4059,14 @@ type Invocation struct {
 
 // InvocationBody defines model for InvocationBody.
 type InvocationBody = json.RawMessage
+
+// KillRequest defines model for KillRequest.
+type KillRequest struct {
+	Signal *KillRequestSignal `json:"signal,omitempty"`
+}
+
+// KillRequestSignal defines model for KillRequest.Signal.
+type KillRequestSignal string
 
 // LifecycleHooks Callables the runner invokes with a context object, each a `module:qualname` reference into the source. on_start runs once per runner process after the handler loads, and its failure is a load error. The others run in the container around each attempt, in order; their failures are logged and do not change the outcome.
 type LifecycleHooks struct {
@@ -3826,6 +4266,20 @@ type MemberRoleRequest struct {
 	Role InvitationRole `json:"role"`
 }
 
+// MemorySnapshot defines model for MemorySnapshot.
+type MemorySnapshot struct {
+	ContainerId openapi_types.UUID  `json:"container_id"`
+	CreatedAt   time.Time           `json:"created_at"`
+	Failure     *string             `json:"failure,omitempty"`
+	Id          openapi_types.UUID  `json:"id"`
+	ReleaseId   openapi_types.UUID  `json:"release_id"`
+	SizeBytes   *int64              `json:"size_bytes,omitempty"`
+	State       MemorySnapshotState `json:"state"`
+}
+
+// MemorySnapshotState defines model for MemorySnapshotState.
+type MemorySnapshotState string
+
 // MoveVolumeFileRequest defines model for MoveVolumeFileRequest.
 type MoveVolumeFileRequest struct {
 	// From A file or directory below the volume root.
@@ -3846,6 +4300,13 @@ type MultipartUpload struct {
 
 // Name defines model for Name.
 type Name = string
+
+// NetworkPolicy defines model for NetworkPolicy.
+type NetworkPolicy struct {
+	// AllowList IPv4 or IPv6 CIDR ranges.
+	AllowList    []string `json:"allow_list"`
+	BlockNetwork bool     `json:"block_network"`
+}
 
 // NoPaymentMethodTerms The limits of an account without a saved card.
 type NoPaymentMethodTerms struct {
@@ -3948,6 +4409,37 @@ type PlatformRate struct {
 
 // PlatformRole An account's standing on the platform; administrators reach every workspace.
 type PlatformRole string
+
+// PodKind A devbox is a pod reached over SSH whose root filesystem is a disk.
+type PodKind string
+
+// PodRole defines model for PodRole.
+type PodRole string
+
+// PodSpec Makes the workload run a command instead of a handler: a pod, a devbox or a sandbox. keep_warm_seconds is the idle time before a container stops; deploy fills 600 for pods and sandboxes and 1800 for devboxes.
+type PodSpec struct {
+	// AllowList The only outbound destinations, as CIDR ranges; wins over block_network.
+	AllowList    *[]string `json:"allow_list,omitempty"`
+	BlockNetwork *bool     `json:"block_network,omitempty"`
+
+	// Command What the container runs.
+	Command *[]string `json:"command,omitempty"`
+
+	// HealthCheck An HTTP GET that must answer 2xx or 3xx before the container takes traffic.
+	HealthCheck *HealthCheck `json:"health_check,omitempty"`
+
+	// Kind A devbox is a pod reached over SSH whose root filesystem is a disk.
+	Kind PodKind `json:"kind"`
+
+	// Ports Ports the command listens on, by name. A sandbox exposes them at start.
+	Ports *map[string]int `json:"ports,omitempty"`
+
+	// Ssh Serve SSH through `lazycloud ssh`; always on for a devbox.
+	Ssh *bool `json:"ssh,omitempty"`
+
+	// Tcp Serve the first port as raw TCP behind TLS with SNI.
+	Tcp *bool `json:"tcp,omitempty"`
+}
 
 // PreflightCheck defines model for PreflightCheck.
 type PreflightCheck struct {
@@ -4054,6 +4546,45 @@ type PricingCatalog struct {
 	Trial      TrialTerms  `json:"trial"`
 }
 
+// Process exit_code is 128+N for a process signal N ended. Each stream keeps its first 256 KiB; truncated also marks output lost to the container's 64 MiB output budget or still being written one second after the exit.
+type Process struct {
+	Command  string  `json:"command"`
+	Cwd      *string `json:"cwd,omitempty"`
+	ExitCode *int    `json:"exit_code,omitempty"`
+
+	// ExpiresAt When an exited process's result is forgotten.
+	ExpiresAt       *time.Time `json:"expires_at,omitempty"`
+	Pid             int        `json:"pid"`
+	ProcessId       string     `json:"process_id"`
+	Running         bool       `json:"running"`
+	Stderr          string     `json:"stderr"`
+	StderrTruncated bool       `json:"stderr_truncated"`
+	Stdout          string     `json:"stdout"`
+	StdoutTruncated bool       `json:"stdout_truncated"`
+}
+
+// ProcessList defines model for ProcessList.
+type ProcessList struct {
+	Processes []ProcessSummary `json:"processes"`
+}
+
+// ProcessRequest defines model for ProcessRequest.
+type ProcessRequest struct {
+	Args []string           `json:"args"`
+	Cwd  *string            `json:"cwd,omitempty"`
+	Env  *map[string]string `json:"env,omitempty"`
+}
+
+// ProcessSummary defines model for ProcessSummary.
+type ProcessSummary struct {
+	Command   string  `json:"command"`
+	Cwd       *string `json:"cwd,omitempty"`
+	ExitCode  *int    `json:"exit_code,omitempty"`
+	Pid       int     `json:"pid"`
+	ProcessId string  `json:"process_id"`
+	Running   bool    `json:"running"`
+}
+
 // PublishedPlan defines model for PublishedPlan.
 type PublishedPlan struct {
 	Entitlements PlanEntitlements `json:"entitlements"`
@@ -4127,6 +4658,20 @@ type RemovedVolumeFiles struct {
 	Removed []string `json:"removed"`
 }
 
+// ReplaceInFilesRequest defines model for ReplaceInFilesRequest.
+type ReplaceInFilesRequest struct {
+	Path        string `json:"path"`
+	Pattern     string `json:"pattern"`
+	Replacement string `json:"replacement"`
+}
+
+// ReplacedFiles defines model for ReplacedFiles.
+type ReplacedFiles struct {
+	// Files Files that changed.
+	Files        int `json:"files"`
+	Replacements int `json:"replacements"`
+}
+
 // ResourceChange defines model for ResourceChange.
 type ResourceChange struct {
 	AppId       *openapi_types.UUID `json:"app_id,omitempty"`
@@ -4176,6 +4721,63 @@ type RetryPolicy struct {
 
 // RetryPolicyBackoff defines model for RetryPolicy.Backoff.
 type RetryPolicyBackoff string
+
+// Sandbox defines model for Sandbox.
+type Sandbox struct {
+	App       AppName   `json:"app"`
+	CreatedAt time.Time `json:"created_at"`
+	Gpu       []GpuType `json:"gpu"`
+
+	// Id The sandbox's container id, which `Sandbox.connect` takes.
+	Id              openapi_types.UUID `json:"id"`
+	LifetimeMs      *int64             `json:"lifetime_ms,omitempty"`
+	Name            WorkloadName       `json:"name"`
+	ReadyAt         *time.Time         `json:"ready_at,omitempty"`
+	ReleaseId       openapi_types.UUID `json:"release_id"`
+	Status          SandboxStatus      `json:"status"`
+	StoppedAt       *time.Time         `json:"stopped_at,omitempty"`
+	TimeToStartedMs *int64             `json:"time_to_started_ms,omitempty"`
+}
+
+// SandboxCreatedBucket defines model for SandboxCreatedBucket.
+type SandboxCreatedBucket struct {
+	Count     int       `json:"count"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
+// SandboxPage defines model for SandboxPage.
+type SandboxPage struct {
+	NextCursor *string   `json:"next_cursor,omitempty"`
+	Sandboxes  []Sandbox `json:"sandboxes"`
+}
+
+// SandboxStats defines model for SandboxStats.
+type SandboxStats struct {
+	// Concurrent Sandboxes pending, running or stopping.
+	Concurrent int `json:"concurrent"`
+
+	// CreatedBuckets Sandboxes created per UTC day, for the last 30 days.
+	CreatedBuckets []SandboxCreatedBucket `json:"created_buckets"`
+
+	// RatePerSecond Sandboxes created in the last 24 hours, per second.
+	RatePerSecond float32        `json:"rate_per_second"`
+	StatusCounts  map[string]int `json:"status_counts"`
+	TotalCreated  int            `json:"total_created"`
+}
+
+// SandboxStatus defines model for SandboxStatus.
+type SandboxStatus string
+
+// ScaleRequest defines model for ScaleRequest.
+type ScaleRequest struct {
+	Containers int `json:"containers"`
+}
+
+// Scaling The containers a pod keeps, from min to max; a scale sets both.
+type Scaling struct {
+	MaxContainers int `json:"max_containers"`
+	MinContainers int `json:"min_containers"`
+}
 
 // Schedule defines model for Schedule.
 type Schedule struct {
@@ -4282,6 +4884,12 @@ type ShapeRate struct {
 	NanosPerMemoryGibHour int64        `json:"nanos_per_memory_gib_hour"`
 }
 
+// SnapshotRequest defines model for SnapshotRequest.
+type SnapshotRequest struct {
+	// SnapshotId The id the snapshot takes; a new one by default.
+	SnapshotId *openapi_types.UUID `json:"snapshot_id,omitempty"`
+}
+
 // SourceRef defines model for SourceRef.
 type SourceRef struct {
 	// Sha256 Lowercase hex SHA-256 digest
@@ -4307,13 +4915,46 @@ type SourceUploadRequest struct {
 	SizeBytes int64  `json:"size_bytes"`
 }
 
+// SshCertificate defines model for SshCertificate.
+type SshCertificate struct {
+	// Certificate The OpenSSH certificate line.
+	Certificate string    `json:"certificate"`
+	ExpiresAt   time.Time `json:"expires_at"`
+	Principal   string    `json:"principal"`
+}
+
+// SshCertificateRequest defines model for SshCertificateRequest.
+type SshCertificateRequest struct {
+	// PublicKey An ssh-ed25519 public key line.
+	PublicKey string `json:"public_key"`
+}
+
+// SshHost defines model for SshHost.
+type SshHost struct {
+	// Alias lazycloud-<workspace>-<app>-<pod>, lowercased with other characters as -.
+	Alias        string             `json:"alias"`
+	App          AppName            `json:"app"`
+	DeploymentId openapi_types.UUID `json:"deployment_id"`
+
+	// HostPublicKey The pod's ssh-ed25519 host key, for known_hosts.
+	HostPublicKey string       `json:"host_public_key"`
+	Pod           WorkloadName `json:"pod"`
+	Role          PodRole      `json:"role"`
+}
+
+// SshHostPage defines model for SshHostPage.
+type SshHostPage struct {
+	Hosts      []SshHost `json:"hosts"`
+	NextCursor *string   `json:"next_cursor,omitempty"`
+}
+
 // StartDeploymentRequest defines model for StartDeploymentRequest.
 type StartDeploymentRequest struct {
 	// Version Make this deployed version active before starting.
 	Version *int `json:"version,omitempty"`
 }
 
-// StopReason defines model for StopReason.
+// StopReason exited means a pod's command ended on its own; exit_code says how.
 type StopReason string
 
 // StopTasksRequest defines model for StopTasksRequest.
@@ -4556,6 +5197,17 @@ type TrialTerms struct {
 	AmountNanos  int64 `json:"amount_nanos"`
 	DurationDays int   `json:"duration_days"`
 	OneTime      bool  `json:"one_time"`
+}
+
+// Ttl defines model for Ttl.
+type Ttl struct {
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+	Ttl       int        `json:"ttl"`
+}
+
+// TtlRequest defines model for TtlRequest.
+type TtlRequest struct {
+	Ttl int `json:"ttl"`
 }
 
 // Upload Where to send bytes. With `upload_id` it is a multipart upload whose part ETags complete it; without, `parts` holds one plain PUT.
@@ -4804,12 +5456,12 @@ type VolumeRelativePath = string
 
 // WorkloadIdentity defines model for WorkloadIdentity.
 type WorkloadIdentity struct {
-	// Kind A function runs tasks; an endpoint or ASGI app serves HTTP. Realtime apps are ASGI apps.
+	// Kind A function runs tasks; an endpoint or ASGI app serves HTTP, and realtime apps are ASGI apps. A pod runs a command, and a devbox is a pod; a sandbox runs instances its owner creates.
 	Kind WorkloadKind `json:"kind"`
 	Name WorkloadName `json:"name"`
 }
 
-// WorkloadKind A function runs tasks; an endpoint or ASGI app serves HTTP. Realtime apps are ASGI apps.
+// WorkloadKind A function runs tasks; an endpoint or ASGI app serves HTTP, and realtime apps are ASGI apps. A pod runs a command, and a devbox is a pod; a sandbox runs instances its owner creates.
 type WorkloadKind string
 
 // WorkloadName defines model for WorkloadName.
@@ -4871,6 +5523,9 @@ type AppRefPath = AppRef
 // ArtifactPath defines model for ArtifactPath.
 type ArtifactPath = openapi_types.UUID
 
+// ContainerFilePath defines model for ContainerFilePath.
+type ContainerFilePath = string
+
 // ContainerPath defines model for ContainerPath.
 type ContainerPath = openapi_types.UUID
 
@@ -4930,6 +5585,9 @@ type PageLimit = int
 
 // PreviewPath defines model for PreviewPath.
 type PreviewPath = openapi_types.UUID
+
+// ProcessPath defines model for ProcessPath.
+type ProcessPath = string
 
 // QueuePath A queue or map name; any characters except control characters.
 type QueuePath = CollectionName
@@ -5176,10 +5834,70 @@ type ListContainersParams struct {
 
 	// Function Only the containers of this workload of `app`; requires it.
 	Function *WorkloadName `form:"function,omitempty" json:"function,omitempty"`
-	Limit    *PageLimit    `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Deployment Only containers of this workload's releases.
+	Deployment *openapi_types.UUID `form:"deployment,omitempty" json:"deployment,omitempty"`
+	Limit      *PageLimit          `form:"limit,omitempty" json:"limit,omitempty"`
 
 	// Cursor The next_cursor of the previous page.
 	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+}
+
+// ConnectContainerParams defines parameters for ConnectContainer.
+type ConnectContainerParams struct {
+	WaitSeconds *int `form:"wait_seconds,omitempty" json:"wait_seconds,omitempty"`
+}
+
+// DeleteContainerDirectoryParams defines parameters for DeleteContainerDirectory.
+type DeleteContainerDirectoryParams struct {
+	// Path A path in the container; a relative one is under /workspace.
+	Path ContainerFilePath `form:"path" json:"path"`
+}
+
+// CreateContainerDirectoryParams defines parameters for CreateContainerDirectory.
+type CreateContainerDirectoryParams struct {
+	Mode *int `form:"mode,omitempty" json:"mode,omitempty"`
+
+	// Path A path in the container; a relative one is under /workspace.
+	Path ContainerFilePath `form:"path" json:"path"`
+}
+
+// DeleteContainerFileParams defines parameters for DeleteContainerFile.
+type DeleteContainerFileParams struct {
+	// Path A path in the container; a relative one is under /workspace.
+	Path ContainerFilePath `form:"path" json:"path"`
+}
+
+// ListContainerFilesParams defines parameters for ListContainerFiles.
+type ListContainerFilesParams struct {
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Path A path in the container; a relative one is under /workspace.
+	Path ContainerFilePath `form:"path" json:"path"`
+}
+
+// DownloadContainerFileParams defines parameters for DownloadContainerFile.
+type DownloadContainerFileParams struct {
+	MaxBytes *int64 `form:"max_bytes,omitempty" json:"max_bytes,omitempty"`
+	Truncate *bool  `form:"truncate,omitempty" json:"truncate,omitempty"`
+
+	// Path A path in the container; a relative one is under /workspace.
+	Path ContainerFilePath `form:"path" json:"path"`
+}
+
+// UploadContainerFileParams defines parameters for UploadContainerFile.
+type UploadContainerFileParams struct {
+	// Mode Permission bits, such as 420 for 0644.
+	Mode *int `form:"mode,omitempty" json:"mode,omitempty"`
+
+	// Path A path in the container; a relative one is under /workspace.
+	Path ContainerFilePath `form:"path" json:"path"`
+}
+
+// StatContainerFileParams defines parameters for StatContainerFile.
+type StatContainerFileParams struct {
+	// Path A path in the container; a relative one is under /workspace.
+	Path ContainerFilePath `form:"path" json:"path"`
 }
 
 // StreamContainerLogsParams defines parameters for StreamContainerLogs.
@@ -5202,6 +5920,26 @@ type GetContainerMetricsParams struct {
 
 	// StepSeconds Seconds per point; defaults to the finest step the range allows.
 	StepSeconds *int `form:"step_seconds,omitempty" json:"step_seconds,omitempty"`
+}
+
+// StreamContainerOutputParams defines parameters for StreamContainerOutput.
+type StreamContainerOutputParams struct {
+	// After Return entries with an id greater than this.
+	After  *LogAfter `form:"after,omitempty" json:"after,omitempty"`
+	Follow *bool     `form:"follow,omitempty" json:"follow,omitempty"`
+}
+
+// GetProcessParams defines parameters for GetProcess.
+type GetProcessParams struct {
+	// WaitSeconds Hold the request until the process exits or this many seconds pass.
+	WaitSeconds *float32 `form:"wait_seconds,omitempty" json:"wait_seconds,omitempty"`
+}
+
+// OpenContainerShellParams defines parameters for OpenContainerShell.
+type OpenContainerShellParams struct {
+	Cols *int    `form:"cols,omitempty" json:"cols,omitempty"`
+	Rows *int    `form:"rows,omitempty" json:"rows,omitempty"`
+	Term *string `form:"term,omitempty" json:"term,omitempty"`
 }
 
 // ListDeploymentsParams defines parameters for ListDeployments.
@@ -5360,6 +6098,20 @@ type ListHttpRequestLogsParams struct {
 	Limit *int   `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
+// ListSandboxesParams defines parameters for ListSandboxes.
+type ListSandboxesParams struct {
+	App   *AppName `form:"app,omitempty" json:"app,omitempty"`
+	Limit *Limit   `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Cursor The next_cursor of the previous page.
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+}
+
+// GetSandboxStatsParams defines parameters for GetSandboxStats.
+type GetSandboxStatsParams struct {
+	App *AppName `form:"app,omitempty" json:"app,omitempty"`
+}
+
 // ListSchedulesParams defines parameters for ListSchedules.
 type ListSchedulesParams struct {
 	// Cursor The next_cursor of the previous page.
@@ -5372,6 +6124,17 @@ type ListSecretsParams struct {
 	// Cursor The next_cursor of the previous page.
 	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
 	Limit  *Limit  `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// ListSshHostsParams defines parameters for ListSshHosts.
+type ListSshHostsParams struct {
+	App   *AppName      `form:"app,omitempty" json:"app,omitempty"`
+	Pod   *WorkloadName `form:"pod,omitempty" json:"pod,omitempty"`
+	Role  *PodRole      `form:"role,omitempty" json:"role,omitempty"`
+	Limit *Limit        `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Cursor The next_cursor of the previous page.
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
 }
 
 // ListTasksParams defines parameters for ListTasks.
@@ -5531,6 +6294,33 @@ type PresignArtifactJSONRequestBody = PresignArtifactRequest
 // ListContainerLifecyclesJSONRequestBody defines body for ListContainerLifecycles for application/json ContentType.
 type ListContainerLifecyclesJSONRequestBody = ContainerLifecyclesRequest
 
+// FindInContainerFilesJSONRequestBody defines body for FindInContainerFiles for application/json ContentType.
+type FindInContainerFilesJSONRequestBody = FindInFilesRequest
+
+// ReplaceInContainerFilesJSONRequestBody defines body for ReplaceInContainerFiles for application/json ContentType.
+type ReplaceInContainerFilesJSONRequestBody = ReplaceInFilesRequest
+
+// SetContainerNetworkJSONRequestBody defines body for SetContainerNetwork for application/json ContentType.
+type SetContainerNetworkJSONRequestBody = NetworkPolicy
+
+// ExposeContainerPortJSONRequestBody defines body for ExposeContainerPort for application/json ContentType.
+type ExposeContainerPortJSONRequestBody = ExposePortRequest
+
+// StartProcessJSONRequestBody defines body for StartProcess for application/json ContentType.
+type StartProcessJSONRequestBody = ProcessRequest
+
+// KillProcessJSONRequestBody defines body for KillProcess for application/json ContentType.
+type KillProcessJSONRequestBody = KillRequest
+
+// SnapshotContainerJSONRequestBody defines body for SnapshotContainer for application/json ContentType.
+type SnapshotContainerJSONRequestBody = SnapshotRequest
+
+// SetContainerTtlJSONRequestBody defines body for SetContainerTtl for application/json ContentType.
+type SetContainerTtlJSONRequestBody = TtlRequest
+
+// ScaleDeploymentJSONRequestBody defines body for ScaleDeployment for application/json ContentType.
+type ScaleDeploymentJSONRequestBody = ScaleRequest
+
 // StartDeploymentJSONRequestBody defines body for StartDeployment for application/json ContentType.
 type StartDeploymentJSONRequestBody = StartDeploymentRequest
 
@@ -5539,6 +6329,9 @@ type BuildImageJSONRequestBody = ImageDefinition
 
 // ResolveImageJSONRequestBody defines body for ResolveImage for application/json ContentType.
 type ResolveImageJSONRequestBody = ImageDefinition
+
+// CreateInstanceJSONRequestBody defines body for CreateInstance for application/json ContentType.
+type CreateInstanceJSONRequestBody = CreateInstanceRequest
 
 // CreateInvitationJSONRequestBody defines body for CreateInvitation for application/json ContentType.
 type CreateInvitationJSONRequestBody = InvitationRequest
@@ -5563,6 +6356,9 @@ type SetSecretJSONRequestBody = SecretValueUpdate
 
 // CreateSourceUploadJSONRequestBody defines body for CreateSourceUpload for application/json ContentType.
 type CreateSourceUploadJSONRequestBody = SourceUploadRequest
+
+// CreateSshCertificateJSONRequestBody defines body for CreateSshCertificate for application/json ContentType.
+type CreateSshCertificateJSONRequestBody = SshCertificateRequest
 
 // StopTasksJSONRequestBody defines body for StopTasks for application/json ContentType.
 type StopTasksJSONRequestBody = StopTasksRequest
