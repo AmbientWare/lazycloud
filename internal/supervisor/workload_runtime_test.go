@@ -67,6 +67,14 @@ func TestSupervisorRedactsSecretsFromOutputAndFailures(t *testing.T) {
 	if e.GetMessage() != "failed with ********" || strings.Contains(e.GetTraceback(), "hunter2") {
 		t.Fatalf("failure %v", e)
 	}
+	if exc := m.GetFinished().GetFailure().GetException(); len(exc) != 0 {
+		t.Fatalf("an exception pickle holding the secret was kept: %q", exc)
+	}
+	c.run(t, "plain", `{"args": ["echo", "harmless"]}`)
+	m, _ = c.until(t, finished("plain"))
+	if len(m.GetFinished().GetFailure().GetException()) == 0 {
+		t.Fatal("an exception without secrets lost its pickle")
+	}
 }
 
 func TestInProcessSlotsShareOneRunnerAndCancelRestartsIt(t *testing.T) {

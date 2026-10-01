@@ -8,6 +8,7 @@ runner. Inputs are {"args": [...], "kwargs": {...}}.
 import importlib
 import json
 import os
+import pickle
 import socket
 import struct
 import sys
@@ -104,7 +105,9 @@ def run(sock, handler, invoke, payload, threaded):
         result = handler(*call.get("args", []), **call.get("kwargs", {}))
     except Exception as exc:
         write_frame(
-            sock, {"type": "failed", "attempt_id": invoke["attempt_id"], "error": error(exc)}
+            sock,
+            {"type": "failed", "attempt_id": invoke["attempt_id"], "error": error(exc)},
+            pickle.dumps(exc),
         )
     else:
         write_frame(

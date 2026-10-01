@@ -156,8 +156,15 @@ func (sl *slot) finish(finished *hostproto.AttemptFinished) bool {
 	cancelled := sl.cancelled
 	sl.attempt, sl.cancelled = "", false
 	if !cancelled {
-		if e := finished.GetFailure().GetError(); e != nil {
-			e.Message, e.Traceback = sl.sup.redact.all(e.GetMessage()), sl.sup.redact.all(e.GetTraceback())
+		if f := finished.GetFailure(); f != nil {
+			if e := f.GetError(); e != nil {
+				e.Message, e.Traceback = sl.sup.redact.all(e.GetMessage()), sl.sup.redact.all(e.GetTraceback())
+			}
+			// A pickled exception holding a secret cannot be redacted
+			// safely; the caller gets the redacted message without it.
+			if sl.sup.redact.containedIn(f.GetException()) {
+				f.Exception = nil
+			}
 		}
 		sl.sup.out.push(finishedMessage(finished))
 	}

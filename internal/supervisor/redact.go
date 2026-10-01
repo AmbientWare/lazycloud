@@ -1,6 +1,7 @@
 package supervisor
 
 import (
+	"bytes"
 	"os"
 	"slices"
 	"strings"
@@ -48,6 +49,20 @@ func (r *redactor) all(text string) string {
 		return text
 	}
 	return r.replacer.Replace(text)
+}
+
+// containedIn reports whether data holds a value. Pickles store strings as
+// UTF-8, so a value in an exception's text appears verbatim.
+func (r *redactor) containedIn(data []byte) bool {
+	if r == nil {
+		return false
+	}
+	for _, v := range r.values {
+		if bytes.Contains(data, []byte(v)) {
+			return true
+		}
+	}
+	return false
 }
 
 // stream redacts pending+text and returns what can be emitted, keeping in
