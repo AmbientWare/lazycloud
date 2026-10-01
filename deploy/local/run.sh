@@ -45,7 +45,14 @@ start() {
   go build -o bin/scheduler ./cmd/scheduler
   go build -o bin/agent ./cmd/agent
   deploy/local/fetch-geesefs.sh
-  [ -d "$state/runtime/3.12" ] || deploy/local/build-runtime.sh "$state/runtime"
+  # Rebuild the managed runtime whenever the Python it bundles changes; a stale
+  # runtime silently lacks newer runner features.
+  digest=$(find python/shared/src python/lazycloud/src python/runner/src uv.lock -type f \
+    -not -path '*/__pycache__/*' -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)
+  if [ ! -d "$state/runtime/3.12" ] || [ "$(cat "$state/runtime/.source-digest" 2>/dev/null)" != "$digest" ]; then
+    deploy/local/build-runtime.sh "$state/runtime"
+    echo "$digest" >"$state/runtime/.source-digest"
+  fi
 
   bin/server migrate
   # This tree's agent is the release joined machines install and update to.
