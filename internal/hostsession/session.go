@@ -176,9 +176,11 @@ func (sess *session) sync(ctx context.Context) error {
 		}
 		msg, err := sess.server.startMessage(ctx, id, start)
 		var missing *secrets.NotFoundError
-		if errors.As(err, &missing) {
-			// The container cannot start until the secret exists; it fails
-			// like a failed preparation and stops being derived.
+		var unreadable *secrets.UnreadableError
+		if errors.As(err, &missing) || errors.As(err, &unreadable) {
+			// The container cannot start without the secret; it fails like
+			// a failed preparation and stops being derived, and the host's
+			// other containers are unaffected.
 			if err := sess.server.execution.StartFailed(ctx, sess.host, start.Container, err.Error()); err != nil {
 				return sess.server.grpcError(ctx, err)
 			}

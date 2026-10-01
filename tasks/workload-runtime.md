@@ -41,8 +41,9 @@ cron in UTC, each occurrence admitted once. Hooks, `in_process` threads and
   workspace (11). A missing secret stops the container as `start_failed`
   with `secret not found: NAME`, through `Execution.containerExited`. The
   supervisor replaces values of 4 bytes or more with `********` in output
-  (held back across chunk boundaries) and in failure messages and
-  tracebacks.
+  (held back across chunk and frame boundaries) and in failure messages and
+  tracebacks, and drops a pickled exception that contains a value. A secret
+  that is missing or cannot be opened fails only its container's start.
 - Schedules live in `internal/schedules`, not control: the cron expression
   is part of the release spec control owns, but when an occurrence is due
   and its identity is cron's own decision (update.md). Deploy writes the
@@ -58,17 +59,24 @@ cron in UTC, each occurrence admitted once. Hooks, `in_process` threads and
   `task_callbacks` row in its transaction. `internal/notifications`
   delivers due rows from cmd/scheduler: a lease fenced by the delivery
   count, at most 16 in flight, no I/O under a lock, connections dialed only
-  to addresses checked as public at dial time, 3 attempts, rows purged a
-  week after they finish.
+  to addresses checked as public at dial time (private, loopback,
+  link-local, carrier-grade NAT and NAT64 rejected), 3 attempts, rows purged
+  a week after they finish. Each delivery reads its own result, and a
+  result above 256 KiB is left out with `data_omitted: true`.
 - Hooks are references in the release spec, sent through StartContainer
   (`FunctionWorkload.hooks`), Configure and the runner's `load` frame. The
   runner calls them; it decides `retry_scheduled` as the server does
   (`attempt_number < max_attempts`), so on_retry/on_failure need no round
   trip.
 - `in_process` with `concurrency` above 1 runs one runner process with a
-  thread per slot. The runner sends each attempt's output as `output`
-  frames, and the supervisor's shared process dispatches outcomes by
-  attempt id.
+  thread per slot. The runner routes `sys.stdout`/`sys.stderr` (and their
+  `.buffer`) before user code loads, so loggers configured at import write
+  through it, and sends each attempt's output as `output` frames whose
+  payload is at most 256 KiB of UTF-8. The supervisor redacts with a held
+  tail per attempt and stream, dispatches outcomes by attempt id, and
+  attributes output written to the process's own descriptors (subprocesses,
+  C extensions) to the attempt when exactly one runs. Output outside any
+  attempt is logged by the agent at Info.
 - `keep_warm=-1` resolves as in the reference: allowed only with a warm
   floor, forced when `min_containers > 0`, and it means the planner stops
   idle containers above the minimum at once. Scheduled functions default
@@ -149,7 +157,8 @@ Measurements (one host, 24 CPUs, Docker 29, same stack):
   without `--reveal` never transfers the value.
 - Callbacks are durable: an outbox row commits with the transition. The
   reference posted after commit and lost the callback if the process died.
-  Statuses follow the public API: `retry`, `succeeded`, `failed`,
+  A result above 256 KiB is not embedded (`data_omitted`); the receiver
+  reads it from the API. Statuses follow the public API: `retry`, `succeeded`, `failed`,
   `cancelled` (the reference's `complete`; a timeout is `failed` with
   `error.kind` `timeout`). The signing key is the workspace secret
   `LAZYCLOUD_CALLBACK_SIGNING_KEY`, which users reveal to verify and set to

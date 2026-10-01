@@ -37,6 +37,19 @@ type ExistsError struct{ Name string }
 
 func (e *ExistsError) Error() string { return "secret already exists: " + e.Name }
 
+// UnreadableError means a stored secret cannot be opened: its master key is
+// not held here, or the row does not authenticate.
+type UnreadableError struct {
+	Name string
+	Err  error
+}
+
+func (e *UnreadableError) Error() string {
+	return fmt.Sprintf("secret %s cannot be read: %v", e.Name, e.Err)
+}
+
+func (e *UnreadableError) Unwrap() error { return e.Err }
+
 // ReservedNameError rejects a name in the platform's namespace.
 type ReservedNameError struct{ Name string }
 
@@ -106,15 +119,15 @@ func (s *Secrets) seal(ctx context.Context, workspace identity.WorkspaceID, name
 func (s *Secrets) open(ctx context.Context, workspace identity.WorkspaceID, row SealedSecretsRow) (string, error) {
 	dataKey, err := s.keys.Unwrap(ctx, row.KeyID, row.WrappedKey)
 	if err != nil {
-		return "", fmt.Errorf("unwrap data key of %s: %w", row.Name, err)
+		return "", &UnreadableError{Name: row.Name, Err: fmt.Errorf("unwrap data key: %w", err)}
 	}
 	aead, err := newAEAD(dataKey)
 	if err != nil {
-		return "", err
+		return "", &UnreadableError{Name: row.Name, Err: err}
 	}
 	value, err := open(aead, append(append([]byte(nil), row.Nonce...), row.Ciphertext...), additionalData(workspace, row.Name))
 	if err != nil {
-		return "", fmt.Errorf("open secret %s: %w", row.Name, err)
+		return "", &UnreadableError{Name: row.Name, Err: err}
 	}
 	return string(value), nil
 }

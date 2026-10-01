@@ -3,9 +3,11 @@ package hostsession_test
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,6 +18,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/hostsession"
+	"github.com/AmbientWare/lazycloud/internal/secrets"
 )
 
 type apiReply struct {
@@ -186,5 +189,46 @@ values ($1, $2, 'starting', $3, 1, 1000, 1 << 28, now()) returning id`, uuid.UUI
 	}
 	if state != "stopped" || message != "secret not found: TOKEN" {
 		t.Fatalf("a start without its secret: %s %q", state, message)
+	}
+}
+
+func TestAnUnreadableSecretFailsOnlyItsContainer(t *testing.T) {
+	h := start(t)
+	host, ctx := h.enroll()
+	ws, bad := h.startingContainerWith(host, `{"handler": "reports:summarize", "image": {"python_version": "3.12"},
+		"secrets": ["SEALED_ELSEWHERE"], "concurrency": 1, "max_pending_tasks": 10}`)
+	// A value sealed under a master key this server does not hold.
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		t.Fatal(err)
+	}
+	otherKey, err := secrets.NewFileKey(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := secrets.NewSecrets(h.pool, otherKey).Set(t.Context(), ws, "SEALED_ELSEWHERE", "value"); err != nil {
+		t.Fatal(err)
+	}
+	var good uuid.UUID
+	if err := h.pool.QueryRow(t.Context(), `
+with rel as (insert into releases (workload_id, version, spec, spec_digest, source_sha256)
+             select workload_id, 2, '{"handler": "reports:summarize", "image": {"python_version": "3.12"}, "concurrency": 1}',
+                    sha256('spec2'), sha256('src') from releases limit 1 returning id)
+insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at)
+select $1, rel.id, 'starting', $2, 1, 1000, 1 << 28, now() from rel returning id`, uuid.UUID(ws), uuid.UUID(host)).Scan(&good); err != nil {
+		t.Fatal(err)
+	}
+
+	stream := open(t, ctx, h.client)
+	if started := receive(t, stream).GetStart(); started.GetContainerId() != good.String() {
+		t.Fatalf("start %v, want the container without the bad secret", started)
+	}
+	var state, message string
+	if err := h.pool.QueryRow(t.Context(), "select state, coalesce(exit_message, '') from containers where id = $1", uuid.UUID(bad)).
+		Scan(&state, &message); err != nil {
+		t.Fatal(err)
+	}
+	if state != "stopped" || !strings.Contains(message, "secret SEALED_ELSEWHERE cannot be read") {
+		t.Fatalf("the container with the unreadable secret: %s %q", state, message)
 	}
 }
