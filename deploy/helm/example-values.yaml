@@ -2,7 +2,7 @@
 # identities. deploy/check.sh renders the chart with it. A real deployment
 # keeps its own file outside this repository.
 image:
-  registry: 000000000000.dkr.ecr.us-east-1.amazonaws.com/lazycloud
+  registry: 000000000000.dkr.ecr.us-east-1.amazonaws.com/lazycloud/release
   tag: v0.1.0
 
 externalSecrets:
@@ -17,6 +17,14 @@ externalSecrets:
     LAZYCLOUD_RESEND_WEBHOOK_SECRET: { document: example/operator, property: LAZYCLOUD_RESEND_WEBHOOK_SECRET }
     LAZYCLOUD_RESEND_API_KEY: { document: example/operator, property: LAZYCLOUD_RESEND_API_KEY }
     secrets.key: { document: example/platform, property: LAZYCLOUD_SECRETS_MASTER_KEY, decodingStrategy: Base64 }
+
+networkPolicy:
+  enabled: true
+  ingressFrom:
+    - namespaceSelector:
+        matchLabels: { kubernetes.io/metadata.name: example-ingress }
+  hostCIDRs: [10.20.0.0/16]
+  nodeCIDRs: [10.0.0.0/16]
 
 config:
   LAZYCLOUD_OBJECT_STORE_ENDPOINT: https://s3.us-east-1.amazonaws.com

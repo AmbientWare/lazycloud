@@ -25,7 +25,15 @@ run_helm lint --strict /charts/lazycloud -f /charts/example-values.yaml
 run_helm template lazycloud /charts/lazycloud -f /charts/example-values.yaml \
   --namespace lazycloud-example >"$out/example.yaml"
 run_helm template lazycloud /charts/lazycloud --set image.registry=registry.example.com \
-  --set image.tag=v0.1.0 --namespace lazycloud-example >"$out/defaults.yaml"
+  --set image.tag=v0.1.0 --set 'networkPolicy.nodeCIDRs={10.0.0.0/16}' \
+  --namespace lazycloud-example >"$out/defaults.yaml"
+
+# The host port carries plaintext gRPC until the agent speaks TLS.
+if run_helm template lazycloud /charts/lazycloud -f /charts/example-values.yaml \
+  --set server.hostService.type=LoadBalancer >/dev/null 2>&1; then
+  echo "the chart rendered a public host service" >&2
+  exit 1
+fi
 
 docker run --rm -v "$out:/manifests:ro" "$kubeconform" -strict -summary \
   -kubernetes-version "$kubernetes" -schema-location "$k8s_schemas" -schema-location "$crd_schemas" \

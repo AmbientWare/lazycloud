@@ -29,6 +29,17 @@ externalSecrets:
 # master key path and the drain delay itself.
 config: {}
 
+# Ingress to the release's pods is denied except from these sources.
+networkPolicy:
+  enabled: true
+  # NetworkPolicy peers that reach the server's API port, such as the
+  # namespace of the public ingress connector.
+  ingressFrom: []
+  # Agent host CIDRs that reach the host port.
+  hostCIDRs: []
+  # Node CIDRs the kubelet probes the health ports from.
+  nodeCIDRs: []
+
 serviceAccounts:
   # Names match the EKS Pod Identity associations that grant AWS access.
   server: lazycloud-server
@@ -73,7 +84,7 @@ server:
     type: ClusterIP
     annotations: {}
   # Agents connect to this port. The host session is plaintext gRPC until
-  # the agent speaks TLS, so keep it inside the cluster network.
+  # the agent speaks TLS, so the schema holds it to ClusterIP.
   hostService:
     type: ClusterIP
     annotations: {}

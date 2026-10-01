@@ -41,6 +41,8 @@ spec:
               value: "0.0.0.0:8080"
             - name: LAZYCLOUD_GRPC_ADDR
               value: "0.0.0.0:8081"
+            - name: LAZYCLOUD_HEALTH_ADDR
+              value: "0.0.0.0:8090"
             - name: LAZYCLOUD_SECRETS_KEY_FILE
               value: /run/lazycloud/secrets/secrets.key
             - name: LAZYCLOUD_DRAIN_DELAY
@@ -51,19 +53,22 @@ spec:
               containerPort: 8080
             - name: hosts
               containerPort: 8081
+            # Probes only; no Service exposes it.
+            - name: health
+              containerPort: 8090
           volumeMounts:
             {{- include "lazycloud.masterKeyMount" . | nindent 12 }}
           startupProbe:
-            httpGet: { path: /healthz, port: http }
+            httpGet: { path: /healthz, port: health }
             periodSeconds: 2
             failureThreshold: 60
           readinessProbe:
-            httpGet: { path: /readyz, port: http }
+            httpGet: { path: /readyz, port: health }
             periodSeconds: 5
             timeoutSeconds: 3
             failureThreshold: 2
           livenessProbe:
-            httpGet: { path: /healthz, port: http }
+            httpGet: { path: /healthz, port: health }
             periodSeconds: 10
             timeoutSeconds: 3
             failureThreshold: 3
