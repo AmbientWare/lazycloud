@@ -52,10 +52,10 @@ func (s *Storage) queueID(ctx context.Context, workspace identity.WorkspaceID, n
 }
 
 // PutQueueMessages appends messages in order and wakes waiting pops.
-func (s *Storage) PutQueueMessages(ctx context.Context, workspace identity.WorkspaceID, name string, messages [][]byte) (apitypes.QueueInfo, error) {
+func (s *Storage) PutQueueMessages(ctx context.Context, workspace identity.WorkspaceID, name string, messages [][]byte) error {
 	for _, m := range messages {
 		if len(m) > MaxValueBytes {
-			return apitypes.QueueInfo{}, ErrTooLarge
+			return ErrTooLarge
 		}
 	}
 	// A delete between reading the id and inserting fails the insert's
@@ -63,7 +63,7 @@ func (s *Storage) PutQueueMessages(ctx context.Context, workspace identity.Works
 	for attempt := 0; ; attempt++ {
 		id, err := s.queueID(ctx, workspace, name, true)
 		if err != nil {
-			return apitypes.QueueInfo{}, err
+			return err
 		}
 		err = pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 			if err := s.queries.WithTx(tx).InsertQueueMessages(ctx, InsertQueueMessagesParams{QueueID: id, Messages: messages}); err != nil {
@@ -75,9 +75,9 @@ func (s *Storage) PutQueueMessages(ctx context.Context, workspace identity.Works
 			continue
 		}
 		if err != nil {
-			return apitypes.QueueInfo{}, fmt.Errorf("put queue messages: %w", err)
+			return fmt.Errorf("put queue messages: %w", err)
 		}
-		return s.queueInfo(ctx, name, id)
+		return nil
 	}
 }
 

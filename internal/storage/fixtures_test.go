@@ -19,7 +19,7 @@ import (
 
 // fixture is a workspace with one app, function, release and host.
 type fixture struct {
-	t       *testing.T
+	t       testing.TB
 	pool    *pgxpool.Pool
 	storage *Storage
 	ws      identity.WorkspaceID
@@ -27,7 +27,7 @@ type fixture struct {
 	host    compute.HostID
 }
 
-func newFixture(t *testing.T, spec string) *fixture {
+func newFixture(t testing.TB, spec string) *fixture {
 	t.Helper()
 	pool := dbtest.New(t)
 	f := &fixture{t: t, pool: pool, storage: NewStorage(pool, storagetest.Config())}

@@ -643,11 +643,7 @@ paths:
           application/json:
             schema: { $ref: "#/components/schemas/PutQueueMessagesRequest" }
       responses:
-        "200":
-          description: The queue after the append
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/QueueInfo" }
+        "204": { description: Appended }
         default: { $ref: "#/components/responses/Error" }
 
   /v1/workspaces/{workspace}/queues/{queue}/pop:

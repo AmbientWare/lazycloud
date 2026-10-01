@@ -27,11 +27,10 @@ func TestQueueDeliversEachMessageOnceInOrder(t *testing.T) {
 		for n := range batch {
 			batch[n] = fmt.Appendf(nil, "%d", start+n)
 		}
-		info, err := s.PutQueueMessages(ctx, f.ws, "jobs", batch)
-		if err != nil {
+		if err := s.PutQueueMessages(ctx, f.ws, "jobs", batch); err != nil {
 			t.Fatal(err)
 		}
-		if info.Size != int64(start+100) {
+		if info, _ := s.GetQueue(ctx, f.ws, "jobs"); info.Size != int64(start+100) {
 			t.Fatalf("size after put: %d", info.Size)
 		}
 	}
@@ -98,7 +97,7 @@ func TestQueuePopWaitsForPut(t *testing.T) {
 		done <- popped{m, found, err, time.Since(began)}
 	}()
 	time.Sleep(300 * time.Millisecond)
-	if _, err := f.storage.PutQueueMessages(ctx, f.ws, "wake", [][]byte{[]byte(`"hello"`)}); err != nil {
+	if err := f.storage.PutQueueMessages(ctx, f.ws, "wake", [][]byte{[]byte(`"hello"`)}); err != nil {
 		t.Fatal(err)
 	}
 	r := <-done
@@ -119,7 +118,7 @@ func TestQueuePopWaitsForPut(t *testing.T) {
 func TestQueueDeleteAndSizeLimit(t *testing.T) {
 	ctx := t.Context()
 	f := newFixture(t, `{}`)
-	if _, err := f.storage.PutQueueMessages(ctx, f.ws, "q/with/slashes", [][]byte{[]byte("1"), {}}); err != nil {
+	if err := f.storage.PutQueueMessages(ctx, f.ws, "q/with/slashes", [][]byte{[]byte("1"), {}}); err != nil {
 		t.Fatal(err)
 	}
 	// A stored empty message is distinct from an empty queue.
@@ -128,7 +127,7 @@ func TestQueueDeleteAndSizeLimit(t *testing.T) {
 	if err != nil || !found || len(m) != 0 {
 		t.Fatalf("empty message: %q found=%v err=%v", m, found, err)
 	}
-	if _, err := f.storage.PutQueueMessages(ctx, f.ws, "big", [][]byte{make([]byte, MaxValueBytes+1)}); !errors.Is(err, ErrTooLarge) {
+	if err := f.storage.PutQueueMessages(ctx, f.ws, "big", [][]byte{make([]byte, MaxValueBytes+1)}); !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("oversized message: %v", err)
 	}
 	if err := f.storage.DeleteQueue(ctx, f.ws, "q/with/slashes"); err != nil {

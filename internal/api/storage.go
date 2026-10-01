@@ -376,11 +376,10 @@ func (s *Server) PutQueueMessages(ctx context.Context, req PutQueueMessagesReque
 	if err != nil {
 		return nil, err
 	}
-	info, err := s.owners.Storage.PutQueueMessages(ctx, ws.ID, req.Queue, req.Body.Messages)
-	if err != nil {
+	if err := s.owners.Storage.PutQueueMessages(ctx, ws.ID, req.Queue, req.Body.Messages); err != nil {
 		return nil, err
 	}
-	return PutQueueMessages200JSONResponse(info), nil
+	return PutQueueMessages204Response{}, nil
 }
 
 // PopQueueMessage removes the oldest message, waiting when asked.
