@@ -197,6 +197,7 @@ func (sess *session) handle(ctx context.Context, msg *hostproto.HostMessage) err
 		return sess.sendActions(actions)
 	case *hostproto.HostMessage_Metrics:
 		sess.server.offerMetrics(sess.host, body.Metrics)
+		return nil
 	case *hostproto.HostMessage_Interruption:
 		at := time.Now()
 		if body.Interruption.GetReclaimAt() != nil {
