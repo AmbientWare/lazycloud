@@ -108,6 +108,7 @@ const (
 	TaskNotFinished     ErrorCode = "task_not_finished"
 	TooManyPendingTasks ErrorCode = "too_many_pending_tasks"
 	Unauthenticated     ErrorCode = "unauthenticated"
+	Unavailable         ErrorCode = "unavailable"
 	Unsupported         ErrorCode = "unsupported"
 )
 
@@ -131,6 +132,8 @@ func (e ErrorCode) Valid() bool {
 	case TooManyPendingTasks:
 		return true
 	case Unauthenticated:
+		return true
+	case Unavailable:
 		return true
 	case Unsupported:
 		return true
@@ -557,8 +560,11 @@ type FunctionSpec struct {
 	Environment *map[string]string `json:"environment,omitempty"`
 
 	// Handler module:qualname within the source archive
-	Handler string    `json:"handler"`
-	Image   ImageSpec `json:"image"`
+	Handler string `json:"handler"`
+
+	// Http Makes the workload answer HTTP. Its slots are `workers` processes, each handling `concurrency` requests at once.
+	Http  *HttpSpec `json:"http,omitempty"`
+	Image ImageSpec `json:"image"`
 
 	// KeepWarmSeconds Idle time before a container above the minimum stops.
 	KeepWarmSeconds *int         `json:"keep_warm_seconds,omitempty"`
@@ -710,7 +716,10 @@ type Release struct {
 	Function  WorkloadName       `json:"function"`
 	Id        openapi_types.UUID `json:"id"`
 	Spec      FunctionSpec       `json:"spec"`
-	Version   int                `json:"version"`
+
+	// Url Where an HTTP workload answers, following the active release.
+	Url     *string `json:"url,omitempty"`
+	Version int     `json:"version"`
 }
 
 // Resources Reservations the container always keeps. CPU above the reservation is shared up to `cpu_limit_millis`, by default the reservation plus 16 cores. Memory above the reservation is allowed up to `memory_limit_mib`, by default four times the reservation, at least 1 GiB and at most 8 GiB above it; the container is killed beyond it.

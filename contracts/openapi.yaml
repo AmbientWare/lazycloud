@@ -517,6 +517,7 @@ components:
         - unsupported
         - too_many_pending_tasks
         - task_not_finished
+        - unavailable
         - internal
 
     Name:
@@ -678,6 +679,8 @@ components:
         environment:
           type: object
           additionalProperties: { type: string }
+        http:
+          $ref: "#/components/schemas/HttpSpec"
 
     SourceRef:
       type: object
@@ -771,6 +774,9 @@ components:
         version: { type: integer }
         created_at: { type: string, format: date-time }
         spec: { $ref: "#/components/schemas/FunctionSpec" }
+        url:
+          description: Where an HTTP workload answers, following the active release.
+          type: string
 
     Function:
       type: object

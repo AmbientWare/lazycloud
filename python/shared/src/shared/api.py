@@ -18,6 +18,7 @@ class ErrorCode(str, Enum):
     unsupported = "unsupported"
     too_many_pending_tasks = "too_many_pending_tasks"
     task_not_finished = "task_not_finished"
+    unavailable = "unavailable"
     internal = "internal"
 
 
@@ -302,48 +303,6 @@ class SourceUpload(BaseModel):
     upload: UploadTarget | None = None
 
 
-class FunctionSpec(BaseModel):
-    name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
-    handler: Annotated[
-        str,
-        Field(
-            description="module:qualname within the source archive",
-            pattern="^[A-Za-z_][A-Za-z0-9_.]*:[A-Za-z_][A-Za-z0-9_.]*$",
-        ),
-    ]
-    source: SourceRef
-    image: ImageSpec
-    resources: Resources
-    timeout_seconds: Annotated[int, Field(ge=1, le=86400)] = 3600
-    retry_policy: RetryPolicy | None = None
-    concurrency: Annotated[
-        int,
-        Field(description="Tasks one container runs at once, one process per slot.", ge=1, le=256),
-    ] = 1
-    keep_warm_seconds: Annotated[
-        int,
-        Field(description="Idle time before a container above the minimum stops.", ge=0, le=86400),
-    ] = 10
-    autoscaler: Autoscaler | None = None
-    max_pending_tasks: Annotated[int, Field(ge=1, le=1000000)] = 100
-    environment: dict[str, str] | None = None
-
-
-class Release(BaseModel):
-    id: UUID
-    function: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
-    version: int
-    created_at: AwareDatetime
-    spec: FunctionSpec
-
-
-class Function(BaseModel):
-    name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
-    app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
-    state: State1
-    active_release: Release
-
-
 class Task(BaseModel):
     id: UUID
     app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
@@ -379,6 +338,64 @@ class HttpSpec(BaseModel):
     workers: Annotated[int, Field(ge=1, le=64)] = 1
 
 
+class Invocation(BaseModel):
+    task: Task
+    result: Annotated[
+        Any | None, Field(description="The JSON value the function returned, once it succeeded.")
+    ] = None
+
+
+class FunctionSpec(BaseModel):
+    name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
+    handler: Annotated[
+        str,
+        Field(
+            description="module:qualname within the source archive",
+            pattern="^[A-Za-z_][A-Za-z0-9_.]*:[A-Za-z_][A-Za-z0-9_.]*$",
+        ),
+    ]
+    source: SourceRef
+    image: ImageSpec
+    resources: Resources
+    timeout_seconds: Annotated[int, Field(ge=1, le=86400)] = 3600
+    retry_policy: RetryPolicy | None = None
+    concurrency: Annotated[
+        int,
+        Field(description="Tasks one container runs at once, one process per slot.", ge=1, le=256),
+    ] = 1
+    keep_warm_seconds: Annotated[
+        int,
+        Field(description="Idle time before a container above the minimum stops.", ge=0, le=86400),
+    ] = 10
+    autoscaler: Autoscaler | None = None
+    max_pending_tasks: Annotated[int, Field(ge=1, le=1000000)] = 100
+    environment: dict[str, str] | None = None
+    http: HttpSpec | None = None
+
+
+class Release(BaseModel):
+    id: UUID
+    function: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
+    version: int
+    created_at: AwareDatetime
+    spec: FunctionSpec
+    url: Annotated[
+        str | None,
+        Field(description="Where an HTTP workload answers, following the active release."),
+    ] = None
+
+
+class Function(BaseModel):
+    name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
+    app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
+    state: State1
+    active_release: Release
+
+
+class SubmitTasksResponse(BaseModel):
+    tasks: list[Task]
+
+
 class HttpWorkload(BaseModel):
     name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
     app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
@@ -390,13 +407,6 @@ class HttpWorkload(BaseModel):
     release_url: Annotated[str, Field(description="Addresses the release by id.")]
     domain_url: Annotated[
         str | None, Field(description="The custom hostname, once its registration is ready.")
-    ] = None
-
-
-class Invocation(BaseModel):
-    task: Task
-    result: Annotated[
-        Any | None, Field(description="The JSON value the function returned, once it succeeded.")
     ] = None
 
 
@@ -418,7 +428,3 @@ class Deployment(BaseModel):
     app: App
     releases: list[Release]
     pruned: list[WorkloadName]
-
-
-class SubmitTasksResponse(BaseModel):
-    tasks: list[Task]
