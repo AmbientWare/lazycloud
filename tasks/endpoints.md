@@ -85,7 +85,7 @@ SaaS, and the edge routes only verified ones.
 - [x] 4 Planning
 - [x] 5 ASGI, WebSockets, function invoke
 - [x] 6 SDK
-- [x] 7 Custom domains (provider unverified without credentials)
+- [x] 7 Custom domains
 - [x] 8 Serve
 - [x] 9 Measurements
 
@@ -127,9 +127,6 @@ SaaS, and the edge routes only verified ones.
 
 ## Gaps
 
-- Cloudflare for SaaS is implemented at the provider boundary but unverified:
-  no credentials locally. Without them `domain add` records the hostname and
-  it stays `awaiting_verification`.
 - The Team/Business plan gate on custom domains needs billing.
 - The dashboard's view of request records and logs is the web packet's; the
   API and CLI serve them now.
@@ -170,6 +167,17 @@ Local, `go test -race`, real PostgreSQL, garage, registry and Docker (runc):
   `TestEndpointRequestsAreRecordedWithTheirOutput`,
   `TestRequestRelaysToTheEdgeHoldingTheHost` (warm through a relaying edge
   p50 2.0 ms, p95 2.8 ms).
+- Cloudflare for SaaS, once against the real zone with the development
+  credentials (2026-10-01), through `lazycloud domain` on a private stack:
+  `add lc-acceptance-c006cbf0.lazycloud-test.invalid` was refused by
+  Cloudflare (1409, reserved TLD) as `invalid_request`, recording nothing;
+  `add lc-acceptance-0aa44784.lazycloud-acceptance-0aa44784.com` created a
+  pending custom hostname and printed the CNAME and `_cf-custom-hostname`
+  TXT records, `validating` from the create response's SSL `initializing`;
+  `status` and `list` then read `awaiting verification` (SSL
+  `pending_validation`), the reference's mapping. `remove` deleted it, and
+  the Cloudflare API listed no `lc-acceptance-` hostname afterwards; the zone
+  kept only its one pre-existing hostname.
 - Review regressions: `TestBrokenResponseReleasesItsCapacity`,
   `TestClientThatLeavesCancelsTheRequest`,
   `TestStalledRequestBodyDoesNotHoldCapacity` and the unit tests in
