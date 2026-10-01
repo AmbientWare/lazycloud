@@ -537,13 +537,10 @@ class Function(Generic[P, R]):
         if len(depends_on) > MAX_DEPENDENCIES:
             msg = f"a call can depend on at most {MAX_DEPENDENCIES} other calls"
             raise FunctionOperationError(msg)
-        return TaskInput.model_validate(
-            {
-                "encoding": Encoding.cloudpickle,
-                "data": base64.b64encode(data),
-                "depends_on": depends_on or None,
-            }
-        )
+        payload: dict[str, Any] = {"encoding": Encoding.cloudpickle, "data": base64.b64encode(data)}
+        if depends_on:
+            payload["depends_on"] = depends_on
+        return TaskInput.model_validate(payload)
 
     def _invocation_session(self) -> tuple[ApiClient, str]:
         if called_on_import():
