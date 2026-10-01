@@ -54,10 +54,17 @@ func hasToken(header http.Header, name, token string) bool {
 // can be answered on it.
 var errHijacked = errors.New("the connection was hijacked") //nolint:gochecknoglobals // sentinel
 
+func checkUpgrade(r *http.Request) error {
+	if !hasToken(r.Header, "Connection", "upgrade") || !hasToken(r.Header, "Upgrade", TunnelProtocol) {
+		return invalid("a tunnel needs Connection: Upgrade and Upgrade: %s", TunnelProtocol)
+	}
+	return nil
+}
+
 // upgrade answers 101 to a tunnel request and returns its connection.
 func upgrade(w http.ResponseWriter, r *http.Request) (*hijackedConn, error) {
-	if !hasToken(r.Header, "Connection", "upgrade") || !hasToken(r.Header, "Upgrade", TunnelProtocol) {
-		return nil, invalid("a tunnel needs Connection: Upgrade and Upgrade: %s", TunnelProtocol)
+	if err := checkUpgrade(r); err != nil {
+		return nil, err
 	}
 	conn, rw, err := http.NewResponseController(w).Hijack()
 	if err != nil {
@@ -75,6 +82,9 @@ func (c *control) openPort(w http.ResponseWriter, r *http.Request) error {
 	port, err := strconv.Atoi(r.PathValue("port"))
 	if err != nil || port < 1 || port > 65535 {
 		return invalid("port must be an integer from 1 to 65535")
+	}
+	if err := checkUpgrade(r); err != nil {
+		return err
 	}
 	dialCtx, cancel := context.WithTimeout(r.Context(), forwardDialTimeout)
 	target, err := (&net.Dialer{}).DialContext(dialCtx, "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
