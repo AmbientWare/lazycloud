@@ -17,6 +17,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/control"
 	"github.com/AmbientWare/lazycloud/internal/database"
+	"github.com/AmbientWare/lazycloud/internal/edge"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/images"
@@ -51,6 +52,8 @@ type Owners struct {
 	// listen on database.ChannelTask, ChannelImageBuild, ChannelImageBuildLog
 	// and storage.ChannelQueue.
 	Listener *database.Listener
+	// Edge describes HTTP workloads and owns custom domains.
+	Edge *edge.Edge
 }
 
 // Config is what the transport needs beyond the owners.
@@ -110,7 +113,7 @@ func newServer(owners Owners, cfg Config, logger *slog.Logger, authenticated ope
 	}
 	cfg.PublicURL = strings.TrimRight(cfg.PublicURL, "/")
 	s := &Server{owners: owners, cfg: cfg, logger: logger}
-	strict := NewStrictHandlerWithOptions(s, []StrictMiddlewareFunc{nameOperation}, StrictHTTPServerOptions{
+	strict := NewStrictHandlerWithOptions(s, []StrictMiddlewareFunc{nameOperation, withQuery}, StrictHTTPServerOptions{
 		RequestErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {
 			s.writeError(w, r, fmt.Errorf("%w: %w", errInvalidRequest, err))
 		},
@@ -287,6 +290,7 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		unknownTask     *execution.UnknownTaskError
 		invalidSpec     *control.InvalidSpecError
 		sourceMissing   *control.SourceMissingError
+		routeConflict   *control.RouteConflictError
 		tooLarge        *http.MaxBytesError
 		invalidImage    *images.InvalidError
 		conflict        *identity.ConflictError
@@ -342,6 +346,8 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, invalidSpec.Error())
 	case errors.As(err, &sourceMissing):
 		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, sourceMissing.Error())
+	case errors.As(err, &routeConflict):
+		writeJSONError(w, http.StatusConflict, apitypes.Conflict, routeConflict.Error())
 	case errors.Is(err, storage.ErrInvalidDigest), errors.Is(err, errInvalidRequest), errors.Is(err, control.ErrNothingToDeploy):
 		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, err.Error())
 	case errors.As(err, &invalidImage):
@@ -404,6 +410,7 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		writeJSONError(w, http.StatusServiceUnavailable, apitypes.Unavailable, billing.ErrPaymentsUnavailable.Error())
 	case errors.Is(err, secrets.ErrInvalidCursor), errors.Is(err, schedules.ErrInvalidCursor):
 		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, "the cursor is not from a previous page")
+	case endpointError(w, err):
 	default:
 		s.logger.ErrorContext(r.Context(), "request failed", "method", r.Method, "path", r.URL.Path, "error", err)
 		writeJSONError(w, http.StatusInternalServerError, apitypes.Internal, "internal error")

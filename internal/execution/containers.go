@@ -72,6 +72,9 @@ func (e *Execution) containerExited(ctx context.Context, tx pgx.Tx, container Co
 		if failQueued == nil {
 			failQueued = &Failure{Kind: FailureLoadError, Message: exit.Message}
 		}
+		if err := q.RecordLoadError(ctx, RecordLoadErrorParams{ID: release, LoadError: &failQueued.Message}); err != nil {
+			return fmt.Errorf("record load error: %w", err)
+		}
 	case StopStartFailed:
 		failures, err := q.CountStartFailure(ctx, release)
 		if err != nil {

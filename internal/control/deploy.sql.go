@@ -138,11 +138,11 @@ func (q *Queries) InsertRelease(ctx context.Context, arg InsertReleaseParams) (I
 const pruneFunctions = `-- name: PruneFunctions :many
 update workloads w
 set desired_state = 'deleted', deleted_at = now()
-where w.app_id = $1 and w.kind = 'function' and w.desired_state <> 'deleted'
+where w.app_id = $1 and w.desired_state <> 'deleted'
   and w.active_release_id is not null
-  and not (w.name = any($2::text[]))
+  and not (w.kind || ':' || w.name = any($2::text[]))
 returning w.name,
-          (select count(*) from releases r where r.workload_id = w.id and r.version is not null)::int as versions
+          (select count(*) from releases r where r.workload_id = w.id and r.version > 0)::int as versions
 `
 
 type PruneFunctionsParams struct {
@@ -240,13 +240,14 @@ func (q *Queries) UpsertApp(ctx context.Context, arg UpsertAppParams) (UpsertApp
 
 const upsertWorkload = `-- name: UpsertWorkload :one
 insert into workloads (app_id, kind, name, desired_state)
-values ($1, 'function', $2, 'active')
+values ($1, $2, $3, 'active')
 on conflict (app_id, kind, name) where desired_state <> 'deleted' do update set desired_state = 'active'
 returning id, active_release_id, next_version
 `
 
 type UpsertWorkloadParams struct {
 	AppID uuid.UUID
+	Kind  string
 	Name  string
 }
 
@@ -258,7 +259,7 @@ type UpsertWorkloadRow struct {
 
 // Locks the live workload row for the release switch.
 func (q *Queries) UpsertWorkload(ctx context.Context, arg UpsertWorkloadParams) (UpsertWorkloadRow, error) {
-	row := q.db.QueryRow(ctx, upsertWorkload, arg.AppID, arg.Name)
+	row := q.db.QueryRow(ctx, upsertWorkload, arg.AppID, arg.Kind, arg.Name)
 	var i UpsertWorkloadRow
 	err := row.Scan(&i.ID, &i.ActiveReleaseID, &i.NextVersion)
 	return i, err

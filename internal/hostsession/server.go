@@ -116,6 +116,13 @@ func hostFrom(ctx context.Context) compute.HostID {
 	return host
 }
 
+// HostFrom is the host that authenticated a call on the server's connection,
+// for other services registered with ServerOptions.
+func HostFrom(ctx context.Context) (compute.HostID, bool) {
+	host, ok := ctx.Value(hostKey{}).(compute.HostID)
+	return host, ok
+}
+
 func (s *Server) authenticate(ctx context.Context) (context.Context, error) {
 	md, _ := metadata.FromIncomingContext(ctx)
 	values := md.Get("authorization")
@@ -297,22 +304,17 @@ func (s *Server) CompleteTask(ctx context.Context, req *hostproto.CompleteTaskRe
 	return &hostproto.CompleteTaskResponse{}, nil
 }
 
-// AppendLogs stores attempt output. Lines without an attempt, such as
-// import output, have no task to belong to and are not stored.
+// AppendLogs stores output. An attempt's lines go to its task's log; lines
+// outside attempts, such as import output and HTTP requests, go to the
+// container's log.
 func (s *Server) AppendLogs(ctx context.Context, req *hostproto.AppendLogsRequest) (*hostproto.AppendLogsResponse, error) {
 	container, err := parseContainer(req.GetContainerId())
 	if err != nil {
 		return nil, err
 	}
 	lines := make([]execution.LogLine, 0, len(req.GetLines()))
+	var containerLines []execution.ContainerLogLine
 	for _, line := range req.GetLines() {
-		if line.GetAttemptId() == "" {
-			continue
-		}
-		attempt, err := uuid.Parse(line.GetAttemptId())
-		if err != nil {
-			return nil, status.Error(codes.InvalidArgument, "attempt_id is not a UUID")
-		}
 		stream, ok := streamIn(line.GetStream())
 		if !ok {
 			return nil, status.Error(codes.InvalidArgument, "a log line needs a stream")
@@ -321,9 +323,28 @@ func (s *Server) AppendLogs(ctx context.Context, req *hostproto.AppendLogsReques
 		if line.GetTime() != nil {
 			at = line.GetTime().AsTime()
 		}
+		if line.GetAttemptId() == "" {
+			containerLine := execution.ContainerLogLine{LogLine: execution.LogLine{Stream: stream, Data: line.GetData(), Time: at}}
+			if id := line.GetRequestId(); id != "" {
+				request, err := uuid.Parse(id)
+				if err != nil {
+					return nil, status.Error(codes.InvalidArgument, "request_id is not a UUID")
+				}
+				containerLine.Request = &request
+			}
+			containerLines = append(containerLines, containerLine)
+			continue
+		}
+		attempt, err := uuid.Parse(line.GetAttemptId())
+		if err != nil {
+			return nil, status.Error(codes.InvalidArgument, "attempt_id is not a UUID")
+		}
 		lines = append(lines, execution.LogLine{Attempt: execution.AttemptID(attempt), Stream: stream, Data: line.GetData(), Time: at})
 	}
 	if err := s.execution.AppendLogs(ctx, hostFrom(ctx), container, lines); err != nil {
+		return nil, s.grpcError(ctx, err)
+	}
+	if err := s.execution.AppendContainerLogs(ctx, hostFrom(ctx), container, containerLines); err != nil {
 		return nil, s.grpcError(ctx, err)
 	}
 	return &hostproto.AppendLogsResponse{}, nil

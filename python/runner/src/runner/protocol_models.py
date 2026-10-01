@@ -31,6 +31,19 @@ class RunnerError(BaseModel):
     traceback: str | None = None
 
 
+class HttpKind(str, Enum):
+    endpoint = "endpoint"
+    asgi = "asgi"
+    realtime = "realtime"
+
+
+class HttpServing(BaseModel):
+    kind: HttpKind
+    concurrency: Annotated[
+        int, Field(description="Requests the supervisor sends this runner at once.", ge=1)
+    ]
+
+
 class Loaded(BaseModel):
     type: Literal["loaded"]
 
@@ -83,7 +96,10 @@ class Stream(str, Enum):
 
 class Output(BaseModel):
     type: Literal["output"]
-    attempt_id: str
+    attempt_id: Annotated[str, Field(description="Empty for an HTTP worker's output.")]
+    request_id: Annotated[
+        str | None, Field(description="The X-Request-Id of the request an HTTP worker served.")
+    ] = None
     stream: Stream
 
 
@@ -110,3 +126,4 @@ class Load(BaseModel):
         ),
     ] = 1
     hooks: LifecycleHooks | None = None
+    http: HttpServing | None = None

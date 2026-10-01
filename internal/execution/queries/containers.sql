@@ -16,5 +16,8 @@ set status = 'failed', failure = @failure, finished_at = now()
 where id = any(@ids::uuid[]) and status = 'queued'
 returning id;
 
+-- name: RecordLoadError :exec
+update releases set load_error = @load_error where id = @id;
+
 -- name: CountStartFailure :one
 update releases set start_failures = start_failures + 1 where id = @id returning start_failures;

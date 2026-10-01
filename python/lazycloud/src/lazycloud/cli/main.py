@@ -24,6 +24,7 @@ from lazycloud.cli.examples import example_app
 from lazycloud.cli.execution import deploy, deployment_app, run, shell
 from lazycloud.cli.identity import login, profile_app, token_app
 from lazycloud.cli.logs import logs
+from lazycloud.cli.requests import requests_app
 from lazycloud.cli.resources import (
     cloud_app,
     compute_app,
@@ -324,6 +325,7 @@ def _register_public_groups(registry: PublicCliRegistry) -> None:
     registry.add_group("machine", machine_app)
     registry.add_group("secret", secret_app)
     registry.add_group("domain", domain_app)
+    registry.add_group("requests", requests_app)
     registry.add_group("volume", volume_app)
     registry.add_group("disk", disk_app)
     registry.add_group("artifact", artifact_app)

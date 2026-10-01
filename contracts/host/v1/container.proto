@@ -54,6 +54,8 @@ message OutputChunk {
   LogStream stream = 2;
   string data = 3;
   google.protobuf.Timestamp time = 4;
+  // The HTTP request, by its X-Request-Id, an HTTP worker wrote this for.
+  string request_id = 30;
 }
 
 message SupervisorCommand {
@@ -62,6 +64,9 @@ message SupervisorCommand {
     RunAttempt run = 2;
     CancelSlot cancel = 3;
     Drain drain = 4;
+    // Reload restarts every runner once its current work finishes, so new
+    // source in the workspace takes effect.
+    Reload reload = 30;
   }
 }
 
@@ -78,6 +83,10 @@ message Configure {
   // Environment variables holding secret values; their values are replaced
   // in task output.
   repeated string secret_env = 12;
+  // Set for HTTP workloads. The supervisor serves HTTP on http_socket and
+  // forwards each request to a worker with a free slot.
+  HttpServing http = 30;
+  string http_socket = 31;
 }
 
 message RunAttempt {
@@ -98,5 +107,8 @@ message CancelSlot {
   string attempt_id = 1;
 }
 
-// Drain lets running attempts finish, then exits the supervisor.
+// Drain lets running attempts and requests finish, then exits the
+// supervisor. HTTP workloads refuse new requests as busy while draining.
 message Drain {}
+
+message Reload {}

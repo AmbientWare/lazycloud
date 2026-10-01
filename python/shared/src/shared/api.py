@@ -863,13 +863,19 @@ class DeploymentPlanAction(str, Enum):
     remove = "remove"
 
 
+class WorkloadKind(str, Enum):
+    function = "function"
+    endpoint = "endpoint"
+    asgi = "asgi"
+
+
 class WorkloadIdentity(BaseModel):
-    kind: Literal["function"]
+    kind: WorkloadKind
     name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
 
 
 class DeploymentPlanItem(BaseModel):
-    kind: Literal["function"]
+    kind: WorkloadKind
     name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
     action: DeploymentPlanAction
     versions: Annotated[int, Field(description="Versions the workload has now.")]
@@ -879,7 +885,7 @@ class DeployedWorkload(BaseModel):
     id: UUID
     app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
     name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
-    kind: Literal["function"]
+    kind: WorkloadKind
     state: WorkloadState
     app_state: AppState | None = None
     version: Annotated[int | None, Field(description="The active version.")] = None
@@ -1066,6 +1072,155 @@ class ImageBuildLogEntry(BaseModel):
     data: Annotated[
         str, Field(description="One line of build output without its trailing newline.")
     ]
+    time: AwareDatetime
+
+
+class HttpKind(str, Enum):
+    endpoint = "endpoint"
+    asgi = "asgi"
+    realtime = "realtime"
+
+
+class HttpMethod(str, Enum):
+    DELETE = "DELETE"
+    GET = "GET"
+    HEAD = "HEAD"
+    OPTIONS = "OPTIONS"
+    PATCH = "PATCH"
+    POST = "POST"
+    PUT = "PUT"
+    TRACE = "TRACE"
+
+
+class State2(str, Enum):
+    active = "active"
+    stopped = "stopped"
+
+
+class InvocationBody(BaseModel):
+    model_config = ConfigDict(
+        extra="allow",
+    )
+
+
+class DomainRequest(BaseModel):
+    hostname: Annotated[str, Field(max_length=253)]
+
+
+class DomainPhase(str, Enum):
+    awaiting_verification = "awaiting_verification"
+    validating = "validating"
+    ready = "ready"
+    action_required = "action_required"
+
+
+class DomainErrorCode(str, Enum):
+    verification_timed_out = "verification_timed_out"
+    certificate_failed = "certificate_failed"
+    hostname_rejected = "hostname_rejected"
+    upstream_unavailable = "upstream_unavailable"
+
+
+class DnsRecord(BaseModel):
+    type: str
+    name: str
+    value: str
+
+
+class Domain(BaseModel):
+    id: UUID
+    hostname: Annotated[
+        str,
+        Field(
+            max_length=253,
+            pattern="^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$",
+        ),
+    ]
+    phase: DomainPhase
+    cname_target: Annotated[str, Field(description="The hostname the domain's CNAME points at.")]
+    required_records: Annotated[
+        list[DnsRecord], Field(description="Records the provider still waits for beyond the CNAME.")
+    ]
+    error_code: DomainErrorCode | None = None
+    error_message: str | None = None
+    verified_at: AwareDatetime | None = None
+    last_checked_at: AwareDatetime | None = None
+    created_at: AwareDatetime
+    updated_at: AwareDatetime
+
+
+class DomainList(BaseModel):
+    data: list[Domain]
+    next: Annotated[
+        str | None, Field(description="Pass as `after` for the next page; absent on the last.")
+    ] = None
+
+
+class PreviewState(str, Enum):
+    starting = "starting"
+    ready = "ready"
+    stopped = "stopped"
+
+
+class PreviewKind(str, Enum):
+    function = "function"
+    endpoint = "endpoint"
+    asgi = "asgi"
+    realtime = "realtime"
+
+
+class Preview(BaseModel):
+    id: UUID
+    app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
+    name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
+    kind: PreviewKind
+    state: PreviewState
+    container_id: UUID | None = None
+    url: Annotated[
+        str,
+        Field(
+            description="Where the preview answers; a function preview takes tasks through the API."
+        ),
+    ]
+    expires_at: AwareDatetime | None = None
+    created_at: AwareDatetime
+
+
+class PreviewSync(BaseModel):
+    written: int
+    removed: int
+
+
+class HttpRequest(BaseModel):
+    id: UUID
+    app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
+    name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
+    kind: WorkloadKind
+    release_id: UUID
+    version: Annotated[
+        int | None, Field(description="The deployed version; negative for a preview.")
+    ] = None
+    container_id: UUID | None = None
+    method: str
+    path: str
+    status: int
+    started_at: AwareDatetime
+    duration_ms: int
+    request_bytes: int
+    response_bytes: int
+
+
+class HttpRequestList(BaseModel):
+    data: list[HttpRequest]
+    next: Annotated[
+        UUID | None, Field(description="Pass as `before` for the next page; absent on the last.")
+    ] = None
+
+
+class ContainerLogEntry(BaseModel):
+    id: int
+    stream: Stream
+    data: Annotated[str, Field(description="One line of output without its trailing newline.")]
     time: AwareDatetime
 
 
@@ -2478,6 +2633,29 @@ class ImageResolution(BaseModel):
     build: ImageBuild | None = None
 
 
+class HttpSpec(BaseModel):
+    kind: HttpKind
+    route: Annotated[
+        str,
+        Field(
+            description="The path an endpoint answers on.", max_length=512, pattern="^/[^\\s?#]*$"
+        ),
+    ] = "/"
+    methods: Annotated[list[HttpMethod], Field(min_length=1)] = [HttpMethod.GET, HttpMethod.POST]
+    domain: Annotated[
+        str | None,
+        Field(
+            max_length=253,
+            pattern="^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$",
+        ),
+    ] = None
+    workers: Annotated[int, Field(ge=1, le=64)] = 1
+
+
+class ContainerLogList(BaseModel):
+    data: list[ContainerLogEntry]
+
+
 class ChangeEvent(BaseModel):
     seq: int
     workspace_id: UUID
@@ -2635,6 +2813,10 @@ class FunctionSpec(BaseModel):
         dict[str, Any] | None,
         Field(description="The signature `lazycloud app export` types clients from."),
     ] = None
+    http: HttpSpec | None = None
+    authorized: Annotated[
+        bool | None, Field(description="Whether requests to the workload's URLs need a token.")
+    ] = None
 
 
 class Release(BaseModel):
@@ -2648,6 +2830,10 @@ class Release(BaseModel):
     ] = None
     created_at: AwareDatetime
     spec: FunctionSpec
+    url: Annotated[
+        str | None,
+        Field(description="Where an HTTP workload answers, following the active release."),
+    ] = None
 
 
 class Function(BaseModel):
@@ -2699,6 +2885,34 @@ class Task(BaseModel):
 class TaskPage(BaseModel):
     tasks: list[Task]
     next_cursor: str | None = None
+
+
+class HttpWorkload(BaseModel):
+    name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
+    app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
+    kind: HttpKind
+    state: State2
+    release: Release
+    url: Annotated[str, Field(description="Follows the active release across deploys.")]
+    version_url: Annotated[str, Field(description="Pinned to the release's version.")]
+    release_url: Annotated[str, Field(description="Addresses the release by id.")]
+    domain_url: Annotated[
+        str | None, Field(description="The custom hostname, once its registration is ready.")
+    ] = None
+
+
+class Invocation(BaseModel):
+    task: Task
+    result: Annotated[
+        Any | None, Field(description="The JSON value the function returned, once it succeeded.")
+    ] = None
+
+
+class PreviewRequest(BaseModel):
+    spec: FunctionSpec
+    timeout_seconds: Annotated[
+        int, Field(description="Stop after this long; 0 runs until stopped.", ge=0, le=86400)
+    ] = 0
 
 
 class DeploymentRequest(BaseModel):

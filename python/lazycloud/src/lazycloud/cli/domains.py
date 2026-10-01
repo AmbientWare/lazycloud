@@ -3,8 +3,8 @@ from __future__ import annotations
 from typing import Annotated
 
 import typer
-from shared.custom_domains import CustomDomainPhase
-from shared.http.custom_domains import CustomDomainResponse
+from shared.api import Domain as CustomDomainResponse
+from shared.api import DomainPhase as CustomDomainPhase
 
 from lazycloud._terminal.cards import notice_card, result_card
 from lazycloud._terminal.streams import console
@@ -15,9 +15,16 @@ from lazycloud.cli.components.output import (
     print_payload,
     table,
 )
-from lazycloud.cli.control import domain_client
+from lazycloud.clients.api import ApiClient
+from lazycloud.clients.endpoints import get_domain, list_domains, register_domain, remove_domain
+from lazycloud.control import api_client, resolve_control_client_config
 
 domain_app = typer.Typer(help="Manage the domains this workspace can serve from.")
+
+
+def _client(workspace: str | None) -> ApiClient:
+    """Domains belong to the account; the workspace only selects the profile's sign-in."""
+    return api_client(resolve_control_client_config(workspace=workspace, timeout_seconds=30))
 
 
 def _payload(domain: CustomDomainResponse) -> dict[str, object]:
@@ -25,7 +32,7 @@ def _payload(domain: CustomDomainResponse) -> dict[str, object]:
         "hostname": domain.hostname,
         "phase": domain.phase.value,
         "cname_target": domain.cname_target,
-        "required_records": [r.model_dump() for r in domain.required_records],
+        "required_records": [r.model_dump(mode="json") for r in domain.required_records],
         "error": domain.error_message,
         "verified_at": domain.verified_at.isoformat() if domain.verified_at else None,
     }
@@ -47,7 +54,7 @@ def _print(ctx: typer.Context, domain: CustomDomainResponse) -> None:
         return
     if domain.error_message:
         console.print(notice_card(domain.error_message, title="Domain error", tone="warning"))
-    if domain.phase is not CustomDomainPhase.Ready and domain.cname_target:
+    if domain.phase is not CustomDomainPhase.ready and domain.cname_target:
         _print_dns_record(domain)
 
 
@@ -81,7 +88,7 @@ def domain_add(
 ) -> None:
     """Register a domain, then point it at the platform with the CNAME shown."""
 
-    registered = domain_client(workspace=workspace).register(domain)
+    registered = register_domain(_client(workspace), domain)
     emit(
         ctx,
         payload=_payload(registered),
@@ -89,14 +96,14 @@ def domain_add(
             f"{registered.hostname} is {registered.phase.value.replace('_', ' ')}.",
             title="Domain added",
             hint=f"Run `lazycloud domain status {registered.hostname}` to check it.",
-            tone="success" if registered.phase is CustomDomainPhase.Ready else "info",
+            tone="success" if registered.phase is CustomDomainPhase.ready else "info",
         ),
     )
     if json_output_enabled(ctx):
         return
     if registered.error_message:
         console.print(notice_card(registered.error_message, title="Domain error", tone="warning"))
-    if registered.phase is not CustomDomainPhase.Ready and registered.cname_target:
+    if registered.phase is not CustomDomainPhase.ready and registered.cname_target:
         _print_dns_record(registered)
 
 
@@ -105,11 +112,11 @@ def domain_list(
     ctx: typer.Context,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
-    response = domain_client(workspace=workspace).list()
+    domains = list_domains(_client(workspace))
     if json_output_enabled(ctx):
-        print_payload(ctx, [_payload(item) for item in response.data])
+        print_payload(ctx, [_payload(item) for item in domains])
         return
-    rows = [[item.hostname, item.phase.value] for item in response.data]
+    rows = [[item.hostname, item.phase.value] for item in domains]
     console.print(table("Domains", ["hostname", "status"], rows))
 
 
@@ -125,7 +132,7 @@ def domain_status(
     printing a spinner against it would only hide how long that takes.
     """
 
-    _print(ctx, domain_client(workspace=workspace).get(hostname))
+    _print(ctx, get_domain(_client(workspace), hostname))
 
 
 @domain_app.command("remove")
@@ -136,7 +143,7 @@ def domain_remove(
 ) -> None:
     """Retire a domain, discarding its certificate."""
 
-    domain_client(workspace=workspace).remove(hostname)
+    remove_domain(_client(workspace), hostname)
     emit(
         ctx,
         payload={"hostname": hostname, "removed": True},

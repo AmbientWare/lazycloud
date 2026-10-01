@@ -230,18 +230,19 @@ func (sess *session) sync(ctx context.Context) error {
 			continue
 		}
 		msg, err := sess.server.startMessage(ctx, id, start)
-		var missing *secrets.NotFoundError
-		var unreadable *secrets.UnreadableError
-		if errors.As(err, &missing) || errors.As(err, &unreadable) {
-			// The container cannot start without the secret; it fails like
-			// a failed preparation and stops being derived, and the host's
-			// other containers are unaffected.
-			if err := sess.server.execution.StartFailed(ctx, sess.host, start.Container, err.Error()); err != nil {
+		if reason, permanent := permanentStartFailure(err); permanent {
+			// A container whose start can never be built fails like a failed
+			// preparation and stops being derived; the host's other
+			// containers are unaffected.
+			sess.server.logger.WarnContext(ctx, "container cannot start", "host", sess.host.String(),
+				"container", start.Container.String(), "error", err)
+			if err := sess.server.execution.StartFailed(ctx, sess.host, start.Container, reason); err != nil {
 				return sess.server.grpcError(ctx, err)
 			}
 			continue
 		}
 		if err != nil {
+			// Transient: the session ends and the start is built again.
 			return sess.server.grpcError(ctx, err)
 		}
 		if usesWorkspaceBucket(msg.GetStart()) {
@@ -261,7 +262,7 @@ func (sess *session) sync(ctx context.Context) error {
 		id := "stop:" + stop.Container.String()
 		derived[id] = true
 		if !sess.sent[id] {
-			if err := sess.send(stopMessage(id, stop.Container)); err != nil {
+			if err := sess.send(stopMessage(id, stop.Container, stop.Grace)); err != nil {
 				return err
 			}
 		}
@@ -311,7 +312,7 @@ func (sess *session) syncStopped(ctx context.Context, derived map[string]bool) e
 		id := "stop:" + container.String()
 		derived[id] = true
 		if !sess.sent[id] {
-			if err := sess.send(stopMessage(id, container)); err != nil {
+			if err := sess.send(stopMessage(id, container, 0)); err != nil {
 				return err
 			}
 		}
@@ -323,7 +324,7 @@ func (sess *session) syncStopped(ctx context.Context, derived map[string]bool) e
 // from durable state, so a later report of the same thing sends them again.
 func (sess *session) sendActions(actions execution.ReportActions) error {
 	for _, container := range actions.Stop {
-		if err := sess.send(stopMessage("stop:"+container.String(), container)); err != nil {
+		if err := sess.send(stopMessage("stop:"+container.String(), container, 0)); err != nil {
 			return err
 		}
 	}
@@ -392,6 +393,7 @@ func (s *Server) startMessage(ctx context.Context, id string, start execution.St
 			InProcess: start.Spec.InProcess != nil && *start.Spec.InProcess,
 			Hooks:     hooksOut(start.Spec.LifecycleHooks),
 		},
+		Http:        httpServing(start.Spec),
 		Environment: env,
 		Volumes:     volumes,
 		Secrets:     secretValues,
@@ -415,10 +417,37 @@ func hooksOut(h *apitypes.LifecycleHooks) *hostproto.LifecycleHooks {
 	}
 }
 
-func stopMessage(id string, container execution.ContainerID) *hostproto.ServerMessage {
+// stopMessage stops a container after grace, or stopGraceSeconds when grace
+// is zero.
+func stopMessage(id string, container execution.ContainerID, grace time.Duration) *hostproto.ServerMessage {
+	seconds := int32(stopGraceSeconds)
+	if grace > 0 {
+		seconds = int32(min(grace.Seconds(), 86400))
+	}
 	return &hostproto.ServerMessage{CommandId: id, Body: &hostproto.ServerMessage_Stop{Stop: &hostproto.StopContainer{
-		ContainerId: container.String(), GraceSeconds: stopGraceSeconds,
+		ContainerId: container.String(), GraceSeconds: seconds,
 	}}}
+}
+
+// httpServing configures an HTTP workload's workers, or nil for a task
+// workload. Each worker admits the spec's concurrency.
+func httpServing(spec apitypes.FunctionSpec) *hostproto.HttpServing {
+	if spec.Http == nil {
+		return nil
+	}
+	concurrency := 1
+	if spec.Concurrency != nil {
+		concurrency = *spec.Concurrency
+	}
+	kind := hostproto.HttpKind_HTTP_KIND_ENDPOINT
+	switch spec.Http.Kind {
+	case apitypes.HttpKindAsgi:
+		kind = hostproto.HttpKind_HTTP_KIND_ASGI
+	case apitypes.HttpKindRealtime:
+		kind = hostproto.HttpKind_HTTP_KIND_REALTIME
+	case apitypes.HttpKindEndpoint:
+	}
+	return &hostproto.HttpServing{Kind: kind, Concurrency: int32(concurrency)} //nolint:gosec // The schema caps concurrency at 256.
 }
 
 func cancelMessage(id string, cancel execution.CancelCommand) *hostproto.ServerMessage {
@@ -499,4 +528,22 @@ func (sess *session) sendUpdate(ctx context.Context, update *compute.AgentUpdate
 		return sess.server.grpcError(ctx, err)
 	}
 	return sess.send(updateMessage(update))
+}
+
+// permanentStartFailure says whether err means the start can never be
+// built, and the reason the container's owner is shown.
+func permanentStartFailure(err error) (string, bool) {
+	var missing *secrets.NotFoundError
+	var unreadable *secrets.UnreadableError
+	switch {
+	case err == nil:
+		return "", false
+	case errors.As(err, &missing):
+		return missing.Error(), true
+	case errors.As(err, &unreadable):
+		return "secret " + unreadable.Name + " cannot be read", true
+	case errors.Is(err, errImageUnpinned):
+		return "the release's image has no pinned reference; deploy it again", true
+	}
+	return "", false
 }

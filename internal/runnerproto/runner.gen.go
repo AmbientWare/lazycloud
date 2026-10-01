@@ -51,6 +51,27 @@ func (e FailedType) Valid() bool {
 	}
 }
 
+// Defines values for HttpKind.
+const (
+	Asgi     HttpKind = "asgi"
+	Endpoint HttpKind = "endpoint"
+	Realtime HttpKind = "realtime"
+)
+
+// Valid indicates whether the value is a known member of the HttpKind enum.
+func (e HttpKind) Valid() bool {
+	switch e {
+	case Asgi:
+		return true
+	case Endpoint:
+		return true
+	case Realtime:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for InvokeType.
 const (
 	InvokeTypeInvoke InvokeType = "invoke"
@@ -206,6 +227,18 @@ type FailedType string
 // HookReferences defines model for HookReferences.
 type HookReferences = []string
 
+// HttpKind `endpoint` maps a JSON body and the query to the function's arguments and maps its return value to a response. `asgi` and `realtime` serve the loaded ASGI application.
+type HttpKind string
+
+// HttpServing defines model for HttpServing.
+type HttpServing struct {
+	// Concurrency Requests the supervisor sends this runner at once.
+	Concurrency int `json:"concurrency"`
+
+	// Kind `endpoint` maps a JSON body and the query to the function's arguments and maps its return value to a response. `asgi` and `realtime` serve the loaded ASGI application.
+	Kind HttpKind `json:"kind"`
+}
+
 // Invoke The payload is the encoded Arguments.
 type Invoke struct {
 	AttemptId     string   `json:"attempt_id"`
@@ -248,6 +281,7 @@ type Load struct {
 
 	// Hooks `module:qualname` references called with one context argument. on_start runs once after the handler loads; a failure is a load failure. on_running runs before the handler. A success runs on_success then on_finish. A failure runs on_error, then on_retry when another attempt follows or on_failure when none does, then on_finish. Failures of these hooks are written to the attempt's stderr and do not change the outcome.
 	Hooks           *LifecycleHooks     `json:"hooks,omitempty"`
+	Http            *HttpServing        `json:"http,omitempty"`
 	ProtocolVersion LoadProtocolVersion `json:"protocol_version"`
 	Type            LoadType            `json:"type"`
 }
@@ -275,9 +309,13 @@ type Loaded struct {
 // LoadedType defines model for Loaded.Type.
 type LoadedType string
 
-// Output Output an attempt wrote while the runner runs several attempts at once, as the UTF-8 payload of at most 256 KiB. Sent only for a `concurrency` above 1.
+// Output Output an attempt wrote while the runner runs several attempts at once, or an HTTP worker wrote while serving a request, as the UTF-8 payload of at most 256 KiB. Sent only for a `concurrency` above 1 or an HTTP worker.
 type Output struct {
-	AttemptId string       `json:"attempt_id"`
+	// AttemptId Empty for an HTTP worker's output.
+	AttemptId string `json:"attempt_id"`
+
+	// RequestId The X-Request-Id of the request an HTTP worker served.
+	RequestId *string      `json:"request_id,omitempty"`
 	Stream    OutputStream `json:"stream"`
 	Type      OutputType   `json:"type"`
 }

@@ -46,7 +46,7 @@ func newTestContainer(t *testing.T, server *hostServer) *container {
 		grpcServer.Stop()
 		_ = os.RemoveAll(dir)
 	})
-	return a.newContainer(uuid.NewString(), "app:handle", 1, hostproto.ContainerPhase_CONTAINER_PHASE_READY)
+	return a.newContainer(uuid.NewString(), "app:handle", 1, nil, hostproto.ContainerPhase_CONTAINER_PHASE_READY)
 }
 
 func succeeded(attempt string) *hostproto.AttemptFinished {

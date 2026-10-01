@@ -153,28 +153,28 @@ func (e AttemptOutcome) Valid() bool {
 
 // Defines values for AwsAuthorizationError.
 const (
-	AccountMismatch       AwsAuthorizationError = "account_mismatch"
-	AssumeRoleDenied      AwsAuthorizationError = "assume_role_denied"
-	ExternalIdNotEnforced AwsAuthorizationError = "external_id_not_enforced"
-	PermissionDrift       AwsAuthorizationError = "permission_drift"
-	StackDrift            AwsAuthorizationError = "stack_drift"
-	UpstreamUnavailable   AwsAuthorizationError = "upstream_unavailable"
+	AwsAuthorizationErrorAccountMismatch       AwsAuthorizationError = "account_mismatch"
+	AwsAuthorizationErrorAssumeRoleDenied      AwsAuthorizationError = "assume_role_denied"
+	AwsAuthorizationErrorExternalIdNotEnforced AwsAuthorizationError = "external_id_not_enforced"
+	AwsAuthorizationErrorPermissionDrift       AwsAuthorizationError = "permission_drift"
+	AwsAuthorizationErrorStackDrift            AwsAuthorizationError = "stack_drift"
+	AwsAuthorizationErrorUpstreamUnavailable   AwsAuthorizationError = "upstream_unavailable"
 )
 
 // Valid indicates whether the value is a known member of the AwsAuthorizationError enum.
 func (e AwsAuthorizationError) Valid() bool {
 	switch e {
-	case AccountMismatch:
+	case AwsAuthorizationErrorAccountMismatch:
 		return true
-	case AssumeRoleDenied:
+	case AwsAuthorizationErrorAssumeRoleDenied:
 		return true
-	case ExternalIdNotEnforced:
+	case AwsAuthorizationErrorExternalIdNotEnforced:
 		return true
-	case PermissionDrift:
+	case AwsAuthorizationErrorPermissionDrift:
 		return true
-	case StackDrift:
+	case AwsAuthorizationErrorStackDrift:
 		return true
-	case UpstreamUnavailable:
+	case AwsAuthorizationErrorUpstreamUnavailable:
 		return true
 	default:
 		return false
@@ -318,13 +318,13 @@ func (e AwsStackActionRequestCapabilities) Valid() bool {
 
 // Defines values for AwsStackActionRequestOnFailure.
 const (
-	DELETE AwsStackActionRequestOnFailure = "DELETE"
+	AwsStackActionRequestOnFailureDELETE AwsStackActionRequestOnFailure = "DELETE"
 )
 
 // Valid indicates whether the value is a known member of the AwsStackActionRequestOnFailure enum.
 func (e AwsStackActionRequestOnFailure) Valid() bool {
 	switch e {
-	case DELETE:
+	case AwsStackActionRequestOnFailureDELETE:
 		return true
 	default:
 		return false
@@ -550,6 +550,27 @@ func (e ComputeWorkloadKind) Valid() bool {
 	}
 }
 
+// Defines values for ContainerLogEntryStream.
+const (
+	ContainerLogEntryStreamStderr ContainerLogEntryStream = "stderr"
+	ContainerLogEntryStreamStdout ContainerLogEntryStream = "stdout"
+	ContainerLogEntryStreamSystem ContainerLogEntryStream = "system"
+)
+
+// Valid indicates whether the value is a known member of the ContainerLogEntryStream enum.
+func (e ContainerLogEntryStream) Valid() bool {
+	switch e {
+	case ContainerLogEntryStreamStderr:
+		return true
+	case ContainerLogEntryStreamStdout:
+		return true
+	case ContainerLogEntryStreamSystem:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ContainerState.
 const (
 	ContainerStateDraining ContainerState = "draining"
@@ -745,6 +766,54 @@ func (e DiskStatus) Valid() bool {
 	case Detached:
 		return true
 	case Saving:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DomainErrorCode.
+const (
+	DomainErrorCodeCertificateFailed    DomainErrorCode = "certificate_failed"
+	DomainErrorCodeHostnameRejected     DomainErrorCode = "hostname_rejected"
+	DomainErrorCodeUpstreamUnavailable  DomainErrorCode = "upstream_unavailable"
+	DomainErrorCodeVerificationTimedOut DomainErrorCode = "verification_timed_out"
+)
+
+// Valid indicates whether the value is a known member of the DomainErrorCode enum.
+func (e DomainErrorCode) Valid() bool {
+	switch e {
+	case DomainErrorCodeCertificateFailed:
+		return true
+	case DomainErrorCodeHostnameRejected:
+		return true
+	case DomainErrorCodeUpstreamUnavailable:
+		return true
+	case DomainErrorCodeVerificationTimedOut:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DomainPhase.
+const (
+	DomainPhaseActionRequired       DomainPhase = "action_required"
+	DomainPhaseAwaitingVerification DomainPhase = "awaiting_verification"
+	DomainPhaseReady                DomainPhase = "ready"
+	DomainPhaseValidating           DomainPhase = "validating"
+)
+
+// Valid indicates whether the value is a known member of the DomainPhase enum.
+func (e DomainPhase) Valid() bool {
+	switch e {
+	case DomainPhaseActionRequired:
+		return true
+	case DomainPhaseAwaitingVerification:
+		return true
+	case DomainPhaseReady:
+		return true
+	case DomainPhaseValidating:
 		return true
 	default:
 		return false
@@ -949,6 +1018,81 @@ func (e GpuType) Valid() bool {
 	case L40S:
 		return true
 	case T4:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HttpKind.
+const (
+	HttpKindAsgi     HttpKind = "asgi"
+	HttpKindEndpoint HttpKind = "endpoint"
+	HttpKindRealtime HttpKind = "realtime"
+)
+
+// Valid indicates whether the value is a known member of the HttpKind enum.
+func (e HttpKind) Valid() bool {
+	switch e {
+	case HttpKindAsgi:
+		return true
+	case HttpKindEndpoint:
+		return true
+	case HttpKindRealtime:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HttpMethod.
+const (
+	HttpMethodDELETE  HttpMethod = "DELETE"
+	HttpMethodGET     HttpMethod = "GET"
+	HttpMethodHEAD    HttpMethod = "HEAD"
+	HttpMethodOPTIONS HttpMethod = "OPTIONS"
+	HttpMethodPATCH   HttpMethod = "PATCH"
+	HttpMethodPOST    HttpMethod = "POST"
+	HttpMethodPUT     HttpMethod = "PUT"
+	HttpMethodTRACE   HttpMethod = "TRACE"
+)
+
+// Valid indicates whether the value is a known member of the HttpMethod enum.
+func (e HttpMethod) Valid() bool {
+	switch e {
+	case HttpMethodDELETE:
+		return true
+	case HttpMethodGET:
+		return true
+	case HttpMethodHEAD:
+		return true
+	case HttpMethodOPTIONS:
+		return true
+	case HttpMethodPATCH:
+		return true
+	case HttpMethodPOST:
+		return true
+	case HttpMethodPUT:
+		return true
+	case HttpMethodTRACE:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HttpWorkloadState.
+const (
+	HttpWorkloadStateActive  HttpWorkloadState = "active"
+	HttpWorkloadStateStopped HttpWorkloadState = "stopped"
+)
+
+// Valid indicates whether the value is a known member of the HttpWorkloadState enum.
+func (e HttpWorkloadState) Valid() bool {
+	switch e {
+	case HttpWorkloadStateActive:
+		return true
+	case HttpWorkloadStateStopped:
 		return true
 	default:
 		return false
@@ -1405,6 +1549,51 @@ func (e PresignVolumeFileRequestMethod) Valid() bool {
 	}
 }
 
+// Defines values for PreviewKind.
+const (
+	PreviewKindAsgi     PreviewKind = "asgi"
+	PreviewKindEndpoint PreviewKind = "endpoint"
+	PreviewKindFunction PreviewKind = "function"
+	PreviewKindRealtime PreviewKind = "realtime"
+)
+
+// Valid indicates whether the value is a known member of the PreviewKind enum.
+func (e PreviewKind) Valid() bool {
+	switch e {
+	case PreviewKindAsgi:
+		return true
+	case PreviewKindEndpoint:
+		return true
+	case PreviewKindFunction:
+		return true
+	case PreviewKindRealtime:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PreviewState.
+const (
+	PreviewStateReady    PreviewState = "ready"
+	PreviewStateStarting PreviewState = "starting"
+	PreviewStateStopped  PreviewState = "stopped"
+)
+
+// Valid indicates whether the value is a known member of the PreviewState enum.
+func (e PreviewState) Valid() bool {
+	switch e {
+	case PreviewStateReady:
+		return true
+	case PreviewStateStarting:
+		return true
+	case PreviewStateStopped:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for RateClass.
 const (
 	Auto                 RateClass = "auto"
@@ -1686,13 +1875,13 @@ func (e TokenStatus) Valid() bool {
 
 // Defines values for UploadTargetMethod.
 const (
-	PUT UploadTargetMethod = "PUT"
+	UploadTargetMethodPUT UploadTargetMethod = "PUT"
 )
 
 // Valid indicates whether the value is a known member of the UploadTargetMethod enum.
 func (e UploadTargetMethod) Valid() bool {
 	switch e {
-	case PUT:
+	case UploadTargetMethodPUT:
 		return true
 	default:
 		return false
@@ -1812,12 +2001,18 @@ func (e UserStatus) Valid() bool {
 
 // Defines values for WorkloadKind.
 const (
+	WorkloadKindAsgi     WorkloadKind = "asgi"
+	WorkloadKindEndpoint WorkloadKind = "endpoint"
 	WorkloadKindFunction WorkloadKind = "function"
 )
 
 // Valid indicates whether the value is a known member of the WorkloadKind enum.
 func (e WorkloadKind) Valid() bool {
 	switch e {
+	case WorkloadKindAsgi:
+		return true
+	case WorkloadKindEndpoint:
+		return true
 	case WorkloadKindFunction:
 		return true
 	default:
@@ -2586,6 +2781,23 @@ type ContainerLifecyclesRequest struct {
 	ContainerIds []openapi_types.UUID `json:"container_ids"`
 }
 
+// ContainerLogEntry defines model for ContainerLogEntry.
+type ContainerLogEntry struct {
+	// Data One line of output without its trailing newline.
+	Data   string                  `json:"data"`
+	Id     int64                   `json:"id"`
+	Stream ContainerLogEntryStream `json:"stream"`
+	Time   time.Time               `json:"time"`
+}
+
+// ContainerLogEntryStream defines model for ContainerLogEntry.Stream.
+type ContainerLogEntryStream string
+
+// ContainerLogList defines model for ContainerLogList.
+type ContainerLogList struct {
+	Data []ContainerLogEntry `json:"data"`
+}
+
 // ContainerMetricPoint Use over the step that starts at timestamp. Counters are the bytes moved in interval_ms, the sampled time the point covers; memory and GPU memory are the peak.
 type ContainerMetricPoint struct {
 	// CpuMillicores Average CPU use over the interval.
@@ -2718,8 +2930,10 @@ type DeployedWorkload struct {
 	// DeployedAt When the active version was deployed.
 	DeployedAt *time.Time         `json:"deployed_at,omitempty"`
 	Id         openapi_types.UUID `json:"id"`
-	Kind       WorkloadKind       `json:"kind"`
-	Name       WorkloadName       `json:"name"`
+
+	// Kind A function runs tasks; an endpoint or ASGI app serves HTTP. Realtime apps are ASGI apps.
+	Kind WorkloadKind `json:"kind"`
+	Name WorkloadName `json:"name"`
 
 	// ReleaseId The active release.
 	ReleaseId *openapi_types.UUID `json:"release_id,omitempty"`
@@ -2774,8 +2988,10 @@ type DeploymentPlanAction string
 type DeploymentPlanItem struct {
 	// Action `add` deploys a new workload, `redeploy` deploys one that exists, `retain` leaves an omitted one deployed and `remove` deletes an omitted one with prune.
 	Action DeploymentPlanAction `json:"action"`
-	Kind   WorkloadKind         `json:"kind"`
-	Name   WorkloadName         `json:"name"`
+
+	// Kind A function runs tasks; an endpoint or ASGI app serves HTTP. Realtime apps are ASGI apps.
+	Kind WorkloadKind `json:"kind"`
+	Name WorkloadName `json:"name"`
 
 	// Versions Versions the workload has now.
 	Versions int `json:"versions"`
@@ -2883,6 +3099,50 @@ type DiskRate struct {
 
 // DiskStatus defines model for DiskStatus.
 type DiskStatus string
+
+// DnsRecord defines model for DnsRecord.
+type DnsRecord struct {
+	Name  string `json:"name"`
+	Type  string `json:"type"`
+	Value string `json:"value"`
+}
+
+// Domain defines model for Domain.
+type Domain struct {
+	// CnameTarget The hostname the domain's CNAME points at.
+	CnameTarget   string             `json:"cname_target"`
+	CreatedAt     time.Time          `json:"created_at"`
+	ErrorCode     *DomainErrorCode   `json:"error_code,omitempty"`
+	ErrorMessage  *string            `json:"error_message,omitempty"`
+	Hostname      Hostname           `json:"hostname"`
+	Id            openapi_types.UUID `json:"id"`
+	LastCheckedAt *time.Time         `json:"last_checked_at,omitempty"`
+	Phase         DomainPhase        `json:"phase"`
+
+	// RequiredRecords Records the provider still waits for beyond the CNAME.
+	RequiredRecords []DnsRecord `json:"required_records"`
+	UpdatedAt       time.Time   `json:"updated_at"`
+	VerifiedAt      *time.Time  `json:"verified_at,omitempty"`
+}
+
+// DomainErrorCode defines model for DomainErrorCode.
+type DomainErrorCode string
+
+// DomainList defines model for DomainList.
+type DomainList struct {
+	Data []Domain `json:"data"`
+
+	// Next Pass as `after` for the next page; absent on the last.
+	Next *string `json:"next,omitempty"`
+}
+
+// DomainPhase defines model for DomainPhase.
+type DomainPhase string
+
+// DomainRequest defines model for DomainRequest.
+type DomainRequest struct {
+	Hostname string `json:"hostname"`
+}
 
 // EntitlementUsage defines model for EntitlementUsage.
 type EntitlementUsage struct {
@@ -3019,6 +3279,8 @@ type FunctionState string
 
 // FunctionSpec defines model for FunctionSpec.
 type FunctionSpec struct {
+	// Authorized Whether requests to the workload's URLs need a token.
+	Authorized *bool       `json:"authorized,omitempty"`
 	Autoscaler *Autoscaler `json:"autoscaler,omitempty"`
 
 	// CallbackUrl Receives a signed POST when a task is retried or finishes.
@@ -3035,8 +3297,11 @@ type FunctionSpec struct {
 	Environment *map[string]string `json:"environment,omitempty"`
 
 	// Handler module:qualname within the source archive
-	Handler string    `json:"handler"`
-	Image   ImageSpec `json:"image"`
+	Handler string `json:"handler"`
+
+	// Http Makes the workload answer HTTP. Its slots are `workers` processes, each handling `concurrency` requests at once.
+	Http  *HttpSpec `json:"http,omitempty"`
+	Image ImageSpec `json:"image"`
 
 	// InProcess Run the concurrency slots as threads of one runner process.
 	InProcess *bool `json:"in_process,omitempty"`
@@ -3090,6 +3355,80 @@ type HostedSessionRequest struct {
 	// ReturnUrl A dashboard page; other origins are refused.
 	ReturnUrl string `json:"return_url"`
 }
+
+// Hostname defines model for Hostname.
+type Hostname = string
+
+// HttpKind defines model for HttpKind.
+type HttpKind string
+
+// HttpMethod defines model for HttpMethod.
+type HttpMethod string
+
+// HttpRequest One request to an endpoint or ASGI app. `status` is what the caller received, 101 for a WebSocket whose `duration_ms` is the session.
+type HttpRequest struct {
+	App         AppName             `json:"app"`
+	ContainerId *openapi_types.UUID `json:"container_id,omitempty"`
+	DurationMs  int64               `json:"duration_ms"`
+	Id          openapi_types.UUID  `json:"id"`
+
+	// Kind A function runs tasks; an endpoint or ASGI app serves HTTP. Realtime apps are ASGI apps.
+	Kind          WorkloadKind       `json:"kind"`
+	Method        string             `json:"method"`
+	Name          WorkloadName       `json:"name"`
+	Path          string             `json:"path"`
+	ReleaseId     openapi_types.UUID `json:"release_id"`
+	RequestBytes  int64              `json:"request_bytes"`
+	ResponseBytes int64              `json:"response_bytes"`
+	StartedAt     time.Time          `json:"started_at"`
+	Status        int                `json:"status"`
+
+	// Version The deployed version; negative for a preview.
+	Version *int `json:"version,omitempty"`
+}
+
+// HttpRequestList defines model for HttpRequestList.
+type HttpRequestList struct {
+	Data []HttpRequest `json:"data"`
+
+	// Next Pass as `before` for the next page; absent on the last.
+	Next *openapi_types.UUID `json:"next,omitempty"`
+}
+
+// HttpSpec Makes the workload answer HTTP. Its slots are `workers` processes, each handling `concurrency` requests at once.
+type HttpSpec struct {
+	Domain  *Hostname     `json:"domain,omitempty"`
+	Kind    HttpKind      `json:"kind"`
+	Methods *[]HttpMethod `json:"methods,omitempty"`
+
+	// Route The path an endpoint answers on.
+	Route   *string `json:"route,omitempty"`
+	Workers *int    `json:"workers,omitempty"`
+}
+
+// HttpWorkload defines model for HttpWorkload.
+type HttpWorkload struct {
+	App AppName `json:"app"`
+
+	// DomainUrl The custom hostname, once its registration is ready.
+	DomainUrl *string      `json:"domain_url,omitempty"`
+	Kind      HttpKind     `json:"kind"`
+	Name      WorkloadName `json:"name"`
+	Release   Release      `json:"release"`
+
+	// ReleaseUrl Addresses the release by id.
+	ReleaseUrl string            `json:"release_url"`
+	State      HttpWorkloadState `json:"state"`
+
+	// Url Follows the active release across deploys.
+	Url string `json:"url"`
+
+	// VersionUrl Pinned to the release's version.
+	VersionUrl string `json:"version_url"`
+}
+
+// HttpWorkloadState defines model for HttpWorkload.State.
+type HttpWorkloadState string
 
 // Image defines model for Image.
 type Image struct {
@@ -3252,6 +3591,16 @@ type InvitationRequest struct {
 
 // InvitationRole The roles an invitation or role change grants; ownership is never offered.
 type InvitationRole string
+
+// Invocation defines model for Invocation.
+type Invocation struct {
+	// Result The JSON value the function returned, once it succeeded.
+	Result *json.RawMessage `json:"result,omitempty"`
+	Task   Task             `json:"task"`
+}
+
+// InvocationBody defines model for InvocationBody.
+type InvocationBody = json.RawMessage
 
 // LifecycleHooks Callables the runner invokes with a context object, each a `module:qualname` reference into the source. on_start runs once per runner process after the handler loads, and its failure is a load error. The others run in the container around each attempt, in order; their failures are logged and do not change the outcome.
 type LifecycleHooks struct {
@@ -3621,6 +3970,41 @@ type PresignedUrl struct {
 	Url string `json:"url"`
 }
 
+// Preview defines model for Preview.
+type Preview struct {
+	App         AppName             `json:"app"`
+	ContainerId *openapi_types.UUID `json:"container_id,omitempty"`
+	CreatedAt   time.Time           `json:"created_at"`
+	ExpiresAt   *time.Time          `json:"expires_at,omitempty"`
+	Id          openapi_types.UUID  `json:"id"`
+	Kind        PreviewKind         `json:"kind"`
+	Name        WorkloadName        `json:"name"`
+	State       PreviewState        `json:"state"`
+
+	// Url Where the preview answers; a function preview takes tasks through the API.
+	Url string `json:"url"`
+}
+
+// PreviewKind defines model for PreviewKind.
+type PreviewKind string
+
+// PreviewRequest defines model for PreviewRequest.
+type PreviewRequest struct {
+	Spec FunctionSpec `json:"spec"`
+
+	// TimeoutSeconds Stop after this long; 0 runs until stopped.
+	TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
+}
+
+// PreviewState defines model for PreviewState.
+type PreviewState string
+
+// PreviewSync defines model for PreviewSync.
+type PreviewSync struct {
+	Removed int `json:"removed"`
+	Written int `json:"written"`
+}
+
 // PricingCatalog defines model for PricingCatalog.
 type PricingCatalog struct {
 	ConnectedCloudManagementFeePercent int                 `json:"connected_cloud_management_fee_percent"`
@@ -3695,6 +4079,9 @@ type Release struct {
 	Function  WorkloadName       `json:"function"`
 	Id        openapi_types.UUID `json:"id"`
 	Spec      FunctionSpec       `json:"spec"`
+
+	// Url Where an HTTP workload answers, following the active release.
+	Url *string `json:"url,omitempty"`
 
 	// Version The deployed version; absent for a release only working-tree calls use.
 	Version *int `json:"version,omitempty"`
@@ -4380,11 +4767,12 @@ type VolumeRelativePath = string
 
 // WorkloadIdentity defines model for WorkloadIdentity.
 type WorkloadIdentity struct {
+	// Kind A function runs tasks; an endpoint or ASGI app serves HTTP. Realtime apps are ASGI apps.
 	Kind WorkloadKind `json:"kind"`
 	Name WorkloadName `json:"name"`
 }
 
-// WorkloadKind defines model for WorkloadKind.
+// WorkloadKind A function runs tasks; an endpoint or ASGI app serves HTTP. Realtime apps are ASGI apps.
 type WorkloadKind string
 
 // WorkloadName defines model for WorkloadName.
@@ -4464,6 +4852,9 @@ type DeploymentPath = openapi_types.UUID
 // DiskPath defines model for DiskPath.
 type DiskPath = DiskName
 
+// EndpointPath defines model for EndpointPath.
+type EndpointPath = WorkloadName
+
 // FunctionPath defines model for FunctionPath.
 type FunctionPath = WorkloadName
 
@@ -4478,6 +4869,9 @@ type InvitationPath = openapi_types.UUID
 
 // InvitationTokenPath defines model for InvitationTokenPath.
 type InvitationTokenPath = string
+
+// InvokeWait defines model for InvokeWait.
+type InvokeWait = int
 
 // Limit defines model for Limit.
 type Limit = int
@@ -4497,6 +4891,9 @@ type MapPath = CollectionName
 // PageLimit defines model for PageLimit.
 type PageLimit = int
 
+// PreviewPath defines model for PreviewPath.
+type PreviewPath = openapi_types.UUID
+
 // QueuePath A queue or map name; any characters except control characters.
 type QueuePath = CollectionName
 
@@ -4505,6 +4902,9 @@ type RangeEnd = time.Time
 
 // RangeStart defines model for RangeStart.
 type RangeStart = time.Time
+
+// RequestPath defines model for RequestPath.
+type RequestPath = openapi_types.UUID
 
 // SecretPath An environment variable name; the LAZYCLOUD_ prefix is reserved.
 type SecretPath = SecretName
@@ -4517,6 +4917,9 @@ type UserCodePath = string
 
 // UserPath defines model for UserPath.
 type UserPath = openapi_types.UUID
+
+// VersionQuery defines model for VersionQuery.
+type VersionQuery = int
 
 // VolumePath defines model for VolumePath.
 type VolumePath = VolumeName
@@ -4570,6 +4973,13 @@ type ListComputeInstancesParams struct {
 	// Cursor The next_cursor of the previous page.
 	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
 	Limit  *Limit  `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// ListDomainsParams defines parameters for ListDomains.
+type ListDomainsParams struct {
+	// After Return domains whose hostname sorts after this.
+	After *string `form:"after,omitempty" json:"after,omitempty"`
+	Limit *int    `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
 // ListFleetNodesParams defines parameters for ListFleetNodes.
@@ -4645,6 +5055,40 @@ type ListAppsParams struct {
 
 	// Cursor The next_cursor of the previous page.
 	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+}
+
+// GetAsgiParams defines parameters for GetAsgi.
+type GetAsgiParams struct {
+	// Version Describe this version instead of the active one.
+	Version *VersionQuery `form:"version,omitempty" json:"version,omitempty"`
+}
+
+// GetEndpointParams defines parameters for GetEndpoint.
+type GetEndpointParams struct {
+	// Version Describe this version instead of the active one.
+	Version *VersionQuery `form:"version,omitempty" json:"version,omitempty"`
+}
+
+// InvokeFunctionParams defines parameters for InvokeFunction.
+type InvokeFunctionParams struct {
+	// WaitSeconds Hold the request until the task finishes or this many seconds pass.
+	WaitSeconds *InvokeWait `form:"wait_seconds,omitempty" json:"wait_seconds,omitempty"`
+}
+
+// InvokeFunctionVersionParams defines parameters for InvokeFunctionVersion.
+type InvokeFunctionVersionParams struct {
+	// WaitSeconds Hold the request until the task finishes or this many seconds pass.
+	WaitSeconds *InvokeWait `form:"wait_seconds,omitempty" json:"wait_seconds,omitempty"`
+}
+
+// ListHttpRequestsParams defines parameters for ListHttpRequests.
+type ListHttpRequestsParams struct {
+	// Name Only the requests of this endpoint or ASGI app.
+	Name *WorkloadName `form:"name,omitempty" json:"name,omitempty"`
+
+	// Before Return requests older than this request id.
+	Before *openapi_types.UUID `form:"before,omitempty" json:"before,omitempty"`
+	Limit  *int                `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
 // ListArtifactsParams defines parameters for ListArtifacts.
@@ -4836,6 +5280,18 @@ type GetTaskMetricsParams struct {
 	Function *WorkloadName `form:"function,omitempty" json:"function,omitempty"`
 }
 
+// GetPreviewParams defines parameters for GetPreview.
+type GetPreviewParams struct {
+	// WaitSeconds Hold the request until the container is ready or the preview stops, or this many seconds pass.
+	WaitSeconds *int `form:"wait_seconds,omitempty" json:"wait_seconds,omitempty"`
+}
+
+// StreamPreviewOutputParams defines parameters for StreamPreviewOutput.
+type StreamPreviewOutputParams struct {
+	After  *int64 `form:"after,omitempty" json:"after,omitempty"`
+	Follow *bool  `form:"follow,omitempty" json:"follow,omitempty"`
+}
+
 // ListQueuesParams defines parameters for ListQueues.
 type ListQueuesParams struct {
 	// Cursor The next_cursor of the previous page.
@@ -4847,6 +5303,12 @@ type ListQueuesParams struct {
 type PopQueueMessageParams struct {
 	// WaitSeconds Wait this long for a message when the queue is empty.
 	WaitSeconds *int `form:"wait_seconds,omitempty" json:"wait_seconds,omitempty"`
+}
+
+// ListHttpRequestLogsParams defines parameters for ListHttpRequestLogs.
+type ListHttpRequestLogsParams struct {
+	After *int64 `form:"after,omitempty" json:"after,omitempty"`
+	Limit *int   `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
 // ListSchedulesParams defines parameters for ListSchedules.
@@ -4951,6 +5413,9 @@ type StartDeviceLoginJSONRequestBody = DeviceLoginRequest
 // PollDeviceLoginJSONRequestBody defines body for PollDeviceLogin for application/json ContentType.
 type PollDeviceLoginJSONRequestBody = DeviceTokenRequest
 
+// RegisterDomainJSONRequestBody defines body for RegisterDomain for application/json ContentType.
+type RegisterDomainJSONRequestBody = DomainRequest
+
 // CreateMachineJoinCommandJSONRequestBody defines body for CreateMachineJoinCommand for application/json ContentType.
 type CreateMachineJoinCommandJSONRequestBody = MachineJoinRequest
 
@@ -4978,11 +5443,20 @@ type PlanDeploymentJSONRequestBody = DeploymentPlanRequest
 // DeployAppJSONRequestBody defines body for DeployApp for application/json ContentType.
 type DeployAppJSONRequestBody = DeploymentRequest
 
+// InvokeFunctionJSONRequestBody defines body for InvokeFunction for application/json ContentType.
+type InvokeFunctionJSONRequestBody = InvocationBody
+
 // PrepareFunctionReleaseJSONRequestBody defines body for PrepareFunctionRelease for application/json ContentType.
 type PrepareFunctionReleaseJSONRequestBody = FunctionSpec
 
 // SubmitTasksJSONRequestBody defines body for SubmitTasks for application/json ContentType.
 type SubmitTasksJSONRequestBody = SubmitTasksRequest
+
+// InvokeFunctionVersionJSONRequestBody defines body for InvokeFunctionVersion for application/json ContentType.
+type InvokeFunctionVersionJSONRequestBody = InvocationBody
+
+// CreatePreviewJSONRequestBody defines body for CreatePreview for application/json ContentType.
+type CreatePreviewJSONRequestBody = PreviewRequest
 
 // CreateArtifactJSONRequestBody defines body for CreateArtifact for application/json ContentType.
 type CreateArtifactJSONRequestBody = CreateArtifactRequest

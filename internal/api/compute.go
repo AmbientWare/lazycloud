@@ -360,7 +360,7 @@ func stackOut(st *compute.StackAction) *apitypes.AwsStackAction {
 	out := &apitypes.AwsStackAction{AccountId: st.AccountID, Region: st.Region, TemplateSha256: st.TemplateSHA256}
 	out.Request.StackName, out.Request.TemplateBody = st.StackName, st.TemplateBody
 	out.Request.Capabilities = []apitypes.AwsStackActionRequestCapabilities{apitypes.CAPABILITYNAMEDIAM}
-	out.Request.OnFailure = apitypes.DELETE
+	out.Request.OnFailure = apitypes.AwsStackActionRequestOnFailureDELETE
 	for _, p := range st.Parameters {
 		out.Request.Parameters = append(out.Request.Parameters, apitypes.AwsStackParameter{ParameterKey: p[0], ParameterValue: p[1]})
 	}

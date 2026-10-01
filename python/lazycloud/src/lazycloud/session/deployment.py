@@ -30,7 +30,6 @@ from lazycloud.exceptions import (
 )
 from lazycloud.references import (
     HandlerReferenceError,
-    dotted_reference,
     source_root_handler_reference,
 )
 from lazycloud.session.task import (
@@ -288,6 +287,26 @@ def prepare_function_release(
     return release
 
 
+def prepare_spec(
+    workload: Function[..., Any],
+    *,
+    client: ApiClient,
+    workspace: str,
+    source_root: str | Path | None = None,
+    terminal: Terminal | None = None,
+) -> tuple[FunctionSpec, tuple[str, ...]]:
+    """Ready one workload's image and source, as a deploy does, without deploying it.
+
+    Returns the definition and the module prefix its files sit under in the
+    container's workspace.
+    """
+    terminal = terminal or Terminal(quiet=True)
+    spec = _function_specs(
+        [workload], client=client, workspace=workspace, source_root=source_root, terminal=terminal
+    )[id(workload)]
+    return spec, _source_placement(workload, Path(source_root or ".").expanduser().resolve())[1]
+
+
 def resolve_deployment(client: ApiClient, workspace: str, reference: str) -> DeploymentReference:
     """Find a deployment by id, by exact name, or as `NAME-vN` for version N of NAME."""
     try:
@@ -379,7 +398,7 @@ def _runtime_done(step: TerminalStep, name: str, release: Release) -> None:
 def _source_placement(function: Function[..., Any], root: Path) -> tuple[str, tuple[str, ...]]:
     """The handler reference inside the archive and the archive's module prefix."""
     try:
-        reference = source_root_handler_reference(dotted_reference(function.func), root)
+        reference = source_root_handler_reference(function.handler_reference(), root)
     except HandlerReferenceError as exc:
         raise DeploymentOperationError(str(exc)) from exc
     return reference.handler, reference.archive_prefix
@@ -444,5 +463,6 @@ __all__ = [
     "DeploymentSubmission",
     "deploy_functions",
     "prepare_function_release",
+    "prepare_spec",
     "resolve_deployment",
 ]

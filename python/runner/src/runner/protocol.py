@@ -31,6 +31,7 @@ from shared.tasks import TaskStatus
 from runner import routed_output
 from runner.handler_loading import load_handler
 from runner.hooks import hooks_from_frame, run_startup_hooks, run_task_hooks, startup_context
+from runner.http import serve_http
 from runner.invocation import cloudpickle_bytes, invoke_handler
 from runner.protocol_models import (
     Arguments,
@@ -103,6 +104,16 @@ class Connection:
             if payload:
                 self._sock.sendall(payload)
 
+    def wait_closed(self) -> None:
+        """Block until the supervisor closes the socket; HTTP workers get no frames."""
+
+        while True:
+            try:
+                if not self._sock.recv(4096):
+                    return
+            except OSError:
+                return
+
     def _read_prefix(self) -> bytearray | None:
         """The next frame's header length bytes, or None on a clean close."""
 
@@ -124,7 +135,7 @@ class Connection:
 
 
 def serve(connection: Connection) -> int:
-    """Load the handler, then run invocations until the supervisor closes."""
+    """Load the handler, then run invocations or serve HTTP until the supervisor closes."""
 
     frame = connection.receive()
     if frame is None:
@@ -133,7 +144,7 @@ def serve(connection: Connection) -> int:
     if not isinstance(load, Load):
         raise ProtocolError("expected load as the first frame")
     hooks = hooks_from_frame(load.hooks)
-    if load.concurrency > 1:
+    if load.concurrency > 1 or load.http is not None:
         # Before user code loads, so module-level loggers write through it.
         routed_output.install()
     try:
@@ -146,6 +157,8 @@ def serve(connection: Connection) -> int:
         connection.send(LoadFailed(type="load_failed", error=_runner_error(exc)))
         return LOAD_FAILED_EXIT
     _flush_output()
+    if load.http is not None:
+        return serve_http(connection, handler, load.http)
     connection.send(Loaded(type="loaded"))
     attempt = _Attempts(handler, hooks, load.handler)
     if load.concurrency > 1:

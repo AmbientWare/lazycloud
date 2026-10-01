@@ -90,7 +90,7 @@ from lazycloud.session.task import FunctionCall, Task, parent_task_id, task_inpu
 from lazycloud.terminal import Terminal, TerminalStep
 
 if TYPE_CHECKING:
-    from shared.api import Deployment
+    from shared.api import Deployment, Preview
 
 
 # Inputs per submit request; the API rejects larger batches.
@@ -303,7 +303,6 @@ class Function(Generic[P, R]):
                 volume.config is not None and volume.config.get("auth_mode") != "secret_references"
                 for volume in self.volumes
             ),
-            "authorized": self.authorized is not DEFAULT_FUNCTION_AUTHORIZED,
             "docker_enabled": self.docker_enabled,
             "metadata": bool(self.metadata),
         }
@@ -312,6 +311,10 @@ class Function(Generic[P, R]):
         if policy.retry_on_statuses != DEFAULT_RETRYABLE_TASK_STATUS_SEQUENCE:
             found.append("retry_policy.retry_on_statuses")
         return found
+
+    def handler_reference(self) -> str:
+        """The `module:qualname` the runner imports."""
+        return dotted_reference(self.func)
 
     def require_supported(self) -> None:
         unsupported = self.unsupported_options()
@@ -361,6 +364,8 @@ class Function(Generic[P, R]):
             spec["secrets"] = list(dict.fromkeys(self.secrets))
         if self.in_process:
             spec["in_process"] = True
+        if self.authorized is False:
+            spec["authorized"] = False
         try:
             callback_url = normalize_callback_url(self.callback_url)
             hooks = self._lifecycle_hooks()
@@ -434,8 +439,17 @@ class Function(Generic[P, R]):
             terminal=self.terminal,
         )[0]
 
-    def serve(self, **_: object) -> None:
-        raise UnsupportedFeatureError(f"function {self.resource_name}", ["serve"])
+    def serve(self, *, timeout: int = 0, sync_dir: str | None = None) -> Preview:
+        """Run a preview container that follows the working tree until Ctrl+C.
+
+        `.remote()`, `.spawn()`, `.map()` and `lazycloud run` from this machine
+        go to the preview while it runs.
+        """
+        from lazycloud.abstractions.serve import serve_workload
+
+        return serve_workload(
+            self, kind="function", authorized=True, timeout=timeout, sync_dir=sync_dir or "."
+        )
 
     def shell(self, **_: object) -> None:
         raise UnsupportedFeatureError(f"function {self.resource_name}", ["shell"])
@@ -564,7 +578,10 @@ class Function(Generic[P, R]):
         self.require_supported()
         client, workspace = self._session()
         if is_local():
-            # Prepared before any Task step so its output reads in order.
+            # A preview that stopped since its record was written is
+            # forgotten here, and the working-tree release is prepared before
+            # any Task step so its output reads in order.
+            self._preview(workspace, client)
             self._release_id(workspace)
         return client, workspace
 
@@ -601,11 +618,32 @@ class Function(Generic[P, R]):
         return tasks
 
     def _release_id(self, workspace: str) -> UUID:
-        """The working-tree release this process calls, prepared on first use."""
+        """The release this process calls.
+
+        That is the preview `lazycloud serve` runs from this machine, or else
+        the working-tree release, prepared on first use.
+        """
+        preview = self._preview(workspace)
+        if preview is not None:
+            return preview
         if self._release is None or self._release[0] != workspace:
             self.prepare(workspace=workspace)
         assert self._release is not None
         return self._release[1]
+
+    def _preview(self, workspace: str, client: ApiClient | None = None) -> UUID | None:
+        """The running preview of this function started from this machine, if any."""
+        from lazycloud.abstractions.serve import read_serve_preview
+
+        record = read_serve_preview(
+            kind="function",
+            name=self.resource_name,
+            app=self._app_slug,
+            workspace=workspace,
+            endpoint=self._session(workspace)[0].endpoint,
+            client=client,
+        )
+        return UUID(record.preview_id) if record is not None else None
 
     def _session(self, workspace: str | None = None) -> tuple[ApiClient, str]:
         config = resolve_control_client_config(workspace=workspace or self.workspace)

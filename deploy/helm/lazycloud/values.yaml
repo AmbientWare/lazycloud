@@ -26,8 +26,10 @@ externalSecrets:
 
 # Non-secret settings shared by the server, scheduler and migrations, as
 # LAZYCLOUD_* environment variables. The chart sets the listen addresses
-# (API 8080, hosts 8081, probes 8090, metrics 9090), the master key path and
-# the drain delay itself.
+# (API 8080, hosts 8081, edge 8082, edge relay 8083 on the pod IP, probes
+# 8090, metrics 9090), the master key path and the drain delay itself. Set
+# LAZYCLOUD_EDGE_URL, the public base URL workloads answer under, and
+# LAZYCLOUD_CLOUDFLARE_ZONE_ID for custom domains.
 config: {}
 
 # Ingress to the release's pods is denied except from these sources.
@@ -36,6 +38,9 @@ networkPolicy:
   # NetworkPolicy peers that reach the server's API port, such as the
   # namespace of the public ingress connector.
   ingressFrom: []
+  # NetworkPolicy peers that reach the edge's workload traffic port, such as
+  # the namespace of the public ingress connector.
+  edgeFrom: []
   # Agent host CIDRs that reach the host port.
   hostCIDRs: []
   # Node CIDRs the kubelet probes the health ports from.
@@ -84,6 +89,10 @@ server:
     requests: { cpu: 250m, memory: 256Mi }
     limits: { memory: 1Gi }
   service:
+    type: ClusterIP
+    annotations: {}
+  # Workload traffic, which the public ingress connector forwards.
+  edgeService:
     type: ClusterIP
     annotations: {}
   # Agents connect to this port. The host session is plaintext gRPC until

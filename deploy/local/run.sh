@@ -73,7 +73,7 @@ start() {
     >"$state/logs/agent.log" 2>&1 &
   echo $! >"$state/agent.pid"
 
-  echo "API http://127.0.0.1:8080, workspace dev"
+  echo "API http://127.0.0.1:8080, workspace dev; workloads answer under http://<host>.lazycloud.localhost:8082"
   echo "export LAZYCLOUD_ENDPOINT=http://127.0.0.1:8080 LAZYCLOUD_WORKSPACE=dev LAZYCLOUD_TOKEN=$(cat "$state/token")"
 }
 

@@ -358,6 +358,12 @@ func AdmitCustomDomain(ctx context.Context, tx pgx.Tx, workspace uuid.UUID) erro
 	return admitCapability(ctx, q, owner, func(e Entitlements) bool { return e.CustomDomains }, "custom domains require the Team plan")
 }
 
+// AdmitAccountCustomDomain refuses registering a custom domain to an
+// account whose plan has none; registrations belong to accounts.
+func AdmitAccountCustomDomain(ctx context.Context, tx pgx.Tx, user uuid.UUID) error {
+	return admitCapability(ctx, New(tx), user, func(e Entitlements) bool { return e.CustomDomains }, "custom domains require the Team plan")
+}
+
 // AdmitConnectedCloud refuses connecting a cloud account to an account whose
 // plan does not include it; Business does.
 func AdmitConnectedCloud(ctx context.Context, tx pgx.Tx, user uuid.UUID) error {

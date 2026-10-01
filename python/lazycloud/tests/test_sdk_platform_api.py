@@ -548,16 +548,88 @@ def test_deploy_fails_with_the_build_id_when_an_image_build_fails(
     assert fake_api.calls("POST", "/v1/workspaces/team/apps/reports/deployments") == []
 
 
-def test_an_app_with_an_endpoint_names_it_instead_of_deploying(
+def test_deploy_maps_endpoint_and_asgi_options_to_http_specs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_api: FakeApi
 ) -> None:
-    source = REPORTS + "\n@app.endpoint(name='api')\ndef api(): return {}\n"
+    source = (
+        REPORTS
+        + "\n@app.endpoint(name='api', route='/count', methods=['post'], workers=2, concurrency=8,"
+        + " authorized=False)\ndef api(text: str) -> dict: return {}\n"
+        + "\nasync def web(scope, receive, send): ...\n"
+        + "service = app.asgi(name='service', concurrent_requests=4, keep_warm_seconds=60)(web)\n"
+    )
     reports = _project(tmp_path, monkeypatch, source)
+    _serve_deployment(fake_api, stored=set())
 
-    with pytest.raises(UnsupportedFeatureError, match="endpoint:api"):
-        reports.app.deploy()
+    reports.app.deploy()
 
-    assert fake_api.requests == []
+    (request,) = fake_api.calls("POST", "/v1/workspaces/team/apps/reports/deployments")
+    specs = {spec["name"]: spec for spec in request.json()["functions"]}
+    api, service = specs["api"], specs["service"]
+    assert api["handler"] == "reports:api"
+    assert api["http"] == {
+        "kind": "endpoint",
+        "route": "/count",
+        "methods": ["POST"],
+        "workers": 2,
+    }
+    assert api["authorized"] is False
+    assert (api["concurrency"], api["timeout_seconds"], api["keep_warm_seconds"]) == (8, 180, 180)
+    assert api["max_pending_tasks"] == 100
+    assert api["retry_policy"]["max_attempts"] == 1
+    assert service["handler"] == "reports:web"
+    assert service["http"] == {"kind": "asgi", "workers": 1}
+    assert "authorized" not in service
+    assert (service["concurrency"], service["keep_warm_seconds"]) == (4, 60)
+
+
+@pytest.mark.parametrize("authorized", [True, False])
+def test_endpoint_request_sends_the_token_only_to_an_authorized_deployment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_api: FakeApi, authorized: bool
+) -> None:
+    source = (
+        REPORTS
+        + "\n@app.endpoint(name='api', route='/count')\ndef api(text: str) -> dict: return {}\n"
+    )
+    reports = _project(tmp_path, monkeypatch, source)
+    spec: dict[str, object] = {
+        "name": "api",
+        "handler": "reports:api",
+        "source": {"sha256": "0" * 64},
+        "image": {"python_version": "3.12"},
+        "resources": {"cpu_millis": 250, "memory_mib": 256},
+        "http": {"kind": "endpoint"},
+        "authorized": authorized,
+    }
+    url = f"{fake_api.url}/count"
+    fake_api.route("GET", "/v1/workspaces/team/apps/reports/endpoints/api")(
+        lambda request: json_reply(
+            {
+                "name": "api",
+                "app": "reports",
+                "kind": "endpoint",
+                "state": "active",
+                "release": {
+                    "id": RELEASE_ID,
+                    "function": "api",
+                    "version": 1,
+                    "created_at": NOW,
+                    "spec": spec,
+                },
+                "url": url,
+                "version_url": url,
+                "release_url": url,
+            }
+        )
+    )
+    fake_api.route("POST", "/count")(lambda request: json_reply({"words": 1}))
+
+    response = reports.api.target("deployed").request(text="one")
+
+    assert response.status_code == 200
+    (call,) = fake_api.calls("POST", "/count")
+    sent = {key.lower(): value for key, value in call.headers.items()}
+    assert ("authorization" in sent) is authorized
 
 
 def test_remote_streams_output_resumes_dropped_logs_and_returns_the_value(

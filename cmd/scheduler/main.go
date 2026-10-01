@@ -204,6 +204,12 @@ func run(ctx context.Context, logger *slog.Logger) error {
 			if err != nil {
 				logger.ErrorContext(ctx, "planning pass", "error", err)
 			}
+			serving, err := exec.PlanServing(ctx, logger)
+			if err != nil {
+				logger.ErrorContext(ctx, "serving planning pass", "error", err)
+			}
+			result.Skipped = result.Skipped || serving.Skipped
+			result.Created += serving.Created
 			if result.Created > 0 {
 				select {
 				case placeNow <- struct{}{}:
