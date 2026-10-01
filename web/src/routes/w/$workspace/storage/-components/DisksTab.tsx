@@ -12,12 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { Schemas } from "@/lib/api/client";
 import { formatBytes } from "@/lib/format";
-import {
-  deleteDisk,
-  disksQueryOptions,
-  selectDiskList,
-  type HeldDisk,
-} from "@/lib/queries/storage";
+import { deleteDisk, disksQueryOptions } from "@/lib/queries/storage";
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 
 const STATUS_LABELS: Record<Schemas["DiskStatus"], string> = {
@@ -28,7 +23,8 @@ const STATUS_LABELS: Record<Schemas["DiskStatus"], string> = {
 
 export function DisksTab({ workspace }: { workspace: string }) {
   const query = useInfiniteQuery(disksQueryOptions(workspace));
-  const { items: disks, nextCursor } = selectDiskList(query.data, query.hasNextPage);
+  const disks = query.data?.pages.flatMap((page) => page.disks) ?? [];
+  const nextCursor = query.hasNextPage ? query.data?.pages.at(-1)?.next_cursor : undefined;
 
   return (
     <ContentTransition pending={query.isPending} className="min-h-full lg:h-full lg:min-h-0">
@@ -55,8 +51,8 @@ export function DisksTab({ workspace }: { workspace: string }) {
             <span />
           </div>
           <div className="divide-y divide-border/60">
-            {disks.map((item) => (
-              <DiskRow key={item.disk.id} workspace={workspace} item={item} />
+            {disks.map((disk) => (
+              <DiskRow key={disk.id} workspace={workspace} disk={disk} />
             ))}
           </div>
           <InfiniteScrollBoundary
@@ -72,8 +68,7 @@ export function DisksTab({ workspace }: { workspace: string }) {
   );
 }
 
-function DiskRow({ workspace, item }: { workspace: string; item: HeldDisk }) {
-  const { disk, holder } = item;
+function DiskRow({ workspace, disk }: { workspace: string; disk: Schemas["Disk"] }) {
   const queryClient = useQueryClient();
   const [confirming, setConfirming] = useState(false);
   const remove = useMutation({
@@ -94,7 +89,7 @@ function DiskRow({ workspace, item }: { workspace: string; item: HeldDisk }) {
             updated <LiveRelativeTime value={disk.updated_at} />
           </span>
         </span>
-        <DiskWorkload workspace={workspace} holder={holder} />
+        <DiskWorkload workspace={workspace} holder={disk.holder} />
         <span className="mono text-right tabular-nums">{formatBytes(disk.size_bytes)}</span>
         <span className="mono text-right tabular-nums text-muted-foreground">
           {formatBytes(disk.stored_bytes)}
@@ -146,16 +141,16 @@ function DiskWorkload({
   holder,
 }: {
   workspace: string;
-  holder: Schemas["Container"] | null;
+  holder: Schemas["WorkloadRef"] | undefined;
 }) {
   if (!holder) return <span className="text-muted-foreground">None</span>;
   return (
     <Link
       to="/w/$workspace/apps/$appId/workloads/$kind/$name"
-      params={{ workspace, appId: holder.app, kind: "function", name: holder.function }}
+      params={{ workspace, appId: holder.app, kind: holder.kind, name: holder.name }}
       className="min-w-0 truncate hover:text-foreground hover:underline"
     >
-      <span className="mono text-foreground">{holder.function}</span>{" "}
+      <span className="mono text-foreground">{holder.name}</span>{" "}
       <span className="text-muted-foreground">pod in {holder.app}</span>
     </Link>
   );

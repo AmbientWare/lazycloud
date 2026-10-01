@@ -10,6 +10,7 @@ const secret = {
   name: "API_KEY",
   created_at: "2026-09-07T00:00:00Z",
   updated_at: "2026-09-07T00:00:00Z",
+  used_by: [],
 };
 
 beforeEach(() => {

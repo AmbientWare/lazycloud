@@ -183,7 +183,7 @@ function SecretRow({
           Rotated <LiveRelativeTime value={secret.updated_at} />
         </p>
         <div className="mt-1 pl-5.5">
-          <ResourceWorkloadLinks workspace={workspace} workloads={[]} />
+          <ResourceWorkloadLinks workspace={workspace} workloads={secret.used_by} />
         </div>
       </div>
 

@@ -1,11 +1,6 @@
 import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
 
-import { api, ApiError, ok, type Schemas } from "@/lib/api/client";
-import {
-  nextListCursor,
-  selectInfiniteList,
-  type InfiniteListQueryData,
-} from "@/lib/queries/infinite-list";
+import { api, ok, type Schemas } from "@/lib/api/client";
 
 import { workspaceLiveQueryMeta, workspaceQueryKeys } from "./workspace-keys";
 
@@ -78,63 +73,22 @@ export function deleteSecret(workspace: string, name: string) {
 
 const DISK_PAGE_SIZE = 50;
 
-/** A disk and the container holding it, which names the workload using it. */
-export type HeldDisk = {
-  disk: Schemas["Disk"];
-  holder: Schemas["Container"] | null;
-};
-
-async function holderContainer(
-  workspace: string,
-  disk: Schemas["Disk"],
-): Promise<Schemas["Container"] | null> {
-  if (!disk.holder_container_id) return null;
-  try {
-    return await ok(
-      api.GET("/v1/workspaces/{workspace}/containers/{container}", {
-        params: { path: { workspace, container: disk.holder_container_id } },
-      }),
-    );
-  } catch (error) {
-    // A holder that has since been removed leaves the disk without a workload.
-    if (error instanceof ApiError && error.status === 404) return null;
-    throw error;
-  }
-}
-
 export function disksQueryOptions(workspace: string) {
   return infiniteQueryOptions({
     queryKey: workspaceQueryKeys.storage.disks(workspace),
     initialPageParam: "",
-    queryFn: async ({ pageParam }): Promise<{ data: HeldDisk[]; next: string }> => {
-      const page = await ok(
+    queryFn: ({ pageParam }) =>
+      ok(
         api.GET("/v1/workspaces/{workspace}/disks", {
           params: {
             path: { workspace },
             query: { limit: DISK_PAGE_SIZE, cursor: pageParam || undefined },
           },
         }),
-      );
-      return {
-        data: await Promise.all(
-          page.disks.map(async (disk) => ({
-            disk,
-            holder: await holderContainer(workspace, disk),
-          })),
-        ),
-        next: page.next_cursor ?? "",
-      };
-    },
-    getNextPageParam: nextListCursor,
+      ),
+    getNextPageParam: (page) => page.next_cursor,
     meta: workspaceLiveQueryMeta(true),
   });
-}
-
-export function selectDiskList(
-  data: InfiniteListQueryData<HeldDisk> | undefined,
-  hasNextPage: boolean | undefined,
-) {
-  return selectInfiniteList(data, hasNextPage, (item) => item.disk.id);
 }
 
 export function deleteDisk(workspace: string, disk: string) {
