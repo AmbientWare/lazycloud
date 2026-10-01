@@ -145,6 +145,13 @@ func (s *Server) Session(stream grpc.BidiStreamingServer[hostproto.HostMessage, 
 			if err := sess.sync(ctx); err != nil {
 				return err
 			}
+			// A removal wakes the session too; ending it at once makes the
+			// agent find its credential revoked without waiting for a touch.
+			if current, err := s.compute.Touch(ctx, host, epoch); err != nil {
+				return s.grpcError(ctx, err)
+			} else if !current {
+				return status.Error(codes.Aborted, "a newer session replaced this one")
+			}
 		case <-touch.C:
 			current, err := s.compute.Touch(ctx, host, epoch)
 			if err != nil {
