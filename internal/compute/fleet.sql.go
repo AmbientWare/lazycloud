@@ -527,26 +527,28 @@ func (q *Queries) InsertCooldown(ctx context.Context, arg InsertCooldownParams) 
 
 const insertRequestedHost = `-- name: InsertRequestedHost :one
 insert into hosts (name, state, kind, provider, connection_id, phase, phase_message, cpu_millis, memory_bytes,
-                   gpu_type, gpu_count, region, availability_zone, instance_type, market, hourly_micros)
+                   gpu_type, gpu_count, region, availability_zone, availability_zone_id, instance_type, market,
+                   hourly_micros)
 values ($1, 'offline', $2, 'aws', $3, 'requested', 'Waiting for the machine to be launched',
-        $4, $5, $6, $7, $8, $9, $10, $11,
-        $12)
+        $4, $5, $6, $7, $8, $9, $10,
+        $11, $12, $13)
 returning id
 `
 
 type InsertRequestedHostParams struct {
-	Name             string
-	Kind             string
-	ConnectionID     *uuid.UUID
-	CpuMillis        int64
-	MemoryBytes      int64
-	GpuType          string
-	GpuCount         int32
-	Region           string
-	AvailabilityZone string
-	InstanceType     string
-	Market           *string
-	HourlyMicros     *int64
+	Name               string
+	Kind               string
+	ConnectionID       *uuid.UUID
+	CpuMillis          int64
+	MemoryBytes        int64
+	GpuType            string
+	GpuCount           int32
+	Region             string
+	AvailabilityZone   string
+	AvailabilityZoneID string
+	InstanceType       string
+	Market             *string
+	HourlyMicros       *int64
 }
 
 func (q *Queries) InsertRequestedHost(ctx context.Context, arg InsertRequestedHostParams) (uuid.UUID, error) {
@@ -560,6 +562,7 @@ func (q *Queries) InsertRequestedHost(ctx context.Context, arg InsertRequestedHo
 		arg.GpuCount,
 		arg.Region,
 		arg.AvailabilityZone,
+		arg.AvailabilityZoneID,
 		arg.InstanceType,
 		arg.Market,
 		arg.HourlyMicros,

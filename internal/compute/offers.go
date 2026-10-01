@@ -141,6 +141,7 @@ type Offer struct {
 	Type   InstanceType
 	Region string
 	Zone   string
+	ZoneID string
 	Market Market
 	// HourlyMicros is the expected price.
 	HourlyMicros int64
@@ -158,7 +159,7 @@ func (o Offer) usable() (int64, int64) {
 func (o Offer) capacity(target Target) HostCapacity {
 	cpu, memory := o.usable()
 	return HostCapacity{
-		Kind: target.Kind, Provider: ProviderAWS, Connection: target.Connection, Region: o.Region, Zone: o.Zone,
+		Kind: target.Kind, Provider: ProviderAWS, Connection: target.Connection, Region: o.Region, Zone: o.Zone, ZoneID: o.ZoneID,
 		Market: o.Market, GPUType: o.Type.GPU, GPUCount: o.Type.GPUCount,
 		CPUMillis: cpu, MemoryBytes: memory, FreeCPUMillis: cpu, FreeMemoryBytes: memory, FreeGPUs: o.Type.GPUCount,
 	}
@@ -187,10 +188,10 @@ func offersFor(r Requirement, regions map[string]Network, cooled func(region, in
 		if !ok || (r.Region != "" && ProductRegion(region) != r.Region) {
 			continue
 		}
-		zone := ""
+		var zone Subnet
 		if r.Zone != "" {
-			zone = zoneIn(network, r.Zone)
-			if zone == "" {
+			var ok bool
+			if zone, ok = zoneIn(network, r.Zone); !ok {
 				continue
 			}
 		}
@@ -209,7 +210,7 @@ func offersFor(r Requirement, regions map[string]Network, cooled func(region, in
 				if cooled(region, t.Name, market) {
 					continue
 				}
-				o := Offer{Type: t, Region: region, Zone: zone, Market: market, HourlyMicros: price(t, region, market)}
+				o := Offer{Type: t, Region: region, Zone: zone.Zone, ZoneID: zone.ZoneID, Market: market, HourlyMicros: price(t, region, market)}
 				if cpu, memory := o.usable(); cpu < r.CPUMillis || memory < r.MemoryBytes {
 					continue
 				}
@@ -243,14 +244,14 @@ func price(t InstanceType, region string, market Market) int64 {
 	return p
 }
 
-// zoneIn returns the zone name in network that matches a zone name or id.
-func zoneIn(network Network, zone string) string {
+// zoneIn returns a subnet of network in the zone a name or id names.
+func zoneIn(network Network, zone string) (Subnet, bool) {
 	for _, s := range network.Subnets {
 		if s.Zone == zone || s.ZoneID == zone {
-			return s.Zone
+			return s, true
 		}
 	}
-	return ""
+	return Subnet{}, false
 }
 
 // subnetFor picks the subnet to launch in: one in zone when set, otherwise

@@ -47,10 +47,11 @@ where cc.phase in ('ready', 'reconnect_pending', 'retiring_authorization');
 
 -- name: InsertRequestedHost :one
 insert into hosts (name, state, kind, provider, connection_id, phase, phase_message, cpu_millis, memory_bytes,
-                   gpu_type, gpu_count, region, availability_zone, instance_type, market, hourly_micros)
+                   gpu_type, gpu_count, region, availability_zone, availability_zone_id, instance_type, market,
+                   hourly_micros)
 values (@name, 'offline', @kind, 'aws', sqlc.narg(connection_id), 'requested', 'Waiting for the machine to be launched',
-        @cpu_millis, @memory_bytes, @gpu_type, @gpu_count, @region, @availability_zone, @instance_type, @market,
-        @hourly_micros)
+        @cpu_millis, @memory_bytes, @gpu_type, @gpu_count, @region, @availability_zone, @availability_zone_id,
+        @instance_type, @market, @hourly_micros)
 returning id;
 
 -- name: SetCapacityWaits :execrows
