@@ -1,7 +1,8 @@
 // Package supervisor is PID 1 in every workload container. It runs one runner
-// process per slot over the local runner protocol, captures each attempt's
-// output, kills a slot's process group on cancellation and reports to the
-// agent over the container's ContainerLink socket.
+// process per slot over the local runner protocol, or a pod's command,
+// captures output, kills a slot's process group on cancellation and reports
+// to the agent over the container's ContainerLink socket. It serves the
+// control API: processes, files, shells, SSH and port tunnels.
 package supervisor
 
 import (
@@ -10,12 +11,14 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
@@ -66,13 +69,21 @@ type Supervisor struct {
 	loaded map[*slot]bool
 	runs   chan *hostproto.RunAttempt
 	// queued maps attempts waiting for a slot to whether they were cancelled.
-	queued         map[string]bool
-	ready          bool
+	queued map[string]bool
+	ready  bool
+	// readySlots is the slot count reported ready: every runner slot, or a
+	// pod's one.
+	readySlots     int32
 	loadFailedSent bool
 	draining       bool
 
 	// workers are the HTTP workers of an HTTP workload.
 	workers httpWorkers
+
+	// sockets are the ones served on the host's side of the container;
+	// detached says a Detach closed them until the next connection.
+	sockets  []hostSocket
+	detached atomic.Bool
 
 	configured chan struct{}
 	drain      chan struct{}
@@ -98,6 +109,12 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	conn, err := grpc.NewClient("unix:"+cfg.Socket,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		// The link comes back within seconds of an agent restart or a
+		// checkpoint.
+		grpc.WithConnectParams(grpc.ConnectParams{
+			Backoff:           backoff.Config{BaseDelay: minBackoff, Multiplier: 1.6, Jitter: 0.2, MaxDelay: maxBackoff},
+			MinConnectTimeout: time.Second,
+		}),
 		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(MaxMessageBytes), grpc.MaxCallSendMsgSize(MaxMessageBytes)),
 	)
 	if err != nil {
@@ -151,6 +168,43 @@ func (s *Supervisor) work(ctx context.Context) error {
 	s.mu.Lock()
 	cfg, slots, runs := s.configure, s.slots, s.runs
 	s.mu.Unlock()
+	if root := cfg.GetPod().GetRoot(); root != "" {
+		if err := enterRoot(root); err != nil {
+			s.loadFailed(&hostproto.RunnerError{Type: "DevboxRootError", Message: err.Error()})
+			return ErrLoadFailed
+		}
+		// A Docker daemon keeps the privileged container's capabilities.
+		if !cfg.GetDocker() {
+			if err := dropMountPrivilege(); err != nil {
+				s.loadFailed(&hostproto.RunnerError{Type: "DevboxRootError", Message: err.Error()})
+				return ErrLoadFailed
+			}
+		}
+	}
+	if path := cfg.GetControlSocket(); path != "" {
+		ctl, err := newControl(s.log, s.children, cfg.GetPod().GetSsh())
+		if err == nil {
+			err = ctl.listen(ctx, path)
+		}
+		if err != nil {
+			s.loadFailed(&hostproto.RunnerError{Type: "SupervisorStartError", Message: err.Error()})
+			return ErrLoadFailed
+		}
+		defer ctl.close()
+		s.holdSocket(ctl)
+		defer s.dropSocket(ctl)
+	}
+	if cfg.GetDocker() {
+		docker, err := s.startDocker(ctx)
+		if err != nil {
+			s.loadFailed(&hostproto.RunnerError{Type: "DockerStartError", Message: err.Error()})
+			return ErrLoadFailed
+		}
+		defer docker.stop()
+	}
+	if cfg.GetPod() != nil {
+		return s.runPod(ctx, cfg.GetPod())
+	}
 	s.log.Info("starting runners", "slots", len(slots), "handler", cfg.GetHandler(), "http", cfg.GetHttp() != nil)
 	var front *httpFront
 	if cfg.GetHttp() != nil {
@@ -160,10 +214,9 @@ func (s *Supervisor) work(ctx context.Context) error {
 			return ErrLoadFailed
 		}
 	}
-	var served sync.WaitGroup
 	var serveErr error
 	if front != nil {
-		served.Go(func() { serveErr = front.serve() })
+		s.holdSocket(front)
 	}
 	g, gctx := errgroup.WithContext(ctx)
 	// HTTP workers admit concurrent requests themselves.
@@ -177,8 +230,8 @@ func (s *Supervisor) work(ctx context.Context) error {
 	err := g.Wait()
 	if front != nil {
 		// Every slot has finished its requests.
-		front.close()
-		served.Wait()
+		s.dropSocket(front)
+		serveErr = front.close()
 	}
 	if err != nil {
 		return fmt.Errorf("run slots: %w", err)
@@ -218,6 +271,7 @@ func (s *Supervisor) connect(ctx context.Context, client hostproto.ContainerLink
 	if err != nil {
 		return false, fmt.Errorf("connect to agent: %w", err)
 	}
+	s.reattach(ctx)
 	if ready := s.readyMessage(); ready != nil {
 		if err := stream.Send(ready); err != nil {
 			return true, fmt.Errorf("send slots ready: %w", err)
@@ -290,9 +344,61 @@ func (s *Supervisor) handle(command *hostproto.SupervisorCommand) {
 		s.onDrain()
 	case *hostproto.SupervisorCommand_Reload:
 		s.onReload()
+	case *hostproto.SupervisorCommand_Detach:
+		s.onDetach()
 	default:
 		s.log.Warn("ignoring unknown supervisor command")
 	}
+}
+
+// hostSocket is a socket served on the host's side of the container,
+// which no checkpoint can hold.
+type hostSocket interface {
+	release()
+	reopen(ctx context.Context) error
+}
+
+func (s *Supervisor) holdSocket(h hostSocket) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sockets = append(s.sockets, h)
+}
+
+func (s *Supervisor) dropSocket(h hostSocket) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sockets = slices.DeleteFunc(s.sockets, func(held hostSocket) bool { return held == h })
+}
+
+// onDetach closes the host sockets and their connections for a checkpoint.
+// The agent closes the link once Detached arrives, and the next connection
+// opens the sockets again.
+func (s *Supervisor) onDetach() {
+	s.mu.Lock()
+	sockets := slices.Clone(s.sockets)
+	s.mu.Unlock()
+	s.detached.Store(true)
+	for _, h := range sockets {
+		h.release()
+	}
+	s.log.Info("detached for a checkpoint")
+	s.out.push(&hostproto.SupervisorMessage{Body: &hostproto.SupervisorMessage_Detached{Detached: &hostproto.Detached{}}})
+}
+
+// reattach opens again the sockets a Detach closed.
+func (s *Supervisor) reattach(ctx context.Context) {
+	if !s.detached.Swap(false) {
+		return
+	}
+	s.mu.Lock()
+	sockets := slices.Clone(s.sockets)
+	s.mu.Unlock()
+	for _, h := range sockets {
+		if err := h.reopen(ctx); err != nil {
+			s.log.Error("reopening a socket after a checkpoint failed", "error", err)
+		}
+	}
+	s.log.Info("reattached after a checkpoint")
 }
 
 // onConfigure creates the slots. The agent sends Configure on every
@@ -303,9 +409,14 @@ func (s *Supervisor) onConfigure(c *hostproto.Configure) {
 	if s.configure != nil || s.draining {
 		return
 	}
-	n := max(1, int(c.GetSlots()))
 	s.configure = c
 	s.redact = newRedactor(c.GetSecretEnv())
+	if c.GetPod() != nil {
+		// A pod runs its command instead of runner slots.
+		close(s.configured)
+		return
+	}
+	n := max(1, int(c.GetSlots()))
 	s.runs = make(chan *hostproto.RunAttempt, n)
 	for range n {
 		sl := &slot{sup: s, buf: make([]byte, readChunk), reload: make(chan struct{}, 1)}
@@ -334,7 +445,7 @@ func (s *Supervisor) onRun(run *hostproto.RunAttempt) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	id := run.GetAttemptId()
-	if s.configure == nil || s.draining || s.configure.GetHttp() != nil {
+	if s.configure == nil || s.draining || s.configure.GetHttp() != nil || s.configure.GetPod() != nil {
 		s.out.push(finishedMessage(crashed(id, "NotAccepting", "the supervisor is not accepting attempts")))
 		return
 	}
@@ -417,7 +528,7 @@ func (s *Supervisor) slotLoaded(sl *slot) {
 	defer s.mu.Unlock()
 	s.loaded[sl] = true
 	if !s.ready && len(s.loaded) == len(s.slots) {
-		s.ready = true
+		s.ready, s.readySlots = true, int32(len(s.slots)) //nolint:gosec // slots come from an int32
 		s.out.push(&hostproto.SupervisorMessage{Body: &hostproto.SupervisorMessage_Ready{
 			Ready: &hostproto.SlotsReady{Slots: int32(len(s.slots))}, //nolint:gosec // slots come from an int32
 		}})
@@ -449,7 +560,7 @@ func (s *Supervisor) readyMessage() *hostproto.SupervisorMessage {
 	// outcomes only for attempts it counts as running.
 	running = append(running, s.out.unreportedAttempts()...)
 	return &hostproto.SupervisorMessage{Body: &hostproto.SupervisorMessage_Ready{Ready: &hostproto.SlotsReady{
-		Slots:           int32(len(s.slots)), //nolint:gosec // slots come from an int32
+		Slots:           s.readySlots,
 		RunningAttempts: running,
 	}}}
 }

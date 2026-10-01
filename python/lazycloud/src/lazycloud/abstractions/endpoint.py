@@ -11,7 +11,6 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Generic,
-    NoReturn,
     ParamSpec,
     Protocol,
     TypeAlias,
@@ -79,6 +78,7 @@ if TYPE_CHECKING:
     from shared.api import FunctionSpec as ApiFunctionSpec
 
     from lazycloud.abstractions.image import ImageBuildResult
+    from lazycloud.abstractions.shell import ShellSession
 
 P = ParamSpec("P")
 R = TypeVar("R")
@@ -393,8 +393,15 @@ class Endpoint(Generic[P, R]):
             ),
         )
 
-    def shell(self, **_: object) -> NoReturn:
-        raise UnsupportedFeatureError(f"endpoint {self.resource_name}", ["shell"])
+    def shell(
+        self,
+        *,
+        workspace: str | None = None,
+        container_id: str | None = None,
+        sync_dir: str | None = None,
+    ) -> ShellSession:
+        """Open a shell container of this endpoint's working-tree release, or `container_id`."""
+        return _shell_http(self, workspace=workspace, container_id=container_id, sync_dir=sync_dir)
 
     def set_handler(self, handler: str) -> None:
         self._handler_reference_override = handler
@@ -446,6 +453,30 @@ def _deploy_http(
         source_root=source_root,
         terminal=owner.terminal,
     )[0]
+
+
+def _shell_http(
+    owner: Endpoint[..., Any] | ASGI,
+    *,
+    workspace: str | None,
+    container_id: str | None,
+    sync_dir: str | None,
+) -> ShellSession:
+    from lazycloud.abstractions.shell import Shell
+    from lazycloud.control import api_client, require_workspace, resolve_control_client_config
+    from lazycloud.session.deployment import prepare_function_release
+
+    config = resolve_control_client_config(workspace=workspace, timeout_seconds=60)
+    shell = Shell(workspace=workspace)
+    if container_id:
+        return shell.create_existing(container_id, sync_dir=sync_dir)
+    release = prepare_function_release(
+        owner,  # type: ignore[arg-type]
+        client=api_client(config),
+        workspace=require_workspace(config),
+        terminal=owner.terminal,
+    )
+    return shell.create_standalone(str(release.id), sync_dir=sync_dir)
 
 
 @overload
@@ -803,8 +834,15 @@ class ASGI:
             timeout_seconds=timeout,
         )
 
-    def shell(self, **_: object) -> NoReturn:
-        raise UnsupportedFeatureError(f"{self._http_kind} {self.name}", ["shell"])
+    def shell(
+        self,
+        *,
+        workspace: str | None = None,
+        container_id: str | None = None,
+        sync_dir: str | None = None,
+    ) -> ShellSession:
+        """Open a shell container of this app's working-tree release, or `container_id`."""
+        return _shell_http(self, workspace=workspace, container_id=container_id, sync_dir=sync_dir)
 
     def set_handler(self, handler: str) -> None:
         self._handler_reference_override = handler

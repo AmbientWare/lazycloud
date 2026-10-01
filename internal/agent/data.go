@@ -179,11 +179,33 @@ func (d *dataLink) forward(ctx context.Context) {
 	defer cancelRequest()
 	in := receive(stream, &d.streams, cancelRequest)
 	head := first.GetHead()
+	c := d.a.lookup(head.GetContainerId())
 	switch kind := head.GetKind().(type) {
 	case *hostproto.RequestHead_Http:
-		d.serveHTTP(requestCtx, stream, in, d.a.lookup(head.GetContainerId()), kind.Http)
+		if c == nil || !c.servesHTTP() {
+			_ = stream.Send(forwardError(hostproto.ForwardErrorKind_FORWARD_ERROR_KIND_NOT_RUNNING, "the container does not serve HTTP on this host"))
+			break
+		}
+		forwardHTTP(requestCtx, stream, in, c.requests, "http://container", kind.Http, true)
+	case *hostproto.RequestHead_Control:
+		if c == nil || !c.reachable() {
+			_ = stream.Send(forwardError(hostproto.ForwardErrorKind_FORWARD_ERROR_KIND_NOT_RUNNING, "the container does not run on this host"))
+			break
+		}
+		forwardHTTP(requestCtx, stream, in, c.control, "http://container", kind.Control, false)
+	case *hostproto.RequestHead_Port:
+		port := kind.Port.GetPort()
+		if port < 1 || port > 65535 {
+			_ = stream.Send(forwardError(hostproto.ForwardErrorKind_FORWARD_ERROR_KIND_FAILED, fmt.Sprintf("port %d is not a TCP port", port)))
+			break
+		}
+		if c == nil || !c.reachable() {
+			_ = stream.Send(forwardError(hostproto.ForwardErrorKind_FORWARD_ERROR_KIND_NOT_RUNNING, "the container does not run on this host"))
+			break
+		}
+		forwardHTTP(requestCtx, stream, in, c.ports, "http://127.0.0.1:"+strconv.Itoa(int(port)), kind.Port.GetHttp(), false)
 	case *hostproto.RequestHead_Sync:
-		d.serveSync(stream, in, d.a.lookup(head.GetContainerId()))
+		d.serveSync(stream, in, c)
 	default:
 		_ = stream.Send(forwardError(hostproto.ForwardErrorKind_FORWARD_ERROR_KIND_FAILED, "the first message must be a request head"))
 	}
@@ -199,14 +221,12 @@ func (d *dataLink) forward(ctx context.Context) {
 	}
 }
 
-// serveHTTP forwards one request to the container's supervisor and streams
-// the response back. A 101 response turns the stream into a byte tunnel.
-func (d *dataLink) serveHTTP(ctx context.Context, stream forwardStream, in *inbound, c *container, head *hostproto.HttpRequest) {
-	if c == nil || !c.servesHTTP() {
-		_ = stream.Send(forwardError(hostproto.ForwardErrorKind_FORWARD_ERROR_KIND_NOT_RUNNING, "the container does not serve HTTP on this host"))
-		return
-	}
-	req, err := http.NewRequestWithContext(ctx, head.GetMethod(), "http://container"+head.GetUri(), in)
+// forwardHTTP sends one request over transport to origin, the supervisor's
+// HTTP or control socket or a port through it, and streams the response
+// back. A 101 response turns the stream into a byte tunnel. Only HTTP
+// workers answer busy.
+func forwardHTTP(ctx context.Context, stream forwardStream, in *inbound, transport http.RoundTripper, origin string, head *hostproto.HttpRequest, busy bool) {
+	req, err := http.NewRequestWithContext(ctx, head.GetMethod(), origin+head.GetUri(), in)
 	if err != nil {
 		_ = stream.Send(forwardError(hostproto.ForwardErrorKind_FORWARD_ERROR_KIND_FAILED, "invalid request: "+err.Error()))
 		return
@@ -225,7 +245,7 @@ func (d *dataLink) serveHTTP(ctx context.Context, stream forwardStream, in *inbo
 	if req.ContentLength == 0 || upgrade {
 		req.Body = http.NoBody
 	}
-	resp, err := c.requests.RoundTrip(req)
+	resp, err := transport.RoundTrip(req)
 	if err != nil {
 		kind := hostproto.ForwardErrorKind_FORWARD_ERROR_KIND_FAILED
 		var opErr *net.OpError
@@ -237,7 +257,7 @@ func (d *dataLink) serveHTTP(ctx context.Context, stream forwardStream, in *inbo
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if reason := resp.Header.Get(supervisor.BusyHeader); resp.StatusCode == http.StatusServiceUnavailable && reason != "" {
+	if reason := resp.Header.Get(supervisor.BusyHeader); busy && resp.StatusCode == http.StatusServiceUnavailable && reason != "" {
 		_ = stream.Send(forwardError(hostproto.ForwardErrorKind_FORWARD_ERROR_KIND_BUSY, reason))
 		return
 	}

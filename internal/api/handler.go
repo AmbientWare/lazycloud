@@ -54,6 +54,8 @@ type Owners struct {
 	Listener *database.Listener
 	// Edge describes HTTP workloads and owns custom domains.
 	Edge *edge.Edge
+	// SSH signs certificates and lists the pods that serve SSH.
+	SSH *execution.SSHKeys
 }
 
 // Config is what the transport needs beyond the owners.
@@ -117,7 +119,7 @@ func newServer(owners Owners, cfg Config, logger *slog.Logger, authenticated ope
 	}
 	cfg.PublicURL = strings.TrimRight(cfg.PublicURL, "/")
 	s := &Server{owners: owners, cfg: cfg, logger: logger}
-	strict := NewStrictHandlerWithOptions(s, []StrictMiddlewareFunc{nameOperation, withQuery}, StrictHTTPServerOptions{
+	strict := NewStrictHandlerWithOptions(s, []StrictMiddlewareFunc{nameOperation, withQuery, withRequest}, StrictHTTPServerOptions{
 		RequestErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {
 			s.writeError(w, r, fmt.Errorf("%w: %w", errInvalidRequest, err))
 		},
@@ -196,8 +198,21 @@ func requireContainerScheme(ctx context.Context, input *openapi3filter.Authentic
 // requireContainer admits only requests carrying a container principal.
 func (s *Server) requireContainer(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if _, ok := containerFrom(r.Context()); !ok {
+		p, ok := containerFrom(r.Context())
+		if !ok {
 			s.writeError(w, r, identity.ErrUnauthenticated)
+			return
+		}
+		// Pods, devboxes, sandboxes, instances and shell containers run code
+		// their owner did not deploy as a function; they hold no workspace
+		// authority.
+		route, err := s.owners.Execution.Route(r.Context(), execution.ContainerID(p.Container))
+		if err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		if route.Purpose != execution.PurposeServe || route.Kind == apitypes.WorkloadKindPod || route.Kind == apitypes.WorkloadKindSandbox {
+			writeJSONError(w, http.StatusForbidden, apitypes.Forbidden, "this container has no access to the platform API")
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -415,6 +430,7 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, secrets.ErrInvalidCursor), errors.Is(err, schedules.ErrInvalidCursor):
 		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, "the cursor is not from a previous page")
 	case endpointError(w, err):
+	case workloadError(w, err):
 	default:
 		s.logger.ErrorContext(r.Context(), "request failed", "method", r.Method, "path", r.URL.Path, "error", err)
 		writeJSONError(w, http.StatusInternalServerError, apitypes.Internal, "internal error")

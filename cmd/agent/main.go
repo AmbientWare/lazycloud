@@ -164,6 +164,8 @@ func newJoinFlags(name string) *joinFlags {
 	f.StringVar(&cfg.RuntimeDir, "runtime-dir", envOr("LAZYCLOUD_RUNTIME_DIR", filepath.Join(release, "runtime")), "managed Python runtimes, one directory per version")
 	f.StringVar(&cfg.SupervisorPath, "supervisor", envOr("LAZYCLOUD_SUPERVISOR", filepath.Join(release, "supervisor")), "static supervisor binary mounted into containers")
 	f.StringVar(&cfg.OCIRuntime, "oci-runtime", envOr("LAZYCLOUD_OCI_RUNTIME", "runc"), "Docker runtime for workload containers (runsc in production)")
+	f.BoolVar(&cfg.AllowPrivilegedDocker, "allow-privileged-docker", os.Getenv("LAZYCLOUD_ALLOW_PRIVILEGED_DOCKER") == "true",
+		"run docker_enabled containers privileged without runsc, which lets them escape to the host; only for trusted tenants")
 	f.StringVar(&cfg.GeeseFSPath, "geesefs", envOr("LAZYCLOUD_GEESEFS", filepath.Join(release, "geesefs")), "pinned GeeseFS binary that mounts volumes; volumes are unavailable without it")
 	f.StringVar(&cfg.MountImage, "mount-image", envOr("LAZYCLOUD_MOUNT_IMAGE", agent.DefaultMountImage), "image that runs GeeseFS for volume mounts")
 	f.StringVar(&cfg.BuildNetwork, "build-network", envOr("LAZYCLOUD_BUILD_NETWORK", "bridge"), "Docker network for image builds")

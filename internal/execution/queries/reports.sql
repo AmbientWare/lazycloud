@@ -1,5 +1,10 @@
 -- name: MarkContainerReady :exec
-update containers set state = 'ready', ready_at = now() where id = @id and state = 'starting';
+-- A container with a keep-warm window starts it now.
+update containers
+set state = 'ready', ready_at = now(),
+    active_until = case when keep_warm_seconds is null then active_until
+                        else greatest(active_until, now() + make_interval(secs => keep_warm_seconds)) end
+where id = @id and state = 'starting';
 
 -- name: ResetStartFailures :exec
 update releases set start_failures = 0, load_error = null

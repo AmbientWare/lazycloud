@@ -57,6 +57,8 @@ type Config struct {
 	// Observability stores container metrics and start stages; nil drops
 	// them.
 	Observability *observability.Observability
+	// SSH holds the keys of pods that serve SSH.
+	SSH *execution.SSHKeys
 }
 
 // Server implements hostproto.HostService.

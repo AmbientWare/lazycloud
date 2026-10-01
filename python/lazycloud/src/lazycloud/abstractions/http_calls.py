@@ -119,6 +119,11 @@ def http_function_spec(
         spec["volumes"] = [_volume_spec(volume) for volume in owner.volumes]
     if owner.authorized is False:
         spec["authorized"] = False
+    if getattr(owner, "docker_enabled", False):
+        spec["docker_enabled"] = True
+    if owner.checkpoint_enabled:
+        # The runner reports readiness, so the snapshot needs no probe.
+        spec["checkpoint"] = {}
     try:
         on_start = lifecycle_hook_references(owner.on_start)
     except (TypeError, ValueError) as exc:
@@ -150,8 +155,6 @@ def unsupported_http_options(owner: Any) -> list[str]:
             for volume in owner.volumes
         ),
         "callback_url": bool(owner.callback_url),
-        "checkpoint_enabled": bool(owner.checkpoint_enabled),
-        "docker_enabled": bool(getattr(owner, "docker_enabled", False)),
         "region": owner.region is not None,
         "availability_zone": bool(owner.availability_zone),
         "machine": owner.machine is not None,

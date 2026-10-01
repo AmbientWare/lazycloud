@@ -47,6 +47,9 @@ func PreviewKind(spec apitypes.FunctionSpec) apitypes.PreviewKind {
 // one transaction. A workload never deployed is created stopped, so its
 // preview serves without deploying it.
 func (c *Control) CreatePreview(ctx context.Context, workspace identity.WorkspaceID, user identity.UserID, app string, spec apitypes.FunctionSpec, timeoutSeconds int) (Preview, error) {
+	if spec.Pod != nil {
+		return Preview{}, &InvalidSpecError{Function: spec.Name, Reason: "pods, devboxes and sandboxes are not served; deploy or create them"}
+	}
 	resolved, err := Resolve(spec)
 	if err != nil {
 		return Preview{}, err

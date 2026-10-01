@@ -92,6 +92,8 @@ from lazycloud.terminal import Terminal, TerminalStep
 if TYPE_CHECKING:
     from shared.api import Deployment, Preview
 
+    from lazycloud.abstractions.shell import ShellSession
+
 
 # Inputs per submit request; the API rejects larger batches.
 MAX_SUBMIT_BATCH = 1000
@@ -303,7 +305,6 @@ class Function(Generic[P, R]):
                 volume.config is not None and volume.config.get("auth_mode") != "secret_references"
                 for volume in self.volumes
             ),
-            "docker_enabled": self.docker_enabled,
             "metadata": bool(self.metadata),
         }
         found = [name for name, present in declared.items() if present]
@@ -366,6 +367,8 @@ class Function(Generic[P, R]):
             spec["in_process"] = True
         if self.authorized is False:
             spec["authorized"] = False
+        if self.docker_enabled:
+            spec["docker_enabled"] = True
         try:
             callback_url = normalize_callback_url(self.callback_url)
             hooks = self._lifecycle_hooks()
@@ -451,8 +454,20 @@ class Function(Generic[P, R]):
             self, kind="function", authorized=True, timeout=timeout, sync_dir=sync_dir or "."
         )
 
-    def shell(self, **_: object) -> None:
-        raise UnsupportedFeatureError(f"function {self.resource_name}", ["shell"])
+    def shell(
+        self,
+        *,
+        workspace: str | None = None,
+        container_id: str | None = None,
+        sync_dir: str | None = None,
+    ) -> ShellSession:
+        """Open a shell container of this function's working-tree release, or `container_id`."""
+        from lazycloud.abstractions.shell import Shell
+
+        shell = Shell(workspace=workspace or self.workspace)
+        if container_id:
+            return shell.create_existing(container_id, sync_dir=sync_dir)
+        return shell.create_standalone(self.prepare(workspace=workspace), sync_dir=sync_dir)
 
     def remote(self, *args: P.args, **kwargs: P.kwargs) -> R:
         """Run one task remotely, print its output as it arrives and return its value.

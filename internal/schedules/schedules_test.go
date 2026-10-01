@@ -49,7 +49,7 @@ select id from ws`, source).Scan(&ws)
 func (f fixture) deploy(t *testing.T, cron *string, maxPending int) {
 	t.Helper()
 	spec := apitypes.FunctionSpec{
-		Name: "nightly", Handler: "app:nightly", Source: apitypes.SourceRef{Sha256: source},
+		Name: "nightly", Handler: new("app:nightly"), Source: apitypes.SourceRef{Sha256: source},
 		Image:     apitypes.ImageSpec{PythonVersion: apitypes.N312},
 		Resources: apitypes.Resources{CpuMillis: 1000, MemoryMib: 512},
 		Cron:      cron, MaxPendingTasks: &maxPending,
@@ -120,7 +120,7 @@ func TestDeployNormalizesAndReplacesTheSchedule(t *testing.T) {
 
 	var invalid *control.InvalidSpecError
 	_, err = f.control.Deploy(t.Context(), f.workspace, "reports", apitypes.DeploymentRequest{Functions: []apitypes.FunctionSpec{{
-		Name: "bad", Handler: "app:bad", Source: apitypes.SourceRef{Sha256: source},
+		Name: "bad", Handler: new("app:bad"), Source: apitypes.SourceRef{Sha256: source},
 		Image: apitypes.ImageSpec{PythonVersion: apitypes.N312}, Resources: apitypes.Resources{CpuMillis: 1000, MemoryMib: 512},
 		Cron: ptr("every 60m"),
 	}}})

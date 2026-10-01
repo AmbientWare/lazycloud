@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
@@ -32,6 +33,15 @@ type Container struct {
 	CreatedAt    time.Time
 	ReadyAt      *time.Time
 	StoppedAt    *time.Time
+	Kind         apitypes.WorkloadKind
+	Purpose      ContainerPurpose
+	ExitCode     *int
+	GPUCount     int
+	// Host is the name of the host the container was placed on.
+	Host *string
+	// ExpiresAt is when an instance with a timeout stops unless it is used
+	// again.
+	ExpiresAt *time.Time
 }
 
 // ContainerPage is one page of containers, newest first.
@@ -41,8 +51,8 @@ type ContainerPage struct {
 }
 
 // ListContainers returns the workspace's containers newest first, only live
-// ones when live is set.
-func (e *Execution) ListContainers(ctx context.Context, workspace identity.WorkspaceID, live bool, limit int, cursor string) (ContainerPage, error) {
+// ones when live is set and only workload's when it is set.
+func (e *Execution) ListContainers(ctx context.Context, workspace identity.WorkspaceID, workload *uuid.UUID, live bool, limit int, cursor string) (ContainerPage, error) {
 	before := uuid.Max
 	if cursor != "" {
 		id, err := uuid.Parse(cursor)
@@ -54,7 +64,7 @@ func (e *Execution) ListContainers(ctx context.Context, workspace identity.Works
 	size := pageSize(limit)
 	var rows []ContainerViewRow
 	if live {
-		r, err := e.queries.ListLiveContainers(ctx, ListLiveContainersParams{WorkspaceID: uuid.UUID(workspace), Before: before, MaxRows: size + 1})
+		r, err := e.queries.ListLiveContainers(ctx, ListLiveContainersParams{WorkspaceID: uuid.UUID(workspace), Before: before, WorkloadID: workload, MaxRows: size + 1})
 		if err != nil {
 			return ContainerPage{}, fmt.Errorf("list live containers: %w", err)
 		}
@@ -62,7 +72,7 @@ func (e *Execution) ListContainers(ctx context.Context, workspace identity.Works
 			rows = append(rows, ContainerViewRow(row))
 		}
 	} else {
-		r, err := e.queries.ListContainers(ctx, ListContainersParams{WorkspaceID: uuid.UUID(workspace), Before: before, MaxRows: size + 1})
+		r, err := e.queries.ListContainers(ctx, ListContainersParams{WorkspaceID: uuid.UUID(workspace), Before: before, WorkloadID: workload, MaxRows: size + 1})
 		if err != nil {
 			return ContainerPage{}, fmt.Errorf("list containers: %w", err)
 		}
@@ -100,10 +110,15 @@ func containerFrom(row ContainerViewRow) Container {
 		Version: versionOf(row.Version), State: ContainerState(row.State), ExitMessage: row.ExitMessage,
 		Slots: int(row.Slots), RunningTasks: int(row.Running), CPUMillis: row.CpuMillis, MemoryBytes: row.MemoryBytes,
 		CreatedAt: row.CreatedAt, ReadyAt: row.ReadyAt, StoppedAt: row.StoppedAt,
+		Kind: apitypes.WorkloadKind(row.Kind), Purpose: ContainerPurpose(row.Purpose), ExitCode: intOf(row.ExitCode),
+		GPUCount: int(row.GpuCount), Host: row.HostName,
 	}
 	if row.StopReason != nil {
 		r := StopReason(*row.StopReason)
 		c.StopReason = &r
+	}
+	if row.KeepWarmSeconds != nil {
+		c.ExpiresAt = row.ActiveUntil
 	}
 	return c
 }

@@ -29,6 +29,9 @@ type Config struct {
 	// RelayAddress is where other servers' edges reach this one's
 	// EdgeRelay service.
 	RelayAddress string
+	// TCPURL is the tls://host:port TCP pods answer under; empty serves
+	// none.
+	TCPURL string
 }
 
 // Edge routes workload traffic. One edge runs in each server process; each
@@ -53,6 +56,10 @@ type Edge struct {
 	hosts         hostStreams
 	bodies        bodyBudget
 	relay         *relaying
+	tcp           tcpURLs
+	tcpTargets    tcpTargets
+	podWaits      podWaits
+	holds         containerHolds
 	// records queues finished requests for writeRequests; droppedRecords
 	// counts those a full queue refused.
 	records        chan requestRecord
@@ -97,6 +104,12 @@ func NewEdge(pool *pgxpool.Pool, id *identity.Identity, exec *execution.Executio
 		records:   make(chan requestRecord, requestQueue),
 	}
 	e.auth.entries = map[authKey]time.Time{}
+	e.holds.first = make(chan struct{}, 1)
+	if cfg.TCPURL != "" {
+		if e.tcp, err = parseTCPURL(cfg.TCPURL); err != nil {
+			return nil, err
+		}
+	}
 	relay, err := newRelaying(cfg.RelayAddress)
 	if err != nil {
 		return nil, err
@@ -135,6 +148,7 @@ func (e *Edge) Run(ctx context.Context) error {
 	g.Go(func() error { e.reconcileDomains(ctx); return nil })
 	g.Go(func() error { e.writeRequests(ctx); return nil })
 	g.Go(func() error { e.register(ctx); return nil })
+	g.Go(func() error { e.renewHolds(ctx); return nil })
 	if err := g.Wait(); err != nil && !errors.Is(err, context.Canceled) {
 		return fmt.Errorf("edge: %w", err)
 	}

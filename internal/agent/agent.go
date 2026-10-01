@@ -99,6 +99,10 @@ type Config struct {
 	// OCIRuntime is the Docker runtime name, runc locally and runsc in
 	// production.
 	OCIRuntime string
+	// AllowPrivilegedDocker lets docker_enabled containers run privileged
+	// under a runtime other than runsc, where they hold the host kernel's
+	// full privilege. Only hosts serving trusted tenants set it.
+	AllowPrivilegedDocker bool
 	// GeeseFSPath is the pinned GeeseFS binary that mounts workspace volume
 	// buckets; empty means the host mounts no volumes.
 	GeeseFSPath string
@@ -144,6 +148,11 @@ type Agent struct {
 	diskLocks sync.Map
 	// releaseNow wakes the disk release loop.
 	releaseNow chan struct{}
+	// netfilters, snapshots and publishes bound network policy helpers,
+	// checkpoints and filesystem publishes running at once.
+	netfilters chan struct{}
+	snapshots  chan struct{}
+	publishes  chan struct{}
 	// host carries claims, completions and logs on a connection separate from
 	// the session, so large payloads never delay commands.
 	host    hostproto.HostServiceClient
@@ -168,6 +177,8 @@ type Agent struct {
 	mu         sync.Mutex
 	containers map[string]*container
 	session    *sessionOut
+	// operations holds snapshots and filesystem publishes in flight.
+	operations map[string]struct{}
 	// interruption is the provider's standing reclaim notice.
 	interruption *interruption
 	// trial is the version on trial until a session commits it.
@@ -265,6 +276,10 @@ func Run(ctx context.Context, cfg Config) error {
 		restart:    cancel,
 		containers: make(map[string]*container),
 		releaseNow: make(chan struct{}, 1),
+		netfilters: make(chan struct{}, maxNetfilterRuns),
+		snapshots:  make(chan struct{}, maxSnapshots),
+		publishes:  make(chan struct{}, maxPublishes),
+		operations: make(map[string]struct{}),
 	}
 	a.volumes = newVolumes(a)
 	a.diskEngine = diskengine.New(filepath.Join(cfg.StateDir, "disks", "engine"), a.log.With("component", "disk"))

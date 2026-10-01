@@ -21,6 +21,12 @@ import (
 
 // KindOf is the workload kind a definition deploys as.
 func KindOf(spec apitypes.FunctionSpec) apitypes.WorkloadKind {
+	if spec.Pod != nil {
+		if spec.Pod.Kind == apitypes.PodKindSandbox {
+			return apitypes.WorkloadKindSandbox
+		}
+		return apitypes.WorkloadKindPod
+	}
 	if spec.Http == nil {
 		return apitypes.WorkloadKindFunction
 	}

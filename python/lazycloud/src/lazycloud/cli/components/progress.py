@@ -8,10 +8,9 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
-from shared.http.errors import HttpApiError, HttpResponseDecodeError, HttpTransportError
-
 from lazycloud.cli.components.errors import debug_errors_enabled
 from lazycloud.cli.components.output import write_stream
+from lazycloud.clients.api import ApiConnectionError, ApiError
 from lazycloud.terminal import Terminal, TerminalStep
 
 CONNECTING_POLL_SECONDS = 1.0
@@ -87,7 +86,7 @@ class ConnectingIndicator:
         while describe is not None and not self._stopped.wait(CONNECTING_POLL_SECONDS):
             try:
                 detail = describe()
-            except (HttpApiError, HttpTransportError, HttpResponseDecodeError):
+            except (ApiError, ApiConnectionError):
                 # A status read that fails leaves the label as it was; it must
                 # never end the connection it describes.
                 continue

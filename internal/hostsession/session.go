@@ -44,6 +44,22 @@ type session struct {
 	// reported and not exited, or started. A stop decided elsewhere, such as
 	// a machine removal or a preemption, reaches the host through it.
 	live map[execution.ContainerID]bool
+	// networks holds the newest policy version recorded per container, so
+	// a report restating it writes nothing.
+	networks map[execution.ContainerID]int32
+}
+
+// recordNetwork records a newly reported applied policy version.
+func (sess *session) recordNetwork(ctx context.Context, container execution.ContainerID, report *hostproto.ContainerReport) error {
+	version := report.GetNetworkVersion()
+	if version <= sess.networks[container] {
+		return nil
+	}
+	if err := sess.server.execution.NetworkApplied(ctx, sess.host, container, version, report.GetNetworkError()); err != nil {
+		return err //nolint:wrapcheck // The caller maps it.
+	}
+	sess.networks[container] = version
+	return nil
 }
 
 // Session serves a host's control stream. Hello opens a session epoch and
@@ -80,7 +96,7 @@ func (s *Server) Session(stream grpc.BidiStreamingServer[hostproto.HostMessage, 
 	if err != nil {
 		return s.grpcError(ctx, err)
 	}
-	sess := &session{server: s, stream: stream, host: host, sent: map[string]bool{}, live: map[execution.ContainerID]bool{},
+	sess := &session{server: s, stream: stream, host: host, sent: map[string]bool{}, live: map[execution.ContainerID]bool{}, networks: map[execution.ContainerID]int32{},
 		grants: map[identity.WorkspaceID]time.Time{}}
 	for _, r := range reports {
 		sess.observe(r)
@@ -194,6 +210,16 @@ func (sess *session) handle(ctx context.Context, msg *hostproto.HostMessage) err
 			return sess.server.grpcError(ctx, err)
 		}
 		sess.server.recordStartup(ctx, sess.host, body.Container)
+		if err := sess.recordNetwork(ctx, report.Container, body.Container); err != nil {
+			return sess.server.grpcError(ctx, err)
+		}
+		if failed := body.Container.GetRestoreFailed(); failed != "" {
+			if snapshot, err := uuid.Parse(failed); err == nil {
+				if err := sess.server.execution.RestoreFailed(ctx, snapshot, "the host started the container cold"); err != nil {
+					return sess.server.grpcError(ctx, err)
+				}
+			}
+		}
 		return sess.sendActions(actions)
 	case *hostproto.HostMessage_Metrics:
 		sess.server.offerMetrics(sess.host, body.Metrics)
@@ -276,6 +302,9 @@ func (sess *session) sync(ctx context.Context) error {
 				return err
 			}
 		}
+	}
+	if err := sess.syncWorkloads(ctx, commands, derived); err != nil {
+		return err
 	}
 	if err := sess.syncStopped(ctx, derived); err != nil {
 		return err
@@ -375,6 +404,27 @@ func (s *Server) startMessage(ctx context.Context, id string, start execution.St
 	if err != nil {
 		return nil, err
 	}
+	restore, err := s.restoreOut(ctx, start.Container)
+	if err != nil {
+		return nil, err
+	}
+	var function *hostproto.FunctionWorkload
+	var pod *hostproto.PodWorkload
+	var http *hostproto.HttpServing
+	if start.Spec.Pod != nil || start.Purpose == execution.PurposeShell {
+		// A shell container of an endpoint serves no HTTP.
+		if pod, err = s.podWorkload(ctx, start); err != nil {
+			return nil, err
+		}
+	} else {
+		http = httpServing(start.Spec)
+		function = &hostproto.FunctionWorkload{
+			Handler:   deref(start.Spec.Handler),
+			Slots:     int32(start.Slots), //nolint:gosec // The schema caps concurrency at 256.
+			InProcess: start.Spec.InProcess != nil && *start.Spec.InProcess,
+			Hooks:     hooksOut(start.Spec.LifecycleHooks),
+		}
+	}
 	return &hostproto.ServerMessage{CommandId: id, Body: &hostproto.ServerMessage_Start{Start: &hostproto.StartContainer{
 		ContainerId:   start.Container.String(),
 		Image:         image.Reference,
@@ -388,13 +438,12 @@ func (s *Server) startMessage(ctx context.Context, id string, start execution.St
 			DiskLimitBytes: diskLimit,
 			GpuCount:       gpusOf(start.Spec.Resources),
 		},
-		Function: &hostproto.FunctionWorkload{
-			Handler:   start.Spec.Handler,
-			Slots:     int32(start.Slots), //nolint:gosec // The schema caps concurrency at 256.
-			InProcess: start.Spec.InProcess != nil && *start.Spec.InProcess,
-			Hooks:     hooksOut(start.Spec.LifecycleHooks),
-		},
-		Http:        httpServing(start.Spec),
+		Function:    function,
+		Pod:         pod,
+		Docker:      start.Spec.DockerEnabled != nil && *start.Spec.DockerEnabled,
+		Restore:     restore,
+		Disks:       disksOut(start.Spec),
+		Http:        http,
 		Environment: env,
 		Volumes:     volumes,
 		Secrets:     secretValues,
@@ -516,6 +565,10 @@ func exitIn(e *hostproto.ContainerExit) execution.ContainerExit {
 		exit.Reason = execution.StopStartFailed
 	case hostproto.ExitReason_EXIT_REASON_OUT_OF_MEMORY:
 		exit.Reason = execution.StopOutOfMemory
+	case hostproto.ExitReason_EXIT_REASON_EXITED:
+		exit.Reason = execution.StopExited
+		code := int(e.GetExitCode())
+		exit.ExitCode = &code
 	case hostproto.ExitReason_EXIT_REASON_CRASHED, hostproto.ExitReason_EXIT_REASON_UNSPECIFIED:
 		exit.Reason = execution.StopCrashed
 	}

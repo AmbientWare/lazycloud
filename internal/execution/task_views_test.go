@@ -211,7 +211,7 @@ func TestStopContainerLosesItsAttemptsForRetry(t *testing.T) {
 		t.Fatalf("stop of unknown container %v", err)
 	}
 
-	page, err := e.ListContainers(t.Context(), f.workspace, true, 10, "")
+	page, err := e.ListContainers(t.Context(), f.workspace, nil, true, 10, "")
 	if err != nil || len(page.Containers) != 1 || page.Containers[0].Function != "summarize" {
 		t.Fatalf("live containers %+v %v", page.Containers, err)
 	}

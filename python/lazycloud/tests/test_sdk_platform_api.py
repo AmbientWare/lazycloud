@@ -439,7 +439,7 @@ def test_invalid_placement_options_fail_where_declared(
 @pytest.mark.parametrize(
     ("decorator", "option"),
     [
-        ("@app.function(docker_enabled=True)", "docker_enabled"),
+        ('@app.function(metadata={"team": "data"})', "metadata"),
         (
             "@app.function(volumes=[lazycloud.CloudBucket("
             '"models", "/models", lazycloud.CloudBucketConfig())])',

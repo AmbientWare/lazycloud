@@ -34,7 +34,7 @@ select id from ws`, testSource).Scan(&ws)
 func function(name string) apitypes.FunctionSpec {
 	return apitypes.FunctionSpec{
 		Name:      name,
-		Handler:   "app:" + name,
+		Handler:   new("app:" + name),
 		Source:    apitypes.SourceRef{Sha256: testSource},
 		Image:     apitypes.ImageSpec{PythonVersion: apitypes.N312},
 		Resources: apitypes.Resources{CpuMillis: 1000, MemoryMib: 512},

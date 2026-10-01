@@ -90,7 +90,10 @@ func (a *Agent) diskStore(workspace string) (diskengine.Store, error) {
 // attachDisks leases and attaches the container's disks and returns their
 // bind mounts. Each lease is recorded before attaching, so a failure part
 // way is released by the release loop like any other exit.
-func (c *container) attachDisks(ctx context.Context, specs []*hostproto.DiskAttachment) ([]mount.Mount, []string, error) {
+//
+// A devbox's disk at / is its root filesystem: it is mounted at devboxRoot,
+// where the supervisor seeds it and switches into it.
+func (c *container) attachDisks(ctx context.Context, specs []*hostproto.DiskAttachment, devbox bool) ([]mount.Mount, []string, error) {
 	if len(specs) == 0 {
 		return nil, nil, nil
 	}
@@ -100,7 +103,11 @@ func (c *container) attachDisks(ctx context.Context, specs []*hostproto.DiskAtta
 	var binds []mount.Mount
 	var workspaces []string
 	for _, spec := range specs {
-		if spec.GetMountPath() == "/" || !filepath.IsAbs(spec.GetMountPath()) {
+		target := spec.GetMountPath()
+		switch {
+		case target == "/" && devbox:
+			target = devboxRoot
+		case target == "/" || !filepath.IsAbs(target):
 			return nil, nil, fmt.Errorf("disk %s: Docker hosts mount disks at an absolute directory, not %q", spec.GetName(), spec.GetMountPath())
 		}
 		lease, err := c.acquire(ctx, spec.GetName())
@@ -137,7 +144,7 @@ func (c *container) attachDisks(ctx context.Context, specs []*hostproto.DiskAtta
 		if err != nil {
 			return nil, nil, fmt.Errorf("attach disk %s: %w", spec.GetName(), err)
 		}
-		binds = append(binds, mount.Mount{Type: mount.TypeBind, Source: request.Mountpoint, Target: spec.GetMountPath()})
+		binds = append(binds, mount.Mount{Type: mount.TypeBind, Source: request.Mountpoint, Target: target})
 		workspaces = append(workspaces, held.Workspace)
 	}
 	c.a.goOwned(func(context.Context) { c.publishLoop(c.work) }) //nolint:contextcheck // Publishing lasts as long as the container's work.

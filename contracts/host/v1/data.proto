@@ -52,7 +52,17 @@ message RequestHead {
   oneof kind {
     HttpRequest http = 2;
     WorkspaceSync sync = 3;
+    // A request to the supervisor's control API: processes, files, shells,
+    // and tunnels to SSH or a port after an upgrade.
+    HttpRequest control = 90;
+    // A request to a port the container listens on.
+    PortRequest port = 91;
   }
+}
+
+message PortRequest {
+  int32 port = 1;
+  HttpRequest http = 2;
 }
 
 // HttpRequest is forwarded to the container's supervisor. Hop-by-hop headers
