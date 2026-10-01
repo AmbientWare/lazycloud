@@ -10,6 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
+	"syscall"
 )
 
 // KeyWrapper wraps per-secret data keys with a master key held outside
@@ -37,15 +39,15 @@ type FileKey struct {
 }
 
 // LoadFileKey reads a master key file. The file must hold exactly 32 bytes
-// and be readable only by its owner and group.
+// and be readable only by its owner, or also by its group when this process
+// is in that group: Kubernetes mounts secret files root-owned and readable
+// by the pod's fsGroup.
 func LoadFileKey(path string) (*FileKey, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, fmt.Errorf("secrets key file: %w", err)
 	}
-	// Group read is allowed: Kubernetes mounts secret files root-owned and
-	// readable by the pod's fsGroup, never by other users.
-	if info.Mode().Perm()&0o027 != 0 {
+	if !privateKeyFile(info) {
 		return nil, fmt.Errorf("secrets key file %s is accessible to other users; chmod 600 it", path)
 	}
 	key, err := os.ReadFile(path) //nolint:gosec // The operator names the key file.
@@ -56,6 +58,32 @@ func LoadFileKey(path string) (*FileKey, error) {
 		return nil, fmt.Errorf("secrets key file %s holds %d bytes; it must hold %d random bytes", path, len(key), masterKeyBytes)
 	}
 	return NewFileKey(key)
+}
+
+// privateKeyFile reports whether only the owner, and the group when this
+// process belongs to it, can read the file, and nobody else can write it.
+func privateKeyFile(info os.FileInfo) bool {
+	perm := info.Mode().Perm()
+	if perm&0o077 == 0 {
+		return true
+	}
+	if perm&0o037 != 0 {
+		return false
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return false
+	}
+	groups, err := os.Getgroups()
+	if err != nil {
+		return false
+	}
+	return memberOf(int(stat.Gid), os.Getgid(), groups)
+}
+
+// memberOf reports whether gid is the process group or a supplementary one.
+func memberOf(gid, own int, supplementary []int) bool {
+	return gid == own || slices.Contains(supplementary, gid)
 }
 
 // NewFileKey uses key, 32 bytes, as the master key.
