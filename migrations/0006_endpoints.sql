@@ -84,10 +84,34 @@ create table container_logs (
     container_id uuid not null references containers (id) on delete cascade,
     stream text not null check (stream in ('stdout', 'stderr', 'system')),
     data text not null,
-    logged_at timestamptz not null
+    logged_at timestamptz not null,
+    -- The request, by its X-Request-Id, an HTTP worker wrote the line for.
+    request_id uuid
 );
 
 create index container_logs_container on container_logs (container_id, id);
+create index container_logs_request on container_logs (request_id, id) where request_id is not null;
+
+-- One row per endpoint or ASGI request, which the edge writes in batches
+-- after each ends. The id is the X-Request-Id the caller and the workload
+-- saw. Rows older than the retention are deleted.
+create table http_requests (
+    id uuid primary key,
+    workspace_id uuid not null references workspaces (id) on delete cascade,
+    workload_id uuid not null references workloads (id) on delete cascade,
+    release_id uuid not null references releases (id) on delete cascade,
+    container_id uuid,
+    method text not null,
+    path text not null,
+    status integer not null,
+    started_at timestamptz not null,
+    duration_ms bigint not null,
+    request_bytes bigint not null,
+    response_bytes bigint not null
+);
+
+create index http_requests_workload on http_requests (workload_id, id desc);
+create index http_requests_started on http_requests (started_at);
 
 -- Wake-ups for the edge's route table and container sets. They are only
 -- signals: the edge re-reads durable state on every one.

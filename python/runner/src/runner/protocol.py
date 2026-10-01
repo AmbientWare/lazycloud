@@ -144,7 +144,7 @@ def serve(connection: Connection) -> int:
     if not isinstance(load, Load):
         raise ProtocolError("expected load as the first frame")
     hooks = hooks_from_frame(load.hooks)
-    if load.concurrency > 1:
+    if load.concurrency > 1 or load.http is not None:
         # Before user code loads, so module-level loggers write through it.
         routed_output.install()
     try:

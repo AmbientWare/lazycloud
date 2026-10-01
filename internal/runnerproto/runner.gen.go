@@ -309,9 +309,13 @@ type Loaded struct {
 // LoadedType defines model for Loaded.Type.
 type LoadedType string
 
-// Output Output an attempt wrote while the runner runs several attempts at once, as the UTF-8 payload of at most 256 KiB. Sent only for a `concurrency` above 1.
+// Output Output an attempt wrote while the runner runs several attempts at once, or an HTTP worker wrote while serving a request, as the UTF-8 payload of at most 256 KiB. Sent only for a `concurrency` above 1 or an HTTP worker.
 type Output struct {
-	AttemptId string       `json:"attempt_id"`
+	// AttemptId Empty for an HTTP worker's output.
+	AttemptId string `json:"attempt_id"`
+
+	// RequestId The X-Request-Id of the request an HTTP worker served.
+	RequestId *string      `json:"request_id,omitempty"`
 	Stream    OutputStream `json:"stream"`
 	Type      OutputType   `json:"type"`
 }

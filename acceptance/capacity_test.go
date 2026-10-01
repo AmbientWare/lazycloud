@@ -169,10 +169,13 @@ def total(values: list[int], scale: float = 1.0) -> float:
 `})
 	p.deploy("reports", spec("total", "app:total", source, nil))
 	url := fmt.Sprintf("http://%s.lazycloud.localhost:%s/?scale=2", control.Subdomain(uuid.UUID(p.workspace.ID), "reports", "total", apitypes.WorkloadKindFunction), p.port())
-	status, _, body := p.call(http.MethodPost, url, `{"values": [1200, 3500, 800]}`)
+	status, header, body := p.call(http.MethodPost, url, `{"values": [1200, 3500, 800]}`)
 	var out apitypes.Invocation
 	if status != http.StatusOK || json.Unmarshal([]byte(body), &out) != nil || out.Task.Status != apitypes.TaskStatusSucceeded || out.Result == nil || string(*out.Result) != "11000.0" {
 		t.Fatalf("invoke over HTTP: %d %s", status, body)
+	}
+	if header.Get("X-Task-Id") != out.Task.Id.String() {
+		t.Fatalf("X-Task-Id %q; want the task %s", header.Get("X-Task-Id"), out.Task.Id)
 	}
 	if status, _, _ := p.call(http.MethodGet, url, ""); status != http.StatusMethodNotAllowed {
 		t.Fatalf("GET of a function: %d", status)

@@ -54,6 +54,8 @@ message OutputChunk {
   LogStream stream = 2;
   string data = 3;
   google.protobuf.Timestamp time = 4;
+  // The HTTP request, by its X-Request-Id, an HTTP worker wrote this for.
+  string request_id = 30;
 }
 
 message SupervisorCommand {

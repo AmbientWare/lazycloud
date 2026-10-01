@@ -8,9 +8,12 @@ from uuid import UUID
 import httpx
 from shared.api import (
     ContainerLogEntry,
+    ContainerLogList,
     Domain,
     DomainList,
     DomainRequest,
+    HttpRequest,
+    HttpRequestList,
     HttpWorkload,
     Preview,
     PreviewRequest,
@@ -99,6 +102,55 @@ def stream_preview_output(
     return client._stream_lines(ContainerLogEntry, path, after=after, tail=None, follow=follow)
 
 
+def list_http_requests(
+    client: ApiClient,
+    workspace: str,
+    app: str,
+    *,
+    name: str | None = None,
+    limit: int = 50,
+) -> list[HttpRequest]:
+    """An app's endpoint and ASGI requests, newest first, up to `limit`."""
+
+    requests: list[HttpRequest] = []
+    before = ""
+    while len(requests) < limit:
+        params: dict[str, str | int] = {"limit": min(200, limit - len(requests))}
+        if name:
+            params["name"] = name
+        if before:
+            params["before"] = before
+        page = client._send(
+            HttpRequestList,
+            "GET",
+            _path("v1", "workspaces", workspace, "apps", app, "requests"),
+            params=params,
+        )
+        requests.extend(page.data)
+        if page.next is None:
+            break
+        before = str(page.next)
+    return requests
+
+
+def http_request_logs(client: ApiClient, workspace: str, request: UUID) -> list[ContainerLogEntry]:
+    """What the workload wrote while serving the request, in order."""
+
+    entries: list[ContainerLogEntry] = []
+    after = 0
+    while True:
+        page = client._send(
+            ContainerLogList,
+            "GET",
+            _path("v1", "workspaces", workspace, "requests", str(request), "logs"),
+            params={"after": after, "limit": 1000},
+        )
+        entries.extend(page.data)
+        if len(page.data) < 1000:
+            return entries
+        after = page.data[-1].id
+
+
 def register_domain(client: ApiClient, hostname: str) -> Domain:
     return client._send(Domain, "POST", "/v1/domains", body=DomainRequest(hostname=hostname))
 
@@ -137,7 +189,9 @@ __all__ = [
     "get_domain",
     "get_http_workload",
     "get_preview",
+    "http_request_logs",
     "list_domains",
+    "list_http_requests",
     "register_domain",
     "remove_domain",
     "stop_preview",

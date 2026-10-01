@@ -328,11 +328,13 @@ func (*AttemptFinished_Failure) isAttemptFinished_Outcome() {}
 // OutputChunk is output a slot wrote while running an attempt. attempt_id is
 // empty for output outside an attempt, such as during import.
 type OutputChunk struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	AttemptId     string                 `protobuf:"bytes,1,opt,name=attempt_id,json=attemptId,proto3" json:"attempt_id,omitempty"`
-	Stream        LogStream              `protobuf:"varint,2,opt,name=stream,proto3,enum=lazycloud.host.v1.LogStream" json:"stream,omitempty"`
-	Data          string                 `protobuf:"bytes,3,opt,name=data,proto3" json:"data,omitempty"`
-	Time          *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=time,proto3" json:"time,omitempty"`
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	AttemptId string                 `protobuf:"bytes,1,opt,name=attempt_id,json=attemptId,proto3" json:"attempt_id,omitempty"`
+	Stream    LogStream              `protobuf:"varint,2,opt,name=stream,proto3,enum=lazycloud.host.v1.LogStream" json:"stream,omitempty"`
+	Data      string                 `protobuf:"bytes,3,opt,name=data,proto3" json:"data,omitempty"`
+	Time      *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=time,proto3" json:"time,omitempty"`
+	// The HTTP request, by its X-Request-Id, an HTTP worker wrote this for.
+	RequestId     string `protobuf:"bytes,30,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -393,6 +395,13 @@ func (x *OutputChunk) GetTime() *timestamppb.Timestamp {
 		return x.Time
 	}
 	return nil
+}
+
+func (x *OutputChunk) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
 }
 
 type SupervisorCommand struct {
@@ -901,13 +910,15 @@ const file_host_v1_container_proto_rawDesc = "" +
 	"attempt_id\x18\x01 \x01(\tR\tattemptId\x12:\n" +
 	"\asuccess\x18\x02 \x01(\v2\x1e.lazycloud.host.v1.TaskSuccessH\x00R\asuccess\x12:\n" +
 	"\afailure\x18\x03 \x01(\v2\x1e.lazycloud.host.v1.TaskFailureH\x00R\afailureB\t\n" +
-	"\aoutcome\"\xa6\x01\n" +
+	"\aoutcome\"\xc5\x01\n" +
 	"\vOutputChunk\x12\x1d\n" +
 	"\n" +
 	"attempt_id\x18\x01 \x01(\tR\tattemptId\x124\n" +
 	"\x06stream\x18\x02 \x01(\x0e2\x1c.lazycloud.host.v1.LogStreamR\x06stream\x12\x12\n" +
 	"\x04data\x18\x03 \x01(\tR\x04data\x12.\n" +
-	"\x04time\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\x04time\"\xac\x02\n" +
+	"\x04time\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\x04time\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x1e \x01(\tR\trequestId\"\xac\x02\n" +
 	"\x11SupervisorCommand\x12<\n" +
 	"\tconfigure\x18\x01 \x01(\v2\x1c.lazycloud.host.v1.ConfigureH\x00R\tconfigure\x121\n" +
 	"\x03run\x18\x02 \x01(\v2\x1d.lazycloud.host.v1.RunAttemptH\x00R\x03run\x127\n" +

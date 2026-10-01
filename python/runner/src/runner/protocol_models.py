@@ -96,7 +96,10 @@ class Stream(str, Enum):
 
 class Output(BaseModel):
     type: Literal["output"]
-    attempt_id: str
+    attempt_id: Annotated[str, Field(description="Empty for an HTTP worker's output.")]
+    request_id: Annotated[
+        str | None, Field(description="The X-Request-Id of the request an HTTP worker served.")
+    ] = None
     stream: Stream
 
 

@@ -1190,6 +1190,32 @@ class PreviewSync(BaseModel):
     removed: int
 
 
+class HttpRequest(BaseModel):
+    id: UUID
+    app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
+    name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
+    kind: WorkloadKind
+    release_id: UUID
+    version: Annotated[
+        int | None, Field(description="The deployed version; negative for a preview.")
+    ] = None
+    container_id: UUID | None = None
+    method: str
+    path: str
+    status: int
+    started_at: AwareDatetime
+    duration_ms: int
+    request_bytes: int
+    response_bytes: int
+
+
+class HttpRequestList(BaseModel):
+    data: list[HttpRequest]
+    next: Annotated[
+        UUID | None, Field(description="Pass as `before` for the next page; absent on the last.")
+    ] = None
+
+
 class ContainerLogEntry(BaseModel):
     id: int
     stream: Stream
@@ -1391,6 +1417,10 @@ class HttpSpec(BaseModel):
     workers: Annotated[int, Field(ge=1, le=64)] = 1
 
 
+class ContainerLogList(BaseModel):
+    data: list[ContainerLogEntry]
+
+
 class Me(BaseModel):
     user: User
     workspaces: list[Workspace]
@@ -1452,10 +1482,7 @@ class FunctionSpec(BaseModel):
     ] = None
     http: HttpSpec | None = None
     authorized: Annotated[
-        bool | None,
-        Field(
-            description="Whether HTTP requests to the workload's URLs need a bearer token for the workspace. Without one a function, endpoint or ASGI app is public; the API's own routes always authenticate."
-        ),
+        bool | None, Field(description="Whether requests to the workload's URLs need a token.")
     ] = None
 
 

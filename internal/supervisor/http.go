@@ -11,10 +11,14 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
+	"github.com/AmbientWare/lazycloud/internal/runnerproto"
 )
 
 // BusyHeader marks the supervisor's own 503: every worker of the container is
@@ -42,6 +46,9 @@ func (sl *slot) serveHTTP(ctx context.Context, p *runnerProcess, cfg *hostproto.
 		sl.sup.loadFailed(loadErr)
 		return false, ErrLoadFailed
 	}
+	// stop closes the runner's socket, which ends the reader, then waits
+	// for it.
+	p.readers.Go(func() { sl.readHTTPOutput(ctx, p) })
 	sl.http.open(p.httpAddr, max(1, int(cfg.GetHttp().GetConcurrency())))
 	defer sl.http.stopAccepting()
 	sl.sup.slotLoaded(sl)
@@ -63,6 +70,65 @@ func (sl *slot) serveHTTP(ctx context.Context, p *runnerProcess, cfg *hostproto.
 		sl.http.stopAccepting()
 		sl.http.waitIdle(ctx, p.done)
 		return true, nil
+	}
+}
+
+// readHTTPOutput sends what an HTTP worker writes while serving requests,
+// which arrives as output frames, one line per message under the request's
+// id, until the runner closes its socket.
+func (sl *slot) readHTTPOutput(ctx context.Context, p *runnerProcess) {
+	// held is output per request and stream that may begin a secret value
+	// continued in the next frame. Only this goroutine touches it.
+	type heldKey struct {
+		request string
+		stream  hostproto.LogStream
+	}
+	held := map[heldKey]string{}
+	for {
+		frame, err := p.read()
+		if err != nil {
+			break
+		}
+		if frame.Type != runnerproto.FrameOutput {
+			continue
+		}
+		var out runnerproto.Output
+		if err := frame.Decode(&out); err != nil || out.RequestId == nil {
+			continue
+		}
+		stream := hostproto.LogStream_LOG_STREAM_STDOUT
+		if out.Stream == runnerproto.Stderr {
+			stream = hostproto.LogStream_LOG_STREAM_STDERR
+		}
+		key := heldKey{*out.RequestId, stream}
+		pending := held[key]
+		text := sl.sup.redact.stream(&pending, strings.ToValidUTF8(string(frame.Payload), "\uFFFD"), false)
+		if pending == "" {
+			delete(held, key)
+		} else {
+			held[key] = pending
+		}
+		sl.sup.pushRequestOutput(key.request, stream, text)
+		if sl.sup.out.waitOutputSpace(ctx) != nil {
+			return
+		}
+	}
+	for key, text := range held {
+		sl.sup.pushRequestOutput(key.request, key.stream, text)
+	}
+}
+
+// pushRequestOutput queues text a request's handler wrote, a line per
+// message without its newline.
+func (s *Supervisor) pushRequestOutput(request string, stream hostproto.LogStream, text string) {
+	text = strings.TrimSuffix(text, "\n")
+	if text == "" {
+		return
+	}
+	for line := range strings.SplitSeq(text, "\n") {
+		s.out.push(&hostproto.SupervisorMessage{Body: &hostproto.SupervisorMessage_Output{Output: &hostproto.OutputChunk{
+			RequestId: request, Stream: stream, Data: line, Time: timestamppb.Now(),
+		}}})
 	}
 }
 

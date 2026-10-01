@@ -49,6 +49,10 @@ type Edge struct {
 	auth          authCache
 	hosts         hostStreams
 	bodies        bodyBudget
+	// records queues finished requests for writeRequests; droppedRecords
+	// counts those a full queue refused.
+	records        chan requestRecord
+	droppedRecords atomic.Int64
 
 	// mu guards releases, versions, workloads and loads. It is held only for
 	// map and counter updates, never across I/O.
@@ -86,6 +90,7 @@ func NewEdge(pool *pgxpool.Pool, id *identity.Identity, exec *execution.Executio
 		misses:    map[uuid.UUID]time.Time{},
 		refresh:   make(chan uuid.UUID, refreshQueue),
 		publish:   make(chan struct{}, 1),
+		records:   make(chan requestRecord, requestQueue),
 	}
 	e.auth.entries = map[authKey]time.Time{}
 	e.hosts.hosts = map[uuid.UUID]*hostPool{}
@@ -116,6 +121,7 @@ func (e *Edge) Run(ctx context.Context) error {
 	g.Go(func() error { e.refreshContainers(ctx); return nil })
 	g.Go(func() error { e.publishLoads(ctx); return nil })
 	g.Go(func() error { e.reconcileDomains(ctx); return nil })
+	g.Go(func() error { e.writeRequests(ctx); return nil })
 	if err := g.Wait(); err != nil && !errors.Is(err, context.Canceled) {
 		return fmt.Errorf("edge: %w", err)
 	}

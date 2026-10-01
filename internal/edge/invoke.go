@@ -167,6 +167,10 @@ func (e *Edge) invoke(w http.ResponseWriter, r *http.Request, t target) {
 		e.fail(w, r, err)
 		return
 	}
+	// Function invocations are tasks; the header names it, as the
+	// reference platform's did.
+	w.Header().Set("X-Task-Id", out.Task.Id.String())
+	w.Header().Add("Access-Control-Expose-Headers", "X-Task-Id")
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(out) //nolint:errchkjson // The client is gone if this fails.
 }

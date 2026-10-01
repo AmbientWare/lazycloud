@@ -512,7 +512,9 @@ func (c *container) onSupervisorMessage(ctx context.Context, m *hostproto.Superv
 		// Output outside an attempt, such as import-time prints and HTTP
 		// requests, goes to the container's own log.
 		o := body.Output
-		_ = c.logs.append(ctx, &hostproto.LogLine{AttemptId: o.GetAttemptId(), Stream: o.GetStream(), Data: o.GetData(), Time: o.GetTime()})
+		_ = c.logs.append(ctx, &hostproto.LogLine{
+			AttemptId: o.GetAttemptId(), RequestId: o.GetRequestId(), Stream: o.GetStream(), Data: o.GetData(), Time: o.GetTime(),
+		})
 	default:
 		c.log.Warn("ignoring unknown supervisor message")
 	}

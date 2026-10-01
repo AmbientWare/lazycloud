@@ -294,7 +294,7 @@ func (s *Server) AppendLogs(ctx context.Context, req *hostproto.AppendLogsReques
 		return nil, err
 	}
 	lines := make([]execution.LogLine, 0, len(req.GetLines()))
-	var containerLines []execution.LogLine
+	var containerLines []execution.ContainerLogLine
 	for _, line := range req.GetLines() {
 		stream, ok := streamIn(line.GetStream())
 		if !ok {
@@ -305,7 +305,15 @@ func (s *Server) AppendLogs(ctx context.Context, req *hostproto.AppendLogsReques
 			at = line.GetTime().AsTime()
 		}
 		if line.GetAttemptId() == "" {
-			containerLines = append(containerLines, execution.LogLine{Stream: stream, Data: line.GetData(), Time: at})
+			containerLine := execution.ContainerLogLine{LogLine: execution.LogLine{Stream: stream, Data: line.GetData(), Time: at}}
+			if id := line.GetRequestId(); id != "" {
+				request, err := uuid.Parse(id)
+				if err != nil {
+					return nil, status.Error(codes.InvalidArgument, "request_id is not a UUID")
+				}
+				containerLine.Request = &request
+			}
+			containerLines = append(containerLines, containerLine)
 			continue
 		}
 		attempt, err := uuid.Parse(line.GetAttemptId())

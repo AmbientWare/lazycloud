@@ -1168,6 +1168,11 @@ type ContainerLogEntry struct {
 // ContainerLogEntryStream defines model for ContainerLogEntry.Stream.
 type ContainerLogEntryStream string
 
+// ContainerLogList defines model for ContainerLogList.
+type ContainerLogList struct {
+	Data []ContainerLogEntry `json:"data"`
+}
+
 // ContainerPage defines model for ContainerPage.
 type ContainerPage struct {
 	Containers []Container `json:"containers"`
@@ -1456,7 +1461,7 @@ type FunctionState string
 
 // FunctionSpec defines model for FunctionSpec.
 type FunctionSpec struct {
-	// Authorized Whether HTTP requests to the workload's URLs need a bearer token for the workspace. Without one a function, endpoint or ASGI app is public; the API's own routes always authenticate.
+	// Authorized Whether requests to the workload's URLs need a token.
 	Authorized *bool       `json:"authorized,omitempty"`
 	Autoscaler *Autoscaler `json:"autoscaler,omitempty"`
 
@@ -1513,6 +1518,36 @@ type HttpKind string
 
 // HttpMethod defines model for HttpMethod.
 type HttpMethod string
+
+// HttpRequest One request to an endpoint or ASGI app. `status` is what the caller received, 101 for a WebSocket whose `duration_ms` is the session.
+type HttpRequest struct {
+	App         AppName             `json:"app"`
+	ContainerId *openapi_types.UUID `json:"container_id,omitempty"`
+	DurationMs  int64               `json:"duration_ms"`
+	Id          openapi_types.UUID  `json:"id"`
+
+	// Kind A function runs tasks; an endpoint or ASGI app serves HTTP. Realtime apps are ASGI apps.
+	Kind          WorkloadKind       `json:"kind"`
+	Method        string             `json:"method"`
+	Name          WorkloadName       `json:"name"`
+	Path          string             `json:"path"`
+	ReleaseId     openapi_types.UUID `json:"release_id"`
+	RequestBytes  int64              `json:"request_bytes"`
+	ResponseBytes int64              `json:"response_bytes"`
+	StartedAt     time.Time          `json:"started_at"`
+	Status        int                `json:"status"`
+
+	// Version The deployed version; negative for a preview.
+	Version *int `json:"version,omitempty"`
+}
+
+// HttpRequestList defines model for HttpRequestList.
+type HttpRequestList struct {
+	Data []HttpRequest `json:"data"`
+
+	// Next Pass as `before` for the next page; absent on the last.
+	Next *openapi_types.UUID `json:"next,omitempty"`
+}
 
 // HttpSpec Makes the workload answer HTTP. Its slots are `workers` processes, each handling `concurrency` requests at once.
 type HttpSpec struct {
@@ -2512,6 +2547,9 @@ type PreviewPath = openapi_types.UUID
 // QueuePath A queue or map name; any characters except control characters.
 type QueuePath = CollectionName
 
+// RequestPath defines model for RequestPath.
+type RequestPath = openapi_types.UUID
+
 // SecretPath An environment variable name; the LAZYCLOUD_ prefix is reserved.
 type SecretPath = SecretName
 
@@ -2587,6 +2625,16 @@ type InvokeFunctionParams struct {
 type InvokeFunctionVersionParams struct {
 	// WaitSeconds Hold the request until the task finishes or this many seconds pass.
 	WaitSeconds *InvokeWait `form:"wait_seconds,omitempty" json:"wait_seconds,omitempty"`
+}
+
+// ListHttpRequestsParams defines parameters for ListHttpRequests.
+type ListHttpRequestsParams struct {
+	// Name Only the requests of this endpoint or ASGI app.
+	Name *WorkloadName `form:"name,omitempty" json:"name,omitempty"`
+
+	// Before Return requests older than this request id.
+	Before *openapi_types.UUID `form:"before,omitempty" json:"before,omitempty"`
+	Limit  *int                `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
 // ListArtifactsParams defines parameters for ListArtifacts.
@@ -2731,6 +2779,12 @@ type ListQueuesParams struct {
 type PopQueueMessageParams struct {
 	// WaitSeconds Wait this long for a message when the queue is empty.
 	WaitSeconds *int `form:"wait_seconds,omitempty" json:"wait_seconds,omitempty"`
+}
+
+// ListHttpRequestLogsParams defines parameters for ListHttpRequestLogs.
+type ListHttpRequestLogsParams struct {
+	After *int64 `form:"after,omitempty" json:"after,omitempty"`
+	Limit *int   `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
 // ListSchedulesParams defines parameters for ListSchedules.

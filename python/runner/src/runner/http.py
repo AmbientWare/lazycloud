@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
 import inspect
 import json
 import os
@@ -28,8 +29,17 @@ from shared.errors import InvalidInputError
 from shared.function_payloads import FunctionPayloadEncoding
 from shared.serialization import to_json_value
 
+from runner import routed_output
 from runner.invocation import call_handler
-from runner.protocol_models import HttpKind, HttpServing, Loaded, LoadFailed, RunnerError
+from runner.protocol_models import (
+    HttpKind,
+    HttpServing,
+    Loaded,
+    LoadFailed,
+    Output,
+    RunnerError,
+    Stream,
+)
 
 HTTP_FD_ENV = "LAZYCLOUD_HTTP_FD"
 # An endpoint reads its whole body before the call, like a task input.
@@ -68,11 +78,11 @@ def serve_http(connection: _FrameConnection, handler: Any, serving: HttpServing)
         return 1
     listener.set_inheritable(False)
     if serving.kind is HttpKind.endpoint:
-        app = EndpointApp(handler, serving.concurrency)
+        app: ASGIApp = EndpointApp(handler, serving.concurrency)
     else:
         app = asgi_application(handler)
     config = uvicorn.Config(
-        app,
+        request_output(app, connection),
         interface="asgi3",
         http="h11",
         ws="wsproto",
@@ -119,6 +129,40 @@ async def _serve(
     return 0
 
 
+REQUEST_ID_HEADER = b"x-request-id"
+
+
+def request_output(app: ASGIApp, connection: _FrameConnection) -> ASGIApp:
+    """Send what each request writes as output frames under its X-Request-Id.
+
+    The edge sets the header on every request, so the platform keeps a
+    request's output with its record. Writes outside a request, such as from
+    threads the handler starts without its context, go to the container's
+    own output.
+    """
+
+    def send_output(request_id: str, stream: Stream, data: str) -> None:
+        for chunk in routed_output.utf8_chunks(data):
+            connection.send(
+                Output(type="output", attempt_id="", request_id=request_id, stream=stream), chunk
+            )
+
+    async def wrapped(scope: Scope, receive: Receive, send: Send) -> None:
+        request_id = ""
+        if scope["type"] in ("http", "websocket"):
+            for key, value in scope.get("headers", []):
+                if bytes(key).lower() == REQUEST_ID_HEADER:
+                    request_id = bytes(value).decode("latin-1").strip()
+                    break
+        if not request_id:
+            await app(scope, receive, send)
+            return
+        with routed_output.attempt_output(request_id, send_output):
+            await app(scope, receive, send)
+
+    return wrapped
+
+
 def asgi_application(handler: Any) -> ASGIApp:
     """The loaded ASGI app. The SDK's wrappers run the user's app through `local`."""
 
@@ -160,10 +204,16 @@ class EndpointApp:
         except ValueError as exc:
             return error_response(400, str(exc))
         loop = asyncio.get_running_loop()
+        # The pool thread runs in the request's context, so its output is
+        # the request's.
+        context = contextvars.copy_context()
+        handler = self.handler
+
+        def run() -> Any:
+            return context.run(call_handler, handler, args, kwargs, FunctionPayloadEncoding.Json)
+
         try:
-            result = await loop.run_in_executor(
-                self.pool, call_handler, self.handler, args, kwargs, FunctionPayloadEncoding.Json
-            )
+            result = await loop.run_in_executor(self.pool, run)
             if inspect.isawaitable(result):
                 result = await result
             status, headers, body = endpoint_response(result)

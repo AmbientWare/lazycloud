@@ -26,9 +26,16 @@ type ContainerLogEntry struct {
 	Time   time.Time
 }
 
+// ContainerLogLine is a line a container wrote outside attempts, for the
+// HTTP request it served when Request is set.
+type ContainerLogLine struct {
+	LogLine
+	Request *uuid.UUID
+}
+
 // AppendContainerLogs stores output a container wrote outside attempts, in
 // order. Lines of a container not assigned to host are dropped.
-func (e *Execution) AppendContainerLogs(ctx context.Context, host compute.HostID, container ContainerID, lines []LogLine) error {
+func (e *Execution) AppendContainerLogs(ctx context.Context, host compute.HostID, container ContainerID, lines []ContainerLogLine) error {
 	if len(lines) == 0 {
 		return nil
 	}
@@ -38,12 +45,16 @@ func (e *Execution) AppendContainerLogs(ctx context.Context, host compute.HostID
 		Streams:     make([]string, len(lines)),
 		Data:        make([]string, len(lines)),
 		LoggedAt:    make([]time.Time, len(lines)),
+		Requests:    make([]uuid.UUID, len(lines)),
 	}
 	for n, line := range lines {
 		params.Streams[n] = string(line.Stream)
 		// PostgreSQL text cannot hold NUL.
 		params.Data[n] = strings.ReplaceAll(line.Data, "\x00", "�")
 		params.LoggedAt[n] = line.Time
+		if line.Request != nil {
+			params.Requests[n] = *line.Request
+		}
 	}
 	err := pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
 		releases, err := e.queries.WithTx(tx).InsertContainerLogs(ctx, params)
@@ -61,6 +72,22 @@ func (e *Execution) AppendContainerLogs(ctx context.Context, host compute.HostID
 		return fmt.Errorf("append container logs: %w", err)
 	}
 	return nil
+}
+
+// RequestLogs returns what was written while serving an HTTP request of the
+// workspace, after the cursor, in order.
+func (e *Execution) RequestLogs(ctx context.Context, workspace uuid.UUID, request uuid.UUID, after int64, limit int) ([]ContainerLogEntry, error) {
+	rows, err := e.queries.RequestLogsAfter(ctx, RequestLogsAfterParams{
+		RequestID: &request, WorkspaceID: workspace, After: after, MaxEntries: int32(min(limit, 1000)), //nolint:gosec // bounded
+	})
+	if err != nil {
+		return nil, fmt.Errorf("read request logs: %w", err)
+	}
+	out := make([]ContainerLogEntry, len(rows))
+	for n, row := range rows {
+		out[n] = ContainerLogEntry{ID: row.ID, Stream: LogStream(row.Stream), Data: row.Data, Time: row.LoggedAt}
+	}
+	return out, nil
 }
 
 // ReleaseContainer is the newest live container of a release.

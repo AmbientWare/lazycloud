@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -71,9 +72,9 @@ func (e *Edge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusMethodNotAllowed, "endpoint method not allowed")
 			return
 		}
-		e.proxy(w, r, t, authorized)
+		e.serveRecorded(w, r, t, func(w http.ResponseWriter, r *http.Request, rec *requestRecord) { e.proxy(w, r, t, authorized, rec) })
 	case apitypes.WorkloadKindAsgi:
-		e.proxy(w, r, t, authorized)
+		e.serveRecorded(w, r, t, func(w http.ResponseWriter, r *http.Request, rec *requestRecord) { e.proxy(w, r, t, authorized, rec) })
 	default:
 		writeError(w, http.StatusNotFound, "no workload answers on this host")
 	}
@@ -206,7 +207,7 @@ func (e *Edge) readBody(r *http.Request, endpoint bool) (*requestBody, error) {
 // refuses before its workload saw the request is replaced by another while
 // the body can be sent again; an endpoint's failed response is retried under
 // its retry policy.
-func (e *Edge) proxy(w http.ResponseWriter, r *http.Request, t target, authorized bool) {
+func (e *Edge) proxy(w http.ResponseWriter, r *http.Request, t target, authorized bool, rec *requestRecord) {
 	ctx := r.Context()
 	// Past max_pending the request is refused before its body is read.
 	if e.overPending(t.release) {
@@ -224,7 +225,7 @@ func (e *Edge) proxy(w http.ResponseWriter, r *http.Request, t target, authorize
 	rc := http.NewResponseController(w)
 	// A streamed body is still being sent while the response comes back.
 	_ = rc.EnableFullDuplex()
-	head := e.requestHead(r, authorized, upgrade, body)
+	head := e.requestHead(r, authorized, upgrade, body, rec.id)
 	deadline := time.Now().Add(t.release.timeout)
 	attempts := 1
 	if t.workload.kind == apitypes.WorkloadKindEndpoint {
@@ -240,6 +241,7 @@ func (e *Edge) proxy(w http.ResponseWriter, r *http.Request, t target, authorize
 		// Ending is idempotent; this covers a response that breaks off and
 		// aborts the handler.
 		defer lease.end()
+		rec.container = lease.slot.id
 		ex, err := e.exchange(ctx, lease, rc, head, body, deadline)
 		if err != nil {
 			lease.end()
@@ -285,8 +287,11 @@ func (e *Edge) proxy(w http.ResponseWriter, r *http.Request, t target, authorize
 
 // requestHead is the request as the container receives it: hop-by-hop
 // headers and the platform's bearer token removed, X-Forwarded-* set.
-func (e *Edge) requestHead(r *http.Request, authorized, upgrade bool, body *requestBody) *hostproto.HttpRequest {
+func (e *Edge) requestHead(r *http.Request, authorized, upgrade bool, body *requestBody, request uuid.UUID) *hostproto.HttpRequest {
 	header := r.Header.Clone()
+	// The workload sees the platform's id for the request, never one the
+	// caller made up.
+	header.Set(RequestIDHeader, request.String())
 	for _, name := range hopHeaders {
 		header.Del(name)
 	}
@@ -441,8 +446,12 @@ func (e *Edge) respond(w http.ResponseWriter, r *http.Request, ex *exchangeState
 		return
 	}
 	header := w.Header()
+	ours := header.Get(RequestIDHeader)
 	for _, h := range head.GetHeaders() {
 		header.Add(h.GetName(), h.GetValue())
+	}
+	if ours != "" {
+		header.Set(RequestIDHeader, ours)
 	}
 	for _, name := range hopHeaders {
 		header.Del(name)
@@ -486,7 +495,12 @@ func (e *Edge) tunnel(w http.ResponseWriter, ex *exchangeState) {
 	defer func() { _ = conn.Close() }()
 	_, _ = fmt.Fprintf(rw, "HTTP/1.1 101 Switching Protocols\r\n")
 	for _, h := range ex.first.GetHead().GetHeaders() {
-		_, _ = fmt.Fprintf(rw, "%s: %s\r\n", h.GetName(), h.GetValue())
+		if !strings.EqualFold(h.GetName(), RequestIDHeader) {
+			_, _ = fmt.Fprintf(rw, "%s: %s\r\n", h.GetName(), h.GetValue())
+		}
+	}
+	if id := w.Header().Get(RequestIDHeader); id != "" {
+		_, _ = fmt.Fprintf(rw, "%s: %s\r\n", RequestIDHeader, id)
 	}
 	_, _ = rw.WriteString("\r\n")
 	if err := rw.Flush(); err != nil {

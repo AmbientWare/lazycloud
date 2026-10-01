@@ -194,7 +194,7 @@ func endpointError(w http.ResponseWriter, err error) bool {
 		provider *edge.ProviderError
 	)
 	switch {
-	case errors.Is(err, edge.ErrWorkloadNotFound), errors.Is(err, edge.ErrDomainNotFound):
+	case errors.Is(err, edge.ErrWorkloadNotFound), errors.Is(err, edge.ErrDomainNotFound), errors.Is(err, edge.ErrRequestNotFound):
 		writeJSONError(w, http.StatusNotFound, apitypes.NotFound, err.Error())
 	case errors.As(err, &invalid):
 		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, invalid.Error())

@@ -15,13 +15,14 @@ import (
 const insertContainerLogs = `-- name: InsertContainerLogs :many
 with line as (
     select i as ord, ($1::text[])[i] as stream, ($2::text[])[i] as data,
-           ($3::timestamptz[])[i] as logged_at
+           ($3::timestamptz[])[i] as logged_at,
+           nullif(($4::uuid[])[i], '00000000-0000-0000-0000-000000000000'::uuid) as request_id
     from generate_subscripts($1::text[], 1) as i
 ), inserted as (
-    insert into container_logs (container_id, stream, data, logged_at)
-    select c.id, line.stream, line.data, line.logged_at
+    insert into container_logs (container_id, stream, data, logged_at, request_id)
+    select c.id, line.stream, line.data, line.logged_at, line.request_id
     from line
-    join containers c on c.id = $4 and c.host_id = $5
+    join containers c on c.id = $5 and c.host_id = $6
     order by line.ord
     returning container_id
 )
@@ -32,17 +33,20 @@ type InsertContainerLogsParams struct {
 	Streams     []string
 	Data        []string
 	LoggedAt    []time.Time
+	Requests    []uuid.UUID
 	ContainerID uuid.UUID
 	HostID      *uuid.UUID
 }
 
 // Lines in order, only for a container assigned to the calling host.
 // Returns the container's release when lines were stored.
+// A nil request id means the line belongs to no request.
 func (q *Queries) InsertContainerLogs(ctx context.Context, arg InsertContainerLogsParams) ([]uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, insertContainerLogs,
 		arg.Streams,
 		arg.Data,
 		arg.LoggedAt,
+		arg.Requests,
 		arg.ContainerID,
 		arg.HostID,
 	)
@@ -118,6 +122,60 @@ func (q *Queries) ReleaseLogsAfter(ctx context.Context, arg ReleaseLogsAfterPara
 	var items []ReleaseLogsAfterRow
 	for rows.Next() {
 		var i ReleaseLogsAfterRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Stream,
+			&i.Data,
+			&i.LoggedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const requestLogsAfter = `-- name: RequestLogsAfter :many
+select l.id, l.stream, l.data, l.logged_at
+from container_logs l
+join containers c on c.id = l.container_id
+where l.request_id = $1 and c.workspace_id = $2 and l.id > $3
+order by l.id
+limit $4
+`
+
+type RequestLogsAfterParams struct {
+	RequestID   *uuid.UUID
+	WorkspaceID uuid.UUID
+	After       int64
+	MaxEntries  int32
+}
+
+type RequestLogsAfterRow struct {
+	ID       int64
+	Stream   string
+	Data     string
+	LoggedAt time.Time
+}
+
+// What a workspace's container wrote while serving one request.
+func (q *Queries) RequestLogsAfter(ctx context.Context, arg RequestLogsAfterParams) ([]RequestLogsAfterRow, error) {
+	rows, err := q.db.Query(ctx, requestLogsAfter,
+		arg.RequestID,
+		arg.WorkspaceID,
+		arg.After,
+		arg.MaxEntries,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []RequestLogsAfterRow
+	for rows.Next() {
+		var i RequestLogsAfterRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.Stream,

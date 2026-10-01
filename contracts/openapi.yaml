@@ -2080,6 +2080,74 @@ paths:
               schema: { type: string, format: binary }
         default: { $ref: "#/components/responses/Error" }
 
+  /v1/workspaces/{workspace}/apps/{app}/requests:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/AppPath"
+    get:
+      operationId: listHttpRequests
+      summary: The app's endpoint and ASGI requests, newest first
+      description: >-
+        One record per request the edge served, written about a second after
+        it ends and kept for seven days. Function invocations over HTTP are
+        tasks instead.
+      parameters:
+        - name: name
+          in: query
+          description: Only the requests of this endpoint or ASGI app.
+          schema: { $ref: "#/components/schemas/WorkloadName" }
+        - name: before
+          in: query
+          description: Return requests older than this request id.
+          schema: { type: string, format: uuid }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+      responses:
+        "200":
+          description: Requests, newest first
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HttpRequestList" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/requests/{http_request}:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/RequestPath"
+    get:
+      operationId: getHttpRequest
+      summary: One request by its X-Request-Id
+      responses:
+        "200":
+          description: The request
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HttpRequest" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/requests/{http_request}/logs:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/RequestPath"
+    get:
+      operationId: listHttpRequestLogs
+      summary: What the workload wrote while serving the request
+      parameters:
+        - name: after
+          in: query
+          schema: { type: integer, format: int64, minimum: 0, default: 0 }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 1000 }
+      responses:
+        "200":
+          description: Output lines in order
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ContainerLogList" }
+        default: { $ref: "#/components/responses/Error" }
+
 components:
   securitySchemes:
     bearer:
@@ -2105,6 +2173,11 @@ components:
       in: path
       required: true
       schema: { $ref: "#/components/schemas/AppName" }
+    RequestPath:
+      name: http_request
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
     FunctionPath:
       name: function
       in: path
@@ -2731,10 +2804,7 @@ components:
         http:
           $ref: "#/components/schemas/HttpSpec"
         authorized:
-          description: >-
-            Whether HTTP requests to the workload's URLs need a bearer token
-            for the workspace. Without one a function, endpoint or ASGI app is
-            public; the API's own routes always authenticate.
+          description: Whether requests to the workload's URLs need a token.
           type: boolean
 
     SourceRef:
@@ -4267,6 +4337,50 @@ components:
       properties:
         written: { type: integer }
         removed: { type: integer }
+
+    HttpRequest:
+      description: >-
+        One request to an endpoint or ASGI app. `status` is what the caller
+        received, 101 for a WebSocket whose `duration_ms` is the session.
+      type: object
+      required: [id, app, name, kind, release_id, method, path, status, started_at, duration_ms, request_bytes, response_bytes]
+      properties:
+        id: { type: string, format: uuid }
+        app: { $ref: "#/components/schemas/AppName" }
+        name: { $ref: "#/components/schemas/WorkloadName" }
+        kind: { $ref: "#/components/schemas/WorkloadKind" }
+        release_id: { type: string, format: uuid }
+        version:
+          description: The deployed version; negative for a preview.
+          type: integer
+        container_id: { type: string, format: uuid }
+        method: { type: string }
+        path: { type: string }
+        status: { type: integer }
+        started_at: { type: string, format: date-time }
+        duration_ms: { type: integer, format: int64 }
+        request_bytes: { type: integer, format: int64 }
+        response_bytes: { type: integer, format: int64 }
+
+    HttpRequestList:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/HttpRequest" }
+        next:
+          description: Pass as `before` for the next page; absent on the last.
+          type: string
+          format: uuid
+
+    ContainerLogList:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/ContainerLogEntry" }
 
     ContainerLogEntry:
       type: object

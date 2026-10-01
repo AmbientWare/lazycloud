@@ -200,11 +200,17 @@ components:
     Output:
       description: >-
         Output an attempt wrote while the runner runs several attempts at
-        once, as the UTF-8 payload of at most 256 KiB. Sent only for a
-        `concurrency` above 1.
+        once, or an HTTP worker wrote while serving a request, as the UTF-8
+        payload of at most 256 KiB. Sent only for a `concurrency` above 1 or
+        an HTTP worker.
       type: object
       required: [type, attempt_id, stream]
       properties:
         type: { type: string, enum: [output] }
-        attempt_id: { type: string }
+        attempt_id:
+          description: Empty for an HTTP worker's output.
+          type: string
+        request_id:
+          description: The X-Request-Id of the request an HTTP worker served.
+          type: string
         stream: { type: string, enum: [stdout, stderr] }

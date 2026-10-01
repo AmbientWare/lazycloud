@@ -414,6 +414,8 @@ message LogLine {
   LogStream stream = 2;
   string data = 3;
   google.protobuf.Timestamp time = 4;
+  // Set for output an HTTP worker wrote while serving this request.
+  string request_id = 30;
 }
 
 message AppendLogsResponse {}
