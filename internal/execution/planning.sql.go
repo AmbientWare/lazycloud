@@ -14,24 +14,13 @@ import (
 const cancelQueuedTasks = `-- name: CancelQueuedTasks :many
 update tasks
 set status = 'cancelled', finished_at = now()
-where id in (
-    select q.id from tasks q
-    where q.release_id = $1::uuid and q.status = 'queued'
-    order by q.available_at, q.id
-    limit $2
-    for update skip locked
-)
-  and status = 'queued'
+where id = any($1::uuid[]) and status = 'queued'
 returning id
 `
 
-type CancelQueuedTasksParams struct {
-	ReleaseID uuid.UUID
-	BatchSize int32
-}
-
-func (q *Queries) CancelQueuedTasks(ctx context.Context, arg CancelQueuedTasksParams) ([]uuid.UUID, error) {
-	rows, err := q.db.Query(ctx, cancelQueuedTasks, arg.ReleaseID, arg.BatchSize)
+// The caller holds the rows from LockQueuedWithDependents.
+func (q *Queries) CancelQueuedTasks(ctx context.Context, ids []uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, cancelQueuedTasks, ids)
 	if err != nil {
 		return nil, err
 	}

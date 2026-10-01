@@ -123,6 +123,23 @@ func (e *Execution) failQueued(ctx context.Context, tx pgx.Tx, ids, releases []u
 	return e.resolveDependents(ctx, tx, ids, upstreamUnsuccessful)
 }
 
+// lockQueuedWithDependents locks up to limit queued tasks of the release
+// with their queued dependents in one id-ordered statement and returns the
+// release's own tasks among them.
+func (e *Execution) lockQueuedWithDependents(ctx context.Context, q *Queries, release uuid.UUID, limit int32) ([]uuid.UUID, error) {
+	rows, err := q.LockQueuedWithDependents(ctx, LockQueuedWithDependentsParams{ReleaseID: release, BatchSize: limit})
+	if err != nil {
+		return nil, fmt.Errorf("lock queued tasks: %w", err)
+	}
+	var own []uuid.UUID
+	for _, row := range rows {
+		if row.InRelease {
+			own = append(own, row.ID)
+		}
+	}
+	return own, nil
+}
+
 func uuidStrings(ids []uuid.UUID) []string {
 	out := make([]string, len(ids))
 	for n, id := range ids {

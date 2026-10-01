@@ -50,3 +50,24 @@ from task_dependencies d
 join task_results r on r.task_id = d.depends_on
 where d.task_id = any(@task_ids::uuid[])
 order by d.task_id, d.depends_on;
+
+-- name: LockQueuedWithDependents :many
+-- Up to batch_size queued tasks of the release, and every queued task that
+-- depends on them directly or transitively, locked together in id order, so
+-- failing or cancelling the batch and then its dependents never takes a
+-- second round of locks.
+with recursive base as (
+    select q.id from tasks q
+    where q.release_id = @release_id::uuid and q.status = 'queued'
+    order by q.id
+    limit @batch_size
+), closure (id) as (
+    select id from base
+    union
+    select d.task_id from task_dependencies d join closure c on d.depends_on = c.id
+)
+select t.id, (t.id in (select id from base))::bool as in_release
+from tasks t
+where t.id in (select id from closure) and t.status = 'queued'
+order by t.id
+for update of t;

@@ -263,7 +263,11 @@ func (e *Execution) stopRelease(ctx context.Context, tx pgx.Tx, plan *releasePla
 	if err := notifyHosts(ctx, tx, plan.drained); err != nil {
 		return err
 	}
-	cancelled, err := q.CancelQueuedTasks(ctx, CancelQueuedTasksParams{ReleaseID: release, BatchSize: cancelBatch})
+	queued, err := e.lockQueuedWithDependents(ctx, q, release, cancelBatch)
+	if err != nil {
+		return err
+	}
+	cancelled, err := q.CancelQueuedTasks(ctx, queued)
 	if err != nil {
 		return fmt.Errorf("cancel queued tasks: %w", err)
 	}

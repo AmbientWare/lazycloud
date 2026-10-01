@@ -137,6 +137,58 @@ func (q *Queries) LockQueuedDependents(ctx context.Context, upstream []uuid.UUID
 	return items, nil
 }
 
+const lockQueuedWithDependents = `-- name: LockQueuedWithDependents :many
+with recursive base as (
+    select q.id from tasks q
+    where q.release_id = $1::uuid and q.status = 'queued'
+    order by q.id
+    limit $2
+), closure (id) as (
+    select id from base
+    union
+    select d.task_id from task_dependencies d join closure c on d.depends_on = c.id
+)
+select t.id, (t.id in (select id from base))::bool as in_release
+from tasks t
+where t.id in (select id from closure) and t.status = 'queued'
+order by t.id
+for update of t
+`
+
+type LockQueuedWithDependentsParams struct {
+	ReleaseID uuid.UUID
+	BatchSize int32
+}
+
+type LockQueuedWithDependentsRow struct {
+	ID        uuid.UUID
+	InRelease bool
+}
+
+// Up to batch_size queued tasks of the release, and every queued task that
+// depends on them directly or transitively, locked together in id order, so
+// failing or cancelling the batch and then its dependents never takes a
+// second round of locks.
+func (q *Queries) LockQueuedWithDependents(ctx context.Context, arg LockQueuedWithDependentsParams) ([]LockQueuedWithDependentsRow, error) {
+	rows, err := q.db.Query(ctx, lockQueuedWithDependents, arg.ReleaseID, arg.BatchSize)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []LockQueuedWithDependentsRow
+	for rows.Next() {
+		var i LockQueuedWithDependentsRow
+		if err := rows.Scan(&i.ID, &i.InRelease); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const satisfyDependencies = `-- name: SatisfyDependencies :many
 update tasks t
 set unmet_dependencies = t.unmet_dependencies - c.n

@@ -3,6 +3,7 @@ package execution
 import (
 	"encoding/json"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -103,6 +104,46 @@ func TestUnsuccessfulUpstreamFailsDependentsTransitively(t *testing.T) {
 	late := submitInputs(t, e, f, dependentInput(a.ID))[0]
 	if late.Status != TaskFailed || status(t, pool, late.ID) != TaskFailed {
 		t.Fatalf("late dependent is %s, want failed", late.Status)
+	}
+}
+
+// Winding down a release locks its queued tasks and their dependents in one
+// id-ordered set, so it never deadlocks with upstream cancellations that
+// lock the same dependents.
+func TestStoppingAReleaseRacesUpstreamCancelsWithoutDeadlock(t *testing.T) {
+	pool := dbtest.New(t)
+	e := NewExecution(pool)
+	f := deployedFunction(t, pool, `{"max_pending_tasks": 200, "resources": {"cpu_millis": 1000, "memory_mib": 256}}`)
+	ups := submit(t, e, f, 40)
+	var downstream []TaskID
+	for n := 0; n+1 < len(ups); n += 2 {
+		downstream = append(downstream, submitInputs(t, e, f, dependentInput(ups[n].ID, ups[n+1].ID))[0].ID)
+	}
+	exec(t, pool, `update workloads set desired_state = 'stopped'`)
+
+	errs := make(chan error, len(ups)+1)
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		_, err := e.Plan(t.Context(), discardLogger())
+		errs <- err
+	})
+	for n := len(ups) - 1; n >= 0; n-- {
+		wg.Go(func() {
+			_, err := e.CancelTask(t.Context(), f.workspace, ups[n].ID)
+			errs <- err
+		})
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent wind-down: %v", err)
+		}
+	}
+	for _, id := range downstream {
+		if s := status(t, pool, id); !s.Terminal() {
+			t.Fatalf("dependent %s is %s after its upstreams ended", id, s)
+		}
 	}
 }
 

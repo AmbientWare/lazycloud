@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -86,7 +87,11 @@ func (e *Execution) containerExited(ctx context.Context, tx pgx.Tx, container Co
 		if err != nil {
 			return fmt.Errorf("encode failure: %w", err)
 		}
-		failed, err := q.FailQueuedTasksOfRelease(ctx, FailQueuedTasksOfReleaseParams{ReleaseID: release, Failure: encoded})
+		queued, err := e.lockQueuedWithDependents(ctx, q, release, math.MaxInt32)
+		if err != nil {
+			return err
+		}
+		failed, err := q.FailQueuedTasksOfRelease(ctx, FailQueuedTasksOfReleaseParams{Ids: queued, Failure: encoded})
 		if err != nil {
 			return fmt.Errorf("fail queued tasks: %w", err)
 		}

@@ -131,16 +131,10 @@ where release_id = @release_id::uuid and state in ('starting', 'ready')
 returning id, host_id;
 
 -- name: CancelQueuedTasks :many
+-- The caller holds the rows from LockQueuedWithDependents.
 update tasks
 set status = 'cancelled', finished_at = now()
-where id in (
-    select q.id from tasks q
-    where q.release_id = @release_id::uuid and q.status = 'queued'
-    order by q.available_at, q.id
-    limit @batch_size
-    for update skip locked
-)
-  and status = 'queued'
+where id = any(@ids::uuid[]) and status = 'queued'
 returning id;
 
 -- name: RunningTasksOfRelease :many
