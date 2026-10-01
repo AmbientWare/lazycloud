@@ -27,10 +27,12 @@ from uuid import UUID
 import httpx
 import lazycloud.config
 import pytest
+from lazycloud.abstractions.disk import DiskOperationError
 from lazycloud.abstractions.shell import Shell
 from lazycloud.cli.main import build_public_cli
 from lazycloud.clients.api import ApiError
 from lazycloud.control import resolve_control_client_config, workloads_client
+from lazycloud.session.ssh import current_cli_command
 from lazycloud.terminal_shell import InteractiveShell
 from shared.api import ContainerState, ErrorCode
 from typer.testing import CliRunner, Result
@@ -91,8 +93,13 @@ def _until_free(action: Callable[[], T], *, seconds: float = 120.0) -> T:
     while True:
         try:
             return action()
-        except ApiError as exc:
-            if exc.code is not ErrorCode.conflict or time.monotonic() > deadline:
+        except (ApiError, DiskOperationError) as exc:
+            api = exc if isinstance(exc, ApiError) else exc.__cause__
+            if (
+                not isinstance(api, ApiError)
+                or api.code is not ErrorCode.conflict
+                or time.monotonic() > deadline
+            ):
                 raise
         time.sleep(2)
 
@@ -309,6 +316,30 @@ def test_ssh_config_makes_plain_ssh_reach_a_devbox(
             env=os.environ.copy(),
         )
         assert ssh.returncode == 0, ssh.stderr
+
+        # `devbox ssh` reaches it through the hidden ssh-proxy and ssh-cert.
+        devbox_ssh = subprocess.run(
+            [
+                *current_cli_command(),
+                "devbox",
+                name,
+                "ssh",
+                "--app",
+                app,
+                "--",
+                "-o",
+                "BatchMode=yes",
+                "echo",
+                "devbox-ok",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=_START_SECONDS,
+            env=os.environ.copy(),
+        )
+        assert (devbox_ssh.returncode, devbox_ssh.stdout.strip()) == (0, "devbox-ok"), (
+            devbox_ssh.stderr
+        )
 
         status = _cli("--json", "devbox", name, "status", "--app", app)
         assert status.exit_code == 0, status.output

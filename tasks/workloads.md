@@ -179,7 +179,10 @@ supervisor Docker tests under it; all pass but the GPU test.
 | Devbox root switch and capability drop | `TestDevboxRootPersistsWritesAndKeepsProc` passes: CapBnd and CapEff lack CAP_SYS_ADMIN, NoNewPrivs 1, `mount` fails |
 | `docker_enabled` | runs with every capability instead of privileged, which gVisor cannot start; `docker info` 29.8.2 in a sandbox, a nested `docker run` printed its output; refused under runc without `-allow-privileged-docker` |
 | Filesystem images | include gVisor's tmpfs `/tmp`; a sandbox from the image read both files |
-| Memory snapshots | the checkpoint is taken after the supervisor detaches (0.18 s), and the pod serves again 0.5 s later (`TestSnapshotUnderRunscDetachesAndKeepsServing`); reading and restoring it needs a root agent, so an unprivileged one reports `unsupported` |
+| Memory snapshots | the checkpoint is taken after the supervisor detaches (0.18 s), and the pod serves again 0.5 s later (`TestSnapshotUnderRunscDetachesAndKeepsServing`); reading it needs a root agent, so an unprivileged one reports `unsupported`. With a root agent `snapshot_memory()` uploads in 0.2 s and the sandbox keeps answering |
+| Restore from a snapshot (root agent) | fails in Docker, not here: `docker start --checkpoint` of a runsc container answers `bind-mount /proc/0/ns/net ... no such file or directory`, with or without a network, and plain `docker checkpoint create` then `docker start --checkpoint` on one container fails with `content ... already exists`. Both reproduce with the docker CLI alone. A requested restore fails the start with that message; an automatic one starts cold |
+| Devbox on an NBD root disk (root agent) | live `test_ssh_config_makes_plain_ssh_reach_a_devbox`: deploy, seed the root disk (137 MB stored, generation 1), plain `ssh -F`, `lazycloud devbox <name> ssh -- echo devbox-ok`, `devbox status`, delete |
+| Everything above again with the root agent | `runsc_live.py` and the live suite pass |
 
 ## Intentional differences from the reference
 
@@ -210,9 +213,11 @@ supervisor Docker tests under it; all pass but the GPU test.
 
 ## Gaps
 
-- Devbox disks, snapshot upload and restore need a root agent; they wait
-  on a root-agent run on this host. CRIU is not installed, so runc
-  checkpoints only reach the `unsupported` path.
+- Restoring runsc checkpoints through Docker 29 fails inside Docker (see
+  "Under gVisor"); it needs a Docker fix or runsc restore without Docker.
+  CRIU is not installed, so runc checkpoints only reach `unsupported`.
+- Disks need a plan with a disk allowance; the private stack's account was
+  made complimentary (`server admin set-complimentary`) to get one.
 - GPUs under runsc need `--nvproxy` in the runtime's arguments; this host's
   runsc has none, so `TestAgentGivesContainersFreeGPUs` times out there.
 - A checkpoint closes the container's open shells, tunnels and HTTP
