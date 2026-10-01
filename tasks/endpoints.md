@@ -91,10 +91,21 @@ SaaS, and the edge routes only verified ones.
 
 ## Intentional differences
 
-- The edge strips the caller's bearer token before forwarding; the reference
-  passed it to user code.
-- No task row per request and no `X-Task-Id` header. HTTP-invoked functions
-  still run as tasks.
+- The edge never passes a platform token to a workload; the reference
+  passed the caller's to user code. A public workload keeps any other
+  Authorization header, and the SDK sends no token to a public target.
+- No task per endpoint or ASGI request. Each gets an `X-Request-Id`, sent to
+  the workload and returned, a record (status, latency, bytes, container)
+  written in batches and kept seven days, and the output the handler wrote
+  while serving it (`GET .../apps/{app}/requests`, `.../requests/{id}`,
+  `.../requests/{id}/logs`, `lazycloud requests list|logs`). The reference
+  showed requests as tasks with `X-Task-Id`; functions invoked over HTTP are
+  still tasks and still return `X-Task-Id`. Calls an endpoint makes are not
+  children of its request, as they were of the reference's request task.
+- The reference SDK's `/api/v1/functions/invoke/stream` NDJSON call was its
+  internal transport for `.remote()`, not a public HTTP route: no doc or
+  other consumer used it. Task submit plus the task log stream replace it,
+  so it is dropped.
 - A function preview is a release of the function; local calls target it
   through the function's submit with `release_id`, which admits while the
   preview's lease lives.
@@ -102,6 +113,17 @@ SaaS, and the edge routes only verified ones.
   same name claims the same URL.
 - Endpoint and ASGI specs reject `cron` and `in_process`; HTTP workers admit
   concurrent requests themselves.
+- `latest` falls back only to an older deployed release while the active
+  one starts, never to a newer one rolled back from.
+- With several servers an edge relays a request for a host whose data
+  connection another server holds over `EdgeRelay` (cluster-internal
+  listener, per-edge token in the `edges` table); container choice,
+  admission and the response stay with the edge the client reached.
+
+## Handed off
+
+- `checkpoint_enabled` and endpoint shells belong to the workloads packet;
+  the SDK rejects them on HTTP workloads until it lands them.
 
 ## Gaps
 
@@ -109,12 +131,11 @@ SaaS, and the edge routes only verified ones.
   no credentials locally. Without them `domain add` records the hostname and
   it stays `awaiting_verification`.
 - The Team/Business plan gate on custom domains needs billing.
-- Public (`authorized=False`) functions, the `/invoke/stream` NDJSON variant,
-  endpoint shells, `checkpoint_enabled` and volumes on HTTP workloads are
-  unsupported and rejected by the SDK.
-- One edge per stream: a request reaches containers through the edge whose
-  data connection holds the agent's streams. Several server replicas need
-  stream routing between edges.
+- The dashboard's view of request records and logs is the web packet's; the
+  API and CLI serve them now.
+- Relays are verified with two edges in one process; a multi-replica
+  deployment needs `LAZYCLOUD_EDGE_RELAY_ADDR` on the pod and
+  `LAZYCLOUD_EDGE_RELAY_ADVERTISE` set to the pod IP and port.
 - gVisor needs `--host-uds` for the supervisor's HTTP socket; only runc is
   verified.
 - The reference docs say a domain may be a subdomain of a registered name;
@@ -144,6 +165,15 @@ Local, `go test -race`, real PostgreSQL, garage, registry and Docker (runc):
   subdomain digests against the reference. Supervisor: `internal/supervisor/http_test.go`.
   Runner: `python/runner/tests/test_http.py`. SDK:
   `test_deploy_maps_endpoint_and_asgi_options_to_http_specs`.
+- Public workloads, volumes, records and relays:
+  `TestPublicWorkloadsAnswerWithoutAToken`, `TestEndpointMountsItsVolumes`,
+  `TestEndpointRequestsAreRecordedWithTheirOutput`,
+  `TestRequestRelaysToTheEdgeHoldingTheHost` (warm through a relaying edge
+  p50 2.0 ms, p95 2.8 ms).
+- Review regressions: `TestBrokenResponseReleasesItsCapacity`,
+  `TestClientThatLeavesCancelsTheRequest`,
+  `TestStalledRequestBodyDoesNotHoldCapacity` and the unit tests in
+  `internal/edge/edge_test.go`; `TestUnbuildableStartFailsOnlyItsContainer`.
 - Real CLI on a private stack: `lazycloud deploy` prints the URLs; curl with a
   token answers, without one 401; `lazycloud serve api_demo:count_words`
   prints the reference's output, URL after 1.8 s, edit answered 1.35 s after
