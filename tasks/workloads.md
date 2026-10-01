@@ -164,6 +164,23 @@ server, scheduler and agent from this branch, images cached:
 | Filesystem image of a sandbox (tar, import, push, register) | 4.4 s |
 | A devbox connection whose start fails | fails in 1.8 s with the start error, not at the 175 s deadline |
 
+## Under gVisor
+
+runsc 20260928 (`--host-uds=all`, no `--net-raw`, no `--nvproxy`), Docker 29,
+an unprivileged agent. `LAZYCLOUD_TEST_OCI_RUNTIME=runsc` runs the agent and
+supervisor Docker tests under it; all pass but the GPU test.
+
+| Check | Result |
+| --- | --- |
+| Functions, endpoints, pods, sandboxes on the private stack | `double.remote(21)` 42, endpoint 42, live pod and sandbox suites pass, `dmesg` says gVisor |
+| Supervisor sockets created inside the sandbox | link, control, HTTP and port tunnels work; the agent's link-refusing dial holds (`TestSupervisorSocketsAreNeverReachedThroughALink`) |
+| Network block, allow list, update | netfilter test and live: open reaches 1.1.1.1, block refuses, `allow 1.1.1.1/32` reaches it and refuses 8.8.8.8; each update returns once the host applied it |
+| Raw-socket bypass | not possible: gVisor refuses packet sockets without `--net-raw` (the test skips); under runc the EtherType filter drops it |
+| Devbox root switch and capability drop | `TestDevboxRootPersistsWritesAndKeepsProc` passes: CapBnd and CapEff lack CAP_SYS_ADMIN, NoNewPrivs 1, `mount` fails |
+| `docker_enabled` | runs with every capability instead of privileged, which gVisor cannot start; `docker info` 29.8.2 in a sandbox, a nested `docker run` printed its output; refused under runc without `-allow-privileged-docker` |
+| Filesystem images | include gVisor's tmpfs `/tmp`; a sandbox from the image read both files |
+| Memory snapshots | the checkpoint is taken after the supervisor detaches (0.18 s), and the pod serves again 0.5 s later (`TestSnapshotUnderRunscDetachesAndKeepsServing`); reading and restoring it needs a root agent, so an unprivileged one reports `unsupported` |
+
 ## Intentional differences from the reference
 
 - Paths follow the new API (`/v1/workspaces/{ws}/instances`,
@@ -193,19 +210,13 @@ server, scheduler and agent from this branch, images cached:
 
 ## Gaps
 
-- Devbox root disks and every disk attach need root, `nbd-client` and the
-  nbd module; this host has none, so a devbox start fails here with that
-  reason. The root switch is verified with a host directory standing in for
-  the disk (`TestDevboxRootPersistsWritesAndKeepsProc`), not with a disk.
-- Memory snapshots and restores need CRIU (runc) or gVisor; neither is
-  installed, so only the `unsupported` path and the restore fallback ran.
-  Under runc a CRIU checkpoint does not carry the writable layer, and a
-  restore needs a root agent to place the checkpoint in Docker's directory.
-- gVisor is not installed, so these are unverified under runsc: the netdev
-  filter on the sandbox's interface (gVisor's netstack sends through it), a
-  privileged dockerd inside the sandbox, the root switch and capability drop,
-  checkpoint and restore, and connecting to supervisor sockets created
-  inside the sandbox through the descriptor of their inode.
+- Devbox disks, snapshot upload and restore need a root agent; they wait
+  on a root-agent run on this host. CRIU is not installed, so runc
+  checkpoints only reach the `unsupported` path.
+- GPUs under runsc need `--nvproxy` in the runtime's arguments; this host's
+  runsc has none, so `TestAgentGivesContainersFreeGPUs` times out there.
+- A checkpoint closes the container's open shells, tunnels and HTTP
+  connections, since no runtime saves a host socket.
 - Under runc `docker_enabled` needs `-allow-privileged-docker` and gives the
   workload host privilege; `LAZYCLOUD_ALLOW_PRIVILEGED_DOCKER=true` sets it
   for `deploy/local/run.sh`.
