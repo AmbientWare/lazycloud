@@ -29,12 +29,193 @@ class WorkloadName(RootModel[str]):
 
 class User(BaseModel):
     id: UUID
-    email: str
+    email: Annotated[
+        str, Field(description="Empty when GitHub reported no verified primary address.")
+    ]
+    display_name: str
+    avatar_url: str
+    github_login: Annotated[
+        str, Field(description="Empty for accounts that have not signed in with GitHub.")
+    ]
+    is_admin: Annotated[bool, Field(description="Platform administrators reach every workspace.")]
+    created_at: AwareDatetime
 
 
-class Workspace(BaseModel):
-    id: UUID
+class WorkspaceState(str, Enum):
+    active = "active"
+    deleting = "deleting"
+
+
+class WorkspaceRole(str, Enum):
+    owner = "owner"
+    administrator = "administrator"
+    member = "member"
+
+
+class WorkspaceRequest(BaseModel):
     name: Annotated[str, Field(pattern="^[a-z][a-z0-9-]{0,62}$")]
+
+
+class TokenStatus(str, Enum):
+    active = "active"
+    expired = "expired"
+
+
+class Token(BaseModel):
+    id: UUID
+    name: str
+    device: Annotated[bool, Field(description="Minted by `lazycloud login`.")]
+    workspace_id: Annotated[
+        UUID | None, Field(description="Set when the token reaches only this workspace.")
+    ] = None
+    status: TokenStatus
+    created_at: AwareDatetime
+    expires_at: Annotated[
+        AwareDatetime | None, Field(description="Absent when the token never expires.")
+    ] = None
+    last_used_at: Annotated[
+        AwareDatetime | None,
+        Field(description="Recorded within 30 seconds of use; absent if never used."),
+    ] = None
+
+
+class TokenList(BaseModel):
+    tokens: list[Token]
+    next_cursor: Annotated[
+        UUID | None, Field(description="Pass as `cursor` for the next page; absent after the last.")
+    ] = None
+
+
+class TokenCreateRequest(BaseModel):
+    name: Annotated[str, Field(max_length=100, min_length=1)]
+    expires_in_seconds: Annotated[
+        int | None,
+        Field(
+            description="One to 90 days; omit for a token that never expires.", ge=86400, le=7776000
+        ),
+    ] = None
+
+
+class CreatedToken(BaseModel):
+    token: Annotated[str, Field(description="The secret; it is not shown again.")]
+    record: Token
+
+
+class DeviceLoginRequest(BaseModel):
+    client_name: Annotated[
+        str, Field(description="Names the device token, such as cli@laptop.", max_length=200)
+    ] = "cli"
+
+
+class DeviceLogin(BaseModel):
+    device_code: Annotated[str, Field(description="The CLI's secret for polling.")]
+    user_code: Annotated[
+        str, Field(description="What the person confirms at the verification page.")
+    ]
+    verification_uri: str
+    verification_uri_complete: Annotated[
+        str, Field(description="The verification page with the code filled in.")
+    ]
+    expires_in_seconds: int
+    poll_interval_seconds: int
+
+
+class DeviceTokenRequest(BaseModel):
+    device_code: Annotated[str, Field(max_length=200, min_length=1)]
+
+
+class DeviceTokenStatus(str, Enum):
+    pending = "pending"
+    slow_down = "slow_down"
+    approved = "approved"
+    denied = "denied"
+    expired = "expired"
+
+
+class DeviceTokenResponse(BaseModel):
+    status: DeviceTokenStatus
+    token: Annotated[
+        str | None,
+        Field(description="The device token, on the poll that finds the login approved."),
+    ] = None
+    poll_interval_seconds: Annotated[
+        int, Field(description="Wait at least this long before the next poll.")
+    ]
+
+
+class DeviceCodeStatus(str, Enum):
+    pending = "pending"
+    approved = "approved"
+    denied = "denied"
+    expired = "expired"
+
+
+class DeviceCode(BaseModel):
+    user_code: str
+    client_name: str
+    status: DeviceCodeStatus
+    created_at: AwareDatetime
+    expires_at: AwareDatetime
+
+
+class Member(BaseModel):
+    user_id: UUID
+    display_name: str
+    email: str
+    role: WorkspaceRole
+    created_at: Annotated[AwareDatetime, Field(description="When the user joined.")]
+
+
+class MemberList(BaseModel):
+    members: list[Member]
+
+
+class InvitationRole(str, Enum):
+    administrator = "administrator"
+    member = "member"
+
+
+class DeliveryState(str, Enum):
+    queued = "queued"
+    sent = "sent"
+    delivered = "delivered"
+    bounced = "bounced"
+    complained = "complained"
+    failed = "failed"
+    discarded = "discarded"
+
+
+class InvitationRequest(BaseModel):
+    email: Annotated[str, Field(max_length=320, min_length=3)]
+    role: InvitationRole = InvitationRole.member
+
+
+class Invitation(BaseModel):
+    id: UUID
+    workspace_id: UUID
+    email: str
+    role: InvitationRole
+    invited_by_user_id: UUID | None = None
+    invited_by_name: str
+    expired: Annotated[bool, Field(description="Decided by the server's clock.")]
+    delivery: DeliveryState
+    expires_at: AwareDatetime
+    created_at: AwareDatetime
+    updated_at: AwareDatetime
+
+
+class InvitationList(BaseModel):
+    invitations: list[Invitation]
+
+
+class InvitationPreview(BaseModel):
+    workspace_id: UUID
+    workspace_name: Annotated[str, Field(pattern="^[a-z][a-z0-9-]{0,62}$")]
+    email: str
+    role: InvitationRole
+    invited_by_name: str
+    expired: bool
+    expires_at: AwareDatetime
 
 
 class SourceUploadRequest(BaseModel):
@@ -85,7 +266,7 @@ class Resources(BaseModel):
     disk_mib: Annotated[
         int | None,
         Field(
-            description="The container's writable layer limit. Hosts whose Docker storage supports project quotas enforce it.",
+            description="Writable layer limit; enforced where Docker has project quotas.",
             ge=1024,
             le=16777216,
         ),
@@ -180,7 +361,7 @@ class VolumeRelativePath(RootModel[str]):
     root: Annotated[
         str,
         Field(
-            description="A path relative to the volume root, with `/` separators. `.` and the empty string name the root; `..` segments are refused.",
+            description="A path below the volume root; `.` or empty is the root, `..` is refused.",
             max_length=1024,
         ),
     ]
@@ -310,9 +491,7 @@ class UploadPart(BaseModel):
     size_bytes: int
     url: Annotated[
         str,
-        Field(
-            description="A presigned PUT for these bytes; the response's ETag completes a multipart upload."
-        ),
+        Field(description="A presigned PUT of these bytes; its ETag completes a multipart upload."),
     ]
 
 
@@ -524,9 +703,7 @@ class MapEntry(BaseModel):
     key: str
     value: Annotated[
         Base64Bytes,
-        Field(
-            description="The stored bytes, base64. SDK values are UTF-8 JSON, or a cloudpickle whose first byte is 0x80."
-        ),
+        Field(description="Base64 bytes; SDK values are JSON, or cloudpickle (first byte 0x80)."),
     ]
     revision: Annotated[
         str,
@@ -541,7 +718,7 @@ class SetMapEntryRequest(BaseModel):
     ttl_seconds: Annotated[
         int | None,
         Field(
-            description="Seconds until the key expires, 0 for never. When absent, an existing key keeps its expiry and a new key never expires.",
+            description="Seconds to expiry, 0 for never; absent keeps an existing expiry.",
             ge=0,
             le=604800,
         ),
@@ -659,9 +836,35 @@ class Error(BaseModel):
     message: str
 
 
-class Me(BaseModel):
-    user: User
+class Workspace(BaseModel):
+    id: UUID
+    name: Annotated[str, Field(pattern="^[a-z][a-z0-9-]{0,62}$")]
+    state: WorkspaceState
+    role: Annotated[
+        WorkspaceRole | None,
+        Field(description="The caller's role; absent for an administrator who is not a member."),
+    ] = None
+    created_at: AwareDatetime
+
+
+class WorkspaceList(BaseModel):
     workspaces: list[Workspace]
+    next_cursor: Annotated[
+        str | None,
+        Field(
+            description="Pass as `cursor` for the next page; absent after the last.",
+            pattern="^[a-z][a-z0-9-]{0,62}$",
+        ),
+    ] = None
+
+
+class MemberRoleRequest(BaseModel):
+    role: InvitationRole
+
+
+class AcceptedInvitation(BaseModel):
+    workspace: Workspace
+    member: Member
 
 
 class SourceUpload(BaseModel):
@@ -697,7 +900,7 @@ class VolumeMountSpec(BaseModel):
     mount_path: Annotated[
         str | None,
         Field(
-            description="Absolute paths are used as given; a relative path is placed under /volumes. The default is /volumes/<name>.",
+            description="Absolute, or relative to /volumes; the default is /volumes/<name>.",
             max_length=1024,
         ),
     ] = None
@@ -749,6 +952,11 @@ class ImageDefinition(BaseModel):
 class ImageResolution(BaseModel):
     image: Image
     build: ImageBuild | None = None
+
+
+class Me(BaseModel):
+    user: User
+    workspaces: list[Workspace]
 
 
 class FunctionSpec(BaseModel):

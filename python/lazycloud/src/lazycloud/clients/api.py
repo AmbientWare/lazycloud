@@ -14,6 +14,10 @@ from pydantic import BaseModel, ValidationError
 from shared.api import (
     Deployment,
     DeploymentRequest,
+    DeviceLogin,
+    DeviceLoginRequest,
+    DeviceTokenRequest,
+    DeviceTokenResponse,
     Error,
     ErrorCode,
     Function,
@@ -31,6 +35,14 @@ from shared.api import (
     SubmitTasksResponse,
     Task,
     UploadTarget,
+    Workspace,
+    WorkspaceList,
+    WorkspaceRequest,
+)
+from shared.client_version import (
+    RECOMMENDED_CLIENT_VERSION_HEADER,
+    client_version,
+    report_client_version,
 )
 
 from lazycloud.exceptions import SdkError
@@ -70,10 +82,11 @@ class ApiConnectionError(SdkError):
 
 @dataclass
 class ApiClient:
-    """One authenticated connection pool to the API.
+    """One connection pool to the API, authenticated when `token` is set.
 
     Workspace, app and function names are validated by the server; they are
-    only escaped here.
+    only escaped here. Device login runs before any token exists, so its two
+    operations are the ones an empty token can call.
     """
 
     endpoint: str
@@ -94,6 +107,56 @@ class ApiClient:
 
     def me(self) -> Me:
         return self._send(Me, "GET", "/v1/me")
+
+    def start_device_login(self, client_name: str) -> DeviceLogin:
+        return self._send(
+            DeviceLogin,
+            "POST",
+            "/v1/device-codes",
+            body=DeviceLoginRequest(client_name=client_name),
+        )
+
+    def poll_device_login(self, device_code: str) -> DeviceTokenResponse:
+        return self._send(
+            DeviceTokenResponse,
+            "POST",
+            "/v1/device-codes/token",
+            body=DeviceTokenRequest(device_code=device_code),
+        )
+
+    def list_workspaces(self) -> list[Workspace]:
+        """Every workspace the caller may act on, following pages."""
+
+        workspaces: list[Workspace] = []
+        cursor: str | None = None
+        while True:
+            params: dict[str, str | int] = {"limit": 1000}
+            if cursor:
+                params["cursor"] = cursor
+            page = self._send(WorkspaceList, "GET", "/v1/workspaces", params=params)
+            workspaces.extend(page.workspaces)
+            if not page.next_cursor:
+                return workspaces
+            cursor = page.next_cursor
+
+    def get_workspace(self, name: str) -> Workspace:
+        return self._send(Workspace, "GET", _path("v1", "workspaces", name))
+
+    def create_workspace(self, name: str) -> Workspace:
+        return self._send(Workspace, "POST", "/v1/workspaces", body=WorkspaceRequest(name=name))
+
+    def rename_workspace(self, name: str, new_name: str) -> Workspace:
+        return self._send(
+            Workspace,
+            "PATCH",
+            _path("v1", "workspaces", name),
+            body=WorkspaceRequest(name=new_name),
+        )
+
+    def delete_workspace(self, name: str) -> Workspace:
+        """Begin deleting a workspace; it reports `deleting` until cleanup ends."""
+
+        return self._send(Workspace, "DELETE", _path("v1", "workspaces", name))
 
     def create_source_upload(self, workspace: str, request: SourceUploadRequest) -> SourceUpload:
         return self._send(
@@ -284,6 +347,7 @@ class ApiClient:
         timeout = httpx.Timeout(self.timeout_seconds, read=read)
         try:
             with self._client().stream("GET", path, params=params, timeout=timeout) as response:
+                report_client_version(response.headers.get(RECOMMENDED_CLIENT_VERSION_HEADER))
                 if response.status_code >= 300:
                     response.read()
                     raise _api_error(response)
@@ -303,9 +367,12 @@ class ApiClient:
 
     def _client(self) -> httpx.Client:
         if self._http is None:
+            headers = {"User-Agent": f"lazycloud/{client_version()}"}
+            if self.token:
+                headers["Authorization"] = f"Bearer {self.token}"
             self._http = httpx.Client(
                 base_url=self.endpoint.rstrip("/"),
-                headers={"Authorization": f"Bearer {self.token}"},
+                headers=headers,
                 timeout=self.timeout_seconds,
             )
         return self._http
@@ -317,7 +384,7 @@ class ApiClient:
         path: str,
         *,
         body: BaseModel | None = None,
-        params: dict[str, int | str] | None = None,
+        params: dict[str, str | int] | None = None,
         read_timeout: float | None = None,
     ) -> ModelT:
         response = self._request(method, path, body=body, params=params, read_timeout=read_timeout)
@@ -371,6 +438,7 @@ class ApiClient:
             )
         except httpx.HTTPError as exc:
             raise ApiConnectionError(method, path, str(exc) or type(exc).__name__) from exc
+        report_client_version(response.headers.get(RECOMMENDED_CLIENT_VERSION_HEADER))
         if response.status_code >= 300:
             raise _api_error(response)
         return response

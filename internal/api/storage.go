@@ -30,7 +30,7 @@ func (s *Server) ListVolumes(ctx context.Context, req ListVolumesRequestObject) 
 	if err != nil {
 		return nil, err
 	}
-	page, err := s.owners.Storage.ListVolumes(ctx, ws.ID, orEmpty(req.Params.Cursor), limitOr(req.Params.Limit, 100))
+	page, err := s.owners.Storage.ListVolumes(ctx, ws.ID, orEmpty(req.Params.Cursor), limitOr(req.Params.Limit, 50))
 	if err != nil {
 		return nil, err
 	}
@@ -184,7 +184,7 @@ func (s *Server) ListDisks(ctx context.Context, req ListDisksRequestObject) (Lis
 	if err != nil {
 		return nil, err
 	}
-	page, err := s.owners.Storage.ListDisks(ctx, ws.ID, orEmpty(req.Params.Cursor), limitOr(req.Params.Limit, 100))
+	page, err := s.owners.Storage.ListDisks(ctx, ws.ID, orEmpty(req.Params.Cursor), limitOr(req.Params.Limit, 50))
 	if err != nil {
 		return nil, err
 	}
@@ -226,7 +226,7 @@ func (s *Server) ListArtifacts(ctx context.Context, req ListArtifactsRequestObje
 	page, err := s.owners.Storage.ListArtifacts(ctx, ws.ID, storage.ArtifactFilter{
 		Task: p.TaskId, App: p.App, Search: p.Search, ContentType: p.ContentType,
 		CreatedAfter: p.CreatedAfter, CreatedBefore: p.CreatedBefore,
-	}, orEmpty(p.Cursor), limitOr(p.Limit, 100))
+	}, orEmpty(p.Cursor), limitOr(p.Limit, 50))
 	if err != nil {
 		return nil, err
 	}
@@ -338,7 +338,7 @@ func (s *Server) ListQueues(ctx context.Context, req ListQueuesRequestObject) (L
 	if err != nil {
 		return nil, err
 	}
-	page, err := s.owners.Storage.ListQueues(ctx, ws.ID, orEmpty(req.Params.Cursor), limitOr(req.Params.Limit, 100))
+	page, err := s.owners.Storage.ListQueues(ctx, ws.ID, orEmpty(req.Params.Cursor), limitOr(req.Params.Limit, 50))
 	if err != nil {
 		return nil, err
 	}
@@ -423,7 +423,7 @@ func (s *Server) ListMaps(ctx context.Context, req ListMapsRequestObject) (ListM
 	if err != nil {
 		return nil, err
 	}
-	page, err := s.owners.Storage.ListMaps(ctx, ws.ID, orEmpty(req.Params.Cursor), limitOr(req.Params.Limit, 100))
+	page, err := s.owners.Storage.ListMaps(ctx, ws.ID, orEmpty(req.Params.Cursor), limitOr(req.Params.Limit, 50))
 	if err != nil {
 		return nil, err
 	}
