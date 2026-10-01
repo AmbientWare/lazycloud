@@ -137,7 +137,6 @@ left join workspace_buckets b on b.workspace_id = d.workspace_id
 where d.state = 'deleting'
 order by d.deleted_at
 limit $1
-for update of d skip locked
 `
 
 type DeletingDisksRow struct {

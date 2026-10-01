@@ -6,6 +6,9 @@
 create table workspace_buckets (
     workspace_id uuid primary key references workspaces (id) on delete cascade,
     bucket text not null unique,
+    -- When the sweep last removed objects no row owns, which presigned
+    -- uploads and lost hosts can write after a delete.
+    orphans_checked_at timestamptz,
     created_at timestamptz not null default now()
 );
 

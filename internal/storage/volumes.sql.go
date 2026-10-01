@@ -44,6 +44,33 @@ func (q *Queries) ActiveVolume(ctx context.Context, arg ActiveVolumeParams) (Act
 	return i, err
 }
 
+const claimOrphanCheck = `-- name: ClaimOrphanCheck :one
+update workspace_buckets
+set orphans_checked_at = now()
+where workspace_id = (
+    select b.workspace_id from workspace_buckets b
+    where b.orphans_checked_at is null or b.orphans_checked_at < now() - interval '1 hour'
+    order by b.orphans_checked_at nulls first
+    limit 1
+    for update skip locked
+)
+returning workspace_id, bucket
+`
+
+type ClaimOrphanCheckRow struct {
+	WorkspaceID uuid.UUID
+	Bucket      string
+}
+
+// A workspace bucket whose orphaned prefixes were not checked for an hour;
+// the claim lasts an hour, so schedulers check different buckets.
+func (q *Queries) ClaimOrphanCheck(ctx context.Context) (ClaimOrphanCheckRow, error) {
+	row := q.db.QueryRow(ctx, claimOrphanCheck)
+	var i ClaimOrphanCheckRow
+	err := row.Scan(&i.WorkspaceID, &i.Bucket)
+	return i, err
+}
+
 const deleteStorageGrant = `-- name: DeleteStorageGrant :exec
 delete from storage_grants where access_key_id = $1
 `
@@ -69,7 +96,6 @@ left join workspace_buckets b on b.workspace_id = v.workspace_id
 where v.state = 'deleting'
 order by v.deleted_at
 limit $1
-for update of v skip locked
 `
 
 type DeletingVolumesRow struct {
@@ -103,7 +129,6 @@ select access_key_id from storage_grants
 where expires_at < now()
 order by expires_at
 limit $1
-for update skip locked
 `
 
 func (q *Queries) ExpiredStorageGrants(ctx context.Context, maxRows int32) ([]string, error) {
@@ -227,6 +252,54 @@ type InsertWorkspaceBucketParams struct {
 func (q *Queries) InsertWorkspaceBucket(ctx context.Context, arg InsertWorkspaceBucketParams) error {
 	_, err := q.db.Exec(ctx, insertWorkspaceBucket, arg.WorkspaceID, arg.Bucket)
 	return err
+}
+
+const knownDisks = `-- name: KnownDisks :many
+select id from disks where id = any($1::uuid[])
+`
+
+func (q *Queries) KnownDisks(ctx context.Context, ids []uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, knownDisks, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const knownVolumes = `-- name: KnownVolumes :many
+select id from volumes where id = any($1::uuid[])
+`
+
+func (q *Queries) KnownVolumes(ctx context.Context, ids []uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, knownVolumes, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listVolumes = `-- name: ListVolumes :many
@@ -410,7 +483,6 @@ where v.state = 'active'
   and (v.size_measured_at is null or v.size_measured_at < now() - make_interval(secs => $1::float8))
 order by v.size_measured_at nulls first
 limit $2
-for update of v skip locked
 `
 
 type VolumesToMeasureParams struct {

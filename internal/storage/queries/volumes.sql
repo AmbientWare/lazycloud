@@ -64,8 +64,7 @@ from volumes v
 left join workspace_buckets b on b.workspace_id = v.workspace_id
 where v.state = 'deleting'
 order by v.deleted_at
-limit @max_rows
-for update of v skip locked;
+limit @max_rows;
 
 -- name: DeleteVolumeRow :exec
 delete from volumes where id = @id and state = 'deleting';
@@ -77,8 +76,7 @@ join workspace_buckets b on b.workspace_id = v.workspace_id
 where v.state = 'active'
   and (v.size_measured_at is null or v.size_measured_at < now() - make_interval(secs => @every_seconds::float8))
 order by v.size_measured_at nulls first
-limit @max_rows
-for update of v skip locked;
+limit @max_rows;
 
 -- name: RecordVolumeSize :exec
 update volumes set size_bytes = @size_bytes, size_measured_at = now() where id = @id;
@@ -106,8 +104,27 @@ values (@access_key_id, @workspace_id, @host_id, @expires_at);
 select access_key_id from storage_grants
 where expires_at < now()
 order by expires_at
-limit @max_rows
-for update skip locked;
+limit @max_rows;
 
 -- name: DeleteStorageGrant :exec
 delete from storage_grants where access_key_id = @access_key_id;
+
+-- name: ClaimOrphanCheck :one
+-- A workspace bucket whose orphaned prefixes were not checked for an hour;
+-- the claim lasts an hour, so schedulers check different buckets.
+update workspace_buckets
+set orphans_checked_at = now()
+where workspace_id = (
+    select b.workspace_id from workspace_buckets b
+    where b.orphans_checked_at is null or b.orphans_checked_at < now() - interval '1 hour'
+    order by b.orphans_checked_at nulls first
+    limit 1
+    for update skip locked
+)
+returning workspace_id, bucket;
+
+-- name: KnownVolumes :many
+select id from volumes where id = any(@ids::uuid[]);
+
+-- name: KnownDisks :many
+select id from disks where id = any(@ids::uuid[]);

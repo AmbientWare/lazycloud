@@ -421,6 +421,10 @@ func (s *Storage) PresignVolumeFile(ctx context.Context, workspace identity.Work
 		return apitypes.PresignedUrl{}, err
 	}
 	lifetime := presignLifetime(req.ExpiresSeconds)
+	if req.Method == apitypes.PresignVolumeFileRequestMethodPut || req.Method == apitypes.PresignVolumeFileRequestMethodUploadPart {
+		// A write URL outliving a delete would recreate files.
+		lifetime = min(lifetime, uploadLifetime)
+	}
 	key := aws.String(prefix + rel)
 	expires := s3.WithPresignExpires(lifetime)
 	var url string
@@ -457,8 +461,9 @@ func (s *Storage) PresignVolumeFile(ctx context.Context, workspace identity.Work
 	return apitypes.PresignedUrl{Url: url, ExpiresAt: time.Now().Add(lifetime)}, nil
 }
 
-// uploadLifetime bounds how long a part URL of an upload stays valid.
-const uploadLifetime = 24 * time.Hour
+// uploadLifetime bounds how long an upload URL stays valid, and with it
+// how long a deleted owner can still receive bytes.
+const uploadLifetime = time.Hour
 
 // CreateVolumeUpload starts a multipart upload of one file.
 func (s *Storage) CreateVolumeUpload(ctx context.Context, workspace identity.WorkspaceID, volume string, req apitypes.CreateVolumeUploadRequest) (apitypes.MultipartUpload, error) {

@@ -72,6 +72,8 @@ type Storage struct {
 	bucket  string
 	config  Config
 	buckets bucketProvider
+	// orphanAge is the sweep's orphanAge; tests in this package shorten it.
+	orphanAge time.Duration
 }
 
 // NewStorage returns the storage owner over pool and the configured bucket.
@@ -88,7 +90,7 @@ func NewStorage(pool *pgxpool.Pool, cfg Config) *Storage {
 	})
 	return &Storage{
 		pool: pool, queries: New(pool), client: client, presign: s3.NewPresignClient(client), bucket: cfg.Bucket,
-		config: cfg, buckets: newBucketProvider(cfg, client),
+		config: cfg, buckets: newBucketProvider(cfg, client), orphanAge: orphanAge,
 	}
 }
 

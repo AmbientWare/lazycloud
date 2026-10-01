@@ -106,8 +106,7 @@ from disks d
 left join workspace_buckets b on b.workspace_id = d.workspace_id
 where d.state = 'deleting'
 order by d.deleted_at
-limit @max_rows
-for update of d skip locked;
+limit @max_rows;
 
 -- name: DeleteDiskRow :exec
 delete from disks where id = @id and state = 'deleting';

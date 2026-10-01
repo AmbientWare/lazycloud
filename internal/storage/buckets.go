@@ -296,14 +296,7 @@ func (a *awsBuckets) ensureBucket(ctx context.Context, bucket string) error {
 }
 
 func (a *awsBuckets) issue(ctx context.Context, bucket, name string, lifetime time.Duration) (Grant, bool, error) {
-	policy, err := json.Marshal(map[string]any{
-		"Version": "2012-10-17",
-		"Statement": []map[string]any{{
-			"Effect":   "Allow",
-			"Action":   []string{"s3:*"},
-			"Resource": []string{"arn:aws:s3:::" + bucket, "arn:aws:s3:::" + bucket + "/*"},
-		}},
-	})
+	policy, err := json.Marshal(hostPolicy(bucket))
 	if err != nil {
 		return Grant{}, false, fmt.Errorf("encode session policy: %w", err)
 	}
@@ -324,3 +317,30 @@ func (a *awsBuckets) issue(ctx context.Context, bucket, name string, lifetime ti
 }
 
 func (a *awsBuckets) revoke(context.Context, string) error { return nil }
+
+// hostPolicy is the STS session policy of a host grant: object reads,
+// writes and multipart uploads under the bucket's volumes/ and disks/
+// prefixes, and listing those prefixes. It grants nothing on the bucket
+// itself, such as its policy, lifecycle or deletion.
+func hostPolicy(bucket string) map[string]any {
+	arn := "arn:aws:s3:::" + bucket
+	return map[string]any{
+		"Version": "2012-10-17",
+		"Statement": []map[string]any{
+			{
+				"Effect": "Allow",
+				"Action": []string{
+					"s3:GetObject", "s3:PutObject", "s3:DeleteObject",
+					"s3:AbortMultipartUpload", "s3:ListMultipartUploadParts",
+				},
+				"Resource": []string{arn + "/volumes/*", arn + "/disks/*"},
+			},
+			{
+				"Effect":    "Allow",
+				"Action":    []string{"s3:ListBucket", "s3:ListBucketMultipartUploads"},
+				"Resource":  []string{arn},
+				"Condition": map[string]any{"StringLike": map[string]any{"s3:prefix": []string{"volumes/*", "disks/*"}}},
+			},
+		},
+	}
+}

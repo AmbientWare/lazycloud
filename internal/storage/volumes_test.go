@@ -108,6 +108,31 @@ func TestVolumeFiles(t *testing.T) {
 	}
 }
 
+// TestMoveKeepsNamesThatLookEscaped: copy sources are URL paths, so a file
+// named "a%20b" must not copy "a b".
+func TestMoveKeepsNamesThatLookEscaped(t *testing.T) {
+	ctx := t.Context()
+	f := newFixture(t, volumeSpec)
+	s := f.storage
+	if _, err := s.CreateVolume(ctx, f.ws, "data"); err != nil {
+		t.Fatal(err)
+	}
+	putFile(t, s, f, "src/a%20b.txt", []byte("percent"))
+	putFile(t, s, f, "src/a b.txt", []byte("space"))
+	if _, err := s.MoveVolumeFile(ctx, f.ws, "data", "src", "dst"); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{"dst/a%20b.txt": "percent", "dst/a b.txt": "space"} {
+		url, err := s.PresignVolumeFile(ctx, f.ws, "data", apitypes.PresignVolumeFileRequest{Path: name, Method: apitypes.PresignVolumeFileRequestMethodGet})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if status, body, _ := get(t, url.Url); status != http.StatusOK || string(body) != want {
+			t.Fatalf("%s after move: %d %q, want %q", name, status, body, want)
+		}
+	}
+}
+
 func TestVolumeMultipartUpload(t *testing.T) {
 	ctx := t.Context()
 	f := newFixture(t, volumeSpec)

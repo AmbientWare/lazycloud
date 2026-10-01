@@ -43,6 +43,31 @@ func (q *Queries) AnyArtifact(ctx context.Context, arg AnyArtifactParams) (Artif
 	return i, err
 }
 
+const artifactIDs = `-- name: ArtifactIDs :many
+select id from artifacts where id = any($1::uuid[])
+`
+
+// The ids among ids that still have a row.
+func (q *Queries) ArtifactIDs(ctx context.Context, ids []uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, artifactIDs, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const artifactSummary = `-- name: ArtifactSummary :one
 select count(*)::bigint as count, coalesce(sum(size_bytes), 0)::bigint as size_bytes
 from artifacts
@@ -87,15 +112,6 @@ func (q *Queries) ArtifactTask(ctx context.Context, arg ArtifactTaskParams) (Art
 	return i, err
 }
 
-const deleteArtifactRows = `-- name: DeleteArtifactRows :exec
-delete from artifacts where id = any($1::uuid[])
-`
-
-func (q *Queries) DeleteArtifactRows(ctx context.Context, ids []uuid.UUID) error {
-	_, err := q.db.Exec(ctx, deleteArtifactRows, ids)
-	return err
-}
-
 const deleteArtifacts = `-- name: DeleteArtifacts :many
 delete from artifacts
 where workspace_id = $1 and id = any($2::uuid[])
@@ -132,13 +148,25 @@ func (q *Queries) DeleteArtifacts(ctx context.Context, arg DeleteArtifactsParams
 	return items, nil
 }
 
+const deleteExpiredArtifactRows = `-- name: DeleteExpiredArtifactRows :exec
+delete from artifacts
+where id = any($1::uuid[])
+  and ((state = 'stored' and expires_at <= now())
+       or (state = 'uploading' and created_at < now() - interval '1 day'))
+`
+
+// Rows whose bytes are gone; the condition matches ExpiredArtifacts.
+func (q *Queries) DeleteExpiredArtifactRows(ctx context.Context, ids []uuid.UUID) error {
+	_, err := q.db.Exec(ctx, deleteExpiredArtifactRows, ids)
+	return err
+}
+
 const expiredArtifacts = `-- name: ExpiredArtifacts :many
 select id, workspace_id, upload_id from artifacts
 where (state = 'stored' and expires_at <= now())
    or (state = 'uploading' and created_at < now() - interval '1 day')
 order by created_at
 limit $1
-for update skip locked
 `
 
 type ExpiredArtifactsRow struct {

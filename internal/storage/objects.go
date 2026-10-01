@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -153,6 +155,20 @@ func (s *Storage) eachObject(ctx context.Context, bucket, prefix string, fn func
 // deleteKeys removes keys in batches. A key that is already gone counts as
 // deleted.
 func (s *Storage) deleteKeys(ctx context.Context, bucket string, keys []string) error {
+	failed, err := s.tryDeleteKeys(ctx, bucket, keys)
+	if err != nil {
+		return err
+	}
+	for key, reason := range failed {
+		return fmt.Errorf("delete %s: %s", key, reason)
+	}
+	return nil
+}
+
+// tryDeleteKeys removes keys and returns those the store refused, with its
+// reason, so callers keep what succeeded.
+func (s *Storage) tryDeleteKeys(ctx context.Context, bucket string, keys []string) (map[string]string, error) {
+	failed := map[string]string{}
 	for start := 0; start < len(keys); start += deleteBatch {
 		batch := keys[start:min(start+deleteBatch, len(keys))]
 		objects := make([]s3types.ObjectIdentifier, len(batch))
@@ -163,43 +179,57 @@ func (s *Storage) deleteKeys(ctx context.Context, bucket string, keys []string) 
 			Bucket: aws.String(bucket), Delete: &s3types.Delete{Objects: objects, Quiet: aws.Bool(true)},
 		})
 		if err != nil {
-			return fmt.Errorf("delete objects: %w", err)
+			return nil, fmt.Errorf("delete objects: %w", err)
 		}
-		if len(out.Errors) > 0 {
-			e := out.Errors[0]
-			return fmt.Errorf("delete %s: %s", aws.ToString(e.Key), aws.ToString(e.Message))
+		for _, e := range out.Errors {
+			failed[aws.ToString(e.Key)] = aws.ToString(e.Message)
 		}
 	}
-	return nil
+	return failed, nil
 }
 
-// deletePrefix removes every object under prefix and aborts the multipart
-// uploads started there.
-func (s *Storage) deletePrefix(ctx context.Context, bucket, prefix string) error {
-	uploads := s3.NewListMultipartUploadsPaginator(s.client, &s3.ListMultipartUploadsInput{Bucket: aws.String(bucket), Prefix: aws.String(prefix)})
-	for uploads.HasMorePages() {
-		page, err := uploads.NextPage(ctx)
-		if err != nil {
-			return fmt.Errorf("list multipart uploads: %w", err)
-		}
-		for _, u := range page.Uploads {
-			if err := s.abortMultipart(ctx, bucket, aws.ToString(u.Key), aws.ToString(u.UploadId)); err != nil {
-				return err
-			}
+// prefixChunk is the most objects one sweep step deletes under a prefix.
+const prefixChunk = 1000
+
+// deletePrefixChunk aborts the prefix's multipart uploads and deletes up to
+// prefixChunk of its objects. It reports whether the prefix is now empty.
+func (s *Storage) deletePrefixChunk(ctx context.Context, bucket, prefix string) (bool, error) {
+	uploads, err := s.client.ListMultipartUploads(ctx, &s3.ListMultipartUploadsInput{
+		Bucket: aws.String(bucket), Prefix: aws.String(prefix), MaxUploads: aws.Int32(prefixChunk),
+	})
+	if err != nil {
+		return false, fmt.Errorf("list multipart uploads: %w", err)
+	}
+	for _, u := range uploads.Uploads {
+		if err := s.abortMultipart(ctx, bucket, aws.ToString(u.Key), aws.ToString(u.UploadId)); err != nil {
+			return false, err
 		}
 	}
-	return s.eachObject(ctx, bucket, prefix, func(batch []objectInfo) error {
-		keys := make([]string, len(batch))
-		for n, o := range batch {
-			keys[n] = o.Key
-		}
-		return s.deleteKeys(ctx, bucket, keys)
+	out, err := s.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+		Bucket: aws.String(bucket), Prefix: aws.String(prefix), MaxKeys: aws.Int32(prefixChunk),
 	})
+	if err != nil {
+		return false, fmt.Errorf("list objects: %w", err)
+	}
+	keys := make([]string, len(out.Contents))
+	for n, o := range out.Contents {
+		keys[n] = aws.ToString(o.Key)
+	}
+	if err := s.deleteKeys(ctx, bucket, keys); err != nil {
+		return false, err
+	}
+	return !aws.ToBool(out.IsTruncated) && !aws.ToBool(uploads.IsTruncated), nil
 }
 
 // copyObject copies one object within bucket, in parts above maxCopyBytes.
 func (s *Storage) copyObject(ctx context.Context, bucket string, from objectInfo, to string) error {
-	source := bucket + "/" + from.Key
+	// CopySource is a URL path: each key segment is escaped, or a key
+	// holding "%20" would copy another object.
+	segments := strings.Split(from.Key, "/")
+	for n, segment := range segments {
+		segments[n] = url.PathEscape(segment)
+	}
+	source := bucket + "/" + strings.Join(segments, "/")
 	if from.Size <= maxCopyBytes {
 		if _, err := s.client.CopyObject(ctx, &s3.CopyObjectInput{
 			Bucket: aws.String(bucket), Key: aws.String(to), CopySource: aws.String(source),

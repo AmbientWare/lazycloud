@@ -65,8 +65,15 @@ select id, workspace_id, upload_id from artifacts
 where (state = 'stored' and expires_at <= now())
    or (state = 'uploading' and created_at < now() - interval '1 day')
 order by created_at
-limit @max_rows
-for update skip locked;
+limit @max_rows;
 
--- name: DeleteArtifactRows :exec
-delete from artifacts where id = any(@ids::uuid[]);
+-- name: DeleteExpiredArtifactRows :exec
+-- Rows whose bytes are gone; the condition matches ExpiredArtifacts.
+delete from artifacts
+where id = any(@ids::uuid[])
+  and ((state = 'stored' and expires_at <= now())
+       or (state = 'uploading' and created_at < now() - interval '1 day'));
+
+-- name: ArtifactIDs :many
+-- The ids among ids that still have a row.
+select id from artifacts where id = any(@ids::uuid[]);
