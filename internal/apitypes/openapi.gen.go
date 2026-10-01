@@ -1338,31 +1338,31 @@ func (e InvitationRole) Valid() bool {
 
 // Defines values for KillRequestSignal.
 const (
-	HUP  KillRequestSignal = "HUP"
-	INT  KillRequestSignal = "INT"
-	KILL KillRequestSignal = "KILL"
-	QUIT KillRequestSignal = "QUIT"
-	TERM KillRequestSignal = "TERM"
-	USR1 KillRequestSignal = "USR1"
-	USR2 KillRequestSignal = "USR2"
+	SignalHUP  KillRequestSignal = "HUP"
+	SignalINT  KillRequestSignal = "INT"
+	SignalKILL KillRequestSignal = "KILL"
+	SignalQUIT KillRequestSignal = "QUIT"
+	SignalTERM KillRequestSignal = "TERM"
+	SignalUSR1 KillRequestSignal = "USR1"
+	SignalUSR2 KillRequestSignal = "USR2"
 )
 
 // Valid indicates whether the value is a known member of the KillRequestSignal enum.
 func (e KillRequestSignal) Valid() bool {
 	switch e {
-	case HUP:
+	case SignalHUP:
 		return true
-	case INT:
+	case SignalINT:
 		return true
-	case KILL:
+	case SignalKILL:
 		return true
-	case QUIT:
+	case SignalQUIT:
 		return true
-	case TERM:
+	case SignalTERM:
 		return true
-	case USR1:
+	case SignalUSR1:
 		return true
-	case USR2:
+	case SignalUSR2:
 		return true
 	default:
 		return false

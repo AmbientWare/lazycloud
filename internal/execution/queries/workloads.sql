@@ -264,7 +264,8 @@ join apps a on a.id = w.app_id
 where c.id = @id;
 
 -- name: SetContainerNetwork :one
-update containers set block_network = @block_network, allow_list = @allow_list::text[]
+update containers
+set block_network = @block_network, allow_list = @allow_list::text[], network_version = network_version + 1
 where id = @id and workspace_id = @workspace_id and state <> 'stopped'
 returning host_id, block_network, allow_list;
 
@@ -272,10 +273,10 @@ returning host_id, block_network, allow_list;
 select block_network, allow_list from containers where id = @id and workspace_id = @workspace_id;
 
 -- name: NetworkPoliciesOnHost :many
--- Live containers on the host whose outbound traffic is limited.
-select id, block_network, allow_list from containers
-where host_id = @host_id and state in ('starting', 'ready', 'draining')
-  and (block_network or cardinality(allow_list) > 0)
+-- Live containers on the host whose policy changed after their start, which
+-- carried the first one.
+select id, block_network, allow_list, network_version from containers
+where host_id = @host_id and state in ('starting', 'ready', 'draining') and network_version > 0
 order by id;
 
 -- name: ExposePort :one

@@ -199,6 +199,8 @@ type PublishCommand struct {
 type NetworkCommand struct {
 	Container ContainerID
 	Policy    NetworkPolicy
+	// Version orders policy changes; a host applies the newest.
+	Version int
 }
 
 // workloadCommands adds the host's snapshot, publish and network commands.
@@ -240,6 +242,7 @@ func (e *Execution) workloadCommands(ctx context.Context, host compute.HostID, o
 	for _, row := range policies {
 		out.Network = append(out.Network, NetworkCommand{
 			Container: ContainerID(row.ID), Policy: NetworkPolicy{Block: row.BlockNetwork, Allow: row.AllowList},
+			Version: int(row.NetworkVersion),
 		})
 	}
 	return nil

@@ -587,19 +587,20 @@ func (q *Queries) LockPodWorkload(ctx context.Context, arg LockPodWorkloadParams
 }
 
 const networkPoliciesOnHost = `-- name: NetworkPoliciesOnHost :many
-select id, block_network, allow_list from containers
-where host_id = $1 and state in ('starting', 'ready', 'draining')
-  and (block_network or cardinality(allow_list) > 0)
+select id, block_network, allow_list, network_version from containers
+where host_id = $1 and state in ('starting', 'ready', 'draining') and network_version > 0
 order by id
 `
 
 type NetworkPoliciesOnHostRow struct {
-	ID           uuid.UUID
-	BlockNetwork bool
-	AllowList    []string
+	ID             uuid.UUID
+	BlockNetwork   bool
+	AllowList      []string
+	NetworkVersion int32
 }
 
-// Live containers on the host whose outbound traffic is limited.
+// Live containers on the host whose policy changed after their start, which
+// carried the first one.
 func (q *Queries) NetworkPoliciesOnHost(ctx context.Context, hostID *uuid.UUID) ([]NetworkPoliciesOnHostRow, error) {
 	rows, err := q.db.Query(ctx, networkPoliciesOnHost, hostID)
 	if err != nil {
@@ -609,7 +610,12 @@ func (q *Queries) NetworkPoliciesOnHost(ctx context.Context, hostID *uuid.UUID) 
 	var items []NetworkPoliciesOnHostRow
 	for rows.Next() {
 		var i NetworkPoliciesOnHostRow
-		if err := rows.Scan(&i.ID, &i.BlockNetwork, &i.AllowList); err != nil {
+		if err := rows.Scan(
+			&i.ID,
+			&i.BlockNetwork,
+			&i.AllowList,
+			&i.NetworkVersion,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -945,7 +951,8 @@ func (q *Queries) SandboxStats(ctx context.Context, arg SandboxStatsParams) (San
 }
 
 const setContainerNetwork = `-- name: SetContainerNetwork :one
-update containers set block_network = $1, allow_list = $2::text[]
+update containers
+set block_network = $1, allow_list = $2::text[], network_version = network_version + 1
 where id = $3 and workspace_id = $4 and state <> 'stopped'
 returning host_id, block_network, allow_list
 `
