@@ -40,7 +40,7 @@ func loadOrEnroll(ctx context.Context, cfg Config, capacity *hostproto.Capacity)
 	if cfg.JoinToken == "" {
 		return identity{}, errors.New("the host is not enrolled and no join token was given")
 	}
-	conn, err := dialServer(cfg.Server, "")
+	conn, err := dialServer(cfg.Server, "", cfg.Telemetry)
 	if err != nil {
 		return identity{}, err
 	}

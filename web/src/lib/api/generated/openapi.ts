@@ -1668,6 +1668,235 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/workspaces/{workspace}/changes/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Committed changes to the workspace's resources as server-sent events
+         * @description Each `change` event's data is a ChangeEvent and its id is the event's seq. A reconnect that sends the last id in Last-Event-ID receives the events that followed it, or a `reset` event (data ChangeReset) when the server no longer holds them or the client fell behind; the client then reloads what it shows. A comment line arrives every 15 seconds without events. The server ends a stream after 10 minutes; clients reconnect with Last-Event-ID.
+         */
+        get: operations["streamChanges"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/containers/{container}/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                container: components["parameters"]["ContainerPath"];
+            };
+            cookie?: never;
+        };
+        /**
+         * CPU, memory, network, disk and GPU use of a container over time
+         * @description Hosts sample every 5 seconds. Samples are kept for an hour and as per-minute points for seven days, so a step under 60 seconds reads only the last hour. The default range is the container's last hour of life, and a range spans at most 7 days; at most 1,000 points are returned, and the step grows to fit.
+         */
+        get: operations["getContainerMetrics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/containers/{container}/lifecycle": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                container: components["parameters"]["ContainerPath"];
+            };
+            cookie?: never;
+        };
+        /** How long the container waited for placement and each start stage, and how it stopped */
+        get: operations["getContainerLifecycle"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/containers/lifecycles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** The lifecycles of up to 200 containers, such as those of a call graph */
+        post: operations["listContainerLifecycles"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/tasks/{task}/timeline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                task: components["parameters"]["TaskPath"];
+            };
+            cookie?: never;
+        };
+        /** The task's submission, attempts, retries and outcome in order */
+        get: operations["getTaskTimeline"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/tasks/{task}/call-graph": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                task: components["parameters"]["TaskPath"];
+            };
+            cookie?: never;
+        };
+        /** Every task of the task's call graph, from its root */
+        get: operations["getTaskCallGraph"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/deployments/{deployment}/performance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                /** @description The workload id. */
+                deployment: components["parameters"]["DeploymentPath"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Run time percentiles, outcomes and cold starts per time bucket
+         * @description Tasks fall in the bucket they were submitted in; a duration is from start to finish of a finished task. A cold start is a container started for the deployment. The default range is the last 24 hours.
+         */
+        get: operations["getDeploymentPerformance"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/metrics/tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Task outcomes, failure rate, run time and startup percentiles over a range
+         * @description Tasks submitted in the range count. The default range is the last 24 hours; a range spans at most 31 days.
+         */
+        get: operations["getTaskMetrics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/metrics/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Tasks submitted per time bucket and status, one series per app or, with `app`, per function
+         * @description Buckets are dense and aligned to multiples of window_seconds since the epoch. The default range is the last 24 buckets.
+         */
+        get: operations["getTaskActivity"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/me/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Live containers across the caller's workspaces and concurrency against plan limits */
+        get: operations["getAccountMetrics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/me/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Container or task starts, or allocated CPU, memory or GPUs, per app over time across the caller's workspaces
+         * @description Starts count containers or tasks created per bucket. Allocations are the average cores, GiB or GPUs reserved by live containers over each bucket, and over the range for each series' total. Series are sorted by total; past `limit` they fold into one `other` series. The default range is the last 24 buckets.
+         */
+        get: operations["getAccountActivity"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -2785,6 +3014,351 @@ export interface components {
             /** Format: date-time */
             time: string;
         };
+        /** @enum {string} */
+        ChangeTopic: "apps" | "deployments" | "tasks" | "containers" | "storage.secrets";
+        /** @enum {string} */
+        ChangeKind: "created" | "updated" | "deleted";
+        /** @description The changes one statement committed in the workspace. A statement that changed many resources sends them grouped, with a count and no resource_id. */
+        ChangeEvent: {
+            /** Format: int64 */
+            seq: number;
+            /** Format: uuid */
+            workspace_id: string;
+            /** Format: date-time */
+            occurred_at: string;
+            changes: components["schemas"]["ResourceChange"][];
+        };
+        ResourceChange: {
+            topic: components["schemas"]["ChangeTopic"];
+            change: components["schemas"]["ChangeKind"];
+            /** @description The resource's id, or a secret's name. */
+            resource_id?: string;
+            /** Format: uuid */
+            app_id?: string;
+            /** Format: uuid */
+            deployment_id?: string;
+            /** Format: uuid */
+            task_id?: string;
+            /** Format: uuid */
+            root_task_id?: string;
+            /** Format: uuid */
+            container_id?: string;
+            /** @description The resource's state after the change. */
+            status?: string;
+            /** @description How many resources a grouped change covers. */
+            count?: number;
+        };
+        /**
+         * @description behind: the client read too slowly and events were dropped. missed: the server lost its database connection and may have missed changes. unknown_cursor: Last-Event-ID is older than the events the server holds.
+         * @enum {string}
+         */
+        ChangeResetReason: "behind" | "missed" | "unknown_cursor";
+        ChangeReset: {
+            reason: components["schemas"]["ChangeResetReason"];
+        };
+        ContainerMetrics: {
+            /** Format: uuid */
+            container_id: string;
+            /**
+             * Format: int64
+             * @description The container's CPU reservation.
+             */
+            cpu_total_millicores: number;
+            /**
+             * Format: int64
+             * @description The container's memory reservation.
+             */
+            memory_total_bytes: number;
+            step_seconds: number;
+            points: components["schemas"]["ContainerMetricPoint"][];
+        };
+        /** @description Use over the step that starts at timestamp. Counters are the bytes moved in interval_ms, the sampled time the point covers; memory and GPU memory are the peak. */
+        ContainerMetricPoint: {
+            /** Format: date-time */
+            timestamp: string;
+            /** Format: int64 */
+            interval_ms: number;
+            /**
+             * Format: double
+             * @description Average CPU use over the interval.
+             */
+            cpu_millicores: number;
+            /** Format: int64 */
+            memory_rss_bytes: number;
+            /** Format: int64 */
+            memory_swap_bytes: number;
+            /** Format: int64 */
+            network_recv_bytes: number;
+            /** Format: int64 */
+            network_sent_bytes: number;
+            /** Format: int64 */
+            disk_read_bytes: number;
+            /** Format: int64 */
+            disk_write_bytes: number;
+            /**
+             * Format: double
+             * @description Average over the container's GPUs; absent without one.
+             */
+            gpu_utilization_pct?: number;
+            /** Format: int64 */
+            gpu_memory_used_bytes?: number;
+            /** Format: int64 */
+            gpu_memory_total_bytes?: number;
+            gpu_type?: string;
+        };
+        /**
+         * @description placement: waiting for a host. image: pulling the image, or finding it on the host. source: fetching the source. create: starting the container process. runtime: loading the handler. draining: from the stop request until the container stopped.
+         * @enum {string}
+         */
+        LifecycleStageKind: "placement" | "image" | "source" | "create" | "runtime" | "draining";
+        LifecycleStage: {
+            stage: components["schemas"]["LifecycleStageKind"];
+            /** Format: date-time */
+            started_at: string;
+            /**
+             * Format: date-time
+             * @description Absent while the stage runs.
+             */
+            finished_at?: string;
+            /**
+             * Format: int64
+             * @description Until finished_at, or until now while the stage runs.
+             */
+            duration_ms?: number;
+            /** @description For image, the image was already on the host. */
+            cached?: boolean;
+        };
+        ContainerLifecycle: {
+            /** Format: uuid */
+            container_id: string;
+            app?: components["schemas"]["AppName"];
+            function?: components["schemas"]["WorkloadName"];
+            state: components["schemas"]["ContainerState"];
+            stop_reason?: components["schemas"]["StopReason"];
+            exit_message?: string;
+            /** @description The name of the host the container was placed on. */
+            host?: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            assigned_at?: string;
+            /** Format: date-time */
+            ready_at?: string;
+            /** Format: date-time */
+            stopped_at?: string;
+            /** @description In the order they began. */
+            stages: components["schemas"]["LifecycleStage"][];
+        };
+        ContainerLifecyclesRequest: {
+            container_ids: string[];
+        };
+        ContainerLifecycleList: {
+            lifecycles: components["schemas"]["ContainerLifecycle"][];
+        };
+        /** @enum {string} */
+        AttemptOutcome: "running" | "succeeded" | "failed" | "timed_out" | "cancelled" | "lost";
+        /** @enum {string} */
+        TaskEventKind: "submitted" | "attempt_started" | "attempt_finished" | "retry_scheduled" | "finished";
+        TaskEvent: {
+            kind: components["schemas"]["TaskEventKind"];
+            /** Format: date-time */
+            at: string;
+            /** @description The attempt number, for attempt and retry events. */
+            attempt?: number;
+            /** Format: uuid */
+            attempt_id?: string;
+            /** Format: uuid */
+            container_id?: string;
+            outcome?: components["schemas"]["AttemptOutcome"];
+            /**
+             * Format: date-time
+             * @description For retry_scheduled, when the next attempt may start.
+             */
+            due_at?: string;
+            /** @description For finished, the task's final status. */
+            status?: components["schemas"]["TaskStatus"];
+        };
+        TaskTimeline: {
+            /** Format: uuid */
+            task_id: string;
+            status: components["schemas"]["TaskStatus"];
+            events: components["schemas"]["TaskEvent"][];
+        };
+        CallGraphNode: {
+            /** Format: uuid */
+            task_id: string;
+            /** Format: uuid */
+            parent_task_id?: string;
+            app: components["schemas"]["AppName"];
+            function: components["schemas"]["WorkloadName"];
+            status: components["schemas"]["TaskStatus"];
+            /**
+             * Format: uuid
+             * @description The container of the latest attempt.
+             */
+            container_id?: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            started_at?: string;
+            /** Format: date-time */
+            finished_at?: string;
+            /** @description Upstream tasks whose results this task's input uses. */
+            depends_on: string[];
+        };
+        TaskCallGraph: {
+            /** Format: uuid */
+            root_task_id: string;
+            /** @description Every task of the graph, oldest first; parents precede their children. */
+            nodes: components["schemas"]["CallGraphNode"][];
+            /** @description The graph holds more than the 2,000 tasks returned. */
+            truncated: boolean;
+        };
+        TaskStatusCounts: {
+            queued: number;
+            running: number;
+            succeeded: number;
+            failed: number;
+            cancelled: number;
+        };
+        PerformanceBucket: {
+            /** Format: date-time */
+            timestamp: string;
+            /** @description Finished tasks with a run time. */
+            count: number;
+            /** Format: double */
+            p50_ms?: number;
+            /** Format: double */
+            p95_ms?: number;
+            cold_starts: number;
+            status_counts: components["schemas"]["TaskStatusCounts"];
+        };
+        DeploymentPerformance: {
+            /** Format: uuid */
+            deployment_id: string;
+            window_seconds: number;
+            /** Format: date-time */
+            start: string;
+            /** Format: date-time */
+            end: string;
+            buckets: components["schemas"]["PerformanceBucket"][];
+        };
+        TaskMetrics: {
+            /** Format: date-time */
+            start: string;
+            /** Format: date-time */
+            end: string;
+            total: number;
+            status_counts: components["schemas"]["TaskStatusCounts"];
+            /**
+             * Format: double
+             * @description Failed tasks over all tasks; 0 without tasks.
+             */
+            failure_rate: number;
+            /** Format: double */
+            average_runtime_ms?: number;
+            /** Format: double */
+            runtime_ms_p50?: number;
+            /** Format: double */
+            runtime_ms_p95?: number;
+            /** Format: double */
+            runtime_ms_p99?: number;
+            /**
+             * Format: double
+             * @description From submission to the start of the first attempt.
+             */
+            startup_ms_p50?: number;
+            /** Format: double */
+            startup_ms_p95?: number;
+        };
+        ActivityBucket: {
+            /** Format: date-time */
+            timestamp: string;
+            status_counts: components["schemas"]["TaskStatusCounts"];
+        };
+        ActivitySeries: {
+            app: components["schemas"]["AppName"];
+            /** Format: uuid */
+            app_id?: string;
+            /** @description Set when the activity was asked for one app. */
+            function?: components["schemas"]["WorkloadName"];
+            total: number;
+            buckets: components["schemas"]["ActivityBucket"][];
+        };
+        TaskActivity: {
+            window_seconds: number;
+            /** Format: date-time */
+            start: string;
+            /** Format: date-time */
+            end: string;
+            /** @description Series with tasks in the range, most tasks first. */
+            series: components["schemas"]["ActivitySeries"][];
+        };
+        ContainerCounts: {
+            /** @description Waiting for a host or starting. */
+            pending: number;
+            /** @description Ready or draining. */
+            running: number;
+        };
+        ConcurrencyLimits: {
+            max_cpu_containers: number;
+            max_gpus: number;
+        };
+        /** @description Live containers in the workspaces the caller owns, which plan limits apply to. */
+        Concurrency: {
+            cpu_containers: number;
+            gpus: number;
+            /** @description Absent while the account's plan limits are unknown. */
+            limits?: components["schemas"]["ConcurrencyLimits"];
+        };
+        AccountMetrics: {
+            /** @description Live containers in every workspace the caller is a member of. */
+            containers: components["schemas"]["ContainerCounts"];
+            concurrency: components["schemas"]["Concurrency"];
+        };
+        /**
+         * @default containers
+         * @enum {string}
+         */
+        ActivityMeasure: "containers" | "tasks" | "cpu" | "memory" | "gpu";
+        /** @enum {string} */
+        ActivityUnit: "starts" | "cores" | "gibibytes" | "gpus";
+        /**
+         * @description other folds the series past the limit; unassigned holds containers of no app, such as image builds.
+         * @enum {string}
+         */
+        ActivitySeriesKind: "app" | "unassigned" | "other";
+        ActivityPoint: {
+            /** Format: date-time */
+            timestamp: string;
+            /** Format: double */
+            value: number;
+        };
+        AccountActivitySeries: {
+            kind: components["schemas"]["ActivitySeriesKind"];
+            workspace?: components["schemas"]["Name"];
+            app?: components["schemas"]["AppName"];
+            /** Format: uuid */
+            app_id?: string;
+            /**
+             * Format: double
+             * @description Starts in the range, or the average allocation over it.
+             */
+            total: number;
+            buckets: components["schemas"]["ActivityPoint"][];
+        };
+        AccountActivity: {
+            measure: components["schemas"]["ActivityMeasure"];
+            unit: components["schemas"]["ActivityUnit"];
+            window_seconds: number;
+            /** Format: date-time */
+            start: string;
+            /** Format: date-time */
+            end: string;
+            /** Format: double */
+            total: number;
+            series: components["schemas"]["AccountActivitySeries"][];
+        };
     };
     responses: {
         /** @description A typed error */
@@ -2823,6 +3397,12 @@ export interface components {
         LogAfter: number;
         /** @description Start with only the last this many stored entries. */
         LogTail: number;
+        /** @description The start of the range, inclusive. */
+        RangeStart: string;
+        /** @description The end of the range, exclusive; defaults to now. */
+        RangeEnd: string;
+        /** @description Seconds per bucket. A range holds at most 500 buckets and 31 days. */
+        WindowSeconds: number;
         VolumePath: components["schemas"]["VolumeName"];
         DiskPath: components["schemas"]["DiskName"];
         ArtifactPath: string;
@@ -5494,6 +6074,307 @@ export interface operations {
                 };
                 content: {
                     "application/x-ndjson": string;
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    streamChanges: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The id of the last event the client received. */
+                "Last-Event-ID"?: string;
+            };
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A text/event-stream of change and reset events */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": string;
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getContainerMetrics: {
+        parameters: {
+            query?: {
+                /** @description The start of the range, inclusive. */
+                start?: components["parameters"]["RangeStart"];
+                /** @description The end of the range, exclusive; defaults to now. */
+                end?: components["parameters"]["RangeEnd"];
+                /** @description Seconds per point; defaults to the finest step the range allows. */
+                step_seconds?: number;
+            };
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                container: components["parameters"]["ContainerPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The container's metrics */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContainerMetrics"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getContainerLifecycle: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                container: components["parameters"]["ContainerPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The container's lifecycle */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContainerLifecycle"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listContainerLifecycles: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ContainerLifecyclesRequest"];
+            };
+        };
+        responses: {
+            /** @description The lifecycles of the listed containers in the workspace; unknown ids are left out */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContainerLifecycleList"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getTaskTimeline: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                task: components["parameters"]["TaskPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The task's timeline */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskTimeline"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getTaskCallGraph: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                task: components["parameters"]["TaskPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The call graph */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskCallGraph"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getDeploymentPerformance: {
+        parameters: {
+            query?: {
+                /** @description Seconds per bucket. A range holds at most 500 buckets and 31 days. */
+                window_seconds?: components["parameters"]["WindowSeconds"];
+                /** @description The start of the range, inclusive. */
+                start?: components["parameters"]["RangeStart"];
+                /** @description The end of the range, exclusive; defaults to now. */
+                end?: components["parameters"]["RangeEnd"];
+            };
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                /** @description The workload id. */
+                deployment: components["parameters"]["DeploymentPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Buckets that saw tasks or cold starts, oldest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeploymentPerformance"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getTaskMetrics: {
+        parameters: {
+            query?: {
+                /** @description The start of the range, inclusive. */
+                start?: components["parameters"]["RangeStart"];
+                /** @description The end of the range, exclusive; defaults to now. */
+                end?: components["parameters"]["RangeEnd"];
+                app?: components["schemas"]["AppName"];
+                /** @description Requires `app`. */
+                function?: components["schemas"]["WorkloadName"];
+            };
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The metrics */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskMetrics"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getTaskActivity: {
+        parameters: {
+            query?: {
+                /** @description Seconds per bucket. A range holds at most 500 buckets and 31 days. */
+                window_seconds?: components["parameters"]["WindowSeconds"];
+                /** @description The start of the range, inclusive. */
+                start?: components["parameters"]["RangeStart"];
+                /** @description The end of the range, exclusive; defaults to now. */
+                end?: components["parameters"]["RangeEnd"];
+                app?: components["schemas"]["AppName"];
+            };
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The activity */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskActivity"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getAccountMetrics: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The account's metrics */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountMetrics"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getAccountActivity: {
+        parameters: {
+            query?: {
+                measure?: components["schemas"]["ActivityMeasure"];
+                /** @description Seconds per bucket. A range holds at most 500 buckets and 31 days. */
+                window_seconds?: components["parameters"]["WindowSeconds"];
+                /** @description The start of the range, inclusive. */
+                start?: components["parameters"]["RangeStart"];
+                /** @description The end of the range, exclusive; defaults to now. */
+                end?: components["parameters"]["RangeEnd"];
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The activity */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountActivity"];
                 };
             };
             default: components["responses"]["Error"];

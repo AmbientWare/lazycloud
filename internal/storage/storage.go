@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
@@ -51,8 +50,9 @@ func ParseDigest(s string) (Digest, error) {
 
 func (d Digest) String() string { return hex.EncodeToString(d[:]) }
 
-// Config locates the object store. Endpoint is required so Garage, R2 and S3
-// work alike; requests use path-style addressing.
+// Config locates the object store. With Endpoint, as for Garage or R2,
+// requests use path-style addressing; without it they go to AWS S3. The key
+// pair is optional; without it the AWS default credential chain applies.
 type Config struct {
 	Endpoint        string
 	Region          string
@@ -82,11 +82,15 @@ type Storage struct {
 
 // NewStorage returns the storage owner over pool and the configured bucket.
 func NewStorage(pool *pgxpool.Pool, cfg Config) *Storage {
+	var endpoint *string
+	if cfg.Endpoint != "" {
+		endpoint = aws.String(cfg.Endpoint)
+	}
 	client := s3.New(s3.Options{
 		Region:       cfg.Region,
-		BaseEndpoint: aws.String(cfg.Endpoint),
-		UsePathStyle: true,
-		Credentials:  credentials.NewStaticCredentialsProvider(cfg.AccessKeyID, cfg.SecretAccessKey, ""),
+		BaseEndpoint: endpoint,
+		UsePathStyle: cfg.Endpoint != "",
+		Credentials:  credentialProvider(cfg),
 		// Only send checksums the request asks for; S3-compatible stores
 		// differ in their support for the SDK's default trailing checksums.
 		RequestChecksumCalculation: aws.RequestChecksumCalculationWhenRequired,

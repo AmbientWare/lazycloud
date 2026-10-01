@@ -1071,6 +1071,329 @@ class ImageBuildLogEntry(BaseModel):
     time: AwareDatetime
 
 
+class ChangeTopic(str, Enum):
+    apps = "apps"
+    deployments = "deployments"
+    tasks = "tasks"
+    containers = "containers"
+    storage_secrets = "storage.secrets"
+
+
+class ChangeKind(str, Enum):
+    created = "created"
+    updated = "updated"
+    deleted = "deleted"
+
+
+class ResourceChange(BaseModel):
+    topic: ChangeTopic
+    change: ChangeKind
+    resource_id: Annotated[
+        str | None, Field(description="The resource's id, or a secret's name.")
+    ] = None
+    app_id: UUID | None = None
+    deployment_id: UUID | None = None
+    task_id: UUID | None = None
+    root_task_id: UUID | None = None
+    container_id: UUID | None = None
+    status: Annotated[str | None, Field(description="The resource's state after the change.")] = (
+        None
+    )
+    count: Annotated[
+        int | None, Field(description="How many resources a grouped change covers.")
+    ] = None
+
+
+class ChangeResetReason(str, Enum):
+    behind = "behind"
+    missed = "missed"
+    unknown_cursor = "unknown_cursor"
+
+
+class ChangeReset(BaseModel):
+    reason: ChangeResetReason
+
+
+class ContainerMetricPoint(BaseModel):
+    timestamp: AwareDatetime
+    interval_ms: int
+    cpu_millicores: Annotated[float, Field(description="Average CPU use over the interval.")]
+    memory_rss_bytes: int
+    memory_swap_bytes: int
+    network_recv_bytes: int
+    network_sent_bytes: int
+    disk_read_bytes: int
+    disk_write_bytes: int
+    gpu_utilization_pct: Annotated[
+        float | None, Field(description="Average over the container's GPUs; absent without one.")
+    ] = None
+    gpu_memory_used_bytes: int | None = None
+    gpu_memory_total_bytes: int | None = None
+    gpu_type: str | None = None
+
+
+class LifecycleStageKind(str, Enum):
+    placement = "placement"
+    image = "image"
+    source = "source"
+    create = "create"
+    runtime = "runtime"
+    draining = "draining"
+
+
+class LifecycleStage(BaseModel):
+    stage: LifecycleStageKind
+    started_at: AwareDatetime
+    finished_at: Annotated[
+        AwareDatetime | None, Field(description="Absent while the stage runs.")
+    ] = None
+    duration_ms: Annotated[
+        int | None, Field(description="Until finished_at, or until now while the stage runs.")
+    ] = None
+    cached: Annotated[
+        bool | None, Field(description="For image, the image was already on the host.")
+    ] = None
+
+
+class ContainerLifecycle(BaseModel):
+    container_id: UUID
+    app: Annotated[str | None, Field(pattern="^[a-z][a-z0-9_]{0,62}$")] = None
+    function: Annotated[str | None, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")] = None
+    state: ContainerState
+    stop_reason: StopReason | None = None
+    exit_message: str | None = None
+    host: Annotated[
+        str | None, Field(description="The name of the host the container was placed on.")
+    ] = None
+    created_at: AwareDatetime
+    assigned_at: AwareDatetime | None = None
+    ready_at: AwareDatetime | None = None
+    stopped_at: AwareDatetime | None = None
+    stages: Annotated[list[LifecycleStage], Field(description="In the order they began.")]
+
+
+class ContainerLifecyclesRequest(BaseModel):
+    container_ids: Annotated[list[UUID], Field(max_length=200, min_length=1)]
+
+
+class ContainerLifecycleList(BaseModel):
+    lifecycles: list[ContainerLifecycle]
+
+
+class AttemptOutcome(str, Enum):
+    running = "running"
+    succeeded = "succeeded"
+    failed = "failed"
+    timed_out = "timed_out"
+    cancelled = "cancelled"
+    lost = "lost"
+
+
+class TaskEventKind(str, Enum):
+    submitted = "submitted"
+    attempt_started = "attempt_started"
+    attempt_finished = "attempt_finished"
+    retry_scheduled = "retry_scheduled"
+    finished = "finished"
+
+
+class TaskEvent(BaseModel):
+    kind: TaskEventKind
+    at: AwareDatetime
+    attempt: Annotated[
+        int | None, Field(description="The attempt number, for attempt and retry events.")
+    ] = None
+    attempt_id: UUID | None = None
+    container_id: UUID | None = None
+    outcome: AttemptOutcome | None = None
+    due_at: Annotated[
+        AwareDatetime | None,
+        Field(description="For retry_scheduled, when the next attempt may start."),
+    ] = None
+    status: Annotated[
+        TaskStatus | None, Field(description="For finished, the task's final status.")
+    ] = None
+
+
+class TaskTimeline(BaseModel):
+    task_id: UUID
+    status: TaskStatus
+    events: list[TaskEvent]
+
+
+class CallGraphNode(BaseModel):
+    task_id: UUID
+    parent_task_id: UUID | None = None
+    app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
+    function: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
+    status: TaskStatus
+    container_id: Annotated[
+        UUID | None, Field(description="The container of the latest attempt.")
+    ] = None
+    created_at: AwareDatetime
+    started_at: AwareDatetime | None = None
+    finished_at: AwareDatetime | None = None
+    depends_on: Annotated[
+        list[UUID], Field(description="Upstream tasks whose results this task's input uses.")
+    ]
+
+
+class TaskCallGraph(BaseModel):
+    root_task_id: UUID
+    nodes: Annotated[
+        list[CallGraphNode],
+        Field(description="Every task of the graph, oldest first; parents precede their children."),
+    ]
+    truncated: Annotated[
+        bool, Field(description="The graph holds more than the 2,000 tasks returned.")
+    ]
+
+
+class TaskStatusCounts(BaseModel):
+    queued: int
+    running: int
+    succeeded: int
+    failed: int
+    cancelled: int
+
+
+class PerformanceBucket(BaseModel):
+    timestamp: AwareDatetime
+    count: Annotated[int, Field(description="Finished tasks with a run time.")]
+    p50_ms: float | None = None
+    p95_ms: float | None = None
+    cold_starts: int
+    status_counts: TaskStatusCounts
+
+
+class DeploymentPerformance(BaseModel):
+    deployment_id: UUID
+    window_seconds: int
+    start: AwareDatetime
+    end: AwareDatetime
+    buckets: list[PerformanceBucket]
+
+
+class TaskMetrics(BaseModel):
+    start: AwareDatetime
+    end: AwareDatetime
+    total: int
+    status_counts: TaskStatusCounts
+    failure_rate: Annotated[
+        float, Field(description="Failed tasks over all tasks; 0 without tasks.")
+    ]
+    average_runtime_ms: float | None = None
+    runtime_ms_p50: float | None = None
+    runtime_ms_p95: float | None = None
+    runtime_ms_p99: float | None = None
+    startup_ms_p50: Annotated[
+        float | None, Field(description="From submission to the start of the first attempt.")
+    ] = None
+    startup_ms_p95: float | None = None
+
+
+class ActivityBucket(BaseModel):
+    timestamp: AwareDatetime
+    status_counts: TaskStatusCounts
+
+
+class ActivitySeries(BaseModel):
+    app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
+    app_id: UUID | None = None
+    function: Annotated[
+        str | None,
+        Field(
+            description="Set when the activity was asked for one app.",
+            pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$",
+        ),
+    ] = None
+    total: int
+    buckets: list[ActivityBucket]
+
+
+class TaskActivity(BaseModel):
+    window_seconds: int
+    start: AwareDatetime
+    end: AwareDatetime
+    series: Annotated[
+        list[ActivitySeries], Field(description="Series with tasks in the range, most tasks first.")
+    ]
+
+
+class ContainerCounts(BaseModel):
+    pending: Annotated[int, Field(description="Waiting for a host or starting.")]
+    running: Annotated[int, Field(description="Ready or draining.")]
+
+
+class ConcurrencyLimits(BaseModel):
+    max_cpu_containers: int
+    max_gpus: int
+
+
+class Concurrency(BaseModel):
+    cpu_containers: int
+    gpus: int
+    limits: Annotated[
+        ConcurrencyLimits | None,
+        Field(description="Absent while the account's plan limits are unknown."),
+    ] = None
+
+
+class AccountMetrics(BaseModel):
+    containers: Annotated[
+        ContainerCounts,
+        Field(description="Live containers in every workspace the caller is a member of."),
+    ]
+    concurrency: Concurrency
+
+
+class ActivityMeasure(str, Enum):
+    containers = "containers"
+    tasks = "tasks"
+    cpu = "cpu"
+    memory = "memory"
+    gpu = "gpu"
+
+
+class ActivityUnit(str, Enum):
+    starts = "starts"
+    cores = "cores"
+    gibibytes = "gibibytes"
+    gpus = "gpus"
+
+
+class ActivitySeriesKind(str, Enum):
+    app = "app"
+    unassigned = "unassigned"
+    other = "other"
+
+
+class ActivityPoint(BaseModel):
+    timestamp: AwareDatetime
+    value: float
+
+
+class AccountActivitySeries(BaseModel):
+    kind: ActivitySeriesKind
+    workspace: Annotated[str | None, Field(pattern="^[a-z][a-z0-9-]{0,62}$")] = None
+    app: Annotated[str | None, Field(pattern="^[a-z][a-z0-9_]{0,62}$")] = None
+    app_id: UUID | None = None
+    total: Annotated[
+        float, Field(description="Starts in the range, or the average allocation over it.")
+    ]
+    buckets: list[ActivityPoint]
+
+
+class AccountActivity(BaseModel):
+    measure: ActivityMeasure
+    unit: ActivityUnit
+    window_seconds: int
+    start: AwareDatetime
+    end: AwareDatetime
+    total: float
+    series: list[AccountActivitySeries]
+
+
 class Error(BaseModel):
     code: ErrorCode
     message: str
@@ -1244,6 +1567,21 @@ class ImageDefinition(BaseModel):
 class ImageResolution(BaseModel):
     image: Image
     build: ImageBuild | None = None
+
+
+class ChangeEvent(BaseModel):
+    seq: int
+    workspace_id: UUID
+    occurred_at: AwareDatetime
+    changes: list[ResourceChange]
+
+
+class ContainerMetrics(BaseModel):
+    container_id: UUID
+    cpu_total_millicores: Annotated[int, Field(description="The container's CPU reservation.")]
+    memory_total_bytes: Annotated[int, Field(description="The container's memory reservation.")]
+    step_seconds: int
+    points: list[ContainerMetricPoint]
 
 
 class Me(BaseModel):
