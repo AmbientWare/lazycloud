@@ -88,7 +88,7 @@ type LockTaskForAttemptRow struct {
 	Spec             []byte
 }
 
-// Lock order everywhere in execution: task, then attempt, then container.
+// Lock order everywhere in execution: container, then task, then attempt.
 func (q *Queries) LockTaskForAttempt(ctx context.Context, attemptID uuid.UUID) (LockTaskForAttemptRow, error) {
 	row := q.db.QueryRow(ctx, lockTaskForAttempt, attemptID)
 	var i LockTaskForAttemptRow

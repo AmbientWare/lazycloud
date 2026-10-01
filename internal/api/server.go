@@ -173,7 +173,12 @@ func (s *Server) CancelTask(ctx context.Context, req CancelTaskRequestObject) (C
 	return CancelTask200JSONResponse(taskOut(task)), nil
 }
 
-// StreamTaskLogs writes log entries as NDJSON, flushing each batch.
+// logHeartbeat is the longest a followed log stream stays silent: it writes a
+// blank line then, so clients can apply a read timeout.
+const logHeartbeat = 15 * time.Second
+
+// StreamTaskLogs writes log entries as NDJSON, flushing each batch. A
+// followed stream writes a blank line after logHeartbeat without entries.
 func (s *Server) StreamTaskLogs(ctx context.Context, req StreamTaskLogsRequestObject) (StreamTaskLogsResponseObject, error) {
 	ws, err := s.workspace(ctx, req.Workspace)
 	if err != nil {
@@ -213,8 +218,13 @@ func (l logStream) VisitStreamTaskLogsResponse(w http.ResponseWriter) error {
 		return nil //nolint:nilerr // The client is gone.
 	}
 	enc := json.NewEncoder(w)
-	err := l.server.owners.Execution.StreamLogs(l.ctx, l.server.owners.Listener, l.workspace, l.task, l.after, l.follow,
+	err := l.server.owners.Execution.StreamLogs(l.ctx, l.server.owners.Listener, l.workspace, l.task, l.after, l.follow, logHeartbeat,
 		func(batch []execution.LogEntry) error {
+			if len(batch) == 0 {
+				if _, err := w.Write([]byte("\n")); err != nil {
+					return fmt.Errorf("write heartbeat: %w", err)
+				}
+			}
 			for _, entry := range batch {
 				if err := enc.Encode(apitypes.LogEntry{
 					Id: entry.ID, Attempt: entry.Attempt, Stream: apitypes.LogEntryStream(entry.Stream),

@@ -2,6 +2,7 @@ package execution
 
 import (
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -74,6 +75,72 @@ where a.id = $1`, uuid.UUID(lost.attempt)).Scan(&hostState, &ctrState, &stopReas
 	}
 	if status, _ := taskState(t, pool, alive.task); status != string(TaskRunning) {
 		t.Fatalf("task on a live host is %s, want running", status)
+	}
+}
+
+// Host loss locks every container of the host before any task. A report
+// holding a later container and then locking a task of an earlier one, in
+// container then task order, must not deadlock with it.
+func TestLostHostLocksContainersBeforeTasks(t *testing.T) {
+	pool := dbtest.New(t)
+	e := NewExecution(pool)
+	l := listen(t, pool)
+	f := deployedFunction(t, pool, `{"max_pending_tasks": 10, "retry_policy": {"max_attempts": 2}}`)
+	tasks := submit(t, e, f, 1)
+	host, first := placedContainer(t, pool, f, ContainerReady, 1)
+	if _, err := e.ClaimTasks(t.Context(), l, host, first, 1, 0); err != nil {
+		t.Fatal(err)
+	}
+	last := uuid.Max
+	exec(t, pool, `
+insert into containers (id, workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes)
+values ($1, $2, $3, 'ready', $4, 1, 1000, 1 << 28)`, last, uuid.UUID(f.workspace), f.release, uuid.UUID(host))
+	exec(t, pool, "update hosts set last_seen_at = now() - interval '1 minute'")
+
+	report, err := pool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = report.Rollback(t.Context()) }()
+	if _, err := report.Exec(t.Context(), "select id from containers where id = $1 for update", last); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan int, 1)
+	go func() {
+		n, err := e.ReleaseLostHosts(t.Context(), discardLogger())
+		if err != nil {
+			t.Error(err)
+		}
+		done <- n
+	}()
+	for deadline := time.Now().Add(5 * time.Second); ; {
+		var waiting int
+		if err := pool.QueryRow(t.Context(), `
+select count(*) from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("host loss never waited for the locked container")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := report.Exec(t.Context(), "set local lock_timeout = '3s'"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := report.Exec(t.Context(), "select id from tasks where id = $1 for update", uuid.UUID(tasks[0].ID)); err != nil {
+		t.Fatalf("lock the task after the container: %v", err)
+	}
+	if err := report.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if n := <-done; n != 1 {
+		t.Fatalf("marked %d hosts lost, want 1", n)
+	}
+	if stateOf(t, e, first) != ContainerStopped || stateOf(t, e, ContainerID(last)) != ContainerStopped || status(t, pool, tasks[0].ID) != TaskQueued {
+		t.Fatal("both containers must stop and the task must wait for a retry")
 	}
 }
 

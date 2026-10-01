@@ -15,6 +15,11 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/database"
 )
 
+// MaxClaimInputBytes caps the total input bytes one claim returns, so a claim
+// response stays well within the host message limit. A claim always returns
+// its first due task, and one input is at most MaxPayloadBytes.
+const MaxClaimInputBytes = 64 << 20
+
 // ErrNotAssigned means the container is unknown or assigned to another host.
 var ErrNotAssigned = errors.New("container is not assigned to this host")
 
@@ -28,7 +33,7 @@ type ClaimedTask struct {
 }
 
 // ClaimTasks starts up to max attempts on container, bounded by its free
-// slots, waiting up to wait for due queued tasks of its release. A container
+// slots and MaxClaimInputBytes, waiting up to wait for due queued tasks of its release. A container
 // that is not ready claims nothing.
 func (e *Execution) ClaimTasks(ctx context.Context, listener *database.Listener, host compute.HostID, container ContainerID, maxTasks int, wait time.Duration) ([]ClaimedTask, error) {
 	release, err := e.queries.AssignedContainerRelease(ctx, AssignedContainerReleaseParams{
@@ -109,6 +114,7 @@ func (e *Execution) claimOnce(ctx context.Context, host compute.HostID, containe
 		rows, err := q.ClaimQueuedTasks(ctx, ClaimQueuedTasksParams{
 			ReleaseID:      c.ReleaseID,
 			MaxTasks:       int32(limit), //nolint:gosec // Bounded by the container's slots.
+			MaxInputBytes:  MaxClaimInputBytes,
 			ContainerID:    uuid.UUID(container),
 			TimeoutSeconds: float64(timeout),
 		})

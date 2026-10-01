@@ -7,6 +7,7 @@ package execution
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -77,6 +78,43 @@ update containers set state = 'ready', ready_at = now() where id = $1 and state 
 func (q *Queries) MarkContainerReady(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, markContainerReady, id)
 	return err
+}
+
+const omittedRunningAttempts = `-- name: OmittedRunningAttempts :many
+select id from attempts
+where container_id = $1
+  and state = 'running'
+  and started_at < $2
+  and not (id = any($3::uuid[]))
+order by id
+`
+
+type OmittedRunningAttemptsParams struct {
+	ContainerID uuid.UUID
+	ObservedAt  time.Time
+	Reported    []uuid.UUID
+}
+
+// Running attempts on the container that started before the host's report
+// yet are missing from it: the host never received or already lost them.
+func (q *Queries) OmittedRunningAttempts(ctx context.Context, arg OmittedRunningAttemptsParams) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, omittedRunningAttempts, arg.ContainerID, arg.ObservedAt, arg.Reported)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const resetStartFailures = `-- name: ResetStartFailures :exec

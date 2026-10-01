@@ -118,6 +118,64 @@ func TestClaimWaitsForSubmit(t *testing.T) {
 	}
 }
 
+func TestClaimWakesWhenContainerBecomesReady(t *testing.T) {
+	pool := dbtest.New(t)
+	e := NewExecution(pool)
+	l := listen(t, pool)
+	f := deployedFunction(t, pool, `{"max_pending_tasks": 10}`)
+	submit(t, e, f, 1)
+	host, container := placedContainer(t, pool, f, ContainerStarting, 1)
+
+	done := make(chan []ClaimedTask, 1)
+	start := time.Now()
+	go func() {
+		claimed, err := e.ClaimTasks(t.Context(), l, host, container, 1, 30*time.Second)
+		if err != nil {
+			t.Error(err)
+		}
+		done <- claimed
+	}()
+	time.Sleep(200 * time.Millisecond)
+	if _, err := e.ApplyReport(t.Context(), host, ContainerReport{Container: container, Phase: ReportReady, ObservedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	claimed := <-done
+	if len(claimed) != 1 || time.Since(start) > 5*time.Second {
+		t.Fatalf("claimed %d after %v; want the ready report to wake the claim", len(claimed), time.Since(start))
+	}
+}
+
+func TestClaimCapsTotalInputBytes(t *testing.T) {
+	pool := dbtest.New(t)
+	e := NewExecution(pool)
+	l := listen(t, pool)
+	f := deployedFunction(t, pool, `{"max_pending_tasks": 10}`)
+	input := Payload{Encoding: EncodingCloudpickle, Data: make([]byte, MaxPayloadBytes)}
+	if _, err := e.Submit(t.Context(), SubmitRequest{
+		Workspace: f.workspace, App: "reports", Function: "summarize", Inputs: []Payload{input, input, input, input, input},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	host, container := placedContainer(t, pool, f, ContainerReady, 5)
+
+	claimed, err := e.ClaimTasks(t.Context(), l, host, container, 5, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	total := 0
+	for _, c := range claimed {
+		total += len(c.Input.Data)
+	}
+	if want := MaxClaimInputBytes / MaxPayloadBytes; len(claimed) != want || total > MaxClaimInputBytes {
+		t.Fatalf("claimed %d tasks with %d input bytes; want %d within %d", len(claimed), total, want, MaxClaimInputBytes)
+	}
+	// The rest stays queued for the next claim.
+	claimed, err = e.ClaimTasks(t.Context(), l, host, container, 5, 0)
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("second claim got %d: %v", len(claimed), err)
+	}
+}
+
 func TestCompletionIsFencedByContainerAndHost(t *testing.T) {
 	pool := dbtest.New(t)
 	e := NewExecution(pool)

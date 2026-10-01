@@ -21,8 +21,17 @@ limit @batch_size;
 
 -- name: AssignContainers :many
 -- The state check loses to a planner that stopped the container meanwhile.
+-- Hosts are locked FOR SHARE and must still be online, so an assignment
+-- either commits before host loss lists the host's containers or skips a
+-- host that host loss marked lost meanwhile.
+with online as (
+    select h.id from hosts h
+    where h.id = any(@host_ids::uuid[]) and h.state = 'online'
+    for share
+)
 update containers c
 set state = 'starting', host_id = a.host_id, assigned_at = now()
 from (select unnest(@ids::uuid[]) as id, unnest(@host_ids::uuid[]) as host_id) a
+join online on online.id = a.host_id
 where c.id = a.id and c.state = 'pending'
 returning c.id, c.host_id, c.release_id;

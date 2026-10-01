@@ -177,3 +177,70 @@ select count(*) from (
 		exec(t, pool, "update containers set state = 'stopped', stopped_at = now()")
 	}
 }
+
+// A host that host loss marks lost while placement runs receives nothing:
+// placement either commits first, so host loss stops the container, or skips
+// the host.
+func TestPlacementSkipsAHostMarkedLostConcurrently(t *testing.T) {
+	pool := dbtest.New(t)
+	s := newScheduling(pool)
+	host := newHost(t, pool, 4000, 8*gib, 0)
+	container := pendingContainer(t, pool, newRelease(t, pool), 1000, gib, time.Minute)
+
+	loss, err := pool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = loss.Rollback(t.Context()) }()
+	if _, err := loss.Exec(t.Context(), "update hosts set last_seen_at = now() - interval '1 minute' where id = $1", host); err != nil {
+		t.Fatal(err)
+	}
+	if marked, err := compute.MarkLost(t.Context(), loss, compute.HostID(host)); err != nil || !marked {
+		t.Fatalf("mark lost: %v, %v", marked, err)
+	}
+
+	done := make(chan PlacementResult, 1)
+	go func() {
+		result, err := s.Place(t.Context())
+		if err != nil {
+			t.Error(err)
+		}
+		done <- result
+	}()
+	var result PlacementResult
+	placed := false
+	for deadline := time.Now().Add(5 * time.Second); !placed; {
+		select {
+		case result = <-done:
+			placed = true
+			continue
+		default:
+		}
+		var waiting int
+		if err := pool.QueryRow(t.Context(), `
+select count(*) from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("placement neither finished nor waited for the host")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := loss.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if !placed {
+		result = <-done
+	}
+	var state string
+	var assigned *uuid.UUID
+	if err := pool.QueryRow(t.Context(), "select state, host_id from containers where id = $1", container).Scan(&state, &assigned); err != nil {
+		t.Fatal(err)
+	}
+	if result.Assigned != 0 || state != "pending" || assigned != nil {
+		t.Fatalf("assigned %d; container %s on %v, want pending off the lost host", result.Assigned, state, assigned)
+	}
+}

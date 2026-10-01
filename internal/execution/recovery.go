@@ -119,7 +119,9 @@ func (e *Execution) TimeOutStarts(ctx context.Context, logger *slog.Logger) (int
 // ReleaseLostHosts marks hosts silent for longer than
 // compute.LivenessTimeout as lost and stops their live containers as
 // host_lost in the same transaction, so their running attempts retry by
-// policy. Each host commits on its own. It returns how many hosts it marked.
+// policy. It locks every live container of the host in id order before
+// finishing any attempt, so it never locks a container after a task. Each
+// host commits on its own. It returns how many hosts it marked.
 func (e *Execution) ReleaseLostHosts(ctx context.Context, logger *slog.Logger) (int, error) {
 	var after *compute.StaleHost
 	lost := 0
@@ -129,7 +131,7 @@ func (e *Execution) ReleaseLostHosts(ctx context.Context, logger *slog.Logger) (
 			return lost, fmt.Errorf("release lost host: %w", err)
 		}
 		for _, host := range hosts {
-			var containers []LiveContainersOnHostRow
+			var containers []uuid.UUID
 			var marked bool
 			err := pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
 				var err error
@@ -137,14 +139,14 @@ func (e *Execution) ReleaseLostHosts(ctx context.Context, logger *slog.Logger) (
 					return err
 				}
 				hostID := uuid.UUID(host.ID)
-				if containers, err = e.queries.WithTx(tx).LiveContainersOnHost(ctx, &hostID); err != nil {
-					return fmt.Errorf("list live containers: %w", err)
+				if containers, err = e.queries.WithTx(tx).LockLiveContainersOnHost(ctx, &hostID); err != nil {
+					return fmt.Errorf("lock live containers: %w", err)
 				}
 				for _, container := range containers {
-					if err := e.containerExited(ctx, tx, ContainerID(container.ID), ContainerExit{
+					if err := e.containerExited(ctx, tx, ContainerID(container), ContainerExit{
 						Reason: StopHostLost, Message: "host stopped reporting",
 					}); err != nil {
-						return fmt.Errorf("stop container %s: %w", container.ID, err)
+						return fmt.Errorf("stop container %s: %w", container, err)
 					}
 				}
 				return nil
@@ -154,7 +156,7 @@ func (e *Execution) ReleaseLostHosts(ctx context.Context, logger *slog.Logger) (
 				lost++
 				logger.WarnContext(ctx, "host lost", "host_id", host.ID, "last_seen_at", host.LastSeenAt, "containers", len(containers))
 				for _, container := range containers {
-					logger.InfoContext(ctx, "container stopped", "container_id", container.ID, "host_id", host.ID, "reason", StopHostLost)
+					logger.InfoContext(ctx, "container stopped", "container_id", container, "host_id", host.ID, "reason", StopHostLost)
 				}
 			case err == nil:
 			case ctx.Err() != nil:
