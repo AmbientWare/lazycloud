@@ -6,12 +6,16 @@
   stay account-scoped; switching workspace does not switch session credentials.
 - TanStack Query owns server state. Use typed, scoped keys and one authenticated,
   resumable stream; do not use unauthenticated EventSource or duplicate polling.
-- Validate responses with exact Zod contracts and environment values with typed
-  settings. Fetch pricing and compute classifications from their server owners.
+- Types come from contracts/openapi.yaml (`bun run apigen`); call the API through
+  the typed `api` client and `ok()`. The server validates both directions against
+  the same document, so do not restate its schemas in Zod. Use Zod only for values
+  the contract leaves open and for typed settings. Fetch pricing and compute
+  classifications from their server owners.
 - Collections use cursor pagination and incremental scrolling, not unbounded
   fetches or client pagination. Scope subscriptions to the current selection.
-- Use same-origin bearer requests. GitHub login uses navigation and a callback
-  outside the authenticated shell, with a single exchange-code redemption.
+- Use same-origin requests authenticated by the HttpOnly session cookie; the page
+  never holds a credential. GitHub sign-in is a navigation to `/auth/github/start`,
+  and the server's callback sets the cookie and redirects.
 - Mask secrets, reveal only on explicit action and do not persist revealed values.
   Show newly issued credentials once. Never evaluate stored user payloads.
 - Keep feature components local until genuinely reused; reuse focused shared
