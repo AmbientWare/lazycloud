@@ -10,7 +10,7 @@ import {
 import { viewActiveDeployment, viewDeployment } from "@/lib/api/views";
 import { workspaceName } from "@/lib/api/workspaces";
 
-import { appById, appDirectory } from "./directory";
+import { appById, appDirectory, workloadRelease } from "./directory";
 
 import {
   LIVE_LIST_MAX_PAGES,
@@ -70,23 +70,19 @@ export function deploymentsInfiniteQueryOptions(
       }
       const data: Deployment[] = [];
       for (const workload of workloads) {
-        const [versions, fn] = await Promise.all([
+        const [versions, { release }] = await Promise.all([
           ok(
             api.GET("/v1/workspaces/{workspace}/deployments/{deployment}/versions", {
               params: { path: { workspace, deployment: workload.id }, query: { limit: 1000 } },
             }),
           ),
-          ok(
-            api.GET("/v1/workspaces/{workspace}/apps/{app}/functions/{function}", {
-              params: { path: { workspace, app: workload.app, function: workload.name } },
-            }),
-          ),
+          workloadRelease(workspace, workload),
         ]);
         const id = appId(workload.app);
         for (const version of versions.versions) {
           data.push(
             viewDeployment(workload, id, version, {
-              spec: fn.active_release.spec,
+              spec: release.spec,
               deletesWorkload: versions.versions.length === 1,
             }),
           );

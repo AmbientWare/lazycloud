@@ -17,6 +17,8 @@ import {
   parseDeploymentId,
   parseStubId,
   viewContainer,
+  viewRequest,
+  viewRequestSummary,
   viewResult,
   viewStatus,
   viewStatusCounts,
@@ -82,22 +84,28 @@ async function listTasks(
   options: TaskListOptions,
   cursor: string,
 ): Promise<{ data: TaskSummary[]; next: string }> {
-  // Only functions run tasks; endpoint and ASGI requests are not recorded as tasks.
-  if (options.kind && options.kind !== "function") return { data: [], next: "" };
   const workspace = workspaceName(workspaceId);
+  const workloads = await workloadDirectory(client, workspaceId);
   let app = options.appId ? (await appById(client, workspaceId, options.appId)).name : undefined;
   let fn: string | undefined;
   let version: number | null = null;
+  let kind = options.kind;
   if (options.deploymentId) {
     const parsed = parseDeploymentId(options.deploymentId);
-    const workload = (await workloadDirectory(client, workspaceId)).byId.get(parsed.workload);
+    const workload = workloads.byId.get(parsed.workload);
     app = workload?.app ?? app;
     fn = workload?.name;
+    kind = workload?.kind ?? kind;
     version = parsed.version;
   } else if (options.stubIds?.length) {
     const stub = parseStubId(options.stubIds[0]);
     app = stub.app;
     fn = stub.name;
+    kind = workloads.byName.get(`${stub.app}/${stub.name}`)?.kind ?? kind;
+  }
+  // Endpoint and ASGI requests are the edge's request records, not tasks.
+  if (kind === "endpoint" || kind === "asgi") {
+    return listRequests(client, workspaceId, options, { app, name: fn, kind, version }, cursor);
   }
   const page = await ok(
     api.GET("/v1/workspaces/{workspace}/tasks", {
@@ -126,6 +134,75 @@ async function listTasks(
     data: data.filter((task) => !options.status || task.status === options.status),
     next: page.next_cursor ?? "",
   };
+}
+
+/**
+ * One page of endpoint or ASGI requests as task rows. Requests are listed per
+ * app, so a workspace-wide list reads the newest page of each app that serves
+ * the kind and ends there.
+ */
+async function listRequests(
+  client: QueryClient,
+  workspaceId: string,
+  options: TaskListOptions,
+  target: { app?: string; name?: string; kind: string; version: number | null },
+  cursor: string,
+): Promise<{ data: TaskSummary[]; next: string }> {
+  if (options.status && !["complete", "failed", "cancelled"].includes(options.status)) {
+    return { data: [], next: "" };
+  }
+  const workspace = workspaceName(workspaceId);
+  const [apps, workloads] = await Promise.all([
+    appDirectory(client, workspaceId),
+    workloadDirectory(client, workspaceId),
+  ]);
+  const limit = options.limit ?? 50;
+  const appNames = target.app
+    ? [target.app]
+    : [
+        ...new Set(
+          [...workloads.byId.values()]
+            .filter((workload) => workload.kind === target.kind)
+            .map((workload) => workload.app),
+        ),
+      ];
+  const pages = await Promise.all(
+    appNames.map((app) =>
+      ok(
+        api.GET("/v1/workspaces/{workspace}/apps/{app}/requests", {
+          params: {
+            path: { workspace, app },
+            query: { name: target.name, limit, before: cursor || undefined },
+          },
+        }),
+      ),
+    ),
+  );
+  const search = options.search?.toLowerCase();
+  const requests = pages
+    .flatMap((page) => page.data)
+    .filter((request) => target.app || request.kind === target.kind)
+    .filter((request) => target.version === null || request.version === target.version)
+    .filter(
+      (request) =>
+        !search ||
+        request.id.startsWith(search) ||
+        request.name.toLowerCase().includes(search) ||
+        request.path.toLowerCase().includes(search),
+    )
+    .sort((left, right) => right.started_at.localeCompare(left.started_at))
+    .slice(0, limit);
+  const data = requests
+    .map((request) =>
+      viewRequestSummary(
+        request,
+        workspaceId,
+        apps.byName.get(request.app)?.id ?? null,
+        workloads.byName.get(`${request.app}/${request.name}`)?.id ?? null,
+      ),
+    )
+    .filter((request) => !options.status || request.status === options.status);
+  return { data, next: (target.app && pages[0]?.next) || "" };
 }
 
 export type TaskListOptions = {
@@ -198,16 +275,17 @@ export function taskQueryOptions(workspaceId: string, taskId: string) {
     // finishes; the change stream refreshes a queued one when it starts.
     queryFn: async ({ client, queryKey, signal }): Promise<Task> => {
       const known = client.getQueryData<Task>(queryKey);
-      const task = await ok(
-        api.GET("/v1/workspaces/{workspace}/tasks/{task}", {
-          ...taskPath(workspaceId, taskId),
-          params: {
-            ...taskPath(workspaceId, taskId).params,
-            query: { wait_seconds: known?.status === "running" ? 25 : 0 },
-          },
-          signal,
-        }),
-      );
+      const read = await api.GET("/v1/workspaces/{workspace}/tasks/{task}", {
+        ...taskPath(workspaceId, taskId),
+        params: {
+          ...taskPath(workspaceId, taskId).params,
+          query: { wait_seconds: known?.status === "running" ? 25 : 0 },
+        },
+        signal,
+      });
+      // An endpoint row opens its request record, which is not a task.
+      if (read.response.status === 404) return requestDetail(client, workspaceId, taskId, signal);
+      const task = await ok(Promise.resolve(read));
       const [apps, workloads] = await Promise.all([
         appDirectory(client, workspaceId),
         workloadDirectory(client, workspaceId),
@@ -246,6 +324,41 @@ export function taskQueryOptions(workspaceId: string, taskId: string) {
     retry: false,
     meta: workspaceLiveQueryMeta(true, true, false),
   });
+}
+
+async function requestDetail(
+  client: QueryClient,
+  workspaceId: string,
+  requestId: string,
+  signal: AbortSignal,
+): Promise<Task> {
+  const workspace = workspaceName(workspaceId);
+  const request = await ok(
+    api.GET("/v1/workspaces/{workspace}/requests/{http_request}", {
+      params: { path: { workspace, http_request: requestId } },
+      signal,
+    }),
+  );
+  const [apps, workloads] = await Promise.all([
+    appDirectory(client, workspaceId),
+    workloadDirectory(client, workspaceId),
+  ]);
+  const appId = apps.byName.get(request.app)?.id ?? null;
+  const container = request.container_id
+    ? await ok(
+        api.GET("/v1/workspaces/{workspace}/containers/{container}", {
+          params: { path: { workspace, container: request.container_id } },
+          signal,
+        }),
+      ).then((found) => viewContainer(found, workspaceId, appId))
+    : null;
+  return viewRequest(
+    request,
+    workspaceId,
+    appId,
+    workloads.byName.get(`${request.app}/${request.name}`)?.id ?? null,
+    container,
+  );
 }
 
 /**

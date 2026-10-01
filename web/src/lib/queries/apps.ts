@@ -12,7 +12,7 @@ import {
 } from "@/lib/api/views";
 import { workspaceName } from "@/lib/api/workspaces";
 
-import { appDirectory, workloadDirectory } from "./directory";
+import { appDirectory, workloadDirectory, workloadRelease } from "./directory";
 import { countTotal, taskActivity } from "./tasks";
 import { workspaceLiveQueryMeta, workspaceQueryKeys } from "./workspace-keys";
 
@@ -239,45 +239,56 @@ export function deleteDeploymentMutationOptions(workspaceId: string, deploymentI
   };
 }
 
-async function deployedFunction(workspaceId: string, deploymentId: string) {
+/** The deployment's workload and its release at the deployment's version. */
+async function deployedRelease(workspaceId: string, deploymentId: string) {
   const workspace = workspaceName(workspaceId);
+  const { version } = parseDeploymentId(deploymentId);
   const workload = await ok(
     api.GET(
       "/v1/workspaces/{workspace}/deployments/{deployment}",
       deploymentPath(workspaceId, deploymentId),
     ),
   );
-  const fn = await ok(
-    api.GET("/v1/workspaces/{workspace}/apps/{app}/functions/{function}", {
-      params: { path: { workspace, app: workload.app, function: workload.name } },
-    }),
-  );
-  return { workspace, workload, fn };
+  const { release, http } = await workloadRelease(workspace, workload, version ?? undefined);
+  const active = version === null || version === workload.version;
+  return { workspace, workload, release, http, active, version: version ?? workload.version ?? 1 };
+}
+
+/** The function's HTTP invoke on this origin, at its active release or one version. */
+function functionInvokePath(workspace: string, app: string, name: string, version?: number) {
+  const path = `/v1/workspaces/${encodeURIComponent(workspace)}/apps/${encodeURIComponent(app)}/functions/${encodeURIComponent(name)}`;
+  return version === undefined ? `${path}/invoke` : `${path}/versions/${version}/invoke`;
 }
 
 /**
  * Invoke manifest for one deployment: the callable contract the deploy
- * recorded, and where a call goes. Functions are invoked by admitting a task
- * with JSON arguments until the HTTP invoke URL is served.
+ * recorded, and where a call to this version goes. A function answers on this
+ * origin's invoke operation; an endpoint or ASGI app on its own host.
  */
 export function deploymentManifestQueryOptions(workspaceId: string, deploymentId: string) {
   return queryOptions({
     queryKey: workspaceQueryKeys.apps.deploymentManifest(workspaceId, deploymentId),
     queryFn: async (): Promise<DeploymentManifest> => {
-      const { workspace, workload, fn } = await deployedFunction(workspaceId, deploymentId);
-      const spec = fn.active_release.spec;
+      const { workspace, workload, release, http, version } = await deployedRelease(
+        workspaceId,
+        deploymentId,
+      );
+      const { spec } = release;
+      const invokePath = http
+        ? http.version_url
+        : functionInvokePath(workspace, workload.app, workload.name, version);
       const contract = clientContractSchema.safeParse(spec.client_contract);
       return {
         app: workload.app,
         name: workload.name,
         kind: workload.kind,
-        stub_id: stubId(workload.app, workload.name, fn.active_release.id),
+        stub_id: stubId(workload.app, workload.name, release.id),
         deployment_id: deploymentId,
-        deployment_version: fn.active_release.version ?? workload.version ?? 1,
-        invoke_url: "",
-        invoke_path: `/v1/workspaces/${encodeURIComponent(workspace)}/apps/${encodeURIComponent(workload.app)}/functions/${encodeURIComponent(workload.name)}/invoke`,
+        deployment_version: version,
+        invoke_url: http ? http.version_url : `${window.location.origin}${invokePath}`,
+        invoke_path: invokePath,
         timeout_seconds: spec.timeout_seconds ?? null,
-        methods: [],
+        methods: spec.http?.methods ?? [],
         inputs: { fields: {} },
         client_contract: contract.success ? contract.data : null,
       };
@@ -285,18 +296,25 @@ export function deploymentManifestQueryOptions(workspaceId: string, deploymentId
   });
 }
 
-/** The HTTP invoke URL; the endpoints packet serves it. */
+/** Where the deployment answers HTTP: following the active release, or pinned to its version. */
 export function deploymentUrlQueryOptions(workspaceId: string, deploymentId: string) {
   return queryOptions({
     queryKey: workspaceQueryKeys.apps.deploymentUrl(workspaceId, deploymentId),
-    queryFn: (): Promise<{ url: string }> =>
-      Promise.reject(
-        new ApiError(
-          404,
-          "Not Found",
-          JSON.stringify({ message: "Invoke URLs are not served yet" }),
-        ),
-      ),
-    retry: false,
+    queryFn: async (): Promise<{ url: string }> => {
+      const { workspace, workload, http, active, version } = await deployedRelease(
+        workspaceId,
+        deploymentId,
+      );
+      if (http) return { url: active ? http.url : http.version_url };
+      const path = functionInvokePath(
+        workspace,
+        workload.app,
+        workload.name,
+        active ? undefined : version,
+      );
+      return {
+        url: `${window.location.origin}${path}`,
+      };
+    },
   });
 }

@@ -5,12 +5,12 @@ import type { Stub, TaskLatencyTimeseries } from "@/lib/api/schemas";
 import { parseDeploymentId, parseStubId, viewStatusCounts, viewStub } from "@/lib/api/views";
 import { workspaceName } from "@/lib/api/workspaces";
 
-import { appById, appDirectory, workloadDirectory } from "./directory";
+import { appById, appDirectory, workloadDirectory, workloadRelease } from "./directory";
 import { workspaceLiveQueryMeta, workspaceQueryKeys } from "./workspace-keys";
 
 /**
  * The deployed workloads, each as its active release's stub. Within one app
- * each carries its handler, read from the function's definition.
+ * each carries its handler and access, read from its definition.
  */
 export function deployedStubsQueryOptions(workspaceId: string, appId?: string) {
   return queryOptions({
@@ -36,12 +36,8 @@ export function deployedStubsQueryOptions(workspaceId: string, appId?: string) {
       );
       const stubs = await Promise.all(
         page.deployments.map(async (workload) => {
-          const fn = await ok(
-            api.GET("/v1/workspaces/{workspace}/apps/{app}/functions/{function}", {
-              params: { path: { workspace, app: app.name, function: workload.name } },
-            }),
-          );
-          return viewStub(workload, workspaceId, app.id, fn.active_release.spec.handler);
+          const { release } = await workloadRelease(workspace, workload);
+          return viewStub(workload, workspaceId, app.id, release.spec);
         }),
       );
       return { stubs };

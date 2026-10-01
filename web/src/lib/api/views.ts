@@ -126,8 +126,9 @@ export function viewSpec(spec: Schemas["FunctionSpec"] | undefined): Deployment[
       availability_zone: "",
       preemptible: false,
     },
+    route: spec.http?.route ?? null,
+    methods: spec.http?.methods ?? [],
     cron: spec.cron ?? null,
-    methods: [],
     command: [],
     ports: {},
     machine: "",
@@ -193,17 +194,18 @@ export function viewStub(
   workload: Schemas["DeployedWorkload"],
   workspaceId: string,
   appId: string,
-  handler: string | null = null,
+  spec?: Schemas["FunctionSpec"],
 ): Stub {
   return {
     id: stubId(workload.app, workload.name, workload.release_id ?? ""),
     workspace_id: workspaceId,
     name: workload.name,
     kind: workload.kind,
-    handler,
+    handler: spec?.handler ?? null,
     deployment_id: deploymentId(workload.id, workload.version ?? 1),
     app_id: appId,
-    public: false,
+    // Deployed with authorized=False, the workload answers its URLs without a token.
+    public: spec?.authorized === false,
     config: { runtime: null },
     created_at: workload.created_at,
     updated_at: workload.deployed_at ?? workload.created_at,
@@ -324,6 +326,70 @@ export function viewTask(
     result: extras.result,
     error: task.failure ? failureText(task.failure) : null,
     container: extras.container,
+  };
+}
+
+/**
+ * An endpoint or ASGI request as the task row the reference listed for it.
+ * The edge records a request once it ends: failed when the workload answered
+ * with a server error, cancelled when the caller left first (499), otherwise
+ * complete.
+ */
+function requestStatus(status: number): string {
+  if (status === 499) return "cancelled";
+  return status >= 500 ? "failed" : "complete";
+}
+
+export function viewRequestSummary(
+  request: Schemas["HttpRequest"],
+  workspaceId: string,
+  appId: string | null,
+  workloadId: string | null,
+): TaskSummary {
+  const finished = new Date(Date.parse(request.started_at) + request.duration_ms).toISOString();
+  return {
+    id: request.id,
+    name: request.name,
+    status: requestStatus(request.status),
+    pending_progress: null,
+    workspace_id: workspaceId,
+    app_id: appId,
+    stub_id: stubId(request.app, request.name, request.release_id),
+    deployment_id: workloadId && request.version ? deploymentId(workloadId, request.version) : null,
+    container_id: request.container_id ?? null,
+    parent_task_id: null,
+    root_task_id: request.id,
+    handler: null,
+    attempt_number: 1,
+    max_attempts: 1,
+    next_retry_at: null,
+    exit_code: null,
+    created_at: request.started_at,
+    started_at: request.started_at,
+    finished_at: finished,
+    app: { name: request.app },
+    workload: { name: request.name, kind: request.kind },
+    deployment: request.version ? { name: request.name, version: request.version } : null,
+    actions: { can_cancel: false, can_rerun: false, can_shell: false },
+  };
+}
+
+export function viewRequest(
+  request: Schemas["HttpRequest"],
+  workspaceId: string,
+  appId: string | null,
+  workloadId: string | null,
+  container: Container | null,
+): Task {
+  return {
+    ...viewRequestSummary(request, workspaceId, appId, workloadId),
+    command: [request.method, request.path],
+    args: [],
+    kwargs: {},
+    result: null,
+    error:
+      request.status >= 500 ? `${request.method} ${request.path} answered ${request.status}` : null,
+    container,
   };
 }
 

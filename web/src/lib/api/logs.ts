@@ -54,6 +54,9 @@ export async function openLogStream(
       ...base,
       params: { path: { workspace, task: scope.taskId }, query },
     });
+    if (result.response.status === 404) {
+      return requestLogStream(workspace, scope.taskId, options.after ?? 0, options.signal);
+    }
   } else if (scope.containerId) {
     result = await api.GET("/v1/workspaces/{workspace}/containers/{container}/logs", {
       ...base,
@@ -78,6 +81,30 @@ export async function openLogStream(
     );
   }
   return result.data;
+}
+
+/**
+ * What an endpoint or ASGI workload wrote while serving one request, as the
+ * task log stream's lines. The edge records a request once it ends, so the
+ * lines are complete and the stream ends after them.
+ */
+async function requestLogStream(
+  workspace: string,
+  requestId: string,
+  after: number,
+  signal?: AbortSignal,
+): Promise<ReadableStream<Uint8Array>> {
+  const { response, data, error } = await api.GET(
+    "/v1/workspaces/{workspace}/requests/{http_request}/logs",
+    { params: { path: { workspace, http_request: requestId }, query: { after } }, signal },
+  );
+  if (!data) {
+    throw new ApiError(response.status, response.statusText, JSON.stringify(error ?? ""));
+  }
+  const lines = data.data
+    .map((line) => JSON.stringify({ ...line, task_id: requestId, attempt: 1 }) + "\n")
+    .join("");
+  return new Blob([lines]).stream();
 }
 
 /** The stored lines of a scope, read to the end of the stream. */

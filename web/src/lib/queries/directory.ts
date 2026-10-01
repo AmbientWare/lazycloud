@@ -108,3 +108,42 @@ export function workloadDirectory(
     },
   });
 }
+
+/**
+ * A deployed workload's release, with the URLs an HTTP workload answers on.
+ * A function is read at its active release; an endpoint or ASGI app at
+ * `version` when one is named.
+ */
+export async function workloadRelease(
+  workspace: string,
+  workload: Pick<Schemas["DeployedWorkload"], "app" | "name" | "kind">,
+  version?: number,
+): Promise<{ release: Schemas["Release"]; http: Schemas["HttpWorkload"] | null }> {
+  const { app, name, kind } = workload;
+  switch (kind) {
+    case "function": {
+      const fn = await ok(
+        api.GET("/v1/workspaces/{workspace}/apps/{app}/functions/{function}", {
+          params: { path: { workspace, app, function: name } },
+        }),
+      );
+      return { release: fn.active_release, http: null };
+    }
+    case "endpoint": {
+      const http = await ok(
+        api.GET("/v1/workspaces/{workspace}/apps/{app}/endpoints/{endpoint}", {
+          params: { path: { workspace, app, endpoint: name }, query: { version } },
+        }),
+      );
+      return { release: http.release, http };
+    }
+    case "asgi": {
+      const http = await ok(
+        api.GET("/v1/workspaces/{workspace}/apps/{app}/asgi/{endpoint}", {
+          params: { path: { workspace, app, endpoint: name }, query: { version } },
+        }),
+      );
+      return { release: http.release, http };
+    }
+  }
+}
