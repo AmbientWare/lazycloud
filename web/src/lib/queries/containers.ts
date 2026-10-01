@@ -1,7 +1,6 @@
 import { infiniteQueryOptions, mutationOptions, queryOptions } from "@tanstack/react-query";
 
 import { ApiError, api, ok, type Schemas } from "@/lib/api/client";
-import type { ContainerDetail } from "@/lib/api/schemas";
 
 import {
   LIVE_LIST_MAX_PAGES,
@@ -76,47 +75,6 @@ export function containerQueryOptions(workspace: string, containerId: string) {
           signal,
         }),
       ),
-    meta: workspaceLiveQueryMeta(true),
-  });
-}
-
-/**
- * A container in the reference's detail shape, which the sandbox and pod
- * pages read until the workloads packet rewrites them.
- */
-export function containerDetailQueryOptions(workspace: string, containerId: string) {
-  return queryOptions({
-    queryKey: [...workspaceQueryKeys.containers.detail(workspace, containerId), "reference"],
-    queryFn: async ({ signal }): Promise<ContainerDetail> => {
-      const container = await ok(
-        api.GET("/v1/workspaces/{workspace}/containers/{container}", {
-          params: { path: { workspace, container: containerId } },
-          signal,
-        }),
-      );
-      const live = container.state !== "stopped";
-      return {
-        id: container.id,
-        name: `${container.function}-${container.id.slice(0, 8)}`,
-        image: container.image ?? "",
-        workspace_id: "",
-        runtime_machine_id: "",
-        runtime_worker_id: "",
-        status: live ? (container.state === "ready" ? "running" : "pending") : "stopped",
-        termination_reason: container.stop_reason ?? "UNKNOWN",
-        command: [],
-        ports: {},
-        created_at: container.created_at,
-        started_at: container.ready_at ?? null,
-        finished_at: container.stopped_at ?? null,
-        actions: {
-          can_stop: live,
-          can_shell: false,
-          can_create_image: false,
-          can_snapshot_memory: false,
-        },
-      };
-    },
     meta: workspaceLiveQueryMeta(true),
   });
 }

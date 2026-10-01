@@ -39,7 +39,9 @@ it("opens a container's own output at its newest lines, though that stream has n
       time: "2026-10-01T12:00:00Z",
     }),
   ).join("\n");
-  const fetchMock = vi.fn(async (_input: Request) => new Response(`${body}\n`));
+  const fetchMock = vi.fn<(input: Request) => Promise<Response>>(
+    async () => new Response(`${body}\n`),
+  );
   vi.stubGlobal("fetch", fetchMock);
 
   const history = await readLogHistory(
