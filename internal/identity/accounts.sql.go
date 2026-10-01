@@ -234,7 +234,7 @@ func (q *Queries) UserByGitHubID(ctx context.Context, githubUserID *int64) (User
 }
 
 const userProfile = `-- name: UserProfile :one
-select id, email, display_name, avatar_url, github_login, is_admin, created_at
+select id, email, display_name, avatar_url, github_login, is_admin, status, created_at
 from users where id = $1
 `
 
@@ -245,6 +245,7 @@ type UserProfileRow struct {
 	AvatarUrl   string
 	GithubLogin string
 	IsAdmin     bool
+	Status      string
 	CreatedAt   time.Time
 }
 
@@ -258,6 +259,7 @@ func (q *Queries) UserProfile(ctx context.Context, id uuid.UUID) (UserProfileRow
 		&i.AvatarUrl,
 		&i.GithubLogin,
 		&i.IsAdmin,
+		&i.Status,
 		&i.CreatedAt,
 	)
 	return i, err

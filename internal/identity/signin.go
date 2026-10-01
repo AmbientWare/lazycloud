@@ -345,6 +345,7 @@ type User struct {
 	AvatarURL   string
 	GitHubLogin string
 	IsAdmin     bool
+	Status      UserStatus
 	CreatedAt   time.Time
 }
 
@@ -357,10 +358,7 @@ func (i *Identity) Me(ctx context.Context, p Principal) (User, error) {
 	if err != nil {
 		return User{}, fmt.Errorf("read profile: %w", err)
 	}
-	return User{
-		ID: UserID(row.ID), Email: deref(row.Email), DisplayName: row.DisplayName, AvatarURL: row.AvatarUrl,
-		GitHubLogin: row.GithubLogin, IsAdmin: row.IsAdmin, CreatedAt: row.CreatedAt,
-	}, nil
+	return userFrom(row), nil
 }
 
 type gitHubProfile struct {
