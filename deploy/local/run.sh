@@ -75,10 +75,20 @@ start() {
   echo $! >"$state/scheduler.pid"
   join=""
   [ -f "$state/join-token" ] && join=$(cat "$state/join-token")
-  bin/agent join -server 127.0.0.1:8081 -server-plaintext -join-token "$join" -state-dir "$PWD/$state/agent" \
-    -runtime-dir "$PWD/$state/runtime" -supervisor "$PWD/bin/supervisor" -geesefs "$PWD/bin/geesefs" -oci-runtime runc -build-network host \
-    >"$state/logs/agent.log" 2>&1 &
-  echo $! >"$state/agent.pid"
+  # LAZYCLOUD_OCI_RUNTIME=runsc uses gVisor (deploy/local/host-setup.sh installs
+  # it). Devbox disks and snapshots need a root agent: with
+  # LAZYCLOUD_AGENT_AS_ROOT=1 the agent is not started here, and the command to
+  # start it with sudo in another terminal is printed instead.
+  runtime="${LAZYCLOUD_OCI_RUNTIME:-runc}"
+  if [ "${LAZYCLOUD_AGENT_AS_ROOT:-}" = 1 ]; then
+    echo "start the agent as root in another terminal:"
+    echo "  sudo $PWD/bin/agent join -server 127.0.0.1:8081 -server-plaintext -join-token '$join' -state-dir '$PWD/$state/agent' -runtime-dir '$PWD/$state/runtime' -supervisor '$PWD/bin/supervisor' -geesefs '$PWD/bin/geesefs' -oci-runtime '$runtime' -build-network host"
+  else
+    bin/agent join -server 127.0.0.1:8081 -server-plaintext -join-token "$join" -state-dir "$PWD/$state/agent" \
+    -runtime-dir "$PWD/$state/runtime" -supervisor "$PWD/bin/supervisor" -geesefs "$PWD/bin/geesefs" -oci-runtime "$runtime" -build-network host \
+      >"$state/logs/agent.log" 2>&1 &
+    echo $! >"$state/agent.pid"
+  fi
 
   echo "API http://127.0.0.1:8080, workspace dev; workloads answer under http://<host>.lazycloud.localhost:8082"
   echo "export LAZYCLOUD_ENDPOINT=http://127.0.0.1:8080 LAZYCLOUD_WORKSPACE=dev LAZYCLOUD_TOKEN=$(cat "$state/token")"
