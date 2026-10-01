@@ -34,7 +34,10 @@ alter table containers
     -- Ports exposed after the start; a release's own ports are always
     -- exposed.
     add column exposed_ports integer[] not null default '{}',
-    add column exit_code integer;
+    add column exit_code integer,
+    -- The function container that started an instance; only it may drive
+    -- the instance through the container API.
+    add column created_by_container uuid references containers (id) on delete set null;
 
 create index containers_live_instances on containers (active_until)
     where purpose <> 'serve' and state <> 'stopped';

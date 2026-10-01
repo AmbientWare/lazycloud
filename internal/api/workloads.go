@@ -59,6 +59,9 @@ func (s *Server) podDeployment(ctx context.Context, d *apitypes.DeployedWorkload
 
 // ScaleDeployment holds a pod at a number of containers.
 func (s *Server) ScaleDeployment(ctx context.Context, req ScaleDeploymentRequestObject) (ScaleDeploymentResponseObject, error) {
+	if err := refuseContainer(ctx); err != nil {
+		return nil, err
+	}
 	ws, err := s.workspace(ctx, req.Workspace)
 	if err != nil {
 		return nil, err
@@ -147,6 +150,9 @@ func (s *Server) rootDisk(ctx context.Context, ws identity.WorkspaceID, spec api
 
 // GetDevbox reads a devbox.
 func (s *Server) GetDevbox(ctx context.Context, req GetDevboxRequestObject) (GetDevboxResponseObject, error) {
+	if err := refuseContainer(ctx); err != nil {
+		return nil, err
+	}
 	ws, err := s.workspace(ctx, req.Workspace)
 	if err != nil {
 		return nil, err
@@ -160,6 +166,9 @@ func (s *Server) GetDevbox(ctx context.Context, req GetDevboxRequestObject) (Get
 
 // StartDevbox starts a devbox now, activating a stopped deployment first.
 func (s *Server) StartDevbox(ctx context.Context, req StartDevboxRequestObject) (StartDevboxResponseObject, error) {
+	if err := refuseContainer(ctx); err != nil {
+		return nil, err
+	}
 	ws, err := s.workspace(ctx, req.Workspace)
 	if err != nil {
 		return nil, err
@@ -188,6 +197,9 @@ func (s *Server) StartDevbox(ctx context.Context, req StartDevboxRequestObject) 
 
 // StopDevbox stops a devbox until its next connection or start.
 func (s *Server) StopDevbox(ctx context.Context, req StopDevboxRequestObject) (StopDevboxResponseObject, error) {
+	if err := refuseContainer(ctx); err != nil {
+		return nil, err
+	}
 	ws, err := s.workspace(ctx, req.Workspace)
 	if err != nil {
 		return nil, err
@@ -236,6 +248,12 @@ func (s *Server) CreateInstance(ctx context.Context, req CreateInstanceRequestOb
 	}
 	b := req.Body
 	in := execution.InstanceRequest{Release: b.ReleaseId, Snapshot: b.SnapshotId, Timeout: b.TimeoutSeconds, Shell: b.Shell != nil && *b.Shell}
+	if p, ok := containerFrom(ctx); ok {
+		if in.Shell || in.Snapshot != nil {
+			return nil, errFromContainer
+		}
+		in.CreatedBy = new(execution.ContainerID(p.Container))
+	}
 	if b.Command != nil {
 		in.Command = *b.Command
 	}
@@ -265,6 +283,9 @@ func (s *Server) ConnectContainer(ctx context.Context, req ConnectContainerReque
 		if err != nil {
 			return nil, err
 		}
+		if err := s.ownsContainer(ctx, i.ID); err != nil {
+			return nil, err
+		}
 		switch i.State {
 		case execution.ContainerReady:
 			if err := s.owners.Execution.Touch(ctx, i.ID); err != nil {
@@ -288,6 +309,9 @@ func (s *Server) ConnectContainer(ctx context.Context, req ConnectContainerReque
 
 // ListSandboxes lists sandbox containers.
 func (s *Server) ListSandboxes(ctx context.Context, req ListSandboxesRequestObject) (ListSandboxesResponseObject, error) {
+	if err := refuseContainer(ctx); err != nil {
+		return nil, err
+	}
 	ws, err := s.workspace(ctx, req.Workspace)
 	if err != nil {
 		return nil, err
@@ -301,6 +325,9 @@ func (s *Server) ListSandboxes(ctx context.Context, req ListSandboxesRequestObje
 
 // GetSandboxStats counts sandboxes.
 func (s *Server) GetSandboxStats(ctx context.Context, req GetSandboxStatsRequestObject) (GetSandboxStatsResponseObject, error) {
+	if err := refuseContainer(ctx); err != nil {
+		return nil, err
+	}
 	ws, err := s.workspace(ctx, req.Workspace)
 	if err != nil {
 		return nil, err
@@ -314,6 +341,9 @@ func (s *Server) GetSandboxStats(ctx context.Context, req GetSandboxStatsRequest
 
 // CreateSshCertificate signs a public key for the workspace's pods.
 func (s *Server) CreateSshCertificate(ctx context.Context, req CreateSshCertificateRequestObject) (CreateSshCertificateResponseObject, error) {
+	if err := refuseContainer(ctx); err != nil {
+		return nil, err
+	}
 	ws, err := s.workspace(ctx, req.Workspace)
 	if err != nil {
 		return nil, err
@@ -334,6 +364,9 @@ func (s *Server) CreateSshCertificate(ctx context.Context, req CreateSshCertific
 
 // ListSshHosts lists pods that serve SSH.
 func (s *Server) ListSshHosts(ctx context.Context, req ListSshHostsRequestObject) (ListSshHostsResponseObject, error) {
+	if err := refuseContainer(ctx); err != nil {
+		return nil, err
+	}
 	ws, err := s.workspace(ctx, req.Workspace)
 	if err != nil {
 		return nil, err
@@ -352,6 +385,9 @@ func (s *Server) ListSshHosts(ctx context.Context, req ListSshHostsRequestObject
 
 // SetContainerTtl changes an instance's idle lifetime.
 func (s *Server) SetContainerTtl(ctx context.Context, req SetContainerTtlRequestObject) (SetContainerTtlResponseObject, error) {
+	if err := refuseContainer(ctx); err != nil {
+		return nil, err
+	}
 	ws, err := s.workspace(ctx, req.Workspace)
 	if err != nil {
 		return nil, err
@@ -365,6 +401,9 @@ func (s *Server) SetContainerTtl(ctx context.Context, req SetContainerTtlRequest
 
 // GetContainerNetwork reads a container's outbound policy.
 func (s *Server) GetContainerNetwork(ctx context.Context, req GetContainerNetworkRequestObject) (GetContainerNetworkResponseObject, error) {
+	if err := refuseContainer(ctx); err != nil {
+		return nil, err
+	}
 	ws, err := s.workspace(ctx, req.Workspace)
 	if err != nil {
 		return nil, err
@@ -378,6 +417,9 @@ func (s *Server) GetContainerNetwork(ctx context.Context, req GetContainerNetwor
 
 // SetContainerNetwork replaces a container's outbound policy.
 func (s *Server) SetContainerNetwork(ctx context.Context, req SetContainerNetworkRequestObject) (SetContainerNetworkResponseObject, error) {
+	if err := refuseContainer(ctx); err != nil {
+		return nil, err
+	}
 	ws, err := s.workspace(ctx, req.Workspace)
 	if err != nil {
 		return nil, err
@@ -403,6 +445,9 @@ func (s *Server) ListContainerPorts(ctx context.Context, req ListContainerPortsR
 	if err != nil {
 		return nil, err
 	}
+	if err := s.ownsContainer(ctx, i.ID); err != nil {
+		return nil, err
+	}
 	out := ListContainerPorts200JSONResponse{Ports: make([]apitypes.ContainerPort, len(i.Ports))}
 	for n, port := range i.Ports {
 		out.Ports[n] = apitypes.ContainerPort{Port: port, Url: s.owners.Edge.ContainerPortURL(uuid.UUID(i.ID), port)}
@@ -417,6 +462,9 @@ func (s *Server) ExposeContainerPort(ctx context.Context, req ExposeContainerPor
 		return nil, err
 	}
 	container := execution.ContainerID(req.Container)
+	if err := s.ownsContainer(ctx, container); err != nil {
+		return nil, err
+	}
 	if err := s.owners.Execution.ExposePort(ctx, ws.ID, container, req.Body.Port); err != nil {
 		return nil, err
 	}
@@ -429,6 +477,9 @@ func (s *Server) ExposeContainerPort(ctx context.Context, req ExposeContainerPor
 // SnapshotContainer checkpoints a running container and waits for the
 // snapshot.
 func (s *Server) SnapshotContainer(ctx context.Context, req SnapshotContainerRequestObject) (SnapshotContainerResponseObject, error) {
+	if err := refuseContainer(ctx); err != nil {
+		return nil, err
+	}
 	ws, err := s.workspace(ctx, req.Workspace)
 	if err != nil {
 		return nil, err
@@ -458,6 +509,9 @@ func (s *Server) SnapshotContainer(ctx context.Context, req SnapshotContainerReq
 // CreateFilesystemImage publishes a container's filesystem and waits for
 // the image.
 func (s *Server) CreateFilesystemImage(ctx context.Context, req CreateFilesystemImageRequestObject) (CreateFilesystemImageResponseObject, error) {
+	if err := refuseContainer(ctx); err != nil {
+		return nil, err
+	}
 	ws, err := s.workspace(ctx, req.Workspace)
 	if err != nil {
 		return nil, err
@@ -482,6 +536,31 @@ func (s *Server) CreateFilesystemImage(ctx context.Context, req CreateFilesystem
 	return CreateFilesystemImage201JSONResponse{ImageId: *image.ImageID}, nil
 }
 
+// errFromContainer refuses workload control from inside a container: a
+// function may drive the instances it started, nothing more.
+var errFromContainer = errors.New("this operation is not available from inside a container")
+
+// refuseContainer refuses a call made through the container API.
+func refuseContainer(ctx context.Context) error {
+	if _, ok := containerFrom(ctx); ok {
+		return errFromContainer
+	}
+	return nil
+}
+
+// ownsInstance lets a container principal reach only the instances it
+// started; other callers reach every container of the workspace.
+func ownsInstance(ctx context.Context, created *execution.ContainerID) error {
+	p, ok := containerFrom(ctx)
+	if !ok {
+		return nil
+	}
+	if created == nil || uuid.UUID(*created) != p.Container {
+		return errFromContainer
+	}
+	return nil
+}
+
 // workloadError maps workload errors; it reports whether it wrote one.
 func workloadError(w http.ResponseWriter, err error) bool {
 	var (
@@ -490,6 +569,8 @@ func workloadError(w http.ResponseWriter, err error) bool {
 		unsupported *execution.UnsupportedError
 	)
 	switch {
+	case errors.Is(err, errFromContainer):
+		writeJSONError(w, http.StatusForbidden, apitypes.Forbidden, err.Error())
 	case errors.As(err, &invalid):
 		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, invalid.Error())
 	case errors.As(err, &conflict):
@@ -506,4 +587,16 @@ func workloadError(w http.ResponseWriter, err error) bool {
 		return false
 	}
 	return true
+}
+
+// ownsContainer applies ownsInstance to a container by id.
+func (s *Server) ownsContainer(ctx context.Context, container execution.ContainerID) error {
+	if _, ok := containerFrom(ctx); !ok {
+		return nil
+	}
+	route, err := s.owners.Execution.Route(ctx, container)
+	if err != nil {
+		return err
+	}
+	return ownsInstance(ctx, route.CreatedBy)
 }

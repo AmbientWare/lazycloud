@@ -329,6 +329,9 @@ func (s *Server) StopContainer(ctx context.Context, req StopContainerRequestObje
 	if err != nil {
 		return nil, err
 	}
+	if err := s.ownsContainer(ctx, execution.ContainerID(req.Container)); err != nil {
+		return nil, err
+	}
 	c, err := s.owners.Execution.StopContainer(ctx, ws.ID, execution.ContainerID(req.Container))
 	if err != nil {
 		return nil, err

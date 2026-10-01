@@ -22,8 +22,11 @@ import (
 // pods are public; the workload authenticates its own clients.
 
 const (
-	// maxTCPConnections bounds the TCP connections one edge relays at once.
+	// maxTCPConnections bounds the TCP connections one edge relays at once,
+	// and maxTCPPerTarget those to one release or container, so one pod
+	// cannot take every slot.
 	maxTCPConnections   = 1024
+	maxTCPPerTarget     = 128
 	tcpHandshakeTimeout = 10 * time.Second
 )
 
@@ -106,6 +109,10 @@ func (e *Edge) relayTCP(ctx context.Context, conn *tls.Conn) {
 	if !ok {
 		return
 	}
+	if !e.tcpTargets.take(id) {
+		return
+	}
+	defer e.tcpTargets.give(id)
 	t, err := e.resolvePod(ctx, id, port)
 	if err != nil || t.authorized() || t.spec.Pod == nil || t.spec.Pod.Tcp == nil || !*t.spec.Pod.Tcp {
 		return
@@ -143,3 +150,30 @@ func (e *Edge) relayTCP(ctx context.Context, conn *tls.Conn) {
 // TunnelProtocol is the Upgrade token the supervisor answers with a raw
 // tunnel to SSH or a port.
 const TunnelProtocol = "lazycloud-tunnel"
+
+// tcpTargets counts the TCP connections this edge relays per target.
+type tcpTargets struct {
+	mu     sync.Mutex
+	counts map[uuid.UUID]int
+}
+
+func (t *tcpTargets) take(id uuid.UUID) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.counts == nil {
+		t.counts = map[uuid.UUID]int{}
+	}
+	if t.counts[id] >= maxTCPPerTarget {
+		return false
+	}
+	t.counts[id]++
+	return true
+}
+
+func (t *tcpTargets) give(id uuid.UUID) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.counts[id]--; t.counts[id] <= 0 {
+		delete(t.counts, id)
+	}
+}

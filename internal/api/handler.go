@@ -198,8 +198,21 @@ func requireContainerScheme(ctx context.Context, input *openapi3filter.Authentic
 // requireContainer admits only requests carrying a container principal.
 func (s *Server) requireContainer(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if _, ok := containerFrom(r.Context()); !ok {
+		p, ok := containerFrom(r.Context())
+		if !ok {
 			s.writeError(w, r, identity.ErrUnauthenticated)
+			return
+		}
+		// Pods, devboxes, sandboxes, instances and shell containers run code
+		// their owner did not deploy as a function; they hold no workspace
+		// authority.
+		route, err := s.owners.Execution.Route(r.Context(), execution.ContainerID(p.Container))
+		if err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		if route.Purpose != execution.PurposeServe || route.Kind == apitypes.WorkloadKindPod || route.Kind == apitypes.WorkloadKindSandbox {
+			writeJSONError(w, http.StatusForbidden, apitypes.Forbidden, "this container has no access to the platform API")
 			return
 		}
 		next.ServeHTTP(w, r)

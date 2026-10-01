@@ -71,6 +71,9 @@ type InstanceRequest struct {
 	// keep-warm window, and 0 or -1 keeps it up until it is stopped.
 	Timeout *int
 	Shell   bool
+	// CreatedBy is the function container that asked for the instance
+	// through the container API; only it may drive the instance there.
+	CreatedBy *ContainerID
 }
 
 // Instance is a container started on request, as its caller sees it.
@@ -139,6 +142,9 @@ func (e *Execution) CreateInstance(ctx context.Context, workspace identity.Works
 		params, err := instanceParams(workspace, row, spec, req)
 		if err != nil {
 			return err
+		}
+		if req.CreatedBy != nil {
+			params.CreatedByContainer = new(uuid.UUID(*req.CreatedBy))
 		}
 		// An instance has nowhere else to run, so the account's container
 		// limit refuses it rather than queueing it.
@@ -424,7 +430,14 @@ func ParseNetworkPolicy(block bool, allow []string) (NetworkPolicy, error) {
 // host, which applies it.
 func (e *Execution) SetNetwork(ctx context.Context, workspace identity.WorkspaceID, container ContainerID, policy NetworkPolicy) (NetworkPolicy, error) {
 	var out NetworkPolicy
-	err := pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
+	route, err := e.Route(ctx, container)
+	if err != nil {
+		return NetworkPolicy{}, err
+	}
+	if (policy.Block || len(policy.Allow) > 0) && route.Spec.DockerEnabled != nil && *route.Spec.DockerEnabled {
+		return NetworkPolicy{}, &InvalidError{Reason: "a container with docker_enabled cannot limit its network: nested containers would bypass the policy"}
+	}
+	err = pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
 		row, err := e.queries.WithTx(tx).SetContainerNetwork(ctx, SetContainerNetworkParams{
 			BlockNetwork: policy.Block, AllowList: policy.Allow, ID: uuid.UUID(container), WorkspaceID: uuid.UUID(workspace),
 		})
@@ -485,6 +498,8 @@ type ContainerRoute struct {
 	Accepting bool
 	Ports     []int
 	Spec      apitypes.FunctionSpec
+	// CreatedBy is the function container that started the instance.
+	CreatedBy *ContainerID
 }
 
 // Route reads what reaching a container needs, in any workspace; callers
@@ -501,6 +516,10 @@ func (e *Execution) Route(ctx context.Context, container ContainerID) (Container
 		ID: ContainerID(row.ID), Host: row.HostID, State: ContainerState(row.State), Purpose: ContainerPurpose(row.Purpose),
 		Workspace: identity.WorkspaceID(row.WorkspaceID), WorkspaceName: row.WorkspaceName, Workload: row.WorkloadID,
 		Kind: apitypes.WorkloadKind(row.Kind), Accepting: row.AppState == "active" && row.DesiredState == "active",
+	}
+	if row.CreatedByContainer != nil {
+		by := ContainerID(*row.CreatedByContainer)
+		out.CreatedBy = &by
 	}
 	if err := json.Unmarshal(row.Spec, &out.Spec); err != nil {
 		return ContainerRoute{}, fmt.Errorf("decode release spec: %w", err)
@@ -545,12 +564,25 @@ func (e *Execution) PodRelease(ctx context.Context, release uuid.UUID) (PodRoute
 func (e *Execution) StopIdle(ctx context.Context, logger *slog.Logger) (int, error) {
 	var drained []drainedContainer
 	err := pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
-		rows, err := e.queries.WithTx(tx).DrainIdleInstances(ctx, idleBatch)
+		q := e.queries.WithTx(tx)
+		rows, err := q.DrainIdleInstances(ctx, idleBatch)
 		if err != nil {
 			return fmt.Errorf("drain idle instances: %w", err)
 		}
 		drained = drained[:0]
 		for _, row := range rows {
+			drained = append(drained, drainedContainer{id: row.ID, host: row.HostID})
+		}
+		// Instances end with their workload, app or workspace, so a stop
+		// or a workspace deletion converges.
+		if _, err := q.StopUnservedPendingInstances(ctx); err != nil {
+			return fmt.Errorf("stop pending instances of stopped workloads: %w", err)
+		}
+		unserved, err := q.DrainUnservedInstances(ctx)
+		if err != nil {
+			return fmt.Errorf("drain instances of stopped workloads: %w", err)
+		}
+		for _, row := range unserved {
 			drained = append(drained, drainedContainer{id: row.ID, host: row.HostID})
 		}
 		return notifyHosts(ctx, tx, drained)

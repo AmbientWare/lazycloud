@@ -66,6 +66,9 @@ func (s *Server) liveContainer(ctx context.Context, workspace string, container 
 	if route.Workspace != ws.ID {
 		return execution.ContainerRoute{}, execution.ErrNotFound
 	}
+	if err := ownsInstance(ctx, route.CreatedBy); err != nil {
+		return execution.ContainerRoute{}, err
+	}
 	if route.State != execution.ContainerReady || route.Host == nil {
 		return execution.ContainerRoute{}, errContainerNotRunning
 	}
@@ -250,6 +253,9 @@ func (s *Server) StreamContainerOutput(ctx context.Context, req StreamContainerO
 	if _, err := s.owners.Execution.Instance(ctx, ws.ID, execution.ContainerID(req.Container)); err != nil {
 		return nil, err
 	}
+	if err := s.ownsContainer(ctx, execution.ContainerID(req.Container)); err != nil {
+		return nil, err
+	}
 	out := containerOutput{ctx: ctx, server: s, workspace: ws.ID, container: execution.ContainerID(req.Container)}
 	if req.Params.After != nil {
 		out.after = *req.Params.After
@@ -342,6 +348,9 @@ func (s *Server) holdWhile(ctx context.Context, container execution.ContainerID)
 // OpenContainerShell opens a login shell in the container over a
 // WebSocket.
 func (s *Server) OpenContainerShell(ctx context.Context, req OpenContainerShellRequestObject) (OpenContainerShellResponseObject, error) {
+	if err := refuseContainer(ctx); err != nil {
+		return nil, err
+	}
 	ws, err := s.workspace(ctx, req.Workspace)
 	if err != nil {
 		return nil, err
@@ -472,6 +481,9 @@ func (t containerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 
 // OpenSshTunnel carries an SSH connection to a pod over a WebSocket.
 func (s *Server) OpenSshTunnel(ctx context.Context, req OpenSshTunnelRequestObject) (OpenSshTunnelResponseObject, error) {
+	if err := refuseContainer(ctx); err != nil {
+		return nil, err
+	}
 	ws, err := s.workspace(ctx, req.Workspace)
 	if err != nil {
 		return nil, err

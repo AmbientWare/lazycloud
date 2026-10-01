@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
@@ -146,6 +147,18 @@ func (sess *session) syncWorkloads(ctx context.Context, commands execution.HostC
 	return nil
 }
 
+func isHexDigest(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for _, c := range s {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 func valueOr[T any](v *T, def T) T {
 	if v == nil {
 		return def
@@ -208,6 +221,13 @@ func (s *Server) CompleteFilesystemImage(ctx context.Context, req *hostproto.Com
 		architecture = "amd64"
 	}
 	err = s.execution.FinishFilesystemImage(ctx, hostFrom(ctx), container, request, failure, func(ws identity.WorkspaceID) (string, error) {
+		// The host names only a digest in the repository this workspace's
+		// images go to.
+		repository, _, _ := s.images.FilesystemTarget(ws)
+		digest, ok := strings.CutPrefix(req.GetReference(), repository+"@sha256:")
+		if !ok || !isHexDigest(digest) {
+			return "", fmt.Errorf("the host reported %q, not an image in %s", req.GetReference(), repository)
+		}
 		return s.images.RegisterFilesystem(ctx, ws, req.GetReference(), architecture, python)
 	})
 	if errors.Is(err, execution.ErrStaleSnapshot) {
