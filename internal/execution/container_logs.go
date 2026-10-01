@@ -2,6 +2,7 @@ package execution
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -13,8 +14,8 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/database"
 )
 
-// ChannelContainerLog wakes followers of a container's output; the payload
-// is the container id.
+// ChannelContainerLog wakes followers of a release's container output; the
+// payload is the release id.
 const ChannelContainerLog database.Channel = "lc_container_log"
 
 // ContainerLogEntry is a stored line of a container's own output.
@@ -45,14 +46,16 @@ func (e *Execution) AppendContainerLogs(ctx context.Context, host compute.HostID
 		params.LoggedAt[n] = line.Time
 	}
 	err := pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
-		stored, err := e.queries.WithTx(tx).InsertContainerLogs(ctx, params)
+		releases, err := e.queries.WithTx(tx).InsertContainerLogs(ctx, params)
 		if err != nil {
 			return fmt.Errorf("insert container logs: %w", err)
 		}
-		if stored == 0 {
-			return nil
+		for _, release := range releases {
+			if err := database.Notify(ctx, tx, ChannelContainerLog, release.String()); err != nil {
+				return err
+			}
 		}
-		return database.Notify(ctx, tx, ChannelContainerLog, container.String())
+		return nil
 	})
 	if err != nil {
 		return fmt.Errorf("append container logs: %w", err)
@@ -60,22 +63,41 @@ func (e *Execution) AppendContainerLogs(ctx context.Context, host compute.HostID
 	return nil
 }
 
-// StreamContainerLogs passes the container's output after the cursor to emit
-// in batches. With follow it waits for more until done reports true or ctx
-// ends, and emits an empty batch whenever heartbeat passes without one. The
-// listener must listen on ChannelContainerLog.
-func (e *Execution) StreamContainerLogs(ctx context.Context, listener *database.Listener, container ContainerID, after int64, follow bool, heartbeat time.Duration, done func(context.Context) (bool, error), emit func([]ContainerLogEntry) error) error {
+// ReleaseContainer is the newest live container of a release.
+type ReleaseContainer struct {
+	ID    ContainerID
+	State ContainerState
+	Host  *uuid.UUID
+}
+
+// NewestContainer returns the release's newest live container, or false.
+func (e *Execution) NewestContainer(ctx context.Context, release uuid.UUID) (ReleaseContainer, bool, error) {
+	row, err := e.queries.ReleaseContainer(ctx, release)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ReleaseContainer{}, false, nil
+	}
+	if err != nil {
+		return ReleaseContainer{}, false, fmt.Errorf("read release container: %w", err)
+	}
+	return ReleaseContainer{ID: ContainerID(row.ID), State: ContainerState(row.State), Host: row.HostID}, true, nil
+}
+
+// StreamReleaseLogs passes the output of the release's containers after the
+// cursor to emit in batches. With follow it waits for more until done
+// reports true or ctx ends, and emits an empty batch whenever heartbeat
+// passes without one. The listener must listen on ChannelContainerLog.
+func (e *Execution) StreamReleaseLogs(ctx context.Context, listener *database.Listener, release uuid.UUID, after int64, follow bool, heartbeat time.Duration, done func(context.Context) (bool, error), emit func([]ContainerLogEntry) error) error {
 	var wake <-chan struct{}
 	var idle *time.Timer
 	if follow {
 		var cancel func()
-		wake, cancel = listener.Subscribe(ChannelContainerLog, container.String())
+		wake, cancel = listener.Subscribe(ChannelContainerLog, release.String())
 		defer cancel()
 		idle = time.NewTimer(heartbeat)
 		defer idle.Stop()
 	}
 	for {
-		// Read whether the stream may end before the entries, so entries
+		// Whether the stream may end is read before the entries, so entries
 		// written before the end are all read.
 		finished := !follow
 		if follow {
@@ -85,7 +107,7 @@ func (e *Execution) StreamContainerLogs(ctx context.Context, listener *database.
 			}
 		}
 		for {
-			rows, err := e.queries.ContainerLogsAfter(ctx, ContainerLogsAfterParams{ContainerID: uuid.UUID(container), After: after, MaxEntries: logBatch})
+			rows, err := e.queries.ReleaseLogsAfter(ctx, ReleaseLogsAfterParams{ReleaseID: release, After: after, MaxEntries: logBatch})
 			if err != nil {
 				return fmt.Errorf("read container logs: %w", err)
 			}

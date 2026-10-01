@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -27,6 +28,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/AmbientWare/lazycloud/internal/agent"
+	"github.com/AmbientWare/lazycloud/internal/api"
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/control"
@@ -82,6 +84,8 @@ type platform struct {
 	edgeAddr  string
 	client    *http.Client
 	socketDir string
+	// api is the public API's base URL.
+	api string
 }
 
 func (p *platform) port() string {
@@ -155,6 +159,19 @@ func startPlatform(t *testing.T) *platform {
 		t.Fatal(err)
 	}
 	edgeServer := &http.Server{Handler: p.edge, ReadHeaderTimeout: 10 * time.Second}
+	apiHandler, err := api.NewHandler(api.Owners{
+		Identity: ident, Control: p.control, Storage: p.storage, Execution: p.execution, Images: im,
+		Listener: listener, Edge: p.edge,
+	}, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	apiListener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.api = "http://" + apiListener.Addr().String()
+	apiServer := &http.Server{Handler: apiHandler, ReadHeaderTimeout: 10 * time.Second}
 	sched := scheduling.NewScheduling(pool, logger)
 	planWake, cancelWake := listener.Subscribe(database.ChannelExecution, "")
 
@@ -162,6 +179,7 @@ func startPlatform(t *testing.T) *platform {
 	wg.Go(func() { _ = p.edge.Run(ctx) })
 	wg.Go(func() { _ = grpcServer.Serve(grpcListener) })
 	wg.Go(func() { _ = edgeServer.Serve(edgeListener) })
+	wg.Go(func() { _ = apiServer.Serve(apiListener) })
 	wg.Go(func() {
 		defer cancelWake()
 		ticker := time.NewTicker(time.Second)
@@ -190,6 +208,7 @@ func startPlatform(t *testing.T) *platform {
 		p.edge.Shutdown()
 		grpcServer.Stop()
 		_ = edgeServer.Close()
+		_ = apiServer.Close()
 		hosts.Wait()
 	})
 
@@ -363,4 +382,43 @@ func liveContainers(t *testing.T, pool *pgxpool.Pool, release uuid.UUID) int {
 		t.Fatal(err)
 	}
 	return n
+}
+
+// apiCall sends a JSON request to the public API with the test token and
+// decodes a JSON answer into out when it is not nil.
+func (p *platform) apiCall(method, path string, body any, out any) int {
+	p.t.Helper()
+	var reader io.Reader
+	if body != nil {
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			p.t.Fatal(err)
+		}
+		reader = bytes.NewReader(encoded)
+	}
+	req, err := http.NewRequestWithContext(p.t.Context(), method, p.api+path, reader)
+	if err != nil {
+		p.t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+p.token)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		p.t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		p.t.Fatal(err)
+	}
+	if out != nil && resp.StatusCode < 300 {
+		if err := json.Unmarshal(data, out); err != nil {
+			p.t.Fatalf("decode %s %s (%d): %v: %s", method, path, resp.StatusCode, err, data)
+		}
+	} else if resp.StatusCode >= 300 {
+		p.t.Logf("%s %s: %d %s", method, path, resp.StatusCode, data)
+	}
+	return resp.StatusCode
 }

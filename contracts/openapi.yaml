@@ -497,14 +497,14 @@ paths:
       operationId: syncPreviewFiles
       summary: Write and remove files in the preview container's workspace
       description: >-
-        The body is a tar of the files to write, paths relative to the
-        workspace. A path to remove is a regular entry of size zero carrying
+        The body is a tar archive of the files to write, paths relative to
+        the workspace, at most 64 MiB. A path to remove is a regular entry of size zero carrying
         the PAX record `LAZYCLOUD.removed=1`. The container's runners restart
         once their current work finishes.
       requestBody:
         required: true
         content:
-          application/x-tar:
+          application/octet-stream:
             schema: { type: string, format: binary }
       responses:
         "200":

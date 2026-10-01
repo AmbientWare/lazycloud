@@ -33,6 +33,11 @@ func (e *Edge) DeployedURL(workspace identity.WorkspaceID, app string, spec apit
 	return e.urls.Deployment(sub, route(spec))
 }
 
+// PreviewURL is where a preview answers: its release's host.
+func (e *Edge) PreviewURL(release uuid.UUID, spec apitypes.FunctionSpec) string {
+	return e.urls.Release(release, route(spec))
+}
+
 // Describe returns a deployed HTTP workload of kind with the URLs it answers
 // on, for its active release or version.
 func (e *Edge) Describe(ctx context.Context, workspace identity.WorkspaceID, app string, kind control.WorkloadKind, name string, version *int) (apitypes.HttpWorkload, error) {

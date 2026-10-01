@@ -20,7 +20,7 @@ order by r.workload_id;
 select rel.id as release_id, rel.version, rel.spec,
        w.id as workload_id, w.kind, w.name, w.desired_state, (w.active_release_id is not distinct from rel.id)::bool as active,
        a.name as app_name, a.state as app_state, a.workspace_id, ws.name as workspace_name,
-       coalesce(p.stopped_at is null, false)::bool as preview_live
+       coalesce(p.stopped_at is null and p.lease_expires_at > now() and (p.deadline_at is null or p.deadline_at > now()), false)::bool as preview_live
 from releases rel
 join workloads w on w.id = rel.workload_id
 join apps a on a.id = w.app_id

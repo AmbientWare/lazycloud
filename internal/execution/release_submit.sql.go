@@ -42,7 +42,8 @@ func (q *Queries) FunctionReleaseByVersion(ctx context.Context, arg FunctionRele
 const lockReleaseForSubmit = `-- name: LockReleaseForSubmit :one
 select w.id as workload_id, w.name, w.kind, w.desired_state, a.name as app_name, a.state as app_state,
        r.id as release_id, r.version, r.spec,
-       (p.release_id is not null and p.stopped_at is null)::bool as preview_live
+       (p.release_id is not null and p.stopped_at is null and p.lease_expires_at > now()
+        and (p.deadline_at is null or p.deadline_at > now()))::bool as preview_live
 from releases r
 join workloads w on w.id = r.workload_id
 join apps a on a.id = w.app_id

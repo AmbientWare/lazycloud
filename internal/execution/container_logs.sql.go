@@ -12,36 +12,112 @@ import (
 	"github.com/google/uuid"
 )
 
-const containerLogsAfter = `-- name: ContainerLogsAfter :many
-select id, stream, data, logged_at
-from container_logs
-where container_id = $1 and id > $2
-order by id
+const insertContainerLogs = `-- name: InsertContainerLogs :many
+with line as (
+    select i as ord, ($1::text[])[i] as stream, ($2::text[])[i] as data,
+           ($3::timestamptz[])[i] as logged_at
+    from generate_subscripts($1::text[], 1) as i
+), inserted as (
+    insert into container_logs (container_id, stream, data, logged_at)
+    select c.id, line.stream, line.data, line.logged_at
+    from line
+    join containers c on c.id = $4 and c.host_id = $5
+    order by line.ord
+    returning container_id
+)
+select distinct c.release_id::uuid from inserted join containers c on c.id = inserted.container_id where c.release_id is not null
+`
+
+type InsertContainerLogsParams struct {
+	Streams     []string
+	Data        []string
+	LoggedAt    []time.Time
+	ContainerID uuid.UUID
+	HostID      *uuid.UUID
+}
+
+// Lines in order, only for a container assigned to the calling host.
+// Returns the container's release when lines were stored.
+func (q *Queries) InsertContainerLogs(ctx context.Context, arg InsertContainerLogsParams) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, insertContainerLogs,
+		arg.Streams,
+		arg.Data,
+		arg.LoggedAt,
+		arg.ContainerID,
+		arg.HostID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var c_release_id uuid.UUID
+		if err := rows.Scan(&c_release_id); err != nil {
+			return nil, err
+		}
+		items = append(items, c_release_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const releaseContainer = `-- name: ReleaseContainer :one
+select id, state, host_id from containers
+where release_id = $1::uuid and state <> 'stopped'
+order by created_at desc, id desc
+limit 1
+`
+
+type ReleaseContainerRow struct {
+	ID     uuid.UUID
+	State  string
+	HostID *uuid.UUID
+}
+
+// The newest live container of the release.
+func (q *Queries) ReleaseContainer(ctx context.Context, releaseID uuid.UUID) (ReleaseContainerRow, error) {
+	row := q.db.QueryRow(ctx, releaseContainer, releaseID)
+	var i ReleaseContainerRow
+	err := row.Scan(&i.ID, &i.State, &i.HostID)
+	return i, err
+}
+
+const releaseLogsAfter = `-- name: ReleaseLogsAfter :many
+select l.id, l.stream, l.data, l.logged_at
+from containers c
+join container_logs l on l.container_id = c.id
+where c.release_id = $1::uuid and l.id > $2
+order by l.id
 limit $3
 `
 
-type ContainerLogsAfterParams struct {
-	ContainerID uuid.UUID
-	After       int64
-	MaxEntries  int32
+type ReleaseLogsAfterParams struct {
+	ReleaseID  uuid.UUID
+	After      int64
+	MaxEntries int32
 }
 
-type ContainerLogsAfterRow struct {
+type ReleaseLogsAfterRow struct {
 	ID       int64
 	Stream   string
 	Data     string
 	LoggedAt time.Time
 }
 
-func (q *Queries) ContainerLogsAfter(ctx context.Context, arg ContainerLogsAfterParams) ([]ContainerLogsAfterRow, error) {
-	rows, err := q.db.Query(ctx, containerLogsAfter, arg.ContainerID, arg.After, arg.MaxEntries)
+// Output of every container of the release, which is how a preview's
+// output continues across a replaced container.
+func (q *Queries) ReleaseLogsAfter(ctx context.Context, arg ReleaseLogsAfterParams) ([]ReleaseLogsAfterRow, error) {
+	rows, err := q.db.Query(ctx, releaseLogsAfter, arg.ReleaseID, arg.After, arg.MaxEntries)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ContainerLogsAfterRow
+	var items []ReleaseLogsAfterRow
 	for rows.Next() {
-		var i ContainerLogsAfterRow
+		var i ReleaseLogsAfterRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.Stream,
@@ -56,43 +132,4 @@ func (q *Queries) ContainerLogsAfter(ctx context.Context, arg ContainerLogsAfter
 		return nil, err
 	}
 	return items, nil
-}
-
-const insertContainerLogs = `-- name: InsertContainerLogs :one
-with line as (
-    select i as ord, ($1::text[])[i] as stream, ($2::text[])[i] as data,
-           ($3::timestamptz[])[i] as logged_at
-    from generate_subscripts($1::text[], 1) as i
-), inserted as (
-    insert into container_logs (container_id, stream, data, logged_at)
-    select c.id, line.stream, line.data, line.logged_at
-    from line
-    join containers c on c.id = $4 and c.host_id = $5
-    order by line.ord
-    returning 1
-)
-select count(*) from inserted
-`
-
-type InsertContainerLogsParams struct {
-	Streams     []string
-	Data        []string
-	LoggedAt    []time.Time
-	ContainerID uuid.UUID
-	HostID      *uuid.UUID
-}
-
-// Lines in order, only for a container assigned to the calling host.
-// Returns how many were stored.
-func (q *Queries) InsertContainerLogs(ctx context.Context, arg InsertContainerLogsParams) (int64, error) {
-	row := q.db.QueryRow(ctx, insertContainerLogs,
-		arg.Streams,
-		arg.Data,
-		arg.LoggedAt,
-		arg.ContainerID,
-		arg.HostID,
-	)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
 }

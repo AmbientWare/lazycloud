@@ -1,6 +1,6 @@
--- name: InsertContainerLogs :one
+-- name: InsertContainerLogs :many
 -- Lines in order, only for a container assigned to the calling host.
--- Returns how many were stored.
+-- Returns the container's release when lines were stored.
 with line as (
     select i as ord, (@streams::text[])[i] as stream, (@data::text[])[i] as data,
            (@logged_at::timestamptz[])[i] as logged_at
@@ -11,13 +11,23 @@ with line as (
     from line
     join containers c on c.id = @container_id and c.host_id = @host_id
     order by line.ord
-    returning 1
+    returning container_id
 )
-select count(*) from inserted;
+select distinct c.release_id::uuid from inserted join containers c on c.id = inserted.container_id where c.release_id is not null;
 
--- name: ContainerLogsAfter :many
-select id, stream, data, logged_at
-from container_logs
-where container_id = @container_id and id > @after
-order by id
+-- name: ReleaseLogsAfter :many
+-- Output of every container of the release, which is how a preview's
+-- output continues across a replaced container.
+select l.id, l.stream, l.data, l.logged_at
+from containers c
+join container_logs l on l.container_id = c.id
+where c.release_id = @release_id::uuid and l.id > @after
+order by l.id
 limit @max_entries;
+
+-- name: ReleaseContainer :one
+-- The newest live container of the release.
+select id, state, host_id from containers
+where release_id = @release_id::uuid and state <> 'stopped'
+order by created_at desc, id desc
+limit 1;

@@ -15,9 +15,6 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
-// errNotYetServed marks endpoint operations this branch has not wired yet.
-var errNotYetServed = errors.New("not yet served")
-
 type queryKey struct{}
 
 // withQuery keeps the raw query for operations that turn it into
@@ -190,30 +187,6 @@ func (s *Server) RemoveDomain(ctx context.Context, req RemoveDomainRequestObject
 	return RemoveDomain204Response{}, nil
 }
 
-func (s *Server) CreatePreview(context.Context, CreatePreviewRequestObject) (CreatePreviewResponseObject, error) {
-	return nil, errNotYetServed
-}
-
-func (s *Server) GetPreview(context.Context, GetPreviewRequestObject) (GetPreviewResponseObject, error) {
-	return nil, errNotYetServed
-}
-
-func (s *Server) StopPreview(context.Context, StopPreviewRequestObject) (StopPreviewResponseObject, error) {
-	return nil, errNotYetServed
-}
-
-func (s *Server) SyncPreviewFiles(context.Context, SyncPreviewFilesRequestObject) (SyncPreviewFilesResponseObject, error) {
-	return nil, errNotYetServed
-}
-
-func (s *Server) StreamPreviewOutput(context.Context, StreamPreviewOutputRequestObject) (StreamPreviewOutputResponseObject, error) {
-	return nil, errNotYetServed
-}
-
-func (s *Server) SubmitPreviewTasks(context.Context, SubmitPreviewTasksRequestObject) (SubmitPreviewTasksResponseObject, error) {
-	return nil, errNotYetServed
-}
-
 // endpointError maps the edge's errors; ok is false for errors it does not
 // know.
 func endpointError(w http.ResponseWriter, err error) bool {
@@ -235,6 +208,10 @@ func endpointError(w http.ResponseWriter, err error) bool {
 		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, provider.Error())
 	case errors.As(err, &provider):
 		writeJSONError(w, http.StatusServiceUnavailable, apitypes.Unavailable, provider.Error())
+	case errors.Is(err, errPreviewNotRunning):
+		writeJSONError(w, http.StatusConflict, apitypes.Conflict, err.Error())
+	case errors.Is(err, edge.ErrSyncRefused):
+		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, err.Error())
 	case errors.Is(err, edge.ErrInvalidArguments):
 		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, err.Error())
 	default:
