@@ -122,6 +122,9 @@ func (s *Server) PrepareFunctionRelease(ctx context.Context, req PrepareFunction
 	if err != nil {
 		return nil, err
 	}
+	if err := s.pinImage(ctx, ws.ID, req.Body); err != nil {
+		return nil, err
+	}
 	release, err := s.owners.Control.PrepareRelease(ctx, ws.ID, req.App, req.Function, *req.Body)
 	if err != nil {
 		return nil, err
