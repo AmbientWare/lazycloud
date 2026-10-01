@@ -3,6 +3,7 @@ package supervisor
 import (
 	"archive/tar"
 	"bytes"
+	"context"
 	"crypto/rand"
 	"errors"
 	"io"
@@ -20,10 +21,13 @@ import (
 
 const busybox = "docker.io/library/busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e"
 
-// docker runs the docker CLI and returns its trimmed output.
+// docker runs the docker CLI and returns its trimmed output. It outlives the
+// test's context, which has ended when cleanups run.
 func docker(t *testing.T, args ...string) (string, error) {
 	t.Helper()
-	out, err := exec.CommandContext(t.Context(), "docker", args...).CombinedOutput()
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 2*time.Minute)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "docker", args...).CombinedOutput()
 	return strings.TrimSpace(string(out)), err //nolint:wrapcheck // the test reads the exit status
 }
 
