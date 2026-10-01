@@ -81,15 +81,69 @@ type ServerInterface interface {
 	// RenameWorkspace Rename a workspace; any member may
 	// (PATCH /v1/workspaces/{workspace})
 	RenameWorkspace(w http.ResponseWriter, r *http.Request, workspace WorkspacePath)
+	// ListApps Apps with at least one deployed workload, by name
+	// (GET /v1/workspaces/{workspace}/apps)
+	ListApps(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, params ListAppsParams)
+	// DeleteApp Delete the app and every workload in it
+	// (DELETE /v1/workspaces/{workspace}/apps/{app})
+	DeleteApp(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, app AppRefPath)
+
+	// (GET /v1/workspaces/{workspace}/apps/{app})
+	GetApp(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, app AppRefPath)
+	// PlanDeployment What a deploy of these workloads would do, without deploying
+	// (POST /v1/workspaces/{workspace}/apps/{app}/deployment-plan)
+	PlanDeployment(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, app AppPath)
 	// DeployApp Make the app's deployed workloads match the given definitions
 	// (POST /v1/workspaces/{workspace}/apps/{app}/deployments)
 	DeployApp(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, app AppPath)
 
 	// (GET /v1/workspaces/{workspace}/apps/{app}/functions/{function})
 	GetFunction(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, app AppPath, function FunctionPath)
+	// PrepareFunctionRelease A release that runs this definition, for calls from a working tree
+	// (POST /v1/workspaces/{workspace}/apps/{app}/functions/{function}/releases)
+	PrepareFunctionRelease(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, app AppPath, function FunctionPath)
 	// SubmitTasks Admit one task per input against the function's active release
 	// (POST /v1/workspaces/{workspace}/apps/{app}/functions/{function}/tasks)
 	SubmitTasks(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, app AppPath, function FunctionPath)
+	// PauseApp Stop admission and drain every workload of the app
+	// (POST /v1/workspaces/{workspace}/apps/{app}/pause)
+	PauseApp(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, app AppRefPath)
+
+	// (POST /v1/workspaces/{workspace}/apps/{app}/resume)
+	ResumeApp(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, app AppRefPath)
+	// ListContainers Containers, newest first
+	// (GET /v1/workspaces/{workspace}/containers)
+	ListContainers(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, params ListContainersParams)
+
+	// (GET /v1/workspaces/{workspace}/containers/{container})
+	GetContainer(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, container ContainerPath)
+	// StreamContainerLogs Log lines of the tasks the container ran, one JSON LogEntry per line
+	// (GET /v1/workspaces/{workspace}/containers/{container}/logs)
+	StreamContainerLogs(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, container ContainerPath, params StreamContainerLogsParams)
+	// StopContainer Stop the container now
+	// (POST /v1/workspaces/{workspace}/containers/{container}/stop)
+	StopContainer(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, container ContainerPath)
+	// ListDeployments Deployed workloads, by app and name
+	// (GET /v1/workspaces/{workspace}/deployments)
+	ListDeployments(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, params ListDeploymentsParams)
+	// DeleteDeployment Delete the workload and every version of it
+	// (DELETE /v1/workspaces/{workspace}/deployments/{deployment})
+	DeleteDeployment(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, deployment DeploymentPath)
+
+	// (GET /v1/workspaces/{workspace}/deployments/{deployment})
+	GetDeployment(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, deployment DeploymentPath)
+	// StreamDeploymentLogs Log lines of every task of the workload, one JSON LogEntry per line
+	// (GET /v1/workspaces/{workspace}/deployments/{deployment}/logs)
+	StreamDeploymentLogs(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, deployment DeploymentPath, params StreamDeploymentLogsParams)
+	// StartDeployment Start the workload again, optionally on an earlier version
+	// (POST /v1/workspaces/{workspace}/deployments/{deployment}/start)
+	StartDeployment(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, deployment DeploymentPath)
+	// StopDeployment Stop admission and drain the workload, keeping its definition
+	// (POST /v1/workspaces/{workspace}/deployments/{deployment}/stop)
+	StopDeployment(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, deployment DeploymentPath)
+	// ListDeploymentVersions Deployed versions, newest first
+	// (GET /v1/workspaces/{workspace}/deployments/{deployment}/versions)
+	ListDeploymentVersions(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, deployment DeploymentPath, params ListDeploymentVersionsParams)
 	// GetImageBuild Read a build, optionally waiting until it finishes
 	// (GET /v1/workspaces/{workspace}/image-builds/{build})
 	GetImageBuild(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, build ImageBuildPath, params GetImageBuildParams)
@@ -153,6 +207,12 @@ type ServerInterface interface {
 	// CreateSourceUpload Register a source archive by digest and get an upload URL when it is missing
 	// (POST /v1/workspaces/{workspace}/sources)
 	CreateSourceUpload(w http.ResponseWriter, r *http.Request, workspace WorkspacePath)
+	// ListTasks Tasks, newest first
+	// (GET /v1/workspaces/{workspace}/tasks)
+	ListTasks(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, params ListTasksParams)
+	// StopTasks Cancel each listed task that is queued or running
+	// (POST /v1/workspaces/{workspace}/tasks/stop)
+	StopTasks(w http.ResponseWriter, r *http.Request, workspace WorkspacePath)
 	// GetTask Read a task, optionally waiting until it finishes
 	// (GET /v1/workspaces/{workspace}/tasks/{task})
 	GetTask(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, task TaskPath, params GetTaskParams)
@@ -162,6 +222,9 @@ type ServerInterface interface {
 	// StreamTaskLogs Log lines after a cursor, one JSON LogEntry per line
 	// (GET /v1/workspaces/{workspace}/tasks/{task}/logs)
 	StreamTaskLogs(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, task TaskPath, params StreamTaskLogsParams)
+	// RerunTask Submit the task's input again to the release it ran on
+	// (POST /v1/workspaces/{workspace}/tasks/{task}/rerun)
+	RerunTask(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, task TaskPath)
 	// GetTaskResult The value a succeeded task returned
 	// (GET /v1/workspaces/{workspace}/tasks/{task}/result)
 	GetTaskResult(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, task TaskPath)
@@ -625,6 +688,179 @@ func (siw *ServerInterfaceWrapper) RenameWorkspace(w http.ResponseWriter, r *htt
 	handler.ServeHTTP(w, r)
 }
 
+// ListApps operation middleware
+func (siw *ServerInterfaceWrapper) ListApps(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "workspace" -------------
+	var workspace WorkspacePath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "workspace", r.PathValue("workspace"), &workspace, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListAppsParams
+
+	// ------------- Optional query parameter "state" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "state", r.URL.Query(), &params.State, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "state"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "state", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", r.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "cursor"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cursor", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListApps(w, r, workspace, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteApp operation middleware
+func (siw *ServerInterfaceWrapper) DeleteApp(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "workspace" -------------
+	var workspace WorkspacePath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "workspace", r.PathValue("workspace"), &workspace, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "app" -------------
+	var app AppRefPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "app", r.PathValue("app"), &app, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "app", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteApp(w, r, workspace, app)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetApp operation middleware
+func (siw *ServerInterfaceWrapper) GetApp(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "workspace" -------------
+	var workspace WorkspacePath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "workspace", r.PathValue("workspace"), &workspace, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "app" -------------
+	var app AppRefPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "app", r.PathValue("app"), &app, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "app", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetApp(w, r, workspace, app)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// PlanDeployment operation middleware
+func (siw *ServerInterfaceWrapper) PlanDeployment(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "workspace" -------------
+	var workspace WorkspacePath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "workspace", r.PathValue("workspace"), &workspace, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "app" -------------
+	var app AppPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "app", r.PathValue("app"), &app, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "app", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.PlanDeployment(w, r, workspace, app)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // DeployApp operation middleware
 func (siw *ServerInterfaceWrapper) DeployApp(w http.ResponseWriter, r *http.Request) {
 
@@ -704,6 +940,50 @@ func (siw *ServerInterfaceWrapper) GetFunction(w http.ResponseWriter, r *http.Re
 	handler.ServeHTTP(w, r)
 }
 
+// PrepareFunctionRelease operation middleware
+func (siw *ServerInterfaceWrapper) PrepareFunctionRelease(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "workspace" -------------
+	var workspace WorkspacePath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "workspace", r.PathValue("workspace"), &workspace, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "app" -------------
+	var app AppPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "app", r.PathValue("app"), &app, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "app", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "function" -------------
+	var function FunctionPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "function", r.PathValue("function"), &function, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "function", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.PrepareFunctionRelease(w, r, workspace, app, function)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // SubmitTasks operation middleware
 func (siw *ServerInterfaceWrapper) SubmitTasks(w http.ResponseWriter, r *http.Request) {
 
@@ -739,6 +1019,653 @@ func (siw *ServerInterfaceWrapper) SubmitTasks(w http.ResponseWriter, r *http.Re
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.SubmitTasks(w, r, workspace, app, function)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// PauseApp operation middleware
+func (siw *ServerInterfaceWrapper) PauseApp(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "workspace" -------------
+	var workspace WorkspacePath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "workspace", r.PathValue("workspace"), &workspace, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "app" -------------
+	var app AppRefPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "app", r.PathValue("app"), &app, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "app", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.PauseApp(w, r, workspace, app)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ResumeApp operation middleware
+func (siw *ServerInterfaceWrapper) ResumeApp(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "workspace" -------------
+	var workspace WorkspacePath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "workspace", r.PathValue("workspace"), &workspace, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "app" -------------
+	var app AppRefPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "app", r.PathValue("app"), &app, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "app", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ResumeApp(w, r, workspace, app)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListContainers operation middleware
+func (siw *ServerInterfaceWrapper) ListContainers(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "workspace" -------------
+	var workspace WorkspacePath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "workspace", r.PathValue("workspace"), &workspace, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListContainersParams
+
+	// ------------- Optional query parameter "live" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "live", r.URL.Query(), &params.Live, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "live"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "live", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", r.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "cursor"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cursor", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListContainers(w, r, workspace, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetContainer operation middleware
+func (siw *ServerInterfaceWrapper) GetContainer(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "workspace" -------------
+	var workspace WorkspacePath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "workspace", r.PathValue("workspace"), &workspace, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "container" -------------
+	var container ContainerPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "container", r.PathValue("container"), &container, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "container", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetContainer(w, r, workspace, container)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// StreamContainerLogs operation middleware
+func (siw *ServerInterfaceWrapper) StreamContainerLogs(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "workspace" -------------
+	var workspace WorkspacePath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "workspace", r.PathValue("workspace"), &workspace, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "container" -------------
+	var container ContainerPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "container", r.PathValue("container"), &container, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "container", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params StreamContainerLogsParams
+
+	// ------------- Optional query parameter "after" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "after", r.URL.Query(), &params.After, runtime.BindQueryParameterOptions{Type: "integer", Format: "int64"})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "after"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "after", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "tail" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "tail", r.URL.Query(), &params.Tail, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "tail"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "tail", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "follow" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "follow", r.URL.Query(), &params.Follow, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "follow"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "follow", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.StreamContainerLogs(w, r, workspace, container, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// StopContainer operation middleware
+func (siw *ServerInterfaceWrapper) StopContainer(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "workspace" -------------
+	var workspace WorkspacePath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "workspace", r.PathValue("workspace"), &workspace, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "container" -------------
+	var container ContainerPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "container", r.PathValue("container"), &container, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "container", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.StopContainer(w, r, workspace, container)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListDeployments operation middleware
+func (siw *ServerInterfaceWrapper) ListDeployments(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "workspace" -------------
+	var workspace WorkspacePath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "workspace", r.PathValue("workspace"), &workspace, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListDeploymentsParams
+
+	// ------------- Optional query parameter "app" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "app", r.URL.Query(), &params.App, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "app"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "app", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "name" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "name", r.URL.Query(), &params.Name, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "name"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "name", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", r.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "cursor"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cursor", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListDeployments(w, r, workspace, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteDeployment operation middleware
+func (siw *ServerInterfaceWrapper) DeleteDeployment(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "workspace" -------------
+	var workspace WorkspacePath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "workspace", r.PathValue("workspace"), &workspace, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "deployment" -------------
+	var deployment DeploymentPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "deployment", r.PathValue("deployment"), &deployment, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "deployment", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteDeployment(w, r, workspace, deployment)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetDeployment operation middleware
+func (siw *ServerInterfaceWrapper) GetDeployment(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "workspace" -------------
+	var workspace WorkspacePath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "workspace", r.PathValue("workspace"), &workspace, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "deployment" -------------
+	var deployment DeploymentPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "deployment", r.PathValue("deployment"), &deployment, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "deployment", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetDeployment(w, r, workspace, deployment)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// StreamDeploymentLogs operation middleware
+func (siw *ServerInterfaceWrapper) StreamDeploymentLogs(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "workspace" -------------
+	var workspace WorkspacePath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "workspace", r.PathValue("workspace"), &workspace, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "deployment" -------------
+	var deployment DeploymentPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "deployment", r.PathValue("deployment"), &deployment, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "deployment", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params StreamDeploymentLogsParams
+
+	// ------------- Optional query parameter "after" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "after", r.URL.Query(), &params.After, runtime.BindQueryParameterOptions{Type: "integer", Format: "int64"})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "after"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "after", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "tail" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "tail", r.URL.Query(), &params.Tail, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "tail"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "tail", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "follow" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "follow", r.URL.Query(), &params.Follow, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "follow"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "follow", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.StreamDeploymentLogs(w, r, workspace, deployment, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// StartDeployment operation middleware
+func (siw *ServerInterfaceWrapper) StartDeployment(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "workspace" -------------
+	var workspace WorkspacePath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "workspace", r.PathValue("workspace"), &workspace, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "deployment" -------------
+	var deployment DeploymentPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "deployment", r.PathValue("deployment"), &deployment, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "deployment", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.StartDeployment(w, r, workspace, deployment)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// StopDeployment operation middleware
+func (siw *ServerInterfaceWrapper) StopDeployment(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "workspace" -------------
+	var workspace WorkspacePath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "workspace", r.PathValue("workspace"), &workspace, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "deployment" -------------
+	var deployment DeploymentPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "deployment", r.PathValue("deployment"), &deployment, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "deployment", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.StopDeployment(w, r, workspace, deployment)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListDeploymentVersions operation middleware
+func (siw *ServerInterfaceWrapper) ListDeploymentVersions(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "workspace" -------------
+	var workspace WorkspacePath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "workspace", r.PathValue("workspace"), &workspace, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "deployment" -------------
+	var deployment DeploymentPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "deployment", r.PathValue("deployment"), &deployment, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "deployment", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListDeploymentVersionsParams
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", r.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "cursor"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cursor", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListDeploymentVersions(w, r, workspace, deployment, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1521,6 +2448,126 @@ func (siw *ServerInterfaceWrapper) CreateSourceUpload(w http.ResponseWriter, r *
 	handler.ServeHTTP(w, r)
 }
 
+// ListTasks operation middleware
+func (siw *ServerInterfaceWrapper) ListTasks(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "workspace" -------------
+	var workspace WorkspacePath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "workspace", r.PathValue("workspace"), &workspace, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListTasksParams
+
+	// ------------- Optional query parameter "app" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "app", r.URL.Query(), &params.App, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "app"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "app", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "function" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "function", r.URL.Query(), &params.Function, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "function"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "function", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "status" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "status", r.URL.Query(), &params.Status, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "status"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "status", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", r.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "cursor"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cursor", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListTasks(w, r, workspace, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// StopTasks operation middleware
+func (siw *ServerInterfaceWrapper) StopTasks(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "workspace" -------------
+	var workspace WorkspacePath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "workspace", r.PathValue("workspace"), &workspace, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.StopTasks(w, r, workspace)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // GetTask operation middleware
 func (siw *ServerInterfaceWrapper) GetTask(w http.ResponseWriter, r *http.Request) {
 
@@ -1647,6 +2694,19 @@ func (siw *ServerInterfaceWrapper) StreamTaskLogs(w http.ResponseWriter, r *http
 		return
 	}
 
+	// ------------- Optional query parameter "tail" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "tail", r.URL.Query(), &params.Tail, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "tail"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "tail", Err: err})
+		}
+		return
+	}
+
 	// ------------- Optional query parameter "follow" -------------
 
 	err = runtime.BindQueryParameterWithOptions("form", true, false, "follow", r.URL.Query(), &params.Follow, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
@@ -1662,6 +2722,41 @@ func (siw *ServerInterfaceWrapper) StreamTaskLogs(w http.ResponseWriter, r *http
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.StreamTaskLogs(w, r, workspace, task, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RerunTask operation middleware
+func (siw *ServerInterfaceWrapper) RerunTask(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "workspace" -------------
+	var workspace WorkspacePath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "workspace", r.PathValue("workspace"), &workspace, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "task" -------------
+	var task TaskPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "task", r.PathValue("task"), &task, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "task", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RerunTask(w, r, workspace, task)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1859,6 +2954,27 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/workspaces/{workspace}/tasks/{task}/result", wrapper.GetTaskResult)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/workspaces/{workspace}/tasks/{task}/logs", wrapper.StreamTaskLogs)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/workspaces/{workspace}/tasks/{task}/cancel", wrapper.CancelTask)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/workspaces/{workspace}/apps", wrapper.ListApps)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/v1/workspaces/{workspace}/apps/{app}", wrapper.DeleteApp)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/workspaces/{workspace}/apps/{app}", wrapper.GetApp)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/workspaces/{workspace}/apps/{app}/pause", wrapper.PauseApp)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/workspaces/{workspace}/apps/{app}/resume", wrapper.ResumeApp)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/workspaces/{workspace}/apps/{app}/deployment-plan", wrapper.PlanDeployment)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/workspaces/{workspace}/apps/{app}/functions/{function}/releases", wrapper.PrepareFunctionRelease)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/workspaces/{workspace}/deployments", wrapper.ListDeployments)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/v1/workspaces/{workspace}/deployments/{deployment}", wrapper.DeleteDeployment)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/workspaces/{workspace}/deployments/{deployment}", wrapper.GetDeployment)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/workspaces/{workspace}/deployments/{deployment}/stop", wrapper.StopDeployment)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/workspaces/{workspace}/deployments/{deployment}/start", wrapper.StartDeployment)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/workspaces/{workspace}/deployments/{deployment}/versions", wrapper.ListDeploymentVersions)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/workspaces/{workspace}/deployments/{deployment}/logs", wrapper.StreamDeploymentLogs)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/workspaces/{workspace}/tasks", wrapper.ListTasks)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/workspaces/{workspace}/tasks/stop", wrapper.StopTasks)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/workspaces/{workspace}/tasks/{task}/rerun", wrapper.RerunTask)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/workspaces/{workspace}/containers", wrapper.ListContainers)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/workspaces/{workspace}/containers/{container}", wrapper.GetContainer)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/workspaces/{workspace}/containers/{container}/stop", wrapper.StopContainer)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/workspaces/{workspace}/containers/{container}/logs", wrapper.StreamContainerLogs)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/workspaces/{workspace}/secrets", wrapper.ListSecrets)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/workspaces/{workspace}/secrets", wrapper.CreateSecret)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/v1/workspaces/{workspace}/secrets/{secret}", wrapper.DeleteSecret)
@@ -2561,6 +3677,167 @@ func (response RenameWorkspacedefaultJSONResponse) VisitRenameWorkspaceResponse(
 	return err
 }
 
+type ListAppsRequestObject struct {
+	Workspace WorkspacePath `json:"workspace"`
+	Params    ListAppsParams
+}
+
+type ListAppsResponseObject interface {
+	VisitListAppsResponse(w http.ResponseWriter) error
+}
+
+type ListApps200JSONResponse AppPage
+
+func (response ListApps200JSONResponse) VisitListAppsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListAppsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ListAppsdefaultJSONResponse) VisitListAppsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteAppRequestObject struct {
+	Workspace WorkspacePath `json:"workspace"`
+	App       AppRefPath    `json:"app"`
+}
+
+type DeleteAppResponseObject interface {
+	VisitDeleteAppResponse(w http.ResponseWriter) error
+}
+
+type DeleteApp200JSONResponse App
+
+func (response DeleteApp200JSONResponse) VisitDeleteAppResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteAppdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response DeleteAppdefaultJSONResponse) VisitDeleteAppResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetAppRequestObject struct {
+	Workspace WorkspacePath `json:"workspace"`
+	App       AppRefPath    `json:"app"`
+}
+
+type GetAppResponseObject interface {
+	VisitGetAppResponse(w http.ResponseWriter) error
+}
+
+type GetApp200JSONResponse App
+
+func (response GetApp200JSONResponse) VisitGetAppResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetAppdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetAppdefaultJSONResponse) VisitGetAppResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PlanDeploymentRequestObject struct {
+	Workspace WorkspacePath `json:"workspace"`
+	App       AppPath       `json:"app"`
+	Body      *PlanDeploymentJSONRequestBody
+}
+
+type PlanDeploymentResponseObject interface {
+	VisitPlanDeploymentResponse(w http.ResponseWriter) error
+}
+
+type PlanDeployment200JSONResponse DeploymentPlan
+
+func (response PlanDeployment200JSONResponse) VisitPlanDeploymentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PlanDeploymentdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response PlanDeploymentdefaultJSONResponse) VisitPlanDeploymentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type DeployAppRequestObject struct {
 	Workspace WorkspacePath `json:"workspace"`
 	App       AppPath       `json:"app"`
@@ -2643,6 +3920,48 @@ func (response GetFunctiondefaultJSONResponse) VisitGetFunctionResponse(w http.R
 	return err
 }
 
+type PrepareFunctionReleaseRequestObject struct {
+	Workspace WorkspacePath `json:"workspace"`
+	App       AppPath       `json:"app"`
+	Function  FunctionPath  `json:"function"`
+	Body      *PrepareFunctionReleaseJSONRequestBody
+}
+
+type PrepareFunctionReleaseResponseObject interface {
+	VisitPrepareFunctionReleaseResponse(w http.ResponseWriter) error
+}
+
+type PrepareFunctionRelease200JSONResponse Release
+
+func (response PrepareFunctionRelease200JSONResponse) VisitPrepareFunctionReleaseResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PrepareFunctionReleasedefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response PrepareFunctionReleasedefaultJSONResponse) VisitPrepareFunctionReleaseResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type SubmitTasksRequestObject struct {
 	Workspace WorkspacePath `json:"workspace"`
 	App       AppPath       `json:"app"`
@@ -2674,6 +3993,588 @@ type SubmitTasksdefaultJSONResponse struct {
 }
 
 func (response SubmitTasksdefaultJSONResponse) VisitSubmitTasksResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PauseAppRequestObject struct {
+	Workspace WorkspacePath `json:"workspace"`
+	App       AppRefPath    `json:"app"`
+}
+
+type PauseAppResponseObject interface {
+	VisitPauseAppResponse(w http.ResponseWriter) error
+}
+
+type PauseApp200JSONResponse App
+
+func (response PauseApp200JSONResponse) VisitPauseAppResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PauseAppdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response PauseAppdefaultJSONResponse) VisitPauseAppResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResumeAppRequestObject struct {
+	Workspace WorkspacePath `json:"workspace"`
+	App       AppRefPath    `json:"app"`
+}
+
+type ResumeAppResponseObject interface {
+	VisitResumeAppResponse(w http.ResponseWriter) error
+}
+
+type ResumeApp200JSONResponse App
+
+func (response ResumeApp200JSONResponse) VisitResumeAppResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResumeAppdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ResumeAppdefaultJSONResponse) VisitResumeAppResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListContainersRequestObject struct {
+	Workspace WorkspacePath `json:"workspace"`
+	Params    ListContainersParams
+}
+
+type ListContainersResponseObject interface {
+	VisitListContainersResponse(w http.ResponseWriter) error
+}
+
+type ListContainers200JSONResponse ContainerPage
+
+func (response ListContainers200JSONResponse) VisitListContainersResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListContainersdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ListContainersdefaultJSONResponse) VisitListContainersResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetContainerRequestObject struct {
+	Workspace WorkspacePath `json:"workspace"`
+	Container ContainerPath `json:"container"`
+}
+
+type GetContainerResponseObject interface {
+	VisitGetContainerResponse(w http.ResponseWriter) error
+}
+
+type GetContainer200JSONResponse Container
+
+func (response GetContainer200JSONResponse) VisitGetContainerResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetContainerdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetContainerdefaultJSONResponse) VisitGetContainerResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StreamContainerLogsRequestObject struct {
+	Workspace WorkspacePath `json:"workspace"`
+	Container ContainerPath `json:"container"`
+	Params    StreamContainerLogsParams
+}
+
+type StreamContainerLogsResponseObject interface {
+	VisitStreamContainerLogsResponse(w http.ResponseWriter) error
+}
+
+type StreamContainerLogs200ApplicationxNdjsonResponse struct {
+	Body          io.Reader
+	ContentLength int64
+}
+
+func (response StreamContainerLogs200ApplicationxNdjsonResponse) VisitStreamContainerLogsResponse(w http.ResponseWriter) error {
+
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	if response.ContentLength != 0 {
+		w.Header().Set("Content-Length", fmt.Sprint(response.ContentLength))
+	}
+	w.WriteHeader(200)
+
+	if closer, ok := response.Body.(io.ReadCloser); ok {
+		defer closer.Close()
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		// If w doesn't support flushing, fall back to io.Copy.
+		_, err := io.Copy(w, response.Body)
+		return err
+	}
+	// text/event-stream messages are typically small; use a
+	// modest buffer and flush after each chunk so clients see
+	// events immediately instead of waiting on OS buffering.
+	buf := make([]byte, 4096)
+	for {
+		n, err := response.Body.Read(buf)
+		if n > 0 {
+			if _, writeErr := w.Write(buf[:n]); writeErr != nil {
+				return writeErr
+			}
+			flusher.Flush()
+		}
+		if err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
+	}
+}
+
+type StreamContainerLogsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response StreamContainerLogsdefaultJSONResponse) VisitStreamContainerLogsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StopContainerRequestObject struct {
+	Workspace WorkspacePath `json:"workspace"`
+	Container ContainerPath `json:"container"`
+}
+
+type StopContainerResponseObject interface {
+	VisitStopContainerResponse(w http.ResponseWriter) error
+}
+
+type StopContainer200JSONResponse Container
+
+func (response StopContainer200JSONResponse) VisitStopContainerResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StopContainerdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response StopContainerdefaultJSONResponse) VisitStopContainerResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListDeploymentsRequestObject struct {
+	Workspace WorkspacePath `json:"workspace"`
+	Params    ListDeploymentsParams
+}
+
+type ListDeploymentsResponseObject interface {
+	VisitListDeploymentsResponse(w http.ResponseWriter) error
+}
+
+type ListDeployments200JSONResponse DeploymentPage
+
+func (response ListDeployments200JSONResponse) VisitListDeploymentsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListDeploymentsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ListDeploymentsdefaultJSONResponse) VisitListDeploymentsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteDeploymentRequestObject struct {
+	Workspace  WorkspacePath  `json:"workspace"`
+	Deployment DeploymentPath `json:"deployment"`
+}
+
+type DeleteDeploymentResponseObject interface {
+	VisitDeleteDeploymentResponse(w http.ResponseWriter) error
+}
+
+type DeleteDeployment200JSONResponse DeployedWorkload
+
+func (response DeleteDeployment200JSONResponse) VisitDeleteDeploymentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteDeploymentdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response DeleteDeploymentdefaultJSONResponse) VisitDeleteDeploymentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetDeploymentRequestObject struct {
+	Workspace  WorkspacePath  `json:"workspace"`
+	Deployment DeploymentPath `json:"deployment"`
+}
+
+type GetDeploymentResponseObject interface {
+	VisitGetDeploymentResponse(w http.ResponseWriter) error
+}
+
+type GetDeployment200JSONResponse DeployedWorkload
+
+func (response GetDeployment200JSONResponse) VisitGetDeploymentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetDeploymentdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetDeploymentdefaultJSONResponse) VisitGetDeploymentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StreamDeploymentLogsRequestObject struct {
+	Workspace  WorkspacePath  `json:"workspace"`
+	Deployment DeploymentPath `json:"deployment"`
+	Params     StreamDeploymentLogsParams
+}
+
+type StreamDeploymentLogsResponseObject interface {
+	VisitStreamDeploymentLogsResponse(w http.ResponseWriter) error
+}
+
+type StreamDeploymentLogs200ApplicationxNdjsonResponse struct {
+	Body          io.Reader
+	ContentLength int64
+}
+
+func (response StreamDeploymentLogs200ApplicationxNdjsonResponse) VisitStreamDeploymentLogsResponse(w http.ResponseWriter) error {
+
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	if response.ContentLength != 0 {
+		w.Header().Set("Content-Length", fmt.Sprint(response.ContentLength))
+	}
+	w.WriteHeader(200)
+
+	if closer, ok := response.Body.(io.ReadCloser); ok {
+		defer closer.Close()
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		// If w doesn't support flushing, fall back to io.Copy.
+		_, err := io.Copy(w, response.Body)
+		return err
+	}
+	// text/event-stream messages are typically small; use a
+	// modest buffer and flush after each chunk so clients see
+	// events immediately instead of waiting on OS buffering.
+	buf := make([]byte, 4096)
+	for {
+		n, err := response.Body.Read(buf)
+		if n > 0 {
+			if _, writeErr := w.Write(buf[:n]); writeErr != nil {
+				return writeErr
+			}
+			flusher.Flush()
+		}
+		if err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
+	}
+}
+
+type StreamDeploymentLogsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response StreamDeploymentLogsdefaultJSONResponse) VisitStreamDeploymentLogsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StartDeploymentRequestObject struct {
+	Workspace  WorkspacePath  `json:"workspace"`
+	Deployment DeploymentPath `json:"deployment"`
+	Body       *StartDeploymentJSONRequestBody
+}
+
+type StartDeploymentResponseObject interface {
+	VisitStartDeploymentResponse(w http.ResponseWriter) error
+}
+
+type StartDeployment200JSONResponse DeployedWorkload
+
+func (response StartDeployment200JSONResponse) VisitStartDeploymentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StartDeploymentdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response StartDeploymentdefaultJSONResponse) VisitStartDeploymentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StopDeploymentRequestObject struct {
+	Workspace  WorkspacePath  `json:"workspace"`
+	Deployment DeploymentPath `json:"deployment"`
+}
+
+type StopDeploymentResponseObject interface {
+	VisitStopDeploymentResponse(w http.ResponseWriter) error
+}
+
+type StopDeployment200JSONResponse DeployedWorkload
+
+func (response StopDeployment200JSONResponse) VisitStopDeploymentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StopDeploymentdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response StopDeploymentdefaultJSONResponse) VisitStopDeploymentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListDeploymentVersionsRequestObject struct {
+	Workspace  WorkspacePath  `json:"workspace"`
+	Deployment DeploymentPath `json:"deployment"`
+	Params     ListDeploymentVersionsParams
+}
+
+type ListDeploymentVersionsResponseObject interface {
+	VisitListDeploymentVersionsResponse(w http.ResponseWriter) error
+}
+
+type ListDeploymentVersions200JSONResponse VersionPage
+
+func (response ListDeploymentVersions200JSONResponse) VisitListDeploymentVersionsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListDeploymentVersionsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ListDeploymentVersionsdefaultJSONResponse) VisitListDeploymentVersionsResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -3540,6 +5441,86 @@ func (response CreateSourceUploaddefaultJSONResponse) VisitCreateSourceUploadRes
 	return err
 }
 
+type ListTasksRequestObject struct {
+	Workspace WorkspacePath `json:"workspace"`
+	Params    ListTasksParams
+}
+
+type ListTasksResponseObject interface {
+	VisitListTasksResponse(w http.ResponseWriter) error
+}
+
+type ListTasks200JSONResponse TaskPage
+
+func (response ListTasks200JSONResponse) VisitListTasksResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListTasksdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ListTasksdefaultJSONResponse) VisitListTasksResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StopTasksRequestObject struct {
+	Workspace WorkspacePath `json:"workspace"`
+	Body      *StopTasksJSONRequestBody
+}
+
+type StopTasksResponseObject interface {
+	VisitStopTasksResponse(w http.ResponseWriter) error
+}
+
+type StopTasks200JSONResponse StopTasksResponse
+
+func (response StopTasks200JSONResponse) VisitStopTasksResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StopTasksdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response StopTasksdefaultJSONResponse) VisitStopTasksResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetTaskRequestObject struct {
 	Workspace WorkspacePath `json:"workspace"`
 	Task      TaskPath      `json:"task"`
@@ -3691,6 +5672,46 @@ func (response StreamTaskLogsdefaultJSONResponse) VisitStreamTaskLogsResponse(w 
 	return err
 }
 
+type RerunTaskRequestObject struct {
+	Workspace WorkspacePath `json:"workspace"`
+	Task      TaskPath      `json:"task"`
+}
+
+type RerunTaskResponseObject interface {
+	VisitRerunTaskResponse(w http.ResponseWriter) error
+}
+
+type RerunTask201JSONResponse Task
+
+func (response RerunTask201JSONResponse) VisitRerunTaskResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RerunTaskdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response RerunTaskdefaultJSONResponse) VisitRerunTaskResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetTaskResultRequestObject struct {
 	Workspace WorkspacePath `json:"workspace"`
 	Task      TaskPath      `json:"task"`
@@ -3787,15 +5808,69 @@ type StrictServerInterface interface {
 	// RenameWorkspace Rename a workspace; any member may
 	// (PATCH /v1/workspaces/{workspace})
 	RenameWorkspace(ctx context.Context, request RenameWorkspaceRequestObject) (RenameWorkspaceResponseObject, error)
+	// ListApps Apps with at least one deployed workload, by name
+	// (GET /v1/workspaces/{workspace}/apps)
+	ListApps(ctx context.Context, request ListAppsRequestObject) (ListAppsResponseObject, error)
+	// DeleteApp Delete the app and every workload in it
+	// (DELETE /v1/workspaces/{workspace}/apps/{app})
+	DeleteApp(ctx context.Context, request DeleteAppRequestObject) (DeleteAppResponseObject, error)
+
+	// (GET /v1/workspaces/{workspace}/apps/{app})
+	GetApp(ctx context.Context, request GetAppRequestObject) (GetAppResponseObject, error)
+	// PlanDeployment What a deploy of these workloads would do, without deploying
+	// (POST /v1/workspaces/{workspace}/apps/{app}/deployment-plan)
+	PlanDeployment(ctx context.Context, request PlanDeploymentRequestObject) (PlanDeploymentResponseObject, error)
 	// DeployApp Make the app's deployed workloads match the given definitions
 	// (POST /v1/workspaces/{workspace}/apps/{app}/deployments)
 	DeployApp(ctx context.Context, request DeployAppRequestObject) (DeployAppResponseObject, error)
 
 	// (GET /v1/workspaces/{workspace}/apps/{app}/functions/{function})
 	GetFunction(ctx context.Context, request GetFunctionRequestObject) (GetFunctionResponseObject, error)
+	// PrepareFunctionRelease A release that runs this definition, for calls from a working tree
+	// (POST /v1/workspaces/{workspace}/apps/{app}/functions/{function}/releases)
+	PrepareFunctionRelease(ctx context.Context, request PrepareFunctionReleaseRequestObject) (PrepareFunctionReleaseResponseObject, error)
 	// SubmitTasks Admit one task per input against the function's active release
 	// (POST /v1/workspaces/{workspace}/apps/{app}/functions/{function}/tasks)
 	SubmitTasks(ctx context.Context, request SubmitTasksRequestObject) (SubmitTasksResponseObject, error)
+	// PauseApp Stop admission and drain every workload of the app
+	// (POST /v1/workspaces/{workspace}/apps/{app}/pause)
+	PauseApp(ctx context.Context, request PauseAppRequestObject) (PauseAppResponseObject, error)
+
+	// (POST /v1/workspaces/{workspace}/apps/{app}/resume)
+	ResumeApp(ctx context.Context, request ResumeAppRequestObject) (ResumeAppResponseObject, error)
+	// ListContainers Containers, newest first
+	// (GET /v1/workspaces/{workspace}/containers)
+	ListContainers(ctx context.Context, request ListContainersRequestObject) (ListContainersResponseObject, error)
+
+	// (GET /v1/workspaces/{workspace}/containers/{container})
+	GetContainer(ctx context.Context, request GetContainerRequestObject) (GetContainerResponseObject, error)
+	// StreamContainerLogs Log lines of the tasks the container ran, one JSON LogEntry per line
+	// (GET /v1/workspaces/{workspace}/containers/{container}/logs)
+	StreamContainerLogs(ctx context.Context, request StreamContainerLogsRequestObject) (StreamContainerLogsResponseObject, error)
+	// StopContainer Stop the container now
+	// (POST /v1/workspaces/{workspace}/containers/{container}/stop)
+	StopContainer(ctx context.Context, request StopContainerRequestObject) (StopContainerResponseObject, error)
+	// ListDeployments Deployed workloads, by app and name
+	// (GET /v1/workspaces/{workspace}/deployments)
+	ListDeployments(ctx context.Context, request ListDeploymentsRequestObject) (ListDeploymentsResponseObject, error)
+	// DeleteDeployment Delete the workload and every version of it
+	// (DELETE /v1/workspaces/{workspace}/deployments/{deployment})
+	DeleteDeployment(ctx context.Context, request DeleteDeploymentRequestObject) (DeleteDeploymentResponseObject, error)
+
+	// (GET /v1/workspaces/{workspace}/deployments/{deployment})
+	GetDeployment(ctx context.Context, request GetDeploymentRequestObject) (GetDeploymentResponseObject, error)
+	// StreamDeploymentLogs Log lines of every task of the workload, one JSON LogEntry per line
+	// (GET /v1/workspaces/{workspace}/deployments/{deployment}/logs)
+	StreamDeploymentLogs(ctx context.Context, request StreamDeploymentLogsRequestObject) (StreamDeploymentLogsResponseObject, error)
+	// StartDeployment Start the workload again, optionally on an earlier version
+	// (POST /v1/workspaces/{workspace}/deployments/{deployment}/start)
+	StartDeployment(ctx context.Context, request StartDeploymentRequestObject) (StartDeploymentResponseObject, error)
+	// StopDeployment Stop admission and drain the workload, keeping its definition
+	// (POST /v1/workspaces/{workspace}/deployments/{deployment}/stop)
+	StopDeployment(ctx context.Context, request StopDeploymentRequestObject) (StopDeploymentResponseObject, error)
+	// ListDeploymentVersions Deployed versions, newest first
+	// (GET /v1/workspaces/{workspace}/deployments/{deployment}/versions)
+	ListDeploymentVersions(ctx context.Context, request ListDeploymentVersionsRequestObject) (ListDeploymentVersionsResponseObject, error)
 	// GetImageBuild Read a build, optionally waiting until it finishes
 	// (GET /v1/workspaces/{workspace}/image-builds/{build})
 	GetImageBuild(ctx context.Context, request GetImageBuildRequestObject) (GetImageBuildResponseObject, error)
@@ -3859,6 +5934,12 @@ type StrictServerInterface interface {
 	// CreateSourceUpload Register a source archive by digest and get an upload URL when it is missing
 	// (POST /v1/workspaces/{workspace}/sources)
 	CreateSourceUpload(ctx context.Context, request CreateSourceUploadRequestObject) (CreateSourceUploadResponseObject, error)
+	// ListTasks Tasks, newest first
+	// (GET /v1/workspaces/{workspace}/tasks)
+	ListTasks(ctx context.Context, request ListTasksRequestObject) (ListTasksResponseObject, error)
+	// StopTasks Cancel each listed task that is queued or running
+	// (POST /v1/workspaces/{workspace}/tasks/stop)
+	StopTasks(ctx context.Context, request StopTasksRequestObject) (StopTasksResponseObject, error)
 	// GetTask Read a task, optionally waiting until it finishes
 	// (GET /v1/workspaces/{workspace}/tasks/{task})
 	GetTask(ctx context.Context, request GetTaskRequestObject) (GetTaskResponseObject, error)
@@ -3868,6 +5949,9 @@ type StrictServerInterface interface {
 	// StreamTaskLogs Log lines after a cursor, one JSON LogEntry per line
 	// (GET /v1/workspaces/{workspace}/tasks/{task}/logs)
 	StreamTaskLogs(ctx context.Context, request StreamTaskLogsRequestObject) (StreamTaskLogsResponseObject, error)
+	// RerunTask Submit the task's input again to the release it ran on
+	// (POST /v1/workspaces/{workspace}/tasks/{task}/rerun)
+	RerunTask(ctx context.Context, request RerunTaskRequestObject) (RerunTaskResponseObject, error)
 	// GetTaskResult The value a succeeded task returned
 	// (GET /v1/workspaces/{workspace}/tasks/{task}/result)
 	GetTaskResult(ctx context.Context, request GetTaskResultRequestObject) (GetTaskResultResponseObject, error)
@@ -4403,6 +6487,121 @@ func (sh *strictHandler) RenameWorkspace(w http.ResponseWriter, r *http.Request,
 	}
 }
 
+// ListApps operation middleware
+func (sh *strictHandler) ListApps(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, params ListAppsParams) {
+	var request ListAppsRequestObject
+
+	request.Workspace = workspace
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListApps(ctx, request.(ListAppsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListApps")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListAppsResponseObject); ok {
+		if err := validResponse.VisitListAppsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeleteApp operation middleware
+func (sh *strictHandler) DeleteApp(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, app AppRefPath) {
+	var request DeleteAppRequestObject
+
+	request.Workspace = workspace
+	request.App = app
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteApp(ctx, request.(DeleteAppRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteApp")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteAppResponseObject); ok {
+		if err := validResponse.VisitDeleteAppResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetApp operation middleware
+func (sh *strictHandler) GetApp(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, app AppRefPath) {
+	var request GetAppRequestObject
+
+	request.Workspace = workspace
+	request.App = app
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetApp(ctx, request.(GetAppRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetApp")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetAppResponseObject); ok {
+		if err := validResponse.VisitGetAppResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// PlanDeployment operation middleware
+func (sh *strictHandler) PlanDeployment(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, app AppPath) {
+	var request PlanDeploymentRequestObject
+
+	request.Workspace = workspace
+	request.App = app
+
+	var body PlanDeploymentJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.PlanDeployment(ctx, request.(PlanDeploymentRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "PlanDeployment")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(PlanDeploymentResponseObject); ok {
+		if err := validResponse.VisitPlanDeploymentResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // DeployApp operation middleware
 func (sh *strictHandler) DeployApp(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, app AppPath) {
 	var request DeployAppRequestObject
@@ -4465,6 +6664,41 @@ func (sh *strictHandler) GetFunction(w http.ResponseWriter, r *http.Request, wor
 	}
 }
 
+// PrepareFunctionRelease operation middleware
+func (sh *strictHandler) PrepareFunctionRelease(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, app AppPath, function FunctionPath) {
+	var request PrepareFunctionReleaseRequestObject
+
+	request.Workspace = workspace
+	request.App = app
+	request.Function = function
+
+	var body PrepareFunctionReleaseJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.PrepareFunctionRelease(ctx, request.(PrepareFunctionReleaseRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "PrepareFunctionRelease")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(PrepareFunctionReleaseResponseObject); ok {
+		if err := validResponse.VisitPrepareFunctionReleaseResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // SubmitTasks operation middleware
 func (sh *strictHandler) SubmitTasks(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, app AppPath, function FunctionPath) {
 	var request SubmitTasksRequestObject
@@ -4493,6 +6727,370 @@ func (sh *strictHandler) SubmitTasks(w http.ResponseWriter, r *http.Request, wor
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(SubmitTasksResponseObject); ok {
 		if err := validResponse.VisitSubmitTasksResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// PauseApp operation middleware
+func (sh *strictHandler) PauseApp(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, app AppRefPath) {
+	var request PauseAppRequestObject
+
+	request.Workspace = workspace
+	request.App = app
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.PauseApp(ctx, request.(PauseAppRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "PauseApp")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(PauseAppResponseObject); ok {
+		if err := validResponse.VisitPauseAppResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ResumeApp operation middleware
+func (sh *strictHandler) ResumeApp(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, app AppRefPath) {
+	var request ResumeAppRequestObject
+
+	request.Workspace = workspace
+	request.App = app
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ResumeApp(ctx, request.(ResumeAppRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ResumeApp")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ResumeAppResponseObject); ok {
+		if err := validResponse.VisitResumeAppResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListContainers operation middleware
+func (sh *strictHandler) ListContainers(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, params ListContainersParams) {
+	var request ListContainersRequestObject
+
+	request.Workspace = workspace
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListContainers(ctx, request.(ListContainersRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListContainers")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListContainersResponseObject); ok {
+		if err := validResponse.VisitListContainersResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetContainer operation middleware
+func (sh *strictHandler) GetContainer(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, container ContainerPath) {
+	var request GetContainerRequestObject
+
+	request.Workspace = workspace
+	request.Container = container
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetContainer(ctx, request.(GetContainerRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetContainer")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetContainerResponseObject); ok {
+		if err := validResponse.VisitGetContainerResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// StreamContainerLogs operation middleware
+func (sh *strictHandler) StreamContainerLogs(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, container ContainerPath, params StreamContainerLogsParams) {
+	var request StreamContainerLogsRequestObject
+
+	request.Workspace = workspace
+	request.Container = container
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.StreamContainerLogs(ctx, request.(StreamContainerLogsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "StreamContainerLogs")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(StreamContainerLogsResponseObject); ok {
+		if err := validResponse.VisitStreamContainerLogsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// StopContainer operation middleware
+func (sh *strictHandler) StopContainer(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, container ContainerPath) {
+	var request StopContainerRequestObject
+
+	request.Workspace = workspace
+	request.Container = container
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.StopContainer(ctx, request.(StopContainerRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "StopContainer")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(StopContainerResponseObject); ok {
+		if err := validResponse.VisitStopContainerResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListDeployments operation middleware
+func (sh *strictHandler) ListDeployments(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, params ListDeploymentsParams) {
+	var request ListDeploymentsRequestObject
+
+	request.Workspace = workspace
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListDeployments(ctx, request.(ListDeploymentsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListDeployments")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListDeploymentsResponseObject); ok {
+		if err := validResponse.VisitListDeploymentsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeleteDeployment operation middleware
+func (sh *strictHandler) DeleteDeployment(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, deployment DeploymentPath) {
+	var request DeleteDeploymentRequestObject
+
+	request.Workspace = workspace
+	request.Deployment = deployment
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteDeployment(ctx, request.(DeleteDeploymentRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteDeployment")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteDeploymentResponseObject); ok {
+		if err := validResponse.VisitDeleteDeploymentResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetDeployment operation middleware
+func (sh *strictHandler) GetDeployment(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, deployment DeploymentPath) {
+	var request GetDeploymentRequestObject
+
+	request.Workspace = workspace
+	request.Deployment = deployment
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetDeployment(ctx, request.(GetDeploymentRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetDeployment")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetDeploymentResponseObject); ok {
+		if err := validResponse.VisitGetDeploymentResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// StreamDeploymentLogs operation middleware
+func (sh *strictHandler) StreamDeploymentLogs(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, deployment DeploymentPath, params StreamDeploymentLogsParams) {
+	var request StreamDeploymentLogsRequestObject
+
+	request.Workspace = workspace
+	request.Deployment = deployment
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.StreamDeploymentLogs(ctx, request.(StreamDeploymentLogsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "StreamDeploymentLogs")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(StreamDeploymentLogsResponseObject); ok {
+		if err := validResponse.VisitStreamDeploymentLogsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// StartDeployment operation middleware
+func (sh *strictHandler) StartDeployment(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, deployment DeploymentPath) {
+	var request StartDeploymentRequestObject
+
+	request.Workspace = workspace
+	request.Deployment = deployment
+
+	var body StartDeploymentJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		if !errors.Is(err, io.EOF) {
+			sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+			return
+		}
+	} else {
+		request.Body = &body
+	}
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.StartDeployment(ctx, request.(StartDeploymentRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "StartDeployment")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(StartDeploymentResponseObject); ok {
+		if err := validResponse.VisitStartDeploymentResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// StopDeployment operation middleware
+func (sh *strictHandler) StopDeployment(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, deployment DeploymentPath) {
+	var request StopDeploymentRequestObject
+
+	request.Workspace = workspace
+	request.Deployment = deployment
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.StopDeployment(ctx, request.(StopDeploymentRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "StopDeployment")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(StopDeploymentResponseObject); ok {
+		if err := validResponse.VisitStopDeploymentResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListDeploymentVersions operation middleware
+func (sh *strictHandler) ListDeploymentVersions(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, deployment DeploymentPath, params ListDeploymentVersionsParams) {
+	var request ListDeploymentVersionsRequestObject
+
+	request.Workspace = workspace
+	request.Deployment = deployment
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListDeploymentVersions(ctx, request.(ListDeploymentVersionsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListDeploymentVersions")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListDeploymentVersionsResponseObject); ok {
+		if err := validResponse.VisitListDeploymentVersionsResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -5119,6 +7717,66 @@ func (sh *strictHandler) CreateSourceUpload(w http.ResponseWriter, r *http.Reque
 	}
 }
 
+// ListTasks operation middleware
+func (sh *strictHandler) ListTasks(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, params ListTasksParams) {
+	var request ListTasksRequestObject
+
+	request.Workspace = workspace
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListTasks(ctx, request.(ListTasksRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListTasks")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListTasksResponseObject); ok {
+		if err := validResponse.VisitListTasksResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// StopTasks operation middleware
+func (sh *strictHandler) StopTasks(w http.ResponseWriter, r *http.Request, workspace WorkspacePath) {
+	var request StopTasksRequestObject
+
+	request.Workspace = workspace
+
+	var body StopTasksJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.StopTasks(ctx, request.(StopTasksRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "StopTasks")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(StopTasksResponseObject); ok {
+		if err := validResponse.VisitStopTasksResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // GetTask operation middleware
 func (sh *strictHandler) GetTask(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, task TaskPath, params GetTaskParams) {
 	var request GetTaskRequestObject
@@ -5202,6 +7860,33 @@ func (sh *strictHandler) StreamTaskLogs(w http.ResponseWriter, r *http.Request, 
 	}
 }
 
+// RerunTask operation middleware
+func (sh *strictHandler) RerunTask(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, task TaskPath) {
+	var request RerunTaskRequestObject
+
+	request.Workspace = workspace
+	request.Task = task
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RerunTask(ctx, request.(RerunTaskRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RerunTask")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RerunTaskResponseObject); ok {
+		if err := validResponse.VisitRerunTaskResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // GetTaskResult operation middleware
 func (sh *strictHandler) GetTaskResult(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, task TaskPath) {
 	var request GetTaskResultRequestObject
@@ -5234,156 +7919,205 @@ func (sh *strictHandler) GetTaskResult(w http.ResponseWriter, r *http.Request, w
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"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",
-	"AA==",
+	"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",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,

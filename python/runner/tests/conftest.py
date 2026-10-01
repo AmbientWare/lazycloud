@@ -48,12 +48,24 @@ class RunnerClient:
         return header
 
     def invoke(
-        self, payload: bytes, *, encoding: str = "json", task_id: str = "task-1"
+        self,
+        payload: bytes,
+        *,
+        encoding: str = "json",
+        task_id: str = "task-1",
+        root_task_id: str = "",
+        dependencies: dict[str, tuple[str, bytes]] | None = None,
     ) -> tuple[dict[str, Any], bytes]:
+        for upstream, (dependency_encoding, result) in (dependencies or {}).items():
+            self.send(
+                {"type": "dependency", "task_id": upstream, "encoding": dependency_encoding},
+                result,
+            )
         self.send(
             {
                 "type": "invoke",
                 "task_id": task_id,
+                "root_task_id": root_task_id or task_id,
                 "attempt_id": f"{task_id}-attempt",
                 "input_encoding": encoding,
             },

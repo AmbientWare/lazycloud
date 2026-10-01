@@ -23,6 +23,9 @@ const (
 	ChannelTask Channel = "lc_task"
 	// ChannelClaim wakes claims waiting for a release's queued tasks.
 	ChannelClaim Channel = "lc_claim"
+	// ChannelLogs wakes followers of a workload's or container's logs;
+	// payload is the workload or container id.
+	ChannelLogs Channel = "lc_logs"
 	// ChannelImageBuild wakes build waiters, log followers and build
 	// recovery when a build or its container changes; payload is the build id.
 	ChannelImageBuild Channel = "lc_image_build"

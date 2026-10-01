@@ -1882,9 +1882,11 @@ type ClaimedTask struct {
 	Deadline      *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=deadline,proto3" json:"deadline,omitempty"`
 	// The root of the task's call graph, which is the task itself when no
 	// task spawned it, and its parent when one did.
-	RootTaskId    string `protobuf:"bytes,10,opt,name=root_task_id,json=rootTaskId,proto3" json:"root_task_id,omitempty"`
-	ParentTaskId  string `protobuf:"bytes,11,opt,name=parent_task_id,json=parentTaskId,proto3" json:"parent_task_id,omitempty"`
-	MaxAttempts   int32  `protobuf:"varint,12,opt,name=max_attempts,json=maxAttempts,proto3" json:"max_attempts,omitempty"`
+	RootTaskId   string `protobuf:"bytes,10,opt,name=root_task_id,json=rootTaskId,proto3" json:"root_task_id,omitempty"`
+	ParentTaskId string `protobuf:"bytes,11,opt,name=parent_task_id,json=parentTaskId,proto3" json:"parent_task_id,omitempty"`
+	MaxAttempts  int32  `protobuf:"varint,12,opt,name=max_attempts,json=maxAttempts,proto3" json:"max_attempts,omitempty"`
+	// The results of the upstream tasks the input refers to.
+	Dependencies  []*DependencyResult `protobuf:"bytes,60,rep,name=dependencies,proto3" json:"dependencies,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1982,6 +1984,75 @@ func (x *ClaimedTask) GetMaxAttempts() int32 {
 	return 0
 }
 
+func (x *ClaimedTask) GetDependencies() []*DependencyResult {
+	if x != nil {
+		return x.Dependencies
+	}
+	return nil
+}
+
+// DependencyResult is an upstream task's result that a dependent's input
+// refers to by task id.
+type DependencyResult struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TaskId        string                 `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
+	Encoding      PayloadEncoding        `protobuf:"varint,2,opt,name=encoding,proto3,enum=lazycloud.host.v1.PayloadEncoding" json:"encoding,omitempty"`
+	Data          []byte                 `protobuf:"bytes,3,opt,name=data,proto3" json:"data,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DependencyResult) Reset() {
+	*x = DependencyResult{}
+	mi := &file_host_v1_host_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DependencyResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DependencyResult) ProtoMessage() {}
+
+func (x *DependencyResult) ProtoReflect() protoreflect.Message {
+	mi := &file_host_v1_host_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DependencyResult.ProtoReflect.Descriptor instead.
+func (*DependencyResult) Descriptor() ([]byte, []int) {
+	return file_host_v1_host_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *DependencyResult) GetTaskId() string {
+	if x != nil {
+		return x.TaskId
+	}
+	return ""
+}
+
+func (x *DependencyResult) GetEncoding() PayloadEncoding {
+	if x != nil {
+		return x.Encoding
+	}
+	return PayloadEncoding_PAYLOAD_ENCODING_UNSPECIFIED
+}
+
+func (x *DependencyResult) GetData() []byte {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
 type CompleteTaskRequest struct {
 	state       protoimpl.MessageState `protogen:"open.v1"`
 	ContainerId string                 `protobuf:"bytes,1,opt,name=container_id,json=containerId,proto3" json:"container_id,omitempty"`
@@ -1997,7 +2068,7 @@ type CompleteTaskRequest struct {
 
 func (x *CompleteTaskRequest) Reset() {
 	*x = CompleteTaskRequest{}
-	mi := &file_host_v1_host_proto_msgTypes[22]
+	mi := &file_host_v1_host_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2009,7 +2080,7 @@ func (x *CompleteTaskRequest) String() string {
 func (*CompleteTaskRequest) ProtoMessage() {}
 
 func (x *CompleteTaskRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_host_v1_host_proto_msgTypes[22]
+	mi := &file_host_v1_host_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2022,7 +2093,7 @@ func (x *CompleteTaskRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompleteTaskRequest.ProtoReflect.Descriptor instead.
 func (*CompleteTaskRequest) Descriptor() ([]byte, []int) {
-	return file_host_v1_host_proto_rawDescGZIP(), []int{22}
+	return file_host_v1_host_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *CompleteTaskRequest) GetContainerId() string {
@@ -2090,7 +2161,7 @@ type TaskSuccess struct {
 
 func (x *TaskSuccess) Reset() {
 	*x = TaskSuccess{}
-	mi := &file_host_v1_host_proto_msgTypes[23]
+	mi := &file_host_v1_host_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2102,7 +2173,7 @@ func (x *TaskSuccess) String() string {
 func (*TaskSuccess) ProtoMessage() {}
 
 func (x *TaskSuccess) ProtoReflect() protoreflect.Message {
-	mi := &file_host_v1_host_proto_msgTypes[23]
+	mi := &file_host_v1_host_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2115,7 +2186,7 @@ func (x *TaskSuccess) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TaskSuccess.ProtoReflect.Descriptor instead.
 func (*TaskSuccess) Descriptor() ([]byte, []int) {
-	return file_host_v1_host_proto_rawDescGZIP(), []int{23}
+	return file_host_v1_host_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *TaskSuccess) GetEncoding() PayloadEncoding {
@@ -2144,7 +2215,7 @@ type TaskFailure struct {
 
 func (x *TaskFailure) Reset() {
 	*x = TaskFailure{}
-	mi := &file_host_v1_host_proto_msgTypes[24]
+	mi := &file_host_v1_host_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2156,7 +2227,7 @@ func (x *TaskFailure) String() string {
 func (*TaskFailure) ProtoMessage() {}
 
 func (x *TaskFailure) ProtoReflect() protoreflect.Message {
-	mi := &file_host_v1_host_proto_msgTypes[24]
+	mi := &file_host_v1_host_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2169,7 +2240,7 @@ func (x *TaskFailure) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TaskFailure.ProtoReflect.Descriptor instead.
 func (*TaskFailure) Descriptor() ([]byte, []int) {
-	return file_host_v1_host_proto_rawDescGZIP(), []int{24}
+	return file_host_v1_host_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *TaskFailure) GetKind() AttemptFailureKind {
@@ -2201,7 +2272,7 @@ type CompleteTaskResponse struct {
 
 func (x *CompleteTaskResponse) Reset() {
 	*x = CompleteTaskResponse{}
-	mi := &file_host_v1_host_proto_msgTypes[25]
+	mi := &file_host_v1_host_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2213,7 +2284,7 @@ func (x *CompleteTaskResponse) String() string {
 func (*CompleteTaskResponse) ProtoMessage() {}
 
 func (x *CompleteTaskResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_host_v1_host_proto_msgTypes[25]
+	mi := &file_host_v1_host_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2226,7 +2297,7 @@ func (x *CompleteTaskResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompleteTaskResponse.ProtoReflect.Descriptor instead.
 func (*CompleteTaskResponse) Descriptor() ([]byte, []int) {
-	return file_host_v1_host_proto_rawDescGZIP(), []int{25}
+	return file_host_v1_host_proto_rawDescGZIP(), []int{26}
 }
 
 type AppendLogsRequest struct {
@@ -2239,7 +2310,7 @@ type AppendLogsRequest struct {
 
 func (x *AppendLogsRequest) Reset() {
 	*x = AppendLogsRequest{}
-	mi := &file_host_v1_host_proto_msgTypes[26]
+	mi := &file_host_v1_host_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2251,7 +2322,7 @@ func (x *AppendLogsRequest) String() string {
 func (*AppendLogsRequest) ProtoMessage() {}
 
 func (x *AppendLogsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_host_v1_host_proto_msgTypes[26]
+	mi := &file_host_v1_host_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2264,7 +2335,7 @@ func (x *AppendLogsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AppendLogsRequest.ProtoReflect.Descriptor instead.
 func (*AppendLogsRequest) Descriptor() ([]byte, []int) {
-	return file_host_v1_host_proto_rawDescGZIP(), []int{26}
+	return file_host_v1_host_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *AppendLogsRequest) GetContainerId() string {
@@ -2293,7 +2364,7 @@ type LogLine struct {
 
 func (x *LogLine) Reset() {
 	*x = LogLine{}
-	mi := &file_host_v1_host_proto_msgTypes[27]
+	mi := &file_host_v1_host_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2305,7 +2376,7 @@ func (x *LogLine) String() string {
 func (*LogLine) ProtoMessage() {}
 
 func (x *LogLine) ProtoReflect() protoreflect.Message {
-	mi := &file_host_v1_host_proto_msgTypes[27]
+	mi := &file_host_v1_host_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2318,7 +2389,7 @@ func (x *LogLine) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogLine.ProtoReflect.Descriptor instead.
 func (*LogLine) Descriptor() ([]byte, []int) {
-	return file_host_v1_host_proto_rawDescGZIP(), []int{27}
+	return file_host_v1_host_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *LogLine) GetAttemptId() string {
@@ -2357,7 +2428,7 @@ type AppendLogsResponse struct {
 
 func (x *AppendLogsResponse) Reset() {
 	*x = AppendLogsResponse{}
-	mi := &file_host_v1_host_proto_msgTypes[28]
+	mi := &file_host_v1_host_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2369,7 +2440,7 @@ func (x *AppendLogsResponse) String() string {
 func (*AppendLogsResponse) ProtoMessage() {}
 
 func (x *AppendLogsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_host_v1_host_proto_msgTypes[28]
+	mi := &file_host_v1_host_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2382,7 +2453,7 @@ func (x *AppendLogsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AppendLogsResponse.ProtoReflect.Descriptor instead.
 func (*AppendLogsResponse) Descriptor() ([]byte, []int) {
-	return file_host_v1_host_proto_rawDescGZIP(), []int{28}
+	return file_host_v1_host_proto_rawDescGZIP(), []int{29}
 }
 
 // APIRequest is one message of a container API call. Only the first carries
@@ -2397,7 +2468,7 @@ type APIRequest struct {
 
 func (x *APIRequest) Reset() {
 	*x = APIRequest{}
-	mi := &file_host_v1_host_proto_msgTypes[29]
+	mi := &file_host_v1_host_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2409,7 +2480,7 @@ func (x *APIRequest) String() string {
 func (*APIRequest) ProtoMessage() {}
 
 func (x *APIRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_host_v1_host_proto_msgTypes[29]
+	mi := &file_host_v1_host_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2422,7 +2493,7 @@ func (x *APIRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use APIRequest.ProtoReflect.Descriptor instead.
 func (*APIRequest) Descriptor() ([]byte, []int) {
-	return file_host_v1_host_proto_rawDescGZIP(), []int{29}
+	return file_host_v1_host_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *APIRequest) GetHead() *APIRequestHead {
@@ -2453,7 +2524,7 @@ type APIRequestHead struct {
 
 func (x *APIRequestHead) Reset() {
 	*x = APIRequestHead{}
-	mi := &file_host_v1_host_proto_msgTypes[30]
+	mi := &file_host_v1_host_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2465,7 +2536,7 @@ func (x *APIRequestHead) String() string {
 func (*APIRequestHead) ProtoMessage() {}
 
 func (x *APIRequestHead) ProtoReflect() protoreflect.Message {
-	mi := &file_host_v1_host_proto_msgTypes[30]
+	mi := &file_host_v1_host_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2478,7 +2549,7 @@ func (x *APIRequestHead) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use APIRequestHead.ProtoReflect.Descriptor instead.
 func (*APIRequestHead) Descriptor() ([]byte, []int) {
-	return file_host_v1_host_proto_rawDescGZIP(), []int{30}
+	return file_host_v1_host_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *APIRequestHead) GetContainerId() string {
@@ -2519,7 +2590,7 @@ type APIHeader struct {
 
 func (x *APIHeader) Reset() {
 	*x = APIHeader{}
-	mi := &file_host_v1_host_proto_msgTypes[31]
+	mi := &file_host_v1_host_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2531,7 +2602,7 @@ func (x *APIHeader) String() string {
 func (*APIHeader) ProtoMessage() {}
 
 func (x *APIHeader) ProtoReflect() protoreflect.Message {
-	mi := &file_host_v1_host_proto_msgTypes[31]
+	mi := &file_host_v1_host_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2544,7 +2615,7 @@ func (x *APIHeader) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use APIHeader.ProtoReflect.Descriptor instead.
 func (*APIHeader) Descriptor() ([]byte, []int) {
-	return file_host_v1_host_proto_rawDescGZIP(), []int{31}
+	return file_host_v1_host_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *APIHeader) GetName() string {
@@ -2573,7 +2644,7 @@ type APIResponse struct {
 
 func (x *APIResponse) Reset() {
 	*x = APIResponse{}
-	mi := &file_host_v1_host_proto_msgTypes[32]
+	mi := &file_host_v1_host_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2585,7 +2656,7 @@ func (x *APIResponse) String() string {
 func (*APIResponse) ProtoMessage() {}
 
 func (x *APIResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_host_v1_host_proto_msgTypes[32]
+	mi := &file_host_v1_host_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2598,7 +2669,7 @@ func (x *APIResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use APIResponse.ProtoReflect.Descriptor instead.
 func (*APIResponse) Descriptor() ([]byte, []int) {
-	return file_host_v1_host_proto_rawDescGZIP(), []int{32}
+	return file_host_v1_host_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *APIResponse) GetHead() *APIResponseHead {
@@ -2625,7 +2696,7 @@ type APIResponseHead struct {
 
 func (x *APIResponseHead) Reset() {
 	*x = APIResponseHead{}
-	mi := &file_host_v1_host_proto_msgTypes[33]
+	mi := &file_host_v1_host_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2637,7 +2708,7 @@ func (x *APIResponseHead) String() string {
 func (*APIResponseHead) ProtoMessage() {}
 
 func (x *APIResponseHead) ProtoReflect() protoreflect.Message {
-	mi := &file_host_v1_host_proto_msgTypes[33]
+	mi := &file_host_v1_host_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2650,7 +2721,7 @@ func (x *APIResponseHead) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use APIResponseHead.ProtoReflect.Descriptor instead.
 func (*APIResponseHead) Descriptor() ([]byte, []int) {
-	return file_host_v1_host_proto_rawDescGZIP(), []int{33}
+	return file_host_v1_host_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *APIResponseHead) GetStatus() int32 {
@@ -2681,7 +2752,7 @@ type CompleteImageBuildRequest struct {
 
 func (x *CompleteImageBuildRequest) Reset() {
 	*x = CompleteImageBuildRequest{}
-	mi := &file_host_v1_host_proto_msgTypes[34]
+	mi := &file_host_v1_host_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2693,7 +2764,7 @@ func (x *CompleteImageBuildRequest) String() string {
 func (*CompleteImageBuildRequest) ProtoMessage() {}
 
 func (x *CompleteImageBuildRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_host_v1_host_proto_msgTypes[34]
+	mi := &file_host_v1_host_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2706,7 +2777,7 @@ func (x *CompleteImageBuildRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompleteImageBuildRequest.ProtoReflect.Descriptor instead.
 func (*CompleteImageBuildRequest) Descriptor() ([]byte, []int) {
-	return file_host_v1_host_proto_rawDescGZIP(), []int{34}
+	return file_host_v1_host_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *CompleteImageBuildRequest) GetContainerId() string {
@@ -2767,7 +2838,7 @@ type CompleteImageBuildResponse struct {
 
 func (x *CompleteImageBuildResponse) Reset() {
 	*x = CompleteImageBuildResponse{}
-	mi := &file_host_v1_host_proto_msgTypes[35]
+	mi := &file_host_v1_host_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2779,7 +2850,7 @@ func (x *CompleteImageBuildResponse) String() string {
 func (*CompleteImageBuildResponse) ProtoMessage() {}
 
 func (x *CompleteImageBuildResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_host_v1_host_proto_msgTypes[35]
+	mi := &file_host_v1_host_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2792,7 +2863,7 @@ func (x *CompleteImageBuildResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompleteImageBuildResponse.ProtoReflect.Descriptor instead.
 func (*CompleteImageBuildResponse) Descriptor() ([]byte, []int) {
-	return file_host_v1_host_proto_rawDescGZIP(), []int{35}
+	return file_host_v1_host_proto_rawDescGZIP(), []int{36}
 }
 
 type AppendImageBuildLogsRequest struct {
@@ -2805,7 +2876,7 @@ type AppendImageBuildLogsRequest struct {
 
 func (x *AppendImageBuildLogsRequest) Reset() {
 	*x = AppendImageBuildLogsRequest{}
-	mi := &file_host_v1_host_proto_msgTypes[36]
+	mi := &file_host_v1_host_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2817,7 +2888,7 @@ func (x *AppendImageBuildLogsRequest) String() string {
 func (*AppendImageBuildLogsRequest) ProtoMessage() {}
 
 func (x *AppendImageBuildLogsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_host_v1_host_proto_msgTypes[36]
+	mi := &file_host_v1_host_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2830,7 +2901,7 @@ func (x *AppendImageBuildLogsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AppendImageBuildLogsRequest.ProtoReflect.Descriptor instead.
 func (*AppendImageBuildLogsRequest) Descriptor() ([]byte, []int) {
-	return file_host_v1_host_proto_rawDescGZIP(), []int{36}
+	return file_host_v1_host_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *AppendImageBuildLogsRequest) GetContainerId() string {
@@ -2857,7 +2928,7 @@ type BuildLogLine struct {
 
 func (x *BuildLogLine) Reset() {
 	*x = BuildLogLine{}
-	mi := &file_host_v1_host_proto_msgTypes[37]
+	mi := &file_host_v1_host_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2869,7 +2940,7 @@ func (x *BuildLogLine) String() string {
 func (*BuildLogLine) ProtoMessage() {}
 
 func (x *BuildLogLine) ProtoReflect() protoreflect.Message {
-	mi := &file_host_v1_host_proto_msgTypes[37]
+	mi := &file_host_v1_host_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2882,7 +2953,7 @@ func (x *BuildLogLine) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BuildLogLine.ProtoReflect.Descriptor instead.
 func (*BuildLogLine) Descriptor() ([]byte, []int) {
-	return file_host_v1_host_proto_rawDescGZIP(), []int{37}
+	return file_host_v1_host_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *BuildLogLine) GetData() string {
@@ -2907,7 +2978,7 @@ type AppendImageBuildLogsResponse struct {
 
 func (x *AppendImageBuildLogsResponse) Reset() {
 	*x = AppendImageBuildLogsResponse{}
-	mi := &file_host_v1_host_proto_msgTypes[38]
+	mi := &file_host_v1_host_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2919,7 +2990,7 @@ func (x *AppendImageBuildLogsResponse) String() string {
 func (*AppendImageBuildLogsResponse) ProtoMessage() {}
 
 func (x *AppendImageBuildLogsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_host_v1_host_proto_msgTypes[38]
+	mi := &file_host_v1_host_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2932,7 +3003,7 @@ func (x *AppendImageBuildLogsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AppendImageBuildLogsResponse.ProtoReflect.Descriptor instead.
 func (*AppendImageBuildLogsResponse) Descriptor() ([]byte, []int) {
-	return file_host_v1_host_proto_rawDescGZIP(), []int{38}
+	return file_host_v1_host_proto_rawDescGZIP(), []int{39}
 }
 
 var File_host_v1_host_proto protoreflect.FileDescriptor
@@ -3075,7 +3146,7 @@ const file_host_v1_host_proto_rawDesc = "" +
 	"\tmax_tasks\x18\x02 \x01(\x05R\bmaxTasks\x12!\n" +
 	"\fwait_seconds\x18\x03 \x01(\x05R\vwaitSeconds\"J\n" +
 	"\x12ClaimTasksResponse\x124\n" +
-	"\x05tasks\x18\x01 \x03(\v2\x1e.lazycloud.host.v1.ClaimedTaskR\x05tasks\"\xf0\x02\n" +
+	"\x05tasks\x18\x01 \x03(\v2\x1e.lazycloud.host.v1.ClaimedTaskR\x05tasks\"\xb9\x03\n" +
 	"\vClaimedTask\x12\x17\n" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12\x1d\n" +
 	"\n" +
@@ -3088,7 +3159,12 @@ const file_host_v1_host_proto_rawDesc = "" +
 	" \x01(\tR\n" +
 	"rootTaskId\x12$\n" +
 	"\x0eparent_task_id\x18\v \x01(\tR\fparentTaskId\x12!\n" +
-	"\fmax_attempts\x18\f \x01(\x05R\vmaxAttempts\"\xda\x01\n" +
+	"\fmax_attempts\x18\f \x01(\x05R\vmaxAttempts\x12G\n" +
+	"\fdependencies\x18< \x03(\v2#.lazycloud.host.v1.DependencyResultR\fdependencies\"\x7f\n" +
+	"\x10DependencyResult\x12\x17\n" +
+	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12>\n" +
+	"\bencoding\x18\x02 \x01(\x0e2\".lazycloud.host.v1.PayloadEncodingR\bencoding\x12\x12\n" +
+	"\x04data\x18\x03 \x01(\fR\x04data\"\xda\x01\n" +
 	"\x13CompleteTaskRequest\x12!\n" +
 	"\fcontainer_id\x18\x01 \x01(\tR\vcontainerId\x12\x1d\n" +
 	"\n" +
@@ -3201,7 +3277,7 @@ func file_host_v1_host_proto_rawDescGZIP() []byte {
 }
 
 var file_host_v1_host_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
-var file_host_v1_host_proto_msgTypes = make([]protoimpl.MessageInfo, 42)
+var file_host_v1_host_proto_msgTypes = make([]protoimpl.MessageInfo, 43)
 var file_host_v1_host_proto_goTypes = []any{
 	(ContainerPhase)(0),                  // 0: lazycloud.host.v1.ContainerPhase
 	(ExitReason)(0),                      // 1: lazycloud.host.v1.ExitReason
@@ -3231,27 +3307,28 @@ var file_host_v1_host_proto_goTypes = []any{
 	(*ClaimTasksRequest)(nil),            // 25: lazycloud.host.v1.ClaimTasksRequest
 	(*ClaimTasksResponse)(nil),           // 26: lazycloud.host.v1.ClaimTasksResponse
 	(*ClaimedTask)(nil),                  // 27: lazycloud.host.v1.ClaimedTask
-	(*CompleteTaskRequest)(nil),          // 28: lazycloud.host.v1.CompleteTaskRequest
-	(*TaskSuccess)(nil),                  // 29: lazycloud.host.v1.TaskSuccess
-	(*TaskFailure)(nil),                  // 30: lazycloud.host.v1.TaskFailure
-	(*CompleteTaskResponse)(nil),         // 31: lazycloud.host.v1.CompleteTaskResponse
-	(*AppendLogsRequest)(nil),            // 32: lazycloud.host.v1.AppendLogsRequest
-	(*LogLine)(nil),                      // 33: lazycloud.host.v1.LogLine
-	(*AppendLogsResponse)(nil),           // 34: lazycloud.host.v1.AppendLogsResponse
-	(*APIRequest)(nil),                   // 35: lazycloud.host.v1.APIRequest
-	(*APIRequestHead)(nil),               // 36: lazycloud.host.v1.APIRequestHead
-	(*APIHeader)(nil),                    // 37: lazycloud.host.v1.APIHeader
-	(*APIResponse)(nil),                  // 38: lazycloud.host.v1.APIResponse
-	(*APIResponseHead)(nil),              // 39: lazycloud.host.v1.APIResponseHead
-	(*CompleteImageBuildRequest)(nil),    // 40: lazycloud.host.v1.CompleteImageBuildRequest
-	(*CompleteImageBuildResponse)(nil),   // 41: lazycloud.host.v1.CompleteImageBuildResponse
-	(*AppendImageBuildLogsRequest)(nil),  // 42: lazycloud.host.v1.AppendImageBuildLogsRequest
-	(*BuildLogLine)(nil),                 // 43: lazycloud.host.v1.BuildLogLine
-	(*AppendImageBuildLogsResponse)(nil), // 44: lazycloud.host.v1.AppendImageBuildLogsResponse
-	nil,                                  // 45: lazycloud.host.v1.StartContainer.EnvironmentEntry
-	nil,                                  // 46: lazycloud.host.v1.StartContainer.SecretsEntry
-	nil,                                  // 47: lazycloud.host.v1.ImageBuild.RegistryAuthEntry
-	(*timestamppb.Timestamp)(nil),        // 48: google.protobuf.Timestamp
+	(*DependencyResult)(nil),             // 28: lazycloud.host.v1.DependencyResult
+	(*CompleteTaskRequest)(nil),          // 29: lazycloud.host.v1.CompleteTaskRequest
+	(*TaskSuccess)(nil),                  // 30: lazycloud.host.v1.TaskSuccess
+	(*TaskFailure)(nil),                  // 31: lazycloud.host.v1.TaskFailure
+	(*CompleteTaskResponse)(nil),         // 32: lazycloud.host.v1.CompleteTaskResponse
+	(*AppendLogsRequest)(nil),            // 33: lazycloud.host.v1.AppendLogsRequest
+	(*LogLine)(nil),                      // 34: lazycloud.host.v1.LogLine
+	(*AppendLogsResponse)(nil),           // 35: lazycloud.host.v1.AppendLogsResponse
+	(*APIRequest)(nil),                   // 36: lazycloud.host.v1.APIRequest
+	(*APIRequestHead)(nil),               // 37: lazycloud.host.v1.APIRequestHead
+	(*APIHeader)(nil),                    // 38: lazycloud.host.v1.APIHeader
+	(*APIResponse)(nil),                  // 39: lazycloud.host.v1.APIResponse
+	(*APIResponseHead)(nil),              // 40: lazycloud.host.v1.APIResponseHead
+	(*CompleteImageBuildRequest)(nil),    // 41: lazycloud.host.v1.CompleteImageBuildRequest
+	(*CompleteImageBuildResponse)(nil),   // 42: lazycloud.host.v1.CompleteImageBuildResponse
+	(*AppendImageBuildLogsRequest)(nil),  // 43: lazycloud.host.v1.AppendImageBuildLogsRequest
+	(*BuildLogLine)(nil),                 // 44: lazycloud.host.v1.BuildLogLine
+	(*AppendImageBuildLogsResponse)(nil), // 45: lazycloud.host.v1.AppendImageBuildLogsResponse
+	nil,                                  // 46: lazycloud.host.v1.StartContainer.EnvironmentEntry
+	nil,                                  // 47: lazycloud.host.v1.StartContainer.SecretsEntry
+	nil,                                  // 48: lazycloud.host.v1.ImageBuild.RegistryAuthEntry
+	(*timestamppb.Timestamp)(nil),        // 49: google.protobuf.Timestamp
 }
 var file_host_v1_host_proto_depIdxs = []int32{
 	8,  // 0: lazycloud.host.v1.EnrollRequest.capacity:type_name -> lazycloud.host.v1.Capacity
@@ -3262,7 +3339,7 @@ var file_host_v1_host_proto_depIdxs = []int32{
 	11, // 5: lazycloud.host.v1.Hello.containers:type_name -> lazycloud.host.v1.ContainerReport
 	0,  // 6: lazycloud.host.v1.ContainerReport.phase:type_name -> lazycloud.host.v1.ContainerPhase
 	12, // 7: lazycloud.host.v1.ContainerReport.exit:type_name -> lazycloud.host.v1.ContainerExit
-	48, // 8: lazycloud.host.v1.ContainerReport.observed_at:type_name -> google.protobuf.Timestamp
+	49, // 8: lazycloud.host.v1.ContainerReport.observed_at:type_name -> google.protobuf.Timestamp
 	1,  // 9: lazycloud.host.v1.ContainerExit.reason:type_name -> lazycloud.host.v1.ExitReason
 	13, // 10: lazycloud.host.v1.ContainerExit.error:type_name -> lazycloud.host.v1.RunnerError
 	16, // 11: lazycloud.host.v1.ServerMessage.start:type_name -> lazycloud.host.v1.StartContainer
@@ -3271,55 +3348,57 @@ var file_host_v1_host_proto_depIdxs = []int32{
 	19, // 14: lazycloud.host.v1.StartContainer.source:type_name -> lazycloud.host.v1.Source
 	20, // 15: lazycloud.host.v1.StartContainer.resources:type_name -> lazycloud.host.v1.Resources
 	21, // 16: lazycloud.host.v1.StartContainer.function:type_name -> lazycloud.host.v1.FunctionWorkload
-	45, // 17: lazycloud.host.v1.StartContainer.environment:type_name -> lazycloud.host.v1.StartContainer.EnvironmentEntry
-	46, // 18: lazycloud.host.v1.StartContainer.secrets:type_name -> lazycloud.host.v1.StartContainer.SecretsEntry
+	46, // 17: lazycloud.host.v1.StartContainer.environment:type_name -> lazycloud.host.v1.StartContainer.EnvironmentEntry
+	47, // 18: lazycloud.host.v1.StartContainer.secrets:type_name -> lazycloud.host.v1.StartContainer.SecretsEntry
 	17, // 19: lazycloud.host.v1.StartContainer.image_auth:type_name -> lazycloud.host.v1.RegistryAuth
 	18, // 20: lazycloud.host.v1.StartContainer.build:type_name -> lazycloud.host.v1.ImageBuild
 	19, // 21: lazycloud.host.v1.ImageBuild.context:type_name -> lazycloud.host.v1.Source
-	47, // 22: lazycloud.host.v1.ImageBuild.registry_auth:type_name -> lazycloud.host.v1.ImageBuild.RegistryAuthEntry
-	48, // 23: lazycloud.host.v1.ImageBuild.deadline:type_name -> google.protobuf.Timestamp
-	48, // 24: lazycloud.host.v1.Source.url_expires_at:type_name -> google.protobuf.Timestamp
+	48, // 22: lazycloud.host.v1.ImageBuild.registry_auth:type_name -> lazycloud.host.v1.ImageBuild.RegistryAuthEntry
+	49, // 23: lazycloud.host.v1.ImageBuild.deadline:type_name -> google.protobuf.Timestamp
+	49, // 24: lazycloud.host.v1.Source.url_expires_at:type_name -> google.protobuf.Timestamp
 	22, // 25: lazycloud.host.v1.FunctionWorkload.hooks:type_name -> lazycloud.host.v1.LifecycleHooks
 	2,  // 26: lazycloud.host.v1.CancelAttempt.reason:type_name -> lazycloud.host.v1.CancelReason
 	27, // 27: lazycloud.host.v1.ClaimTasksResponse.tasks:type_name -> lazycloud.host.v1.ClaimedTask
 	3,  // 28: lazycloud.host.v1.ClaimedTask.input_encoding:type_name -> lazycloud.host.v1.PayloadEncoding
-	48, // 29: lazycloud.host.v1.ClaimedTask.deadline:type_name -> google.protobuf.Timestamp
-	29, // 30: lazycloud.host.v1.CompleteTaskRequest.success:type_name -> lazycloud.host.v1.TaskSuccess
-	30, // 31: lazycloud.host.v1.CompleteTaskRequest.failure:type_name -> lazycloud.host.v1.TaskFailure
-	3,  // 32: lazycloud.host.v1.TaskSuccess.encoding:type_name -> lazycloud.host.v1.PayloadEncoding
-	4,  // 33: lazycloud.host.v1.TaskFailure.kind:type_name -> lazycloud.host.v1.AttemptFailureKind
-	13, // 34: lazycloud.host.v1.TaskFailure.error:type_name -> lazycloud.host.v1.RunnerError
-	33, // 35: lazycloud.host.v1.AppendLogsRequest.lines:type_name -> lazycloud.host.v1.LogLine
-	5,  // 36: lazycloud.host.v1.LogLine.stream:type_name -> lazycloud.host.v1.LogStream
-	48, // 37: lazycloud.host.v1.LogLine.time:type_name -> google.protobuf.Timestamp
-	36, // 38: lazycloud.host.v1.APIRequest.head:type_name -> lazycloud.host.v1.APIRequestHead
-	37, // 39: lazycloud.host.v1.APIRequestHead.headers:type_name -> lazycloud.host.v1.APIHeader
-	39, // 40: lazycloud.host.v1.APIResponse.head:type_name -> lazycloud.host.v1.APIResponseHead
-	37, // 41: lazycloud.host.v1.APIResponseHead.headers:type_name -> lazycloud.host.v1.APIHeader
-	43, // 42: lazycloud.host.v1.AppendImageBuildLogsRequest.lines:type_name -> lazycloud.host.v1.BuildLogLine
-	48, // 43: lazycloud.host.v1.BuildLogLine.time:type_name -> google.protobuf.Timestamp
-	17, // 44: lazycloud.host.v1.ImageBuild.RegistryAuthEntry.value:type_name -> lazycloud.host.v1.RegistryAuth
-	6,  // 45: lazycloud.host.v1.HostService.Enroll:input_type -> lazycloud.host.v1.EnrollRequest
-	9,  // 46: lazycloud.host.v1.HostService.Session:input_type -> lazycloud.host.v1.HostMessage
-	25, // 47: lazycloud.host.v1.HostService.ClaimTasks:input_type -> lazycloud.host.v1.ClaimTasksRequest
-	28, // 48: lazycloud.host.v1.HostService.CompleteTask:input_type -> lazycloud.host.v1.CompleteTaskRequest
-	32, // 49: lazycloud.host.v1.HostService.AppendLogs:input_type -> lazycloud.host.v1.AppendLogsRequest
-	35, // 50: lazycloud.host.v1.HostService.ContainerAPI:input_type -> lazycloud.host.v1.APIRequest
-	40, // 51: lazycloud.host.v1.HostService.CompleteImageBuild:input_type -> lazycloud.host.v1.CompleteImageBuildRequest
-	42, // 52: lazycloud.host.v1.HostService.AppendImageBuildLogs:input_type -> lazycloud.host.v1.AppendImageBuildLogsRequest
-	7,  // 53: lazycloud.host.v1.HostService.Enroll:output_type -> lazycloud.host.v1.EnrollResponse
-	15, // 54: lazycloud.host.v1.HostService.Session:output_type -> lazycloud.host.v1.ServerMessage
-	26, // 55: lazycloud.host.v1.HostService.ClaimTasks:output_type -> lazycloud.host.v1.ClaimTasksResponse
-	31, // 56: lazycloud.host.v1.HostService.CompleteTask:output_type -> lazycloud.host.v1.CompleteTaskResponse
-	34, // 57: lazycloud.host.v1.HostService.AppendLogs:output_type -> lazycloud.host.v1.AppendLogsResponse
-	38, // 58: lazycloud.host.v1.HostService.ContainerAPI:output_type -> lazycloud.host.v1.APIResponse
-	41, // 59: lazycloud.host.v1.HostService.CompleteImageBuild:output_type -> lazycloud.host.v1.CompleteImageBuildResponse
-	44, // 60: lazycloud.host.v1.HostService.AppendImageBuildLogs:output_type -> lazycloud.host.v1.AppendImageBuildLogsResponse
-	53, // [53:61] is the sub-list for method output_type
-	45, // [45:53] is the sub-list for method input_type
-	45, // [45:45] is the sub-list for extension type_name
-	45, // [45:45] is the sub-list for extension extendee
-	0,  // [0:45] is the sub-list for field type_name
+	49, // 29: lazycloud.host.v1.ClaimedTask.deadline:type_name -> google.protobuf.Timestamp
+	28, // 30: lazycloud.host.v1.ClaimedTask.dependencies:type_name -> lazycloud.host.v1.DependencyResult
+	3,  // 31: lazycloud.host.v1.DependencyResult.encoding:type_name -> lazycloud.host.v1.PayloadEncoding
+	30, // 32: lazycloud.host.v1.CompleteTaskRequest.success:type_name -> lazycloud.host.v1.TaskSuccess
+	31, // 33: lazycloud.host.v1.CompleteTaskRequest.failure:type_name -> lazycloud.host.v1.TaskFailure
+	3,  // 34: lazycloud.host.v1.TaskSuccess.encoding:type_name -> lazycloud.host.v1.PayloadEncoding
+	4,  // 35: lazycloud.host.v1.TaskFailure.kind:type_name -> lazycloud.host.v1.AttemptFailureKind
+	13, // 36: lazycloud.host.v1.TaskFailure.error:type_name -> lazycloud.host.v1.RunnerError
+	34, // 37: lazycloud.host.v1.AppendLogsRequest.lines:type_name -> lazycloud.host.v1.LogLine
+	5,  // 38: lazycloud.host.v1.LogLine.stream:type_name -> lazycloud.host.v1.LogStream
+	49, // 39: lazycloud.host.v1.LogLine.time:type_name -> google.protobuf.Timestamp
+	37, // 40: lazycloud.host.v1.APIRequest.head:type_name -> lazycloud.host.v1.APIRequestHead
+	38, // 41: lazycloud.host.v1.APIRequestHead.headers:type_name -> lazycloud.host.v1.APIHeader
+	40, // 42: lazycloud.host.v1.APIResponse.head:type_name -> lazycloud.host.v1.APIResponseHead
+	38, // 43: lazycloud.host.v1.APIResponseHead.headers:type_name -> lazycloud.host.v1.APIHeader
+	44, // 44: lazycloud.host.v1.AppendImageBuildLogsRequest.lines:type_name -> lazycloud.host.v1.BuildLogLine
+	49, // 45: lazycloud.host.v1.BuildLogLine.time:type_name -> google.protobuf.Timestamp
+	17, // 46: lazycloud.host.v1.ImageBuild.RegistryAuthEntry.value:type_name -> lazycloud.host.v1.RegistryAuth
+	6,  // 47: lazycloud.host.v1.HostService.Enroll:input_type -> lazycloud.host.v1.EnrollRequest
+	9,  // 48: lazycloud.host.v1.HostService.Session:input_type -> lazycloud.host.v1.HostMessage
+	25, // 49: lazycloud.host.v1.HostService.ClaimTasks:input_type -> lazycloud.host.v1.ClaimTasksRequest
+	29, // 50: lazycloud.host.v1.HostService.CompleteTask:input_type -> lazycloud.host.v1.CompleteTaskRequest
+	33, // 51: lazycloud.host.v1.HostService.AppendLogs:input_type -> lazycloud.host.v1.AppendLogsRequest
+	36, // 52: lazycloud.host.v1.HostService.ContainerAPI:input_type -> lazycloud.host.v1.APIRequest
+	41, // 53: lazycloud.host.v1.HostService.CompleteImageBuild:input_type -> lazycloud.host.v1.CompleteImageBuildRequest
+	43, // 54: lazycloud.host.v1.HostService.AppendImageBuildLogs:input_type -> lazycloud.host.v1.AppendImageBuildLogsRequest
+	7,  // 55: lazycloud.host.v1.HostService.Enroll:output_type -> lazycloud.host.v1.EnrollResponse
+	15, // 56: lazycloud.host.v1.HostService.Session:output_type -> lazycloud.host.v1.ServerMessage
+	26, // 57: lazycloud.host.v1.HostService.ClaimTasks:output_type -> lazycloud.host.v1.ClaimTasksResponse
+	32, // 58: lazycloud.host.v1.HostService.CompleteTask:output_type -> lazycloud.host.v1.CompleteTaskResponse
+	35, // 59: lazycloud.host.v1.HostService.AppendLogs:output_type -> lazycloud.host.v1.AppendLogsResponse
+	39, // 60: lazycloud.host.v1.HostService.ContainerAPI:output_type -> lazycloud.host.v1.APIResponse
+	42, // 61: lazycloud.host.v1.HostService.CompleteImageBuild:output_type -> lazycloud.host.v1.CompleteImageBuildResponse
+	45, // 62: lazycloud.host.v1.HostService.AppendImageBuildLogs:output_type -> lazycloud.host.v1.AppendImageBuildLogsResponse
+	55, // [55:63] is the sub-list for method output_type
+	47, // [47:55] is the sub-list for method input_type
+	47, // [47:47] is the sub-list for extension type_name
+	47, // [47:47] is the sub-list for extension extendee
+	0,  // [0:47] is the sub-list for field type_name
 }
 
 func init() { file_host_v1_host_proto_init() }
@@ -3337,11 +3416,11 @@ func file_host_v1_host_proto_init() {
 		(*ServerMessage_Stop)(nil),
 		(*ServerMessage_Cancel)(nil),
 	}
-	file_host_v1_host_proto_msgTypes[22].OneofWrappers = []any{
+	file_host_v1_host_proto_msgTypes[23].OneofWrappers = []any{
 		(*CompleteTaskRequest_Success)(nil),
 		(*CompleteTaskRequest_Failure)(nil),
 	}
-	file_host_v1_host_proto_msgTypes[34].OneofWrappers = []any{
+	file_host_v1_host_proto_msgTypes[35].OneofWrappers = []any{
 		(*CompleteImageBuildRequest_Digest)(nil),
 		(*CompleteImageBuildRequest_Failure)(nil),
 	}
@@ -3351,7 +3430,7 @@ func file_host_v1_host_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_host_v1_host_proto_rawDesc), len(file_host_v1_host_proto_rawDesc)),
 			NumEnums:      6,
-			NumMessages:   42,
+			NumMessages:   43,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
