@@ -24,6 +24,7 @@ from shared.serialization import to_json_value
 from shared.task_context import task_context
 
 from runner.handler_loading import load_handler
+from runner.http import serve_http
 from runner.invocation import cloudpickle_bytes, invoke_handler
 from runner.protocol_models import (
     Arguments,
@@ -86,6 +87,16 @@ class Connection:
         if payload:
             self._sock.sendall(payload)
 
+    def wait_closed(self) -> None:
+        """Block until the supervisor closes the socket; HTTP workers get no frames."""
+
+        while True:
+            try:
+                if not self._sock.recv(4096):
+                    return
+            except OSError:
+                return
+
     def _read_prefix(self) -> bytearray | None:
         """The next frame's header length bytes, or None on a clean close."""
 
@@ -107,7 +118,7 @@ class Connection:
 
 
 def serve(connection: Connection) -> int:
-    """Load the handler, then run invocations until the supervisor closes."""
+    """Load the handler, then run invocations or serve HTTP until the supervisor closes."""
 
     frame = connection.receive()
     if frame is None:
@@ -124,6 +135,8 @@ def serve(connection: Connection) -> int:
         connection.send(LoadFailed(type="load_failed", error=_runner_error(exc)))
         return LOAD_FAILED_EXIT
     _flush_output()
+    if load.http is not None:
+        return serve_http(connection, handler, load.http)
     connection.send(Loaded(type="loaded"))
     while (frame := connection.receive()) is not None:
         invoke, payload = frame
