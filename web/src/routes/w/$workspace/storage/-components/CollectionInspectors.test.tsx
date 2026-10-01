@@ -1,11 +1,14 @@
 import { testQueryClient } from "@/test/query-client";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 
+import { rememberWorkspaces } from "@/lib/api/workspaces";
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 
 import { MapInspector } from "./CollectionInspectors";
+
+beforeEach(() => rememberWorkspaces([{ id: "workspace-1", name: "workspace" }]));
 
 it("loads the value of an empty-string map key", async () => {
   const queryClient = testQueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
@@ -18,9 +21,10 @@ it("loads the value of an empty-string map key", async () => {
   });
   const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
     Response.json({
-      value_base64: btoa("value for the empty key"),
-      revision: "first",
-      expires_at: null,
+      key: "",
+      value: btoa("value for the empty key"),
+      revision: "1",
+      updated_at: "2026-10-01T00:00:00Z",
     }),
   );
   vi.stubGlobal("fetch", fetchMock);
@@ -38,7 +42,9 @@ it("loads the value of an empty-string map key", async () => {
 
   await screen.findByText("value for the empty key");
   expect(screen.getByRole("button", { name: "Edit value" })).toBeDisabled();
-  expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/v1/maps/map/entry?key=&workspace=workspace-1");
+  expect(new URL((fetchMock.mock.calls[0]?.[0] as Request).url).pathname).toBe(
+    "/v1/workspaces/workspace/maps/map/entries/",
+  );
 });
 
 it("keeps the user's draft and original revision when live data changes during an edit", async () => {
@@ -58,12 +64,15 @@ it("keeps the user's draft and original revision when live data changes during a
   });
   vi.stubGlobal(
     "fetch",
-    vi.fn<typeof fetch>().mockImplementation(async (_input, init) => {
-      const request = JSON.parse(String(init?.body));
+    vi.fn<typeof fetch>().mockImplementation(async (input) => {
+      const request = await (input as Request).json();
       if (request.if_revision !== "worker") {
-        return Response.json({ detail: "Map key changed. Reload before saving." }, { status: 409 });
+        return Response.json(
+          { code: "conflict", message: "Map key changed. Reload before saving." },
+          { status: 409 },
+        );
       }
-      return Response.json({});
+      return Response.json({ revision: "next" });
     }),
   );
   render(
