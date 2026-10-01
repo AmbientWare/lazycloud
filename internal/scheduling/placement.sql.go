@@ -14,11 +14,12 @@ import (
 const assignContainers = `-- name: AssignContainers :many
 with online as (
     select h.id from hosts h
-    where h.id = any($2::uuid[]) and h.state = 'online'
+    where h.id = any($2::uuid[]) and h.state = 'online' and h.phase = 'ready'
+      and h.capacity_state = 'available'
     for share
 )
 update containers c
-set state = 'starting', host_id = a.host_id, assigned_at = now()
+set state = 'starting', host_id = a.host_id, assigned_at = now(), capacity_wait = null
 from (select unnest($1::uuid[]) as id, unnest($2::uuid[]) as host_id) a
 join online on online.id = a.host_id
 where c.id = a.id and c.state = 'pending'
@@ -37,9 +38,9 @@ type AssignContainersRow struct {
 }
 
 // The state check loses to a planner that stopped the container meanwhile.
-// Hosts are locked FOR SHARE and must still be online, so an assignment
-// either commits before host loss lists the host's containers or skips a
-// host that host loss marked lost meanwhile.
+// Hosts are locked FOR SHARE and must still take work, so an assignment
+// either commits before host loss, a drain or a removal touches the host's
+// containers, or skips a host that one of them changed meanwhile.
 func (q *Queries) AssignContainers(ctx context.Context, arg AssignContainersParams) ([]AssignContainersRow, error) {
 	rows, err := q.db.Query(ctx, assignContainers, arg.Ids, arg.HostIds)
 	if err != nil {
@@ -61,38 +62,68 @@ func (q *Queries) AssignContainers(ctx context.Context, arg AssignContainersPara
 }
 
 const pendingContainers = `-- name: PendingContainers :many
-select p.id, p.workspace_id, p.release_id, p.cpu_millis, p.memory_bytes
+select p.id, p.workspace_id, p.release_id, p.cpu_millis, p.memory_bytes, p.connection_id,
+       p.machine, p.region, p.zone, p.preemptible, p.gpus, p.gpu_count
 from (
     select c.id, c.workspace_id, c.release_id, c.cpu_millis, c.memory_bytes, c.created_at,
+           ws.connection_id,
+           coalesce(r.spec -> 'placement' ->> 'machine', '')::text as machine,
+           coalesce(r.spec -> 'placement' ->> 'region', '')::text as region,
+           coalesce(r.spec -> 'placement' ->> 'availability_zone', '')::text as zone,
+           coalesce((r.spec -> 'placement' ->> 'preemptible')::boolean, true)::bool as preemptible,
+           array(select jsonb_array_elements_text(coalesce(r.spec -> 'resources' -> 'gpu', '[]'::jsonb)))::text[] as gpus,
+           coalesce((r.spec -> 'resources' ->> 'gpu_count')::int, 0)::int as gpu_count,
            row_number() over (partition by c.workspace_id order by c.created_at, c.id) as turn
     from containers c
+    join workspaces ws on ws.id = c.workspace_id
+    left join releases r on r.id = c.release_id
     where c.state = 'pending'
       and c.cpu_millis <= $1
       and c.memory_bytes <= $2
 ) p
+where (case
+           when p.machine <> '' then 'machine:' || p.workspace_id::text || ':' || p.machine
+           when p.connection_id is not null then 'connection:' || p.connection_id::text
+           else 'platform'
+       end) = any($3::text[])
 order by p.turn, p.created_at, p.id
-limit $3
+limit $4
 `
 
 type PendingContainersParams struct {
 	MaxFreeCpuMillis   int64
 	MaxFreeMemoryBytes int64
+	Targets            []string
 	BatchSize          int32
 }
 
 type PendingContainersRow struct {
-	ID          uuid.UUID
-	WorkspaceID uuid.UUID
-	ReleaseID   *uuid.UUID
-	CpuMillis   int64
-	MemoryBytes int64
+	ID           uuid.UUID
+	WorkspaceID  uuid.UUID
+	ReleaseID    *uuid.UUID
+	CpuMillis    int64
+	MemoryBytes  int64
+	ConnectionID *uuid.UUID
+	Machine      string
+	Region       string
+	Zone         string
+	Preemptible  bool
+	Gpus         []string
+	GpuCount     int32
 }
 
-// Pending containers that fit the largest free host in each resource, in
-// per-workspace round robin: every workspace's oldest request, then every
-// workspace's second, and so on. Reads the containers_pending partial index.
+// Pending containers that fit the largest free host in each resource and
+// whose target has a host, in per-workspace round robin: every workspace's
+// oldest request, then every workspace's second, and so on. A container's
+// target is its release's machine pin, else its workspace's connection,
+// else the platform. Reads the containers_pending partial index.
 func (q *Queries) PendingContainers(ctx context.Context, arg PendingContainersParams) ([]PendingContainersRow, error) {
-	rows, err := q.db.Query(ctx, pendingContainers, arg.MaxFreeCpuMillis, arg.MaxFreeMemoryBytes, arg.BatchSize)
+	rows, err := q.db.Query(ctx, pendingContainers,
+		arg.MaxFreeCpuMillis,
+		arg.MaxFreeMemoryBytes,
+		arg.Targets,
+		arg.BatchSize,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -106,6 +137,13 @@ func (q *Queries) PendingContainers(ctx context.Context, arg PendingContainersPa
 			&i.ReleaseID,
 			&i.CpuMillis,
 			&i.MemoryBytes,
+			&i.ConnectionID,
+			&i.Machine,
+			&i.Region,
+			&i.Zone,
+			&i.Preemptible,
+			&i.Gpus,
+			&i.GpuCount,
 		); err != nil {
 			return nil, err
 		}

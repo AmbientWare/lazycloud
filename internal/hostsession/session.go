@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -36,6 +37,10 @@ type session struct {
 	// sent holds the ids of derived commands this session already sent, so
 	// each is sent once per session. It keeps only ids still derived.
 	sent map[string]bool
+	// live holds the containers the host runs as far as this session knows:
+	// reported and not exited, or started. A stop decided elsewhere, such as
+	// a machine removal or a preemption, reaches the host through it.
+	live map[execution.ContainerID]bool
 }
 
 // Session serves a host's control stream. Hello opens a session epoch and
@@ -66,13 +71,25 @@ func (s *Server) Session(stream grpc.BidiStreamingServer[hostproto.HostMessage, 
 	// Subscribe before reading durable state so no change is missed.
 	wake, unsubscribe := s.listener.Subscribe(database.ChannelHost, host.String())
 	defer unsubscribe()
-	epoch, err := s.compute.OpenSession(ctx, host, hello.GetBootId(), compute.Capacity{
-		CPUMillis: hello.GetCapacity().GetCpuMillis(), MemoryBytes: hello.GetCapacity().GetMemoryBytes(),
+	epoch, err := s.compute.OpenSession(ctx, host, compute.SessionOpen{
+		BootID: hello.GetBootId(), Capacity: capacityIn(hello.GetCapacity()), AgentVersion: hello.GetAgentVersion(),
 	})
 	if err != nil {
 		return s.grpcError(ctx, err)
 	}
-	sess := &session{server: s, stream: stream, host: host, sent: map[string]bool{}}
+	sess := &session{server: s, stream: stream, host: host, sent: map[string]bool{}, live: map[execution.ContainerID]bool{}}
+	for _, r := range reports {
+		sess.observe(r)
+	}
+	update, err := s.compute.UpdateFor(ctx, host, hello.GetAgentVersion(), hello.GetRejectedVersion(), hello.GetUpdatable())
+	if err != nil {
+		return s.grpcError(ctx, err)
+	}
+	if update != nil {
+		if err := sess.send(updateMessage(update)); err != nil {
+			return err
+		}
+	}
 	actions, err := s.execution.ReconcileHost(ctx, host, reports)
 	if err != nil {
 		return s.grpcError(ctx, err)
@@ -146,11 +163,21 @@ func (sess *session) handle(ctx context.Context, msg *hostproto.HostMessage) err
 		if err != nil {
 			return err
 		}
+		sess.observe(report)
 		actions, err := sess.server.execution.ApplyReport(ctx, sess.host, report)
 		if err != nil {
 			return sess.server.grpcError(ctx, err)
 		}
 		return sess.sendActions(actions)
+	case *hostproto.HostMessage_Interruption:
+		at := time.Now()
+		if body.Interruption.GetReclaimAt() != nil {
+			at = body.Interruption.GetReclaimAt().AsTime()
+		}
+		if err := sess.server.compute.ReportInterruption(ctx, sess.host, body.Interruption.GetReason(), at); err != nil {
+			return sess.server.grpcError(ctx, err)
+		}
+		return nil
 	case *hostproto.HostMessage_Ack:
 		// Acknowledgement is receipt only; the following report shows the
 		// outcome.
@@ -192,6 +219,7 @@ func (sess *session) sync(ctx context.Context) error {
 		if err := sess.send(msg); err != nil {
 			return err
 		}
+		sess.live[start.Container] = true
 	}
 	if err := sess.syncBuilds(ctx, derived); err != nil {
 		return err
@@ -214,7 +242,47 @@ func (sess *session) sync(ctx context.Context) error {
 			}
 		}
 	}
+	if err := sess.syncStopped(ctx, derived); err != nil {
+		return err
+	}
+	for id := range sess.sent {
+		if strings.HasPrefix(id, "update:") {
+			derived[id] = true
+		}
+	}
 	sess.sent = derived
+	return nil
+}
+
+// observe tracks whether the host still runs a reported container.
+func (sess *session) observe(report execution.ContainerReport) {
+	if report.Phase == execution.ReportExited {
+		delete(sess.live, report.Container)
+		return
+	}
+	sess.live[report.Container] = true
+}
+
+// syncStopped sends a stop for every container the host runs that is
+// already stopped.
+func (sess *session) syncStopped(ctx context.Context, derived map[string]bool) error {
+	ids := make([]execution.ContainerID, 0, len(sess.live))
+	for id := range sess.live {
+		ids = append(ids, id)
+	}
+	stopped, err := sess.server.execution.StoppedAmong(ctx, ids)
+	if err != nil {
+		return sess.server.grpcError(ctx, err)
+	}
+	for _, container := range stopped {
+		id := "stop:" + container.String()
+		derived[id] = true
+		if !sess.sent[id] {
+			if err := sess.send(stopMessage(id, container)); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 
@@ -274,6 +342,7 @@ func (s *Server) startMessage(ctx context.Context, id string, start execution.St
 		Resources: &hostproto.Resources{
 			CpuMillis: start.CPUMillis, MemoryBytes: start.MemoryBytes,
 			CpuLimitMillis: start.CPULimitMillis, MemoryLimitBytes: start.MemoryLimitBytes,
+			GpuCount: gpusOf(start.Spec.Resources),
 		},
 		Function: &hostproto.FunctionWorkload{
 			Handler:   start.Spec.Handler,

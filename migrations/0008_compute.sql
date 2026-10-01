@@ -47,6 +47,8 @@ create table cloud_authorizations (
     stack_id text,
     template_version text,
     template_sha256 text,
+    -- The role and instance profile the account's instances run as.
+    node_role_arn text,
     node_instance_profile text,
     -- {region: {vpc_id, subnet_ids, security_group_id}} the launcher uses.
     networks jsonb not null default '{}',
@@ -109,6 +111,7 @@ alter table hosts
     -- Cloud instances: the offer launched and what the provider reported.
     add column region text not null default '',
     add column availability_zone text not null default '',
+    add column availability_zone_id text not null default '',
     add column instance_type text not null default '',
     add column market text check (market in ('spot', 'on_demand')),
     add column hourly_micros bigint,
@@ -120,7 +123,8 @@ alter table hosts
     -- Set while a ready cloud host has no live container.
     add column idle_since timestamptz,
     -- The provider will reclaim the instance at this time.
-    add column interruption_at timestamptz;
+    add column interruption_at timestamptz,
+    add column updated_at timestamptz not null default now();
 
 -- A machine name is unique in its account among machines that still exist.
 create unique index hosts_machine_name on hosts (account_id, name) where kind = 'machine' and phase <> 'deleted';
@@ -158,6 +162,15 @@ create table capacity_cooldowns (
 -- provisioned for it, or the fleet limit holds it back. The capacity
 -- controller writes it; pending reasons read it.
 alter table containers add column capacity_wait text check (capacity_wait in ('provisioning', 'limit'));
+
+-- The GPUs a release's container reserves: gpu_count, or one when it names
+-- models without a count.
+create function release_gpus(spec jsonb) returns integer
+language sql immutable
+return greatest(
+    coalesce((spec -> 'resources' ->> 'gpu_count')::integer, 0),
+    case when jsonb_array_length(coalesce(spec -> 'resources' -> 'gpu', '[]'::jsonb)) > 0 then 1 else 0 end
+);
 
 -- Agent releases. One row is the target every updatable agent moves to.
 create table agent_releases (

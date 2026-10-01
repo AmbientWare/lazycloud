@@ -105,6 +105,7 @@ type serveConfig struct {
 	identity      identity.Config
 	api           api.Config
 	images        images.Config
+	compute       compute.Config
 }
 
 func serve(ctx context.Context, args []string) error {
@@ -125,9 +126,24 @@ func serve(ctx context.Context, args []string) error {
 	fs.StringVar(&cfg.images.Registry, "image-registry", env("LAZYCLOUD_IMAGE_REGISTRY", ""), "registry host[:port] that builds publish to (LAZYCLOUD_IMAGE_REGISTRY)")
 	fs.StringVar(&cfg.images.Repository, "image-repository", env("LAZYCLOUD_IMAGE_REPOSITORY", "lazycloud"), "path under the registry for images and build cache (LAZYCLOUD_IMAGE_REPOSITORY)")
 	fs.BoolVar(&cfg.images.Insecure, "image-registry-insecure", env("LAZYCLOUD_IMAGE_REGISTRY_INSECURE", "") == "true", "the image registry speaks plain HTTP (LAZYCLOUD_IMAGE_REGISTRY_INSECURE)")
+	fs.StringVar(&cfg.compute.ServerAddress, "agent-server-addr", env("LAZYCLOUD_AGENT_SERVER_ADDR", ""), "host:port agents dial; defaults to -grpc-addr (LAZYCLOUD_AGENT_SERVER_ADDR)")
+	fs.BoolVar(&cfg.compute.ServerTLS, "agent-server-tls", env("LAZYCLOUD_AGENT_SERVER_TLS", "") == "true", "agents dial the host connection with TLS (LAZYCLOUD_AGENT_SERVER_TLS)")
+	fs.StringVar(&cfg.compute.InstallURL, "install-url", env("LAZYCLOUD_INSTALL_URL", ""), "origin hosts download the agent from; defaults to -public-url (LAZYCLOUD_INSTALL_URL)")
+	fs.StringVar(&cfg.api.AgentDistDir, "agent-dist-dir", env("LAZYCLOUD_AGENT_DIST_DIR", ""), "agent release archives by version (LAZYCLOUD_AGENT_DIST_DIR)")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
 	}
+	if cfg.compute.ServerAddress == "" {
+		cfg.compute.ServerAddress = cfg.grpcAddr
+	}
+	if cfg.compute.InstallURL == "" {
+		cfg.compute.InstallURL = cfg.identity.PublicURL
+	}
+	fleet, err := compute.LoadFleet(ctx, os.Getenv)
+	if err != nil {
+		return err
+	}
+	cfg.compute.Fleet = fleet
 	if cfg.images.Registry == "" {
 		return errors.New("the image registry is required: set LAZYCLOUD_IMAGE_REGISTRY or -image-registry")
 	}
@@ -167,13 +183,14 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, logger 
 	vault := secrets.NewSecrets(pool, masterKey)
 	im := images.NewImages(pool, exec, cfg.images)
 	ident := identity.NewIdentity(pool, cfg.identity)
+	comp := compute.NewCompute(pool, exec, cfg.compute)
 	if cfg.identity.GitHub.ClientID == "" || cfg.identity.GitHub.ClientSecret == "" {
 		logger.WarnContext(ctx, "dashboard sign-in is unavailable: set LAZYCLOUD_GITHUB_CLIENT_ID and LAZYCLOUD_GITHUB_CLIENT_SECRET")
 	}
 	owners := api.Owners{
 		Identity: ident, Control: control.NewControl(pool), Storage: store,
 		Execution: exec, Images: im, Notifications: notifications.NewNotifications(pool, nil, logger),
-		Secrets: vault, Schedules: schedules.NewSchedules(pool, exec), Listener: listener,
+		Secrets: vault, Schedules: schedules.NewSchedules(pool, exec), Listener: listener, Compute: comp,
 	}
 	handler, err := api.NewHandler(owners, cfg.api, logger)
 	if err != nil {
@@ -183,7 +200,7 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, logger 
 	if err != nil {
 		return err
 	}
-	hosts := hostsession.NewServer(compute.NewCompute(pool), exec, store, im, listener, hostsession.Config{
+	hosts := hostsession.NewServer(comp, exec, store, im, listener, hostsession.Config{
 		ImageTemplate: cfg.imageTemplate, TouchInterval: 10 * time.Second,
 		Secrets: vault, ContainerAPI: containerAPI,
 	}, logger)

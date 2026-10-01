@@ -51,8 +51,8 @@ func start(t *testing.T) *harness {
 	pool := dbtest.New(t)
 	logger := slog.New(slog.DiscardHandler)
 	listener := database.NewListener(pool, logger, database.ChannelHost, database.ChannelClaim)
-	c := compute.NewCompute(pool)
 	e := execution.NewExecution(pool)
+	c := compute.NewCompute(pool, e, compute.Config{})
 	store := storage.NewStorage(pool, storagetest.Config())
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {

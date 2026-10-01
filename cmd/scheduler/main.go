@@ -1,5 +1,5 @@
 // Command scheduler runs execution planning, placement, recovery, email
-// delivery and workspace deletion against PostgreSQL. Replicas are safe to
+// delivery, workspace deletion and the compute fleet against PostgreSQL. Replicas are safe to
 // run together: advisory locks serialize the planner and the placer, a
 // replica that finds a lock held skips the pass, and email and deletion
 // steps are claimed or idempotent.
@@ -18,6 +18,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/AmbientWare/lazycloud/internal/callbacks"
+	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/identity"
@@ -43,6 +44,11 @@ const (
 	contendedRetry = 100 * time.Millisecond
 	// purgeInterval paces deletion of finished callbacks.
 	purgeInterval = time.Minute
+	// fleetTick paces capacity planning, launches, retirement, preemption
+	// and connection steps; compute wakes cut it short.
+	fleetTick = 5 * time.Second
+	// reconcileTick paces comparing cloud hosts with the provider.
+	reconcileTick = time.Minute
 )
 
 func main() {
@@ -72,6 +78,14 @@ func run(logger *slog.Logger) error {
 
 	exec := execution.NewExecution(pool)
 	sched := scheduling.NewScheduling(pool, logger)
+	fleet, err := compute.LoadFleet(ctx, os.Getenv)
+	if err != nil {
+		return err
+	}
+	comp := compute.NewCompute(pool, exec, compute.Config{
+		InstallURL: os.Getenv("LAZYCLOUD_INSTALL_URL"), ServerAddress: os.Getenv("LAZYCLOUD_AGENT_SERVER_ADDR"),
+		ServerTLS: os.Getenv("LAZYCLOUD_AGENT_SERVER_TLS") == "true", Fleet: fleet,
+	})
 	keyFile := os.Getenv("LAZYCLOUD_SECRETS_KEY_FILE")
 	if keyFile == "" {
 		return errors.New("LAZYCLOUD_SECRETS_KEY_FILE is required: callbacks are signed with workspace secrets")
@@ -87,7 +101,13 @@ func run(logger *slog.Logger) error {
 	// Build recovery needs no registry: it only reads and moves build state.
 	im := images.NewImages(pool, exec, images.Config{})
 	listener := database.NewListener(pool, logger, database.ChannelExecution, database.ChannelImageBuild,
-		notifications.Channel, identity.ChannelWorkspace)
+		notifications.Channel, identity.ChannelWorkspace, compute.ChannelCompute)
+	fleetWake, cancelFleetWake := listener.Subscribe(compute.ChannelCompute, "")
+	defer cancelFleetWake()
+	capacityWake, cancelCapacityWake := listener.Subscribe(database.ChannelExecution, "")
+	defer cancelCapacityWake()
+	capacityFleetWake, cancelCapacityFleetWake := listener.Subscribe(compute.ChannelCompute, "")
+	defer cancelCapacityFleetWake()
 	buildWake, cancelBuildWake := listener.Subscribe(database.ChannelImageBuild, "")
 	defer cancelBuildWake()
 	accounts, cancelAccounts, err := newAccountLoops(pool, exec, im, listener, logger)
@@ -167,6 +187,40 @@ func run(logger *slog.Logger) error {
 		return loop(ctx, hostLossTick, nil, nil, func(ctx context.Context) bool {
 			if _, err := exec.ReleaseLostHosts(ctx, logger); err != nil {
 				logger.ErrorContext(ctx, "host loss pass", "error", err)
+			}
+			return false
+		})
+	})
+	group.Go(func() error {
+		return loop(ctx, fleetTick, capacityWake, capacityFleetWake, func(ctx context.Context) bool {
+			result, err := comp.PlanCapacity(ctx, logger)
+			if err != nil {
+				logger.ErrorContext(ctx, "capacity pass", "error", err)
+			}
+			return result.Skipped
+		})
+	})
+	group.Go(func() error {
+		return loop(ctx, fleetTick, fleetWake, nil, func(ctx context.Context) bool {
+			if _, err := comp.Launch(ctx, logger); err != nil {
+				logger.ErrorContext(ctx, "launch pass", "error", err)
+			}
+			if _, err := comp.Retire(ctx, logger); err != nil {
+				logger.ErrorContext(ctx, "retire pass", "error", err)
+			}
+			if _, err := comp.Preempt(ctx, logger); err != nil {
+				logger.ErrorContext(ctx, "preempt pass", "error", err)
+			}
+			if _, err := comp.AdvanceConnections(ctx, logger); err != nil {
+				logger.ErrorContext(ctx, "connection pass", "error", err)
+			}
+			return false
+		})
+	})
+	group.Go(func() error {
+		return loop(ctx, reconcileTick, nil, nil, func(ctx context.Context) bool {
+			if err := comp.Reconcile(ctx, logger); err != nil {
+				logger.ErrorContext(ctx, "reconcile pass", "error", err)
 			}
 			return false
 		})

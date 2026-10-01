@@ -137,6 +137,21 @@ func (q *Queries) InsertWorkspace(ctx context.Context, name string) (InsertWorks
 	return i, err
 }
 
+const setWorkspaceConnection = `-- name: SetWorkspaceConnection :exec
+update workspaces set connection_id = $1 where id = $2
+`
+
+type SetWorkspaceConnectionParams struct {
+	ConnectionID *uuid.UUID
+	ID           uuid.UUID
+}
+
+// Places a new workspace in a connected AWS account; it stays there.
+func (q *Queries) SetWorkspaceConnection(ctx context.Context, arg SetWorkspaceConnectionParams) error {
+	_, err := q.db.Exec(ctx, setWorkspaceConnection, arg.ConnectionID, arg.ID)
+	return err
+}
+
 const userByEmail = `-- name: UserByEmail :one
 select id, email, is_admin from users where email = $1
 `

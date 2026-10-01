@@ -13,6 +13,7 @@ import (
 	middleware "github.com/oapi-codegen/nethttp-middleware"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/control"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/execution"
@@ -38,6 +39,7 @@ type Owners struct {
 	Notifications *notifications.Notifications
 	Secrets       *secrets.Secrets
 	Schedules     *schedules.Schedules
+	Compute       *compute.Compute
 	// Listener wakes waits on task and image build changes. It must listen
 	// on database.ChannelTask, ChannelImageBuild and ChannelImageBuildLog.
 	Listener *database.Listener
@@ -54,6 +56,8 @@ type Config struct {
 	// ClientReleaseVersion, when set, is sent on every response so older
 	// CLIs tell their users to run `lazycloud update`.
 	ClientReleaseVersion string
+	// AgentDistDir holds agent release archives for /install/agent.
+	AgentDistDir string
 }
 
 // RecommendedClientHeader carries Config.ClientReleaseVersion.
@@ -72,6 +76,7 @@ func NewHandler(owners Owners, cfg Config, logger *slog.Logger) (http.Handler, e
 	mux.HandleFunc("GET "+signInStartPath, s.startSignIn)
 	mux.HandleFunc("GET "+identity.GitHubCallbackPath, s.completeSignIn)
 	mux.HandleFunc("POST /webhooks/resend", s.receiveResendWebhook)
+	s.installRoutes(mux)
 	mux.Handle("/", s.authenticate(ops))
 	return s.recommendClient(s.limitBody(mux)), nil
 }
@@ -273,6 +278,10 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		secretMissing  *secrets.NotFoundError
 		secretExists   *secrets.ExistsError
 		secretReserved *secrets.ReservedNameError
+		computeMissing *compute.NotFoundError
+		computeClash   *compute.ConflictError
+		computeInvalid *compute.InvalidError
+		computeDown    *compute.UnavailableError
 	)
 	switch {
 	case errors.Is(err, identity.ErrUnauthenticated):
@@ -324,6 +333,16 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		writeJSONError(w, http.StatusConflict, apitypes.Conflict, secretExists.Error())
 	case errors.As(err, &secretReserved):
 		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, secretReserved.Error())
+	case errors.As(err, &computeMissing):
+		writeJSONError(w, http.StatusNotFound, apitypes.NotFound, computeMissing.Error())
+	case errors.As(err, &computeClash):
+		writeJSONError(w, http.StatusConflict, apitypes.Conflict, computeClash.Error())
+	case errors.As(err, &computeInvalid):
+		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, computeInvalid.Error())
+	case errors.As(err, &computeDown):
+		writeJSONError(w, http.StatusServiceUnavailable, apitypes.Unavailable, computeDown.Error())
+	case errors.Is(err, compute.ErrNotFound):
+		writeJSONError(w, http.StatusNotFound, apitypes.NotFound, "not found")
 	case errors.Is(err, secrets.ErrInvalidCursor), errors.Is(err, schedules.ErrInvalidCursor):
 		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, "the cursor is not from a previous page")
 	default:
