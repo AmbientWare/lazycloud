@@ -86,7 +86,7 @@ func env(name, fallback string) string {
 // stay out of the process arguments.
 func billingConfig(publicURL string) billing.Config {
 	return billing.Config{PublicURL: publicURL, Stripe: billing.StripeConfig{
-		SecretKey: os.Getenv("LAZYCLOUD_STRIPE_SECRET_KEY"), WebhookSecret: os.Getenv("LAZYCLOUD_STRIPE_WEBHOOK_SECRET"),
+		SecretKey: os.Getenv("LAZYCLOUD_STRIPE_API_KEY"), WebhookSecret: os.Getenv("LAZYCLOUD_STRIPE_WEBHOOK_SECRET"),
 	}}
 }
 
@@ -208,7 +208,7 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, tel *te
 	}
 	bill := billing.NewBilling(pool, cfg.billing, logger)
 	if cfg.billing.Stripe.SecretKey == "" {
-		logger.WarnContext(ctx, "payments are unavailable: set LAZYCLOUD_STRIPE_SECRET_KEY and LAZYCLOUD_STRIPE_WEBHOOK_SECRET")
+		logger.WarnContext(ctx, "payments are unavailable: set LAZYCLOUD_STRIPE_API_KEY and LAZYCLOUD_STRIPE_WEBHOOK_SECRET")
 	}
 	owners := api.Owners{
 		Identity: ident, Control: control.NewControl(pool), Storage: store,

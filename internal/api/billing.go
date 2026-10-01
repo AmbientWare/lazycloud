@@ -256,7 +256,7 @@ func (s *Server) receiveStripeWebhook(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, billing.ErrBadSignature):
 		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, "the delivery is not signed by Stripe")
 	case errors.Is(err, billing.ErrPaymentsUnavailable):
-		s.logger.ErrorContext(r.Context(), "a stripe delivery arrived but LAZYCLOUD_STRIPE_SECRET_KEY or LAZYCLOUD_STRIPE_WEBHOOK_SECRET is not set")
+		s.logger.ErrorContext(r.Context(), "a stripe delivery arrived but LAZYCLOUD_STRIPE_API_KEY or LAZYCLOUD_STRIPE_WEBHOOK_SECRET is not set")
 		writeJSONError(w, http.StatusServiceUnavailable, apitypes.Unavailable, "payments are not configured")
 	case err != nil:
 		s.writeError(w, r, err)

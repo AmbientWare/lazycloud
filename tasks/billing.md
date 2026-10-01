@@ -77,6 +77,9 @@ Owner: `internal/billing` (billing and usage metering in one package).
 - [x] PR #424 review fixes, each with a regression test
 - [x] stripe-mock in `compose.test.yaml` and CI; Stripe tests fail rather
   than skip without it
+- [x] Real Stripe test-mode flows (`TestStripeTestMode`). Server and
+  scheduler read `LAZYCLOUD_STRIPE_API_KEY`, the reference's deployed secret
+  name.
 
 ## API (for the web packet)
 
@@ -161,6 +164,33 @@ Tests (real PostgreSQL; Stripe at the boundary through stripe-mock):
   `TestOnlyAdministratorsSeeAndWaiveAccounts`,
   `TestStripeDeliveriesNeedTheEndpointSecret`.
 
+Stripe test mode (`TestStripeTestMode`, 2026-10-01, about 21 s, API version
+2026-09-30.endive). It runs when `LAZYCLOUD_TEST_STRIPE_API_KEY` holds a
+test-mode key and refuses any other key. Deliveries are the events Stripe
+recorded, signed and passed through `ReceiveWebhook` and `ProcessEvents`.
+It covers:
+
+- the customer, created on the first card setup page and reused;
+- a test card attached, its `payment_method.attached` delivery making it
+  the default;
+- a credit Checkout, expired, its delivery cancelling the purchase;
+- automatic reload charging the card off-session once and funding $20, its
+  `payment_intent.succeeded` delivery and a second pass changing nothing;
+- subscribing to Team, with included credit granted once (the
+  `invoice.paid` delivery adds none);
+- upgrading to Business with prorated credit;
+- scheduling Team, a `customer.subscription.updated` delivery keeping the
+  schedule, then cancelling it;
+- scheduling Free, then cancelling that;
+- the portal opening with invoices and cards only.
+
+The customer is deleted afterwards. The plan prices and the portal
+configuration stay in the test account because the platform reuses them.
+
+The first run found that the current API version refuses
+`payment_method_types` on Checkout. The Checkout sessions and the
+off-session payment now use `allowed_payment_method_types`.
+
 Measurements (`BenchmarkMetering10kContainers`, 1,000 accounts × 10 running
 containers, local PostgreSQL 18, i9-12900K):
 
@@ -194,8 +224,13 @@ adds one live-container count and one account read to its transaction.
 - Grouping by task equals grouping by workload: no container runs one task.
 - The cost of storage scans at scale is not measured; only the container
   pass is.
-- Stripe is verified against stripe-mock only (no STRIPE test keys here):
-  request shapes are proven, end-to-end flows (Checkout completion, renewal
-  invoices, proration amounts, schedules) are not exercised against real
-  Stripe test mode.
+- Stripe test mode does not cover these:
+  - completing a hosted Checkout page, which the API cannot do;
+  - renewal invoices, which need a test clock;
+  - declines and authentication-required cards.
+
+  CI runs stripe-mock only. Its newest spec (v0.205.0) predates Checkout's
+  `allowed_payment_method_types`, so the two Checkout calls are proven only
+  by `TestStripeTestMode`. That test needs a test-mode key, which CI does
+  not hold.
 - Enforcement and retention are not exercised on the local stack end to end.

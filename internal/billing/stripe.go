@@ -114,7 +114,7 @@ func (s *stripeProvider) setupSession(ctx context.Context, customer, success, ca
 	}
 	// Cards only: other wallets cannot be charged off-session, which is
 	// what a saved method is for.
-	params.AddExtra("payment_method_types[0]", "card")
+	params.AllowedPaymentMethodTypes = []*string{stripe.String("card")}
 	session, err := s.client.V1CheckoutSessions.Create(ctx, params)
 	if err != nil {
 		return "", fmt.Errorf("create card setup session: %w", err)
@@ -200,7 +200,7 @@ func (s *stripeProvider) creditCheckout(ctx context.Context, customer string, pu
 		}},
 		SuccessURL: stripe.String(success), CancelURL: stripe.String(cancel),
 	}
-	params.AddExtra("payment_method_types[0]", "card")
+	params.AllowedPaymentMethodTypes = []*string{stripe.String("card")}
 	keyed(params, "credit-checkout-"+purchase.String())
 	session, err := s.client.V1CheckoutSessions.Create(ctx, params)
 	if err != nil {
@@ -342,7 +342,7 @@ func (s *stripeProvider) chargeCard(ctx context.Context, customer string, purcha
 		PaymentMethod: stripe.String(cust.InvoiceSettings.DefaultPaymentMethod.ID), Confirm: stripe.Bool(true),
 		OffSession: stripe.Bool(true), Metadata: map[string]string{"credit_purchase_id": purchase.String()},
 	}
-	params.AddExtra("payment_method_types[0]", "card")
+	params.AllowedPaymentMethodTypes = []*string{stripe.String("card")}
 	params.AddExpand("latest_charge")
 	keyed(params, "credit-payment-"+purchase.String())
 	intent, err := s.client.V1PaymentIntents.Create(ctx, params)
