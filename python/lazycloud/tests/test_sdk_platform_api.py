@@ -484,7 +484,13 @@ def test_remote_cancels_the_task_when_following_ends_early(
     )
     if ending == "ctrl-c":
         reports.summarize_sales.terminal = _InterruptedTerminal()
-        line = {"id": 1, "task_id": task_id, "attempt": 1, "stream": "stdout", "data": "x"}
+        line: dict[str, object] = {
+            "id": 1,
+            "task_id": task_id,
+            "attempt": 1,
+            "stream": "stdout",
+            "data": "x",
+        }
         fake_api.route("GET", logs)(lambda _: json_reply({**line, "time": NOW}))
         expected: type[BaseException] = KeyboardInterrupt
     else:
@@ -552,8 +558,14 @@ def test_task_handles_read_results_logs_and_reruns(fake_api: FakeApi) -> None:
     )
     fake_api.route("GET", f"{tasks}/{task_id}/logs")(
         lambda _: json_reply(
-            {"id": 9, "task_id": task_id, "attempt": 1, "stream": "stdout", "data": "done"}
-            | {"time": NOW}
+            {
+                "id": 9,
+                "task_id": task_id,
+                "attempt": 1,
+                "stream": "stdout",
+                "data": "done",
+                "time": NOW,
+            }
         )
     )
     fake_api.route("POST", f"{tasks}/{task_id}/rerun")(lambda _: json_reply(_task(rerun_id)))
@@ -565,7 +577,10 @@ def test_task_handles_read_results_logs_and_reruns(fake_api: FakeApi) -> None:
     task = lazycloud.Task.from_id(task_id)
     result = task.result()
     call: lazycloud.FunctionCall[dict[str, int]] = lazycloud.FunctionCall(task)
-    failed = lazycloud.FunctionCall(lazycloud.Task.from_id(failed_id)).result()
+    failed_call: lazycloud.FunctionCall[int] = lazycloud.FunctionCall(
+        lazycloud.Task.from_id(failed_id)
+    )
+    failed = failed_call.result()
 
     assert (result.ok, result.status, result.exit_code, result.error) == (
         True,
@@ -678,3 +693,12 @@ def test_cli_deploy_of_a_file_deploys_its_app(
     assert json.loads(result.stdout)["releases"][0]["function"] == "summarize_sales"
     (request,) = fake_api.calls("POST", "/v1/workspaces/team/apps/reports/deployments")
     assert request.json()["functions"][0]["handler"] == "reports:summarize_sales"
+
+    monkeypatch.setattr(sys, "path", [str(tmp_path), *sys.path])
+    pruned = CliRunner().invoke(build_public_cli(), ["deploy", "reports.py", "--prune"])
+    single = CliRunner().invoke(build_public_cli(), ["deploy", "reports:summarize_sales"])
+
+    assert pruned.exit_code == 0, pruned.output
+    assert "App deployed" in pruned.stdout and "Removed versions" in pruned.stdout
+    assert "Prune" in pruned.stderr and "Runtime" in pruned.stderr
+    assert "Deployment created" in single.stdout and "reports:summarize_sales" in single.stdout

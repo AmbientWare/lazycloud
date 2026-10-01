@@ -192,12 +192,15 @@ class _DependencyUnpickler(pickle.Unpickler):
         self._dependencies = dependencies
 
     def persistent_load(self, pid: Any) -> Any:
-        if not (isinstance(pid, tuple) and len(pid) == 2 and pid[0] == _FUNCTION_CALL):
-            raise ProtocolError(f"unsupported persistent id {pid!r}")
+        match pid:
+            case (str(kind), str(task_id)) if kind == _FUNCTION_CALL:
+                pass
+            case _:
+                raise ProtocolError(f"unsupported persistent id {pid!r}")
         try:
-            encoding, payload = self._dependencies[pid[1]]
+            encoding, payload = self._dependencies[task_id]
         except KeyError:
-            raise ProtocolError(f"input refers to task {pid[1]} without its dependency") from None
+            raise ProtocolError(f"input refers to task {task_id} without its dependency") from None
         if encoding is Encoding.json:
             return json.loads(payload)
         return pickle.loads(payload)

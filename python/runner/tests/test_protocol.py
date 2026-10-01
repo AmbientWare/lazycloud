@@ -212,7 +212,10 @@ def test_dependency_frames_resolve_upstream_results_for_the_next_invoke(
 ) -> None:
     runner = start_runner(workdir)
     runner.load("handlers:echo")
-    arguments = {"args": [[_Upstream("up-1"), {"nested": _Upstream("up-2")}]], "kwargs": {}}
+    arguments: dict[str, object] = {
+        "args": [[_Upstream("up-1"), {"nested": _Upstream("up-2")}]],
+        "kwargs": {},
+    }
 
     header, payload = runner.invoke(
         _with_upstream(arguments),

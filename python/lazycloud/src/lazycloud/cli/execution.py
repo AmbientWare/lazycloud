@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Annotated, Any, Protocol, runtime_checkable
+from typing import Annotated, Any, Protocol, cast, runtime_checkable
 
 import typer
 from pydantic import JsonValue
@@ -115,7 +115,8 @@ def deploy(
         if diff:
             if not isinstance(target, Function):
                 raise typer.BadParameter("--diff requires an app or a decorated workload")
-            plan = _plan(client, selected_workspace, AppFunctions(target._app_slug, (target,)))
+            function = cast("Function[..., Any]", target)
+            plan = _plan(client, selected_workspace, AppFunctions(function._app_slug, (function,)))
             _emit_deployment_plans(ctx, [plan])
             return
         if not isinstance(target, Function):

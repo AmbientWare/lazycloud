@@ -7,10 +7,9 @@ import sys
 from pathlib import Path
 
 import pytest
-from click.testing import Result
 from lazycloud.cli.components.errors import ClientError
 from lazycloud.cli.main import build_public_cli
-from typer.testing import CliRunner
+from typer.testing import CliRunner, Result
 
 from tests.api_server import ApiRequest, FakeApi, Reply, error_reply, json_reply
 
@@ -78,7 +77,7 @@ def _task(status: str = "running", **extra: object) -> dict[str, object]:
 
 
 def _entry(number: int, data: str, stream: str = "stdout") -> bytes:
-    record = {
+    record: dict[str, object] = {
         "id": number,
         "task_id": TASK_ID,
         "attempt": 1,
@@ -171,11 +170,16 @@ def test_deploy_diff_previews_the_plan_without_deploying(
 
     @fake_api.route("POST", f"{TEAM}/apps/reports/deployment-plan")
     def plan(request: ApiRequest) -> Reply:
-        listed = [
+        listed: list[dict[str, object]] = [
             {"kind": "function", "name": item["name"], "action": "add", "versions": 0}
             for item in request.json()["workloads"]
         ]
-        removed = {"kind": "function", "name": "old_job", "action": "remove", "versions": 4}
+        removed: dict[str, object] = {
+            "kind": "function",
+            "name": "old_job",
+            "action": "remove",
+            "versions": 4,
+        }
         return json_reply({"app": "reports", "prune": True, "items": [*listed, removed]})
 
     result = _cli("deploy", "reports.py", "--diff", "--prune")
