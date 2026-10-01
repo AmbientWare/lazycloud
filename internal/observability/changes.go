@@ -144,16 +144,17 @@ func (c *Changes) latestLocked() (int64, bool) {
 	return latest.Seq, latest.Frame != nil
 }
 
-// Run listens until ctx ends, reconnecting after failures. Every reconnect
-// is a gap: retained events are dropped and subscribers reset.
+// Run listens until ctx ends, reconnecting after failures. Every lost
+// connection is a gap: retained events are dropped and subscribers reset.
 func (c *Changes) Run(ctx context.Context) error {
 	defer close(c.done)
 	for {
 		err := c.listen(ctx)
-		c.gap()
+		// Stopping is no gap: streams end without a reset.
 		if ctx.Err() != nil {
 			return nil //nolint:nilerr // Cancellation is the normal stop.
 		}
+		c.gap()
 		c.logger.WarnContext(ctx, "change listener disconnected", "error", err)
 		select {
 		case <-ctx.Done():
