@@ -55,11 +55,7 @@ export function QueueInspector({ workspace, name }: { workspace: string; name: s
           {error.message}
         </p>
       ) : null}
-      <CollectionStats
-        items={[
-          { label: "Oldest", value: oldest ?? "Empty" },
-        ]}
-      />
+      <CollectionStats items={[{ label: "Oldest", value: oldest ?? "Empty" }]} />
       <div className="mt-3 min-w-0 border-t border-border/60 pt-3">
         <EncodedValuePreview
           valueBase64={head.data?.message}

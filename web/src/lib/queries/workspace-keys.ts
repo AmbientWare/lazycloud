@@ -164,7 +164,8 @@ export const workspaceQueryKeys = {
   },
   storage: {
     root: (workspace: string) => [...workspaceRoot(workspace), "storage"] as const,
-    artifacts: (workspace: string) => [...workspaceRoot(workspace), "storage", "artifacts"] as const,
+    artifacts: (workspace: string) =>
+      [...workspaceRoot(workspace), "storage", "artifacts"] as const,
     secrets: (workspace: string) => [...workspaceRoot(workspace), "storage", "secrets"] as const,
     volumes: (workspace: string) => [...workspaceRoot(workspace), "storage", "volumes"] as const,
     disks: (workspace: string) => [...workspaceRoot(workspace), "storage", "disks"] as const,

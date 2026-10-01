@@ -117,7 +117,10 @@ export function disksQueryOptions(workspace: string) {
       );
       return {
         data: await Promise.all(
-          page.disks.map(async (disk) => ({ disk, holder: await holderContainer(workspace, disk) })),
+          page.disks.map(async (disk) => ({
+            disk,
+            holder: await holderContainer(workspace, disk),
+          })),
         ),
         next: page.next_cursor ?? "",
       };

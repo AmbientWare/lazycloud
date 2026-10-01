@@ -163,9 +163,7 @@ export function CollectionValueForm({
         {entry ? (
           <p className="text-xs text-muted-foreground">
             Current expiry:{" "}
-            {entry.expires_at
-              ? new Date(entry.expires_at).toLocaleString()
-              : "No expiry"}
+            {entry.expires_at ? new Date(entry.expires_at).toLocaleString() : "No expiry"}
           </p>
         ) : null}
         <div className="flex flex-wrap items-center gap-2">

@@ -373,7 +373,9 @@ function VolumeForm({
   const create = useMutation({
     mutationFn: () => createVolume(workspace, name.trim()),
     onSuccess: (volume) => {
-      void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.storage.volumes(workspace) });
+      void queryClient.invalidateQueries({
+        queryKey: workspaceQueryKeys.storage.volumes(workspace),
+      });
       onCreated(volume.name);
     },
   });

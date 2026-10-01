@@ -301,7 +301,9 @@ function SecretForm({
       }
     },
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.storage.secrets(workspace) });
+      void queryClient.invalidateQueries({
+        queryKey: workspaceQueryKeys.storage.secrets(workspace),
+      });
       onDone();
     },
   });
