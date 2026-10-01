@@ -1,22 +1,22 @@
-# Image repositories and the release identity for the server, scheduler and
-# agent images. Only what the existing platform roots lack: platform-core
-# owns the EKS cluster, its OIDC provider and the workload image repository,
-# and platform-deployment owns each deployment's database, buckets, secrets
-# and Pod Identity roles. The images live under <name>/release/, apart from
-# the reference platform's <name>/<image> repositories, so a reference
-# deployment can never select one by tag.
+# Release identities: the repositories Ship pushes the server, scheduler and
+# web images to, the role it pushes with, the role the Node images workflow
+# bakes AMIs with, and the GitHub side that gates both. platform-core owns
+# the cluster and the reference platform's <name>/<image> repositories;
+# these images live under <name>/release/, so a reference deployment can
+# never select one by tag.
 
 locals {
   github_owner      = split("/", var.github_repository)[0]
   github_repository = split("/", var.github_repository)[1]
   environment       = "images"
-  # Release tags have their own prefix: the reference Ship workflow cuts v*.
-  tag_pattern = "platform-v*"
-  workflow    = "${var.github_repository}/.github/workflows/release.yml"
+  # Ship cuts v<version> tags and runs only from main.
+  tag_pattern = "v*"
+  ship        = "${var.github_repository}/.github/workflows/ship.yml"
+  node_images = "${var.github_repository}/.github/workflows/node-images.yml"
 }
 
 resource "aws_ecr_repository" "image" {
-  for_each = toset(["server", "scheduler", "agent"])
+  for_each = toset(["server", "scheduler", "web"])
 
   name                 = "${var.name}/release/${each.key}"
   image_tag_mutability = "IMMUTABLE"
@@ -28,7 +28,7 @@ resource "aws_ecr_repository" "image" {
 }
 
 # Untagged manifests accumulate as layers are rebuilt. Tagged images stay: a
-# deployment names its tag and a rollback names an older one.
+# deployment names its version and a rollback names an older one.
 resource "aws_ecr_lifecycle_policy" "image" {
   for_each = aws_ecr_repository.image
 
@@ -49,10 +49,10 @@ resource "aws_ecr_lifecycle_policy" "image" {
   })
 }
 
-# The GitHub side comes first, and the role depends on it, so the role never
+# The GitHub side comes first, and the roles depend on it, so a role never
 # trusts a job the environment's protections have not gated.
 
-# Release jobs wait for a reviewer and run only for platform-v* tags.
+# Release jobs wait for a reviewer and run only from main.
 resource "github_repository_environment" "images" {
   repository  = local.github_repository
   environment = local.environment
@@ -68,15 +68,16 @@ resource "github_repository_environment" "images" {
   }
 }
 
-resource "github_repository_environment_deployment_policy" "release_tags" {
-  repository  = local.github_repository
-  environment = github_repository_environment.images.environment
-  tag_pattern = local.tag_pattern
+resource "github_repository_environment_deployment_policy" "main" {
+  repository     = local.github_repository
+  environment    = github_repository_environment.images.environment
+  branch_pattern = "main"
 }
 
-# Only repository administrators create, move or delete release tags.
+# Only repository administrators and Ship's workflow token create, move or
+# delete release tags.
 resource "github_repository_ruleset" "release_tags" {
-  name        = "platform release tags"
+  name        = "release tags"
   repository  = local.github_repository
   target      = "tag"
   enforcement = "active"
@@ -88,10 +89,16 @@ resource "github_repository_ruleset" "release_tags" {
     }
   }
 
-  # Repository role 5 is admin.
+  # Repository role 5 is admin; integration 15368 is GitHub Actions.
   bypass_actors {
     actor_id    = 5
     actor_type  = "RepositoryRole"
+    bypass_mode = "always"
+  }
+
+  bypass_actors {
+    actor_id    = 15368
+    actor_type  = "Integration"
     bypass_mode = "always"
   }
 
@@ -117,11 +124,11 @@ data "aws_iam_openid_connect_provider" "github" {
   url = "https://token.actions.githubusercontent.com"
 }
 
+# Only Ship, run from main, in the images environment.
 resource "aws_iam_role" "release" {
   name        = "${var.name}-image-release"
-  description = "GitHub Actions identity that pushes ${var.name} server, scheduler and agent images."
+  description = "GitHub Actions identity that pushes ${var.name} server, scheduler and web images."
 
-  # Only release.yml, run for a platform-v* tag, in the images environment.
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
@@ -131,13 +138,11 @@ resource "aws_iam_role" "release" {
       Condition = {
         StringEquals = {
           "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-        }
-        StringLike = {
           "token.actions.githubusercontent.com:sub" = join(":", [
             "repo:${var.github_repository}",
             "environment:${local.environment}",
-            "job_workflow_ref:${local.workflow}@refs/tags/${local.tag_pattern}",
-            "ref:refs/tags/${local.tag_pattern}",
+            "job_workflow_ref:${local.ship}@refs/heads/main",
+            "ref:refs/heads/main",
           ])
         }
       }
@@ -145,7 +150,7 @@ resource "aws_iam_role" "release" {
   })
 
   depends_on = [
-    github_repository_environment_deployment_policy.release_tags,
+    github_repository_environment_deployment_policy.main,
     github_repository_ruleset.release_tags,
     github_actions_repository_oidc_subject_claim_customization_template.repository,
   ]
@@ -180,10 +185,97 @@ resource "aws_iam_role_policy" "release" {
   policy = data.aws_iam_policy_document.release.json
 }
 
-# The workflow reads these from the environment it runs in.
+# Only the Node images workflow, run from main, in the images environment.
+# It launches one tagged bake instance in the first region, images it and
+# copies the image to the other regions.
+resource "aws_iam_role" "node_images" {
+  name        = "${var.name}-node-image-bake"
+  description = "GitHub Actions identity that bakes ${var.name} fleet node images."
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Federated = data.aws_iam_openid_connect_provider.github.arn }
+      Action    = "sts:AssumeRoleWithWebIdentity"
+      Condition = {
+        StringEquals = {
+          "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+          "token.actions.githubusercontent.com:sub" = join(":", [
+            "repo:${var.github_repository}",
+            "environment:${local.environment}",
+            "job_workflow_ref:${local.node_images}@refs/heads/main",
+            "ref:refs/heads/main",
+          ])
+        }
+      }
+    }]
+  })
+
+  depends_on = [
+    github_repository_environment_deployment_policy.main,
+    github_repository_ruleset.release_tags,
+    github_actions_repository_oidc_subject_claim_customization_template.repository,
+  ]
+}
+
+data "aws_iam_policy_document" "node_images" {
+  statement {
+    sid = "Inspect"
+    actions = [
+      "ec2:DescribeImages", "ec2:DescribeInstances", "ec2:DescribeSubnets",
+      "ec2:DescribeSecurityGroups", "ec2:DescribeRouteTables", "ec2:DescribeSnapshots",
+      "ssm:GetParameters",
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid       = "LaunchTaggedBakeInstances"
+    actions   = ["ec2:RunInstances", "ec2:CreateTags"]
+    resources = ["arn:aws:ec2:*:*:instance/*", "arn:aws:ec2:*:*:volume/*", "arn:aws:ec2:*:*:network-interface/*"]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestTag/lazycloud:node-image-bake"
+      values   = ["true"]
+    }
+  }
+
+  statement {
+    sid       = "LaunchInFleetNetworks"
+    actions   = ["ec2:RunInstances"]
+    resources = ["arn:aws:ec2:*:*:subnet/*", "arn:aws:ec2:*:*:security-group/*", "arn:aws:ec2:*::image/*"]
+  }
+
+  statement {
+    sid       = "ManageBakeInstances"
+    actions   = ["ec2:GetConsoleOutput", "ec2:StopInstances", "ec2:TerminateInstances", "ec2:CreateImage"]
+    resources = ["arn:aws:ec2:*:*:instance/*"]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:ResourceTag/lazycloud:node-image-bake"
+      values   = ["true"]
+    }
+  }
+
+  statement {
+    sid       = "RegisterAndCopyImages"
+    actions   = ["ec2:CreateImage", "ec2:CopyImage", "ec2:CreateTags"]
+    resources = ["arn:aws:ec2:*::image/*", "arn:aws:ec2:*::snapshot/*"]
+  }
+}
+
+resource "aws_iam_role_policy" "node_images" {
+  name   = "bake-node-images"
+  role   = aws_iam_role.node_images.name
+  policy = data.aws_iam_policy_document.node_images.json
+}
+
+# The workflows read these from the environment they run in.
 resource "github_actions_environment_variable" "release" {
   for_each = {
     AWS_IMAGE_RELEASE_ROLE_ARN = aws_iam_role.release.arn
+    AWS_NODE_IMAGE_ROLE_ARN    = aws_iam_role.node_images.arn
     IMAGE_REGISTRY             = "${split("/", aws_ecr_repository.image["server"].repository_url)[0]}/${var.name}/release"
     AWS_REGION                 = var.region
   }

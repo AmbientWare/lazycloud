@@ -11,13 +11,13 @@ variable "region" {
 }
 
 variable "github_repository" {
-  description = "owner/name of the repository whose release workflow pushes images."
+  description = "owner/name of the repository whose Ship and Node images workflows hold the roles."
   type        = string
   default     = "AmbientWare/lazycloud"
 }
 
 variable "release_reviewer_user_ids" {
-  description = "GitHub user ids who must approve each image release job in the images environment."
+  description = "GitHub user ids who must approve each image push and node image bake in the images environment."
   type        = list(number)
 
   validation {
@@ -29,17 +29,18 @@ variable "release_reviewer_user_ids" {
 variable "accept_repository_subject_change" {
   description = <<-EOT
     The OIDC subject template this root sets applies to every workflow in
-    the repository, so the reference platform's deploy and release roles,
-    which match repo:<repository>:environment:<name>, stop matching. Set true
-    only after their trust policies match the new subject (see the subject
-    format in main.tf), or Ship to production fails.
+    the repository, so roles that match repo:<repository>:environment:<name>
+    stop matching: main's deploy role (until platform-deployment trusts both
+    subjects) and its release role (the lazycloud-release-assets stack). Set
+    true only after platform-deployment is applied with the dual trust and
+    the cutover no longer needs main's Ship (tasks/deploy.md).
   EOT
   type        = bool
   default     = false
 
   validation {
     condition     = var.accept_repository_subject_change
-    error_message = "Update the reference deploy and release role trusts for the new OIDC subject first, then set accept_repository_subject_change = true."
+    error_message = "Apply platform-deployment with its dual deploy trust first, then set accept_repository_subject_change = true (tasks/deploy.md)."
   }
 }
 

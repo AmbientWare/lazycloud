@@ -1,6 +1,11 @@
 output "release_role_arn" {
-  description = "The role the release workflow assumes."
+  description = "The role Ship pushes images with."
   value       = aws_iam_role.release.arn
+}
+
+output "node_image_role_arn" {
+  description = "The role the Node images workflow bakes with."
+  value       = aws_iam_role.node_images.arn
 }
 
 output "repository_urls" {
