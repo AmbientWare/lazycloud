@@ -2242,7 +2242,15 @@ type ArtifactPage struct {
 
 // ArtifactSummary defines model for ArtifactSummary.
 type ArtifactSummary struct {
-	Count int64 `json:"count"`
+	// AccruedNanos Metered cost since accrued_since, by closed quarter-hour.
+	AccruedNanos int64 `json:"accrued_nanos"`
+
+	// AccruedSince The start of the current UTC month.
+	AccruedSince time.Time `json:"accrued_since"`
+	Count        int64     `json:"count"`
+
+	// EstimatedMonthlyNanos size_bytes for 30 days at the volume storage rate.
+	EstimatedMonthlyNanos int64 `json:"estimated_monthly_nanos"`
 
 	// RetentionSeconds How long new artifacts are kept under the workspace's plan.
 	RetentionSeconds int64 `json:"retention_seconds"`
