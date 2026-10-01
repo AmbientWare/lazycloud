@@ -83,7 +83,7 @@ func (s *Server) DeployApp(ctx context.Context, req DeployAppRequestObject) (Dep
 	if err != nil {
 		return nil, err
 	}
-	if err := s.checkImages(ctx, ws.ID, *req.Body); err != nil {
+	if err := s.checkImages(ctx, ws.ID, req.Body); err != nil {
 		return nil, err
 	}
 	deployment, err := s.owners.Control.Deploy(ctx, ws.ID, req.App, *req.Body)

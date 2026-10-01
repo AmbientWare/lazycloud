@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"net"
 	"net/http"
 	"os/exec"
 	"strings"
@@ -96,7 +95,7 @@ func newFixture(t *testing.T) fixture {
 	im := images.NewImages(pool, exec, images.Config{
 		Registry: registry, Repository: "lazycloud", Insecure: true,
 		ManagedBase: registry + "/library/python:{version}-slim",
-	}, nil)
+	})
 	pushRandom(t, registry+"/library/python:3.12-slim")
 	listener := database.NewListener(pool, slog.New(slog.DiscardHandler), database.ChannelImageBuild, database.ChannelImageBuildLog)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -352,18 +351,18 @@ func TestDeployableNeedsAReadyImageForTheRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := f.images.Deployable(t.Context(), ws, plain.Image.ID, "3.12"); err != nil {
+	if ref, err := f.images.Deployable(t.Context(), ws, plain.Image.ID, "3.12"); err != nil || ref != *plain.Image.Reference {
 		t.Fatal(err)
 	}
 	var invalid *images.InvalidError
-	if err := f.images.Deployable(t.Context(), ws, plain.Image.ID, "3.11"); !errors.As(err, &invalid) {
+	if _, err := f.images.Deployable(t.Context(), ws, plain.Image.ID, "3.11"); !errors.As(err, &invalid) {
 		t.Fatalf("a runtime of another Python version is rejected: %v", err)
 	}
 	built, err := f.images.Resolve(t.Context(), ws, numpy())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := f.images.Deployable(t.Context(), ws, built.Image.ID, "3.12"); !errors.Is(err, images.ErrNotReady) {
+	if _, err := f.images.Deployable(t.Context(), ws, built.Image.ID, "3.12"); !errors.Is(err, images.ErrNotReady) {
 		t.Fatalf("an unbuilt image cannot deploy: %v", err)
 	}
 }
@@ -372,7 +371,8 @@ func TestDefinitionsNeedReadableInputs(t *testing.T) {
 	f := newFixture(t)
 	ws := f.workspace(t, "a")
 	var invalid *images.InvalidError
-	missingBase := apitypes.ImageDefinition{PythonVersion: "3.12", BaseImage: ptr(f.registry + "/nothing:here")}
+	// No managed base is published for 3.11.
+	missingBase := apitypes.ImageDefinition{PythonVersion: "3.11"}
 	if _, err := f.images.Resolve(t.Context(), ws, missingBase); !errors.As(err, &invalid) {
 		t.Fatalf("a base that does not exist is rejected: %v", err)
 	}
@@ -384,21 +384,10 @@ func TestDefinitionsNeedReadableInputs(t *testing.T) {
 	if _, err := f.images.Resolve(t.Context(), ws, gpu); !errors.Is(err, images.ErrUnsupported) {
 		t.Fatalf("GPU builds are unsupported: %v", err)
 	}
-	unreachable := apitypes.ImageDefinition{PythonVersion: "3.12", BaseImage: ptr(unusedAddress(t) + "/python:3.12")}
+	unreachable := apitypes.ImageDefinition{PythonVersion: "3.12", BaseImage: ptr("registry.invalid/python:3.12")}
 	if _, err := f.images.Resolve(t.Context(), ws, unreachable); !errors.Is(err, images.ErrRegistryUnavailable) {
 		t.Fatalf("an unreachable registry is unavailable, not invalid: %v", err)
 	}
-}
-
-func unusedAddress(t *testing.T) string {
-	t.Helper()
-	l, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	address := l.Addr().String()
-	_ = l.Close()
-	return address
 }
 
 func ptr[T any](v T) *T { return &v }

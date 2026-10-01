@@ -144,7 +144,7 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, logger 
 	listener := database.NewListener(pool, logger, database.ChannelHost, database.ChannelTask, database.ChannelClaim, database.ChannelImageBuild, database.ChannelImageBuildLog)
 	store := storage.NewStorage(pool, cfg.objectStore)
 	exec := execution.NewExecution(pool)
-	im := images.NewImages(pool, exec, cfg.images, nil)
+	im := images.NewImages(pool, exec, cfg.images)
 	handler, err := api.NewHandler(api.Owners{
 		Identity: identity.NewIdentity(pool), Control: control.NewControl(pool), Storage: store,
 		Execution: exec, Images: im, Listener: listener,

@@ -1,13 +1,18 @@
 package images
 
 import (
+	"bytes"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/moby/buildkit/frontend/dockerfile/instructions"
+	"github.com/moby/buildkit/frontend/dockerfile/parser"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 )
@@ -24,7 +29,7 @@ const (
 	workdir            = "/workspace"
 	// identityVersion changes when rendering changes what an equal
 	// definition builds, so old identities are not reused.
-	identityVersion = 1
+	identityVersion = 2
 )
 
 // pipBoundaryFlags end a group of merged pip installs: they change how the
@@ -41,7 +46,6 @@ var (
 	pythonVersionPattern = regexp.MustCompile(`^3\.(10|11|12|13|14)(\.[0-9]{1,3})?$`)
 	envNamePattern       = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 	plainEnvValue        = regexp.MustCompile(`^[A-Za-z0-9_./:@+-]+$`)
-	fromLine             = regexp.MustCompile(`(?i)^(\s*FROM(?:\s+--\S+)*\s+)(\S+)(.*)$`)
 )
 
 // spec is a validated definition with its base images still unpinned.
@@ -83,6 +87,9 @@ func validate(def apitypes.ImageDefinition) (spec, error) {
 	}
 	if def.BaseImage != nil {
 		s.base = strings.TrimSpace(*def.BaseImage)
+		if err := oneLine("base_image", s.base); err != nil {
+			return spec{}, err
+		}
 	}
 	if def.Dockerfile != nil && strings.TrimSpace(*def.Dockerfile) != "" {
 		if s.base != "" {
@@ -91,6 +98,11 @@ func validate(def apitypes.ImageDefinition) (spec, error) {
 		s.dockerfile = strings.TrimRight(*def.Dockerfile, "\n") + "\n"
 	}
 	if def.PythonPackages != nil {
+		for _, p := range *def.PythonPackages {
+			if err := oneLine("python_packages", p); err != nil {
+				return spec{}, err
+			}
+		}
 		s.packages = cleanPackages(*def.PythonPackages)
 	}
 	if def.Steps != nil {
@@ -111,6 +123,9 @@ func validate(def apitypes.ImageDefinition) (spec, error) {
 	}
 	if def.Commands != nil {
 		for _, command := range *def.Commands {
+			if strings.ContainsRune(command, 0) {
+				return spec{}, invalid("commands must not contain NUL")
+			}
 			if c := strings.TrimSpace(command); c != "" {
 				s.commands = append(s.commands, c)
 			}
@@ -132,6 +147,15 @@ func validate(def apitypes.ImageDefinition) (spec, error) {
 		s.context = digest
 	}
 	return s, nil
+}
+
+// oneLine refuses a value with a line break or NUL, which could end the
+// Dockerfile instruction it is written into.
+func oneLine(field, value string) error {
+	if strings.ContainsAny(value, "\r\n\x00") {
+		return invalid("%s must not contain line breaks", field)
+	}
+	return nil
 }
 
 func cleanPackages(values []string) []string {
@@ -175,6 +199,11 @@ func cleanStep(step apitypes.ImageStep) (*apitypes.ImageStep, error) {
 	}
 	if step.Groups != nil {
 		groups = *step.Groups
+	}
+	for _, value := range append(slices.Clone(args), groups...) {
+		if err := oneLine("step arguments", value); err != nil {
+			return nil, err
+		}
 	}
 	out := apitypes.ImageStep{Kind: step.Kind}
 	switch step.Kind {
@@ -229,21 +258,13 @@ func (s spec) baseReference(managedBase string) string {
 }
 
 // render writes the Dockerfile. pin maps each FROM image to its reference by
-// digest.
+// digest; see pinDockerfile for what else the result must satisfy.
 func (s spec) render(managedBase string, pin func(string) (string, error)) (string, error) {
 	var lines []string
 	if s.dockerfile != "" {
-		pinned, err := pinDockerfile(s.dockerfile, pin)
-		if err != nil {
-			return "", err
-		}
-		lines = strings.Split(strings.TrimRight(pinned, "\n"), "\n")
+		lines = strings.Split(strings.TrimRight(s.dockerfile, "\n"), "\n")
 	} else {
-		base, err := pin(s.baseReference(managedBase))
-		if err != nil {
-			return "", err
-		}
-		lines = []string{"FROM " + base}
+		lines = []string{"FROM " + s.baseReference(managedBase)}
 		// Project steps copy their manifests into the working directory.
 		if slices.ContainsFunc(s.steps, func(step apitypes.ImageStep) bool { return projectKind(step.Kind) }) {
 			lines = append(lines, "WORKDIR "+workdir)
@@ -255,7 +276,11 @@ func (s spec) render(managedBase string, pin func(string) (string, error)) (stri
 	python, setup := s.pythonSetup(managedBase)
 	lines = append(lines, setup...)
 	managed := python != "python"
-	for _, cmd := range s.installCommands(python, managed) {
+	commands, err := s.installCommands(python, managed)
+	if err != nil {
+		return "", err
+	}
+	for _, cmd := range commands {
 		lines = append(lines, cmd...)
 	}
 	if slices.ContainsFunc(s.steps, func(step apitypes.ImageStep) bool { return projectKind(step.Kind) }) {
@@ -264,7 +289,7 @@ func (s spec) render(managedBase string, pin func(string) (string, error)) (stri
 		check := fmt.Sprintf("import sys; assert sys.version_info[:%d] == (%s), sys.version", len(parts), tuple)
 		lines = append(lines, "RUN python -c "+shellQuote(check))
 	}
-	return strings.Join(lines, "\n") + "\n", nil
+	return pinDockerfile(strings.Join(lines, "\n")+"\n", pin)
 }
 
 // pythonSetup returns the interpreter later steps install with and the
@@ -339,7 +364,7 @@ func managedPythonInstall(version string) string {
 // installCommands renders packages, steps and commands in that order.
 // Consecutive pip or micromamba installs merge into one RUN unless a flag
 // changes how they resolve.
-func (s spec) installCommands(python string, managed bool) [][]string {
+func (s spec) installCommands(python string, managed bool) ([][]string, error) {
 	ordered := make([]apitypes.ImageStep, 0, len(s.steps)+len(s.commands)+1)
 	if len(s.packages) > 0 {
 		packages := s.packages
@@ -377,7 +402,11 @@ func (s spec) installCommands(python string, managed bool) [][]string {
 			}
 		case apitypes.Shell:
 			flush()
-			out = append(out, []string{runShell(*step.Command)})
+			run, err := runShell(*step.Command)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, []string{run})
 		case apitypes.UvProject, apitypes.PoetryProject, apitypes.Pyproject, apitypes.MicromambaEnvironment:
 			flush()
 			out = append(out, projectInstall(step, python))
@@ -386,7 +415,7 @@ func (s spec) installCommands(python string, managed bool) [][]string {
 		}
 	}
 	flush()
-	return out
+	return out, nil
 }
 
 func installCommand(kind apitypes.ImageStepKind, args []string, python string, managed bool) string {
@@ -463,48 +492,118 @@ func projectInstall(step apitypes.ImageStep, python string) []string {
 	}
 }
 
-// runShell writes a shell step; a multi-line command becomes a heredoc so its
-// lines stay one step.
-func runShell(command string) string {
-	if !strings.Contains(command, "\n") {
-		return "RUN " + command
+// runShell writes a shell step as a heredoc, so the Dockerfile parser never
+// reads the command. The delimiter derives from the command, which keeps the
+// rendering deterministic; a command holding that line is refused.
+func runShell(command string) (string, error) {
+	sum := sha256.Sum256([]byte(command))
+	delimiter := "LAZYCLOUD_" + hex.EncodeToString(sum[:8])
+	if slices.Contains(strings.Split(command, "\n"), delimiter) {
+		return "", invalid("a command contains the line %s", delimiter)
 	}
-	return "RUN <<'LAZYCLOUD_STEP'\n" + command + "\nLAZYCLOUD_STEP"
+	return "RUN <<'" + delimiter + "'\n" + command + "\n" + delimiter, nil
 }
 
-// pinDockerfile replaces every FROM image with its pinned reference. Stage
-// names and scratch stay as they are.
+// toolImages are the images rendered steps copy tools from. They are pinned
+// by digest and need no access check.
+func toolImage(ref string) bool { return ref == uvImage || ref == micromambaImage }
+
+// directive matches a parser directive such as "# syntax=...".
+var directive = regexp.MustCompile(`^#\s*[A-Za-z][A-Za-z0-9]*\s*=`)
+
+// pinDockerfile parses the whole Dockerfile with BuildKit's parser and pins
+// every FROM image through pin, which also checks the caller may read it.
+// Every other way to name an image is refused, because nothing would check
+// access to it: parser directives (a "# syntax=" frontend runs as code),
+// COPY --from and RUN --mount from= naming anything but an earlier stage or a
+// tool image, and variables in image names.
 func pinDockerfile(dockerfile string, pin func(string) (string, error)) (string, error) {
-	stages := map[string]bool{"scratch": true}
-	lines := strings.Split(dockerfile, "\n")
-	for n, line := range lines {
-		m := fromLine.FindStringSubmatch(line)
-		if m == nil {
+	data := []byte(dockerfile)
+	if _, _, _, found := parser.DetectSyntax(data); found {
+		return "", invalid("Dockerfile parser directives such as # syntax= are not supported")
+	}
+	for _, line := range strings.Split(dockerfile, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
 			continue
 		}
-		image, suffix := m[2], m[3]
-		if !stages[strings.ToLower(image)] {
-			if strings.Contains(image, "$") {
-				return "", invalid("Dockerfile FROM %s uses a variable; name the image directly", image)
+		if directive.MatchString(line) {
+			return "", invalid("Dockerfile parser directives such as %q are not supported", line)
+		}
+		if !strings.HasPrefix(line, "#") {
+			break
+		}
+	}
+	result, err := parser.Parse(bytes.NewReader(data))
+	if err != nil {
+		return "", invalid("the Dockerfile does not parse: %v", err)
+	}
+	lines := strings.Split(dockerfile, "\n")
+	stages := map[string]bool{}
+	count := 0
+	checkFrom := func(from, what string) error {
+		if from == "" || stages[strings.ToLower(from)] || toolImage(from) {
+			return nil
+		}
+		if n, err := strconv.Atoi(from); err == nil && n >= 0 && n < count {
+			return nil
+		}
+		return invalid("%s names %q; name an image in FROM ... AS <stage> and use the stage", what, from)
+	}
+	for _, node := range result.AST.Children {
+		instruction, err := instructions.ParseInstruction(node)
+		if err != nil {
+			return "", invalid("the Dockerfile does not parse: %v", err)
+		}
+		switch c := instruction.(type) {
+		case *instructions.Stage:
+			base := c.BaseName
+			if strings.Contains(base, "$") {
+				return "", invalid("FROM %s uses a variable; name the image directly", base)
 			}
-			pinned, err := pin(image)
-			if err != nil {
+			if !stages[strings.ToLower(base)] && !strings.EqualFold(base, "scratch") {
+				pinned, err := pin(base)
+				if err != nil {
+					return "", err
+				}
+				from := append([]string{"FROM"}, node.Flags...)
+				from = append(from, pinned)
+				if c.Name != "" {
+					from = append(from, "AS", c.Name)
+				}
+				lines[node.StartLine-1] = strings.Join(from, " ")
+				for n := node.StartLine; n < node.EndLine; n++ {
+					lines[n] = ""
+				}
+			}
+			if c.Name != "" {
+				stages[strings.ToLower(c.Name)] = true
+			}
+			count++
+		case *instructions.CopyCommand:
+			if err := checkFrom(c.From, "COPY --from"); err != nil {
 				return "", err
 			}
-			lines[n] = m[1] + pinned + suffix
-		}
-		if fields := strings.Fields(suffix); len(fields) == 2 && strings.EqualFold(fields[0], "as") {
-			stages[strings.ToLower(fields[1])] = true
+		case *instructions.RunCommand:
+			for _, mount := range instructions.GetMounts(c) {
+				if err := checkFrom(mount.From, "RUN --mount from="); err != nil {
+					return "", err
+				}
+			}
 		}
 	}
 	return strings.Join(lines, "\n"), nil
 }
 
-// dockerfileBase is the image the first FROM names.
+// dockerfileBase is the image the first FROM names, or "" when there is none.
 func dockerfileBase(dockerfile string) string {
-	for _, line := range strings.Split(dockerfile, "\n") {
-		if m := fromLine.FindStringSubmatch(line); m != nil {
-			return m[2]
+	result, err := parser.Parse(strings.NewReader(dockerfile))
+	if err != nil {
+		return ""
+	}
+	for _, node := range result.AST.Children {
+		if strings.EqualFold(node.Value, "from") && node.Next != nil {
+			return node.Next.Value
 		}
 	}
 	return ""
@@ -533,15 +632,14 @@ func imageDigest(dockerfile, architecture string, context []byte) []byte {
 	return sum[:]
 }
 
-// needsBuild reports whether a Dockerfile does more than name its base.
+// needsBuild reports whether a pinned Dockerfile does more than name its
+// base.
 func needsBuild(dockerfile string) bool {
-	for _, line := range strings.Split(strings.TrimSpace(dockerfile), "\n") {
-		if fromLine.MatchString(line) {
-			continue
-		}
+	result, err := parser.Parse(strings.NewReader(dockerfile))
+	if err != nil {
 		return true
 	}
-	return false
+	return len(result.AST.Children) != 1 || !strings.EqualFold(result.AST.Children[0].Value, "from")
 }
 
 func dockerValue(value string) string {
