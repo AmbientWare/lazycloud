@@ -17,10 +17,13 @@ select count(*) from tasks where workload_id = @workload_id and status = 'queued
 -- FOR SHARE holds each upstream's status until the submit commits, so an
 -- upstream either finished before and is read here, or finishes after and
 -- sees the new dependency rows.
-select id, status from tasks
-where id = any(@ids::uuid[]) and workspace_id = @workspace_id
-order by id
-for share;
+-- A succeeded upstream reports the size of the result it hands on.
+select t.id, t.status, coalesce(octet_length(r.data), 0)::bigint as result_bytes
+from tasks t
+left join task_results r on r.task_id = t.id
+where t.id = any(@ids::uuid[]) and t.workspace_id = @workspace_id
+order by t.id
+for share of t;
 
 -- name: ParentTask :one
 select id, root_task_id from tasks where id = @id and workspace_id = @workspace_id;

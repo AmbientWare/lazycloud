@@ -15,7 +15,7 @@ import (
 // PrepareRelease returns a release of the function that runs spec, for calls
 // from a working tree. A release of the function with the same resolved spec
 // is reused, the active one first, so unchanged code reaches the deployed
-// containers. Otherwise an unversioned release is inserted; it is never
+// containers; a stopped workload reuses only working-tree releases. Otherwise an unversioned release is inserted; it is never
 // active and its tasks name it explicitly. A missing app or function is
 // created without being deployed.
 func (c *Control) PrepareRelease(ctx context.Context, workspace identity.WorkspaceID, app, function string, spec apitypes.FunctionSpec) (apitypes.Release, error) {
@@ -40,8 +40,12 @@ func (c *Control) PrepareRelease(ctx context.Context, workspace identity.Workspa
 		if err != nil {
 			return fmt.Errorf("ensure workload: %w", err)
 		}
+		// Execution admits tasks to a deployed version only while the
+		// workload is active, so a stopped workload's calls need a
+		// working-tree release even for unchanged code.
 		existing, err := q.ReleaseByDigest(ctx, ReleaseByDigestParams{
 			WorkloadID: workload.ID, SpecDigest: f.digest, ActiveReleaseID: workload.ActiveReleaseID,
+			UnversionedOnly: WorkloadState(workload.DesiredState) != WorkloadActive,
 		})
 		if err == nil {
 			out = apitypes.Release{

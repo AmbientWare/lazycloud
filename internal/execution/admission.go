@@ -148,20 +148,28 @@ func (e *Execution) Submit(ctx context.Context, req SubmitRequest) ([]Task, erro
 			return err
 		}
 		unmet := make([]int32, len(req.Inputs))
-		var doomed []int
+		var doomed, tooLarge []int
 		for n, input := range req.Inputs {
 			failed := false
-			for _, dep := range input.DependsOn {
-				switch statuses[uuid.UUID(dep)] {
+			size := int64(len(input.Data))
+			for _, dep := range uniqueTasks(input.DependsOn) {
+				upstream := statuses[uuid.UUID(dep)]
+				switch upstream.status {
 				case TaskQueued, TaskRunning:
 					unmet[n]++
 				case TaskFailed, TaskCancelled:
 					failed = true
 				case TaskSucceeded:
+					size += upstream.resultBytes
 				}
 			}
-			if failed {
+			switch {
+			case failed:
 				doomed = append(doomed, n)
+			case unmet[n] == 0 && size > MaxDependentInputBytes:
+				// Every upstream already succeeded, so no later
+				// resolution checks the size.
+				tooLarge = append(tooLarge, n)
 			}
 		}
 
@@ -190,20 +198,25 @@ func (e *Execution) Submit(ctx context.Context, req SubmitRequest) ([]Task, erro
 				CreatedAt: row.CreatedAt,
 			}
 		}
-		if len(doomed) > 0 {
-			ids := make([]uuid.UUID, len(doomed))
-			releases := make([]uuid.UUID, len(doomed))
-			for n, i := range doomed {
+		failNew := func(indexes []int, failure Failure) error {
+			if len(indexes) == 0 {
+				return nil
+			}
+			ids := make([]uuid.UUID, len(indexes))
+			releases := make([]uuid.UUID, len(indexes))
+			for n, i := range indexes {
 				ids[n], releases[n] = rows[i].ID, fn.ReleaseID
 				tasks[i].Status = TaskFailed
-			}
-			failure := Failure{Kind: FailureDependencyFailed, Message: "an upstream task failed or was cancelled"}
-			if err := e.failQueued(ctx, tx, ids, releases, failure, false); err != nil {
-				return err
-			}
-			for _, i := range doomed {
 				tasks[i].Failure = &failure
 			}
+			// New tasks have no dependents yet.
+			return e.failQueued(ctx, tx, ids, releases, failure, false)
+		}
+		if err := failNew(doomed, Failure{Kind: FailureDependencyFailed, Message: "an upstream task failed or was cancelled"}); err != nil {
+			return err
+		}
+		if err := failNew(tooLarge, dependenciesTooLarge); err != nil {
+			return err
 		}
 		if err := database.Notify(ctx, tx, database.ChannelExecution, fn.ReleaseID.String()); err != nil {
 			return err
@@ -232,7 +245,7 @@ func accepting(fn LockFunctionForSubmitRow, explicit bool) bool {
 // lockUpstream holds the upstream tasks FOR SHARE in id order and returns
 // their statuses. Tasks lock in id order everywhere, which follows creation
 // order, so an upstream always locks before its dependents.
-func (e *Execution) lockUpstream(ctx context.Context, q *Queries, workspace identity.WorkspaceID, upstream []uuid.UUID) (map[uuid.UUID]TaskStatus, error) {
+func (e *Execution) lockUpstream(ctx context.Context, q *Queries, workspace identity.WorkspaceID, upstream []uuid.UUID) (map[uuid.UUID]upstreamState, error) {
 	if len(upstream) == 0 {
 		return nil, nil
 	}
@@ -240,9 +253,9 @@ func (e *Execution) lockUpstream(ctx context.Context, q *Queries, workspace iden
 	if err != nil {
 		return nil, fmt.Errorf("lock upstream tasks: %w", err)
 	}
-	statuses := make(map[uuid.UUID]TaskStatus, len(rows))
+	statuses := make(map[uuid.UUID]upstreamState, len(rows))
 	for _, row := range rows {
-		statuses[row.ID] = TaskStatus(row.Status)
+		statuses[row.ID] = upstreamState{status: TaskStatus(row.Status), resultBytes: row.ResultBytes}
 	}
 	for _, id := range upstream {
 		if _, ok := statuses[id]; !ok {
@@ -250,6 +263,23 @@ func (e *Execution) lockUpstream(ctx context.Context, q *Queries, workspace iden
 		}
 	}
 	return statuses, nil
+}
+
+type upstreamState struct {
+	status      TaskStatus
+	resultBytes int64
+}
+
+func uniqueTasks(ids []TaskID) []TaskID {
+	seen := make(map[TaskID]bool, len(ids))
+	out := ids[:0:0]
+	for _, id := range ids {
+		if !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 func recordDependencies(ctx context.Context, q *Queries, inputs []TaskInput, rows []InsertTasksRow) error {

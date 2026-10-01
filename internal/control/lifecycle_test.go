@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/execution"
 )
 
 func withConcurrency(spec apitypes.FunctionSpec, n int) apitypes.FunctionSpec {
@@ -185,6 +186,33 @@ func TestPrepareReleaseReusesMatchingDefinitions(t *testing.T) {
 	}
 	if _, err := c.PrepareRelease(t.Context(), ws, "reports", "other", function("summarize")); err == nil {
 		t.Fatal("prepare accepted a spec named for another function")
+	}
+}
+
+func TestStoppedWorkloadRunsUnchangedWorkingTreeCalls(t *testing.T) {
+	pool, ws := fixture(t)
+	c := NewControl(pool)
+	deployed := deploy(t, c, ws, false, function("summarize"))
+	list, err := c.ListDeployments(t.Context(), ws, DeploymentFilter{}, 10, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.StopDeployment(t.Context(), ws, WorkloadID(list.Deployments[0].Id)); err != nil {
+		t.Fatal(err)
+	}
+	release, err := c.PrepareRelease(t.Context(), ws, "reports", "summarize", function("summarize"))
+	if err != nil || release.Id == deployed.Releases[0].Id || release.Version != nil {
+		t.Fatalf("prepare on a stopped workload %+v %v, want a new unversioned release", release, err)
+	}
+	tasks, err := execution.NewExecution(pool).Submit(t.Context(), execution.SubmitRequest{
+		Workspace: ws, App: "reports", Function: "summarize", Release: &release.Id,
+		Inputs: []execution.TaskInput{{Payload: execution.Payload{Encoding: execution.EncodingJSON, Data: []byte(`{"args": []}`)}}},
+	})
+	if err != nil || len(tasks) != 1 {
+		t.Fatalf("submit to the prepared release %v %v", tasks, err)
+	}
+	if again, err := c.PrepareRelease(t.Context(), ws, "reports", "summarize", function("summarize")); err != nil || again.Id != release.Id {
+		t.Fatalf("second prepare %+v %v, want %v", again, err, release.Id)
 	}
 }
 

@@ -16,7 +16,7 @@ const ensureWorkload = `-- name: EnsureWorkload :one
 insert into workloads (app_id, kind, name, desired_state)
 values ($1, 'function', $2, 'active')
 on conflict (app_id, kind, name) where desired_state <> 'deleted' do update set name = excluded.name
-returning id, active_release_id
+returning id, active_release_id, desired_state
 `
 
 type EnsureWorkloadParams struct {
@@ -27,6 +27,7 @@ type EnsureWorkloadParams struct {
 type EnsureWorkloadRow struct {
 	ID              uuid.UUID
 	ActiveReleaseID *uuid.UUID
+	DesiredState    string
 }
 
 // The live workload, created without a release when missing. Unlike a
@@ -35,7 +36,7 @@ type EnsureWorkloadRow struct {
 func (q *Queries) EnsureWorkload(ctx context.Context, arg EnsureWorkloadParams) (EnsureWorkloadRow, error) {
 	row := q.db.QueryRow(ctx, ensureWorkload, arg.AppID, arg.Name)
 	var i EnsureWorkloadRow
-	err := row.Scan(&i.ID, &i.ActiveReleaseID)
+	err := row.Scan(&i.ID, &i.ActiveReleaseID, &i.DesiredState)
 	return i, err
 }
 
@@ -43,13 +44,15 @@ const releaseByDigest = `-- name: ReleaseByDigest :one
 select r.id, r.version, r.created_at
 from releases r
 where r.workload_id = $1 and r.spec_digest = $2
-order by (r.id = $3::uuid) desc nulls last, r.id desc
+  and (not $3::bool or r.version is null)
+order by (r.id = $4::uuid) desc nulls last, r.id desc
 limit 1
 `
 
 type ReleaseByDigestParams struct {
 	WorkloadID      uuid.UUID
 	SpecDigest      []byte
+	UnversionedOnly bool
 	ActiveReleaseID *uuid.UUID
 }
 
@@ -59,9 +62,15 @@ type ReleaseByDigestRow struct {
 	CreatedAt time.Time
 }
 
-// The active release when it matches, else the newest matching one.
+// The active release when it matches, else the newest matching one. With
+// unversioned_only it matches working-tree releases alone.
 func (q *Queries) ReleaseByDigest(ctx context.Context, arg ReleaseByDigestParams) (ReleaseByDigestRow, error) {
-	row := q.db.QueryRow(ctx, releaseByDigest, arg.WorkloadID, arg.SpecDigest, arg.ActiveReleaseID)
+	row := q.db.QueryRow(ctx, releaseByDigest,
+		arg.WorkloadID,
+		arg.SpecDigest,
+		arg.UnversionedOnly,
+		arg.ActiveReleaseID,
+	)
 	var i ReleaseByDigestRow
 	err := row.Scan(&i.ID, &i.Version, &i.CreatedAt)
 	return i, err

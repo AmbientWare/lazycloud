@@ -162,10 +162,12 @@ func (q *Queries) LockFunctionForSubmit(ctx context.Context, arg LockFunctionFor
 }
 
 const lockUpstreamTasks = `-- name: LockUpstreamTasks :many
-select id, status from tasks
-where id = any($1::uuid[]) and workspace_id = $2
-order by id
-for share
+select t.id, t.status, coalesce(octet_length(r.data), 0)::bigint as result_bytes
+from tasks t
+left join task_results r on r.task_id = t.id
+where t.id = any($1::uuid[]) and t.workspace_id = $2
+order by t.id
+for share of t
 `
 
 type LockUpstreamTasksParams struct {
@@ -174,13 +176,15 @@ type LockUpstreamTasksParams struct {
 }
 
 type LockUpstreamTasksRow struct {
-	ID     uuid.UUID
-	Status string
+	ID          uuid.UUID
+	Status      string
+	ResultBytes int64
 }
 
 // FOR SHARE holds each upstream's status until the submit commits, so an
 // upstream either finished before and is read here, or finishes after and
 // sees the new dependency rows.
+// A succeeded upstream reports the size of the result it hands on.
 func (q *Queries) LockUpstreamTasks(ctx context.Context, arg LockUpstreamTasksParams) ([]LockUpstreamTasksRow, error) {
 	rows, err := q.db.Query(ctx, lockUpstreamTasks, arg.Ids, arg.WorkspaceID)
 	if err != nil {
@@ -190,7 +194,7 @@ func (q *Queries) LockUpstreamTasks(ctx context.Context, arg LockUpstreamTasksPa
 	var items []LockUpstreamTasksRow
 	for rows.Next() {
 		var i LockUpstreamTasksRow
-		if err := rows.Scan(&i.ID, &i.Status); err != nil {
+		if err := rows.Scan(&i.ID, &i.Status, &i.ResultBytes); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

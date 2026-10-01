@@ -146,12 +146,32 @@ func TestOversizedDependencyResultsFailTheDependent(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	task, err := e.readTask(t.Context(), f.workspace, dependent.ID)
+	assertTooLarge := func(id TaskID) {
+		t.Helper()
+		task, err := e.readTask(t.Context(), f.workspace, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if task.Status != TaskFailed || task.Failure == nil || task.Failure.Type != "DependenciesTooLarge" {
+			encoded, _ := json.Marshal(task.Failure)
+			t.Fatalf("dependent %s %s, want failed DependenciesTooLarge", task.Status, encoded)
+		}
+	}
+	assertTooLarge(dependent.ID)
+
+	// The cap holds when every upstream had succeeded before the submit,
+	// and for a rerun, which no later resolution checks.
+	late := submitInputs(t, e, f, dependentInput(ups[0].ID, ups[1].ID, ups[2].ID, ups[3].ID))[0]
+	if late.Status != TaskFailed {
+		t.Fatalf("late dependent submitted as %s", late.Status)
+	}
+	assertTooLarge(late.ID)
+	rerun, err := e.RerunTask(t.Context(), f.workspace, late.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if task.Status != TaskFailed || task.Failure == nil || task.Failure.Type != "DependenciesTooLarge" {
-		encoded, _ := json.Marshal(task.Failure)
-		t.Fatalf("dependent %s %s, want failed DependenciesTooLarge", task.Status, encoded)
+	assertTooLarge(rerun.ID)
+	if fits := submitInputs(t, e, f, dependentInput(ups[0].ID, ups[1].ID))[0]; fits.Status != TaskQueued {
+		t.Fatalf("dependent within the cap is %s", fits.Status)
 	}
 }
