@@ -29,9 +29,18 @@ type Container struct {
 	RunningTasks int
 	CPUMillis    int64
 	MemoryBytes  int64
-	CreatedAt    time.Time
-	ReadyAt      *time.Time
-	StoppedAt    *time.Time
+	// Image is the image reference the release runs, empty when the
+	// release names none.
+	Image     string
+	CreatedAt time.Time
+	ReadyAt   *time.Time
+	StoppedAt *time.Time
+}
+
+// ContainerFilter narrows a container listing. App is an app name.
+type ContainerFilter struct {
+	Live bool
+	App  *string
 }
 
 // ContainerPage is one page of containers, newest first.
@@ -41,8 +50,8 @@ type ContainerPage struct {
 }
 
 // ListContainers returns the workspace's containers newest first, only live
-// ones when live is set.
-func (e *Execution) ListContainers(ctx context.Context, workspace identity.WorkspaceID, live bool, limit int, cursor string) (ContainerPage, error) {
+// ones or one app's when the filter says so.
+func (e *Execution) ListContainers(ctx context.Context, workspace identity.WorkspaceID, filter ContainerFilter, limit int, cursor string) (ContainerPage, error) {
 	before := uuid.Max
 	if cursor != "" {
 		id, err := uuid.Parse(cursor)
@@ -53,8 +62,8 @@ func (e *Execution) ListContainers(ctx context.Context, workspace identity.Works
 	}
 	size := pageSize(limit)
 	var rows []ContainerViewRow
-	if live {
-		r, err := e.queries.ListLiveContainers(ctx, ListLiveContainersParams{WorkspaceID: uuid.UUID(workspace), Before: before, MaxRows: size + 1})
+	if filter.Live {
+		r, err := e.queries.ListLiveContainers(ctx, ListLiveContainersParams{WorkspaceID: uuid.UUID(workspace), App: filter.App, Before: before, MaxRows: size + 1})
 		if err != nil {
 			return ContainerPage{}, fmt.Errorf("list live containers: %w", err)
 		}
@@ -62,7 +71,7 @@ func (e *Execution) ListContainers(ctx context.Context, workspace identity.Works
 			rows = append(rows, ContainerViewRow(row))
 		}
 	} else {
-		r, err := e.queries.ListContainers(ctx, ListContainersParams{WorkspaceID: uuid.UUID(workspace), Before: before, MaxRows: size + 1})
+		r, err := e.queries.ListContainers(ctx, ListContainersParams{WorkspaceID: uuid.UUID(workspace), App: filter.App, Before: before, MaxRows: size + 1})
 		if err != nil {
 			return ContainerPage{}, fmt.Errorf("list containers: %w", err)
 		}
@@ -99,7 +108,7 @@ func containerFrom(row ContainerViewRow) Container {
 		ID: ContainerID(row.ID), App: row.AppName, Function: row.FunctionName, Release: row.ReleaseID,
 		Version: versionOf(row.Version), State: ContainerState(row.State), ExitMessage: row.ExitMessage,
 		Slots: int(row.Slots), RunningTasks: int(row.Running), CPUMillis: row.CpuMillis, MemoryBytes: row.MemoryBytes,
-		CreatedAt: row.CreatedAt, ReadyAt: row.ReadyAt, StoppedAt: row.StoppedAt,
+		Image: row.Image, CreatedAt: row.CreatedAt, ReadyAt: row.ReadyAt, StoppedAt: row.StoppedAt,
 	}
 	if row.StopReason != nil {
 		r := StopReason(*row.StopReason)

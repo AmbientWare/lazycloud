@@ -115,6 +115,37 @@ func TestListTasksPagesNewestFirstWithFilters(t *testing.T) {
 	if _, err := e.ListTasks(t.Context(), f.workspace, TaskFilter{}, 10, "nope"); !errors.Is(err, ErrInvalidCursor) {
 		t.Fatalf("bad cursor error %v", err)
 	}
+
+	// Search matches an id prefix or the function name on the server, and
+	// a LIKE wildcard in it is a literal character.
+	prefix := tasks[2].ID.String()[:35]
+	for _, filter := range []TaskFilter{{Search: &prefix}, {App: &app, Search: &prefix}} {
+		page, err := e.ListTasks(t.Context(), f.workspace, filter, 10, "")
+		if err != nil || len(page.Tasks) != 1 || page.Tasks[0].ID != tasks[2].ID {
+			t.Fatalf("id prefix search %+v: %+v %v", filter, page.Tasks, err)
+		}
+	}
+	name, wildcard := "SUMMAR", "%"
+	if page, err := e.ListTasks(t.Context(), f.workspace, TaskFilter{Search: &name}, 10, ""); err != nil || len(page.Tasks) != 5 {
+		t.Fatalf("function search %d %v, want all five", len(page.Tasks), err)
+	}
+	if page, err := e.ListTasks(t.Context(), f.workspace, TaskFilter{Search: &wildcard}, 10, ""); err != nil || len(page.Tasks) != 0 {
+		t.Fatalf("wildcard search %d %v, want none", len(page.Tasks), err)
+	}
+
+	// A task another task spawned is left out of a root-only listing.
+	exec(t, pool, `update tasks set parent_task_id = $1 where id = $2`, uuid.UUID(tasks[0].ID), uuid.UUID(tasks[1].ID))
+	for _, filter := range []TaskFilter{{RootOnly: true}, {App: &app, RootOnly: true}} {
+		page, err := e.ListTasks(t.Context(), f.workspace, filter, 10, "")
+		if err != nil || len(page.Tasks) != 4 {
+			t.Fatalf("root-only tasks %+v: %d %v, want four", filter, len(page.Tasks), err)
+		}
+		for _, task := range page.Tasks {
+			if task.ID == tasks[1].ID {
+				t.Fatalf("root-only listing has the spawned task")
+			}
+		}
+	}
 }
 
 func TestStopTasksCancelsLiveTasksAndSkipsTheRest(t *testing.T) {
@@ -211,9 +242,21 @@ func TestStopContainerLosesItsAttemptsForRetry(t *testing.T) {
 		t.Fatalf("stop of unknown container %v", err)
 	}
 
-	page, err := e.ListContainers(t.Context(), f.workspace, true, 10, "")
+	page, err := e.ListContainers(t.Context(), f.workspace, ContainerFilter{Live: true}, 10, "")
 	if err != nil || len(page.Containers) != 1 || page.Containers[0].Function != "summarize" {
 		t.Fatalf("live containers %+v %v", page.Containers, err)
+	}
+	app, other := "reports", "other"
+	if page, err := e.ListContainers(t.Context(), f.workspace, ContainerFilter{App: &app}, 10, ""); err != nil || len(page.Containers) != 1 {
+		t.Fatalf("app containers %+v %v", page.Containers, err)
+	}
+	if page, err := e.ListContainers(t.Context(), f.workspace, ContainerFilter{App: &other}, 10, ""); err != nil || len(page.Containers) != 0 {
+		t.Fatalf("another app's containers %+v %v", page.Containers, err)
+	}
+	// A container shows the image its release runs.
+	exec(t, pool, `update releases set spec = spec || '{"image": {"python_version": "3.12", "reference": "registry.example/fn@sha256:ab"}}'`)
+	if c, err := e.GetContainer(t.Context(), f.workspace, container); err != nil || c.Image != "registry.example/fn@sha256:ab" {
+		t.Fatalf("container image %q %v", c.Image, err)
 	}
 }
 

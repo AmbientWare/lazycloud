@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/billing"
 
 	"github.com/google/uuid"
@@ -307,4 +308,33 @@ func servingDesired(row ServingReleasesRow, active int) int {
 
 func clampInt32(n int) int32 {
 	return int32(min(max(n, 0), 1<<31-1)) //nolint:gosec // clamped above
+}
+
+// AdmitCold asks billing whether the workspace may start a container of
+// spec for a request that has none, so the edge can refuse the request at
+// once instead of letting it wait for a container planning will not start.
+// It returns billing's PaymentRequiredError or LimitError.
+func (e *Execution) AdmitCold(ctx context.Context, workspace uuid.UUID, spec apitypes.FunctionSpec) error {
+	req := billing.Request{Workspace: workspace, Cold: true}
+	if r := spec.Resources; r.GpuCount != nil && *r.GpuCount > 0 {
+		req.GPUs = *r.GpuCount
+	} else if r.Gpu != nil && len(*r.Gpu) > 0 {
+		req.GPUs = 1
+	}
+	if r := spec.Resources; r.Gpu != nil {
+		for _, m := range *r.Gpu {
+			req.GPUModels = append(req.GPUModels, billing.GPUType(m))
+		}
+	}
+	if p := spec.Placement; p != nil {
+		req.Pinned = (p.Region != nil && *p.Region != "") || (p.AvailabilityZone != nil && *p.AvailabilityZone != "")
+	}
+	err := pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
+		_, err := billing.Admit(ctx, tx, req)
+		return err //nolint:wrapcheck // billing's refusal passes through typed
+	})
+	if err != nil {
+		return fmt.Errorf("admit a cold request: %w", err)
+	}
+	return nil
 }

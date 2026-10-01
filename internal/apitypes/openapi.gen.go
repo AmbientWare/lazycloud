@@ -2242,7 +2242,15 @@ type ArtifactPage struct {
 
 // ArtifactSummary defines model for ArtifactSummary.
 type ArtifactSummary struct {
-	Count int64 `json:"count"`
+	// AccruedNanos Metered cost since accrued_since, by closed quarter-hour.
+	AccruedNanos int64 `json:"accrued_nanos"`
+
+	// AccruedSince The start of the current UTC month.
+	AccruedSince time.Time `json:"accrued_since"`
+	Count        int64     `json:"count"`
+
+	// EstimatedMonthlyNanos size_bytes for 30 days at the volume storage rate.
+	EstimatedMonthlyNanos int64 `json:"estimated_monthly_nanos"`
 
 	// RetentionSeconds How long new artifacts are kept under the workspace's plan.
 	RetentionSeconds int64 `json:"retention_seconds"`
@@ -2727,9 +2735,12 @@ type Container struct {
 	ExitMessage *string            `json:"exit_message,omitempty"`
 	Function    WorkloadName       `json:"function"`
 	Id          openapi_types.UUID `json:"id"`
-	MemoryMib   int64              `json:"memory_mib"`
-	ReadyAt     *time.Time         `json:"ready_at,omitempty"`
-	ReleaseId   openapi_types.UUID `json:"release_id"`
+
+	// Image The image reference the release runs.
+	Image     *string            `json:"image,omitempty"`
+	MemoryMib int64              `json:"memory_mib"`
+	ReadyAt   *time.Time         `json:"ready_at,omitempty"`
+	ReleaseId openapi_types.UUID `json:"release_id"`
 
 	// RunningTasks Attempts running now.
 	RunningTasks int            `json:"running_tasks"`
@@ -3411,10 +3422,13 @@ type HttpWorkload struct {
 	App AppName `json:"app"`
 
 	// DomainUrl The custom hostname, once its registration is ready.
-	DomainUrl *string      `json:"domain_url,omitempty"`
-	Kind      HttpKind     `json:"kind"`
-	Name      WorkloadName `json:"name"`
-	Release   Release      `json:"release"`
+	DomainUrl *string `json:"domain_url,omitempty"`
+
+	// InvokePath The workload on the API host; append the request's path.
+	InvokePath string       `json:"invoke_path"`
+	Kind       HttpKind     `json:"kind"`
+	Name       WorkloadName `json:"name"`
+	Release    Release      `json:"release"`
 
 	// ReleaseUrl Addresses the release by id.
 	ReleaseUrl string            `json:"release_url"`
@@ -3422,6 +3436,9 @@ type HttpWorkload struct {
 
 	// Url Follows the active release across deploys.
 	Url string `json:"url"`
+
+	// VersionInvokePath The API-host path pinned to the release's version.
+	VersionInvokePath string `json:"version_invoke_path"`
 
 	// VersionUrl Pinned to the release's version.
 	VersionUrl string `json:"version_url"`
@@ -4080,7 +4097,10 @@ type Release struct {
 	CreatedAt time.Time          `json:"created_at"`
 	Function  WorkloadName       `json:"function"`
 	Id        openapi_types.UUID `json:"id"`
-	Spec      FunctionSpec       `json:"spec"`
+
+	// InvokePath The HTTP workload on the API host, following the active release.
+	InvokePath *string      `json:"invoke_path,omitempty"`
+	Spec       FunctionSpec `json:"spec"`
 
 	// Url Where an HTTP workload answers, following the active release.
 	Url *string `json:"url,omitempty"`
@@ -4491,9 +4511,12 @@ type Token struct {
 	Id        openapi_types.UUID `json:"id"`
 
 	// LastUsedAt Recorded within 30 seconds of use; absent if never used.
-	LastUsedAt *time.Time  `json:"last_used_at,omitempty"`
-	Name       string      `json:"name"`
-	Status     TokenStatus `json:"status"`
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+	Name       string     `json:"name"`
+
+	// Prefix The token's first characters; empty for older tokens.
+	Prefix string      `json:"prefix"`
+	Status TokenStatus `json:"status"`
 
 	// WorkspaceId Set when the token reaches only this workspace.
 	WorkspaceId *openapi_types.UUID `json:"workspace_id,omitempty"`
@@ -5131,7 +5154,10 @@ type ListComputeWorkloadsParams struct {
 // ListContainersParams defines parameters for ListContainers.
 type ListContainersParams struct {
 	// Live Only containers that have not stopped.
-	Live  *bool      `form:"live,omitempty" json:"live,omitempty"`
+	Live *bool `form:"live,omitempty" json:"live,omitempty"`
+
+	// App Only the containers of this app's workloads.
+	App   *AppName   `form:"app,omitempty" json:"app,omitempty"`
 	Limit *PageLimit `form:"limit,omitempty" json:"limit,omitempty"`
 
 	// Cursor The next_cursor of the previous page.
@@ -5334,7 +5360,13 @@ type ListTasksParams struct {
 	// Function Requires `app`.
 	Function *WorkloadName `form:"function,omitempty" json:"function,omitempty"`
 	Status   *TaskStatus   `form:"status,omitempty" json:"status,omitempty"`
-	Limit    *PageLimit    `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// RootOnly Only tasks no other task spawned.
+	RootOnly *bool `form:"root_only,omitempty" json:"root_only,omitempty"`
+
+	// Search A task id prefix or part of a function name.
+	Search *string    `form:"search,omitempty" json:"search,omitempty"`
+	Limit  *PageLimit `form:"limit,omitempty" json:"limit,omitempty"`
 
 	// Cursor The next_cursor of the previous page.
 	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`

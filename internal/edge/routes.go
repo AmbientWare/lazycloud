@@ -183,8 +183,14 @@ func (w *workload) activeAuthorized() bool { return w.active != nil && w.active.
 // resolve finds what a request host names: a custom hostname, a deployment
 // label (latest or a pinned version), a release id or a container id.
 func (e *Edge) resolve(ctx context.Context, host string) (target, error) {
-	arrived := time.Now()
 	label, under := e.urls.hostLabel(host)
+	return e.resolveLabel(ctx, label, under)
+}
+
+// resolveLabel resolves a host label under the edge's base domain, or a
+// custom hostname when under is false.
+func (e *Edge) resolveLabel(ctx context.Context, label string, under bool) (target, error) {
+	arrived := time.Now()
 	if under {
 		if id, err := uuid.Parse(label); err == nil {
 			return e.resolveID(ctx, id)
