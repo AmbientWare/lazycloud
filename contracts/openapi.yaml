@@ -799,6 +799,258 @@ paths:
               schema: { type: string, format: binary }
         default: { $ref: "#/components/responses/Error" }
 
+  # Billing: plans, prices, credit, spending controls and usage cost. The
+  # account is the caller's: a workspace bills its owner. Every operation
+  # except the catalog needs an account credential, not a token restricted
+  # to one workspace. The Stripe webhook (/webhooks/stripe) is served outside
+  # this document.
+
+  /v1/pricing:
+    get:
+      tags: [billing]
+      operationId: getPricing
+      summary: Published plans, limits and metered rates
+      security: []
+      parameters:
+        - name: at
+          in: query
+          description: Answer with the rates in force at this instant.
+          schema: { type: string, format: date-time }
+      responses:
+        "200":
+          description: The pricing catalog
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PricingCatalog" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/billing:
+    get:
+      tags: [billing]
+      operationId: getBilling
+      summary: The caller's plan, payment standing, credit and limits
+      responses:
+        "200":
+          description: The billing account
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BillingAccount" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/billing/preferences:
+    put:
+      tags: [billing]
+      operationId: setBillingPreferences
+      summary: Set the monthly usage limit and automatic reload
+      description: >-
+        Turning automatic reload on needs a saved payment method. A limit of
+        0 blocks new work.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BillingPreferences" }
+      responses:
+        "200":
+          description: The billing account with the new preferences
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BillingAccount" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/billing/automatic-reload/resume:
+    post:
+      tags: [billing]
+      operationId: resumeAutomaticReload
+      summary: Resume automatic reload after a declined or unauthenticated payment
+      responses:
+        "200":
+          description: The billing account
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BillingAccount" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/billing/plan:
+    put:
+      tags: [billing]
+      operationId: changePlan
+      summary: Move the account onto published plan terms
+      description: >-
+        A dearer plan applies at once and charges the prorated difference; a
+        cheaper one, Free included, applies at renewal. Choosing the current
+        terms cancels a scheduled change. Responds 409 while another change
+        is being settled and 402 when the payment method is refused.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PlanChangeRequest" }
+      responses:
+        "200":
+          description: >-
+            The billing account. plan_change_pending is true when the
+            provider's answer is not known yet; the change is retried.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BillingAccount" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/billing/payment-method-sessions:
+    post:
+      tags: [billing]
+      operationId: startPaymentMethodSetup
+      summary: Open Stripe's page for saving a card
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/HostedSessionRequest" }
+      responses:
+        "201":
+          description: Where to send the person
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HostedSession" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/billing/portal-sessions:
+    post:
+      tags: [billing]
+      operationId: startBillingPortal
+      summary: Open Stripe's page for invoices and the saved card
+      description: Responds 404 for an account with no Stripe customer yet.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/HostedSessionRequest" }
+      responses:
+        "201":
+          description: Where to send the person
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HostedSession" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/billing/credit-purchases:
+    post:
+      tags: [billing]
+      operationId: createCreditPurchase
+      summary: Buy prepaid credit through Stripe Checkout
+      description: >-
+        Needs a saved payment method. Repeating a request_key returns the
+        same purchase.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreditPurchaseRequest" }
+      responses:
+        "201":
+          description: The purchase and its checkout page
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CreditPurchase" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/billing/credit-purchases/{purchase}:
+    parameters:
+      - name: purchase
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [billing]
+      operationId: getCreditPurchase
+      summary: One credit purchase
+      responses:
+        "200":
+          description: The purchase
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CreditPurchase" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/billing/costs:
+    get:
+      tags: [billing]
+      operationId: listCosts
+      summary: What the account's usage cost, grouped by app, workload or task
+      description: >-
+        Covers every workspace the account pays for. Rows are ordered by cost,
+        most first; cost_nanos totals the whole window.
+      parameters:
+        - $ref: "#/components/parameters/CostStart"
+        - $ref: "#/components/parameters/CostEnd"
+        - name: group_by
+          in: query
+          schema: { $ref: "#/components/schemas/UsageCostGroup" }
+        - name: workspace_id
+          in: query
+          schema: { type: string, format: uuid }
+        - name: app_id
+          in: query
+          description: Only this app's usage.
+          schema: { type: string, format: uuid }
+        - name: category
+          in: query
+          schema: { $ref: "#/components/schemas/UsageCostCategory" }
+        - $ref: "#/components/parameters/Cursor"
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+      responses:
+        "200":
+          description: One page of cost rows
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UsageCostPage" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/billing/cost-series:
+    get:
+      tags: [billing]
+      operationId: getCostSeries
+      summary: The account's spend over a window, interval by interval
+      description: >-
+        Intervals are whole buckets from start; every interval is present,
+        including empty ones, and the last ends at end.
+      parameters:
+        - $ref: "#/components/parameters/CostStart"
+        - $ref: "#/components/parameters/CostEnd"
+        - name: bucket
+          in: query
+          schema: { $ref: "#/components/schemas/UsageCostBucket" }
+      responses:
+        "200":
+          description: The series
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UsageCostSeries" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/billing/accounts/{user}/complimentary:
+    parameters:
+      - name: user
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    put:
+      tags: [billing]
+      operationId: setComplimentary
+      summary: Waive an account's usage charges, or stop waiving them
+      description: Platform administrators only.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ComplimentaryRequest" }
+      responses:
+        "204":
+          description: Set
+        default: { $ref: "#/components/responses/Error" }
+
 components:
   securitySchemes:
     bearer:
@@ -875,6 +1127,17 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+    CostStart:
+      name: start
+      in: query
+      required: true
+      schema: { type: string, format: date-time }
+    CostEnd:
+      name: end
+      in: query
+      required: true
+      description: After start, and at most 400 days later.
+      schema: { type: string, format: date-time }
 
   responses:
     Error:
@@ -905,6 +1168,10 @@ components:
         - task_not_finished
         - unavailable
         - internal
+        # Billing: the account must pay or add credit (HTTP 402), or it
+        # already holds what its plan allows (HTTP 409).
+        - payment_required
+        - limit_reached
 
     Name:
       type: string
@@ -1840,3 +2107,528 @@ components:
           description: One line of build output without its trailing newline.
           type: string
         time: { type: string, format: date-time }
+
+    # Billing
+
+    PlanId:
+      type: string
+      enum: [free, team, business]
+
+    TermsVersion:
+      description: The published terms of a plan; a change names the exact terms chosen.
+      type: string
+      enum: [free-v2, team-v3, business-v2]
+
+    BillingOwner:
+      description: >-
+        Who pays for the machine a container ran on: the platform's fleet
+        bills catalog rates, a connected cloud account a management fee, and
+        self-hosted machines nothing.
+      type: string
+      enum: [platform_fleet, connected_cloud, self_hosted]
+
+    RateClass:
+      type: string
+      enum: [auto, pinned, non_preemptible, pinned_non_preemptible]
+
+    PlanEntitlements:
+      type: object
+      required:
+        - max_concurrent_cpu_containers
+        - max_concurrent_gpus
+        - gpu_types
+        - connected_cloud
+        - custom_domains
+        - self_hosted
+        - retention_days
+        - region_selection
+        - max_workspace_disk_gib
+      properties:
+        max_concurrent_cpu_containers: { type: integer }
+        max_concurrent_gpus: { type: integer }
+        gpu_types:
+          description: The GPU models the account may ask for.
+          type: array
+          items: { type: string }
+        max_workspaces:
+          description: Absent when unlimited.
+          type: integer
+        max_members:
+          description: >-
+            Distinct people across the account's workspaces, the owner
+            included. Absent when unlimited.
+          type: integer
+        connected_cloud: { type: boolean }
+        custom_domains: { type: boolean }
+        self_hosted: { type: boolean }
+        retention_days:
+          description: Log and artifact retention.
+          type: integer
+        region_selection: { type: boolean }
+        max_workspace_disk_gib:
+          description: Declared disk size one workspace may hold; 0 is no disks.
+          type: integer
+
+    PublishedPlan:
+      type: object
+      required: [id, terms_version, name, summary, monthly_nanos, included_nanos, entitlements, terms]
+      properties:
+        id: { $ref: "#/components/schemas/PlanId" }
+        terms_version: { $ref: "#/components/schemas/TermsVersion" }
+        name: { type: string }
+        summary: { type: string }
+        monthly_nanos: { type: integer, format: int64 }
+        included_nanos:
+          description: Usage credit each month.
+          type: integer
+          format: int64
+        entitlements: { $ref: "#/components/schemas/PlanEntitlements" }
+        terms:
+          type: array
+          items: { type: string }
+
+    ShapeRate:
+      type: object
+      required: [billing_owner, nanos_per_container_hour, nanos_per_cpu_core_hour, nanos_per_memory_gib_hour]
+      properties:
+        billing_owner: { $ref: "#/components/schemas/BillingOwner" }
+        nanos_per_container_hour: { type: integer, format: int64 }
+        nanos_per_cpu_core_hour: { type: integer, format: int64 }
+        nanos_per_memory_gib_hour: { type: integer, format: int64 }
+
+    GpuRate:
+      type: object
+      required: [gpu_type, nanos_per_card_hour]
+      properties:
+        gpu_type: { type: string }
+        nanos_per_card_hour: { $ref: "#/components/schemas/CardRates" }
+
+    CardRates:
+      description: What one card costs an hour on each kind of capacity.
+      type: object
+      required: [platform_fleet, connected_cloud, self_hosted]
+      properties:
+        platform_fleet: { type: integer, format: int64 }
+        connected_cloud: { type: integer, format: int64 }
+        self_hosted: { type: integer, format: int64 }
+
+    ComputeRate:
+      type: object
+      required:
+        - billing_owner
+        - nanos_per_container_hour
+        - nanos_per_cpu_core_hour
+        - nanos_per_memory_gib_hour
+        - nanos_per_gpu_card_hour
+      properties:
+        billing_owner: { $ref: "#/components/schemas/BillingOwner" }
+        gpu_type:
+          description: Absent for containers without a GPU.
+          type: string
+        nanos_per_container_hour: { type: integer, format: int64 }
+        nanos_per_cpu_core_hour: { type: integer, format: int64 }
+        nanos_per_memory_gib_hour: { type: integer, format: int64 }
+        nanos_per_gpu_card_hour: { type: integer, format: int64 }
+
+    PlacementRate:
+      type: object
+      required:
+        - rate_class
+        - effective_at
+        - pinned
+        - preemptible
+        - name
+        - cpu_memory_multiplier
+        - gpu_multiplier
+        - compute_rates
+      properties:
+        rate_class: { $ref: "#/components/schemas/RateClass" }
+        effective_at: { type: string, format: date-time }
+        pinned: { type: boolean }
+        preemptible: { type: boolean }
+        name: { type: string }
+        cpu_memory_multiplier: { type: number }
+        gpu_multiplier: { type: number }
+        compute_rates:
+          type: array
+          items: { $ref: "#/components/schemas/ComputeRate" }
+
+    TrialTerms:
+      type: object
+      required: [amount_nanos, duration_days, one_time]
+      properties:
+        amount_nanos: { type: integer, format: int64 }
+        duration_days: { type: integer }
+        one_time: { type: boolean }
+
+    NoPaymentMethodTerms:
+      description: The limits of an account without a saved card.
+      type: object
+      required: [max_concurrent_cpu_containers, max_concurrent_gpus, gpu_types]
+      properties:
+        max_concurrent_cpu_containers: { type: integer }
+        max_concurrent_gpus: { type: integer }
+        gpu_types:
+          type: array
+          items: { type: string }
+
+    PlatformRate:
+      type: object
+      required: [nanos_per_egress_gib, nanos_per_volume_gib_month, storage_month_seconds]
+      properties:
+        nanos_per_egress_gib: { type: integer, format: int64 }
+        nanos_per_volume_gib_month: { type: integer, format: int64 }
+        storage_month_seconds: { type: integer }
+
+    DiskRate:
+      type: object
+      required: [nanos_per_stored_gib_month, nanos_per_attached_gib_month]
+      properties:
+        nanos_per_stored_gib_month: { type: integer, format: int64 }
+        nanos_per_attached_gib_month: { type: integer, format: int64 }
+
+    CreditPurchaseTerms:
+      type: object
+      required: [minimum_cents, maximum_cents]
+      properties:
+        minimum_cents: { type: integer }
+        maximum_cents: { type: integer }
+
+    PricingCatalog:
+      type: object
+      required:
+        - trial
+        - pricing_version
+        - metered_rates_effective_at
+        - currency
+        - connected_cloud_management_fee_percent
+        - no_payment_method
+        - plans
+        - shape_rates
+        - gpu_rates
+        - platform_rate
+        - placement_rates
+        - credit_purchase
+      properties:
+        trial: { $ref: "#/components/schemas/TrialTerms" }
+        pricing_version: { type: string }
+        metered_rates_effective_at: { type: string, format: date-time }
+        currency: { type: string }
+        connected_cloud_management_fee_percent: { type: integer }
+        no_payment_method: { $ref: "#/components/schemas/NoPaymentMethodTerms" }
+        plans:
+          type: array
+          items: { $ref: "#/components/schemas/PublishedPlan" }
+        shape_rates:
+          description: Automatic placement rates for containers without a GPU.
+          type: array
+          items: { $ref: "#/components/schemas/ShapeRate" }
+        gpu_rates:
+          type: array
+          items: { $ref: "#/components/schemas/GpuRate" }
+        platform_rate: { $ref: "#/components/schemas/PlatformRate" }
+        # Absent at an instant before disks were first priced.
+        disk_rate: { $ref: "#/components/schemas/DiskRate" }
+        placement_rates:
+          type: array
+          items: { $ref: "#/components/schemas/PlacementRate" }
+        credit_purchase: { $ref: "#/components/schemas/CreditPurchaseTerms" }
+
+    BillingStatus:
+      description: past_due refuses new work until the card on file is updated.
+      type: string
+      enum: [active, past_due]
+
+    BillingPlan:
+      type: object
+      required: [id, name, terms_version, monthly_nanos, included_nanos]
+      properties:
+        id: { $ref: "#/components/schemas/PlanId" }
+        name: { type: string }
+        terms_version: { $ref: "#/components/schemas/TermsVersion" }
+        monthly_nanos: { type: integer, format: int64 }
+        included_nanos: { type: integer, format: int64 }
+        scheduled_terms_version: { $ref: "#/components/schemas/TermsVersion" }
+        scheduled_change_at: { type: string, format: date-time }
+        period_started_at:
+          description: The subscription's billing period; absent on Free.
+          type: string
+          format: date-time
+        period_ended_at: { type: string, format: date-time }
+
+    EntitlementUsage:
+      type: object
+      required: [concurrent_cpu_containers, concurrent_gpus, workspaces, members, connected_clouds, custom_domains]
+      properties:
+        concurrent_cpu_containers: { type: integer }
+        concurrent_gpus: { type: integer }
+        workspaces: { type: integer }
+        members: { type: integer }
+        connected_clouds: { type: integer }
+        custom_domains: { type: integer }
+
+    UsageBudget:
+      type: object
+      required: [month_started_at, month_ended_at, spent_nanos]
+      properties:
+        month_started_at: { type: string, format: date-time }
+        month_ended_at: { type: string, format: date-time }
+        limit_nanos:
+          description: Absent without a monthly usage limit.
+          type: integer
+          format: int64
+        spent_nanos: { type: integer, format: int64 }
+        available_nanos: { type: integer, format: int64 }
+
+    BillingPreferences:
+      type: object
+      required: [reload_enabled, reload_threshold_cents, reload_amount_cents]
+      properties:
+        monthly_usage_limit_nanos:
+          description: >-
+            Stops new work once the month's usage reaches it; resets on the
+            first of each month, UTC. Absent for no limit.
+          type: integer
+          format: int64
+          minimum: 0
+          maximum: 9007199254740991
+        reload_enabled: { type: boolean }
+        reload_threshold_cents: { type: integer, minimum: 0, maximum: 100000 }
+        reload_amount_cents: { type: integer, minimum: 500, maximum: 100000 }
+
+    ReloadPauseReason:
+      type: string
+      enum: [declined, action_required]
+
+    AutomaticReload:
+      type: object
+      required: [month_started_at, month_ended_at, monthly_payment_committed_cents]
+      properties:
+        paused_purchase_id: { type: string, format: uuid }
+        pause_reason: { $ref: "#/components/schemas/ReloadPauseReason" }
+        pending_purchase_id: { type: string, format: uuid }
+        month_started_at: { type: string, format: date-time }
+        month_ended_at: { type: string, format: date-time }
+        monthly_payment_committed_cents: { type: integer, format: int64 }
+
+    BillingAccount:
+      type: object
+      required:
+        - status
+        - currency
+        - plan
+        - portal_available
+        - payment_method_on_file
+        - entitlements
+        - usage
+        - balance_nanos
+        - usage_budget
+        - preferences
+        - automatic_reload
+        - plan_change_pending
+      properties:
+        status: { $ref: "#/components/schemas/BillingStatus" }
+        currency: { type: string }
+        plan: { $ref: "#/components/schemas/BillingPlan" }
+        portal_available:
+          description: Stripe holds a customer for the account, so invoices can be shown.
+          type: boolean
+        payment_method_on_file: { type: boolean }
+        complimentary_since:
+          description: When an administrator waived the account's usage charges.
+          type: string
+          format: date-time
+        # The limits the account is held to now: its plan's, reduced without
+        # a saved card, or Business while complimentary.
+        entitlements: { $ref: "#/components/schemas/PlanEntitlements" }
+        usage: { $ref: "#/components/schemas/EntitlementUsage" }
+        balance_nanos:
+          description: Prepaid credit left; negative is usage the next credit covers first.
+          type: integer
+          format: int64
+        usage_budget: { $ref: "#/components/schemas/UsageBudget" }
+        preferences: { $ref: "#/components/schemas/BillingPreferences" }
+        automatic_reload: { $ref: "#/components/schemas/AutomaticReload" }
+        plan_change_pending:
+          description: A plan change is waiting on Stripe's answer.
+          type: boolean
+
+    PlanChangeRequest:
+      type: object
+      required: [plan, terms_version]
+      properties:
+        plan: { $ref: "#/components/schemas/PlanId" }
+        terms_version: { $ref: "#/components/schemas/TermsVersion" }
+
+    HostedSessionRequest:
+      type: object
+      required: [return_url]
+      properties:
+        return_url:
+          description: A dashboard page; other origins are refused.
+          type: string
+          minLength: 1
+          maxLength: 2048
+        cancel_url:
+          description: Where to return on abandoning the page; defaults to return_url.
+          type: string
+          maxLength: 2048
+
+    HostedSession:
+      type: object
+      required: [url]
+      properties:
+        url: { type: string }
+
+    CreditPurchaseRequest:
+      type: object
+      required: [request_key, amount_cents, return_url]
+      properties:
+        request_key: { type: string, format: uuid }
+        amount_cents: { type: integer, minimum: 500, maximum: 100000 }
+        return_url: { type: string, minLength: 1, maxLength: 2048 }
+        cancel_url: { type: string, maxLength: 2048 }
+
+    CreditPaymentStatus:
+      type: string
+      enum: [pending, action_required, succeeded, declined, cancelled]
+
+    CreditPurchase:
+      type: object
+      required: [id, kind, amount_nanos, status, reversed_nanos, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        kind:
+          type: string
+          enum: [manual, automatic]
+        amount_nanos: { type: integer, format: int64 }
+        status: { $ref: "#/components/schemas/CreditPaymentStatus" }
+        checkout_url:
+          description: Stripe Checkout, while the purchase is pending.
+          type: string
+        funded_at: { type: string, format: date-time }
+        reversed_nanos:
+          description: Refunded or disputed credit taken back.
+          type: integer
+          format: int64
+        created_at: { type: string, format: date-time }
+
+    ComplimentaryRequest:
+      type: object
+      required: [complimentary]
+      properties:
+        complimentary: { type: boolean }
+
+    UsageCostGroup:
+      type: string
+      enum: [app, workload, task]
+      default: app
+
+    UsageCostCategory:
+      description: >-
+        Usage no app explains: image builds, and usage of resources outside
+        any app.
+      type: string
+      enum: [image-build, unattributed]
+
+    UsageCostBucket:
+      type: string
+      enum: [hour, day]
+      default: day
+
+    BilledDimension:
+      description: The invoice line a component rolls up into.
+      type: string
+      enum: [compute_runtime, network_egress, volume_storage, disk]
+
+    UsageCostComponentKind:
+      description: >-
+        What a quantity counts: container_time in seconds, cpu in
+        core-seconds, memory in GiB-seconds, gpu in card-seconds.
+      type: string
+      enum: [container_time, cpu, memory, gpu]
+
+    UsageCostComponent:
+      type: object
+      required: [dimension, component, quantity, cost_nanos]
+      properties:
+        dimension: { $ref: "#/components/schemas/BilledDimension" }
+        component: { $ref: "#/components/schemas/UsageCostComponentKind" }
+        quantity: { type: number }
+        cost_nanos: { type: integer, format: int64 }
+
+    UsageCostRow:
+      description: >-
+        One app, workload or task over the window. Every level carries the
+        ids above it. A name is absent when its app or workload was deleted.
+      type: object
+      required: [workspace_id, cost_nanos, components]
+      properties:
+        workspace_id: { type: string, format: uuid }
+        workspace_name: { type: string }
+        app_id: { type: string, format: uuid }
+        app_name: { type: string }
+        workload_id: { type: string, format: uuid }
+        workload_name: { type: string }
+        workload_kind: { type: string }
+        task_id: { type: string, format: uuid }
+        category: { $ref: "#/components/schemas/UsageCostCategory" }
+        cost_nanos: { type: integer, format: int64 }
+        components:
+          type: array
+          items: { $ref: "#/components/schemas/UsageCostComponent" }
+
+    UsageCostPage:
+      type: object
+      required: [start, end, currency, group_by, cost_nanos, rows]
+      properties:
+        start: { type: string, format: date-time }
+        end: { type: string, format: date-time }
+        currency: { type: string }
+        group_by: { $ref: "#/components/schemas/UsageCostGroup" }
+        cost_nanos:
+          description: The whole window's cost, not the page's.
+          type: integer
+          format: int64
+        rows:
+          type: array
+          items: { $ref: "#/components/schemas/UsageCostRow" }
+        next_cursor:
+          description: Present when more rows follow.
+          type: string
+
+    UsageCostInterval:
+      type: object
+      required: [started_at, ended_at, cost_nanos, dimensions]
+      properties:
+        started_at: { type: string, format: date-time }
+        ended_at: { type: string, format: date-time }
+        cost_nanos: { type: integer, format: int64 }
+        dimensions:
+          description: Only the invoice lines metered in the interval.
+          type: array
+          items: { $ref: "#/components/schemas/UsageCostDimension" }
+
+    UsageCostDimension:
+      type: object
+      required: [dimension, cost_nanos]
+      properties:
+        dimension: { $ref: "#/components/schemas/BilledDimension" }
+        cost_nanos: { type: integer, format: int64 }
+
+    UsageCostSeries:
+      type: object
+      required: [start, end, currency, bucket, cost_nanos, subscription_credit_nanos, intervals]
+      properties:
+        start: { type: string, format: date-time }
+        end: { type: string, format: date-time }
+        currency: { type: string }
+        bucket: { $ref: "#/components/schemas/UsageCostBucket" }
+        cost_nanos: { type: integer, format: int64 }
+        subscription_credit_nanos:
+          description: Usage in the window that subscription credit covered.
+          type: integer
+          format: int64
+        intervals:
+          type: array
+          items: { $ref: "#/components/schemas/UsageCostInterval" }
