@@ -108,6 +108,13 @@ PostgreSQL holds metadata and authority; the object store holds bytes.
 - Function `disk=` is the writable layer limit, sent as `resources.disk_mib`.
   Docker enforces it only on overlay2 over XFS with project quotas; other
   hosts log at startup that the limit is not enforced.
+- `Volume.file_service_info()` returns a constant; there is no endpoint.
+- `lazycloud volume list` shows name, size and created. The reference's
+  status and updated columns are gone: a deleted volume leaves the list at
+  once, and volumes have no update time.
+- A `Disk` size must be whole 4096-byte blocks; the reference accepted any
+  byte count and then failed at attach.
+- List pages default to 50 entries, the identity packet's shared `Limit`.
 
 ## Measurements
 
@@ -137,6 +144,13 @@ keep-alive, 500 calls each, PostgreSQL 18 on tmpfs):
 The reference kept queues and maps in Redis behind the Python API; its
 numbers on this host are not measured here.
 
+End to end through the SDK (test_function_writes_into_a_mounted_volume):
+deploying a function with `volumes=[Volume(name)]`, a cold `.remote()` that
+writes a file under the mount, and reading the file back from outside with
+`Volume.read_text` takes 2.2 to 2.4 s. A workspace's first mount adds about
+0.3 s to container start (start stage 0.50 s against 0.19 s with the mount
+already up).
+
 ## Tests
 
 Go, against PostgreSQL, Garage and Docker:
@@ -152,10 +166,18 @@ Go, against PostgreSQL, Garage and Docker:
 - `internal/agent`: TestVolumesMountThroughWorkspaceBucket (two containers
   share a volume through GeeseFS; the read-only one cannot write; neither
   sees a credential).
+- `internal/api`: TestStorageRoutes (escaped names and keys, typed errors,
+  authorization) and TestSchemaPatternsCompile.
 - `internal/diskengine`: chunking, manifests, credential refresh, publish and
   restore through Garage, seal, compact, recover, flatten and collect through
   qemu-storage-daemon. The attach test skips here: it needs root, nbd-client
   and the nbd module.
+
+Python, `python/lazycloud/tests/test_storage_live.py` against a running
+platform (skipped without `LAZYCLOUD_ENDPOINT`): volume files, multipart
+put, the volume CLI with `cp` globs and downloads, disks, queues, maps,
+artifacts with the artifact CLI, and a function writing into a mounted
+volume. All 8 pass; the offline suite passes too.
 
 ## Gaps
 
@@ -180,5 +202,5 @@ Go, against PostgreSQL, Garage and Docker:
 - [x] Schema, OpenAPI, Go owner and handlers
 - [x] Host protocol, session grants, agent volume mounts
 - [x] Disk engine port, disk leases, agent disk lifecycle
-- [ ] Python SDK and CLI on the new API
-- [ ] End to end through the SDK
+- [x] Python SDK and CLI on the new API
+- [x] End to end through the SDK
