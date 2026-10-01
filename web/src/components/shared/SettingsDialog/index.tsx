@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import { useSession } from "@/components/shared/AuthGate/session";
 import { LinearTab, LinearTabsList } from "@/components/shared/LinearSelect";
@@ -7,7 +7,6 @@ import { Tabs, TabsContent } from "@/components/ui/tabs";
 
 import { AccessTokens } from "./AccessTokens";
 import { AccountSettings } from "./AccountSettings";
-import { AdminSettings } from "./AdminSettings";
 import { BillingSettings } from "./BillingSettings";
 import { ComputeSettings } from "./ComputeSettings";
 import { DomainSettings } from "./DomainSettings";
@@ -23,14 +22,6 @@ export function SettingsDialog({
   onClose: () => void;
 }) {
   const { user } = useSession();
-  const admin = user.is_admin;
-  // A member can arrive at `?settings=admin` by typing it. The tab is not
-  // rendered for them, so the view is shown as billing and the address is
-  // corrected to say so.
-  const shownView = view === "admin" && !admin ? "billing" : view;
-  useEffect(() => {
-    if (shownView !== view) onViewChange(shownView);
-  }, [shownView, view, onViewChange]);
   const [planOpen, setPlanOpen] = useState(false);
   const openUpgrade = () => {
     setPlanOpen(true);
@@ -48,7 +39,7 @@ export function SettingsDialog({
         </header>
 
         <Tabs
-          value={shownView}
+          value={view}
           onValueChange={(next) => onViewChange(settingsView(next) ?? "billing")}
           className="flex min-h-0 flex-1 flex-col overflow-hidden"
         >
@@ -58,7 +49,6 @@ export function SettingsDialog({
               <LinearTab value="tokens">Tokens</LinearTab>
               <LinearTab value="compute">Compute</LinearTab>
               <LinearTab value="domains">Domains</LinearTab>
-              {admin ? <LinearTab value="admin">Admin</LinearTab> : null}
             </LinearTabsList>
           </div>
 
@@ -94,15 +84,6 @@ export function SettingsDialog({
           >
             <DomainSettings onUpgrade={openUpgrade} />
           </TabsContent>
-
-          {admin ? (
-            <TabsContent
-              value="admin"
-              className="flex min-h-0 flex-1 flex-col overflow-hidden px-4 py-3"
-            >
-              <AdminSettings />
-            </TabsContent>
-          ) : null}
         </Tabs>
       </DialogContent>
     </Dialog>
