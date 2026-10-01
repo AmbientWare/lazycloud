@@ -79,6 +79,8 @@ async function listTasks(
   options: TaskListOptions,
   cursor: string,
 ): Promise<{ data: TaskSummary[]; next: string }> {
+  // Only functions run tasks; endpoint and ASGI requests are not recorded as tasks.
+  if (options.kind && options.kind !== "function") return { data: [], next: "" };
   const workspace = workspaceName(workspaceId);
   let app = options.appId ? (await appById(client, workspaceId, options.appId)).name : undefined;
   let fn: string | undefined;
