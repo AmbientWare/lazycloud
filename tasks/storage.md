@@ -124,6 +124,19 @@ Owner level, real PostgreSQL 18 (compose.test.yaml, fsync off), 24 CPUs,
 A pop waiting with `wait_seconds` returns within milliseconds of the put
 (TestQueuePopWaitsForPut).
 
+Through the public API (server on this host, one client over HTTP/1.1
+keep-alive, 500 calls each, PostgreSQL 18 on tmpfs):
+
+| Call | p50 | p95 |
+| --- | --- | --- |
+| Queue put | 0.49 ms | 1.34 ms |
+| Queue pop | 0.49 ms | 1.18 ms |
+| Map set | 0.60 ms | 1.56 ms |
+| Map get | 0.76 ms | 1.11 ms |
+
+The reference kept queues and maps in Redis behind the Python API; its
+numbers on this host are not measured here.
+
 ## Tests
 
 Go, against PostgreSQL, Garage and Docker:
