@@ -766,6 +766,9 @@ type ImageSpec struct {
 
 	// PythonVersion The Python minor version the runtime is mounted for.
 	PythonVersion ImageSpecPythonVersion `json:"python_version"`
+
+	// Reference The image by digest the release runs, set by the server.
+	Reference *string `json:"reference,omitempty"`
 }
 
 // ImageSpecPythonVersion The Python minor version the runtime is mounted for.

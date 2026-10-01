@@ -153,7 +153,7 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, logger 
 	listener := database.NewListener(pool, logger, database.ChannelHost, database.ChannelTask, database.ChannelClaim, database.ChannelImageBuild, database.ChannelImageBuildLog)
 	store := storage.NewStorage(pool, cfg.objectStore)
 	exec := execution.NewExecution(pool)
-	im := images.NewImages(pool, exec, cfg.images, nil)
+	im := images.NewImages(pool, exec, cfg.images)
 	ident := identity.NewIdentity(pool, cfg.identity)
 	if cfg.identity.GitHub.ClientID == "" || cfg.identity.GitHub.ClientSecret == "" {
 		logger.WarnContext(ctx, "dashboard sign-in is unavailable: set LAZYCLOUD_GITHUB_CLIENT_ID and LAZYCLOUD_GITHUB_CLIENT_SECRET")
