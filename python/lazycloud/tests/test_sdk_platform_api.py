@@ -620,7 +620,9 @@ def test_endpoint_request_sends_the_token_only_to_an_authorized_deployment(
                 "version_url": url,
                 "release_url": url,
                 "invoke_path": "/v1/workspaces/team/apps/reports/endpoints/api/invoke",
-                "version_invoke_path": "/v1/workspaces/team/apps/reports/endpoints/api/versions/1/invoke",
+                "version_invoke_path": (
+                    "/v1/workspaces/team/apps/reports/endpoints/api/versions/1/invoke"
+                ),
             }
         )
     )
