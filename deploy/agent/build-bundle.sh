@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Builds the agent release archives the install script and self-update
 # download: <out_dir>/<version>/lazycloud-agent-linux-<arch>.tar.gz, each
-# holding lazycloud-agent, supervisor and runtime/<python> at its root. Prints
+# holding lazycloud-agent, supervisor, runtime/<python> and, on amd64,
+# geesefs at its root. Prints
 # one "<arch> <sha256>" line per archive.
 #
 # Usage: deploy/agent/build-bundle.sh [--arch amd64,arm64] [--python "3.12 3.13"] <out_dir> <version>
@@ -50,8 +51,15 @@ for arch in "${arch_list[@]}"; do
     -o "$stage/supervisor" ./cmd/supervisor)
   # shellcheck disable=SC2086 # the Python versions are separate words
   LAZYCLOUD_RUNTIME_PLATFORM="$platform" "$root/deploy/local/build-runtime.sh" "$stage/runtime" $pythons
+  files=(lazycloud-agent supervisor runtime)
+  # GeeseFS mounts volumes; its pinned release exists for amd64.
+  if [[ "$arch" == amd64 ]]; then
+    "$root/deploy/local/fetch-geesefs.sh"
+    cp "$root/bin/geesefs" "$stage/geesefs"
+    files+=(geesefs)
+  fi
   archive="$out/$version/lazycloud-agent-linux-$arch.tar.gz"
-  tar -C "$stage" --owner=0 --group=0 --numeric-owner -czf "$archive.tmp" lazycloud-agent supervisor runtime
+  tar -C "$stage" --owner=0 --group=0 --numeric-owner -czf "$archive.tmp" "${files[@]}"
   mv "$archive.tmp" "$archive"
   echo "$arch $(sha256sum "$archive" | cut -d' ' -f1)"
 done
