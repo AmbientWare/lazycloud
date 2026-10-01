@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 )
@@ -28,24 +30,30 @@ type sessionOut struct {
 	cancel context.CancelFunc
 }
 
-// sessions keeps a session open, reconnecting with backoff, until ctx ends.
-func (a *Agent) sessions(ctx context.Context) {
+// sessions keeps a session open, reconnecting with backoff, until ctx ends
+// or the server refuses the host's credential.
+func (a *Agent) sessions(ctx context.Context) error {
 	delay := minSessionBackoff
 	for ctx.Err() == nil {
 		began := time.Now()
 		err := a.runSession(ctx)
 		if ctx.Err() != nil {
-			return
+			return nil //nolint:nilerr // the session ended because the agent is stopping
+		}
+		if status.Code(err) == codes.Unauthenticated {
+			a.log.Error("host credential revoked; the machine was removed or its token replaced", "error", err)
+			return errors.Join(ErrCredentialRevoked, forgetIdentity(a.cfg.StateDir))
 		}
 		if time.Since(began) > time.Minute {
 			delay = minSessionBackoff
 		}
 		a.log.Warn("session ended", "error", err, "retry_in", delay)
 		if !sleep(ctx, delay/2+rand.N(delay/2+1)) { //nolint:gosec // jitter needs no cryptographic randomness
-			return
+			return nil
 		}
 		delay = min(2*delay, maxSessionBackoff)
 	}
+	return nil
 }
 
 // runSession opens the stream with a Hello describing every container, then
@@ -73,6 +81,14 @@ func (a *Agent) runSession(ctx context.Context) error {
 	if err := stream.Send(hello); err != nil {
 		return fmt.Errorf("send hello: %w", err)
 	}
+	a.mu.Lock()
+	notice, trial := a.interruption, a.trial
+	a.mu.Unlock()
+	if notice != nil {
+		if err := stream.Send(notice.message()); err != nil {
+			return fmt.Errorf("send interruption: %w", err)
+		}
+	}
 	for _, c := range exited {
 		a.goOwned(c.cleanup)
 	}
@@ -80,6 +96,9 @@ func (a *Agent) runSession(ctx context.Context) error {
 
 	errs := make(chan error, 2)
 	var wg sync.WaitGroup
+	if trial != "" {
+		wg.Go(func() { a.commitAfterSession(ctx) })
+	}
 	wg.Go(func() {
 		for {
 			command, err := stream.Recv()
@@ -138,10 +157,12 @@ func (a *Agent) hello() (*hostproto.HostMessage, []*container) {
 		}
 	}
 	return &hostproto.HostMessage{Body: &hostproto.HostMessage_Hello{Hello: &hostproto.Hello{
-		BootId:       a.bootID,
-		Capacity:     a.capacity,
-		Containers:   reports,
-		AgentVersion: a.cfg.Version,
+		BootId:          a.bootID,
+		Capacity:        a.capacity,
+		Containers:      reports,
+		AgentVersion:    a.cfg.Version,
+		Updatable:       a.updatable,
+		RejectedVersion: readMarker(a.cfg.StateDir, RejectedFile),
 	}}}, exited
 }
 
@@ -174,6 +195,8 @@ func (a *Agent) handle(command *hostproto.ServerMessage) {
 		if c := a.lookup(body.Cancel.GetContainerId()); c != nil {
 			c.cancelAttempt(body.Cancel.GetAttemptId())
 		}
+	case *hostproto.ServerMessage_Update:
+		a.update(body.Update)
 	default:
 		a.log.Warn("ignoring unknown command", "command_id", command.GetCommandId())
 	}

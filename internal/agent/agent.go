@@ -6,17 +6,21 @@ package agent
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/feature/ec2/imds"
 	"github.com/moby/moby/client"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
@@ -42,22 +46,37 @@ const maxSocketPath = 107
 // 16 MiB inputs; the server limits how many it returns.
 const maxMessageBytes = 512 << 20
 
+// dockerWait bounds how long the preflight waits for Docker to answer.
+const dockerWait = 30 * time.Second
+
 // exitRetention is how long an exited container's report stays in every
 // Hello, so a server that missed it learns the exit after reconnecting.
 const exitRetention = 10 * time.Minute
 
 // Config configures an agent.
 type Config struct {
-	// Server is the control plane's gRPC address, host:port.
-	Server string
+	// Server is the control plane's gRPC address, host:port. ServerTLS dials
+	// it with TLS verified against the system roots.
+	Server    string
+	ServerTLS bool
 	// StateDir holds the host identity, the source cache and per-container
 	// workspaces and sockets.
 	StateDir string
 	// SocketDir holds one directory per container with its link socket. Unix
 	// socket paths are limited to 107 bytes, so it must be short.
 	SocketDir string
-	// JoinToken enrolls the host on first start.
-	JoinToken string
+	// JoinToken enrolls the host on first start. JoinTokenFile holds it
+	// instead and is deleted once the host is enrolled.
+	JoinToken     string
+	JoinTokenFile string
+	// CloudHostID enrolls a cloud instance with its instance-profile identity
+	// in place of a join token.
+	CloudHostID string
+	// IMDSEndpoint is the instance metadata service. Set, the agent reports
+	// Spot interruption notices.
+	IMDSEndpoint string
+	// Hostname is reported at enrollment; empty uses the system's.
+	Hostname string
 	// RuntimeDir holds managed Python runtimes at <dir>/<python_version>.
 	RuntimeDir string
 	// SupervisorPath is the static supervisor binary mounted into containers.
@@ -68,12 +87,16 @@ type Config struct {
 	// BuildNetwork is the Docker network image builds run on. It must reach
 	// the platform registry and the base images' registries.
 	BuildNetwork string
-	// Capacity is what the host offers; nil detects it.
-	Capacity *hostproto.Capacity
+	// Limits caps the offered capacity.
+	Limits Limits
 	// Labels are added to every container the agent creates.
-	Labels  map[string]string
-	Version string
-	Logger  *slog.Logger
+	Labels map[string]string
+	// AgentRoot is the install root the service wrapper runs releases from;
+	// with Executable inside its releases the agent can update itself.
+	AgentRoot  string
+	Executable string
+	Version    string
+	Logger     *slog.Logger
 }
 
 // Agent owns one host's connection and containers.
@@ -90,14 +113,29 @@ type Agent struct {
 	// the session, so large payloads never delay commands.
 	host    hostproto.HostServiceClient
 	control hostproto.HostServiceClient
+	http    *http.Client
+	// gpus are the offered devices; containers take free ones.
+	gpus []gpuDevice
+	// metadata is the cloud instance metadata service, nil off the cloud.
+	metadata  *imds.Client
+	updatable bool
+	// committed is closed once the release on trial is committed.
+	committed chan struct{}
 
 	// work tracks every goroutine the agent starts; Run waits for them.
 	work sync.WaitGroup
 	ctx  context.Context
+	// restart ends Run with a cause, as after installing an update.
+	restart func(error)
 
 	mu         sync.Mutex
 	containers map[string]*container
 	session    *sessionOut
+	// interruption is the provider's standing reclaim notice.
+	interruption *interruption
+	// trial is the version on trial until a session commits it.
+	trial    string
+	updating bool
 }
 
 // Run enrolls if needed, adopts containers left by a previous agent and
@@ -128,41 +166,59 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	defer func() { _ = docker.Close() }()
 
-	capacity := cfg.Capacity
-	if capacity == nil {
-		if capacity, err = detectCapacity(); err != nil {
-			return err
-		}
-	}
-	id, err := loadOrEnroll(ctx, cfg, capacity)
+	machine, err := detect(ctx)
 	if err != nil {
 		return err
 	}
+	offered := resolveOffer(machine, cfg.Limits)
+	offered.checks = append([]*hostproto.PreflightCheck{dockerCheck(ctx, docker)}, offered.checks...)
+	var metadata *imds.Client
+	if cfg.IMDSEndpoint != "" {
+		metadata = newIMDS(cfg.IMDSEndpoint)
+	}
+	id, err := loadOrEnroll(ctx, cfg, offered, metadata)
+	if err != nil {
+		return err
+	}
+	// An enrolled host that fails a check may pass after a restart, as when
+	// a driver loads late, so this is not ErrPreflightFailed.
+	if failed := offered.failed(); len(failed) > 0 {
+		return fmt.Errorf("preflight: %s", describeChecks(failed))
+	}
 	cfg.Logger = cfg.Logger.With("host_id", id.HostID)
 
-	control, err := dialServer(cfg.Server, id.HostToken)
+	control, err := dialServer(cfg, id.HostToken)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = control.Close() }()
-	payload, err := dialServer(cfg.Server, id.HostToken)
+	payload, err := dialServer(cfg, id.HostToken)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = payload.Close() }()
 
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	httpClient := &http.Client{}
 	a := &Agent{
 		cfg:        cfg,
 		log:        cfg.Logger,
 		docker:     docker,
 		identity:   id,
-		capacity:   capacity,
+		capacity:   offered.capacity,
+		gpus:       offered.gpus,
 		bootID:     bootID(),
-		sources:    &sourceCache{dir: filepath.Join(cfg.StateDir, "sources"), http: &http.Client{}},
+		sources:    &sourceCache{dir: filepath.Join(cfg.StateDir, "sources"), http: httpClient},
 		images:     &imageCache{docker: docker},
 		host:       hostproto.NewHostServiceClient(payload),
 		control:    hostproto.NewHostServiceClient(control),
+		http:       httpClient,
+		metadata:   metadata,
+		updatable:  updatable(cfg.AgentRoot, cfg.Executable),
+		committed:  make(chan struct{}),
 		ctx:        ctx,
+		restart:    cancel,
 		containers: make(map[string]*container),
 	}
 	defer a.shutdown()
@@ -172,10 +228,46 @@ func Run(ctx context.Context, cfg Config) error {
 	if err := a.adopt(ctx); err != nil {
 		return err
 	}
-	a.log.Info("agent started", "containers", len(a.containers), "cpu_millis", capacity.GetCpuMillis(), "memory_bytes", capacity.GetMemoryBytes())
+	a.log.Info("agent started", "containers", len(a.containers), "cpu_millis", a.capacity.GetCpuMillis(),
+		"memory_bytes", a.capacity.GetMemoryBytes(), "gpus", a.capacity.GetGpuCount(), "updatable", a.updatable)
+	if a.updatable && readMarker(cfg.StateDir, TrialFile) == cfg.Version {
+		a.trial = cfg.Version
+		a.goOwned(a.watchTrial)
+	}
+	if metadata != nil {
+		a.goOwned(a.watchInterruptions)
+	}
 	a.goOwned(a.pruneExited)
-	a.sessions(ctx)
-	return nil
+	err = a.sessions(ctx)
+	if cause := context.Cause(ctx); cause != nil && !errors.Is(cause, context.Canceled) {
+		return fmt.Errorf("agent stopped: %w", cause)
+	}
+	return err
+}
+
+func describeChecks(checks []*hostproto.PreflightCheck) string {
+	messages := make([]string, 0, len(checks))
+	for _, check := range checks {
+		messages = append(messages, check.GetName()+": "+check.GetMessage())
+	}
+	return strings.Join(messages, "; ")
+}
+
+// dockerCheck waits briefly for Docker, which may still be starting at boot.
+func dockerCheck(ctx context.Context, docker *client.Client) *hostproto.PreflightCheck {
+	deadline := time.Now().Add(dockerWait)
+	for {
+		pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		_, err := docker.Ping(pingCtx, client.PingOptions{})
+		cancel()
+		if err == nil {
+			return check("docker", true, "Docker is reachable", "")
+		}
+		if time.Now().After(deadline) || !sleep(ctx, time.Second) {
+			return check("docker", false, "Docker is not reachable: "+err.Error(),
+				"start Docker and check that docker info works for the agent's user")
+		}
+	}
 }
 
 // goOwned runs fn on a goroutine Run waits for.
@@ -230,8 +322,8 @@ func (a *Agent) pruneExited(ctx context.Context) {
 	}
 }
 
-// hostToken attaches the host token to every call. The local transport is
-// plaintext; TLS between agent and server is a gap in this slice.
+// hostToken attaches the host token to every call. Local stacks dial in
+// plaintext; remote servers use ServerTLS.
 type hostToken string
 
 func (t hostToken) GetRequestMetadata(context.Context, ...string) (map[string]string, error) {
@@ -240,9 +332,14 @@ func (t hostToken) GetRequestMetadata(context.Context, ...string) (map[string]st
 
 func (hostToken) RequireTransportSecurity() bool { return false }
 
-func dialServer(address, token string) (*grpc.ClientConn, error) {
+func dialServer(cfg Config, token string) (*grpc.ClientConn, error) {
+	transport := insecure.NewCredentials()
+	if cfg.ServerTLS {
+		transport = credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS12})
+	}
+	address := cfg.Server
 	options := []grpc.DialOption{
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithTransportCredentials(transport),
 		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(maxMessageBytes), grpc.MaxCallSendMsgSize(maxMessageBytes)),
 	}
 	if token != "" {
@@ -283,3 +380,15 @@ func sleep(ctx context.Context, d time.Duration) bool {
 }
 
 var errStopped = errors.New("container stopped")
+
+// Errors that end Run for good: restarting the agent cannot fix them, so its
+// service does not restart it.
+var (
+	// ErrCredentialRevoked: the server refused the host token, as after the
+	// machine was removed. The identity is deleted so a new join can enroll.
+	ErrCredentialRevoked = errors.New("host credential revoked")
+	// ErrEnrollmentRefused: the server refused the join token or identity.
+	ErrEnrollmentRefused = errors.New("enrollment refused")
+	// ErrPreflightFailed: an error-severity preflight check failed.
+	ErrPreflightFailed = errors.New("preflight failed")
+)
