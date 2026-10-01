@@ -49,8 +49,9 @@ which now calls `cancelTask` from the query layer. Data shapes change only in
   call graph, lifecycle, account metrics, live changes
 - [x] Admin users (operations), compute, machines, AWS connection, fleet
 - [x] Billing, usage, pricing, complimentary grants
-- [ ] Invoke URLs, endpoint kinds, domains: ready on web-endpoints, waiting
-  for the endpoints packet
+- [x] Invoke URLs, the function playground's HTTP invoke, endpoint and ASGI
+  workloads, their request records in Activity and the task drawer, domains
+- [ ] Pods, devboxes, sandboxes and shells: wait for the workloads packet
 - [x] Stack journeys in `web/tests/e2e/stack.spec.ts` against a private stack
 
 ## Intentional differences from the reference
@@ -62,6 +63,10 @@ which now calls `cancelTask` from the query layer. Data shapes change only in
 - Deleting a workload version deletes the workload, so only a workload's
   active row or its last version offers Delete.
 - Map keys need at least one character.
+- Endpoint and ASGI requests are the edge's request records, listed where
+  the reference listed their tasks. A request is complete, failed for a
+  5xx answer, or cancelled when the caller left first (499). A
+  workspace-wide list of them shows each app's newest page only.
 
 ## Gaps
 
@@ -70,8 +75,8 @@ server's error.
 
 - Pods, devboxes, sandboxes and shells have no API. Their panels show the
   server's "no such operation".
-- Invoke URLs and the HTTP invoke until the endpoints packet. The function
-  playground submits a task instead.
+- The endpoint playground cannot call an endpoint: its host takes a
+  workspace token and sends no CORS headers. It shows that as the error.
 - Containers have no image, command, ports or exit code. Tasks carry no
   handler, args or kwargs. Results have no rich display.
 - The artifact summary has no cost fields. Its tooltip reads "$0.00 accrued",
@@ -96,13 +101,17 @@ Both also fail on the reference's own specs. The specs mark them
 ## Evidence
 
 - `bun run typecheck`, `lint`, `format:check`, `build` and vitest
-  (126 tests) pass. The mocked smoke, onboarding and marketing specs pass
+  (124 tests) pass. The mocked smoke, onboarding and marketing specs pass
   on both projects apart from the two fixme tests.
 - The stack journeys pass on chromium and mobile against server, scheduler
   and agent on private ports. They cover sign-in, workspace create, rename,
   invite and delete, deploy with the SDK, playground invoke, task drawer
   logs and container, tokens, `/activate`, secrets, volume upload and
   download, queues, maps, task artifacts, and accepting an invitation.
+- An endpoint deployed to the local stack shows its invoke URL, route and
+  methods, and its request records open in the drawer. Its requests hang
+  locally and end as 499 after the caller's timeout. That path belongs to
+  the endpoints packet and is unverified here.
 - Before and after screenshots of Apps, the app, the workload, Tasks, the
   task drawer, Secrets, Tokens and sign-in match in layout and copy. Only
   the data differs.

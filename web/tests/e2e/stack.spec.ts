@@ -167,7 +167,7 @@ test("a deployed app is listed, invoked from the playground and its task opened 
 
   const who = `e2e ${Date.now().toString(36)}`;
   await page.getByLabel("name").fill(who);
-  await page.getByRole("button", { name: "Invoke" }).click();
+  await page.getByRole("button", { name: "Invoke", exact: true }).click();
   // A cold container starts for the first call.
   await expect(page.getByText(`"hello ${who}"`)).toBeVisible({ timeout: 60_000 });
 
@@ -338,7 +338,7 @@ test("an artifact a task saved is previewed from the task and listed in storage"
   const title = `e2e ${Date.now().toString(36)}`;
   await page.goto(`/w/${workspace}/apps/${await appId(page)}/workloads/function/report`);
   await page.getByLabel("title").fill(title);
-  await page.getByRole("button", { name: "Invoke" }).click();
+  await page.getByRole("button", { name: "Invoke", exact: true }).click();
   const outcome = page
     .locator("section")
     .filter({ has: page.getByRole("link", { name: "Open task" }) });
