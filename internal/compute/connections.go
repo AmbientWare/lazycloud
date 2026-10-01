@@ -188,8 +188,14 @@ func (c Connection) HostsWorkloads() bool {
 		return true
 	case ConnActionRequire:
 		return c.Retiring != nil
+	case ConnAwaiting, ConnValidating, ConnDegraded, ConnDraining, ConnRevoking, ConnVerifying:
 	}
 	return false
+}
+
+// removing reports whether the connection is being disconnected.
+func (c Connection) removing() bool {
+	return c.Phase == ConnDraining || c.Phase == ConnRevoking || c.Phase == ConnVerifying
 }
 
 // ManagesCapacity reports whether the platform still runs the account's
@@ -581,8 +587,7 @@ func (c *Compute) Disconnect(ctx context.Context, account identity.UserID) (*Con
 		}
 		id = row.ID
 		conn := connectionOf(row, auths)
-		switch conn.Phase {
-		case ConnDraining, ConnRevoking, ConnVerifying:
+		if conn.removing() {
 			return nil
 		}
 		workspaces, err := q.ConnectionWorkspaces(ctx, &row.ID)
@@ -644,6 +649,7 @@ func (c *Compute) Retry(ctx context.Context, account identity.UserID) (Connectio
 			return setPhase(ctx, q, row.ID, next, now(), 0, [2]string{})
 		case ConnDegraded, ConnAwaiting, ConnReconnecting:
 			return setPhase(ctx, q, row.ID, conn.Phase, now(), 0, [2]string{})
+		case ConnValidating, ConnReady, ConnRetiring, ConnDraining, ConnRevoking, ConnVerifying:
 		}
 		return nil
 	})

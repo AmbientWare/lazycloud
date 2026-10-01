@@ -89,16 +89,16 @@ func awsCode(err error) string {
 	return ""
 }
 
-// capacityCodes are launch refusals that mean the offer has no capacity or
-// quota now; the offer cools down and the controller picks another.
-var capacityCodes = map[string]bool{
-	"InsufficientInstanceCapacity": true,
-	"InstanceLimitExceeded":        true,
-	"VcpuLimitExceeded":            true,
-	"MaxSpotInstanceCountExceeded": true,
-	"SpotMaxPriceTooLow":           true,
-	"Unsupported":                  true,
-	"InsufficientCapacity":         true,
+// capacityRefusal reports whether a launch error means the offer has no
+// capacity or quota now; the offer cools down and the controller picks
+// another.
+func capacityRefusal(code string) bool {
+	switch code {
+	case "InsufficientInstanceCapacity", "InstanceLimitExceeded", "VcpuLimitExceeded",
+		"MaxSpotInstanceCountExceeded", "SpotMaxPriceTooLow", "Unsupported", "InsufficientCapacity":
+		return true
+	}
+	return false
 }
 
 // accessDenied reports whether AWS refused the caller's authority.

@@ -24,6 +24,14 @@ func (c *Compute) aws() awsClients {
 	return awsClients{base: c.fleet.AWS, endpoints: c.fleet.Endpoints}
 }
 
+// inTx runs fn in a transaction.
+func inTx(ctx context.Context, c *Compute, fn func(pgx.Tx) error) error {
+	if err := pgx.BeginFunc(ctx, c.pool, fn); err != nil {
+		return fmt.Errorf("connection step: %w", err)
+	}
+	return nil
+}
+
 func notifyChannel(ctx context.Context, tx pgx.Tx, id uuid.UUID) error {
 	return database.Notify(ctx, tx, ChannelCompute, id.String())
 }
@@ -32,7 +40,7 @@ func notifyChannel(ctx context.Context, tx pgx.Tx, id uuid.UUID) error {
 // active authorization the connection goes, otherwise the active one keeps
 // serving.
 func (c *Compute) expirePending(ctx context.Context, conn Connection) error {
-	return pgx.BeginFunc(ctx, c.pool, func(tx pgx.Tx) error {
+	return inTx(ctx, c, func(tx pgx.Tx) error {
 		q := c.queries.WithTx(tx)
 		if conn.Active == nil {
 			return q.DeleteConnection(ctx, conn.ID)
@@ -47,7 +55,7 @@ func (c *Compute) expirePending(ctx context.Context, conn Connection) error {
 // finishDrain moves a disconnecting connection to revoking once its
 // instances are gone; retirement drains them meanwhile.
 func (c *Compute) finishDrain(ctx context.Context, conn Connection) error {
-	return pgx.BeginFunc(ctx, c.pool, func(tx pgx.Tx) error {
+	return inTx(ctx, c, func(tx pgx.Tx) error {
 		q := c.queries.WithTx(tx)
 		live, err := q.ConnectionLiveHosts(ctx, &conn.ID)
 		if err != nil {
@@ -86,12 +94,13 @@ func (c *Compute) removeStack(ctx context.Context, conn Connection, a *Authoriza
 		return c.finishRemoval(ctx, conn, a, after)
 	}
 	stack := out.Stacks[0]
-	switch stack.StackStatus {
-	case cftypes.StackStatusDeleteComplete:
+	if stack.StackStatus == cftypes.StackStatusDeleteComplete {
 		return c.finishRemoval(ctx, conn, a, after)
-	case cftypes.StackStatusDeleteInProgress:
+	}
+	if stack.StackStatus == cftypes.StackStatusDeleteInProgress {
 		return c.cleanupLater(ctx, conn, nil)
-	case cftypes.StackStatusDeleteFailed:
+	}
+	if stack.StackStatus == cftypes.StackStatusDeleteFailed {
 		return c.needsCustomer(ctx, conn, a, aws.ToString(stack.StackId))
 	}
 	if _, err := cf.DeleteStack(ctx, &cloudformation.DeleteStackInput{StackName: aws.String(a.StackName)}); err != nil {
@@ -100,7 +109,7 @@ func (c *Compute) removeStack(ctx context.Context, conn Connection, a *Authoriza
 		}
 		return c.cleanupLater(ctx, conn, fmt.Errorf("delete stack: %w", err))
 	}
-	return pgx.BeginFunc(ctx, c.pool, func(tx pgx.Tx) error {
+	return inTx(ctx, c, func(tx pgx.Tx) error {
 		next := conn.Phase
 		if next == ConnRevoking {
 			next = ConnVerifying
@@ -112,7 +121,7 @@ func (c *Compute) removeStack(ctx context.Context, conn Connection, a *Authoriza
 // cleanupLater schedules the next cleanup step with backoff, and hands the
 // cleanup to the customer after cleanupAttempts.
 func (c *Compute) cleanupLater(ctx context.Context, conn Connection, cause error) error {
-	return pgx.BeginFunc(ctx, c.pool, func(tx pgx.Tx) error {
+	return inTx(ctx, c, func(tx pgx.Tx) error {
 		q := c.queries.WithTx(tx)
 		row, err := q.LockConnection(ctx, conn.ID)
 		if err != nil {
@@ -135,7 +144,7 @@ func (c *Compute) cleanupLater(ctx context.Context, conn Connection, cause error
 
 // needsCustomer asks the customer to delete the stack in AWS.
 func (c *Compute) needsCustomer(ctx context.Context, conn Connection, a *Authorization, stackID string) error {
-	return pgx.BeginFunc(ctx, c.pool, func(tx pgx.Tx) error {
+	return inTx(ctx, c, func(tx pgx.Tx) error {
 		return setPhase(ctx, c.queries.WithTx(tx), conn.ID, ConnActionRequire, nil, 0,
 			[2]string{consoleURL(a.Region, stackID), "Delete the stack in AWS"})
 	})
@@ -144,7 +153,7 @@ func (c *Compute) needsCustomer(ctx context.Context, conn Connection, a *Authori
 // finishRemoval retires a replaced authorization, or deletes a revoked
 // connection.
 func (c *Compute) finishRemoval(ctx context.Context, conn Connection, a *Authorization, after ConnectionPhase) error {
-	return pgx.BeginFunc(ctx, c.pool, func(tx pgx.Tx) error {
+	return inTx(ctx, c, func(tx pgx.Tx) error {
 		q := c.queries.WithTx(tx)
 		if after == "" {
 			if live, err := q.ConnectionLiveHosts(ctx, &conn.ID); err != nil {

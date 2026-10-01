@@ -68,15 +68,15 @@ func (c *Compute) Launch(ctx context.Context, logger *slog.Logger) (int, error) 
 func (c *Compute) launch(ctx context.Context, logger *slog.Logger, h ClaimLaunchesRow) error {
 	target, err := c.launchTarget(ctx, h.ConnectionID, h.Region)
 	if err != nil {
-		return c.failLaunch(ctx, h, FailureUnknown, err.Error(), false)
+		return c.failLaunch(ctx, h, err.Error(), false)
 	}
 	release, err := c.TargetRelease(ctx)
 	if err != nil {
-		return c.failLaunch(ctx, h, FailureUnknown, "no agent release is published", false)
+		return c.failLaunch(ctx, h, "no agent release is published", false)
 	}
 	subnet, ok := subnetFor(target.network, h.AvailabilityZone, h.ID)
 	if !ok {
-		return c.failLaunch(ctx, h, FailureUnknown, fmt.Sprintf("no subnet in %s %s", h.Region, h.AvailabilityZone), false)
+		return c.failLaunch(ctx, h, fmt.Sprintf("no subnet in %s %s", h.Region, h.AvailabilityZone), false)
 	}
 	image := cpuImage
 	if h.GpuCount > 0 {
@@ -131,10 +131,10 @@ func (c *Compute) launch(ctx context.Context, logger *slog.Logger, h ClaimLaunch
 	if err != nil {
 		code := awsCode(err)
 		switch {
-		case capacityCodes[code] || strings.HasPrefix(code, "InvalidParameter") || code == "UnauthorizedOperation":
-			return c.failLaunch(ctx, h, FailureUnknown, describeAWSError(err), true)
+		case capacityRefusal(code) || strings.HasPrefix(code, "InvalidParameter") || code == "UnauthorizedOperation":
+			return c.failLaunch(ctx, h, describeAWSError(err), true)
 		case h.LaunchAttempts >= maxLaunchAttempts:
-			return c.failLaunch(ctx, h, FailureUnknown, describeAWSError(err), false)
+			return c.failLaunch(ctx, h, describeAWSError(err), false)
 		}
 		return fmt.Errorf("run instance: %w", err)
 	}
@@ -164,7 +164,7 @@ func (c *Compute) launch(ctx context.Context, logger *slog.Logger, h ClaimLaunch
 
 // failLaunch fails a host that could not launch; cool also skips its offer
 // until the cooldown ends.
-func (c *Compute) failLaunch(ctx context.Context, h ClaimLaunchesRow, failure Failure, message string, cool bool) error {
+func (c *Compute) failLaunch(ctx context.Context, h ClaimLaunchesRow, message string, cool bool) error {
 	return pgx.BeginFunc(ctx, c.pool, func(tx pgx.Tx) error {
 		q := c.queries.WithTx(tx)
 		if cool && h.Market != nil {
@@ -179,7 +179,7 @@ func (c *Compute) failLaunch(ctx context.Context, h ClaimLaunchesRow, failure Fa
 				return fmt.Errorf("insert cooldown: %w", err)
 			}
 		}
-		if err := q.FailHost(ctx, FailHostParams{ID: h.ID, Failure: ptr(string(failure)), Message: truncate("Launch failed: "+message, 512)}); err != nil {
+		if err := q.FailHost(ctx, FailHostParams{ID: h.ID, Failure: ptr(string(FailureUnknown)), Message: truncate("Launch failed: "+message, 512)}); err != nil {
 			return fmt.Errorf("fail host: %w", err)
 		}
 		return notifyChannel(ctx, tx, h.ID)

@@ -98,31 +98,32 @@ type InstanceType struct {
 
 const gib = int64(1) << 30
 
-// gpuRegions are the US regions that sell the GPU types; us-west-1 does not.
-var gpuRegions = []string{"us-east-1", "us-east-2", "us-west-2"}
-
 // catalog is what the fleet buys. Prices are hand-reviewed on-demand rates;
-// Spot is estimated from them at spotDiscount.
-var catalog = []InstanceType{
-	{Name: "m7i.large", CPUMillis: 2000, MemoryBytes: 8 * gib, HourlyMicros: 100800},
-	{Name: "m7i.xlarge", CPUMillis: 4000, MemoryBytes: 16 * gib, HourlyMicros: 201600},
-	{Name: "m7i.2xlarge", CPUMillis: 8000, MemoryBytes: 32 * gib, HourlyMicros: 403200},
-	{Name: "m7i.4xlarge", CPUMillis: 16000, MemoryBytes: 64 * gib, HourlyMicros: 806400},
-	{Name: "m7i.8xlarge", CPUMillis: 32000, MemoryBytes: 128 * gib, HourlyMicros: 1612800},
-	{Name: "c7i.2xlarge", CPUMillis: 8000, MemoryBytes: 16 * gib, HourlyMicros: 357000},
-	{Name: "r7i.2xlarge", CPUMillis: 8000, MemoryBytes: 64 * gib, HourlyMicros: 529200},
-	{Name: "g4dn.xlarge", CPUMillis: 4000, MemoryBytes: 16 * gib, GPU: "T4", GPUCount: 1, HourlyMicros: 526000},
-	{Name: "g4dn.12xlarge", CPUMillis: 48000, MemoryBytes: 192 * gib, GPU: "T4", GPUCount: 4, HourlyMicros: 3912000},
-	{Name: "g5.xlarge", CPUMillis: 4000, MemoryBytes: 16 * gib, GPU: "A10G", GPUCount: 1, HourlyMicros: 1006000, Regions: gpuRegions},
-	{Name: "g5.12xlarge", CPUMillis: 48000, MemoryBytes: 192 * gib, GPU: "A10G", GPUCount: 4, HourlyMicros: 5672000, Regions: gpuRegions},
-	{Name: "g6.xlarge", CPUMillis: 4000, MemoryBytes: 16 * gib, GPU: "L4", GPUCount: 1, HourlyMicros: 804800, Regions: gpuRegions},
-	{Name: "g6.12xlarge", CPUMillis: 48000, MemoryBytes: 192 * gib, GPU: "L4", GPUCount: 4, HourlyMicros: 4601600, Regions: gpuRegions},
-	{Name: "g6e.xlarge", CPUMillis: 4000, MemoryBytes: 32 * gib, GPU: "L40S", GPUCount: 1, HourlyMicros: 1861000, Regions: gpuRegions},
-	{Name: "g6e.12xlarge", CPUMillis: 48000, MemoryBytes: 384 * gib, GPU: "L40S", GPUCount: 4, HourlyMicros: 10493000, Regions: gpuRegions},
-	{Name: "p4d.24xlarge", CPUMillis: 96000, MemoryBytes: 1152 * gib, GPU: "A100-40", GPUCount: 8, HourlyMicros: 21957600, Regions: gpuRegions},
-	{Name: "p4de.24xlarge", CPUMillis: 96000, MemoryBytes: 1152 * gib, GPU: "A100-80", GPUCount: 8, HourlyMicros: 27447000, Regions: []string{"us-east-1", "us-west-2"}},
-	{Name: "p5.48xlarge", CPUMillis: 192000, MemoryBytes: 2048 * gib, GPU: "H100", GPUCount: 8, HourlyMicros: 55040000, Regions: gpuRegions},
-	{Name: "p5en.48xlarge", CPUMillis: 192000, MemoryBytes: 2048 * gib, GPU: "H200", GPUCount: 8, HourlyMicros: 63296000, Regions: gpuRegions},
+// Spot is estimated from them at spotDiscount. us-west-1 sells none of the
+// GPU types but T4.
+func catalog() []InstanceType {
+	gpuRegions := []string{"us-east-1", "us-east-2", "us-west-2"}
+	return []InstanceType{
+		{Name: "m7i.large", CPUMillis: 2000, MemoryBytes: 8 * gib, HourlyMicros: 100800},
+		{Name: "m7i.xlarge", CPUMillis: 4000, MemoryBytes: 16 * gib, HourlyMicros: 201600},
+		{Name: "m7i.2xlarge", CPUMillis: 8000, MemoryBytes: 32 * gib, HourlyMicros: 403200},
+		{Name: "m7i.4xlarge", CPUMillis: 16000, MemoryBytes: 64 * gib, HourlyMicros: 806400},
+		{Name: "m7i.8xlarge", CPUMillis: 32000, MemoryBytes: 128 * gib, HourlyMicros: 1612800},
+		{Name: "c7i.2xlarge", CPUMillis: 8000, MemoryBytes: 16 * gib, HourlyMicros: 357000},
+		{Name: "r7i.2xlarge", CPUMillis: 8000, MemoryBytes: 64 * gib, HourlyMicros: 529200},
+		{Name: "g4dn.xlarge", CPUMillis: 4000, MemoryBytes: 16 * gib, GPU: "T4", GPUCount: 1, HourlyMicros: 526000},
+		{Name: "g4dn.12xlarge", CPUMillis: 48000, MemoryBytes: 192 * gib, GPU: "T4", GPUCount: 4, HourlyMicros: 3912000},
+		{Name: "g5.xlarge", CPUMillis: 4000, MemoryBytes: 16 * gib, GPU: "A10G", GPUCount: 1, HourlyMicros: 1006000, Regions: gpuRegions},
+		{Name: "g5.12xlarge", CPUMillis: 48000, MemoryBytes: 192 * gib, GPU: "A10G", GPUCount: 4, HourlyMicros: 5672000, Regions: gpuRegions},
+		{Name: "g6.xlarge", CPUMillis: 4000, MemoryBytes: 16 * gib, GPU: "L4", GPUCount: 1, HourlyMicros: 804800, Regions: gpuRegions},
+		{Name: "g6.12xlarge", CPUMillis: 48000, MemoryBytes: 192 * gib, GPU: "L4", GPUCount: 4, HourlyMicros: 4601600, Regions: gpuRegions},
+		{Name: "g6e.xlarge", CPUMillis: 4000, MemoryBytes: 32 * gib, GPU: "L40S", GPUCount: 1, HourlyMicros: 1861000, Regions: gpuRegions},
+		{Name: "g6e.12xlarge", CPUMillis: 48000, MemoryBytes: 384 * gib, GPU: "L40S", GPUCount: 4, HourlyMicros: 10493000, Regions: gpuRegions},
+		{Name: "p4d.24xlarge", CPUMillis: 96000, MemoryBytes: 1152 * gib, GPU: "A100-40", GPUCount: 8, HourlyMicros: 21957600, Regions: gpuRegions},
+		{Name: "p4de.24xlarge", CPUMillis: 96000, MemoryBytes: 1152 * gib, GPU: "A100-80", GPUCount: 8, HourlyMicros: 27447000, Regions: []string{"us-east-1", "us-west-2"}},
+		{Name: "p5.48xlarge", CPUMillis: 192000, MemoryBytes: 2048 * gib, GPU: "H100", GPUCount: 8, HourlyMicros: 55040000, Regions: gpuRegions},
+		{Name: "p5en.48xlarge", CPUMillis: 192000, MemoryBytes: 2048 * gib, GPU: "H200", GPUCount: 8, HourlyMicros: 63296000, Regions: gpuRegions},
+	}
 }
 
 // spotDiscount estimates Spot as a fraction of on-demand, for ordering
@@ -130,7 +131,7 @@ var catalog = []InstanceType{
 const spotDiscount = 0.4
 
 // regionOrder is the purchase preference among the US regions.
-var regionOrder = []string{"us-east-2", "us-west-1", "us-east-1", "us-west-2"}
+func regionOrder() []string { return []string{"us-east-2", "us-west-1", "us-east-1", "us-west-2"} }
 
 // regionPremium is us-west-1's price over us-east-1, in percent.
 const regionPremium = 15
@@ -181,7 +182,7 @@ func (t Target) key() string {
 func offersFor(r Requirement, regions map[string]Network, cooled func(region, instanceType string, market Market) bool) []Offer {
 	var offers []Offer
 	gpus := r.GPUsNeeded()
-	for _, region := range regionOrder {
+	for _, region := range regionOrder() {
 		network, ok := regions[region]
 		if !ok || (r.Region != "" && ProductRegion(region) != r.Region) {
 			continue
@@ -193,7 +194,7 @@ func offersFor(r Requirement, regions map[string]Network, cooled func(region, in
 				continue
 			}
 		}
-		for _, t := range catalog {
+		for _, t := range catalog() {
 			if t.Regions != nil && !slices.Contains(t.Regions, region) {
 				continue
 			}

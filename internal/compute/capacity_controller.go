@@ -103,10 +103,7 @@ func (c *Compute) PlanCapacity(ctx context.Context, logger *slog.Logger) (Capaci
 			}
 		}
 		for _, n := range short {
-			wait, err := plan.buy(demand[n].need)
-			if err != nil {
-				return err
-			}
+			wait := plan.buy(demand[n].need)
 			waits[n] = string(wait)
 			if wait == WaitLimit {
 				result.Limited++
@@ -223,7 +220,7 @@ func (c *Compute) planner(ctx context.Context, q *Queries) (*purchasePlan, error
 // buy finds room for r on a host bought in this pass, or buys the cheapest
 // offer that takes it. It reports WaitLimit when the owner's fleet is full,
 // and no wait when no offer can take r.
-func (p *purchasePlan) buy(r Requirement) (CapacityWait, error) {
+func (p *purchasePlan) buy(r Requirement) CapacityWait {
 	target := Target{Kind: KindPlatform}
 	if r.Connection != nil {
 		target = Target{Kind: KindConnection, Connection: r.Connection}
@@ -232,21 +229,21 @@ func (p *purchasePlan) buy(r Requirement) (CapacityWait, error) {
 	for i := range p.opened {
 		if p.openedFor[i] == owner && p.opened[i].Fits(r) {
 			p.opened[i].Reserve(r)
-			return WaitProvisioning, nil
+			return WaitProvisioning
 		}
 	}
 	networks, ok := p.networks[owner]
 	if !ok {
-		return "", nil
+		return ""
 	}
 	offers := offersFor(r, networks, func(region, instanceType string, market Market) bool {
 		return p.cooled[owner+"/"+region+"/"+instanceType+"/"+string(market)]
 	})
 	if len(offers) == 0 {
-		return "", nil
+		return ""
 	}
 	if p.live[owner] >= p.fleet.MaxHosts {
-		return WaitLimit, nil
+		return WaitLimit
 	}
 	o := offers[0]
 	host := o.capacity(target)
@@ -261,5 +258,5 @@ func (p *purchasePlan) buy(r Requirement) (CapacityWait, error) {
 		Region: o.Region, AvailabilityZone: o.Zone, InstanceType: o.Type.Name, Market: ptr(string(o.Market)),
 		HourlyMicros: &o.HourlyMicros,
 	})
-	return WaitProvisioning, nil
+	return WaitProvisioning
 }

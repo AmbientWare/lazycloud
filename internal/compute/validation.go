@@ -92,6 +92,7 @@ func (c *Compute) validateConnection(ctx context.Context, id uuid.UUID, manual b
 			if manual {
 				return &ConflictError{Message: "AWS account connection validation is already running"}
 			}
+		case ConnAwaiting, ConnReady, ConnDegraded, ConnReconnecting:
 		}
 		switch {
 		case conn.Pending != nil:
@@ -248,7 +249,7 @@ type stsAssume struct {
 func (s stsAssume) Retrieve(ctx context.Context) (aws.Credentials, error) {
 	out, err := s.client.AssumeRole(ctx, &sts.AssumeRoleInput{RoleArn: aws.String(s.role), RoleSessionName: aws.String(s.session)})
 	if err != nil {
-		return aws.Credentials{}, err
+		return aws.Credentials{}, fmt.Errorf("assume role: %w", err)
 	}
 	return aws.Credentials{
 		AccessKeyID: aws.ToString(out.Credentials.AccessKeyId), SecretAccessKey: aws.ToString(out.Credentials.SecretAccessKey),
