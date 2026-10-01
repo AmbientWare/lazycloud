@@ -92,10 +92,10 @@ export function TaskTable({
                           <span className="flex min-w-0 items-center gap-2">
                             <StubKindIcon kind={kind ?? "function"} className="size-3 shrink-0" />
                             <Link
-                              to="/w/$workspace/apps/$appId/workloads/$kind/$name"
+                              to="/w/$workspace/apps/$app/workloads/$kind/$name"
                               params={{
                                 workspace: workspace.name,
-                                appId: task.app_id ?? "",
+                                app: task.app?.name ?? "",
                                 kind: task.workload.kind,
                                 name: task.workload.name,
                               }}
@@ -118,8 +118,8 @@ export function TaskTable({
                       <TableCell className="max-w-[160px] truncate text-xs text-muted-foreground">
                         {task.app && task.app_id ? (
                           <Link
-                            to="/w/$workspace/apps/$appId"
-                            params={{ workspace: workspace.name, appId: task.app_id }}
+                            to="/w/$workspace/apps/$app"
+                            params={{ workspace: workspace.name, app: task.app.name }}
                             className="interactive-link"
                           >
                             {task.app.name}

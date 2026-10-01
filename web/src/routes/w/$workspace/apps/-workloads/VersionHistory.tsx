@@ -19,7 +19,7 @@ import type { WorkloadGroup } from "./grouping";
 
 export function VersionHistory({
   group,
-  appId,
+  app,
   workspaceId,
   workspaceName,
   nextCursor,
@@ -28,7 +28,7 @@ export function VersionHistory({
   onLoadMore,
 }: {
   group: WorkloadGroup;
-  appId: string;
+  app: string;
   workspaceId: string;
   workspaceName: string;
   nextCursor: string | undefined;
@@ -46,7 +46,7 @@ export function VersionHistory({
             deployment={deployment}
             latest={deployment.id === group.latest.id}
             lastDeployment={group.deployments.length === 1}
-            appId={appId}
+            app={app}
             workspaceId={workspaceId}
             workspaceName={workspaceName}
           />
@@ -83,14 +83,14 @@ function VersionRow({
   deployment,
   latest,
   lastDeployment,
-  appId,
+  app,
   workspaceId,
   workspaceName,
 }: {
   deployment: Deployment;
   latest: boolean;
   lastDeployment: boolean;
-  appId: string;
+  app: string;
   workspaceId: string;
   workspaceName: string;
 }) {
@@ -101,7 +101,7 @@ function VersionRow({
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.deployments.root(workspaceId) }),
       queryClient.invalidateQueries({
-        queryKey: workspaceQueryKeys.apps.detail(workspaceId, appId),
+        queryKey: workspaceQueryKeys.apps.detail(workspaceId, app),
       }),
       queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.apps.summaries(workspaceId) }),
       queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.containers.root(workspaceId) }),
@@ -121,8 +121,8 @@ function VersionRow({
       await refresh();
       if (lastDeployment) {
         await navigate({
-          to: "/w/$workspace/apps/$appId",
-          params: { workspace: workspaceName, appId },
+          to: "/w/$workspace/apps/$app",
+          params: { workspace: workspaceName, app },
         });
       }
     },
@@ -150,7 +150,7 @@ function VersionRow({
         <Link
           to="/w/$workspace/tasks"
           params={{ workspace: workspaceName }}
-          search={{ app: appId, deployment: deployment.id }}
+          search={{ app: app, deployment: deployment.id }}
           className="interactive-link text-brand"
         >
           Tasks

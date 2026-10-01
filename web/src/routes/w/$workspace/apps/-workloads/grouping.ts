@@ -27,11 +27,11 @@ export function currentDeployment(group: WorkloadGroup): Deployment {
 
 export function groupDeploymentsByWorkload(
   deployments: Deployment[] | undefined,
-  appId: string,
+  app: string,
 ): WorkloadGroup[] {
   const byWorkload = new Map<string, Deployment[]>();
   for (const deployment of deployments ?? []) {
-    if (deployment.app_id !== appId) continue;
+    if (deployment.app_id !== app) continue;
     const key = JSON.stringify([deployment.kind, deployment.name]);
     const versions = byWorkload.get(key);
     if (versions) versions.push(deployment);
@@ -60,11 +60,11 @@ export function groupDeploymentsByWorkload(
 
 export function findWorkloadGroup(
   deployments: Deployment[] | undefined,
-  appId: string,
+  app: string,
   kind: string,
   name: string,
 ): WorkloadGroup | undefined {
-  return groupDeploymentsByWorkload(deployments, appId).find(
+  return groupDeploymentsByWorkload(deployments, app).find(
     (group) => group.kind === kind && group.name === name,
   );
 }

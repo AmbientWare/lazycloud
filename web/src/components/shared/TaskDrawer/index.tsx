@@ -266,10 +266,10 @@ function TaskDrawerBody({
                 <StubKindIcon kind={kind} className="size-3" />
                 {record.app_id ? (
                   <Link
-                    to="/w/$workspace/apps/$appId/workloads/$kind/$name"
+                    to="/w/$workspace/apps/$app/workloads/$kind/$name"
                     params={{
                       workspace: workspace.name,
-                      appId: record.app_id,
+                      app: record.app?.name ?? "",
                       kind: record.workload.kind,
                       name: record.workload.name,
                     }}
@@ -287,8 +287,8 @@ function TaskDrawerBody({
             ) : null}
             {record.app_id ? (
               <Link
-                to="/w/$workspace/apps/$appId"
-                params={{ workspace: workspace.name, appId: record.app_id }}
+                to="/w/$workspace/apps/$app"
+                params={{ workspace: workspace.name, app: record.app?.name ?? "" }}
                 className="text-brand hover:underline"
               >
                 {record.app?.name ?? "App"}

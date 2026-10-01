@@ -25,7 +25,7 @@ import { WorkloadRowActions } from "./WorkloadRowActions";
 export function AppWorkloadsSection({
   workspaceId,
   workspaceName,
-  appId,
+  app,
   deployments,
   containers,
   pending,
@@ -38,7 +38,7 @@ export function AppWorkloadsSection({
 }: {
   workspaceId: string;
   workspaceName: string;
-  appId: string;
+  app: string;
   deployments: Deployment[] | undefined;
   containers: Container[] | undefined;
   pending: boolean;
@@ -50,7 +50,7 @@ export function AppWorkloadsSection({
   continuationLabel: string;
 }) {
   const [kind, setKind] = useState<string>();
-  const groups = groupDeploymentsByWorkload(deployments, appId);
+  const groups = groupDeploymentsByWorkload(deployments, app);
   // The kinds this app actually deploys, not the kinds one could. A filter
   // offering a kind nothing here has is an option whose only outcome is an
   // empty list.
@@ -133,8 +133,8 @@ export function AppWorkloadsSection({
                 return (
                   <Link
                     key={JSON.stringify([group.kind, group.name])}
-                    to="/w/$workspace/apps/$appId/workloads/$kind/$name"
-                    params={{ workspace: workspaceName, appId, kind: group.kind, name: group.name }}
+                    to="/w/$workspace/apps/$app/workloads/$kind/$name"
+                    params={{ workspace: workspaceName, app, kind: group.kind, name: group.name }}
                     className="interactive-row group grid min-w-0 gap-x-2 gap-y-2 px-3 py-3 xl:grid-cols-[minmax(8rem,1fr)_4.5rem_6rem_5.75rem_6.25rem_1rem] xl:items-center"
                   >
                     <span className="flex min-w-0 items-center gap-2.5">
@@ -178,7 +178,7 @@ export function AppWorkloadsSection({
                       />
                     </span>
                     <span className="flex items-center justify-end gap-1">
-                      <WorkloadRowActions group={group} workspaceId={workspaceId} appId={appId} />
+                      <WorkloadRowActions group={group} workspaceId={workspaceId} app={app} />
                       <ChevronRight
                         className="interactive-row-indicator hidden size-3.5 text-muted-foreground transition-colors xl:block"
                         aria-hidden="true"

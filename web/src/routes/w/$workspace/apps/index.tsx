@@ -109,8 +109,8 @@ function AppCard({
   return (
     <article className="interactive-panel panel group relative min-w-0 rounded-md">
       <Link
-        to="/w/$workspace/apps/$appId"
-        params={{ workspace: workspaceName, appId: item.app.id }}
+        to="/w/$workspace/apps/$app"
+        params={{ workspace: workspaceName, app: item.app.name }}
         aria-label={item.app.name}
         className="flex h-full min-h-[17.5rem] flex-col rounded-md p-4 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
       >
