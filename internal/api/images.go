@@ -133,15 +133,21 @@ func (l buildLogStream) VisitStreamImageBuildLogsResponse(w http.ResponseWriter)
 	return nil
 }
 
-// checkImages rejects a deployment naming an image the workspace cannot run.
-func (s *Server) checkImages(ctx context.Context, workspace identity.WorkspaceID, req apitypes.DeploymentRequest) error {
-	for _, fn := range req.Functions {
-		if fn.Image.ImageId == nil {
+// checkImages rejects a deployment naming an image the workspace cannot run
+// and pins each named image's reference into the request, so the release
+// runs exactly that image. A reference the caller sent is replaced.
+func (s *Server) checkImages(ctx context.Context, workspace identity.WorkspaceID, req *apitypes.DeploymentRequest) error {
+	for n := range req.Functions {
+		image := &req.Functions[n].Image
+		image.Reference = nil
+		if image.ImageId == nil {
 			continue
 		}
-		if err := s.owners.Images.Deployable(ctx, workspace, *fn.Image.ImageId, string(fn.Image.PythonVersion)); err != nil {
-			return fmt.Errorf("function %s: %w", fn.Name, err)
+		reference, err := s.owners.Images.Deployable(ctx, workspace, *image.ImageId, string(image.PythonVersion))
+		if err != nil {
+			return fmt.Errorf("function %s: %w", req.Functions[n].Name, err)
 		}
+		image.Reference = &reference
 	}
 	return nil
 }

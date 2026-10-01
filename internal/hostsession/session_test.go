@@ -70,7 +70,7 @@ func start(t *testing.T) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	im := images.NewImages(pool, e, images.Config{Registry: "127.0.0.1:1", Repository: "lazycloud"}, nil)
+	im := images.NewImages(pool, e, images.Config{Registry: "127.0.0.1:1", Repository: "lazycloud"})
 	srv := hostsession.NewServer(c, e, store, im, listener, hostsession.Config{
 		ImageTemplate: "docker.io/library/python:{version}-slim",
 		TouchInterval: 100 * time.Millisecond,

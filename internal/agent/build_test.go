@@ -84,7 +84,8 @@ func TestAgentBuildsPushesAndPullsAnImageByDigest(t *testing.T) {
 	e.startAgent()
 	session := e.session()
 
-	start := buildCommand(registry, "FROM "+testBuildBase+"\nRUN echo built > /proof\n")
+	// Rendered shell steps are heredocs.
+	start := buildCommand(registry, "FROM "+testBuildBase+"\nRUN <<'LAZYCLOUD_STEP'\necho built > /proof\nLAZYCLOUD_STEP\n")
 	container := start.GetStart().GetContainerId()
 	session.send(t, start)
 	session.phase(t, container, hostproto.ContainerPhase_CONTAINER_PHASE_READY)
@@ -102,7 +103,7 @@ func TestAgentBuildsPushesAndPullsAnImageByDigest(t *testing.T) {
 	if exit.GetReason() != hostproto.ExitReason_EXIT_REASON_STOPPED {
 		t.Fatalf("a finished build exits as stopped: %v", exit)
 	}
-	if out := e.server.buildOutput(); !strings.Contains(out, "RUN echo built > /proof") || !strings.Contains(out, "pushed "+registry) {
+	if out := e.server.buildOutput(); !strings.Contains(out, "echo built > /proof") || !strings.Contains(out, "pushed "+registry) {
 		t.Fatalf("build output streams to the server, got:\n%s", out)
 	}
 

@@ -13,8 +13,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -41,8 +41,11 @@ const (
 	buildMemoryBytes = 2 << 30
 	buildMemoryLimit = 8 << 30
 	maxFailureBytes  = 64 << 10
-	recoveryBatch    = 100
-	logBatch         = 500
+	// maxLogBytes and maxLogLines bound the output one attempt stores.
+	maxLogBytes   = 8 << 20
+	maxLogLines   = 100_000
+	recoveryBatch = 100
+	logBatch      = 500
 )
 
 var (
@@ -99,11 +102,10 @@ type Images struct {
 	ecr       ecrToken
 }
 
-// NewImages returns the images owner. transport carries registry requests;
-// nil uses the default.
-func NewImages(pool *pgxpool.Pool, exec *execution.Execution, config Config, transport http.RoundTripper) *Images {
+// NewImages returns the images owner.
+func NewImages(pool *pgxpool.Pool, exec *execution.Execution, config Config) *Images {
 	return &Images{
-		pool: pool, queries: New(pool), execution: exec, resolver: newResolver(transport), config: config, ecr: exchangeECR,
+		pool: pool, queries: New(pool), execution: exec, resolver: newResolver(config.Registry), config: config, ecr: exchangeECR,
 	}
 }
 
@@ -112,10 +114,14 @@ type Image struct {
 	ID            string
 	PythonVersion string
 	Architecture  string
-	// Reference is the pullable reference by digest once published.
+	// Reference is the pullable reference by digest once published, as the
+	// workspace that read the image sees it.
 	Reference *string
-	CreatedAt time.Time
-	ReadyAt   *time.Time
+	// globalReference is the reference every workspace without its own
+	// rebuild sees.
+	globalReference *string
+	CreatedAt       time.Time
+	ReadyAt         *time.Time
 }
 
 // BuildStatus is a build's outcome so far.
@@ -206,19 +212,34 @@ func (i *Images) prepare(ctx context.Context, workspace identity.WorkspaceID, de
 	if baseAuth != nil {
 		out.auth[baseHost] = *baseAuth
 	}
+	// The managed base is the platform's choice; every other image is the
+	// user's and must come from a public registry other than the platform's.
+	managed := ""
+	if s.base == "" && s.dockerfile == "" {
+		managed = s.baseReference(i.config.ManagedBase)
+	}
 	pin := func(ref string) (string, error) {
 		host, err := registryHost(ref)
 		if err != nil {
 			return "", err
 		}
+		platform := host == i.config.registryHost()
+		if ref != managed {
+			if platform {
+				return "", invalid("%s is in the platform registry; use a built image by its id with Image.from_id", ref)
+			}
+			if err := checkRegistryHost(host); err != nil {
+				return "", err
+			}
+		}
 		var auth *Auth
 		switch {
+		case platform:
+			auth = i.config.Auth
 		case host == baseHost && baseAuth != nil:
 			auth = baseAuth
-		case host == i.config.registryHost():
-			auth = i.config.Auth
 		}
-		p, err := i.resolver.pin(ctx, ref, auth, host == i.config.registryHost() && i.config.Insecure)
+		p, err := i.resolver.pin(ctx, ref, auth, platform && i.config.Insecure)
 		if err != nil {
 			return "", err
 		}
@@ -231,7 +252,7 @@ func (i *Images) prepare(ctx context.Context, workspace identity.WorkspaceID, de
 	out.digest = imageDigest(out.dockerfile, s.architecture, s.context)
 	out.id = "img_" + hex.EncodeToString(out.digest)[:24]
 	if !needsBuild(out.dockerfile) && baseAuth == nil {
-		ref := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(out.dockerfile), "FROM"))
+		ref := dockerfileBase(out.dockerfile)
 		out.reference = &ref
 	}
 	return out, nil
@@ -252,7 +273,7 @@ func (i *Images) Resolve(ctx context.Context, workspace identity.WorkspaceID, de
 			return err
 		}
 		out = Resolution{Image: image}
-		build, err := q.ActiveBuild(ctx, p.digest)
+		build, err := q.ActiveBuild(ctx, ActiveBuildParams{ImageDigest: p.digest})
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil
 		}
@@ -270,8 +291,9 @@ func (i *Images) Resolve(ctx context.Context, workspace identity.WorkspaceID, de
 }
 
 // Build resolves def and starts a build unless the image is ready, or joins
-// the build already running for it. force builds a ready image again; the
-// new reference replaces the old one when the build succeeds.
+// the build already running for it. force builds a published image again for
+// workspace alone: the result replaces the image for that workspace, and
+// other workspaces keep the published one.
 func (i *Images) Build(ctx context.Context, workspace identity.WorkspaceID, def apitypes.ImageDefinition, force bool) (Resolution, error) {
 	p, err := i.prepare(ctx, workspace, def)
 	if err != nil {
@@ -296,7 +318,9 @@ func (i *Images) Build(ctx context.Context, workspace identity.WorkspaceID, def 
 		if p.reference != nil || (image.Reference != nil && !force) {
 			return nil
 		}
-		active, err := q.ActiveBuild(ctx, p.digest)
+		// Forcing an image nobody published yet is its first build.
+		forced := force && image.globalReference != nil
+		active, err := q.ActiveBuild(ctx, ActiveBuildParams{ImageDigest: p.digest, Forced: forced, WorkspaceID: uuid.UUID(workspace)})
 		switch {
 		case err == nil:
 			b, err := i.buildOut(ctx, q, active.ID, image.ID, active.State, active.Failure, active.CreatedAt, active.FinishedAt)
@@ -308,7 +332,7 @@ func (i *Images) Build(ctx context.Context, workspace identity.WorkspaceID, def 
 		// The image row lock serializes requests for this image, so no other
 		// build can start between the check and the insert.
 		row, err := q.InsertBuild(ctx, InsertBuildParams{
-			ImageDigest: p.digest, WorkspaceID: uuid.UUID(workspace), ContextSha256: p.spec.context,
+			ImageDigest: p.digest, WorkspaceID: uuid.UUID(workspace), Forced: forced, ContextSha256: p.spec.context,
 			RegistryAuth: auth, TimeoutSeconds: BuildTimeout.Seconds(),
 		})
 		if err != nil {
@@ -342,15 +366,11 @@ func (i *Images) upsert(ctx context.Context, q *Queries, workspace identity.Work
 	if err := q.GrantImage(ctx, GrantImageParams{WorkspaceID: uuid.UUID(workspace), ImageDigest: p.digest}); err != nil {
 		return Image{}, fmt.Errorf("grant image: %w", err)
 	}
-	return Image{
-		ID: row.ID, PythonVersion: row.PythonVersion, Architecture: row.Architecture,
-		Reference: row.Reference, CreatedAt: row.CreatedAt, ReadyAt: row.ReadyAt,
-	}, nil
+	return i.workspaceImage(ctx, q, workspace, row.ID)
 }
 
-// Get returns an image the workspace resolved.
-func (i *Images) Get(ctx context.Context, workspace identity.WorkspaceID, id string) (Image, error) {
-	row, err := i.queries.WorkspaceImage(ctx, WorkspaceImageParams{WorkspaceID: uuid.UUID(workspace), ID: id})
+func (i *Images) workspaceImage(ctx context.Context, q *Queries, workspace identity.WorkspaceID, id string) (Image, error) {
+	row, err := q.WorkspaceImage(ctx, WorkspaceImageParams{WorkspaceID: uuid.UUID(workspace), ID: id})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Image{}, ErrNotFound
 	}
@@ -359,24 +379,29 @@ func (i *Images) Get(ctx context.Context, workspace identity.WorkspaceID, id str
 	}
 	return Image{
 		ID: row.ID, PythonVersion: row.PythonVersion, Architecture: row.Architecture,
-		Reference: row.Reference, CreatedAt: row.CreatedAt, ReadyAt: row.ReadyAt,
+		Reference: row.Reference, globalReference: row.GlobalReference, CreatedAt: row.CreatedAt, ReadyAt: row.ReadyAt,
 	}, nil
 }
 
+// Get returns an image the workspace resolved, as that workspace sees it.
+func (i *Images) Get(ctx context.Context, workspace identity.WorkspaceID, id string) (Image, error) {
+	return i.workspaceImage(ctx, i.queries, workspace, id)
+}
+
 // Deployable checks that workspace may run image id with the runtime for
-// python, a minor version.
-func (i *Images) Deployable(ctx context.Context, workspace identity.WorkspaceID, id, python string) error {
+// python, a minor version, and returns the reference a release pins.
+func (i *Images) Deployable(ctx context.Context, workspace identity.WorkspaceID, id, python string) (string, error) {
 	image, err := i.Get(ctx, workspace, id)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if image.Reference == nil {
-		return ErrNotReady
+		return "", ErrNotReady
 	}
 	if minorVersion(image.PythonVersion) != python {
-		return invalid("image %s has Python %s, not %s", id, image.PythonVersion, python)
+		return "", invalid("image %s has Python %s, not %s", id, image.PythonVersion, python)
 	}
-	return nil
+	return *image.Reference, nil
 }
 
 // Pull is what a host needs to pull a ready image.
@@ -388,17 +413,15 @@ type Pull struct {
 	Platform string
 }
 
-// PullOf returns how to pull image id.
-func (i *Images) PullOf(ctx context.Context, id string) (Pull, error) {
-	row, err := i.queries.ImageToPull(ctx, id)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return Pull{}, ErrNotReady
-	}
+// PullOf returns how to pull reference, the image a release pinned when it
+// deployed image id.
+func (i *Images) PullOf(ctx context.Context, id, reference string) (Pull, error) {
+	architecture, err := i.queries.ImageArchitecture(ctx, id)
 	if err != nil {
-		return Pull{}, fmt.Errorf("read image: %w", err)
+		return Pull{}, fmt.Errorf("read image %s: %w", id, err)
 	}
-	pull := Pull{Reference: row.Reference, Platform: "linux/" + row.Architecture}
-	if strings.HasPrefix(row.Reference, i.config.Registry+"/") {
+	pull := Pull{Reference: reference, Platform: "linux/" + architecture}
+	if strings.HasPrefix(reference, i.config.Registry+"/") {
 		pull.Auth = i.config.Auth
 	}
 	return pull, nil
@@ -569,8 +592,9 @@ func (i *Images) BuildCommandOf(ctx context.Context, start execution.BuildStart)
 	if i.config.Auth != nil {
 		auth[i.config.registryHost()] = *i.config.Auth
 	}
-	// Images on one base share a cache: their first layers are the same.
-	scope := sha256.Sum256([]byte(row.Architecture + "\n" + dockerfileBase(row.Dockerfile)))
+	// A workspace's images on one base share a cache. Workspaces never share
+	// one: a build could write any cache entry it can push.
+	scope := sha256.Sum256([]byte(row.WorkspaceID.String() + "\n" + row.Architecture + "\n" + dockerfileBase(row.Dockerfile)))
 	return BuildCommand{
 		Build: start.Build, Attempt: start.Attempt, Dockerfile: row.Dockerfile,
 		Context: row.ContextSha256, ContextWorkspace: identity.WorkspaceID(row.WorkspaceID),
@@ -632,7 +656,15 @@ func (i *Images) CompleteBuild(ctx context.Context, host compute.HostID, contain
 				return fmt.Errorf("fail build: %w", err)
 			}
 		} else {
-			if err := q.PublishImage(ctx, PublishImageParams{Digest: digest, Reference: &reference}); err != nil {
+			var err error
+			if row.Forced {
+				err = q.PublishWorkspaceImage(ctx, PublishWorkspaceImageParams{
+					WorkspaceID: row.WorkspaceID, ImageDigest: digest, Reference: reference,
+				})
+			} else {
+				err = q.PublishImage(ctx, PublishImageParams{Digest: digest, Reference: &reference})
+			}
+			if err != nil {
 				return fmt.Errorf("publish image: %w", err)
 			}
 			if err := q.SucceedBuild(ctx, build); err != nil {
@@ -663,7 +695,38 @@ func (i *Images) AppendLogs(ctx context.Context, host compute.HostID, container 
 		return err
 	}
 	if err := pgx.BeginFunc(ctx, i.pool, func(tx pgx.Tx) error {
-		return i.insertLogs(ctx, tx, build, attempt, lines)
+		q := i.queries.WithTx(tx)
+		// The build row lock orders appends, so the counts stay exact.
+		row, err := q.LockBuild(ctx, build)
+		if err != nil {
+			return fmt.Errorf("lock build: %w", err)
+		}
+		keep, size := 0, int64(0)
+		for _, line := range lines {
+			if row.LogBytes+size+int64(len(line.Data)) > maxLogBytes || int(row.LogLines)+keep >= maxLogLines {
+				break
+			}
+			keep++
+			size += int64(len(line.Data))
+		}
+		// More lines than the cap means the cut is already marked.
+		if int(row.LogLines) > maxLogLines {
+			return nil
+		}
+		kept := lines[:keep]
+		count := CountBuildLogsParams{ID: build, Bytes: size, Lines: int32(keep)} //nolint:gosec // Bounded by maxLogLines.
+		if keep < len(lines) {
+			// Mark the cut once; a count above the cap drops later output.
+			kept = append(slices.Clone(kept), LogLine{
+				Data: fmt.Sprintf("build output truncated: an attempt keeps at most %d lines and %d MiB", maxLogLines, maxLogBytes>>20),
+				Time: time.Now(),
+			})
+			count.Bytes, count.Lines = size, int32(maxLogLines+1)-row.LogLines //nolint:gosec // Bounded by maxLogLines.
+		}
+		if err := q.CountBuildLogs(ctx, count); err != nil {
+			return fmt.Errorf("count build logs: %w", err)
+		}
+		return i.insertLogs(ctx, tx, build, attempt, kept)
 	}); err != nil {
 		return fmt.Errorf("append build logs: %w", err)
 	}
@@ -763,6 +826,9 @@ func (i *Images) recoverBuild(ctx context.Context, id uuid.UUID, digest []byte) 
 		changed = true
 		if err := i.insertLogs(ctx, tx, id, len(containers), []LogLine{{Data: reason + "; retrying", Time: time.Now()}}); err != nil {
 			return err
+		}
+		if err := q.ResetBuildLogCount(ctx, id); err != nil {
+			return fmt.Errorf("reset build log count: %w", err)
 		}
 		_, err = i.execution.CreateBuildContainer(ctx, tx, identity.WorkspaceID(build.WorkspaceID), id, buildCPUMillis, buildMemoryBytes)
 		return err
