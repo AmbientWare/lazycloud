@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
   useInfiniteQuery,
   useQueryClient,
@@ -6,17 +6,18 @@ import {
   type QueryClient,
 } from "@tanstack/react-query";
 
-import type { AuthToken, TokenListResponse } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 import {
   createToken,
   revokeToken,
-  selectTokenList,
+  tokenPrefix,
   tokensQueryOptions,
   type CreateTokenInput,
 } from "@/lib/queries/tokens";
 import { accountQueryKeys } from "@/lib/queries/workspace-keys";
 
-type TokenPages = InfiniteData<TokenListResponse, string>;
+type Token = Schemas["Token"];
+type TokenPages = InfiniteData<Schemas["TokenList"], string>;
 
 type CreateMode = "closed" | "drafting" | "creating" | "issued" | "error";
 type ActionMode = "idle" | "confirming" | "running" | "error";
@@ -46,7 +47,7 @@ type ControllerState = {
 };
 
 export type AccessTokensController = {
-  tokens: readonly AuthToken[];
+  tokens: readonly Token[];
   isLoading: boolean;
   loadError: Error | null;
   nextCursor: string | undefined;
@@ -63,7 +64,7 @@ export type AccessTokensController = {
   actionMode: ActionMode;
   actionTokenId: string | null;
   actionError: Error | null;
-  beginAction: (token: AuthToken) => void;
+  beginAction: (token: Token) => void;
   cancelAction: () => void;
   confirmAction: () => void;
   isCommandPending: boolean;
@@ -77,7 +78,7 @@ const IDLE: ControllerState = {
 export function useAccessTokensController(showDeviceTokens: boolean): AccessTokensController {
   const queryClient = useQueryClient();
   const query = useInfiniteQuery(tokensQueryOptions(showDeviceTokens));
-  const list = selectTokenList(query.data, query.hasNextPage);
+  const tokens = useMemo(() => uniqueTokens(query.data), [query.data]);
   const [state, setState] = useState<ControllerState>(IDLE);
   // One command at a time, so a double submit cannot mint two credentials and a
   // confirm cannot race the request it is confirming.
@@ -108,7 +109,7 @@ export function useAccessTokensController(showDeviceTokens: boolean): AccessToke
             issued: {
               secret: result.token,
               name: result.record.name,
-              prefix: result.record.prefix,
+              prefix: tokenPrefix(result.record),
             },
           },
           action: { mode: "idle" },
@@ -128,7 +129,7 @@ export function useAccessTokensController(showDeviceTokens: boolean): AccessToke
     setState(IDLE);
   };
 
-  const beginAction = (token: AuthToken) => {
+  const beginAction = (token: Token) => {
     if (commandRunning.current || state.create.mode !== "closed") return;
     setState({
       create: { mode: "closed" },
@@ -166,10 +167,10 @@ export function useAccessTokensController(showDeviceTokens: boolean): AccessToke
   };
 
   return {
-    tokens: list.items,
+    tokens,
     isLoading: query.isPending,
     loadError: query.error,
-    nextCursor: list.nextCursor,
+    nextCursor: query.hasNextPage ? query.data?.pages.at(-1)?.next_cursor : undefined,
     loadingMore: query.isFetchingNextPage,
     loadMoreError: query.isFetchNextPageError,
     loadMore: () => void query.fetchNextPage(),
@@ -190,17 +191,29 @@ export function useAccessTokensController(showDeviceTokens: boolean): AccessToke
   };
 }
 
+/** A token created while later pages load can appear twice; the first copy wins. */
+function uniqueTokens(data: TokenPages | undefined): Token[] {
+  const seen = new Set<string>();
+  const tokens: Token[] = [];
+  for (const token of (data?.pages ?? []).flatMap((page) => page.tokens)) {
+    if (seen.has(token.id)) continue;
+    seen.add(token.id);
+    tokens.push(token);
+  }
+  return tokens;
+}
+
 function isDraftable(mode: CreateMode): boolean {
   return mode === "drafting" || mode === "error";
 }
 
 /** Newest first, matching the order the server pages in, so the row lands where it will stay. */
-function insertTokenRecord(queryClient: QueryClient, record: AuthToken): void {
+function insertTokenRecord(queryClient: QueryClient, record: Token): void {
   queryClient.setQueriesData<TokenPages>({ queryKey: accountQueryKeys.tokens() }, (current) => {
     if (!current) return current;
     const [first, ...rest] = withoutToken(current.pages, record.id);
     if (!first) return current;
-    return { ...current, pages: [{ ...first, data: [record, ...first.data] }, ...rest] };
+    return { ...current, pages: [{ ...first, tokens: [record, ...first.tokens] }, ...rest] };
   });
 }
 
@@ -210,10 +223,10 @@ function removeTokenRecord(queryClient: QueryClient, tokenId: string): void {
   );
 }
 
-function withoutToken(pages: TokenListResponse[], tokenId: string): TokenListResponse[] {
+function withoutToken(pages: Schemas["TokenList"][], tokenId: string): Schemas["TokenList"][] {
   return pages.map((page) => ({
     ...page,
-    data: page.data.filter((token) => token.id !== tokenId),
+    tokens: page.tokens.filter((token) => token.id !== tokenId),
   }));
 }
 

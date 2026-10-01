@@ -1,7 +1,6 @@
 import { mutationOptions, queryOptions } from "@tanstack/react-query";
 
 import { api, ok, type Schemas } from "@/lib/api/client";
-import { rememberWorkspaces } from "@/lib/api/workspaces";
 
 /** The marker the page keeps once it holds a session; the cookie itself is HttpOnly. */
 export const SESSION_MARKER = "session";
@@ -17,6 +16,32 @@ export const SESSION_MARKER = "session";
 export function githubSignInHref(returnTo: string): string {
   const callback = `/callback#code=${encodeURIComponent(returnTo)}`;
   return `/auth/github/start?return_to=${encodeURIComponent(callback)}`;
+}
+
+// Pages that mean "not signed in". Returning to one of them after signing in
+// strands the person on a logged-out page holding a live session, so the product
+// is the destination instead.
+const SIGNED_OUT_PATHS = new Set(["", "/", "/signin", "/callback"]);
+
+/**
+ * Where the browser goes after signing in, from the `code` the `/callback` fragment
+ * carries. The fragment parameter is already decoded once and is used as it is.
+ *
+ * Only a path on this origin is followed. Anything else, including `//host`, and
+ * `/\host` or an embedded tab that a browser also reads as another origin, lands on
+ * the dashboard.
+ */
+export function signedInDestination(returnTo: string): string {
+  if (!returnTo.startsWith("/") || returnTo.startsWith("//")) return "/dashboard";
+  const origin = "https://dashboard.invalid";
+  let url: URL;
+  try {
+    url = new URL(returnTo, origin);
+  } catch {
+    return "/dashboard";
+  }
+  if (url.origin !== origin) return "/dashboard";
+  return SIGNED_OUT_PATHS.has(url.pathname.replace(/\/+$/, "")) ? "/dashboard" : returnTo;
 }
 
 /**
@@ -37,10 +62,8 @@ export function currentSessionQueryOptions() {
   });
 }
 
-async function readSession(): Promise<Schemas["Me"]> {
-  const me = await ok(api.GET("/v1/me"));
-  rememberWorkspaces(me.workspaces);
-  return me;
+function readSession(): Promise<Schemas["Me"]> {
+  return ok(api.GET("/v1/me"));
 }
 
 /** End the session this browser holds, so signing out stops the credential working. */

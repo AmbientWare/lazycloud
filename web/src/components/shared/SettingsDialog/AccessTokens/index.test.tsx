@@ -13,6 +13,7 @@ it("shows CLI login tokens only when the device toggle is on", async () => {
     device: false,
     status: "active",
     created_at: "2026-09-10T12:00:00Z",
+    prefix: "lc_man",
   };
   const device = { ...manual, id: "device", name: "work-laptop", device: true };
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
@@ -30,6 +31,7 @@ it("shows CLI login tokens only when the device toggle is on", async () => {
   const toggle = screen.getByRole("switch", { name: "Show device tokens" });
   expect(toggle).not.toBeChecked();
   expect(await screen.findByText(manual.name)).toBeVisible();
+  expect(screen.getByText("lc_man...")).toBeVisible();
   expect(screen.queryByText(device.name)).not.toBeInTheDocument();
 
   fireEvent.click(toggle);

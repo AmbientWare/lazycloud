@@ -87,7 +87,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
   return <SessionContext.Provider value={contextValue}>{children}</SessionContext.Provider>;
 }
 
-function LoadingScreen() {
+export function LoadingScreen() {
   return (
     <ContentTransition
       pending

@@ -5,7 +5,6 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { Schemas } from "@/lib/api/client";
-import type { TokenListResponse } from "@/lib/api/schemas";
 import { tokensQueryOptions } from "@/lib/queries/tokens";
 
 import { useAccessTokensController } from "./controller";
@@ -13,7 +12,7 @@ import { useAccessTokensController } from "./controller";
 describe("access tokens controller", () => {
   it("mints once and keeps the issued secret out of the query cache", async () => {
     const existing = token({ id: "existing", name: "existing" });
-    const created = token({ id: "created", name: "ci-deploy" });
+    const created = { ...token({ id: "created", name: "ci-deploy" }), prefix: "lc_9zz" };
     const createResponse = deferred<Response>();
     let createRequests = 0;
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
@@ -100,10 +99,10 @@ function ids(tokens: readonly { id: string }[]): string[] {
 }
 
 function cachedTokens(queryClient: QueryClient): { id: string }[] {
-  const cache = queryClient.getQueryData<InfiniteData<TokenListResponse, string>>(
+  const cache = queryClient.getQueryData<InfiniteData<Schemas["TokenList"], string>>(
     tokensQueryOptions(false).queryKey,
   );
-  return (cache?.pages ?? []).flatMap((page) => page.data);
+  return (cache?.pages ?? []).flatMap((page) => page.tokens);
 }
 
 function serializedQueryState(queryClient: QueryClient): string {
