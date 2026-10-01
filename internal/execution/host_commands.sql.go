@@ -54,26 +54,35 @@ func (q *Queries) EndedAttemptsOnHost(ctx context.Context, arg EndedAttemptsOnHo
 }
 
 const idleDrainingContainersOnHost = `-- name: IdleDrainingContainersOnHost :many
-select c.id
+select c.id,
+       (case when r.spec ? 'http' then coalesce((r.spec ->> 'timeout_seconds')::int, 0) else 0 end)::int as grace_seconds
 from containers c
+join releases r on r.id = c.release_id
 where c.host_id = $1 and c.state = 'draining'
   and not exists (select 1 from attempts a where a.container_id = c.id and a.state = 'running')
 order by c.id
 `
 
-func (q *Queries) IdleDrainingContainersOnHost(ctx context.Context, hostID *uuid.UUID) ([]uuid.UUID, error) {
+type IdleDrainingContainersOnHostRow struct {
+	ID           uuid.UUID
+	GraceSeconds int32
+}
+
+// An HTTP container has no attempts; its supervisor finishes the requests in
+// flight, which may take the release's timeout.
+func (q *Queries) IdleDrainingContainersOnHost(ctx context.Context, hostID *uuid.UUID) ([]IdleDrainingContainersOnHostRow, error) {
 	rows, err := q.db.Query(ctx, idleDrainingContainersOnHost, hostID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []uuid.UUID
+	var items []IdleDrainingContainersOnHostRow
 	for rows.Next() {
-		var id uuid.UUID
-		if err := rows.Scan(&id); err != nil {
+		var i IdleDrainingContainersOnHostRow
+		if err := rows.Scan(&i.ID, &i.GraceSeconds); err != nil {
 			return nil, err
 		}
-		items = append(items, id)
+		items = append(items, i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

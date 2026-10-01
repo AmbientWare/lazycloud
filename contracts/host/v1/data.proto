@@ -63,11 +63,10 @@ message Header {
 }
 
 // WorkspaceSync applies a source change to a preview container's workspace.
-// The body is a tar of the files to write; removed lists paths to delete.
-// The agent restarts the container's runners afterwards.
-message WorkspaceSync {
-  repeated string removed = 1;
-}
+// The body is a tar of the files to write, paths relative to the workspace;
+// a path to remove is a regular entry of size zero carrying the PAX record
+// LAZYCLOUD.removed=1. The agent restarts the container's runners afterwards.
+message WorkspaceSync {}
 
 message End {}
 

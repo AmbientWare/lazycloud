@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -45,6 +47,11 @@ type container struct {
 	handler string
 	slots   int
 	logs    *logBatcher
+	// http is set for HTTP workloads, whose slots serve requests forwarded
+	// over the data connection instead of claiming tasks.
+	http *hostproto.HttpServing
+	// requests reaches the supervisor's HTTP socket.
+	requests *http.Transport
 
 	// work covers preparation, claims and log delivery; claims stop earlier
 	// when the container begins stopping.
@@ -74,7 +81,7 @@ type container struct {
 	claiming   bool
 }
 
-func (a *Agent) newContainer(id, handler string, slots int, phase hostproto.ContainerPhase) *container {
+func (a *Agent) newContainer(id, handler string, slots int, httpServing *hostproto.HttpServing, phase hostproto.ContainerPhase) *container {
 	c := &container{
 		a:          a,
 		log:        a.log.With("container_id", id),
@@ -82,12 +89,24 @@ func (a *Agent) newContainer(id, handler string, slots int, phase hostproto.Cont
 		dir:        filepath.Join(a.cfg.StateDir, "containers", id),
 		handler:    handler,
 		slots:      max(1, slots),
+		http:       httpServing,
 		phase:      phase,
 		running:    make(map[string]struct{}),
 		completing: make(map[string]struct{}),
 		cancelled:  cancelledAttempts{at: make(map[string]time.Time)},
 		slotFree:   make(chan struct{}, 1),
 		gone:       make(chan struct{}),
+	}
+	if httpServing != nil {
+		socket := filepath.Join(c.linkDir(), httpSocketName)
+		c.requests = &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return (&net.Dialer{}).DialContext(ctx, "unix", socket)
+			},
+			MaxIdleConnsPerHost: maxIdleRequestConns,
+			IdleConnTimeout:     90 * time.Second,
+			DisableCompression:  true,
+		}
 	}
 	c.work, c.cancelWork = context.WithCancel(a.ctx)
 	c.claims, c.cancelClaims = context.WithCancel(c.work)
@@ -106,12 +125,17 @@ func (c *container) linkDir() string      { return filepath.Join(c.a.cfg.SocketD
 func (c *container) dockerName() string   { return "lazycloud-" + c.id }
 
 func (c *container) configure() *hostproto.Configure {
-	return &hostproto.Configure{
+	configure := &hostproto.Configure{
 		Handler:          c.handler,
 		Slots:            int32(c.slots), //nolint:gosec // slots come from an int32
 		RunnerCommand:    []string{"python3", "-m", "runner"},
 		WorkingDirectory: containerWorkspace,
 	}
+	if c.http != nil {
+		configure.Http = c.http
+		configure.HttpSocket = containerLinkDir + "/" + httpSocketName
+	}
+	return configure
 }
 
 // snapshot is the container's current report.
@@ -316,6 +340,9 @@ func (c *container) cleanup(ctx context.Context) {
 	}
 	c.cleaned = true
 	c.mu.Unlock()
+	if c.requests != nil {
+		c.requests.CloseIdleConnections()
+	}
 	if err := c.a.removeContainer(ctx, c.dockerName()); err != nil {
 		c.log.Warn("removing docker container failed", "error", err)
 	}
@@ -341,6 +368,31 @@ func (c *container) detach() {
 	if l != nil {
 		l.close(0)
 	}
+}
+
+func (c *container) hasExited() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.phase == hostproto.ContainerPhase_CONTAINER_PHASE_EXITED
+}
+
+// reload restarts the container's runners once their work finishes, so new
+// workspace source takes effect.
+func (c *container) reload() {
+	c.mu.Lock()
+	l := c.link
+	c.mu.Unlock()
+	if l != nil {
+		l.enqueue(&hostproto.SupervisorCommand{Body: &hostproto.SupervisorCommand_Reload{Reload: &hostproto.Reload{}}})
+	}
+}
+
+// servesHTTP reports whether the container's workers take requests now. A
+// draining container still gets them; its supervisor answers busy.
+func (c *container) servesHTTP() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.http != nil && c.phase == hostproto.ContainerPhase_CONTAINER_PHASE_READY
 }
 
 func (c *container) isStopping() bool {
@@ -406,13 +458,9 @@ func (c *container) onSupervisorMessage(ctx context.Context, m *hostproto.Superv
 	case *hostproto.SupervisorMessage_Finished:
 		c.onFinished(body.Finished)
 	case *hostproto.SupervisorMessage_Output:
+		// Output outside an attempt, such as import-time prints and HTTP
+		// requests, goes to the container's own log.
 		o := body.Output
-		if o.GetAttemptId() == "" {
-			// Output outside an attempt, such as import-time prints, belongs
-			// to no task log; a load error carries its own traceback.
-			c.log.Debug("container output", "stream", o.GetStream(), "data", o.GetData())
-			return
-		}
 		_ = c.logs.append(ctx, &hostproto.LogLine{AttemptId: o.GetAttemptId(), Stream: o.GetStream(), Data: o.GetData(), Time: o.GetTime()})
 	default:
 		c.log.Warn("ignoring unknown supervisor message")
@@ -446,7 +494,8 @@ func (c *container) onReady(ready *hostproto.SlotsReady) {
 	c.running = running
 	changed := c.phase != hostproto.ContainerPhase_CONTAINER_PHASE_READY
 	c.phase = hostproto.ContainerPhase_CONTAINER_PHASE_READY
-	startClaims := !c.claiming && !c.stopping
+	// HTTP workers take requests from the data connection instead.
+	startClaims := !c.claiming && !c.stopping && c.http == nil
 	c.claiming = c.claiming || startClaims
 	c.mu.Unlock()
 	c.signalSlotFree()

@@ -8,6 +8,11 @@ alter table workloads add constraint workloads_kind_check check (kind in ('funct
 -- collide with deployed versions and never become active.
 create sequence preview_versions;
 
+-- The handler's import error since the release last had a ready container.
+-- Containers of an HTTP release follow traffic rather than tasks, so this
+-- stops planning from starting containers that would fail the same way.
+alter table releases add column load_error text;
+
 -- The hostnames a deployed workload answers on. Control claims them in the
 -- deploy transaction, so no two workloads share a subdomain or a custom
 -- hostname.

@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/execution"
@@ -185,7 +186,7 @@ func (sess *session) sync(ctx context.Context) error {
 		id := "stop:" + stop.Container.String()
 		derived[id] = true
 		if !sess.sent[id] {
-			if err := sess.send(stopMessage(id, stop.Container)); err != nil {
+			if err := sess.send(stopMessage(id, stop.Container, stop.Grace)); err != nil {
 				return err
 			}
 		}
@@ -207,7 +208,7 @@ func (sess *session) sync(ctx context.Context) error {
 // from durable state, so a later report of the same thing sends them again.
 func (sess *session) sendActions(actions execution.ReportActions) error {
 	for _, container := range actions.Stop {
-		if err := sess.send(stopMessage("stop:"+container.String(), container)); err != nil {
+		if err := sess.send(stopMessage("stop:"+container.String(), container, 0)); err != nil {
 			return err
 		}
 	}
@@ -250,14 +251,42 @@ func (s *Server) startMessage(ctx context.Context, id string, start execution.St
 			Handler: start.Spec.Handler,
 			Slots:   int32(start.Slots), //nolint:gosec // The schema caps concurrency at 256.
 		},
+		Http:        httpServing(start.Spec),
 		Environment: env,
 	}}}, nil
 }
 
-func stopMessage(id string, container execution.ContainerID) *hostproto.ServerMessage {
+// stopMessage stops a container after grace, or stopGraceSeconds when grace
+// is zero.
+func stopMessage(id string, container execution.ContainerID, grace time.Duration) *hostproto.ServerMessage {
+	seconds := int32(stopGraceSeconds)
+	if grace > 0 {
+		seconds = int32(min(grace.Seconds(), 86400))
+	}
 	return &hostproto.ServerMessage{CommandId: id, Body: &hostproto.ServerMessage_Stop{Stop: &hostproto.StopContainer{
-		ContainerId: container.String(), GraceSeconds: stopGraceSeconds,
+		ContainerId: container.String(), GraceSeconds: seconds,
 	}}}
+}
+
+// httpServing configures an HTTP workload's workers, or nil for a task
+// workload. Each worker admits the spec's concurrency.
+func httpServing(spec apitypes.FunctionSpec) *hostproto.HttpServing {
+	if spec.Http == nil {
+		return nil
+	}
+	concurrency := 1
+	if spec.Concurrency != nil {
+		concurrency = *spec.Concurrency
+	}
+	kind := hostproto.HttpKind_HTTP_KIND_ENDPOINT
+	switch spec.Http.Kind {
+	case apitypes.HttpKindAsgi:
+		kind = hostproto.HttpKind_HTTP_KIND_ASGI
+	case apitypes.HttpKindRealtime:
+		kind = hostproto.HttpKind_HTTP_KIND_REALTIME
+	case apitypes.HttpKindEndpoint:
+	}
+	return &hostproto.HttpServing{Kind: kind, Concurrency: int32(concurrency)} //nolint:gosec // The schema caps concurrency at 256.
 }
 
 func cancelMessage(id string, cancel execution.CancelCommand) *hostproto.ServerMessage {

@@ -120,7 +120,8 @@ func (q *Queries) OmittedRunningAttempts(ctx context.Context, arg OmittedRunning
 }
 
 const resetStartFailures = `-- name: ResetStartFailures :exec
-update releases set start_failures = 0 where id = $1 and start_failures <> 0
+update releases set start_failures = 0, load_error = null
+where id = $1 and (start_failures <> 0 or load_error is not null)
 `
 
 func (q *Queries) ResetStartFailures(ctx context.Context, id uuid.UUID) error {

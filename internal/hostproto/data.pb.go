@@ -475,11 +475,11 @@ func (x *Header) GetValue() string {
 }
 
 // WorkspaceSync applies a source change to a preview container's workspace.
-// The body is a tar of the files to write; removed lists paths to delete.
-// The agent restarts the container's runners afterwards.
+// The body is a tar of the files to write, paths relative to the workspace;
+// a path to remove is a regular entry of size zero carrying the PAX record
+// LAZYCLOUD.removed=1. The agent restarts the container's runners afterwards.
 type WorkspaceSync struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Removed       []string               `protobuf:"bytes,1,rep,name=removed,proto3" json:"removed,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -512,13 +512,6 @@ func (x *WorkspaceSync) ProtoReflect() protoreflect.Message {
 // Deprecated: Use WorkspaceSync.ProtoReflect.Descriptor instead.
 func (*WorkspaceSync) Descriptor() ([]byte, []int) {
 	return file_host_v1_data_proto_rawDescGZIP(), []int{6}
-}
-
-func (x *WorkspaceSync) GetRemoved() []string {
-	if x != nil {
-		return x.Removed
-	}
-	return nil
 }
 
 type End struct {
@@ -870,9 +863,8 @@ const file_host_v1_data_proto_rawDesc = "" +
 	"\aheaders\x18\x04 \x03(\v2\x19.lazycloud.host.v1.HeaderR\aheaders\"2\n" +
 	"\x06Header\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value\")\n" +
-	"\rWorkspaceSync\x12\x18\n" +
-	"\aremoved\x18\x01 \x03(\tR\aremoved\"\x05\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value\"\x0f\n" +
+	"\rWorkspaceSync\"\x05\n" +
 	"\x03End\"\xfe\x01\n" +
 	"\tForwardUp\x125\n" +
 	"\x04head\x18\x01 \x01(\v2\x1f.lazycloud.host.v1.ResponseHeadH\x00R\x04head\x12\x14\n" +

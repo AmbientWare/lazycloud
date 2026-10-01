@@ -19,7 +19,15 @@ with candidates as (
       and coalesce((r.spec -> 'autoscaler' ->> 'min_containers')::int, 0) > 0
 ),
 batch as (
-    select release_id from candidates order by release_id limit @batch_size
+    -- HTTP workloads and previews follow traffic instead; ServingReleases
+    -- plans them.
+    select c.release_id
+    from candidates c
+    join releases cr on cr.id = c.release_id
+    join workloads cw on cw.id = cr.workload_id
+    where cw.kind = 'function' and cr.version > 0
+    order by c.release_id
+    limit @batch_size
 )
 select r.id as release_id,
        a.workspace_id,
