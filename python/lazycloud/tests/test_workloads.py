@@ -721,27 +721,10 @@ def test_devbox_list_pages_and_status_reports_the_devbox(fake_api: FakeApi) -> N
                     "generation": 1,
                     "status": "detached",
                 },
+                "resources": {"cpu_millis": 2000, "memory_mib": 4096},
             }
         )
     )
-    fake_api.route("GET", f"{TEAM}/apps/tools/functions/box")(
-        lambda request: json_reply(
-            {
-                "name": "box",
-                "app": "tools",
-                "state": "active",
-                "active_release": _release(
-                    {
-                        "name": "box",
-                        "source": {"sha256": "0" * 64},
-                        "image": {"python_version": "3.12"},
-                        "resources": {"cpu_millis": 2000, "memory_mib": 4096},
-                    }
-                ),
-            }
-        )
-    )
-
     listed = _cli("devbox", "list", "--limit", "1")
     status = _cli("devbox", "box", "status")
 
