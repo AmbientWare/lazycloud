@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"strconv"
 	"sync"
+	"syscall"
 
 	"golang.org/x/sys/unix"
 )
@@ -91,6 +92,33 @@ func parentPID(pid string) int {
 		}
 	}
 	return 0
+}
+
+// wait reaps a process started with start. exited runs once the process
+// has exited but before it is reaped, while its pid and process group id
+// cannot be reused, so a caller can stop signalling them.
+func (c *children) wait(cmd *exec.Cmd, exited func()) error {
+	pid := cmd.Process.Pid
+	awaitExit(pid)
+	exited()
+	err := cmd.Wait()
+	c.remove(pid)
+	return err //nolint:wrapcheck // callers read the exit status from *exec.ExitError
+}
+
+// exitCode is a process's exit status, 128+N for a process signal N ended.
+func exitCode(err error) int {
+	if err == nil {
+		return 0
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return 1
+	}
+	if status, ok := exitErr.Sys().(syscall.WaitStatus); ok && status.Signaled() {
+		return 128 + int(status.Signal())
+	}
+	return exitErr.ExitCode()
 }
 
 // awaitExit blocks until pid has exited without reaping it.
