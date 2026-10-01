@@ -12,6 +12,18 @@ import (
 	"github.com/google/uuid"
 )
 
+const countLiveReleaseContainers = `-- name: CountLiveReleaseContainers :one
+select count(*)::int from containers where release_id = $1::uuid and state <> 'stopped'
+`
+
+// Work for a release without live containers needs one started.
+func (q *Queries) CountLiveReleaseContainers(ctx context.Context, releaseID uuid.UUID) (int32, error) {
+	row := q.db.QueryRow(ctx, countLiveReleaseContainers, releaseID)
+	var column_1 int32
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const countQueuedTasks = `-- name: CountQueuedTasks :one
 select count(*) from tasks where workload_id = $1 and status = 'queued'
 `

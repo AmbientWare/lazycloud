@@ -315,6 +315,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		}))
 	})
 	accounts.start(ctx, group, beats)
+	newBillingLoops(pool, exec, store, logger).start(ctx, group)
 	if healthListener != nil {
 		server := &http.Server{Handler: beats.handler(), ReadHeaderTimeout: 5 * time.Second}
 		group.Go(func() error {

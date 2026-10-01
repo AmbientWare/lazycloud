@@ -110,3 +110,11 @@ limit @max_rows;
 
 -- name: DeleteDiskRow :exec
 delete from disks where id = @id and state = 'deleting';
+
+-- name: WorkspaceDiskBytes :one
+-- The declared size of the workspace's live disks other than name, and of
+-- name itself.
+select coalesce(sum(size_bytes) filter (where name <> @name::text), 0)::bigint as others,
+       coalesce(max(size_bytes) filter (where name = @name::text), 0)::bigint as own
+from disks
+where workspace_id = @workspace_id and state = 'active';

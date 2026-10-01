@@ -80,12 +80,11 @@ func (i *Identity) CreateOwnedWorkspaceIn(ctx context.Context, p Principal, name
 	var ws Workspace
 	err := pgx.BeginFunc(ctx, i.pool, func(tx pgx.Tx) error {
 		var err error
-		q := i.queries.WithTx(tx)
-		ws, err = addWorkspace(ctx, q, name, p.User)
+		ws, err = addWorkspace(ctx, tx, name, p.User)
 		if err != nil || connection == nil {
 			return err
 		}
-		if err := q.SetWorkspaceConnection(ctx, SetWorkspaceConnectionParams{ID: uuid.UUID(ws.ID), ConnectionID: connection}); err != nil {
+		if err := i.queries.WithTx(tx).SetWorkspaceConnection(ctx, SetWorkspaceConnectionParams{ID: uuid.UUID(ws.ID), ConnectionID: connection}); err != nil {
 			return fmt.Errorf("place workspace: %w", err)
 		}
 		return nil

@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
@@ -106,6 +107,16 @@ func (s *Storage) AcquireDisk(ctx context.Context, host compute.HostID, containe
 	lease := DiskLease{Workspace: workspace, Bucket: bucket}
 	err = pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		q := s.queries.WithTx(tx)
+		// Creating or growing a disk is held to the plan's disk allowance.
+		sizes, err := q.WorkspaceDiskBytes(ctx, WorkspaceDiskBytesParams{WorkspaceID: declared.WorkspaceID, Name: name})
+		if err != nil {
+			return fmt.Errorf("read declared disk sizes: %w", err)
+		}
+		if declared.SizeBytes > sizes.Own {
+			if err := billing.AdmitDisk(ctx, tx, declared.WorkspaceID, sizes.Others+declared.SizeBytes); err != nil {
+				return err
+			}
+		}
 		if err := q.InsertDisk(ctx, InsertDiskParams{WorkspaceID: declared.WorkspaceID, Name: name, SizeBytes: declared.SizeBytes}); err != nil {
 			return fmt.Errorf("create disk: %w", err)
 		}

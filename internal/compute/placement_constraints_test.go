@@ -98,6 +98,49 @@ func TestCPUWorkStaysOffFleetGPUInstancesButRunsOnGPUMachines(t *testing.T) {
 	}
 }
 
+func TestAssignmentRecordsWhoseMachineAndWhichGPUBillingPrices(t *testing.T) {
+	o := newOwners(t, machineConfig())
+	alice := newUser(t, o.pool, "alice@example.com")
+	dev := newWorkspace(t, o.pool, "dev", alice)
+	fleet := newHost(t, o.pool, hostSpec{Provider: compute.ProviderAWS, CPU: 16000, Memory: 64 * gib, GPUType: "L4", GPUCount: 1})
+	publish(t, o.compute)
+	cmd, err := o.compute.CreateMachineJoin(t.Context(), compute.MachineJoin{Account: alice, Name: "gpu-box", Workspaces: []uuid.UUID{dev}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gpu := compute.Capacity{CPUMillis: 8000, MemoryBytes: 16 * gib, GPUType: "A100-80", GPUCount: 2}
+	machine, _, err := o.compute.Enroll(t.Context(), joinToken(t, cmd), compute.HostReport{Hostname: "gpu-box", Capacity: gpu})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := o.compute.OpenSession(t.Context(), machine, compute.SessionOpen{BootID: "boot", Capacity: gpu}); err != nil {
+		t.Fatal(err)
+	}
+	onFleet := pendingContainer(t, o.pool, dev, newRelease(t, o.pool, dev, `{"resources": {"gpu": ["L4"]}}`), 1000, gib)
+	onMachine := pendingContainer(t, o.pool, dev, newRelease(t, o.pool, dev, `{"resources": {"gpu": ["A100-80"]}, "placement": {"machine": "gpu-box"}}`), 1000, gib)
+	cpuOnMachine := pendingContainer(t, o.pool, dev, newRelease(t, o.pool, dev, `{"placement": {"machine": "gpu-box"}}`), 1000, gib)
+	run(t, o.pool, "update containers set gpu_count = 1 where id = any($1)", []uuid.UUID{onFleet, onMachine})
+	place(t, o)
+	for _, want := range []struct {
+		container uuid.UUID
+		host      compute.HostID
+		gpu       string
+		owner     string
+	}{
+		{onFleet, fleet, "L4", "platform_fleet"},
+		{onMachine, machine, "A100-80", "self_hosted"},
+		{cpuOnMachine, machine, "", "self_hosted"},
+	} {
+		var gpuType, owner string
+		if err := o.pool.QueryRow(t.Context(), "select gpu_type, billing_owner from containers where id = $1", want.container).Scan(&gpuType, &owner); err != nil {
+			t.Fatal(err)
+		}
+		if h := containerHost(t, o.pool, want.container); !on(h, want.host) || gpuType != want.gpu || owner != want.owner {
+			t.Errorf("container on %v records GPU %q and owner %s, want %q and %s", h, gpuType, owner, want.gpu, want.owner)
+		}
+	}
+}
+
 func TestNonPreemptibleWorkNeverRunsOnSpot(t *testing.T) {
 	o := newOwners(t, compute.Config{})
 	alice := newUser(t, o.pool, "alice@example.com")

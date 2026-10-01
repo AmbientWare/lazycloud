@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/notifications"
 )
 
@@ -74,7 +75,9 @@ func (i *Identity) Invite(ctx context.Context, p Principal, workspace, email str
 		if member {
 			return &ConflictError{Message: fmt.Sprintf("%s is already a member of this workspace", address)}
 		}
-		if err := admitMember(ctx, q, ws.ID); err != nil {
+		// Billing applies the owner's member limit; an open invitation
+		// holds a seat.
+		if err := billing.AdmitMember(ctx, tx, uuid.UUID(ws.ID), billing.Candidate{Email: address}); err != nil {
 			return err
 		}
 		inviter, err := q.UserProfile(ctx, uuid.UUID(p.User))
@@ -290,7 +293,8 @@ func (i *Identity) AcceptInvitation(ctx context.Context, p Principal, token stri
 		role, since := offered, time.Now()
 		switch {
 		case errors.Is(err, pgx.ErrNoRows):
-			if err := admitMember(ctx, q, WorkspaceID(inv.WorkspaceID)); err != nil {
+			user := uuid.UUID(p.User)
+			if err := billing.AdmitMember(ctx, tx, inv.WorkspaceID, billing.Candidate{User: &user}); err != nil {
 				return err
 			}
 			if err := q.InsertMember(ctx, InsertMemberParams{WorkspaceID: inv.WorkspaceID, UserID: uuid.UUID(p.User), Role: string(offered)}); err != nil {

@@ -147,6 +147,7 @@ select ws.id, rel.id from ws, rel`, spec).Scan(&ws, &release)
 	if err != nil {
 		h.t.Fatal(err)
 	}
+	dbtest.OwnWorkspaces(h.t, h.pool)
 	if _, err := h.pool.Exec(ctx, "update workloads set active_release_id = $1, next_version = 2", release); err != nil {
 		h.t.Fatal(err)
 	}

@@ -58,6 +58,8 @@ start() {
     bin/server admin create-workspace --name dev --owner-email dev@lazycloud.local >/dev/null
     bin/server admin create-token --email dev@lazycloud.local --name dev >"$state/token"
   fi
+  # The local stack takes no payments, so its development account is waived.
+  bin/server admin set-complimentary --email dev@lazycloud.local
   [ -f "$state/agent/identity.json" ] || bin/server admin create-join-token >"$state/join-token"
 
   bin/server serve >"$state/logs/server.log" 2>&1 &

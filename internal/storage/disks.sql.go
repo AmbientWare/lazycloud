@@ -490,3 +490,29 @@ func (q *Queries) TakeDiskLease(ctx context.Context, arg TakeDiskLeaseParams) er
 	_, err := q.db.Exec(ctx, takeDiskLease, arg.ContainerID, arg.LeaseToken, arg.ID)
 	return err
 }
+
+const workspaceDiskBytes = `-- name: WorkspaceDiskBytes :one
+select coalesce(sum(size_bytes) filter (where name <> $1::text), 0)::bigint as others,
+       coalesce(max(size_bytes) filter (where name = $1::text), 0)::bigint as own
+from disks
+where workspace_id = $2 and state = 'active'
+`
+
+type WorkspaceDiskBytesParams struct {
+	Name        string
+	WorkspaceID uuid.UUID
+}
+
+type WorkspaceDiskBytesRow struct {
+	Others int64
+	Own    int64
+}
+
+// The declared size of the workspace's live disks other than name, and of
+// name itself.
+func (q *Queries) WorkspaceDiskBytes(ctx context.Context, arg WorkspaceDiskBytesParams) (WorkspaceDiskBytesRow, error) {
+	row := q.db.QueryRow(ctx, workspaceDiskBytes, arg.Name, arg.WorkspaceID)
+	var i WorkspaceDiskBytesRow
+	err := row.Scan(&i.Others, &i.Own)
+	return i, err
+}

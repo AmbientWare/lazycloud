@@ -9,14 +9,17 @@ import (
 
 func TestWorkspaceAuthorization(t *testing.T) {
 	ctx := t.Context()
-	id := NewIdentity(dbtest.New(t), Config{})
+	pool := dbtest.New(t)
+	id := NewIdentity(pool, Config{})
 	for _, u := range []struct {
 		email string
 		admin bool
 	}{{"owner@example.com", false}, {"other@example.com", false}, {"admin@example.com", true}} {
-		if _, err := id.CreateUser(ctx, u.email, u.admin); err != nil {
+		user, err := id.CreateUser(ctx, u.email, u.admin)
+		if err != nil {
 			t.Fatal(err)
 		}
+		(&fixture{t: t, pool: pool}).unlimited(user)
 	}
 	if _, err := id.CreateWorkspace(ctx, "alpha", "owner@example.com"); err != nil {
 		t.Fatal(err)

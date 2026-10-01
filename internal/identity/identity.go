@@ -19,6 +19,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/AmbientWare/lazycloud/internal/billing"
 )
 
 var (
@@ -315,7 +317,7 @@ func (i *Identity) CreateWorkspace(ctx context.Context, name, ownerEmail string)
 		if err != nil {
 			return fmt.Errorf("read owner: %w", err)
 		}
-		ws, err = addWorkspace(ctx, q, name, UserID(owner.ID))
+		ws, err = addWorkspace(ctx, tx, name, UserID(owner.ID))
 		return err
 	})
 	if err != nil {
@@ -324,11 +326,13 @@ func (i *Identity) CreateWorkspace(ctx context.Context, name, ownerEmail string)
 	return ws, nil
 }
 
-// addWorkspace adds a workspace and its owner's membership.
-func addWorkspace(ctx context.Context, q *Queries, name string, owner UserID) (Workspace, error) {
-	if err := admitWorkspace(ctx, q, owner); err != nil {
+// addWorkspace adds a workspace and its owner's membership in tx, after
+// billing applies the owner's workspace limit.
+func addWorkspace(ctx context.Context, tx pgx.Tx, name string, owner UserID) (Workspace, error) {
+	if err := billing.AdmitWorkspace(ctx, tx, uuid.UUID(owner)); err != nil {
 		return Workspace{}, err
 	}
+	q := New(tx)
 	row, err := q.InsertWorkspace(ctx, name)
 	if isUniqueViolation(err) {
 		return Workspace{}, fmt.Errorf("workspace %s: %w", name, ErrExists)
@@ -341,17 +345,6 @@ func addWorkspace(ctx context.Context, q *Queries, name string, owner UserID) (W
 	}
 	return Workspace{ID: WorkspaceID(row.ID), Name: name, State: WorkspaceActive, Role: RoleOwner, CreatedAt: row.CreatedAt}, nil
 }
-
-// admitWorkspace is where billing will apply plan limits on the workspaces
-// an account owns. Workspace creation calls it inside its transaction. No
-// limits exist until billing owns them.
-func admitWorkspace(_ context.Context, _ *Queries, _ UserID) error { return nil }
-
-// admitMember is where billing will apply plan limits on a workspace's
-// members, such as Team's three. Invitations call it when sent and when
-// accepted, inside their transactions. No limits exist until billing owns
-// them.
-func admitMember(_ context.Context, _ *Queries, _ WorkspaceID) error { return nil }
 
 // CreateToken issues an API token for the user with email, restricted to
 // workspace when it is not empty. The token is returned once and only its

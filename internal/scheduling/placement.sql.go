@@ -13,13 +13,19 @@ import (
 
 const assignContainers = `-- name: AssignContainers :many
 with online as (
-    select h.id from hosts h
+    select h.id, h.kind, h.gpu_type from hosts h
     where h.id = any($2::uuid[]) and h.state = 'online' and h.phase = 'ready'
       and h.capacity_state = 'available'
     for share
 )
 update containers c
-set state = 'starting', host_id = a.host_id, assigned_at = now(), capacity_wait = null
+set state = 'starting', host_id = a.host_id, assigned_at = now(), capacity_wait = null,
+    gpu_type = case when c.gpu_count > 0 then online.gpu_type else '' end,
+    billing_owner = case online.kind
+        when 'connection' then 'connected_cloud'
+        when 'machine' then 'self_hosted'
+        else 'platform_fleet'
+    end
 from (select unnest($1::uuid[]) as id, unnest($2::uuid[]) as host_id) a
 join online on online.id = a.host_id
 where c.id = a.id and c.state = 'pending'
@@ -40,7 +46,8 @@ type AssignContainersRow struct {
 // The state check loses to a planner that stopped the container meanwhile.
 // Hosts are locked FOR SHARE and must still take work, so an assignment
 // either commits before host loss, a drain or a removal touches the host's
-// containers, or skips a host that one of them changed meanwhile.
+// containers, or skips a host that one of them changed meanwhile. The host
+// decides what billing prices: its GPU model and whose machine it is.
 func (q *Queries) AssignContainers(ctx context.Context, arg AssignContainersParams) ([]AssignContainersRow, error) {
 	rows, err := q.db.Query(ctx, assignContainers, arg.Ids, arg.HostIds)
 	if err != nil {

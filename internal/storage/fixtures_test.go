@@ -59,6 +59,7 @@ func (f *fixture) workspace(name string) identity.WorkspaceID {
 	f.t.Helper()
 	var id uuid.UUID
 	f.exec(`insert into workspaces (name) values ($1) returning id`, &id, name)
+	dbtest.OwnWorkspaces(f.t, f.pool)
 	return identity.WorkspaceID(id)
 }
 
