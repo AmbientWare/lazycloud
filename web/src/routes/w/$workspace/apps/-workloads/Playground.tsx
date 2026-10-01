@@ -302,7 +302,7 @@ function TaskInvokeOutcome({
           <ResultBody error={task.data.error} result={task.data.result} />
         ) : (
           <p className="p-3 text-xs text-muted-foreground">
-            {task.data.status === "complete" ? "The task returned no result." : "Result pending."}
+            {task.data.status === "succeeded" ? "The task returned no result." : "Result pending."}
           </p>
         )}
       </ContentTransition>
