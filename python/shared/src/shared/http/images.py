@@ -4,8 +4,8 @@ from uuid import UUID, uuid4
 
 from pydantic import Field
 
+from shared.api import TaskPendingReason
 from shared.http.base import HttpModel
-from shared.http.task_progress import TaskPendingReason
 from shared.image_building.authoring import LinuxArchitecture
 from shared.image_building.records import BuildStatus, ImageBuildPhase
 

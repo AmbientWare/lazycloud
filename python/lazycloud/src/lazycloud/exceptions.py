@@ -88,6 +88,23 @@ class TaskNotFoundError(SdkError):
         super().__init__(f"task not found: {task_id}")
 
 
+class DeploymentNotFoundError(SdkError):
+    def __init__(self, reference: str) -> None:
+        self.reference = reference
+        super().__init__(f"deployment not found: {reference}")
+
+
+class AmbiguousDeploymentError(SdkError):
+    """A deployment name that several apps use."""
+
+    def __init__(self, name: str, apps: list[str]) -> None:
+        self.name = name
+        self.apps = apps
+        super().__init__(
+            f"deployment {name} exists in apps {', '.join(apps)}; use the deployment id"
+        )
+
+
 class WorkspaceNotFoundError(SdkError):
     def __init__(self, workspace: str) -> None:
         self.workspace = workspace
@@ -133,7 +150,9 @@ class SandboxFileSystemError(SdkError):
 
 
 __all__ = [
+    "AmbiguousDeploymentError",
     "ConfigurationError",
+    "DeploymentNotFoundError",
     "FunctionNotDeployedError",
     "InvalidFunctionArgumentsError",
     "MapSubmissionError",

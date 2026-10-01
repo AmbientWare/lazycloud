@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-import base64
+import threading
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext
+from contextvars import copy_context
 from dataclasses import dataclass, field
 from functools import update_wrapper
 from pathlib import Path
@@ -14,17 +15,20 @@ from typing import (
     TypedDict,
     TypeGuard,
     TypeVar,
+    cast,
     overload,
 )
+from uuid import UUID
 
 from pydantic import ValidationError
 from shared.api import (
     Encoding,
     ErrorCode,
     LogEntry,
-    Payload,
     Stream,
     SubmitTasksRequest,
+    TaskInput,
+    TaskStatus,
 )
 from shared.api import FunctionSpec as ApiFunctionSpec
 from shared.autoscaling import Autoscaler
@@ -69,7 +73,7 @@ from lazycloud.client_contracts import (
     schema_from_contract_parameters,
     schema_from_contract_return,
 )
-from lazycloud.clients.api import ApiClient, ApiError
+from lazycloud.clients.api import ApiClient, ApiError, is_transient
 from lazycloud.control import api_client, require_workspace, resolve_control_client_config
 from lazycloud.env import called_on_import, is_local
 from lazycloud.exceptions import (
@@ -78,10 +82,10 @@ from lazycloud.exceptions import (
     SdkError,
     UnsupportedFeatureError,
 )
+from lazycloud.progress import PendingProgressReporter
 from lazycloud.references import dotted_reference
-from lazycloud.session.task import FunctionCall, Task
+from lazycloud.session.task import FunctionCall, Task, parent_task_id, task_input
 from lazycloud.terminal import Terminal, TerminalStep
-from lazycloud.values import cloudpickle_bytes
 
 if TYPE_CHECKING:
     from shared.api import Deployment
@@ -89,6 +93,8 @@ if TYPE_CHECKING:
 
 # Inputs per submit request; the API rejects larger batches.
 MAX_SUBMIT_BATCH = 1000
+# How often a followed call reads its task while it waits to start.
+QUEUED_POLL_SECONDS = 1.0
 
 P = ParamSpec("P")
 R = TypeVar("R")
@@ -186,6 +192,7 @@ class Function(Generic[P, R]):
     terminal: Terminal | None = field(
         default_factory=lambda: Terminal(default_enabled=is_local()), init=False, repr=False
     )
+    _release: tuple[str, UUID] | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         update_wrapper(self, self.func)
@@ -358,11 +365,39 @@ class Function(Generic[P, R]):
             spec["max_pending_tasks"] = self.max_pending_tasks
         if self.env:
             spec["environment"] = dict(self.env)
+        contract = build_client_contract(
+            self.func, kind=DeploymentKind.Function, inputs=self.inputs, outputs=self.outputs
+        )
+        if contract is not None:
+            spec["client_contract"] = contract.model_dump(mode="json")
         try:
             return ApiFunctionSpec.model_validate(spec)
         except ValidationError as exc:
             msg = f"function {self.resource_name} has invalid options: {exc}"
             raise FunctionOperationError(msg) from exc
+
+    def prepare(
+        self,
+        *,
+        workspace: str | None = None,
+        source_root: str | Path | None = None,
+    ) -> str:
+        """Upload the working tree and return the id of the release that runs it.
+
+        Calls from this process run on that release until it is prepared again.
+        """
+        from lazycloud.session.deployment import prepare_function_release
+
+        client, selected_workspace = self._session(workspace)
+        release = prepare_function_release(
+            self,
+            client=client,
+            workspace=selected_workspace,
+            source_root=source_root,
+            terminal=self.terminal,
+        )
+        self._release = (selected_workspace, release.id)
+        return str(release.id)
 
     def deploy(
         self,
@@ -391,7 +426,10 @@ class Function(Generic[P, R]):
     def remote(self, *args: P.args, **kwargs: P.kwargs) -> R:
         """Run one task remotely, print its output as it arrives and return its value.
 
-        A dropped connection never cancels the task; the call resumes following it.
+        From a laptop the call runs the working tree, which is uploaded on the
+        first call. A failed task raises the exception the function raised. A
+        dropped connection resumes following the task; Ctrl-C, or a connection
+        that cannot be restored, cancels it.
         """
         return self._remote_call(args, kwargs)
 
@@ -405,7 +443,10 @@ class Function(Generic[P, R]):
     def spawn(self, *args: Any, **kwargs: Any) -> FunctionCall[R]: ...
 
     def spawn(self, *args: Any, **kwargs: Any) -> FunctionCall[R]:
-        return FunctionCall(self._submit([self._input(args, kwargs)])[0])
+        """Submit one task and return its call without waiting for it."""
+        client, workspace = self._invocation_session()
+        task = self._submit(client, workspace, [self._input(args, kwargs, workspace)])[0]
+        return FunctionCall(task)
 
     @overload
     async def async_spawn(self, *args: P.args, **kwargs: P.kwargs) -> FunctionCall[R]: ...
@@ -420,8 +461,9 @@ class Function(Generic[P, R]):
         """Submit one task per input, in batches, and return the calls in input order."""
         if not inputs:
             return []
-        payloads = [self._input(_map_args(value), {}) for value in inputs]
-        return [FunctionCall(task) for task in self._submit(payloads)]
+        client, workspace = self._invocation_session()
+        payloads = [self._input(_map_args(value), {}, workspace) for value in inputs]
+        return [FunctionCall(task) for task in self._submit(client, workspace, payloads)]
 
     def map(self, inputs: Sequence[Any]) -> Iterator[R | None]:
         """Yield each input's value in input order; a failed task yields None."""
@@ -429,50 +471,83 @@ class Function(Generic[P, R]):
             try:
                 yield call.get()
             except Exception as exc:
-                self._error(f"Task {call.task_id} failed during map: {exc}")
+                self._error(f"Task failed during map: {exc}")
                 yield None
 
     def submit_json(self, args: Sequence[Any], kwargs: Mapping[str, Any]) -> Task:
         """Submit one task with JSON arguments; its result comes back as JSON."""
-        payload = Payload(
+        client, workspace = self._invocation_session()
+        payload = TaskInput(
             encoding=Encoding.json,
             value={"args": to_json_value(list(args)), "kwargs": to_json_value(dict(kwargs))},
         )
-        return self._submit([payload])[0]
+        return self._submit(client, workspace, [payload])[0]
 
     def run_task(self, task: Task) -> Any:
         """Follow a submitted task's output until it finishes, then return its outcome."""
         with self._task_step() as step:
             step.update(f"{task.task_id[:8]} submitted")
-            try:
-                task.follow_logs(self._print_log)
-            except SdkError as exc:
-                self._warn(f"output of task {task.task_id} is unavailable: {exc}")
-            if self.terminal is not None:
-                self.terminal.flush_remote_output()
-            view = task.wait()
-            step.update(f"{task.task_id[:8]} {view.status.value}")
-        return task.outcome(view)
+            return self._follow(task, step)
 
     def _remote_call(self, args: tuple[Any, ...], kwargs: Mapping[str, Any]) -> R:
-        return self.run_task(self._submit([self._input(args, kwargs)])[0])
+        client, workspace = self._invocation_session()
+        payload = self._input(args, kwargs, workspace)
+        with self._task_step() as step:
+            task = self._submit(client, workspace, [payload])[0]
+            step.update(f"{task.task_id[:8]} submitted")
+            return cast(R, self._follow(task, step))
 
-    def _input(self, args: tuple[Any, ...], kwargs: Mapping[str, Any]) -> Payload:
+    def _follow(self, task: Task, step: TerminalStep) -> Any:
+        """Print the task's output and wait for it; anything that ends the wait early cancels it."""
+        reporter = PendingProgressReporter(terminal=self.terminal, step=step)
+        watcher = _QueuedTaskWatcher(task, step, reporter)
+        try:
+            watcher.start()
+            try:
+                task.follow_logs(self._print_log)
+            finally:
+                watcher.stop()
+            if self.terminal is not None:
+                self.terminal.flush_remote_output()
+            view = task.wait_view()
+        except BaseException as exc:
+            try:
+                task.client.cancel_task(task.workspace, UUID(task.task_id))
+            except Exception as cancel_error:
+                msg = (
+                    f"Connection ended; cancellation of task {task.task_id} "
+                    f"could not be confirmed: {cancel_error}"
+                )
+                raise FunctionOperationError(msg) from exc
+            raise
+        reporter.update(task.task_id, None)
+        step.update(f"{task.task_id[:8]} {view.status.value}")
+        return task.outcome(view)
+
+    def _input(self, args: tuple[Any, ...], kwargs: Mapping[str, Any], workspace: str) -> TaskInput:
         encoded_args, encoded_kwargs = encode_arguments(self.func, args, kwargs, self.inputs)
-        data = cloudpickle_bytes({"args": list(encoded_args), "kwargs": encoded_kwargs})
-        return Payload.model_validate(
-            {"encoding": Encoding.cloudpickle, "data": base64.b64encode(data)}
-        )
+        return task_input(encoded_args, encoded_kwargs, workspace=workspace)
 
-    def _submit(self, inputs: list[Payload]) -> list[Task]:
+    def _invocation_session(self) -> tuple[ApiClient, str]:
         if called_on_import():
             msg = "remote function invocation is unavailable while importing user code"
             raise FunctionOperationError(msg)
         self.require_supported()
         client, workspace = self._session()
+        if is_local():
+            # Prepared before any Task step so its output reads in order.
+            self._release_id(workspace)
+        return client, workspace
+
+    def _submit(self, client: ApiClient, workspace: str, inputs: list[TaskInput]) -> list[Task]:
+        target: dict[str, UUID] = {}
+        if is_local():
+            target["release_id"] = self._release_id(workspace)
+        elif parent := parent_task_id():
+            target["parent_task_id"] = parent
         tasks: list[Task] = []
         for start in range(0, len(inputs), MAX_SUBMIT_BATCH):
-            request = SubmitTasksRequest(inputs=inputs[start : start + MAX_SUBMIT_BATCH])
+            request = SubmitTasksRequest(inputs=inputs[start : start + MAX_SUBMIT_BATCH], **target)
             try:
                 response = client.submit_tasks(
                     workspace, self._app_slug, self.resource_name, request
@@ -488,6 +563,13 @@ class Function(Generic[P, R]):
                 ) from exc
             tasks.extend(Task(str(item.id), workspace, client) for item in response.tasks)
         return tasks
+
+    def _release_id(self, workspace: str) -> UUID:
+        """The working-tree release this process calls, prepared on first use."""
+        if self._release is None or self._release[0] != workspace:
+            self.prepare(workspace=workspace)
+        assert self._release is not None
+        return self._release[1]
 
     def _session(self, workspace: str | None = None) -> tuple[ApiClient, str]:
         config = resolve_control_client_config(workspace=workspace or self.workspace)
@@ -519,14 +601,55 @@ class Function(Generic[P, R]):
         terminal = self.terminal or Terminal()
         terminal.error(message)
 
-    def _warn(self, message: str) -> None:
-        if self.terminal is not None:
-            self.terminal.warn(message)
-
     def _effective_timeout_seconds(self) -> int | None:
         if self.task_policy is not None and self.task_policy.timeout_seconds is not None:
             return self.task_policy.timeout_seconds
         return self.timeout_seconds
+
+
+@dataclass
+class _QueuedTaskWatcher:
+    """Reads a followed task about once a second until it starts.
+
+    The log stream says nothing while a task waits, so this keeps the Task
+    step's status and the pending notice current until the task runs.
+    """
+
+    task: Task
+    step: TerminalStep
+    reporter: PendingProgressReporter
+    _stopped: threading.Event = field(default_factory=threading.Event)
+    _thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        context = copy_context()
+        self._thread = threading.Thread(
+            target=context.run, args=(self._watch,), name="lazycloud-task-watch", daemon=True
+        )
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stopped.set()
+        if self._thread is not None:
+            self._thread.join(timeout=self.task.client.timeout_seconds)
+
+    def _watch(self) -> None:
+        task_id = UUID(self.task.task_id)
+        status: TaskStatus | None = None
+        while not self._stopped.is_set():
+            try:
+                view = self.task.client.get_task(self.task.workspace, task_id)
+            except Exception as exc:
+                if not is_transient(exc):
+                    return
+            else:
+                if view.status is not status:
+                    status = view.status
+                    self.step.update(f"{self.task.task_id[:8]} {status.value}")
+                self.reporter.update(self.task.task_id, view.pending)
+                if view.status is not TaskStatus.queued:
+                    return
+            self._stopped.wait(QUEUED_POLL_SECONDS)
 
 
 def _map_args(input_value: Any) -> tuple[Any, ...]:

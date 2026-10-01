@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TypeVar
@@ -115,20 +115,30 @@ class ApiClient:
             body=request,
         )
 
-    def upload_source(self, target: UploadTarget, archive: Path) -> None:
+    def upload_source(
+        self,
+        target: UploadTarget,
+        archive: Path,
+        *,
+        progress: Callable[[int], None] | None = None,
+    ) -> None:
         """Send archive bytes to a presigned upload target.
 
         The target URL carries its own authorization, so the bearer token is
-        not sent with it.
+        not sent with it. `progress` receives the bytes read so far.
         """
 
         size = archive.stat().st_size
         headers = {**target.headers, "Content-Length": str(size)}
 
         def chunks() -> Iterator[bytes]:
+            sent = 0
             with archive.open("rb") as source:
                 while chunk := source.read(_UPLOAD_CHUNK_BYTES):
                     yield chunk
+                    sent += len(chunk)
+                    if progress is not None:
+                        progress(sent)
 
         try:
             response = httpx.request(

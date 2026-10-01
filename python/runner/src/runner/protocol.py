@@ -9,6 +9,7 @@ protocol errors are reported on stderr only when the runner is about to exit.
 from __future__ import annotations
 
 import contextlib
+import io
 import json
 import os
 import pickle
@@ -27,6 +28,7 @@ from runner.handler_loading import load_handler
 from runner.invocation import cloudpickle_bytes, invoke_handler
 from runner.protocol_models import (
     Arguments,
+    Dependency,
     Encoding,
     Failed,
     Invoke,
@@ -43,9 +45,10 @@ MAX_PAYLOAD_BYTES = 64 << 20
 PROTOCOL_ERROR_EXIT = 2
 LOAD_FAILED_EXIT = 1
 
-_INBOUND: TypeAdapter[Load | Invoke] = TypeAdapter(
-    Annotated[Load | Invoke, Field(discriminator="type")]
+_INBOUND: TypeAdapter[Load | Dependency | Invoke] = TypeAdapter(
+    Annotated[Load | Dependency | Invoke, Field(discriminator="type")]
 )
+_FUNCTION_CALL = "function_call"
 
 
 class ProtocolError(Exception):
@@ -58,7 +61,7 @@ class Connection:
     def __init__(self, sock: socket.socket) -> None:
         self._sock = sock
 
-    def receive(self) -> tuple[Load | Invoke, bytearray] | None:
+    def receive(self) -> tuple[Load | Dependency | Invoke, bytearray] | None:
         """Read one frame, or None when the supervisor closed between frames."""
 
         prefix = self._read_prefix()
@@ -125,26 +128,34 @@ def serve(connection: Connection) -> int:
         return LOAD_FAILED_EXIT
     _flush_output()
     connection.send(Loaded(type="loaded"))
+    dependencies: dict[str, tuple[Encoding, bytearray]] = {}
     while (frame := connection.receive()) is not None:
-        invoke, payload = frame
-        if not isinstance(invoke, Invoke):
+        message, payload = frame
+        if isinstance(message, Dependency):
+            dependencies[message.task_id] = (message.encoding, payload)
+            continue
+        if not isinstance(message, Invoke):
             raise ProtocolError("load after the handler loaded")
-        reply, result = _attempt(handler, invoke, payload)
+        reply, result = _attempt(handler, message, payload, dependencies)
+        dependencies = {}
         _flush_output()
         connection.send(reply, result)
     return 0
 
 
 def _attempt(
-    handler: Callable[..., Any], invoke: Invoke, payload: bytearray
+    handler: Callable[..., Any],
+    invoke: Invoke,
+    payload: bytearray,
+    dependencies: dict[str, tuple[Encoding, bytearray]],
 ) -> tuple[Succeeded | Failed, bytes]:
     encoding = invoke.input_encoding
     try:
-        args, kwargs = _decode_arguments(encoding, payload)
-        with task_context(invoke.task_id):
+        args, kwargs = _decode_arguments(encoding, payload, dependencies)
+        with task_context(invoke.task_id, invoke.root_task_id):
             result = invoke_handler(handler, args, kwargs, encoding=encoding)
         encoded = _encode_result(result, encoding)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ProtocolError):
         raise
     except BaseException as exc:
         failed = Failed(type="failed", attempt_id=invoke.attempt_id, error=_runner_error(exc))
@@ -154,16 +165,45 @@ def _attempt(
 
 
 def _decode_arguments(
-    encoding: Encoding, payload: bytearray
+    encoding: Encoding,
+    payload: bytearray,
+    dependencies: dict[str, tuple[Encoding, bytearray]],
 ) -> tuple[tuple[Any, ...], dict[str, Any]]:
     try:
         if encoding is Encoding.json:
             arguments = Arguments.model_validate_json(payload)
         else:
-            arguments = Arguments.model_validate(pickle.loads(payload))
+            unpickler = _DependencyUnpickler(io.BytesIO(payload), dependencies)
+            arguments = Arguments.model_validate(unpickler.load())
+    except ProtocolError:
+        raise
     except Exception as exc:
         raise InvalidInputError(f"invalid {encoding.value} arguments: {exc}") from exc
     return tuple(arguments.args), arguments.kwargs
+
+
+class _DependencyUnpickler(pickle.Unpickler):
+    """Resolves `("function_call", task_id)` to the upstream task's decoded result."""
+
+    def __init__(
+        self, file: io.BytesIO, dependencies: dict[str, tuple[Encoding, bytearray]]
+    ) -> None:
+        super().__init__(file)
+        self._dependencies = dependencies
+
+    def persistent_load(self, pid: Any) -> Any:
+        match pid:
+            case (str(kind), str(task_id)) if kind == _FUNCTION_CALL:
+                pass
+            case _:
+                raise ProtocolError(f"unsupported persistent id {pid!r}")
+        try:
+            encoding, payload = self._dependencies[task_id]
+        except KeyError:
+            raise ProtocolError(f"input refers to task {task_id} without its dependency") from None
+        if encoding is Encoding.json:
+            return json.loads(payload)
+        return pickle.loads(payload)
 
 
 def _encode_result(result: Any, encoding: Encoding) -> bytes:

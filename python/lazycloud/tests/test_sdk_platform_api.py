@@ -7,6 +7,7 @@ import io
 import json
 import pickle
 import sys
+import threading
 import zipfile
 from collections.abc import Iterator
 from pathlib import Path
@@ -16,15 +17,19 @@ from typing import Any
 import pytest
 from lazycloud.cli.components.errors import ClientError
 from lazycloud.cli.main import build_public_cli, start
+from lazycloud.clients.api import ApiError
 from lazycloud.config import get_profile, reset_settings_cache
 from lazycloud.exceptions import (
     FunctionNotDeployedError,
     RemoteTaskError,
     UnsupportedFeatureError,
 )
+from lazycloud.terminal import Terminal
 from lazycloud.values import cloudpickle_bytes
+from shared.api import TaskPendingReason, TaskStatus
 from typer.testing import CliRunner
 
+import lazycloud
 from tests.api_server import (
     TOKEN,
     WORKSPACE,
@@ -41,7 +46,8 @@ pytestmark = pytest.mark.usefixtures("isolated_imports")
 APP_ID = "0192f0a0-0000-7000-8000-000000000001"
 RELEASE_ID = "0192f0a0-0000-7000-8000-000000000002"
 NOW = "2026-09-30T12:00:00Z"
-TASKS = "/v1/workspaces/team/apps/reports/functions/summarize_sales/tasks"
+FUNCTION = "/v1/workspaces/team/apps/reports/functions/summarize_sales"
+TASKS = f"{FUNCTION}/tasks"
 
 REPORTS = """\
 import lazycloud
@@ -83,6 +89,7 @@ def _task(task_id: str, status: str = "queued", **extra: object) -> dict[str, ob
         "release_id": RELEASE_ID,
         "status": status,
         "attempts": 1 if status != "queued" else 0,
+        "max_attempts": 1,
         "created_at": NOW,
         **extra,
     }
@@ -137,8 +144,31 @@ def _serve_deployment(api: FakeApi, *, stored: set[str]) -> None:
             }
             for spec in functions
         ]
-        app = {"id": APP_ID, "name": "reports", "state": "active", "created_at": NOW}
-        return json_reply({"app": app, "releases": releases, "pruned": []})
+        return json_reply(
+            {
+                "app": _app(workloads=len(releases)),
+                "releases": releases,
+                "pruned": [],
+                "removed_versions": 0,
+            }
+        )
+
+    @api.route("POST", "/v1/workspaces/team/apps/reports/functions/[^/]+/releases")
+    def prepare(request: ApiRequest) -> Reply:
+        spec: dict[str, Any] = request.json()
+        return json_reply(
+            {"id": RELEASE_ID, "function": spec["name"], "created_at": NOW, "spec": spec}
+        )
+
+
+def _app(*, workloads: int = 1, state: str = "active") -> dict[str, object]:
+    return {
+        "id": APP_ID,
+        "name": "reports",
+        "state": state,
+        "workloads": workloads,
+        "created_at": NOW,
+    }
 
 
 def test_deploy_uploads_the_source_once_and_maps_function_options(
@@ -160,7 +190,10 @@ def test_deploy_uploads_the_source_once_and_maps_function_options(
     assert len(fake_api.calls("POST", "/v1/workspaces/team/sources")) == 2
     (request,) = fake_api.calls("POST", "/v1/workspaces/team/apps/reports/deployments")
     assert request.headers["authorization"] == f"Bearer {TOKEN}"
-    assert request.json() == {
+    body = request.json()
+    contract = body["functions"][0].pop("client_contract")
+    assert contract["operation"]["parameters"][0]["name"] == "values"
+    assert body == {
         "functions": [
             {
                 "name": "summarize_sales",
@@ -232,12 +265,14 @@ def test_remote_streams_output_resumes_dropped_logs_and_returns_the_value(
     fake_api: FakeApi,
 ) -> None:
     reports = _project(tmp_path, monkeypatch)
+    _serve_deployment(fake_api, stored=set())
     task_id = _task_id(7)
     log_streams: list[Iterator[bytes]] = []
 
     def entry(number: int, stream: str, data: str) -> bytes:
         record: dict[str, object] = {
             "id": number,
+            "task_id": task_id,
             "attempt": 1,
             "stream": stream,
             "data": data,
@@ -274,14 +309,15 @@ def test_remote_streams_output_resumes_dropped_logs_and_returns_the_value(
         (["0"], ["true"]),
         (["1"], ["true"]),
     ]
-    (wait,) = fake_api.calls("GET", f"/v1/workspaces/team/tasks/{task_id}")
-    assert wait.query["wait_seconds"] == ["30"]
+    reads = fake_api.calls("GET", f"/v1/workspaces/team/tasks/{task_id}")
+    assert [r.query["wait_seconds"] for r in reads if "wait_seconds" in r.query] == [["30"]]
     stderr = capsys.readouterr().err
     assert stderr.count("summing 3 values") == 1
     assert "total ready" in stderr
 
 
 def _serve_failed_task(api: FakeApi, failure: dict[str, object]) -> None:
+    _serve_deployment(api, stored=set())
     task_id = _task_id(9)
     api.route("POST", TASKS)(lambda _: json_reply({"tasks": [_task(task_id)]}, 201))
     api.route("GET", f"/v1/workspaces/team/tasks/{task_id}/logs")(lambda _: (200, {}, b""))
@@ -335,6 +371,7 @@ def test_spawn_map_submits_in_batches_and_keeps_input_order(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_api: FakeApi
 ) -> None:
     reports = _project(tmp_path, monkeypatch)
+    _serve_deployment(fake_api, stored=set())
     submitted: list[int] = []
 
     @fake_api.route("POST", TASKS)
@@ -360,15 +397,209 @@ def test_spawn_map_submits_in_batches_and_keeps_input_order(
     assert submitted == list(range(1001))
     assert [call.get() for call in calls[995:]] == list(range(995, 1001))
 
+    assert list(reports.summarize_sales.map([[1], [2]])) == [1, 2]
+    assert {r.json()["release_id"] for r in fake_api.calls("POST", TASKS)} == {RELEASE_ID}
+    assert len(fake_api.calls("POST", f"{FUNCTION}/releases")) == 1
 
-def test_calling_an_undeployed_function_raises_a_typed_error(
+
+def test_calls_inside_a_container_run_the_active_release_as_children(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_api: FakeApi
 ) -> None:
     reports = _project(tmp_path, monkeypatch)
-    fake_api.route("POST", TASKS)(lambda _: error_reply("not_found", "function not found", 404))
+    parent = _task_id(40)
+    monkeypatch.setenv("CONTAINER_ID", "container-1")
+    monkeypatch.setenv("TASK_ID", parent)
+    fake_api.route("POST", TASKS)(lambda _: json_reply({"tasks": [_task(_task_id(41))]}, 201))
 
+    call = reports.summarize_sales.spawn([1])
+
+    assert call.task_id == _task_id(41)
+    (submit,) = fake_api.calls("POST", TASKS)
+    assert "release_id" not in submit.json()
+    assert submit.json()["parent_task_id"] == parent
+    assert fake_api.calls("POST", "/v1/workspaces/team/sources") == []
+
+    fake_api.route("POST", TASKS)(lambda _: error_reply("not_found", "function not found", 404))
     with pytest.raises(FunctionNotDeployedError, match=r"reports\.summarize_sales"):
         reports.summarize_sales.spawn([1])
+
+
+class _CallReferences(pickle.Unpickler):
+    def persistent_load(self, pid: Any) -> Any:
+        return ("resolved", *pid)
+
+
+def test_function_calls_in_arguments_become_dependencies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_api: FakeApi
+) -> None:
+    reports = _project(tmp_path, monkeypatch)
+    _serve_deployment(fake_api, stored=set())
+    submitted: list[dict[str, Any]] = []
+
+    @fake_api.route("POST", TASKS)
+    def submit(request: ApiRequest) -> Reply:
+        submitted.extend(request.json()["inputs"])
+        return json_reply({"tasks": [_task(_task_id(50 + len(submitted)))]}, 201)
+
+    first = reports.summarize_sales.spawn([1, 2])
+    second = reports.summarize_sales.spawn([3])
+    reports.summarize_sales.spawn({"totals": [first, second], "again": first})
+
+    dependent = submitted[-1]
+    assert dependent["depends_on"] == [first.task_id, second.task_id]
+    arguments = _CallReferences(io.BytesIO(base64.b64decode(dependent["data"]))).load()
+    reference = ("resolved", "function_call")
+    assert arguments["args"] == [
+        {
+            "totals": [(*reference, first.task_id), (*reference, second.task_id)],
+            "again": (*reference, first.task_id),
+        }
+    ]
+    assert "depends_on" not in submitted[0]
+    with pytest.raises(TypeError, match="argument of a remote call"):
+        pickle.dumps(first)
+
+
+class _InterruptedTerminal(Terminal):
+    """A terminal whose user presses Ctrl-C when the first output line arrives."""
+
+    def remote_output(self, message: str, *, stream: str = "stdout") -> None:
+        raise KeyboardInterrupt
+
+
+@pytest.mark.parametrize("ending", ["ctrl-c", "lost-stream"])
+def test_remote_cancels_the_task_when_following_ends_early(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_api: FakeApi, ending: str
+) -> None:
+    reports = _project(tmp_path, monkeypatch)
+    _serve_deployment(fake_api, stored=set())
+    task_id = _task_id(60)
+    logs = f"/v1/workspaces/team/tasks/{task_id}/logs"
+    fake_api.route("POST", TASKS)(lambda _: json_reply({"tasks": [_task(task_id)]}, 201))
+    fake_api.route("GET", f"/v1/workspaces/team/tasks/{task_id}")(
+        lambda _: json_reply(_task(task_id, "running"))
+    )
+    fake_api.route("POST", f"/v1/workspaces/team/tasks/{task_id}/cancel")(
+        lambda _: json_reply(_task(task_id, "cancelled"))
+    )
+    if ending == "ctrl-c":
+        reports.summarize_sales.terminal = _InterruptedTerminal()
+        line: dict[str, object] = {
+            "id": 1,
+            "task_id": task_id,
+            "attempt": 1,
+            "stream": "stdout",
+            "data": "x",
+        }
+        fake_api.route("GET", logs)(lambda _: json_reply({**line, "time": NOW}))
+        expected: type[BaseException] = KeyboardInterrupt
+    else:
+        fake_api.route("GET", logs)(lambda _: error_reply("forbidden", "token revoked", 403))
+        expected = ApiError
+
+    with pytest.raises(expected):
+        reports.summarize_sales.remote([1])
+
+    assert len(fake_api.calls("POST", f"/v1/workspaces/team/tasks/{task_id}/cancel")) == 1
+
+
+def test_remote_reports_why_a_queued_task_waits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    fake_api: FakeApi,
+) -> None:
+    reports = _project(tmp_path, monkeypatch)
+    _serve_deployment(fake_api, stored=set())
+    task_id = _task_id(70)
+    polled = threading.Event()
+    pending = {
+        "reason": "capacity_busy",
+        "message": "Waiting for an available function container.",
+        "since": "2020-01-01T00:00:00Z",
+        "pending_since": "2020-01-01T00:00:00Z",
+        "observed_at": NOW,
+    }
+
+    @fake_api.route("GET", f"/v1/workspaces/team/tasks/{task_id}")
+    def read(request: ApiRequest) -> Reply:
+        if "wait_seconds" in request.query:
+            return json_reply(_task(task_id, "succeeded"))
+        polled.set()
+        return json_reply(_task(task_id, pending=pending))
+
+    def logs(_: ApiRequest) -> Reply:
+        assert polled.wait(5)
+        return 200, {}, b""
+
+    fake_api.route("GET", f"/v1/workspaces/team/tasks/{task_id}/logs")(logs)
+    fake_api.route("POST", TASKS)(lambda _: json_reply({"tasks": [_task(task_id)]}, 201))
+    fake_api.route("GET", f"/v1/workspaces/team/tasks/{task_id}/result")(
+        lambda _: json_reply({"encoding": "json", "value": 3})
+    )
+    updates: list[tuple[str, TaskPendingReason | None]] = []
+
+    with lazycloud.progress(lambda task, update: updates.append((task, update and update.reason))):
+        assert reports.summarize_sales.remote([1, 2]) == 3
+
+    assert updates == [(task_id, TaskPendingReason.CapacityBusy), (task_id, None)]
+    stderr = capsys.readouterr().err
+    assert f"Task {task_id[:8]} · pending" in stderr
+    assert "Waiting for an available function container." in stderr
+    assert f"{task_id[:8]} succeeded" in stderr
+
+
+def test_task_handles_read_results_logs_and_reruns(fake_api: FakeApi) -> None:
+    task_id, rerun_id, failed_id = _task_id(80), _task_id(81), _task_id(82)
+    tasks = f"/v1/workspaces/{WORKSPACE}/tasks"
+    fake_api.route("GET", f"{tasks}/{task_id}")(lambda _: json_reply(_task(task_id, "succeeded")))
+    fake_api.route("GET", f"{tasks}/{task_id}/result")(
+        lambda _: json_reply({"encoding": "cloudpickle", "data": _pickled({"total": 6})})
+    )
+    fake_api.route("GET", f"{tasks}/{task_id}/logs")(
+        lambda _: json_reply(
+            {
+                "id": 9,
+                "task_id": task_id,
+                "attempt": 1,
+                "stream": "stdout",
+                "data": "done",
+                "time": NOW,
+            }
+        )
+    )
+    fake_api.route("POST", f"{tasks}/{task_id}/rerun")(lambda _: json_reply(_task(rerun_id)))
+    failure = {"kind": "user_error", "type": "ValueError", "message": "no sales"}
+    fake_api.route("GET", f"{tasks}/{failed_id}")(
+        lambda _: json_reply(_task(failed_id, "failed", failure=failure))
+    )
+
+    task = lazycloud.Task.from_id(task_id)
+    result = task.result()
+    call: lazycloud.FunctionCall[dict[str, int]] = lazycloud.FunctionCall(task)
+    failed_call: lazycloud.FunctionCall[int] = lazycloud.FunctionCall(
+        lazycloud.Task.from_id(failed_id)
+    )
+    failed = failed_call.result()
+
+    assert (result.ok, result.status, result.exit_code, result.error) == (
+        True,
+        TaskStatus.succeeded,
+        None,
+        "",
+    )
+    assert call.result().value == {"total": 6}
+    assert (failed.ok, failed.value, failed.error) == (False, None, "ValueError: no sales")
+    assert task.output() == "done"
+    (logs,) = fake_api.calls("GET", f"{tasks}/{task_id}/logs")
+    assert logs.query["tail"] == ["100"]
+    assert [event.event for event in task.subscribe()] == ["status"]
+    assert call.rerun().task_id == rerun_id
+    gathered = lazycloud.FunctionCall.gather(
+        call, lazycloud.FunctionCall(lazycloud.Task.from_id(failed_id)), return_exceptions=True
+    )
+    assert gathered[0] == {"total": 6}
+    assert isinstance(gathered[1], RemoteTaskError)
 
 
 def _me(*workspaces: str) -> Reply:
@@ -415,6 +646,7 @@ def test_cli_run_json_and_task_commands_use_the_task_api(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_api: FakeApi
 ) -> None:
     _project(tmp_path, monkeypatch)
+    _serve_deployment(fake_api, stored=set())
     task_id = _task_id(11)
     fake_api.route("POST", TASKS)(lambda _: json_reply({"tasks": [_task(task_id)]}, 201))
     fake_api.route("GET", f"/v1/workspaces/team/tasks/{task_id}/logs")(lambda _: (200, {}, b""))
@@ -437,7 +669,10 @@ def test_cli_run_json_and_task_commands_use_the_task_api(
     assert json.loads(ran.stdout) == 6
     (submit,) = fake_api.calls("POST", TASKS)
     arguments: dict[str, object] = {"args": [[1, 2, 3]], "kwargs": {}}
-    assert submit.json() == {"inputs": [{"encoding": "json", "value": arguments}]}
+    assert submit.json() == {
+        "inputs": [{"encoding": "json", "value": arguments}],
+        "release_id": RELEASE_ID,
+    }
     assert result.exit_code == 0, result.output
     assert json.loads(result.stdout) == 6
     assert cancelled.exit_code == 0, cancelled.output
@@ -458,3 +693,12 @@ def test_cli_deploy_of_a_file_deploys_its_app(
     assert json.loads(result.stdout)["releases"][0]["function"] == "summarize_sales"
     (request,) = fake_api.calls("POST", "/v1/workspaces/team/apps/reports/deployments")
     assert request.json()["functions"][0]["handler"] == "reports:summarize_sales"
+
+    monkeypatch.setattr(sys, "path", [str(tmp_path), *sys.path])
+    pruned = CliRunner().invoke(build_public_cli(), ["deploy", "reports.py", "--prune"])
+    single = CliRunner().invoke(build_public_cli(), ["deploy", "reports:summarize_sales"])
+
+    assert pruned.exit_code == 0, pruned.output
+    assert "App deployed" in pruned.stdout and "Removed versions" in pruned.stdout
+    assert "Prune" in pruned.stderr and "Runtime" in pruned.stderr
+    assert "Deployment created" in single.stdout and "reports:summarize_sales" in single.stdout
