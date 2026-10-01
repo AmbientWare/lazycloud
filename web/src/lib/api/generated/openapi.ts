@@ -3798,6 +3798,8 @@ export interface components {
             cpu_millis: number;
             /** Format: int64 */
             memory_mib: number;
+            /** @description The image reference the release runs. */
+            image?: string;
             /** Format: date-time */
             created_at: string;
             /** Format: date-time */
@@ -6539,6 +6541,10 @@ export interface operations {
                 /** @description Requires `app`. */
                 function?: components["schemas"]["WorkloadName"];
                 status?: components["schemas"]["TaskStatus"];
+                /** @description Only tasks no other task spawned. */
+                root_only?: boolean;
+                /** @description A task id prefix or part of a function name. */
+                search?: string;
                 limit?: components["parameters"]["PageLimit"];
                 /** @description The next_cursor of the previous page. */
                 cursor?: components["parameters"]["Cursor"];
@@ -6619,6 +6625,8 @@ export interface operations {
             query?: {
                 /** @description Only containers that have not stopped. */
                 live?: boolean;
+                /** @description Only the containers of this app's workloads. */
+                app?: components["schemas"]["AppName"];
                 limit?: components["parameters"]["PageLimit"];
                 /** @description The next_cursor of the previous page. */
                 cursor?: components["parameters"]["Cursor"];

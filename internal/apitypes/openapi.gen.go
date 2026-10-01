@@ -2727,9 +2727,12 @@ type Container struct {
 	ExitMessage *string            `json:"exit_message,omitempty"`
 	Function    WorkloadName       `json:"function"`
 	Id          openapi_types.UUID `json:"id"`
-	MemoryMib   int64              `json:"memory_mib"`
-	ReadyAt     *time.Time         `json:"ready_at,omitempty"`
-	ReleaseId   openapi_types.UUID `json:"release_id"`
+
+	// Image The image reference the release runs.
+	Image     *string            `json:"image,omitempty"`
+	MemoryMib int64              `json:"memory_mib"`
+	ReadyAt   *time.Time         `json:"ready_at,omitempty"`
+	ReleaseId openapi_types.UUID `json:"release_id"`
 
 	// RunningTasks Attempts running now.
 	RunningTasks int            `json:"running_tasks"`
@@ -5134,7 +5137,10 @@ type ListComputeWorkloadsParams struct {
 // ListContainersParams defines parameters for ListContainers.
 type ListContainersParams struct {
 	// Live Only containers that have not stopped.
-	Live  *bool      `form:"live,omitempty" json:"live,omitempty"`
+	Live *bool `form:"live,omitempty" json:"live,omitempty"`
+
+	// App Only the containers of this app's workloads.
+	App   *AppName   `form:"app,omitempty" json:"app,omitempty"`
 	Limit *PageLimit `form:"limit,omitempty" json:"limit,omitempty"`
 
 	// Cursor The next_cursor of the previous page.
@@ -5337,7 +5343,13 @@ type ListTasksParams struct {
 	// Function Requires `app`.
 	Function *WorkloadName `form:"function,omitempty" json:"function,omitempty"`
 	Status   *TaskStatus   `form:"status,omitempty" json:"status,omitempty"`
-	Limit    *PageLimit    `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// RootOnly Only tasks no other task spawned.
+	RootOnly *bool `form:"root_only,omitempty" json:"root_only,omitempty"`
+
+	// Search A task id prefix or part of a function name.
+	Search *string    `form:"search,omitempty" json:"search,omitempty"`
+	Limit  *PageLimit `form:"limit,omitempty" json:"limit,omitempty"`
 
 	// Cursor The next_cursor of the previous page.
 	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`

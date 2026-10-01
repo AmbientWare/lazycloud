@@ -230,7 +230,10 @@ func (s *Server) ListTasks(ctx context.Context, req ListTasksRequestObject) (Lis
 	if err != nil {
 		return nil, err
 	}
-	filter := execution.TaskFilter{App: req.Params.App, Function: req.Params.Function}
+	filter := execution.TaskFilter{
+		App: req.Params.App, Function: req.Params.Function, Search: req.Params.Search,
+		RootOnly: req.Params.RootOnly != nil && *req.Params.RootOnly,
+	}
 	if req.Params.Status != nil {
 		st := execution.TaskStatus(*req.Params.Status)
 		filter.Status = &st
@@ -290,8 +293,8 @@ func (s *Server) ListContainers(ctx context.Context, req ListContainersRequestOb
 	if err != nil {
 		return nil, err
 	}
-	live := req.Params.Live != nil && *req.Params.Live
-	page, err := s.owners.Execution.ListContainers(ctx, ws.ID, live, limitOf(req.Params.Limit), cursorOf(req.Params.Cursor))
+	filter := execution.ContainerFilter{Live: req.Params.Live != nil && *req.Params.Live, App: req.Params.App}
+	page, err := s.owners.Execution.ListContainers(ctx, ws.ID, filter, limitOf(req.Params.Limit), cursorOf(req.Params.Cursor))
 	if err != nil {
 		return nil, err
 	}
@@ -344,6 +347,9 @@ func containerOut(c execution.Container) apitypes.Container {
 	if c.StopReason != nil {
 		r := apitypes.StopReason(*c.StopReason)
 		out.StopReason = &r
+	}
+	if c.Image != "" {
+		out.Image = &c.Image
 	}
 	return out
 }

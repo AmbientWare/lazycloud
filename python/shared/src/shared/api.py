@@ -972,6 +972,7 @@ class Container(BaseModel):
     running_tasks: Annotated[int, Field(description="Attempts running now.")]
     cpu_millis: int
     memory_mib: int
+    image: Annotated[str | None, Field(description="The image reference the release runs.")] = None
     created_at: AwareDatetime
     ready_at: AwareDatetime | None = None
     stopped_at: AwareDatetime | None = None

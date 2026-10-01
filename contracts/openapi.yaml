@@ -917,6 +917,14 @@ paths:
         - name: status
           in: query
           schema: { $ref: "#/components/schemas/TaskStatus" }
+        - name: root_only
+          in: query
+          description: Only tasks no other task spawned.
+          schema: { type: boolean, default: false }
+        - name: search
+          in: query
+          description: A task id prefix or part of a function name.
+          schema: { type: string, minLength: 1, maxLength: 100 }
         - $ref: "#/components/parameters/PageLimit"
         - $ref: "#/components/parameters/Cursor"
       responses:
@@ -975,6 +983,10 @@ paths:
           in: query
           description: Only containers that have not stopped.
           schema: { type: boolean, default: false }
+        - name: app
+          in: query
+          description: Only the containers of this app's workloads.
+          schema: { $ref: "#/components/schemas/AppName" }
         - $ref: "#/components/parameters/PageLimit"
         - $ref: "#/components/parameters/Cursor"
       responses:
@@ -4981,6 +4993,9 @@ components:
           type: integer
         cpu_millis: { type: integer, format: int64 }
         memory_mib: { type: integer, format: int64 }
+        image:
+          description: The image reference the release runs.
+          type: string
         created_at: { type: string, format: date-time }
         ready_at: { type: string, format: date-time }
         stopped_at: { type: string, format: date-time }
