@@ -60,22 +60,6 @@ func (s *Storage) Sweep(ctx context.Context, logger *slog.Logger) (SweepResult, 
 	return out, errors.Join(errs...)
 }
 
-// RunSweeper sweeps every interval until ctx ends.
-func (s *Storage) RunSweeper(ctx context.Context, interval time.Duration, logger *slog.Logger) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		if _, err := s.Sweep(ctx, logger); err != nil && ctx.Err() == nil {
-			logger.WarnContext(ctx, "storage sweep incomplete", "error", err)
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-	}
-}
-
 // sweepArtifacts deletes expired artifacts and uploads abandoned for a day.
 // A row is deleted only once its bytes are gone.
 func (s *Storage) sweepArtifacts(ctx context.Context, logger *slog.Logger) (int, error) {

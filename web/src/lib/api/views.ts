@@ -28,7 +28,7 @@ export function viewUser(user: Schemas["User"]): User {
     github_user_id: "",
     github_login: user.github_login,
     role: user.is_admin ? "administrator" : "member",
-    status: "active",
+    status: user.status,
     created_at: user.created_at,
     updated_at: user.created_at,
   };

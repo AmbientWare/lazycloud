@@ -383,6 +383,67 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Every account, oldest first; platform administrators only
+         * @description Accounts that have never signed in are listed too. The filters narrow the list on the server, so every page holds only matches.
+         */
+        get: operations["listUsers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/users/{user}/role": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user: components["parameters"]["UserPath"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** Grant or withdraw platform administration; never your own */
+        put: operations["setUserRole"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/users/{user}/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user: components["parameters"]["UserPath"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Enable or disable an account; never your own
+         * @description A disabled account cannot sign in, and its tokens, browser sessions and approved device logins end at once. Enabling it again restores none of them. Its running work is not stopped.
+         */
+        put: operations["setUserStatus"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/workspaces/{workspace}/sources": {
         parameters: {
             query?: never;
@@ -1927,8 +1988,33 @@ export interface components {
             github_login: string;
             /** @description Platform administrators reach every workspace. */
             is_admin: boolean;
+            status: components["schemas"]["UserStatus"];
             /** Format: date-time */
             created_at: string;
+        };
+        /**
+         * @description A disabled account cannot sign in or authenticate.
+         * @enum {string}
+         */
+        UserStatus: "active" | "disabled";
+        /**
+         * @description An account's standing on the platform; administrators reach every workspace.
+         * @enum {string}
+         */
+        PlatformRole: "administrator" | "member";
+        UserList: {
+            users: components["schemas"]["User"][];
+            /**
+             * Format: uuid
+             * @description Pass as `cursor` for the next page; absent after the last.
+             */
+            next_cursor?: string;
+        };
+        UserRoleRequest: {
+            role: components["schemas"]["PlatformRole"];
+        };
+        UserStatusRequest: {
+            status: components["schemas"]["UserStatus"];
         };
         Workspace: {
             /** Format: uuid */
@@ -3382,6 +3468,7 @@ export interface components {
         Limit: number;
         /** @description The code the CLI shows, such as BCDF-GHJK, in any case. */
         UserCodePath: string;
+        UserPath: string;
         InvitationPath: string;
         /** @description The secret from the invitation link. */
         InvitationTokenPath: string;
@@ -4009,6 +4096,89 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listUsers: {
+        parameters: {
+            query?: {
+                /** @description Matches the display name, email or GitHub login, ignoring case. */
+                search?: string;
+                role?: components["schemas"]["PlatformRole"];
+                status?: components["schemas"]["UserStatus"];
+                limit?: number;
+                /** @description The `next_cursor` of the previous page. */
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of accounts */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserList"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    setUserRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user: components["parameters"]["UserPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserRoleRequest"];
+            };
+        };
+        responses: {
+            /** @description The account */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["User"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    setUserStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user: components["parameters"]["UserPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserStatusRequest"];
+            };
+        };
+        responses: {
+            /** @description The account */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["User"];
+                };
             };
             default: components["responses"]["Error"];
         };

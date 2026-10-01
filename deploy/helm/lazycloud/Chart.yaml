@@ -1,0 +1,7 @@
+apiVersion: v2
+name: lazycloud
+description: The LazyCloud server and scheduler, with database migrations as a pre-upgrade job.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.33.0-0"

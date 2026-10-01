@@ -32,6 +32,7 @@ const session: Schemas["Me"] = {
     avatar_url: "",
     github_login: "",
     is_admin: false,
+    status: "active",
     created_at: "2026-07-21T10:00:00Z",
   },
   workspaces: [],
