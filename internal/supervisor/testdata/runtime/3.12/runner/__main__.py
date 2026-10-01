@@ -72,7 +72,9 @@ def main():
             return 0
         if threaded:
             # Attempts share the process; each reports its own output as a frame.
-            threading.Thread(target=run, args=(sock, handler, invoke, payload, True), daemon=True).start()
+            threading.Thread(
+                target=run, args=(sock, handler, invoke, payload, True), daemon=True
+            ).start()
         else:
             run(sock, handler, invoke, payload, False)
 
@@ -99,7 +101,7 @@ def run(sock, handler, invoke, payload, threaded):
             write_frame(
                 sock,
                 {"type": "output", "attempt_id": invoke["attempt_id"], "stream": "stdout"},
-                data[start:start + (256 << 10)],
+                data[start : start + (256 << 10)],
             )
     try:
         result = handler(*call.get("args", []), **call.get("kwargs", {}))
