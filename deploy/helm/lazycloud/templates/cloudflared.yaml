@@ -1,0 +1,79 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloudflared
+  labels:
+    {{- include "lazycloud.labels" (list . "cloudflared") | nindent 4 }}
+spec:
+  replicas: {{ .Values.cloudflared.replicas }}
+  minReadySeconds: 10
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cloudflared
+  template:
+    metadata:
+      labels:
+        {{- include "lazycloud.labels" (list . "cloudflared") | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/cloudflared-config.yaml") . | sha256sum }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      topologySpreadConstraints:
+        {{- include "lazycloud.spread" "cloudflared" | trim | nindent 8 }}
+      volumes:
+        - name: config
+          configMap:
+            name: cloudflared
+        - name: credentials
+          secret:
+            secretName: {{ .Values.secrets.name }}
+            defaultMode: 0440
+            items:
+              - key: {{ .Values.secrets.tunnelCredentials }}
+                path: credentials.json
+      containers:
+        - name: cloudflared
+          image: {{ .Values.cloudflared.image }}
+          args: ["tunnel", "--config", "/etc/cloudflared/config/config.yaml", "--metrics", "0.0.0.0:20241", "run"]
+          ports:
+            - name: metrics
+              containerPort: 20241
+          readinessProbe:
+            httpGet: { path: /ready, port: metrics }
+            periodSeconds: 5
+            timeoutSeconds: 2
+          livenessProbe:
+            httpGet: { path: /ready, port: metrics }
+            periodSeconds: 10
+            failureThreshold: 6
+          volumeMounts:
+            - name: config
+              mountPath: /etc/cloudflared/config
+              readOnly: true
+            - name: credentials
+              mountPath: /etc/cloudflared/credentials.json
+              subPath: credentials.json
+              readOnly: true
+          resources:
+            {{- toYaml .Values.cloudflared.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: cloudflared
+  labels:
+    {{- include "lazycloud.labels" (list . "cloudflared") | nindent 4 }}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cloudflared

@@ -1,58 +1,94 @@
-# Images come from the release workflow: <registry>/<repository>:<tag>, or
-# @<digest> when a digest is set, which pins the exact bytes.
+# A deployment's values come from three files, merged in this order by the
+# Argo CD Application (deploy/argocd/apps):
+#   values.yaml                 these defaults
+#   environments/<name>.yaml    reviewed product settings of one deployment
+#   values-deployment.yaml      written by the Deploy workflow on the
+#                               deployment branch: the Terraform descriptor
+#                               (platform-deployment output helm_values) and
+#                               the release version
+
+# The apex the deployment answers on. The dashboard and API are
+# https://<domain>, workloads https://<label>.<domain>, TCP pods
+# tls://<container>-<port>.tcp.<domain>:<tcp port>, and agents dial
+# hosts.<domain>:443.
+domain: ""
+
+# Region of the AWS SDK clients without one of their own.
+awsRegion: ""
+
+release:
+  # The image tag of every component, the agent release the server serves
+  # and publishes, and the CLI version older clients are told to install.
+  version: ""
+
+# Images are <registry>/<repository>:<release.version>, or @<digest> when a
+# component sets one.
 image:
   registry: ""
-  tag: ""
   pullPolicy: IfNotPresent
 
-# Every credential comes from one Kubernetes Secret, whose keys are the
-# environment variable names. Create it out of band, or let External Secrets
-# project it from AWS Secrets Manager (externalSecrets below). The chart never
-# carries a secret value.
+# Every credential comes from one Kubernetes Secret. Keys named like
+# environment variables are passed as such to the processes that list them;
+# the others are mounted as files. The chart never carries a secret value.
 secrets:
   name: lazycloud
-  # The key holding the 32-byte master key that wraps secret data keys. It
-  # is mounted as a file, never passed in the environment.
+  # The 32-byte master key that wraps workspace secrets' data keys.
   masterKey: secrets.key
+  # The Cloudflare tunnel's credentials file.
+  tunnelCredentials: cloudflared.json
 
+# Projects the Secret from AWS Secrets Manager. `data` maps each Secret key
+# to a document (platform, written by Terraform, or operator) and property.
 externalSecrets:
   enabled: false
   region: ""
   # The role the secrets-reader service account exchanges its token for.
   readerRoleArn: ""
   refreshInterval: 1h
-  # Secret key -> {document, property} in Secrets Manager.
-  data: {}
+  documents:
+    platform: ""
+    operator: ""
+  data:
+    LAZYCLOUD_DATABASE_URL: { document: platform, property: LAZYCLOUD_PLATFORM_DATABASE_URL }
+    secrets.key: { document: platform, property: LAZYCLOUD_SECRETS_MASTER_KEY, decodingStrategy: Base64 }
+    cloudflared.json: { document: platform, property: LAZYCLOUD_CLOUDFLARE_TUNNEL_CREDENTIALS }
+    LAZYCLOUD_GITHUB_CLIENT_ID: { document: operator, property: LAZYCLOUD_GITHUB_CLIENT_ID }
+    LAZYCLOUD_GITHUB_CLIENT_SECRET: { document: operator, property: LAZYCLOUD_GITHUB_CLIENT_SECRET }
+    LAZYCLOUD_STRIPE_API_KEY: { document: operator, property: LAZYCLOUD_STRIPE_API_KEY }
+    LAZYCLOUD_STRIPE_WEBHOOK_SECRET: { document: operator, property: LAZYCLOUD_STRIPE_WEBHOOK_SECRET }
+    LAZYCLOUD_RESEND_API_KEY: { document: operator, property: LAZYCLOUD_RESEND_API_KEY }
+    LAZYCLOUD_RESEND_WEBHOOK_SECRET: { document: operator, property: LAZYCLOUD_RESEND_WEBHOOK_SECRET }
+    LAZYCLOUD_CLOUDFLARE_API_TOKEN: { document: operator, property: LAZYCLOUD_CLOUDFLARE_API_TOKEN }
+    # cert-manager's DNS-01 token for the TCP certificate; no process reads it.
+    LAZYCLOUD_TCP_DNS_API_TOKEN: { document: operator, property: LAZYCLOUD_TCP_DNS_API_TOKEN }
 
-# Non-secret settings shared by the server, scheduler and migrations, as
-# LAZYCLOUD_* environment variables. The chart sets the listen addresses
-# (API 8080, hosts 8081, edge 8082, edge relay 8083 on the pod IP, probes
-# 8090, metrics 9090), the master key path and the drain delay itself. Set
-# LAZYCLOUD_EDGE_URL, the public base URL workloads answer under, and
-# LAZYCLOUD_CLOUDFLARE_ZONE_ID for custom domains.
+# Non-secret settings shared by the server and scheduler, as LAZYCLOUD_*
+# environment variables: object store, workspace buckets and fleet. The
+# chart sets listen addresses, file paths, the drain delay and the URLs
+# derived from domain and release itself, and refuses them here.
 config: {}
 
-# Ingress to the release's pods is denied except from these sources.
+# Ingress to the release's pods is denied except from these sources. The
+# chart admits cloudflared to the API, edge and web ports and other server
+# pods to the relay port itself.
 networkPolicy:
   enabled: true
-  # NetworkPolicy peers that reach the server's API port, such as the
-  # namespace of the public ingress connector.
-  ingressFrom: []
-  # NetworkPolicy peers that reach the edge's workload traffic port, such as
-  # the namespace of the public ingress connector.
-  edgeFrom: []
-  # Agent host CIDRs that reach the host port.
+  # NetworkPolicy peers that scrape /metrics.
+  metricsFrom: []
+  # Load balancer addresses that reach the host port (the VPC CIDR).
   hostCIDRs: []
+  # Clients that reach TCP pods. The TCP load balancer preserves client
+  # addresses.
+  tcpCIDRs: [0.0.0.0/0]
   # Node CIDRs the kubelet probes the health ports from.
   nodeCIDRs: []
-  # NetworkPolicy peers that scrape /metrics, such as the Prometheus
-  # namespace.
-  metricsFrom: []
 
 serviceAccounts:
   # Names match the EKS Pod Identity associations that grant AWS access.
   server: lazycloud-server
   scheduler: lazycloud-scheduler
+  # Named in the secrets-reader role's IRSA trust.
+  secretsReader: secrets-reader
 
 podSecurityContext:
   runAsNonRoot: true
@@ -74,31 +110,40 @@ server:
   replicas: 2
   # Extra settings for the server alone.
   config: {}
-  # Secret keys the server reads. S3 access comes from the Pod Identity role
-  # through the AWS default credential chain, so no object store key is here.
+  # Secret keys the server reads. S3, EC2 and ECR access come from the Pod
+  # Identity role through the AWS default credential chain.
   secretKeys:
     - LAZYCLOUD_DATABASE_URL
+    - LAZYCLOUD_GITHUB_CLIENT_ID
     - LAZYCLOUD_GITHUB_CLIENT_SECRET
+    - LAZYCLOUD_STRIPE_API_KEY
+    - LAZYCLOUD_STRIPE_WEBHOOK_SECRET
     - LAZYCLOUD_RESEND_WEBHOOK_SECRET
+    - LAZYCLOUD_CLOUDFLARE_API_TOKEN
   # On SIGTERM the server reports not ready and keeps serving this long so
   # Service endpoints and load balancers drop it, then gives open requests
   # 10 seconds. The grace period must cover both.
   drainDelaySeconds: 5
   terminationGracePeriodSeconds: 30
   resources:
-    requests: { cpu: 250m, memory: 256Mi }
+    requests: { cpu: 250m, memory: 384Mi }
     limits: { memory: 1Gi }
   service:
-    type: ClusterIP
     annotations: {}
-  # Workload traffic, which the public ingress connector forwards.
   edgeService:
-    type: ClusterIP
     annotations: {}
-  # Agents connect to this port. The host session is plaintext gRPC until
-  # the agent speaks TLS, so the schema holds it to ClusterIP.
+  # Agents' host sessions and data connections. A LoadBalancer terminates
+  # TLS with certificateArn (ACM) and forwards HTTP/2 to the pods' gRPC
+  # port, which then serves plaintext inside the VPC.
   hostService:
-    type: ClusterIP
+    type: LoadBalancer
+    certificateArn: ""
+    annotations: {}
+  # TCP pods. The load balancer passes TLS through; the server terminates it
+  # with the cert-manager certificate for *.tcp.<domain>.
+  tcpService:
+    enabled: true
+    port: 1995
     annotations: {}
 
 scheduler:
@@ -108,11 +153,39 @@ scheduler:
   config: {}
   secretKeys:
     - LAZYCLOUD_DATABASE_URL
+    - LAZYCLOUD_STRIPE_API_KEY
     - LAZYCLOUD_RESEND_API_KEY
   terminationGracePeriodSeconds: 30
   resources:
     requests: { cpu: 250m, memory: 256Mi }
     limits: { memory: 1Gi }
+
+# The dashboard: the web build's static files.
+web:
+  repository: web
+  digest: ""
+  replicas: 2
+  resources:
+    requests: { cpu: 25m, memory: 32Mi }
+    limits: { memory: 128Mi }
+
+# Public HTTP ingress: the deployment's Cloudflare tunnel, locally managed,
+# so these connectors' configuration is the only routing table.
+cloudflared:
+  replicas: 2
+  image: docker.io/cloudflare/cloudflared:2026.9.3@sha256:072c067d25ccbe61d46e18f0d0723255f2bb5304f7317caa95b27031520ff92c
+  tunnelId: ""
+  # Argo CD's own hostname, argocd.<domain>, reaches its sign-in page.
+  argocd: true
+  # Keepalive latency under CPU contention can drop every tunnel connection.
+  resources:
+    requests: { cpu: 150m, memory: 96Mi }
+    limits: { memory: 256Mi }
+
+# The certificate for *.tcp.<domain>, issued by Let's Encrypt over DNS-01
+# with the zone's Cloudflare token.
+tcpCertificate:
+  acmeServer: https://acme-v02.api.letsencrypt.org/directory
 
 migrations:
   secretKeys:
@@ -121,4 +194,28 @@ migrations:
   activeDeadlineSeconds: 600
   resources:
     requests: { cpu: 100m, memory: 128Mi }
+    limits: { memory: 256Mi }
+
+# After every sync, publishes the agent bundled in the server image as the
+# release hosts install and update to.
+agentRelease:
+  # Percent of updatable hosts that move to it.
+  rollout: 100
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { memory: 256Mi }
+
+# OpenTelemetry collector the processes push traces to. It holds the
+# backend credential, which the processes cannot send.
+telemetry:
+  enabled: false
+  image: docker.io/otel/opentelemetry-collector-contrib:0.161.0@sha256:fd328de2552466ad78385e1b1289c3f2402b1c45f265b252aab1955b42845ac1
+  # OTLP/HTTP endpoint of the backend.
+  endpoint: ""
+  sampleRatio: "1"
+  # Secret keys of the backend's basic auth.
+  usernameKey: LAZYCLOUD_TELEMETRY_BACKEND_USERNAME
+  passwordKey: LAZYCLOUD_TELEMETRY_BACKEND_PASSWORD
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
     limits: { memory: 256Mi }

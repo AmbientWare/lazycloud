@@ -1,0 +1,45 @@
+# The shape of values-deployment.yaml, which the Deploy workflow writes on a
+# deployment branch from platform-deployment's helm_values and the release,
+# with placeholders instead of real identities. deploy/check.sh renders the
+# chart with it and environments/prod.yaml.
+domain: lazycloud.example.com
+awsRegion: us-east-1
+release:
+  version: 0.1.0
+image:
+  registry: 000000000000.dkr.ecr.us-east-1.amazonaws.com/lazycloud/release
+externalSecrets:
+  enabled: true
+  region: us-east-1
+  readerRoleArn: arn:aws:iam::000000000000:role/example-secrets-reader
+  documents:
+    platform: example/platform
+    operator: example/operator
+serviceAccounts:
+  server: lazycloud-server
+  scheduler: lazycloud-scheduler
+  secretsReader: secrets-reader
+networkPolicy:
+  nodeCIDRs: [10.80.0.0/16]
+  hostCIDRs: [10.80.0.0/16]
+cloudflared:
+  tunnelId: 00000000-0000-4000-8000-000000000000
+config:
+  LAZYCLOUD_OBJECT_STORE_REGION: us-east-1
+  LAZYCLOUD_OBJECT_STORE_BUCKET: example-objects-000000000000
+  LAZYCLOUD_WORKSPACE_BUCKET_PROVIDER: aws
+  LAZYCLOUD_WORKSPACE_BUCKET_PREFIX: example-workspace
+  LAZYCLOUD_WORKSPACE_BUCKET_ROLE_ARN: arn:aws:iam::000000000000:role/example-workspace-storage
+  LAZYCLOUD_FLEET_NAME: example
+  LAZYCLOUD_FLEET_ACCOUNT_ID: "000000000000"
+  LAZYCLOUD_FLEET_NODE_ROLE_ARN: arn:aws:iam::000000000000:role/compute-node-example
+  LAZYCLOUD_FLEET_INSTANCE_PROFILE: compute-node-example
+  LAZYCLOUD_FLEET_NETWORKS: '{"us-east-2":{"vpc_id":"vpc-0example","security_group_id":"sg-0example","subnets":[{"id":"subnet-0example","zone":"us-east-2a","zone_id":"use2-az1"}]}}'
+  LAZYCLOUD_AWS_PRINCIPAL_ARN: arn:aws:iam::000000000000:role/example-control-plane
+server:
+  config:
+    LAZYCLOUD_IMAGE_REGISTRY: 000000000000.dkr.ecr.us-east-1.amazonaws.com
+    LAZYCLOUD_IMAGE_REPOSITORY: lazycloud/workload-images
+    LAZYCLOUD_CLOUDFLARE_ZONE_ID: "00000000000000000000000000000000"
+  hostService:
+    certificateArn: arn:aws:acm:us-east-1:000000000000:certificate/00000000-0000-4000-8000-000000000000

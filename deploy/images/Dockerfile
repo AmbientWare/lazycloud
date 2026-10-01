@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.27.1@sha256:4edf897a3ffa55b89f906fc8cc78afdb3f1834cc9c7083565e611a8a7d5fe99e
 
-# Platform images: server, scheduler and agent. Build them with
+# Platform images: server, scheduler, web and agent. Build them with
 # `docker buildx bake -f deploy/images/docker-bake.hcl` from the repository
 # root. Every base is pinned by digest; VERSION is stamped into the binaries
 # and SOURCE_DATE_EPOCH fixes file and image timestamps, so one commit builds
@@ -41,11 +41,30 @@ ARG SOURCE_DATE_EPOCH
 ENV UV=/usr/local/bin/uv UV_PYTHON_DOWNLOADS=never
 RUN --mount=type=cache,target=/root/.cache/uv deploy/local/build-runtime.sh /out/runtimes
 
+# The agent release archive hosts install, laid out as
+# deploy/agent/build-bundle.sh lays it out, with fixed owners, order and
+# times so one commit archives the same bytes.
+FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.27.1-trixie@sha256:3b77fc618ec235a1ab412de7737f120dd507c57e8d87de4cbb7994fb94275ed5 AS agent-archive
+ARG VERSION=dev
+ARG SOURCE_DATE_EPOCH=0
+COPY --from=go /out/agent /stage/lazycloud-agent
+COPY --from=go /out/supervisor /stage/supervisor
+COPY --from=geesefs /src/bin/geesefs /stage/geesefs
+COPY --from=runtimes /out/runtimes /stage/runtime
+RUN mkdir -p /out/${VERSION} && \
+    tar -C /stage --sort=name --mtime=@${SOURCE_DATE_EPOCH} --owner=0 --group=0 --numeric-owner \
+      --pax-option=exthdr.name=%d/PaxHeaders/%f,delete=atime,delete=ctime \
+      -cf - lazycloud-agent supervisor runtime geesefs | gzip -n -9 >/out/${VERSION}/lazycloud-agent-linux-amd64.tar.gz
+
+# The server serves the agent archive of its own version at /install/agent;
+# the chart's post-sync Job publishes it as the hosts' target release.
 FROM gcr.io/distroless/static-debian13:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3 AS server
 ARG VERSION=dev
 LABEL org.opencontainers.image.title="lazycloud-server" org.opencontainers.image.version="${VERSION}"
 COPY --from=go /out/server /usr/local/bin/server
-ENV LAZYCLOUD_HTTP_ADDR=0.0.0.0:8080 LAZYCLOUD_GRPC_ADDR=0.0.0.0:8081 LAZYCLOUD_HEALTH_ADDR=0.0.0.0:8090
+COPY --from=agent-archive /out /opt/lazycloud/agent-dist
+ENV LAZYCLOUD_HTTP_ADDR=0.0.0.0:8080 LAZYCLOUD_GRPC_ADDR=0.0.0.0:8081 LAZYCLOUD_HEALTH_ADDR=0.0.0.0:8090 \
+    LAZYCLOUD_AGENT_DIST_DIR=/opt/lazycloud/agent-dist
 EXPOSE 8080 8081 8090
 ENTRYPOINT ["/usr/local/bin/server"]
 CMD ["serve"]
@@ -57,6 +76,22 @@ COPY --from=go /out/scheduler /usr/local/bin/scheduler
 ENV LAZYCLOUD_HEALTH_ADDR=0.0.0.0:8090
 EXPOSE 8090
 ENTRYPOINT ["/usr/local/bin/scheduler"]
+
+# The dashboard: the web build's static files, served by unprivileged nginx
+# on port 8080. Bun runs the build as in CI.
+FROM --platform=$BUILDPLATFORM docker.io/oven/bun:1.3.12-debian@sha256:1b709c9dd883fc1af38c210f7ea5222c552a8d470ea73efbd4b8fcfee798a64b AS web-build
+WORKDIR /src/web
+COPY web/package.json web/bun.lock ./
+RUN --mount=type=cache,target=/root/.bun/install/cache bun install --frozen-lockfile
+COPY web ./
+RUN bun run build
+
+FROM docker.io/nginxinc/nginx-unprivileged:1.30-alpine@sha256:ed04ec1ff34502c339ee5c3ae3f855442398edc1d05591e2b98981dcbbd20b1e AS web
+ARG VERSION=dev
+LABEL org.opencontainers.image.title="lazycloud-web" org.opencontainers.image.version="${VERSION}"
+COPY deploy/images/web.conf /etc/nginx/conf.d/default.conf
+COPY --from=web-build /src/web/dist/client /usr/share/nginx/html
+EXPOSE 8080
 
 # The agent's release bundle. Hosts install /opt/lazycloud from it; the agent
 # finds the supervisor and GeeseFS beside its executable and the runtimes in
