@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -67,7 +68,26 @@ func (a *Agent) restoreInto(ctx context.Context, id string, point *restorePoint)
 	if err := moveDir(point.dir, target); err != nil {
 		return err
 	}
+	if err := markRestore(target, id); err != nil {
+		return err
+	}
 	return a.startDocker(ctx, id, client.ContainerStartOptions{CheckpointID: point.snapshot})
+}
+
+// restoreMarker is a file the agent adds to a checkpoint before restoring
+// it. Docker uploads the checkpoint directory to containerd as one blob
+// first and fails when that blob is already stored (moby#42900), as it is on
+// the host that took the snapshot and on every later restore there; the
+// marker names the restoring container, so each restore's blob is new.
+// runsc reads only its own image files.
+const restoreMarker = "lazycloud-restore"
+
+func markRestore(dir, container string) error {
+	mark := container + " " + strconv.FormatInt(time.Now().UnixNano(), 10) + "\n"
+	if err := os.WriteFile(filepath.Join(dir, restoreMarker), []byte(mark), 0o600); err != nil {
+		return fmt.Errorf("mark checkpoint: %w", err)
+	}
+	return nil
 }
 
 // moveDir renames src to dst, copying when they are on different

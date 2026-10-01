@@ -806,9 +806,9 @@ func lastCount(log string) int {
 
 // Under gVisor a running pod checkpoints once its supervisor closed its
 // host sockets and keeps serving afterwards. A root agent, which reads and
-// places Docker's checkpoints, uploads it and restores it into a new pod
-// whose count resumes past the snapshot's, behind the restored pod's own
-// block policy.
+// places Docker's checkpoints, uploads it and restores it, twice on the same
+// host, into new pods whose count resumes past the snapshot's, behind the
+// restored pod's own block policy.
 func TestSnapshotUnderRunscRestoresARunningPod(t *testing.T) {
 	if testRuntime() != "runsc" {
 		t.Skip("needs LAZYCLOUD_TEST_OCI_RUNTIME=runsc")
@@ -883,41 +883,45 @@ func TestSnapshotUnderRunscRestoresARunningPod(t *testing.T) {
 		return
 	}
 
-	restored := e.podCommand(&hostproto.PodWorkload{Command: countingPod(target), Ports: []int32{8000}, Network: &hostproto.NetworkPolicy{Block: true}})
-	restored.GetStart().Checkpointable = true
-	restored.GetStart().Restore = &hostproto.SnapshotRestore{SnapshotId: snapshotID, Url: store.URL, Sha256: r.GetSha256()}
-	restoredID := restored.GetStart().GetContainerId()
-	began = time.Now()
-	session.send(t, restored)
-	ready := session.phase(t, restoredID, hostproto.ContainerPhase_CONTAINER_PHASE_READY)
-	if ready.GetRestoreFailed() != "" {
-		t.Fatalf("restore report %v", ready)
-	}
-	t.Logf("restored to ready in %s", time.Since(began))
-	waitLog(t, e.server, restoredID, "blocked")
-	// The count resumes rather than restarting at 1, and every count after
-	// the snapshot's is blocked; earlier lines may be ones the source
-	// printed and the restored supervisor delivers.
-	log := e.server.containerLog(restoredID)
-	low := 0
-	for _, line := range strings.Split(log, "\n") {
-		var n int
-		var state string
-		if _, err := fmt.Sscanf(line, "count %d %s", &n, &state); err != nil {
-			continue
+	// Restoring the same snapshot twice on the host that took it reaches
+	// Docker with a checkpoint whose content containerd may already hold.
+	for range 2 {
+		restored := e.podCommand(&hostproto.PodWorkload{Command: countingPod(target), Ports: []int32{8000}, Network: &hostproto.NetworkPolicy{Block: true}})
+		restored.GetStart().Checkpointable = true
+		restored.GetStart().Restore = &hostproto.SnapshotRestore{SnapshotId: snapshotID, Url: store.URL, Sha256: r.GetSha256()}
+		restoredID := restored.GetStart().GetContainerId()
+		began = time.Now()
+		session.send(t, restored)
+		ready := session.phase(t, restoredID, hostproto.ContainerPhase_CONTAINER_PHASE_READY)
+		if ready.GetRestoreFailed() != "" {
+			t.Fatalf("restore report %v", ready)
 		}
-		if low == 0 || n < low {
-			low = n
+		t.Logf("restored to ready in %s", time.Since(began))
+		waitLog(t, e.server, restoredID, "blocked")
+		// The count resumes rather than restarting at 1, and every count after
+		// the snapshot's is blocked; earlier lines may be ones the source
+		// printed and the restored supervisor delivers.
+		log := e.server.containerLog(restoredID)
+		low := 0
+		for _, line := range strings.Split(log, "\n") {
+			var n int
+			var state string
+			if _, err := fmt.Sscanf(line, "count %d %s", &n, &state); err != nil {
+				continue
+			}
+			if low == 0 || n < low {
+				low = n
+			}
+			if n > atSnapshot && state != "blocked" {
+				t.Fatalf("the restored pod reached the network past its policy: %q", line)
+			}
 		}
-		if n > atSnapshot && state != "blocked" {
-			t.Fatalf("the restored pod reached the network past its policy: %q", line)
+		if low <= 1 {
+			t.Fatalf("the restored pod started counting over: %q", log)
 		}
-	}
-	if low <= 1 {
-		t.Fatalf("the restored pod started counting over: %q", log)
-	}
-	if port := e.server.data.forward(t, portHead(restoredID, 8000, "/"), ""); port.status != http.StatusOK {
-		t.Fatalf("the restored pod does not serve: %+v", port)
+		if port := e.server.data.forward(t, portHead(restoredID, 8000, "/"), ""); port.status != http.StatusOK {
+			t.Fatalf("the restored pod does not serve: %+v", port)
+		}
 	}
 }
 

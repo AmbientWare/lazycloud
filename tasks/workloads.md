@@ -226,10 +226,12 @@ supervisor Docker tests under it; all pass but the GPU test.
 
 - Snapshot upload and restore need a root agent; CRIU is not installed, so
   runc checkpoints only reach `unsupported`.
-- Docker's restore upload fails with `content ... already exists` when the
-  checkpoint's files keep the times `docker checkpoint create` wrote
-  (moby#42900); the agent unpacks a downloaded snapshot, so its files are
-  new.
+- Docker uploads a checkpoint to containerd before restoring it and fails
+  with `content ... already exists` when containerd holds that content
+  (moby#42900), as on the host that took the snapshot and on any second
+  restore there. The agent adds a `lazycloud-restore` file naming the
+  restoring container, so each restore's content is new; runsc reads only
+  its image files.
 - Disks need a plan with a disk allowance; the private stack's account was
   made complimentary (`server admin set-complimentary`) to get one.
 - GPUs under runsc need `--nvproxy` in the runtime's arguments; this host's
