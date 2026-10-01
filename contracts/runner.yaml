@@ -24,6 +24,13 @@ info:
     The runner exits 0 after the socket closes, 1 after `load_failed` and 2 on
     a protocol error such as a malformed frame or an unsupported
     `protocol_version`.
+
+    HTTP workloads send `load` with `http`. The runner also inherits a
+    listening stream socket as the file descriptor named by LAZYCLOUD_HTTP_FD.
+    It loads the handler, serves HTTP/1.1 on that socket, including WebSocket
+    upgrades, and replies `loaded` once it accepts connections. It receives no
+    `invoke`; the supervisor admits at most `concurrency` requests at once and
+    closing the frame socket asks the runner to stop serving and exit.
 paths: {}
 components:
   schemas:
@@ -66,6 +73,26 @@ components:
         handler:
           description: "module:qualname importable from the working directory"
           type: string
+        http:
+          $ref: "#/components/schemas/HttpServing"
+
+    HttpKind:
+      description: >-
+        `endpoint` maps a JSON body and the query to the function's arguments
+        and maps its return value to a response. `asgi` and `realtime` serve
+        the loaded ASGI application.
+      type: string
+      enum: [endpoint, asgi, realtime]
+
+    HttpServing:
+      type: object
+      required: [kind, concurrency]
+      properties:
+        kind: { $ref: "#/components/schemas/HttpKind" }
+        concurrency:
+          description: Requests the supervisor sends this runner at once.
+          type: integer
+          minimum: 1
 
     Loaded:
       type: object

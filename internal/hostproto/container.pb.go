@@ -403,6 +403,7 @@ type SupervisorCommand struct {
 	//	*SupervisorCommand_Run
 	//	*SupervisorCommand_Cancel
 	//	*SupervisorCommand_Drain
+	//	*SupervisorCommand_Reload
 	Body          isSupervisorCommand_Body `protobuf_oneof:"body"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -481,6 +482,15 @@ func (x *SupervisorCommand) GetDrain() *Drain {
 	return nil
 }
 
+func (x *SupervisorCommand) GetReload() *Reload {
+	if x != nil {
+		if x, ok := x.Body.(*SupervisorCommand_Reload); ok {
+			return x.Reload
+		}
+	}
+	return nil
+}
+
 type isSupervisorCommand_Body interface {
 	isSupervisorCommand_Body()
 }
@@ -501,6 +511,12 @@ type SupervisorCommand_Drain struct {
 	Drain *Drain `protobuf:"bytes,4,opt,name=drain,proto3,oneof"`
 }
 
+type SupervisorCommand_Reload struct {
+	// Reload restarts every runner once its current work finishes, so new
+	// source in the workspace takes effect.
+	Reload *Reload `protobuf:"bytes,30,opt,name=reload,proto3,oneof"`
+}
+
 func (*SupervisorCommand_Configure) isSupervisorCommand_Body() {}
 
 func (*SupervisorCommand_Run) isSupervisorCommand_Body() {}
@@ -508,6 +524,8 @@ func (*SupervisorCommand_Run) isSupervisorCommand_Body() {}
 func (*SupervisorCommand_Cancel) isSupervisorCommand_Body() {}
 
 func (*SupervisorCommand_Drain) isSupervisorCommand_Body() {}
+
+func (*SupervisorCommand_Reload) isSupervisorCommand_Body() {}
 
 // Configure is the first command. The supervisor starts `slots` runner
 // processes with runner_command in working_directory.
@@ -517,8 +535,12 @@ type Configure struct {
 	Slots            int32                  `protobuf:"varint,2,opt,name=slots,proto3" json:"slots,omitempty"`
 	RunnerCommand    []string               `protobuf:"bytes,3,rep,name=runner_command,json=runnerCommand,proto3" json:"runner_command,omitempty"`
 	WorkingDirectory string                 `protobuf:"bytes,4,opt,name=working_directory,json=workingDirectory,proto3" json:"working_directory,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Set for HTTP workloads. The supervisor serves HTTP on http_socket and
+	// forwards each request to a worker with a free slot.
+	Http          *HttpServing `protobuf:"bytes,30,opt,name=http,proto3" json:"http,omitempty"`
+	HttpSocket    string       `protobuf:"bytes,31,opt,name=http_socket,json=httpSocket,proto3" json:"http_socket,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Configure) Reset() {
@@ -575,6 +597,20 @@ func (x *Configure) GetRunnerCommand() []string {
 func (x *Configure) GetWorkingDirectory() string {
 	if x != nil {
 		return x.WorkingDirectory
+	}
+	return ""
+}
+
+func (x *Configure) GetHttp() *HttpServing {
+	if x != nil {
+		return x.Http
+	}
+	return nil
+}
+
+func (x *Configure) GetHttpSocket() string {
+	if x != nil {
+		return x.HttpSocket
 	}
 	return ""
 }
@@ -700,7 +736,8 @@ func (x *CancelSlot) GetAttemptId() string {
 	return ""
 }
 
-// Drain lets running attempts finish, then exits the supervisor.
+// Drain lets running attempts and requests finish, then exits the
+// supervisor. HTTP workloads refuse new requests as busy while draining.
 type Drain struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -737,6 +774,42 @@ func (*Drain) Descriptor() ([]byte, []int) {
 	return file_host_v1_container_proto_rawDescGZIP(), []int{9}
 }
 
+type Reload struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Reload) Reset() {
+	*x = Reload{}
+	mi := &file_host_v1_container_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Reload) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Reload) ProtoMessage() {}
+
+func (x *Reload) ProtoReflect() protoreflect.Message {
+	mi := &file_host_v1_container_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Reload.ProtoReflect.Descriptor instead.
+func (*Reload) Descriptor() ([]byte, []int) {
+	return file_host_v1_container_proto_rawDescGZIP(), []int{10}
+}
+
 var File_host_v1_container_proto protoreflect.FileDescriptor
 
 const file_host_v1_container_proto_rawDesc = "" +
@@ -767,18 +840,22 @@ const file_host_v1_container_proto_rawDesc = "" +
 	"attempt_id\x18\x01 \x01(\tR\tattemptId\x124\n" +
 	"\x06stream\x18\x02 \x01(\x0e2\x1c.lazycloud.host.v1.LogStreamR\x06stream\x12\x12\n" +
 	"\x04data\x18\x03 \x01(\tR\x04data\x12.\n" +
-	"\x04time\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\x04time\"\xf7\x01\n" +
+	"\x04time\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\x04time\"\xac\x02\n" +
 	"\x11SupervisorCommand\x12<\n" +
 	"\tconfigure\x18\x01 \x01(\v2\x1c.lazycloud.host.v1.ConfigureH\x00R\tconfigure\x121\n" +
 	"\x03run\x18\x02 \x01(\v2\x1d.lazycloud.host.v1.RunAttemptH\x00R\x03run\x127\n" +
 	"\x06cancel\x18\x03 \x01(\v2\x1d.lazycloud.host.v1.CancelSlotH\x00R\x06cancel\x120\n" +
-	"\x05drain\x18\x04 \x01(\v2\x18.lazycloud.host.v1.DrainH\x00R\x05drainB\x06\n" +
-	"\x04body\"\x8f\x01\n" +
+	"\x05drain\x18\x04 \x01(\v2\x18.lazycloud.host.v1.DrainH\x00R\x05drain\x123\n" +
+	"\x06reload\x18\x1e \x01(\v2\x19.lazycloud.host.v1.ReloadH\x00R\x06reloadB\x06\n" +
+	"\x04body\"\xe4\x01\n" +
 	"\tConfigure\x12\x18\n" +
 	"\ahandler\x18\x01 \x01(\tR\ahandler\x12\x14\n" +
 	"\x05slots\x18\x02 \x01(\x05R\x05slots\x12%\n" +
 	"\x0erunner_command\x18\x03 \x03(\tR\rrunnerCommand\x12+\n" +
-	"\x11working_directory\x18\x04 \x01(\tR\x10workingDirectory\"\xdd\x01\n" +
+	"\x11working_directory\x18\x04 \x01(\tR\x10workingDirectory\x122\n" +
+	"\x04http\x18\x1e \x01(\v2\x1e.lazycloud.host.v1.HttpServingR\x04http\x12\x1f\n" +
+	"\vhttp_socket\x18\x1f \x01(\tR\n" +
+	"httpSocket\"\xdd\x01\n" +
 	"\n" +
 	"RunAttempt\x12\x17\n" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12\x1d\n" +
@@ -791,7 +868,8 @@ const file_host_v1_container_proto_rawDesc = "" +
 	"CancelSlot\x12\x1d\n" +
 	"\n" +
 	"attempt_id\x18\x01 \x01(\tR\tattemptId\"\a\n" +
-	"\x05Drain2j\n" +
+	"\x05Drain\"\b\n" +
+	"\x06Reload2j\n" +
 	"\rContainerLink\x12Y\n" +
 	"\aConnect\x12$.lazycloud.host.v1.SupervisorMessage\x1a$.lazycloud.host.v1.SupervisorCommand(\x010\x01B5Z3github.com/AmbientWare/lazycloud/internal/hostprotob\x06proto3"
 
@@ -807,7 +885,7 @@ func file_host_v1_container_proto_rawDescGZIP() []byte {
 	return file_host_v1_container_proto_rawDescData
 }
 
-var file_host_v1_container_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
+var file_host_v1_container_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_host_v1_container_proto_goTypes = []any{
 	(*SupervisorMessage)(nil),     // 0: lazycloud.host.v1.SupervisorMessage
 	(*SlotsReady)(nil),            // 1: lazycloud.host.v1.SlotsReady
@@ -819,36 +897,40 @@ var file_host_v1_container_proto_goTypes = []any{
 	(*RunAttempt)(nil),            // 7: lazycloud.host.v1.RunAttempt
 	(*CancelSlot)(nil),            // 8: lazycloud.host.v1.CancelSlot
 	(*Drain)(nil),                 // 9: lazycloud.host.v1.Drain
-	(*RunnerError)(nil),           // 10: lazycloud.host.v1.RunnerError
-	(*TaskSuccess)(nil),           // 11: lazycloud.host.v1.TaskSuccess
-	(*TaskFailure)(nil),           // 12: lazycloud.host.v1.TaskFailure
-	(LogStream)(0),                // 13: lazycloud.host.v1.LogStream
-	(*timestamppb.Timestamp)(nil), // 14: google.protobuf.Timestamp
-	(PayloadEncoding)(0),          // 15: lazycloud.host.v1.PayloadEncoding
+	(*Reload)(nil),                // 10: lazycloud.host.v1.Reload
+	(*RunnerError)(nil),           // 11: lazycloud.host.v1.RunnerError
+	(*TaskSuccess)(nil),           // 12: lazycloud.host.v1.TaskSuccess
+	(*TaskFailure)(nil),           // 13: lazycloud.host.v1.TaskFailure
+	(LogStream)(0),                // 14: lazycloud.host.v1.LogStream
+	(*timestamppb.Timestamp)(nil), // 15: google.protobuf.Timestamp
+	(*HttpServing)(nil),           // 16: lazycloud.host.v1.HttpServing
+	(PayloadEncoding)(0),          // 17: lazycloud.host.v1.PayloadEncoding
 }
 var file_host_v1_container_proto_depIdxs = []int32{
 	1,  // 0: lazycloud.host.v1.SupervisorMessage.ready:type_name -> lazycloud.host.v1.SlotsReady
 	2,  // 1: lazycloud.host.v1.SupervisorMessage.load_failed:type_name -> lazycloud.host.v1.LoadFailed
 	3,  // 2: lazycloud.host.v1.SupervisorMessage.finished:type_name -> lazycloud.host.v1.AttemptFinished
 	4,  // 3: lazycloud.host.v1.SupervisorMessage.output:type_name -> lazycloud.host.v1.OutputChunk
-	10, // 4: lazycloud.host.v1.LoadFailed.error:type_name -> lazycloud.host.v1.RunnerError
-	11, // 5: lazycloud.host.v1.AttemptFinished.success:type_name -> lazycloud.host.v1.TaskSuccess
-	12, // 6: lazycloud.host.v1.AttemptFinished.failure:type_name -> lazycloud.host.v1.TaskFailure
-	13, // 7: lazycloud.host.v1.OutputChunk.stream:type_name -> lazycloud.host.v1.LogStream
-	14, // 8: lazycloud.host.v1.OutputChunk.time:type_name -> google.protobuf.Timestamp
+	11, // 4: lazycloud.host.v1.LoadFailed.error:type_name -> lazycloud.host.v1.RunnerError
+	12, // 5: lazycloud.host.v1.AttemptFinished.success:type_name -> lazycloud.host.v1.TaskSuccess
+	13, // 6: lazycloud.host.v1.AttemptFinished.failure:type_name -> lazycloud.host.v1.TaskFailure
+	14, // 7: lazycloud.host.v1.OutputChunk.stream:type_name -> lazycloud.host.v1.LogStream
+	15, // 8: lazycloud.host.v1.OutputChunk.time:type_name -> google.protobuf.Timestamp
 	6,  // 9: lazycloud.host.v1.SupervisorCommand.configure:type_name -> lazycloud.host.v1.Configure
 	7,  // 10: lazycloud.host.v1.SupervisorCommand.run:type_name -> lazycloud.host.v1.RunAttempt
 	8,  // 11: lazycloud.host.v1.SupervisorCommand.cancel:type_name -> lazycloud.host.v1.CancelSlot
 	9,  // 12: lazycloud.host.v1.SupervisorCommand.drain:type_name -> lazycloud.host.v1.Drain
-	15, // 13: lazycloud.host.v1.RunAttempt.input_encoding:type_name -> lazycloud.host.v1.PayloadEncoding
-	14, // 14: lazycloud.host.v1.RunAttempt.deadline:type_name -> google.protobuf.Timestamp
-	0,  // 15: lazycloud.host.v1.ContainerLink.Connect:input_type -> lazycloud.host.v1.SupervisorMessage
-	5,  // 16: lazycloud.host.v1.ContainerLink.Connect:output_type -> lazycloud.host.v1.SupervisorCommand
-	16, // [16:17] is the sub-list for method output_type
-	15, // [15:16] is the sub-list for method input_type
-	15, // [15:15] is the sub-list for extension type_name
-	15, // [15:15] is the sub-list for extension extendee
-	0,  // [0:15] is the sub-list for field type_name
+	10, // 13: lazycloud.host.v1.SupervisorCommand.reload:type_name -> lazycloud.host.v1.Reload
+	16, // 14: lazycloud.host.v1.Configure.http:type_name -> lazycloud.host.v1.HttpServing
+	17, // 15: lazycloud.host.v1.RunAttempt.input_encoding:type_name -> lazycloud.host.v1.PayloadEncoding
+	15, // 16: lazycloud.host.v1.RunAttempt.deadline:type_name -> google.protobuf.Timestamp
+	0,  // 17: lazycloud.host.v1.ContainerLink.Connect:input_type -> lazycloud.host.v1.SupervisorMessage
+	5,  // 18: lazycloud.host.v1.ContainerLink.Connect:output_type -> lazycloud.host.v1.SupervisorCommand
+	18, // [18:19] is the sub-list for method output_type
+	17, // [17:18] is the sub-list for method input_type
+	17, // [17:17] is the sub-list for extension type_name
+	17, // [17:17] is the sub-list for extension extendee
+	0,  // [0:17] is the sub-list for field type_name
 }
 
 func init() { file_host_v1_container_proto_init() }
@@ -872,6 +954,7 @@ func file_host_v1_container_proto_init() {
 		(*SupervisorCommand_Run)(nil),
 		(*SupervisorCommand_Cancel)(nil),
 		(*SupervisorCommand_Drain)(nil),
+		(*SupervisorCommand_Reload)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -879,7 +962,7 @@ func file_host_v1_container_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_host_v1_container_proto_rawDesc), len(file_host_v1_container_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   10,
+			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

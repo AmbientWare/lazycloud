@@ -28,6 +28,75 @@ func (e AppState) Valid() bool {
 	}
 }
 
+// Defines values for ContainerLogEntryStream.
+const (
+	ContainerLogEntryStreamStderr ContainerLogEntryStream = "stderr"
+	ContainerLogEntryStreamStdout ContainerLogEntryStream = "stdout"
+	ContainerLogEntryStreamSystem ContainerLogEntryStream = "system"
+)
+
+// Valid indicates whether the value is a known member of the ContainerLogEntryStream enum.
+func (e ContainerLogEntryStream) Valid() bool {
+	switch e {
+	case ContainerLogEntryStreamStderr:
+		return true
+	case ContainerLogEntryStreamStdout:
+		return true
+	case ContainerLogEntryStreamSystem:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DomainErrorCode.
+const (
+	CertificateFailed    DomainErrorCode = "certificate_failed"
+	HostnameRejected     DomainErrorCode = "hostname_rejected"
+	UpstreamUnavailable  DomainErrorCode = "upstream_unavailable"
+	VerificationTimedOut DomainErrorCode = "verification_timed_out"
+)
+
+// Valid indicates whether the value is a known member of the DomainErrorCode enum.
+func (e DomainErrorCode) Valid() bool {
+	switch e {
+	case CertificateFailed:
+		return true
+	case HostnameRejected:
+		return true
+	case UpstreamUnavailable:
+		return true
+	case VerificationTimedOut:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DomainPhase.
+const (
+	DomainPhaseActionRequired       DomainPhase = "action_required"
+	DomainPhaseAwaitingVerification DomainPhase = "awaiting_verification"
+	DomainPhaseReady                DomainPhase = "ready"
+	DomainPhaseValidating           DomainPhase = "validating"
+)
+
+// Valid indicates whether the value is a known member of the DomainPhase enum.
+func (e DomainPhase) Valid() bool {
+	switch e {
+	case DomainPhaseActionRequired:
+		return true
+	case DomainPhaseAwaitingVerification:
+		return true
+	case DomainPhaseReady:
+		return true
+	case DomainPhaseValidating:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ErrorCode.
 const (
 	Conflict            ErrorCode = "conflict"
@@ -118,6 +187,81 @@ func (e FunctionState) Valid() bool {
 	}
 }
 
+// Defines values for HttpKind.
+const (
+	HttpKindAsgi     HttpKind = "asgi"
+	HttpKindEndpoint HttpKind = "endpoint"
+	HttpKindRealtime HttpKind = "realtime"
+)
+
+// Valid indicates whether the value is a known member of the HttpKind enum.
+func (e HttpKind) Valid() bool {
+	switch e {
+	case HttpKindAsgi:
+		return true
+	case HttpKindEndpoint:
+		return true
+	case HttpKindRealtime:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HttpMethod.
+const (
+	HttpMethodDELETE  HttpMethod = "DELETE"
+	HttpMethodGET     HttpMethod = "GET"
+	HttpMethodHEAD    HttpMethod = "HEAD"
+	HttpMethodOPTIONS HttpMethod = "OPTIONS"
+	HttpMethodPATCH   HttpMethod = "PATCH"
+	HttpMethodPOST    HttpMethod = "POST"
+	HttpMethodPUT     HttpMethod = "PUT"
+	HttpMethodTRACE   HttpMethod = "TRACE"
+)
+
+// Valid indicates whether the value is a known member of the HttpMethod enum.
+func (e HttpMethod) Valid() bool {
+	switch e {
+	case HttpMethodDELETE:
+		return true
+	case HttpMethodGET:
+		return true
+	case HttpMethodHEAD:
+		return true
+	case HttpMethodOPTIONS:
+		return true
+	case HttpMethodPATCH:
+		return true
+	case HttpMethodPOST:
+		return true
+	case HttpMethodPUT:
+		return true
+	case HttpMethodTRACE:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HttpWorkloadState.
+const (
+	HttpWorkloadStateActive  HttpWorkloadState = "active"
+	HttpWorkloadStateStopped HttpWorkloadState = "stopped"
+)
+
+// Valid indicates whether the value is a known member of the HttpWorkloadState enum.
+func (e HttpWorkloadState) Valid() bool {
+	switch e {
+	case HttpWorkloadStateActive:
+		return true
+	case HttpWorkloadStateStopped:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ImageSpecPythonVersion.
 const (
 	N310 ImageSpecPythonVersion = "3.10"
@@ -184,6 +328,51 @@ func (e PayloadEncoding) Valid() bool {
 	}
 }
 
+// Defines values for PreviewKind.
+const (
+	PreviewKindAsgi     PreviewKind = "asgi"
+	PreviewKindEndpoint PreviewKind = "endpoint"
+	PreviewKindFunction PreviewKind = "function"
+	PreviewKindRealtime PreviewKind = "realtime"
+)
+
+// Valid indicates whether the value is a known member of the PreviewKind enum.
+func (e PreviewKind) Valid() bool {
+	switch e {
+	case PreviewKindAsgi:
+		return true
+	case PreviewKindEndpoint:
+		return true
+	case PreviewKindFunction:
+		return true
+	case PreviewKindRealtime:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PreviewState.
+const (
+	PreviewStateReady    PreviewState = "ready"
+	PreviewStateStarting PreviewState = "starting"
+	PreviewStateStopped  PreviewState = "stopped"
+)
+
+// Valid indicates whether the value is a known member of the PreviewState enum.
+func (e PreviewState) Valid() bool {
+	switch e {
+	case PreviewStateReady:
+		return true
+	case PreviewStateStarting:
+		return true
+	case PreviewStateStopped:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for RetryPolicyBackoff.
 const (
 	Exponential RetryPolicyBackoff = "exponential"
@@ -231,13 +420,13 @@ func (e TaskStatus) Valid() bool {
 
 // Defines values for UploadTargetMethod.
 const (
-	PUT UploadTargetMethod = "PUT"
+	UploadTargetMethodPUT UploadTargetMethod = "PUT"
 )
 
 // Valid indicates whether the value is a known member of the UploadTargetMethod enum.
 func (e UploadTargetMethod) Valid() bool {
 	switch e {
-	case PUT:
+	case UploadTargetMethodPUT:
 		return true
 	default:
 		return false
@@ -265,6 +454,18 @@ type Autoscaler struct {
 	TasksPerContainer *int `json:"tasks_per_container,omitempty"`
 }
 
+// ContainerLogEntry defines model for ContainerLogEntry.
+type ContainerLogEntry struct {
+	// Data One line of output without its trailing newline.
+	Data   string                  `json:"data"`
+	Id     int64                   `json:"id"`
+	Stream ContainerLogEntryStream `json:"stream"`
+	Time   time.Time               `json:"time"`
+}
+
+// ContainerLogEntryStream defines model for ContainerLogEntry.Stream.
+type ContainerLogEntryStream string
+
 // Deployment defines model for Deployment.
 type Deployment struct {
 	App      App            `json:"app"`
@@ -278,6 +479,50 @@ type DeploymentRequest struct {
 
 	// Prune Stop every function of the app that is not listed.
 	Prune *bool `json:"prune,omitempty"`
+}
+
+// DnsRecord defines model for DnsRecord.
+type DnsRecord struct {
+	Name  string `json:"name"`
+	Type  string `json:"type"`
+	Value string `json:"value"`
+}
+
+// Domain defines model for Domain.
+type Domain struct {
+	// CnameTarget The hostname the domain's CNAME points at.
+	CnameTarget   string             `json:"cname_target"`
+	CreatedAt     time.Time          `json:"created_at"`
+	ErrorCode     *DomainErrorCode   `json:"error_code,omitempty"`
+	ErrorMessage  *string            `json:"error_message,omitempty"`
+	Hostname      Hostname           `json:"hostname"`
+	Id            openapi_types.UUID `json:"id"`
+	LastCheckedAt *time.Time         `json:"last_checked_at,omitempty"`
+	Phase         DomainPhase        `json:"phase"`
+
+	// RequiredRecords Records the provider still waits for beyond the CNAME.
+	RequiredRecords []DnsRecord `json:"required_records"`
+	UpdatedAt       time.Time   `json:"updated_at"`
+	VerifiedAt      *time.Time  `json:"verified_at,omitempty"`
+}
+
+// DomainErrorCode defines model for DomainErrorCode.
+type DomainErrorCode string
+
+// DomainList defines model for DomainList.
+type DomainList struct {
+	Data []Domain `json:"data"`
+
+	// Next Pass as `after` for the next page; absent on the last.
+	Next *string `json:"next,omitempty"`
+}
+
+// DomainPhase defines model for DomainPhase.
+type DomainPhase string
+
+// DomainRequest defines model for DomainRequest.
+type DomainRequest struct {
+	Hostname string `json:"hostname"`
 }
 
 // Error defines model for Error.
@@ -327,6 +572,52 @@ type FunctionSpec struct {
 	TimeoutSeconds *int         `json:"timeout_seconds,omitempty"`
 }
 
+// Hostname defines model for Hostname.
+type Hostname = string
+
+// HttpKind defines model for HttpKind.
+type HttpKind string
+
+// HttpMethod defines model for HttpMethod.
+type HttpMethod string
+
+// HttpSpec Makes the workload answer HTTP. Its slots are `workers` processes, each handling `concurrency` requests at once.
+type HttpSpec struct {
+	// Authorized Require a bearer token for the workspace.
+	Authorized *bool         `json:"authorized,omitempty"`
+	Domain     *Hostname     `json:"domain,omitempty"`
+	Kind       HttpKind      `json:"kind"`
+	Methods    *[]HttpMethod `json:"methods,omitempty"`
+
+	// Route The path an endpoint answers on.
+	Route   *string `json:"route,omitempty"`
+	Workers *int    `json:"workers,omitempty"`
+}
+
+// HttpWorkload defines model for HttpWorkload.
+type HttpWorkload struct {
+	App AppName `json:"app"`
+
+	// DomainUrl The custom hostname, once its registration is ready.
+	DomainUrl *string      `json:"domain_url,omitempty"`
+	Kind      HttpKind     `json:"kind"`
+	Name      WorkloadName `json:"name"`
+	Release   Release      `json:"release"`
+
+	// ReleaseUrl Addresses the release by id.
+	ReleaseUrl string            `json:"release_url"`
+	State      HttpWorkloadState `json:"state"`
+
+	// Url Follows the active release across deploys.
+	Url string `json:"url"`
+
+	// VersionUrl Pinned to the release's version.
+	VersionUrl string `json:"version_url"`
+}
+
+// HttpWorkloadState defines model for HttpWorkload.State.
+type HttpWorkloadState string
+
 // ImageSpec defines model for ImageSpec.
 type ImageSpec struct {
 	PythonVersion ImageSpecPythonVersion `json:"python_version"`
@@ -334,6 +625,16 @@ type ImageSpec struct {
 
 // ImageSpecPythonVersion defines model for ImageSpec.PythonVersion.
 type ImageSpecPythonVersion string
+
+// Invocation defines model for Invocation.
+type Invocation struct {
+	// Result The JSON value the function returned, once it succeeded.
+	Result *json.RawMessage `json:"result,omitempty"`
+	Task   Task             `json:"task"`
+}
+
+// InvocationBody defines model for InvocationBody.
+type InvocationBody map[string]interface{}
 
 // LogEntry defines model for LogEntry.
 type LogEntry struct {
@@ -367,6 +668,41 @@ type Payload struct {
 
 // PayloadEncoding defines model for Payload.Encoding.
 type PayloadEncoding string
+
+// Preview defines model for Preview.
+type Preview struct {
+	App         AppName             `json:"app"`
+	ContainerId *openapi_types.UUID `json:"container_id,omitempty"`
+	CreatedAt   time.Time           `json:"created_at"`
+	ExpiresAt   *time.Time          `json:"expires_at,omitempty"`
+	Id          openapi_types.UUID  `json:"id"`
+	Kind        PreviewKind         `json:"kind"`
+	Name        WorkloadName        `json:"name"`
+	State       PreviewState        `json:"state"`
+
+	// Url Where the preview answers; a function preview takes tasks through the API.
+	Url string `json:"url"`
+}
+
+// PreviewKind defines model for PreviewKind.
+type PreviewKind string
+
+// PreviewRequest defines model for PreviewRequest.
+type PreviewRequest struct {
+	Spec FunctionSpec `json:"spec"`
+
+	// TimeoutSeconds Stop after this long; 0 runs until stopped.
+	TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
+}
+
+// PreviewState defines model for PreviewState.
+type PreviewState string
+
+// PreviewSync defines model for PreviewSync.
+type PreviewSync struct {
+	Removed int `json:"removed"`
+	Written int `json:"written"`
+}
 
 // Release defines model for Release.
 type Release struct {
@@ -498,14 +834,69 @@ type Workspace struct {
 // AppPath defines model for AppPath.
 type AppPath = AppName
 
+// EndpointPath defines model for EndpointPath.
+type EndpointPath = WorkloadName
+
 // FunctionPath defines model for FunctionPath.
 type FunctionPath = WorkloadName
+
+// InvokeWait defines model for InvokeWait.
+type InvokeWait = int
+
+// PreviewPath defines model for PreviewPath.
+type PreviewPath = openapi_types.UUID
 
 // TaskPath defines model for TaskPath.
 type TaskPath = openapi_types.UUID
 
+// VersionQuery defines model for VersionQuery.
+type VersionQuery = int
+
 // WorkspacePath defines model for WorkspacePath.
 type WorkspacePath = Name
+
+// ListDomainsParams defines parameters for ListDomains.
+type ListDomainsParams struct {
+	// After Return domains whose hostname sorts after this.
+	After *string `form:"after,omitempty" json:"after,omitempty"`
+	Limit *int    `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// GetAsgiParams defines parameters for GetAsgi.
+type GetAsgiParams struct {
+	// Version Describe this version instead of the active one.
+	Version *VersionQuery `form:"version,omitempty" json:"version,omitempty"`
+}
+
+// GetEndpointParams defines parameters for GetEndpoint.
+type GetEndpointParams struct {
+	// Version Describe this version instead of the active one.
+	Version *VersionQuery `form:"version,omitempty" json:"version,omitempty"`
+}
+
+// InvokeFunctionParams defines parameters for InvokeFunction.
+type InvokeFunctionParams struct {
+	// WaitSeconds Hold the request until the task finishes or this many seconds pass.
+	WaitSeconds *InvokeWait `form:"wait_seconds,omitempty" json:"wait_seconds,omitempty"`
+}
+
+// InvokeFunctionVersionParams defines parameters for InvokeFunctionVersion.
+type InvokeFunctionVersionParams struct {
+	// WaitSeconds Hold the request until the task finishes or this many seconds pass.
+	WaitSeconds *InvokeWait `form:"wait_seconds,omitempty" json:"wait_seconds,omitempty"`
+}
+
+// GetPreviewParams defines parameters for GetPreview.
+type GetPreviewParams struct {
+	// WaitSeconds Hold the request until the container is ready or the preview stops, or this many seconds pass.
+	WaitSeconds *int `form:"wait_seconds,omitempty" json:"wait_seconds,omitempty"`
+}
+
+// StreamPreviewOutputParams defines parameters for StreamPreviewOutput.
+type StreamPreviewOutputParams struct {
+	After  *int64 `form:"after,omitempty" json:"after,omitempty"`
+	Follow *bool  `form:"follow,omitempty" json:"follow,omitempty"`
+}
 
 // GetTaskParams defines parameters for GetTask.
 type GetTaskParams struct {
@@ -522,11 +913,26 @@ type StreamTaskLogsParams struct {
 	Follow *bool `form:"follow,omitempty" json:"follow,omitempty"`
 }
 
+// RegisterDomainJSONRequestBody defines body for RegisterDomain for application/json ContentType.
+type RegisterDomainJSONRequestBody = DomainRequest
+
 // DeployAppJSONRequestBody defines body for DeployApp for application/json ContentType.
 type DeployAppJSONRequestBody = DeploymentRequest
 
+// InvokeFunctionJSONRequestBody defines body for InvokeFunction for application/json ContentType.
+type InvokeFunctionJSONRequestBody = InvocationBody
+
 // SubmitTasksJSONRequestBody defines body for SubmitTasks for application/json ContentType.
 type SubmitTasksJSONRequestBody = SubmitTasksRequest
+
+// InvokeFunctionVersionJSONRequestBody defines body for InvokeFunctionVersion for application/json ContentType.
+type InvokeFunctionVersionJSONRequestBody = InvocationBody
+
+// CreatePreviewJSONRequestBody defines body for CreatePreview for application/json ContentType.
+type CreatePreviewJSONRequestBody = PreviewRequest
+
+// SubmitPreviewTasksJSONRequestBody defines body for SubmitPreviewTasks for application/json ContentType.
+type SubmitPreviewTasksJSONRequestBody = SubmitTasksRequest
 
 // CreateSourceUploadJSONRequestBody defines body for CreateSourceUpload for application/json ContentType.
 type CreateSourceUploadJSONRequestBody = SourceUploadRequest

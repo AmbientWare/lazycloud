@@ -1,0 +1,111 @@
+syntax = "proto3";
+
+package lazycloud.host.v1;
+
+option go_package = "github.com/AmbientWare/lazycloud/internal/hostproto";
+
+// HostData carries workload traffic between the edge and a host's agent. The
+// agent dials out on its own connection, separate from the control session,
+// so request bodies never delay commands or presence, and every call carries
+// `authorization: Bearer <host token>` metadata.
+//
+// The agent opens Forward streams in advance. Each waits idle until the edge
+// sends a RequestHead on it, so a request costs no extra round trip. The
+// edge asks for more idle streams on Listen when it has none.
+service HostData {
+  // Listen registers the agent with the edge for as long as it stays open.
+  rpc Listen(ListenRequest) returns (stream ListenEvent);
+  // Forward carries one request and its response. Bodies stream in both
+  // directions under gRPC's per-stream flow control.
+  rpc Forward(stream ForwardUp) returns (stream ForwardDown);
+}
+
+message ListenRequest {}
+
+message ListenEvent {
+  // Open this many more idle Forward streams.
+  int32 streams = 1;
+}
+
+// ForwardDown flows from the edge to the agent: a head, then body chunks,
+// then end. After a 101 response, data is raw bytes from the client.
+message ForwardDown {
+  oneof body {
+    RequestHead head = 1;
+    bytes data = 2;
+    // The request body is complete, or the client closed its half of an
+    // upgraded connection.
+    End end = 3;
+  }
+}
+
+message RequestHead {
+  string container_id = 1;
+  oneof kind {
+    HttpRequest http = 2;
+    WorkspaceSync sync = 3;
+  }
+}
+
+// HttpRequest is forwarded to the container's supervisor. Hop-by-hop headers
+// are already removed, except Connection and Upgrade on an upgrade request.
+message HttpRequest {
+  string method = 1;
+  // The escaped path and query.
+  string uri = 2;
+  string host = 3;
+  repeated Header headers = 4;
+}
+
+message Header {
+  string name = 1;
+  string value = 2;
+}
+
+// WorkspaceSync applies a source change to a preview container's workspace.
+// The body is a tar of the files to write; removed lists paths to delete.
+// The agent restarts the container's runners afterwards.
+message WorkspaceSync {
+  repeated string removed = 1;
+}
+
+message End {}
+
+// ForwardUp flows from the agent to the edge: a head or an error, then body
+// chunks, then end.
+message ForwardUp {
+  oneof body {
+    ResponseHead head = 1;
+    bytes data = 2;
+    End end = 3;
+    ForwardError error = 4;
+    SyncResult synced = 5;
+  }
+}
+
+message ResponseHead {
+  int32 status = 1;
+  repeated Header headers = 2;
+}
+
+enum ForwardErrorKind {
+  FORWARD_ERROR_KIND_UNSPECIFIED = 0;
+  // Every slot of the container is busy or it is draining. Nothing reached
+  // the workload, so the edge may send the request to another container.
+  FORWARD_ERROR_KIND_BUSY = 1;
+  // The container does not run on this host or does not serve HTTP. Nothing
+  // reached the workload.
+  FORWARD_ERROR_KIND_NOT_RUNNING = 2;
+  // The request failed after it may have reached the workload.
+  FORWARD_ERROR_KIND_FAILED = 3;
+}
+
+message ForwardError {
+  ForwardErrorKind kind = 1;
+  string message = 2;
+}
+
+message SyncResult {
+  int32 written = 1;
+  int32 removed = 2;
+}

@@ -36,6 +36,27 @@ func (e FailedType) Valid() bool {
 	}
 }
 
+// Defines values for HttpKind.
+const (
+	Asgi     HttpKind = "asgi"
+	Endpoint HttpKind = "endpoint"
+	Realtime HttpKind = "realtime"
+)
+
+// Valid indicates whether the value is a known member of the HttpKind enum.
+func (e HttpKind) Valid() bool {
+	switch e {
+	case Asgi:
+		return true
+	case Endpoint:
+		return true
+	case Realtime:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for InvokeType.
 const (
 	InvokeTypeInvoke InvokeType = "invoke"
@@ -145,6 +166,18 @@ type Failed struct {
 // FailedType defines model for Failed.Type.
 type FailedType string
 
+// HttpKind `endpoint` maps a JSON body and the query to the function's arguments and maps its return value to a response. `asgi` and `realtime` serve the loaded ASGI application.
+type HttpKind string
+
+// HttpServing defines model for HttpServing.
+type HttpServing struct {
+	// Concurrency Requests the supervisor sends this runner at once.
+	Concurrency int `json:"concurrency"`
+
+	// Kind `endpoint` maps a JSON body and the query to the function's arguments and maps its return value to a response. `asgi` and `realtime` serve the loaded ASGI application.
+	Kind HttpKind `json:"kind"`
+}
+
 // Invoke The payload is the encoded Arguments.
 type Invoke struct {
 	AttemptId     string     `json:"attempt_id"`
@@ -160,6 +193,7 @@ type InvokeType string
 type Load struct {
 	// Handler module:qualname importable from the working directory
 	Handler         string              `json:"handler"`
+	Http            *HttpServing        `json:"http,omitempty"`
 	ProtocolVersion LoadProtocolVersion `json:"protocol_version"`
 	Type            LoadType            `json:"type"`
 }

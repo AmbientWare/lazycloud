@@ -133,6 +133,27 @@ message StartContainer {
   Resources resources = 5;
   FunctionWorkload function = 6;
   map<string, string> environment = 7;
+  // Set for endpoint, ASGI and realtime workloads: the slots are workers that
+  // serve HTTP instead of claiming tasks.
+  HttpServing http = 30;
+}
+
+enum HttpKind {
+  HTTP_KIND_UNSPECIFIED = 0;
+  // A function whose JSON body and query become its arguments.
+  HTTP_KIND_ENDPOINT = 1;
+  // An ASGI application.
+  HTTP_KIND_ASGI = 2;
+  // A WebSocket handler called once per message.
+  HTTP_KIND_REALTIME = 3;
+}
+
+// HttpServing configures a container's workers to serve HTTP. Each of the
+// FunctionWorkload slots is one worker process admitting up to concurrency
+// requests at once.
+message HttpServing {
+  HttpKind kind = 1;
+  int32 concurrency = 2;
 }
 
 message Source {

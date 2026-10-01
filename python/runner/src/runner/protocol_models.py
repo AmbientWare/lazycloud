@@ -31,11 +31,16 @@ class RunnerError(BaseModel):
     traceback: str | None = None
 
 
-class Load(BaseModel):
-    type: Literal["load"]
-    protocol_version: Literal[1]
-    handler: Annotated[
-        str, Field(description="module:qualname importable from the working directory")
+class HttpKind(str, Enum):
+    endpoint = "endpoint"
+    asgi = "asgi"
+    realtime = "realtime"
+
+
+class HttpServing(BaseModel):
+    kind: HttpKind
+    concurrency: Annotated[
+        int, Field(description="Requests the supervisor sends this runner at once.", ge=1)
     ]
 
 
@@ -65,3 +70,12 @@ class Failed(BaseModel):
     type: Literal["failed"]
     attempt_id: str
     error: RunnerError
+
+
+class Load(BaseModel):
+    type: Literal["load"]
+    protocol_version: Literal[1]
+    handler: Annotated[
+        str, Field(description="module:qualname importable from the working directory")
+    ]
+    http: HttpServing | None = None
