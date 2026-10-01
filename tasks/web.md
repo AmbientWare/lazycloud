@@ -83,12 +83,26 @@ server's error.
 - Volumes have no update time, queues have no write rate, and disks have no
   workload reference.
 - `contracts/http_contract_cases.json` stays because a Python test reads it.
-- The reference marketing page fails its axe check on `.run-test-checks`.
+- `/pricing` reads `/api/v1/pricing` until billing serves pricing.
+
+## Pre-existing UI issues for the user to decide
+
+Both also fail on the reference's own specs. The specs mark them
+`test.fixme`, and the UI is unchanged.
+
+- Workspace search. Type a query that filters out the selected "Apps"
+  destination, and no result is selected, so Enter does nothing. cmdk 1.1.1
+  with `shouldFilter=false` keeps the stale value. ArrowDown and Home
+  reselect a result.
+- Marketing axe check. `aria-prohibited-attr` on `<div class="run-test-checks"
+  aria-label="8 tests passed">` in `RunWorkloadViews.tsx`. An aria-label
+  needs a role on a div.
 
 ## Evidence
 
 - `bun run typecheck`, `lint`, `format:check`, `build` and vitest
-  (125 tests) pass.
+  (126 tests) pass. The mocked smoke, onboarding and marketing specs pass
+  on both projects apart from the two fixme tests.
 - The stack journeys pass on chromium and mobile against server, scheduler
   and agent on private ports. They cover sign-in, workspace create, rename,
   invite and delete, deploy with the SDK, playground invoke, task drawer
