@@ -191,9 +191,6 @@ func instanceParams(workspace identity.WorkspaceID, row InstanceReleaseRow, spec
 	if req.Shell && req.Snapshot != nil {
 		return InsertInstanceParams{}, &InvalidError{Reason: "a shell container does not restore a snapshot"}
 	}
-	if p := spec.Pod; req.Snapshot != nil && p != nil && ((p.BlockNetwork != nil && *p.BlockNetwork) || (p.AllowList != nil && len(*p.AllowList) > 0)) {
-		return InsertInstanceParams{}, &InvalidError{Reason: "an instance with a network policy cannot restore a snapshot: it would run before its filter applies"}
-	}
 	if spec.Pod != nil && spec.Pod.Kind == apitypes.PodKindDevbox {
 		return InsertInstanceParams{}, &InvalidError{Reason: "a devbox runs one container; connect to it instead"}
 	}

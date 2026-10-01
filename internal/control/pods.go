@@ -39,8 +39,6 @@ func resolvePod(spec apitypes.WorkloadSpec, out *apitypes.WorkloadSpec) error {
 	switch {
 	case docker && limited:
 		return invalid("docker_enabled cannot be combined with block_network or allow_list: nested containers would bypass the policy")
-	case spec.Checkpoint != nil && limited:
-		return invalid("checkpoint cannot be combined with block_network or allow_list: a restored pod would run before its filter applies")
 	case !p.Kind.Valid():
 		return invalid(fmt.Sprintf("unknown pod kind %q", p.Kind))
 	case spec.Handler != nil:

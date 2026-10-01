@@ -20,7 +20,9 @@ import (
 	"testing"
 	"time"
 
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/google/uuid"
+	"github.com/moby/moby/client"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
@@ -541,7 +543,7 @@ func TestAdoptedPodKeepsItsConfiguration(t *testing.T) {
 
 	e.startAgent()
 	session = e.session()
-	session.phase(t, id, hostproto.ContainerPhase_CONTAINER_PHASE_READY)
+	session.adoptedReady(t, id)
 	if listing := e.server.data.forward(t, portHead(id, 8000, "/"), ""); listing.status != http.StatusOK || !strings.Contains(listing.body, "app.py") {
 		t.Fatalf("port 8000 after adoption: %+v", listing)
 	}
@@ -552,6 +554,59 @@ func TestAdoptedPodKeepsItsConfiguration(t *testing.T) {
 	if err != nil || !strings.HasPrefix(string(m.GetData()), "SSH-2.0-") {
 		t.Fatalf("SSH tunnel after adoption: %v %v", m, err)
 	}
+}
+
+// A checkpointable pod runs in its network holder's namespace: its start
+// policy is in place before it runs and updates reach it through the
+// holder; a restarted agent adopts both, and a stop removes both.
+func TestCheckpointablePodsShareTheirHoldersNetwork(t *testing.T) {
+	e := newEnv(t)
+	first := e.startAgent()
+	session := e.session()
+	target := startTargetServer(t, e.id)
+	probe := fmt.Sprintf(`import socket, time
+while True:
+    try:
+        socket.create_connection((%q, 80), timeout=1).close()
+        print("reach open", flush=True)
+    except OSError:
+        print("reach blocked", flush=True)
+    time.sleep(0.3)
+`, target)
+	start := e.podCommand(&hostproto.PodWorkload{Command: []string{"python3", "-c", probe}, Network: &hostproto.NetworkPolicy{Block: true}})
+	start.GetStart().Checkpointable = true
+	id := start.GetStart().GetContainerId()
+	session.send(t, start)
+	session.phase(t, id, hostproto.ContainerPhase_CONTAINER_PHASE_READY)
+	waitLog(t, e.server, id, "reach blocked")
+	if strings.Contains(e.server.containerLog(id), "reach open") {
+		t.Fatal("the pod reached the network before its policy applied")
+	}
+	holder, err := e.docker.ContainerInspect(t.Context(), "lazycloud-"+id+"-net", client.ContainerInspectOptions{})
+	if err != nil || !holder.Container.State.Running {
+		t.Fatalf("network holder %+v: %v", holder.Container.State, err)
+	}
+	pod, err := e.docker.ContainerInspect(t.Context(), "lazycloud-"+id, client.ContainerInspectOptions{})
+	if err != nil || string(pod.Container.HostConfig.NetworkMode) != "container:"+holder.Container.ID {
+		t.Fatalf("pod network %q: %v", pod.Container.HostConfig.NetworkMode, err)
+	}
+
+	first.stop()
+	e.startAgent()
+	session = e.session()
+	session.adoptedReady(t, id)
+	session.send(t, &hostproto.ServerMessage{CommandId: uuid.NewString(), Body: &hostproto.ServerMessage_Network{Network: &hostproto.UpdateNetwork{
+		ContainerId: id, Policy: &hostproto.NetworkPolicy{Allow: []string{target + "/32"}}, Version: 1,
+	}}})
+	waitLog(t, e.server, id, "reach open")
+
+	session.send(t, stopCommand(id, 0))
+	session.phase(t, id, hostproto.ContainerPhase_CONTAINER_PHASE_EXITED)
+	e.eventually("the pod and its holder are removed", func() bool {
+		_, podErr := e.docker.ContainerInspect(t.Context(), "lazycloud-"+id, client.ContainerInspectOptions{})
+		_, holderErr := e.docker.ContainerInspect(t.Context(), "lazycloud-"+id+"-net", client.ContainerInspectOptions{})
+		return cerrdefs.IsNotFound(podErr) && cerrdefs.IsNotFound(holderErr)
+	})
 }
 
 // sshKey is a new ed25519 private key in OpenSSH PEM form.
@@ -719,20 +774,55 @@ func TestSnapshotWithoutCheckpointSupportIsUnsupported(t *testing.T) {
 	}
 }
 
+// countingPod counts and probes target in a loop and serves port 8000, so
+// a restored copy shows it resumed where the snapshot left it.
+func countingPod(target string) []string {
+	return []string{"python3", "-c", fmt.Sprintf(`import http.server, socket, threading, time
+threading.Thread(target=http.server.HTTPServer(("", 8000), http.server.SimpleHTTPRequestHandler).serve_forever, daemon=True).start()
+n = 0
+while True:
+    n += 1
+    try:
+        socket.create_connection((%q, 80), timeout=1).close()
+        print("count", n, "open", flush=True)
+    except OSError:
+        print("count", n, "blocked", flush=True)
+    time.sleep(0.2)
+`, target)}
+}
+
+// lastCount is the highest count a counting pod logged.
+func lastCount(log string) int {
+	high := 0
+	for _, line := range strings.Split(log, "\n") {
+		var n int
+		var state string
+		if _, err := fmt.Sscanf(line, "count %d %s", &n, &state); err == nil && n > high {
+			high = n
+		}
+	}
+	return high
+}
+
 // Under gVisor a running pod checkpoints once its supervisor closed its
-// host sockets and keeps serving afterwards; a root agent, which reads and
-// places Docker's checkpoints, uploads and restores it.
-func TestSnapshotUnderRunscDetachesAndKeepsServing(t *testing.T) {
+// host sockets and keeps serving afterwards. A root agent, which reads and
+// places Docker's checkpoints, uploads it and restores it, twice on the same
+// host, into new pods whose count resumes past the snapshot's, behind the
+// restored pod's own block policy.
+func TestSnapshotUnderRunscRestoresARunningPod(t *testing.T) {
 	if testRuntime() != "runsc" {
 		t.Skip("needs LAZYCLOUD_TEST_OCI_RUNTIME=runsc")
 	}
 	e := newEnv(t)
 	e.startAgent()
 	session := e.session()
-	start := e.podCommand(&hostproto.PodWorkload{Command: []string{"python3", "-m", "http.server", "8000"}, Ports: []int32{8000}})
+	target := startTargetServer(t, e.id)
+	start := e.podCommand(&hostproto.PodWorkload{Command: countingPod(target), Ports: []int32{8000}})
+	start.GetStart().Checkpointable = true
 	id := start.GetStart().GetContainerId()
 	session.send(t, start)
 	session.phase(t, id, hostproto.ContainerPhase_CONTAINER_PHASE_READY)
+	waitLog(t, e.server, id, "count 5 open")
 	var stored atomic.Pointer[[]byte]
 	store := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPut {
@@ -758,6 +848,7 @@ func TestSnapshotUnderRunscDetachesAndKeepsServing(t *testing.T) {
 	case <-time.After(time.Minute):
 		t.Fatal("no snapshot outcome")
 	}
+	atSnapshot := lastCount(e.server.containerLog(id))
 	root := os.Geteuid() == 0
 	if !root {
 		// The checkpoint was taken; only root reads what Docker wrote.
@@ -788,28 +879,50 @@ func TestSnapshotUnderRunscDetachesAndKeepsServing(t *testing.T) {
 		}
 	}
 	t.Logf("serving again %s after the snapshot began", time.Since(began))
-
 	if !root {
 		return
 	}
-	restored := e.podCommand(&hostproto.PodWorkload{Command: []string{"python3", "-m", "http.server", "8000"}, Ports: []int32{8000}})
-	restored.GetStart().Restore = &hostproto.SnapshotRestore{SnapshotId: snapshotID, Url: store.URL, Sha256: r.GetSha256()}
-	restoredID := restored.GetStart().GetContainerId()
-	began = time.Now()
-	session.send(t, restored)
-	ready := session.phase(t, restoredID, hostproto.ContainerPhase_CONTAINER_PHASE_READY)
-	if ready.GetRestoreFailed() != "" {
-		t.Fatalf("restore report %v", ready)
-	}
-	for deadline := time.Now().Add(15 * time.Second); ; time.Sleep(200 * time.Millisecond) {
-		if port := e.server.data.forward(t, portHead(restoredID, 8000, "/"), ""); port.status == http.StatusOK {
-			break
+
+	// Restoring the same snapshot twice on the host that took it reaches
+	// Docker with a checkpoint whose content containerd may already hold.
+	for range 2 {
+		restored := e.podCommand(&hostproto.PodWorkload{Command: countingPod(target), Ports: []int32{8000}, Network: &hostproto.NetworkPolicy{Block: true}})
+		restored.GetStart().Checkpointable = true
+		restored.GetStart().Restore = &hostproto.SnapshotRestore{SnapshotId: snapshotID, Url: store.URL, Sha256: r.GetSha256()}
+		restoredID := restored.GetStart().GetContainerId()
+		began = time.Now()
+		session.send(t, restored)
+		ready := session.phase(t, restoredID, hostproto.ContainerPhase_CONTAINER_PHASE_READY)
+		if ready.GetRestoreFailed() != "" {
+			t.Fatalf("restore report %v", ready)
 		}
-		if time.Now().After(deadline) {
-			t.Fatal("the restored pod does not serve")
+		t.Logf("restored to ready in %s", time.Since(began))
+		waitLog(t, e.server, restoredID, "blocked")
+		// The count resumes rather than restarting at 1, and every count after
+		// the snapshot's is blocked; earlier lines may be ones the source
+		// printed and the restored supervisor delivers.
+		log := e.server.containerLog(restoredID)
+		low := 0
+		for _, line := range strings.Split(log, "\n") {
+			var n int
+			var state string
+			if _, err := fmt.Sscanf(line, "count %d %s", &n, &state); err != nil {
+				continue
+			}
+			if low == 0 || n < low {
+				low = n
+			}
+			if n > atSnapshot && state != "blocked" {
+				t.Fatalf("the restored pod reached the network past its policy: %q", line)
+			}
+		}
+		if low <= 1 {
+			t.Fatalf("the restored pod started counting over: %q", log)
+		}
+		if port := e.server.data.forward(t, portHead(restoredID, 8000, "/"), ""); port.status != http.StatusOK {
+			t.Fatalf("the restored pod does not serve: %+v", port)
 		}
 	}
-	t.Logf("restored and serving in %s", time.Since(began))
 }
 
 // An automatic snapshot that does not restore starts the container cold and
@@ -820,17 +933,14 @@ func TestFailedRestoreStartsColdOnlyForAutomaticSnapshots(t *testing.T) {
 	session := e.session()
 	archive := tarOf(t, map[string]string{"inventory.img": "not a checkpoint"})
 	sum := sha256.Sum256(archive)
-	var downloads atomic.Int32
-	store := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		downloads.Add(1)
-		_, _ = w.Write(archive)
-	}))
+	store := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(archive) }))
 	t.Cleanup(store.Close)
 	restore := func(automatic bool) *hostproto.SnapshotRestore {
 		return &hostproto.SnapshotRestore{SnapshotId: uuid.NewString(), Url: store.URL, Sha256: hex.EncodeToString(sum[:]), Automatic: automatic}
 	}
 
 	automatic := e.startCommand("app:handle", 1)
+	automatic.GetStart().Checkpointable = true
 	automatic.GetStart().Restore = restore(true)
 	session.send(t, automatic)
 	ready := session.phase(t, automatic.GetStart().GetContainerId(), hostproto.ContainerPhase_CONTAINER_PHASE_READY)
@@ -843,6 +953,7 @@ func TestFailedRestoreStartsColdOnlyForAutomaticSnapshots(t *testing.T) {
 	}
 
 	requested := e.startCommand("app:handle", 1)
+	requested.GetStart().Checkpointable = true
 	requested.GetStart().Restore = restore(false)
 	session.send(t, requested)
 	exit := session.phase(t, requested.GetStart().GetContainerId(), hostproto.ContainerPhase_CONTAINER_PHASE_EXITED).GetExit()
@@ -851,35 +962,13 @@ func TestFailedRestoreStartsColdOnlyForAutomaticSnapshots(t *testing.T) {
 	}
 
 	corrupt := e.startCommand("app:handle", 1)
+	corrupt.GetStart().Checkpointable = true
 	corrupt.GetStart().Restore = restore(false)
 	corrupt.GetStart().Restore.Sha256 = strings.Repeat("0", 64)
 	session.send(t, corrupt)
 	exit = session.phase(t, corrupt.GetStart().GetContainerId(), hostproto.ContainerPhase_CONTAINER_PHASE_EXITED).GetExit()
 	if !strings.Contains(exit.GetMessage(), "digest mismatch") {
 		t.Fatalf("corrupt snapshot exit %v", exit)
-	}
-
-	// Restored processes would run before a network filter applies, so a
-	// policed container never fetches its snapshot.
-	fetched := downloads.Load()
-	policed := func(automatic bool) *hostproto.ServerMessage {
-		start := e.podCommand(&hostproto.PodWorkload{Command: []string{"sleep", "600"}, Network: &hostproto.NetworkPolicy{Block: true}})
-		start.GetStart().Restore = restore(automatic)
-		session.send(t, start)
-		return start
-	}
-	cold := policed(true)
-	ready = session.phase(t, cold.GetStart().GetContainerId(), hostproto.ContainerPhase_CONTAINER_PHASE_READY)
-	if ready.GetRestoreFailed() != cold.GetStart().GetRestore().GetSnapshotId() {
-		t.Fatalf("policed automatic restore report %v", ready)
-	}
-	refused := policed(false)
-	exit = session.phase(t, refused.GetStart().GetContainerId(), hostproto.ContainerPhase_CONTAINER_PHASE_EXITED).GetExit()
-	if exit.GetReason() != hostproto.ExitReason_EXIT_REASON_START_FAILED || !strings.Contains(exit.GetMessage(), "network policy") {
-		t.Fatalf("policed requested restore exit %v", exit)
-	}
-	if n := downloads.Load(); n != fetched {
-		t.Fatalf("policed containers fetched %d snapshots", n-fetched)
 	}
 }
 

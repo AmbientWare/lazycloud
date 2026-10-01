@@ -288,10 +288,12 @@ func (q *Queries) InsertSnapshot(ctx context.Context, arg InsertSnapshotParams) 
 }
 
 const lockSnapshotSource = `-- name: LockSnapshotSource :one
-select c.id, c.host_id, c.release_id::uuid as release_id, c.state
+select c.id, c.host_id, c.release_id::uuid as release_id, c.state, c.purpose, w.kind, r.spec
 from containers c
+join releases r on r.id = c.release_id
+join workloads w on w.id = r.workload_id
 where c.id = $1 and c.workspace_id = $2
-for share
+for share of c
 `
 
 type LockSnapshotSourceParams struct {
@@ -304,6 +306,9 @@ type LockSnapshotSourceRow struct {
 	HostID    *uuid.UUID
 	ReleaseID uuid.UUID
 	State     string
+	Purpose   string
+	Kind      string
+	Spec      []byte
 }
 
 // A container that can be snapshotted: ready, on a host, in the workspace.
@@ -315,6 +320,9 @@ func (q *Queries) LockSnapshotSource(ctx context.Context, arg LockSnapshotSource
 		&i.HostID,
 		&i.ReleaseID,
 		&i.State,
+		&i.Purpose,
+		&i.Kind,
+		&i.Spec,
 	)
 	return i, err
 }

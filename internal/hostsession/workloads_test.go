@@ -109,9 +109,13 @@ func TestSandboxesDoNotWaitForTheirPorts(t *testing.T) {
 			if _, err := h.pool.Exec(t.Context(), "update workloads set kind = $1", c.kind); err != nil {
 				t.Fatal(err)
 			}
-			pod := receive(t, open(t, ctx, h.client)).GetStart().GetPod()
+			start := receive(t, open(t, ctx, h.client)).GetStart()
+			pod := start.GetPod()
 			if pod == nil || len(pod.GetPorts()) != c.ports {
 				t.Fatalf("%s start of %s waits for ports %v", c.kind, container, pod.GetPorts())
+			}
+			if !start.GetCheckpointable() {
+				t.Fatalf("a %s starts without checkpoints", c.kind)
 			}
 		})
 	}
@@ -162,5 +166,20 @@ func TestNetworkChangesWaitForTheHost(t *testing.T) {
 		case <-time.After(10 * time.Second):
 			t.Fatal("the change never returned")
 		}
+	}
+}
+
+// Only containers started checkpointable can be snapshotted: a plain
+// function's network could not be given to a restored copy.
+func TestPlainFunctionsAreNotSnapshotted(t *testing.T) {
+	h := start(t)
+	host, _ := h.enroll()
+	ws, container := h.startingContainer(host)
+	if _, err := h.pool.Exec(t.Context(), "update containers set state = 'ready', ready_at = now()"); err != nil {
+		t.Fatal(err)
+	}
+	var invalid *execution.InvalidError
+	if _, err := h.execution.CreateSnapshot(t.Context(), ws, container, nil); !errors.As(err, &invalid) {
+		t.Fatalf("snapshot of a plain function: %v", err)
 	}
 }

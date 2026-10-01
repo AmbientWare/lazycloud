@@ -247,6 +247,7 @@ func (a *Agent) start(spec *hostproto.StartContainer) {
 		c = a.newContainer(id, spec.GetFunction().GetHandler(), int(spec.GetFunction().GetSlots()), spec.GetHttp(), hostproto.ContainerPhase_CONTAINER_PHASE_PREPARING)
 		c.runtime = runtimeOf(spec)
 		c.docker = spec.GetDocker()
+		c.checkpointable = spec.GetCheckpointable()
 		a.containers[id] = c
 	}
 	a.mu.Unlock()

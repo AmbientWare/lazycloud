@@ -2399,9 +2399,13 @@ type StartContainer struct {
 	// Start from this memory snapshot. A failed restore of a deployed
 	// workload's automatic snapshot starts the container cold and reports
 	// restore_failed; any other failed restore fails the start.
-	Restore       *SnapshotRestore `protobuf:"bytes,92,opt,name=restore,proto3" json:"restore,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Restore *SnapshotRestore `protobuf:"bytes,92,opt,name=restore,proto3" json:"restore,omitempty"`
+	// The container may be snapshotted, or restores one: a pod, sandbox or
+	// devbox, or a function with checkpoints. Its network is set up so a
+	// restored copy gets one the same way.
+	Checkpointable bool `protobuf:"varint,93,opt,name=checkpointable,proto3" json:"checkpointable,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *StartContainer) Reset() {
@@ -2558,6 +2562,13 @@ func (x *StartContainer) GetRestore() *SnapshotRestore {
 		return x.Restore
 	}
 	return nil
+}
+
+func (x *StartContainer) GetCheckpointable() bool {
+	if x != nil {
+		return x.Checkpointable
+	}
+	return false
 }
 
 type PodWorkload struct {
@@ -6059,7 +6070,7 @@ const file_host_v1_host_proto_rawDesc = "" +
 	"\vUpdateAgent\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\tR\aversion\x12\x10\n" +
 	"\x03url\x18\x02 \x01(\tR\x03url\x12\x16\n" +
-	"\x06sha256\x18\x03 \x01(\tR\x06sha256\"\xa5\b\n" +
+	"\x06sha256\x18\x03 \x01(\tR\x06sha256\"\xcd\b\n" +
 	"\x0eStartContainer\x12!\n" +
 	"\fcontainer_id\x18\x01 \x01(\tR\vcontainerId\x12\x14\n" +
 	"\x05image\x18\x02 \x01(\tR\x05image\x12%\n" +
@@ -6080,7 +6091,8 @@ const file_host_v1_host_proto_rawDesc = "" +
 	"\x05disks\x18) \x03(\v2!.lazycloud.host.v1.DiskAttachmentR\x05disks\x120\n" +
 	"\x03pod\x18Z \x01(\v2\x1e.lazycloud.host.v1.PodWorkloadR\x03pod\x12\x16\n" +
 	"\x06docker\x18[ \x01(\bR\x06docker\x12<\n" +
-	"\arestore\x18\\ \x01(\v2\".lazycloud.host.v1.SnapshotRestoreR\arestore\x1a>\n" +
+	"\arestore\x18\\ \x01(\v2\".lazycloud.host.v1.SnapshotRestoreR\arestore\x12&\n" +
+	"\x0echeckpointable\x18] \x01(\bR\x0echeckpointable\x1a>\n" +
 	"\x10EnvironmentEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a:\n" +
