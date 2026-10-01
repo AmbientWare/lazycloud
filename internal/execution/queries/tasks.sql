@@ -31,8 +31,8 @@ where t.workspace_id = @workspace_id
   and (sqlc.narg(status)::text is null or t.status = sqlc.narg(status)::text)
   and (not @root_only::bool or t.parent_task_id is null)
   and (sqlc.narg(search)::text is null
-       or t.id::text like sqlc.narg(search)::text || '%'
-       or w.name ilike '%' || sqlc.narg(search)::text || '%')
+       or starts_with(t.id::text, sqlc.narg(search)::text)
+       or strpos(lower(w.name), sqlc.narg(search)::text) > 0)
   and t.id < @before
 order by t.id desc
 limit @max_rows;
@@ -56,8 +56,8 @@ cross join lateral (
       and (sqlc.narg(status)::text is null or t.status = sqlc.narg(status)::text)
       and (not @root_only::bool or t.parent_task_id is null)
       and (sqlc.narg(search)::text is null
-           or t.id::text like sqlc.narg(search)::text || '%'
-           or w.name ilike '%' || sqlc.narg(search)::text || '%')
+           or starts_with(t.id::text, sqlc.narg(search)::text)
+           or strpos(lower(w.name), sqlc.narg(search)::text) > 0)
       and t.id < @before
     order by t.id desc
     limit @max_rows
@@ -65,6 +65,7 @@ cross join lateral (
 join releases r on r.id = t.release_id
 where a.workspace_id = @workspace_id and a.id = @app_id
   and (sqlc.narg(function)::text is null or w.name = sqlc.narg(function)::text)
+  and (sqlc.narg(version)::int is null or r.version = sqlc.narg(version)::int)
 order by t.id desc
 limit @max_rows;
 

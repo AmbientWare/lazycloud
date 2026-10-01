@@ -37,6 +37,8 @@ var ErrVersionNotFound = errors.New("version not found")
 type DeploymentFilter struct {
 	App  *string
 	Name *string
+	// Search matches part of the app or workload name.
+	Search *string
 }
 
 // DeploymentPage is one page of deployed workloads by app and name.
@@ -53,7 +55,7 @@ func (c *Control) ListDeployments(ctx context.Context, workspace identity.Worksp
 	}
 	size := pageSize(limit)
 	rows, err := c.queries.ListDeployments(ctx, ListDeploymentsParams{
-		WorkspaceID: uuid.UUID(workspace), App: filter.App, Name: filter.Name,
+		WorkspaceID: uuid.UUID(workspace), App: filter.App, Name: filter.Name, Search: lowered(filter.Search),
 		AfterApp: afterApp, AfterName: afterName, MaxRows: size + 1,
 	})
 	if err != nil {

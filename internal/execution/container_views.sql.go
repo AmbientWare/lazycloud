@@ -95,14 +95,16 @@ join workloads w on w.id = r.workload_id
 join apps a on a.id = w.app_id
 where c.workspace_id = $1
   and ($2::text is null or a.name = $2::text)
-  and c.id < $3
+  and ($3::text is null or w.name = $3::text)
+  and c.id < $4
 order by c.id desc
-limit $4
+limit $5
 `
 
 type ListContainersParams struct {
 	WorkspaceID uuid.UUID
 	App         *string
+	Function    *string
 	Before      uuid.UUID
 	MaxRows     int32
 }
@@ -131,6 +133,7 @@ func (q *Queries) ListContainers(ctx context.Context, arg ListContainersParams) 
 	rows, err := q.db.Query(ctx, listContainers,
 		arg.WorkspaceID,
 		arg.App,
+		arg.Function,
 		arg.Before,
 		arg.MaxRows,
 	)
@@ -182,14 +185,16 @@ join apps a on a.id = w.app_id
 where c.workspace_id = $1
   and c.state <> 'stopped'
   and ($2::text is null or a.name = $2::text)
-  and c.id < $3
+  and ($3::text is null or w.name = $3::text)
+  and c.id < $4
 order by c.id desc
-limit $4
+limit $5
 `
 
 type ListLiveContainersParams struct {
 	WorkspaceID uuid.UUID
 	App         *string
+	Function    *string
 	Before      uuid.UUID
 	MaxRows     int32
 }
@@ -219,6 +224,7 @@ func (q *Queries) ListLiveContainers(ctx context.Context, arg ListLiveContainers
 	rows, err := q.db.Query(ctx, listLiveContainers,
 		arg.WorkspaceID,
 		arg.App,
+		arg.Function,
 		arg.Before,
 		arg.MaxRows,
 	)
