@@ -17,10 +17,12 @@ const MaxDependentInputBytes = 48 << 20
 
 // dependenciesTooLarge fails a task whose input and upstream results exceed
 // MaxDependentInputBytes.
-var dependenciesTooLarge = Failure{
-	Kind:    FailureDependencyFailed,
-	Type:    "DependenciesTooLarge",
-	Message: fmt.Sprintf("the input and upstream results exceed %d MiB", MaxDependentInputBytes>>20),
+func dependenciesTooLarge() Failure {
+	return Failure{
+		Kind:    FailureDependencyFailed,
+		Type:    "DependenciesTooLarge",
+		Message: fmt.Sprintf("the input and upstream results exceed %d MiB", MaxDependentInputBytes>>20),
+	}
 }
 
 // MaxDependencies caps the upstream tasks one input may name.
@@ -91,7 +93,7 @@ func (e *Execution) resolveDependents(ctx context.Context, tx pgx.Tx, upstream [
 		ready = append(ready, row.ReleaseID.String())
 	}
 	if len(tooLarge) > 0 {
-		if err := e.failQueued(ctx, tx, tooLarge, tooLargeReleases, dependenciesTooLarge, true); err != nil {
+		if err := e.failQueued(ctx, tx, tooLarge, tooLargeReleases, dependenciesTooLarge(), true); err != nil {
 			return err
 		}
 	}

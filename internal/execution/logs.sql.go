@@ -13,9 +13,11 @@ import (
 )
 
 const containerLogTail = `-- name: ContainerLogTail :one
-select coalesce(min(id) - 1, 0)::bigint from (
-    select id from task_logs where container_id = $1 order by id desc limit $2
-) last
+select writer::text::bigint as writer, id from task_logs
+where container_id = $1
+order by writer desc, id desc
+offset $2- 1
+limit 1
 `
 
 type ContainerLogTailParams struct {
@@ -23,25 +25,33 @@ type ContainerLogTailParams struct {
 	Tail int32
 }
 
-func (q *Queries) ContainerLogTail(ctx context.Context, arg ContainerLogTailParams) (int64, error) {
+type ContainerLogTailRow struct {
+	Writer int64
+	ID     int64
+}
+
+// The position of the oldest of the last @tail lines.
+func (q *Queries) ContainerLogTail(ctx context.Context, arg ContainerLogTailParams) (ContainerLogTailRow, error) {
 	row := q.db.QueryRow(ctx, containerLogTail, arg.Key, arg.Tail)
-	var column_1 int64
-	err := row.Scan(&column_1)
-	return column_1, err
+	var i ContainerLogTailRow
+	err := row.Scan(&i.Writer, &i.ID)
+	return i, err
 }
 
 const containerLogsAfter = `-- name: ContainerLogsAfter :many
-select id, task_id, attempt, stream, data, logged_at
+select id, task_id, attempt, stream, data, logged_at, writer::text::bigint as writer,
+       (writer < pg_snapshot_xmin(pg_current_snapshot()))::bool as settled
 from task_logs
-where container_id = $1 and id > $2
-order by id
-limit $3
+where container_id = $1 and (writer, id) > (($2::bigint)::text::xid8, $3::bigint)
+order by writer, id
+limit $4
 `
 
 type ContainerLogsAfterParams struct {
-	Key        uuid.UUID
-	After      int64
-	MaxEntries int32
+	Key         uuid.UUID
+	AfterWriter int64
+	AfterID     int64
+	MaxEntries  int32
 }
 
 type ContainerLogsAfterRow struct {
@@ -51,10 +61,17 @@ type ContainerLogsAfterRow struct {
 	Stream   string
 	Data     string
 	LoggedAt time.Time
+	Writer   int64
+	Settled  bool
 }
 
 func (q *Queries) ContainerLogsAfter(ctx context.Context, arg ContainerLogsAfterParams) ([]ContainerLogsAfterRow, error) {
-	rows, err := q.db.Query(ctx, containerLogsAfter, arg.Key, arg.After, arg.MaxEntries)
+	rows, err := q.db.Query(ctx, containerLogsAfter,
+		arg.Key,
+		arg.AfterWriter,
+		arg.AfterID,
+		arg.MaxEntries,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -69,6 +86,8 @@ func (q *Queries) ContainerLogsAfter(ctx context.Context, arg ContainerLogsAfter
 			&i.Stream,
 			&i.Data,
 			&i.LoggedAt,
+			&i.Writer,
+			&i.Settled,
 		); err != nil {
 			return nil, err
 		}
@@ -158,10 +177,28 @@ func (q *Queries) InsertLogs(ctx context.Context, arg InsertLogsParams) ([]Inser
 	return items, nil
 }
 
+const logCursor = `-- name: LogCursor :one
+
+select writer::text::bigint as writer from task_logs where id = $1
+`
+
+// Readers page by (writer, id) and stop at the first unsettled line: one
+// whose writer is not below the oldest running transaction, so an earlier
+// line may still commit.
+// The (writer, id) position of an entry id a client resumes after.
+func (q *Queries) LogCursor(ctx context.Context, id int64) (int64, error) {
+	row := q.db.QueryRow(ctx, logCursor, id)
+	var writer int64
+	err := row.Scan(&writer)
+	return writer, err
+}
+
 const taskLogTail = `-- name: TaskLogTail :one
-select coalesce(min(id) - 1, 0)::bigint from (
-    select id from task_logs where task_id = $1 order by id desc limit $2
-) last
+select writer::text::bigint as writer, id from task_logs
+where task_id = $1
+order by writer desc, id desc
+offset $2- 1
+limit 1
 `
 
 type TaskLogTailParams struct {
@@ -169,26 +206,33 @@ type TaskLogTailParams struct {
 	Tail int32
 }
 
-// The cursor just before the last @tail entries.
-func (q *Queries) TaskLogTail(ctx context.Context, arg TaskLogTailParams) (int64, error) {
+type TaskLogTailRow struct {
+	Writer int64
+	ID     int64
+}
+
+// The position of the oldest of the last @tail lines.
+func (q *Queries) TaskLogTail(ctx context.Context, arg TaskLogTailParams) (TaskLogTailRow, error) {
 	row := q.db.QueryRow(ctx, taskLogTail, arg.Key, arg.Tail)
-	var column_1 int64
-	err := row.Scan(&column_1)
-	return column_1, err
+	var i TaskLogTailRow
+	err := row.Scan(&i.Writer, &i.ID)
+	return i, err
 }
 
 const taskLogsAfter = `-- name: TaskLogsAfter :many
-select id, task_id, attempt, stream, data, logged_at
+select id, task_id, attempt, stream, data, logged_at, writer::text::bigint as writer,
+       (writer < pg_snapshot_xmin(pg_current_snapshot()))::bool as settled
 from task_logs
-where task_id = $1 and id > $2
-order by id
-limit $3
+where task_id = $1 and (writer, id) > (($2::bigint)::text::xid8, $3::bigint)
+order by writer, id
+limit $4
 `
 
 type TaskLogsAfterParams struct {
-	Key        uuid.UUID
-	After      int64
-	MaxEntries int32
+	Key         uuid.UUID
+	AfterWriter int64
+	AfterID     int64
+	MaxEntries  int32
 }
 
 type TaskLogsAfterRow struct {
@@ -198,10 +242,17 @@ type TaskLogsAfterRow struct {
 	Stream   string
 	Data     string
 	LoggedAt time.Time
+	Writer   int64
+	Settled  bool
 }
 
 func (q *Queries) TaskLogsAfter(ctx context.Context, arg TaskLogsAfterParams) ([]TaskLogsAfterRow, error) {
-	rows, err := q.db.Query(ctx, taskLogsAfter, arg.Key, arg.After, arg.MaxEntries)
+	rows, err := q.db.Query(ctx, taskLogsAfter,
+		arg.Key,
+		arg.AfterWriter,
+		arg.AfterID,
+		arg.MaxEntries,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -216,6 +267,8 @@ func (q *Queries) TaskLogsAfter(ctx context.Context, arg TaskLogsAfterParams) ([
 			&i.Stream,
 			&i.Data,
 			&i.LoggedAt,
+			&i.Writer,
+			&i.Settled,
 		); err != nil {
 			return nil, err
 		}
@@ -261,9 +314,11 @@ func (q *Queries) WorkloadInWorkspace(ctx context.Context, arg WorkloadInWorkspa
 }
 
 const workloadLogTail = `-- name: WorkloadLogTail :one
-select coalesce(min(id) - 1, 0)::bigint from (
-    select id from task_logs where workload_id = $1 order by id desc limit $2
-) last
+select writer::text::bigint as writer, id from task_logs
+where workload_id = $1
+order by writer desc, id desc
+offset $2- 1
+limit 1
 `
 
 type WorkloadLogTailParams struct {
@@ -271,25 +326,33 @@ type WorkloadLogTailParams struct {
 	Tail int32
 }
 
-func (q *Queries) WorkloadLogTail(ctx context.Context, arg WorkloadLogTailParams) (int64, error) {
+type WorkloadLogTailRow struct {
+	Writer int64
+	ID     int64
+}
+
+// The position of the oldest of the last @tail lines.
+func (q *Queries) WorkloadLogTail(ctx context.Context, arg WorkloadLogTailParams) (WorkloadLogTailRow, error) {
 	row := q.db.QueryRow(ctx, workloadLogTail, arg.Key, arg.Tail)
-	var column_1 int64
-	err := row.Scan(&column_1)
-	return column_1, err
+	var i WorkloadLogTailRow
+	err := row.Scan(&i.Writer, &i.ID)
+	return i, err
 }
 
 const workloadLogsAfter = `-- name: WorkloadLogsAfter :many
-select id, task_id, attempt, stream, data, logged_at
+select id, task_id, attempt, stream, data, logged_at, writer::text::bigint as writer,
+       (writer < pg_snapshot_xmin(pg_current_snapshot()))::bool as settled
 from task_logs
-where workload_id = $1 and id > $2
-order by id
-limit $3
+where workload_id = $1 and (writer, id) > (($2::bigint)::text::xid8, $3::bigint)
+order by writer, id
+limit $4
 `
 
 type WorkloadLogsAfterParams struct {
-	Key        uuid.UUID
-	After      int64
-	MaxEntries int32
+	Key         uuid.UUID
+	AfterWriter int64
+	AfterID     int64
+	MaxEntries  int32
 }
 
 type WorkloadLogsAfterRow struct {
@@ -299,10 +362,17 @@ type WorkloadLogsAfterRow struct {
 	Stream   string
 	Data     string
 	LoggedAt time.Time
+	Writer   int64
+	Settled  bool
 }
 
 func (q *Queries) WorkloadLogsAfter(ctx context.Context, arg WorkloadLogsAfterParams) ([]WorkloadLogsAfterRow, error) {
-	rows, err := q.db.Query(ctx, workloadLogsAfter, arg.Key, arg.After, arg.MaxEntries)
+	rows, err := q.db.Query(ctx, workloadLogsAfter,
+		arg.Key,
+		arg.AfterWriter,
+		arg.AfterID,
+		arg.MaxEntries,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -317,6 +387,8 @@ func (q *Queries) WorkloadLogsAfter(ctx context.Context, arg WorkloadLogsAfterPa
 			&i.Stream,
 			&i.Data,
 			&i.LoggedAt,
+			&i.Writer,
+			&i.Settled,
 		); err != nil {
 			return nil, err
 		}

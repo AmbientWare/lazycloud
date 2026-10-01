@@ -215,7 +215,7 @@ func (e *Execution) Submit(ctx context.Context, req SubmitRequest) ([]Task, erro
 		if err := failNew(doomed, Failure{Kind: FailureDependencyFailed, Message: "an upstream task failed or was cancelled"}); err != nil {
 			return err
 		}
-		if err := failNew(tooLarge, dependenciesTooLarge); err != nil {
+		if err := failNew(tooLarge, dependenciesTooLarge()); err != nil {
 			return err
 		}
 		if err := database.Notify(ctx, tx, database.ChannelExecution, fn.ReleaseID.String()); err != nil {

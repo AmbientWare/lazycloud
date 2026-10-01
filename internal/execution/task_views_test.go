@@ -299,6 +299,70 @@ func TestWorkingTreeReleaseRunsWhileTheDeploymentIsStopped(t *testing.T) {
 	}
 }
 
+// A line whose transaction commits after a later line is still delivered:
+// readers hold back lines that an older running transaction may precede.
+func TestLogReadersNeverSkipLinesThatCommitOutOfOrder(t *testing.T) {
+	pool := dbtest.New(t)
+	e := NewExecution(pool)
+	l := listen(t, pool)
+	f := deployedFunction(t, pool, `{"max_pending_tasks": 10}`)
+	host, container := placedContainer(t, pool, f, ContainerReady, 2)
+	submit(t, e, f, 2)
+	claimed, err := e.ClaimTasks(t.Context(), l, host, container, 2, 0)
+	if err != nil || len(claimed) != 2 {
+		t.Fatalf("claim %v %v", claimed, err)
+	}
+	source := LogSource{Kind: LogsOfContainer, ID: uuid.UUID(container)}
+	read := func(after int64) []LogEntry {
+		var out []LogEntry
+		err := e.StreamLogs(t.Context(), l, f.workspace, source, LogQuery{After: after}, func(batch []LogEntry) error {
+			out = append(out, batch...)
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	line := func(n int, data string) []LogLine {
+		return []LogLine{{Attempt: claimed[n].Attempt, Stream: LogStdout, Data: data, Time: time.Now()}}
+	}
+
+	// The first writer takes the lower id and commits last.
+	slow, err := pool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = slow.Rollback(t.Context()) }()
+	if _, err := New(slow).InsertLogs(t.Context(), InsertLogsParams{
+		AttemptIds: []uuid.UUID{uuid.UUID(claimed[0].Attempt)}, Streams: []string{"stdout"}, Data: []string{"first"},
+		LoggedAt: []time.Time{time.Now()}, ContainerID: uuid.UUID(container), HostID: hostUUID(host),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.AppendLogs(t.Context(), host, container, line(1, "second")); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(0); len(got) != 0 {
+		t.Fatalf("read while an older writer runs returned %+v", got)
+	}
+	if err := slow.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	first := read(0)
+	if len(first) != 2 || first[0].Data != "first" || first[1].Data != "second" {
+		t.Fatalf("lines after both commit %+v, want first then second", first)
+	}
+	if err := e.AppendLogs(t.Context(), host, container, line(0, "third")); err != nil {
+		t.Fatal(err)
+	}
+	// Resuming after the last entry, whose id is below the first's, yields
+	// only the newer line.
+	if got := read(first[1].ID); len(got) != 1 || got[0].Data != "third" {
+		t.Fatalf("resumed lines %+v, want third", got)
+	}
+}
+
 func TestLogsByWorkloadAndContainerWithTail(t *testing.T) {
 	pool := dbtest.New(t)
 	e := NewExecution(pool)

@@ -43,15 +43,21 @@ create table task_dependencies (
 create index task_dependencies_upstream on task_dependencies (depends_on);
 
 -- Logs by workload and by container read their own index instead of every
--- task's lines.
-alter table task_logs add column workload_id uuid, add column container_id uuid;
+-- task's lines. Concurrent writers commit identity values out of order, so
+-- readers order lines by (writer, id): every transaction below the oldest
+-- running one has finished, and a line that commits later sorts after
+-- everything a reader already returned.
+alter table task_logs add column workload_id uuid, add column container_id uuid,
+    add column writer xid8 not null default pg_current_xact_id();
 update task_logs l
 set workload_id = t.workload_id, container_id = a.container_id
 from tasks t, attempts a
 where t.id = l.task_id and a.task_id = l.task_id and a.number = l.attempt;
 alter table task_logs alter column workload_id set not null, alter column container_id set not null;
-create index task_logs_workload on task_logs (workload_id, id);
-create index task_logs_container on task_logs (container_id, id);
+drop index task_logs_task;
+create index task_logs_task on task_logs (task_id, writer, id);
+create index task_logs_workload on task_logs (workload_id, writer, id);
+create index task_logs_container on task_logs (container_id, writer, id);
 
 create index containers_workspace_recent on containers (workspace_id, id desc);
 create index containers_workspace_live on containers (workspace_id, id desc) where state <> 'stopped';

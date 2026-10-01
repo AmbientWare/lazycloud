@@ -8,42 +8,61 @@ where w.id = @id and a.workspace_id = @workspace_id;
 -- name: ContainerStateInWorkspace :one
 select state from containers where id = @id and workspace_id = @workspace_id;
 
+-- Readers page by (writer, id) and stop at the first unsettled line: one
+-- whose writer is not below the oldest running transaction, so an earlier
+-- line may still commit.
+
+-- name: LogCursor :one
+-- The (writer, id) position of an entry id a client resumes after.
+select writer::text::bigint as writer from task_logs where id = @id;
+
 -- name: TaskLogsAfter :many
-select id, task_id, attempt, stream, data, logged_at
+select id, task_id, attempt, stream, data, logged_at, writer::text::bigint as writer,
+       (writer < pg_snapshot_xmin(pg_current_snapshot()))::bool as settled
 from task_logs
-where task_id = @key and id > @after
-order by id
+where task_id = @key and (writer, id) > ((@after_writer::bigint)::text::xid8, @after_id::bigint)
+order by writer, id
 limit @max_entries;
 
 -- name: WorkloadLogsAfter :many
-select id, task_id, attempt, stream, data, logged_at
+select id, task_id, attempt, stream, data, logged_at, writer::text::bigint as writer,
+       (writer < pg_snapshot_xmin(pg_current_snapshot()))::bool as settled
 from task_logs
-where workload_id = @key and id > @after
-order by id
+where workload_id = @key and (writer, id) > ((@after_writer::bigint)::text::xid8, @after_id::bigint)
+order by writer, id
 limit @max_entries;
 
 -- name: ContainerLogsAfter :many
-select id, task_id, attempt, stream, data, logged_at
+select id, task_id, attempt, stream, data, logged_at, writer::text::bigint as writer,
+       (writer < pg_snapshot_xmin(pg_current_snapshot()))::bool as settled
 from task_logs
-where container_id = @key and id > @after
-order by id
+where container_id = @key and (writer, id) > ((@after_writer::bigint)::text::xid8, @after_id::bigint)
+order by writer, id
 limit @max_entries;
 
 -- name: TaskLogTail :one
--- The cursor just before the last @tail entries.
-select coalesce(min(id) - 1, 0)::bigint from (
-    select id from task_logs where task_id = @key order by id desc limit @tail
-) last;
+-- The position of the oldest of the last @tail lines.
+select writer::text::bigint as writer, id from task_logs
+where task_id = @key
+order by writer desc, id desc
+offset @tail - 1
+limit 1;
 
 -- name: WorkloadLogTail :one
-select coalesce(min(id) - 1, 0)::bigint from (
-    select id from task_logs where workload_id = @key order by id desc limit @tail
-) last;
+-- The position of the oldest of the last @tail lines.
+select writer::text::bigint as writer, id from task_logs
+where workload_id = @key
+order by writer desc, id desc
+offset @tail - 1
+limit 1;
 
 -- name: ContainerLogTail :one
-select coalesce(min(id) - 1, 0)::bigint from (
-    select id from task_logs where container_id = @key order by id desc limit @tail
-) last;
+-- The position of the oldest of the last @tail lines.
+select writer::text::bigint as writer, id from task_logs
+where container_id = @key
+order by writer desc, id desc
+offset @tail - 1
+limit 1;
 
 -- name: InsertLogs :many
 -- Lines keep their order. Lines for attempts outside the container or host
