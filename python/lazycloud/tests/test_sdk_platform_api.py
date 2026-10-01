@@ -6,6 +6,7 @@ import importlib
 import io
 import json
 import pickle
+import re
 import sys
 import zipfile
 from collections.abc import Iterator
@@ -253,10 +254,100 @@ def test_deploy_maps_workload_runtime_options(
     }
 
 
+PLACEMENT_OPTIONS = """\
+import lazycloud
+
+app = lazycloud.App("reports")
+
+
+@app.function(
+    gpu=[lazycloud.GpuType.H100, "a100-80gb", lazycloud.GpuType.Any],
+    gpu_count=2,
+    region="us-west",
+    availability_zone="usw2-az1",
+    preemptible=False,
+)
+def train() -> None:
+    pass
+
+
+@app.function(gpu="L4", machine="gpu-1")
+def pinned() -> None:
+    pass
+
+
+@app.function()
+def anywhere() -> None:
+    pass
+"""
+
+
+def test_deploy_maps_gpu_and_placement_options(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_api: FakeApi
+) -> None:
+    reports = _project(tmp_path, monkeypatch, PLACEMENT_OPTIONS)
+    _serve_deployment(fake_api, stored=set())
+
+    reports.app.deploy()
+
+    (request,) = fake_api.calls("POST", "/v1/workspaces/team/apps/reports/deployments")
+    specs = {spec["name"]: spec for spec in request.json()["functions"]}
+    assert specs["train"]["resources"] == {
+        "cpu_millis": 125,
+        "memory_mib": 128,
+        "gpu": ["H100", "A100-80", "any"],
+        "gpu_count": 2,
+    }
+    assert specs["train"]["placement"] == {
+        "region": "us-west",
+        "availability_zone": "usw2-az1",
+        "preemptible": False,
+    }
+    # Without gpu_count the server reserves one card, so none is sent.
+    assert specs["pinned"]["resources"]["gpu"] == ["L4"]
+    assert "gpu_count" not in specs["pinned"]["resources"]
+    assert specs["pinned"]["placement"] == {"machine": "gpu-1"}
+    assert "gpu" not in specs["anywhere"]["resources"]
+    assert "placement" not in specs["anywhere"]
+
+
+@pytest.mark.parametrize(
+    ("options", "message"),
+    [
+        ('gpu="A100"', "A100 comes in more than one size"),
+        ('gpu=["any", "T4"]', "nothing after it is ever reached: T4"),
+        ('gpu="T4", gpu_count=-1', "gpu_count cannot be negative"),
+        ('region="mars"', "'mars' is not a valid ProductRegion"),
+        (
+            'region="us-east", machine="gpu-1"',
+            "region or availability zone and a named machine cannot be selected together",
+        ),
+        (
+            'availability_zone="use1-az1", machine="gpu-1"',
+            "region or availability zone and a named machine cannot be selected together",
+        ),
+    ],
+)
+def test_invalid_placement_options_fail_where_declared(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_api: FakeApi,
+    options: str,
+    message: str,
+) -> None:
+    header = 'import lazycloud\napp = lazycloud.App("reports")\n'
+    source = f"{header}@app.function({options})\ndef job(): pass\n"
+
+    with pytest.raises(ValueError, match=re.escape(message)):
+        _project(tmp_path, monkeypatch, source)
+
+    assert fake_api.requests == []
+
+
 @pytest.mark.parametrize(
     ("decorator", "option"),
     [
-        ('@app.function(gpu="A10G")', "gpu"),
+        ('@app.function(disk="20Gi")', "disk"),
         ("@app.function(docker_enabled=True)", "docker_enabled"),
     ],
 )
