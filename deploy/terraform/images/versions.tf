@@ -10,6 +10,10 @@ terraform {
       source  = "hashicorp/aws"
       version = "= 6.67.0"
     }
+    github = {
+      source  = "integrations/github"
+      version = "= 6.13.0"
+    }
   }
 }
 
@@ -22,4 +26,10 @@ provider "aws" {
       "lazycloud:managed-by" = "terraform"
     }
   }
+}
+
+# Reads GITHUB_TOKEN from the environment: a token of a repository
+# administrator, used only for this apply.
+provider "github" {
+  owner = local.github_owner
 }
