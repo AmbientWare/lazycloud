@@ -26,6 +26,11 @@ const (
 	// ChannelLogs wakes followers of a workload's or container's logs;
 	// payload is the workload or container id.
 	ChannelLogs Channel = "lc_logs"
+	// ChannelImageBuild wakes build waiters, log followers and build
+	// recovery when a build or its container changes; payload is the build id.
+	ChannelImageBuild Channel = "lc_image_build"
+	// ChannelImageBuildLog wakes followers of a build's output.
+	ChannelImageBuildLog Channel = "lc_image_build_log"
 )
 
 // Listener holds one connection that LISTENs on a fixed set of channels and

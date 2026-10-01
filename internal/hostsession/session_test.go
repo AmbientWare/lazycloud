@@ -25,6 +25,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/hostsession"
 	"github.com/AmbientWare/lazycloud/internal/identity"
+	"github.com/AmbientWare/lazycloud/internal/images"
 	"github.com/AmbientWare/lazycloud/internal/storage"
 	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
@@ -46,7 +47,8 @@ func start(t *testing.T) *harness {
 	listener := database.NewListener(pool, logger, database.ChannelHost, database.ChannelClaim)
 	c := compute.NewCompute(pool)
 	e := execution.NewExecution(pool)
-	srv := hostsession.NewServer(c, e, storage.NewStorage(pool, storagetest.Config()), listener, hostsession.Config{
+	im := images.NewImages(pool, e, images.Config{Registry: "127.0.0.1:1", Repository: "lazycloud"}, nil)
+	srv := hostsession.NewServer(c, e, storage.NewStorage(pool, storagetest.Config()), im, listener, hostsession.Config{
 		ImageTemplate: "docker.io/library/python:{version}-slim",
 		TouchInterval: 100 * time.Millisecond,
 	}, logger)

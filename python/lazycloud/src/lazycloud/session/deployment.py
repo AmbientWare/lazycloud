@@ -19,7 +19,6 @@ from shared.api import (
     SubmitTasksRequest,
 )
 from shared.api import Deployment as AppDeployment
-from shared.image_building.python import python_minor_version
 
 from lazycloud.clients.api import ApiClient
 from lazycloud.control import api_client, require_workspace, resolve_control_client_config
@@ -51,6 +50,7 @@ from lazycloud.terminal import Terminal, TerminalStep, humanize_bytes
 
 if TYPE_CHECKING:
     from lazycloud.abstractions.function import Function
+    from lazycloud.abstractions.image import ImageBuildResult
 
 _VERSIONED_NAME = re.compile(r"(?P<name>.+)-v(?P<version>[1-9][0-9]*)")
 
@@ -329,12 +329,7 @@ def _function_specs(
     for function in functions:
         function.require_supported()
     placements = {id(function): _source_placement(function, root) for function in functions}
-    for version in dict.fromkeys(
-        python_minor_version(function.image.python_version) for function in functions
-    ):
-        with terminal.step("Image", "preparing") as step:
-            # Only base images exist, and every host has them.
-            step.done(f"python {version} · cached")
+    images = _prepare_images(functions, client=client, workspace=workspace, terminal=terminal)
     if ensure_source_ignore_file(root):
         terminal.detail(SOURCE_IGNORE_FILE_WRITTEN_NOTICE)
     sources: dict[tuple[str, ...], str] = {}
@@ -345,8 +340,36 @@ def _function_specs(
     specs: dict[int, FunctionSpec] = {}
     for function in functions:
         handler, prefix = placements[id(function)]
-        specs[id(function)] = function.function_spec(handler=handler, source_sha256=sources[prefix])
+        specs[id(function)] = function.function_spec(
+            handler=handler, source_sha256=sources[prefix], image=images[id(function)]
+        )
     return specs
+
+
+def _prepare_images(
+    functions: Sequence[Function[..., Any]],
+    *,
+    client: ApiClient,
+    workspace: str,
+    terminal: Terminal,
+) -> dict[int, ImageBuildResult]:
+    """Make each distinct image ready once, keyed by the function's id()."""
+    by_definition: dict[str, ImageBuildResult] = {}
+    results: dict[int, ImageBuildResult] = {}
+    for function in functions:
+        image = function.image
+        key = image.explicit_image_id or image.definition().model_dump_json()
+        result = by_definition.get(key)
+        if result is None:
+            result = image.build(client, workspace=workspace, terminal=terminal)
+            if not result.success:
+                build = f" build {result.build_id}" if result.build_id else ""
+                image_name = f" {result.image_id}" if result.image_id else ""
+                msg = f"image{image_name}{build} failed: {result.error or 'unknown error'}"
+                raise DeploymentOperationError(msg)
+            by_definition[key] = result
+        results[id(function)] = result
+    return results
 
 
 def _runtime_done(step: TerminalStep, name: str, release: Release) -> None:

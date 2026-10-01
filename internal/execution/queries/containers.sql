@@ -1,5 +1,5 @@
 -- name: LockContainer :one
-select id, release_id, state, host_id from containers where id = @id for update;
+select id, release_id, image_build_id, state, host_id from containers where id = @id for update;
 
 -- name: StopContainer :exec
 update containers

@@ -24,6 +24,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
+	"github.com/AmbientWare/lazycloud/internal/images"
 	"github.com/AmbientWare/lazycloud/internal/storage"
 )
 
@@ -54,6 +55,7 @@ type Server struct {
 	compute   *compute.Compute
 	execution *execution.Execution
 	storage   *storage.Storage
+	images    *images.Images
 	listener  *database.Listener
 	config    Config
 	logger    *slog.Logger
@@ -68,10 +70,10 @@ type Server struct {
 
 // NewServer returns the host service. listener must listen on
 // database.ChannelHost and database.ChannelClaim.
-func NewServer(c *compute.Compute, e *execution.Execution, s *storage.Storage, listener *database.Listener, config Config, logger *slog.Logger) *Server {
+func NewServer(c *compute.Compute, e *execution.Execution, s *storage.Storage, im *images.Images, listener *database.Listener, config Config, logger *slog.Logger) *Server {
 	lifetime, shutdown := context.WithCancel(context.Background())
 	return &Server{
-		compute: c, execution: e, storage: s, listener: listener, config: config, logger: logger,
+		compute: c, execution: e, storage: s, images: im, listener: listener, config: config, logger: logger,
 		lifetime: lifetime, shutdown: shutdown,
 	}
 }
@@ -158,6 +160,8 @@ func (s *Server) grpcError(ctx context.Context, err error) error {
 		return status.Error(codes.FailedPrecondition, "the attempt is no longer running on this container")
 	case errors.Is(err, execution.ErrNotAssigned):
 		return status.Error(codes.PermissionDenied, "the container is not assigned to this host")
+	case errors.Is(err, images.ErrStaleBuild):
+		return status.Error(codes.FailedPrecondition, "the build already finished")
 	case errors.Is(err, context.Canceled):
 		return status.Error(codes.Canceled, "cancelled")
 	case errors.Is(err, context.DeadlineExceeded):

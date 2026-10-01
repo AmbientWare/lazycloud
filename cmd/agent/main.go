@@ -52,6 +52,7 @@ func parseConfig(args []string) (agent.Config, error) {
 	flags.StringVar(&cfg.RuntimeDir, "runtime-dir", envOr("LAZYCLOUD_RUNTIME_DIR", "/opt/lazycloud/runtimes"), "managed Python runtimes, one directory per version")
 	flags.StringVar(&cfg.SupervisorPath, "supervisor", envOr("LAZYCLOUD_SUPERVISOR", filepath.Join(filepath.Dir(executable), "supervisor")), "static supervisor binary mounted into containers")
 	flags.StringVar(&cfg.OCIRuntime, "oci-runtime", envOr("LAZYCLOUD_OCI_RUNTIME", "runc"), "Docker runtime for workload containers (runsc in production)")
+	flags.StringVar(&cfg.BuildNetwork, "build-network", envOr("LAZYCLOUD_BUILD_NETWORK", "bridge"), "Docker network for image builds")
 	cpu := flags.Int64("cpu-millis", envInt("LAZYCLOUD_CPU_MILLIS"), "offered CPU in millicores; 0 detects")
 	memory := flags.Int64("memory-bytes", envInt("LAZYCLOUD_MEMORY_BYTES"), "offered memory in bytes; 0 detects")
 	flags.Func("label", "key=value label added to every container (repeatable)", func(value string) error {

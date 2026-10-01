@@ -362,9 +362,9 @@ def follow_log_stream(
             failures += 1
             if failures == 1:
                 failing_since = time.monotonic()
-            if not is_transient(exc) or _budget_spent(failing_since):
+            if not is_transient(exc) or retry_budget_spent(failing_since):
                 raise
-            _backoff(failures)
+            retry_backoff(failures)
 
 
 def retry_transient(call: Callable[[], T], *, not_found: Callable[[], Exception]) -> T:
@@ -380,9 +380,9 @@ def retry_transient(call: Callable[[], T], *, not_found: Callable[[], Exception]
             failures += 1
             if failures == 1:
                 failing_since = time.monotonic()
-            if not is_transient(exc) or _budget_spent(failing_since):
+            if not is_transient(exc) or retry_budget_spent(failing_since):
                 raise
-        _backoff(failures)
+        retry_backoff(failures)
 
 
 def decode_payload(payload: Payload) -> Any:
@@ -417,11 +417,11 @@ def raise_task_failure(view: TaskView) -> None:
     raise remote
 
 
-def _budget_spent(failing_since: float) -> bool:
+def retry_budget_spent(failing_since: float) -> bool:
     return time.monotonic() - failing_since >= _TRANSIENT_BUDGET_SECONDS
 
 
-def _backoff(failures: int) -> None:
+def retry_backoff(failures: int) -> None:
     time.sleep(min(0.5 * 2 ** (failures - 1), 8.0))
 
 
@@ -436,6 +436,8 @@ __all__ = [
     "follow_log_stream",
     "parent_task_id",
     "raise_task_failure",
+    "retry_backoff",
+    "retry_budget_spent",
     "retry_transient",
     "task_input",
 ]

@@ -56,7 +56,7 @@ from shared.serialization import to_json_value
 from shared.tasks import DEFAULT_RETRYABLE_TASK_STATUS_SEQUENCE, RetryPolicy, TaskPolicy
 
 from lazycloud._invocation import encode_arguments, prepare_arguments, serialize_result
-from lazycloud.abstractions.image import Image
+from lazycloud.abstractions.image import Image, ImageBuildResult
 from lazycloud.abstractions.metadata import (
     LifecycleHookInput,
     MachineInput,
@@ -327,7 +327,6 @@ class Function(Generic[P, R]):
         policy = self._retry_policy()
         if policy.retry_on_statuses != DEFAULT_RETRYABLE_TASK_STATUS_SEQUENCE:
             found.append("retry_policy.retry_on_statuses")
-        found.extend(f"image {name}" for name in _unsupported_image_options(self.image))
         return found
 
     def require_supported(self) -> None:
@@ -335,15 +334,20 @@ class Function(Generic[P, R]):
         if unsupported:
             raise UnsupportedFeatureError(f"function {self.resource_name}", unsupported)
 
-    def function_spec(self, *, handler: str, source_sha256: str) -> ApiFunctionSpec:
-        """The API definition of this function for one uploaded source archive."""
+    def function_spec(
+        self, *, handler: str, source_sha256: str, image: ImageBuildResult
+    ) -> ApiFunctionSpec:
+        """The API definition of this function for an uploaded source and a ready image."""
         self.require_supported()
         policy = self._retry_policy()
         spec: dict[str, Any] = {
             "name": self.resource_name,
             "handler": handler,
             "source": {"sha256": source_sha256},
-            "image": {"python_version": python_minor_version(self.image.python_version)},
+            "image": {
+                "python_version": python_minor_version(image.python_version),
+                "image_id": image.image_id,
+            },
             "resources": _resources(self.cpu, self.memory),
             "retry_policy": policy.model_dump(
                 mode="json",
@@ -674,15 +678,6 @@ def _resources(cpu: Any, memory: Any) -> dict[str, int]:
     else:
         resources["memory_mib"] = parse_memory_mib(memory)
     return resources
-
-
-def _unsupported_image_options(image: Image) -> list[str]:
-    declared = image.spec().model_dump()
-    baseline = Image(python_version=image.python_version).spec().model_dump()
-    found = [name for name, value in declared.items() if baseline.get(name) != value]
-    if image.python_version.startswith("micromamba"):
-        found.append("micromamba python")
-    return found
 
 
 def _is_invocation_list(value: object) -> TypeGuard[list[object]]:

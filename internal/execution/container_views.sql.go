@@ -13,7 +13,7 @@ import (
 )
 
 const containerView = `-- name: ContainerView :one
-select c.id, a.name as app_name, w.name as function_name, c.release_id, r.version, c.state,
+select c.id, a.name as app_name, w.name as function_name, r.id as release_id, r.version, c.state,
        c.stop_reason, c.exit_message, c.slots, c.cpu_millis, c.memory_bytes,
        c.created_at, c.ready_at, c.stopped_at,
        (select count(*) from attempts at where at.container_id = c.id and at.state = 'running')::int as running
@@ -81,7 +81,7 @@ func (q *Queries) DrainContainer(ctx context.Context, id uuid.UUID) error {
 }
 
 const listContainers = `-- name: ListContainers :many
-select c.id, a.name as app_name, w.name as function_name, c.release_id, r.version, c.state,
+select c.id, a.name as app_name, w.name as function_name, r.id as release_id, r.version, c.state,
        c.stop_reason, c.exit_message, c.slots, c.cpu_millis, c.memory_bytes,
        c.created_at, c.ready_at, c.stopped_at,
        (select count(*) from attempts at where at.container_id = c.id and at.state = 'running')::int as running
@@ -157,7 +157,7 @@ func (q *Queries) ListContainers(ctx context.Context, arg ListContainersParams) 
 }
 
 const listLiveContainers = `-- name: ListLiveContainers :many
-select c.id, a.name as app_name, w.name as function_name, c.release_id, r.version, c.state,
+select c.id, a.name as app_name, w.name as function_name, r.id as release_id, r.version, c.state,
        c.stop_reason, c.exit_message, c.slots, c.cpu_millis, c.memory_bytes,
        c.created_at, c.ready_at, c.stopped_at,
        (select count(*) from attempts at where at.container_id = c.id and at.state = 'running')::int as running
@@ -235,8 +235,8 @@ func (q *Queries) ListLiveContainers(ctx context.Context, arg ListLiveContainers
 }
 
 const lockContainerInWorkspace = `-- name: LockContainerInWorkspace :one
-select id, state, host_id, release_id from containers
-where id = $1 and workspace_id = $2
+select id, state, host_id, release_id::uuid as release_id from containers
+where id = $1 and workspace_id = $2 and release_id is not null
 for update
 `
 
@@ -252,6 +252,7 @@ type LockContainerInWorkspaceRow struct {
 	ReleaseID uuid.UUID
 }
 
+// Function containers only; image builds stop through the images owner.
 func (q *Queries) LockContainerInWorkspace(ctx context.Context, arg LockContainerInWorkspaceParams) (LockContainerInWorkspaceRow, error) {
 	row := q.db.QueryRow(ctx, lockContainerInWorkspace, arg.ID, arg.WorkspaceID)
 	var i LockContainerInWorkspaceRow
