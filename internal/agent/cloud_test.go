@@ -21,9 +21,9 @@ import (
 )
 
 const (
-	testAccessKey = "ASIATESTACCESSKEY"
-	testSecretKey = "test-secret-key"
-	testSession   = "test-session-token"
+	imdsAccessKey = "ASIATESTACCESSKEY"
+	imdsSecretKey = "test-secret-key"
+	imdsSession   = "test-session-token"
 	testRegion    = "us-east-2"
 )
 
@@ -73,8 +73,8 @@ func (m *imdsEmulator) serve(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("lazycloud-node"))
 	case "/latest/meta-data/iam/security-credentials/lazycloud-node":
 		_ = json.NewEncoder(w).Encode(map[string]string{
-			"Code": "Success", "Type": "AWS-HMAC", "AccessKeyId": testAccessKey, "SecretAccessKey": testSecretKey,
-			"Token": testSession, "Expiration": time.Now().Add(6 * time.Hour).UTC().Format(time.RFC3339),
+			"Code": "Success", "Type": "AWS-HMAC", "AccessKeyId": imdsAccessKey, "SecretAccessKey": imdsSecretKey,
+			"Token": imdsSession, "Expiration": time.Now().Add(6 * time.Hour).UTC().Format(time.RFC3339),
 			"LastUpdated": time.Now().UTC().Format(time.RFC3339),
 		})
 	case "/latest/meta-data/spot/instance-action":
@@ -129,7 +129,7 @@ func presignedSignature(t *testing.T, identity *hostproto.CloudIdentity, hostID 
 		t.Fatal(err)
 	}
 	request.Header.Set(hostIDHeader, hostID)
-	credentials := aws.Credentials{AccessKeyID: testAccessKey, SecretAccessKey: testSecretKey, SessionToken: testSession}
+	credentials := aws.Credentials{AccessKeyID: imdsAccessKey, SecretAccessKey: imdsSecretKey, SessionToken: imdsSession}
 	emptyBody := "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 	signed, _, err := v4.NewSigner().PresignHTTP(context.Background(), credentials, request, emptyBody, "sts", testRegion, signedAt)
 	if err != nil {
@@ -155,8 +155,8 @@ func TestCloudIdentityIsAPresignedCallerIdentityRequest(t *testing.T) {
 	}
 	query := u.Query()
 	if identity.GetHostId() != hostID || identity.GetMethod() != http.MethodGet || u.Host != "sts."+testRegion+".amazonaws.com" ||
-		query.Get("Action") != "GetCallerIdentity" || query.Get("X-Amz-Expires") != "60" || query.Get("X-Amz-Security-Token") != testSession ||
-		!strings.HasPrefix(query.Get("X-Amz-Credential"), testAccessKey+"/") || !strings.HasSuffix(query.Get("X-Amz-Credential"), "/"+testRegion+"/sts/aws4_request") {
+		query.Get("Action") != "GetCallerIdentity" || query.Get("X-Amz-Expires") != "60" || query.Get("X-Amz-Security-Token") != imdsSession ||
+		!strings.HasPrefix(query.Get("X-Amz-Credential"), imdsAccessKey+"/") || !strings.HasSuffix(query.Get("X-Amz-Credential"), "/"+testRegion+"/sts/aws4_request") {
 		t.Fatalf("presigned request %s %s", identity.GetMethod(), identity.GetUrl())
 	}
 	if !slices.Contains(strings.Split(query.Get("X-Amz-SignedHeaders"), ";"), "lazycloud-host-id") {

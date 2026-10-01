@@ -152,7 +152,7 @@ func (s *Schedules) admit(ctx context.Context, tx pgx.Tx, row LockDueSchedulesRo
 			Workspace:    identity.WorkspaceID(row.WorkspaceID),
 			App:          row.AppName,
 			Function:     row.FunctionName,
-			Inputs:       []execution.Payload{{Encoding: execution.EncodingCloudpickle, Data: noArguments}},
+			Inputs:       []execution.TaskInput{{Payload: execution.Payload{Encoding: execution.EncodingCloudpickle, Data: noArguments}}},
 			ScheduledFor: &scheduledFor,
 		})
 		if err != nil {

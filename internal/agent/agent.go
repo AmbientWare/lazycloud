@@ -23,6 +23,7 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 
+	"github.com/AmbientWare/lazycloud/internal/diskengine"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 )
 
@@ -84,6 +85,11 @@ type Config struct {
 	// OCIRuntime is the Docker runtime name, runc locally and runsc in
 	// production.
 	OCIRuntime string
+	// GeeseFSPath is the pinned GeeseFS binary that mounts workspace volume
+	// buckets; empty means the host mounts no volumes.
+	GeeseFSPath string
+	// MountImage is the image volume mount containers run GeeseFS in.
+	MountImage string
 	// BuildNetwork is the Docker network image builds run on. It must reach
 	// the platform registry and the base images' registries.
 	BuildNetwork string
@@ -109,6 +115,16 @@ type Agent struct {
 	bootID   string
 	sources  *sourceCache
 	images   *imageCache
+	volumes  *volumes
+	// diskQuota is whether Docker enforces writable layer limits here.
+	diskQuota bool
+	// diskEngine attaches durable disks; diskErr says why it cannot here.
+	diskEngine *diskengine.Engine
+	diskErr    error
+	// diskLocks holds a mutex per disk id that serializes publishing.
+	diskLocks sync.Map
+	// releaseNow wakes the disk release loop.
+	releaseNow chan struct{}
 	// host carries claims, completions and logs on a connection separate from
 	// the session, so large payloads never delay commands.
 	host    hostproto.HostServiceClient
@@ -220,6 +236,18 @@ func Run(ctx context.Context, cfg Config) error {
 		ctx:        ctx,
 		restart:    cancel,
 		containers: make(map[string]*container),
+		releaseNow: make(chan struct{}, 1),
+	}
+	a.volumes = newVolumes(a)
+	a.diskEngine = diskengine.New(filepath.Join(cfg.StateDir, "disks", "engine"), a.log.With("component", "disk"))
+	if a.diskErr = a.diskEngine.Check(); a.diskErr != nil {
+		a.log.Info("durable disks are unavailable on this host", "reason", a.diskErr)
+	}
+	if a.diskQuota, err = detectDiskQuota(ctx, docker); err != nil {
+		return err
+	}
+	if !a.diskQuota {
+		a.log.Warn("docker storage here cannot limit container disk; disk limits are not enforced")
 	}
 	// Owned goroutines stop with ctx, so it ends before shutdown waits for them.
 	defer func() {
@@ -232,6 +260,7 @@ func Run(ctx context.Context, cfg Config) error {
 	if err := a.adopt(ctx); err != nil {
 		return err
 	}
+	a.recoverDisks(ctx)
 	a.log.Info("agent started", "containers", len(a.containers), "cpu_millis", a.capacity.GetCpuMillis(),
 		"memory_bytes", a.capacity.GetMemoryBytes(), "gpus", a.capacity.GetGpuCount(), "updatable", a.updatable)
 	if a.updatable && readMarker(cfg.StateDir, TrialFile) == cfg.Version {
@@ -242,6 +271,7 @@ func Run(ctx context.Context, cfg Config) error {
 		a.goOwned(a.watchInterruptions)
 	}
 	a.goOwned(a.pruneExited)
+	a.goOwned(a.releaseLoop)
 	err = a.sessions(ctx)
 	if errors.Is(err, ErrCredentialRevoked) {
 		// The machine was removed: nothing it runs belongs to anyone now.
@@ -331,6 +361,7 @@ func (a *Agent) pruneExited(ctx context.Context) {
 			}
 		}
 		a.mu.Unlock()
+		a.volumes.pruneIdle(ctx)
 	}
 }
 

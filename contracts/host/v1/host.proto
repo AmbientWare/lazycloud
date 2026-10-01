@@ -26,6 +26,17 @@ service HostService {
   rpc CompleteTask(CompleteTaskRequest) returns (CompleteTaskResponse);
   // AppendLogs stores output lines in order per attempt.
   rpc AppendLogs(AppendLogsRequest) returns (AppendLogsResponse);
+
+  // AcquireDisk takes the lease on a disk the container's release declares.
+  // ABORTED means another container still holds it; the host retries.
+  rpc AcquireDisk(AcquireDiskRequest) returns (AcquireDiskResponse);
+  // RecordDiskGeneration records an uploaded generation under the lease. A
+  // stale lease returns FAILED_PRECONDITION.
+  rpc RecordDiskGeneration(RecordDiskGenerationRequest) returns (RecordDiskGenerationResponse);
+  // RecordDiskCollection records the bytes a collection removed.
+  rpc RecordDiskCollection(RecordDiskCollectionRequest) returns (RecordDiskCollectionResponse);
+  // ReleaseDisk ends the lease after the final publish.
+  rpc ReleaseDisk(ReleaseDiskRequest) returns (ReleaseDiskResponse);
   // ContainerAPI carries one public API request a container made through its
   // supervisor. The first APIRequest holds the head, later ones the body;
   // the host half-closes after the body. The server answers with the head,
@@ -178,8 +189,23 @@ message ServerMessage {
     StartContainer start = 2;
     StopContainer stop = 3;
     CancelAttempt cancel = 4;
+    StorageGrant storage_grant = 40;
     UpdateAgent update = 70;
   }
+}
+
+// StorageGrant is a short-lived credential for one workspace's bucket of
+// volumes and disks. The server sends one before the first container that
+// needs it and a fresh one before it expires. Hosts keep it from containers.
+message StorageGrant {
+  string workspace_id = 1;
+  string endpoint = 2;
+  string region = 3;
+  string bucket = 4;
+  string access_key_id = 5;
+  string secret_access_key = 6;
+  string session_token = 7;
+  google.protobuf.Timestamp expires_at = 8;
 }
 
 // UpdateAgent asks an updatable agent to install a release and restart into
@@ -213,6 +239,43 @@ message StartContainer {
   ImageBuild build = 21;
   // The OCI platform image is pulled for, such as linux/amd64.
   string image_platform = 22;
+  repeated VolumeMount volumes = 40;
+  repeated DiskAttachment disks = 41;
+}
+
+// VolumeMount bind-mounts a volume into the container. A platform volume is
+// the prefix of its workspace bucket under the latest StorageGrant; a cloud
+// bucket carries its own location and keys.
+message VolumeMount {
+  string mount_path = 1;
+  bool read_only = 2;
+  oneof source {
+    PlatformVolume volume = 3;
+    CloudBucket cloud_bucket = 4;
+  }
+}
+
+message PlatformVolume {
+  string volume_id = 1;
+  string workspace_id = 2;
+  // The key prefix of the volume's files, ending in "/".
+  string prefix = 3;
+}
+
+message CloudBucket {
+  string bucket = 1;
+  string prefix = 2;
+  string region = 3;
+  string endpoint = 4;
+  bool force_path_style = 5;
+  string access_key_id = 6;
+  string secret_access_key = 7;
+}
+
+// DiskAttachment mounts a durable disk the agent acquires with AcquireDisk.
+message DiskAttachment {
+  string name = 1;
+  string mount_path = 2;
 }
 
 // RegistryAuth authenticates to one registry.
@@ -257,6 +320,8 @@ message Resources {
   int64 memory_bytes = 2;
   int64 cpu_limit_millis = 3;
   int64 memory_limit_bytes = 4;
+  // The writable layer limit; zero is the host default.
+  int64 disk_limit_bytes = 40;
   // GPUs the host gives the container; the host picks free devices.
   int32 gpu_count = 70;
 }
@@ -328,6 +393,16 @@ message ClaimedTask {
   string root_task_id = 10;
   string parent_task_id = 11;
   int32 max_attempts = 12;
+  // The results of the upstream tasks the input refers to.
+  repeated DependencyResult dependencies = 60;
+}
+
+// DependencyResult is an upstream task's result that a dependent's input
+// refers to by task id.
+message DependencyResult {
+  string task_id = 1;
+  PayloadEncoding encoding = 2;
+  bytes data = 3;
 }
 
 message CompleteTaskRequest {
@@ -381,6 +456,60 @@ message LogLine {
 }
 
 message AppendLogsResponse {}
+
+message AcquireDiskRequest {
+  string container_id = 1;
+  string name = 2;
+}
+
+message AcquireDiskResponse {
+  string disk_id = 1;
+  string workspace_id = 2;
+  int64 size_bytes = 3;
+  bytes lease_token = 4;
+  repeated DiskGeneration chain = 5;
+}
+
+// DiskGeneration is one published generation; a chain lists them base
+// first.
+message DiskGeneration {
+  int64 generation = 1;
+  string manifest_key = 2;
+  string manifest_sha256 = 3;
+}
+
+message RecordDiskGenerationRequest {
+  string container_id = 1;
+  string disk_id = 2;
+  bytes lease_token = 3;
+  int64 generation = 4;
+  int64 parent_generation = 5;
+  string manifest_key = 6;
+  string manifest_sha256 = 7;
+  int64 added_bytes = 8;
+  bool flat = 9;
+}
+
+message RecordDiskGenerationResponse {}
+
+message RecordDiskCollectionRequest {
+  string container_id = 1;
+  string disk_id = 2;
+  bytes lease_token = 3;
+  int64 removed_bytes = 4;
+  // The base generation of the chain the collection kept.
+  int64 base_generation = 5;
+}
+
+message RecordDiskCollectionResponse {}
+
+message ReleaseDiskRequest {
+  string container_id = 1;
+  string disk_id = 2;
+  bytes lease_token = 3;
+}
+
+message ReleaseDiskResponse {}
 
 // APIRequest is one message of a container API call. Only the first carries
 // head; body chunks follow in order.

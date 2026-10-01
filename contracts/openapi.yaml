@@ -521,10 +521,8 @@ paths:
         entries, so clients can apply a read timeout. Clients skip blank
         lines.
       parameters:
-        - name: after
-          in: query
-          description: Return entries with an id greater than this.
-          schema: { type: integer, format: int64, minimum: 0, default: 0 }
+        - $ref: "#/components/parameters/LogAfter"
+        - $ref: "#/components/parameters/LogTail"
         - name: follow
           in: query
           description: Keep the stream open until the task finishes.
@@ -550,6 +548,419 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Task" }
+        default: { $ref: "#/components/responses/Error" }
+
+  # Control packet: apps, deployments, task listing, containers and logs.
+
+  /v1/workspaces/{workspace}/apps:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+    get:
+      operationId: listApps
+      tags: [control]
+      summary: Apps with at least one deployed workload, by name
+      parameters:
+        - name: state
+          in: query
+          description: Only apps in this state. Omitted lists active and paused apps.
+          schema: { $ref: "#/components/schemas/LiveAppState" }
+        - $ref: "#/components/parameters/PageLimit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: One page of apps
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AppPage" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/apps/{app}:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/AppRefPath"
+    get:
+      operationId: getApp
+      tags: [control]
+      responses:
+        "200":
+          description: The app
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/App" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteApp
+      tags: [control]
+      summary: Delete the app and every workload in it
+      description: >-
+        Admission stops at once. Queued and running tasks are cancelled and
+        containers stop. Task history, volumes, secrets and stored data stay.
+        The name is free for a new app.
+      responses:
+        "200":
+          description: The deleted app
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/App" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/apps/{app}/pause:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/AppRefPath"
+    post:
+      operationId: pauseApp
+      tags: [control]
+      summary: Stop admission and drain every workload of the app
+      description: Queued tasks are cancelled; running tasks finish.
+      responses:
+        "200":
+          description: The paused app
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/App" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/apps/{app}/resume:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/AppRefPath"
+    post:
+      operationId: resumeApp
+      tags: [control]
+      responses:
+        "200":
+          description: The resumed app
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/App" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/apps/{app}/deployment-plan:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/AppPath"
+    post:
+      operationId: planDeployment
+      tags: [control]
+      summary: What a deploy of these workloads would do, without deploying
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DeploymentPlanRequest" }
+      responses:
+        "200":
+          description: One item per listed or deployed workload
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeploymentPlan" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/apps/{app}/functions/{function}/releases:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/AppPath"
+      - $ref: "#/components/parameters/FunctionPath"
+    post:
+      operationId: prepareFunctionRelease
+      tags: [control]
+      summary: A release that runs this definition, for calls from a working tree
+      description: >-
+        Returns the function's release with the same resolved definition when
+        one exists, including the active one, or creates an unversioned
+        release that is never active. Submits name it with `release_id`. The
+        app and function are created when missing but are not deployed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FunctionSpec" }
+      responses:
+        "200":
+          description: The release
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Release" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/deployments:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+    get:
+      operationId: listDeployments
+      tags: [control]
+      summary: Deployed workloads, by app and name
+      parameters:
+        - name: app
+          in: query
+          schema: { $ref: "#/components/schemas/AppName" }
+        - name: name
+          in: query
+          schema: { $ref: "#/components/schemas/WorkloadName" }
+        - $ref: "#/components/parameters/PageLimit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: One page of deployments
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeploymentPage" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/deployments/{deployment}:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/DeploymentPath"
+    get:
+      operationId: getDeployment
+      tags: [control]
+      responses:
+        "200":
+          description: The deployment
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeployedWorkload" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteDeployment
+      tags: [control]
+      summary: Delete the workload and every version of it
+      description: >-
+        Queued and running tasks are cancelled and its containers stop. The
+        name is free for a later deploy, which starts again at version 1.
+      responses:
+        "200":
+          description: The deleted deployment
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeployedWorkload" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/deployments/{deployment}/stop:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/DeploymentPath"
+    post:
+      operationId: stopDeployment
+      tags: [control]
+      summary: Stop admission and drain the workload, keeping its definition
+      description: Queued tasks are cancelled; running tasks finish.
+      responses:
+        "200":
+          description: The stopped deployment
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeployedWorkload" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/deployments/{deployment}/start:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/DeploymentPath"
+    post:
+      operationId: startDeployment
+      tags: [control]
+      summary: Start the workload again, optionally on an earlier version
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/StartDeploymentRequest" }
+      responses:
+        "200":
+          description: The started deployment
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeployedWorkload" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/deployments/{deployment}/versions:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/DeploymentPath"
+    get:
+      operationId: listDeploymentVersions
+      tags: [control]
+      summary: Deployed versions, newest first
+      parameters:
+        - $ref: "#/components/parameters/PageLimit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: One page of versions
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VersionPage" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/deployments/{deployment}/logs:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/DeploymentPath"
+    get:
+      operationId: streamDeploymentLogs
+      tags: [control]
+      summary: Log lines of every task of the workload, one JSON LogEntry per line
+      description: >-
+        A followed stream stays open until the client closes it and writes a
+        blank line after 15 seconds without entries.
+      parameters:
+        - $ref: "#/components/parameters/LogAfter"
+        - $ref: "#/components/parameters/LogTail"
+        - name: follow
+          in: query
+          schema: { type: boolean, default: false }
+      responses:
+        "200":
+          description: Newline-delimited LogEntry objects
+          content:
+            application/x-ndjson:
+              schema: { type: string, format: binary }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/tasks:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+    get:
+      operationId: listTasks
+      tags: [control]
+      summary: Tasks, newest first
+      parameters:
+        - name: app
+          in: query
+          schema: { $ref: "#/components/schemas/AppName" }
+        - name: function
+          in: query
+          description: Requires `app`.
+          schema: { $ref: "#/components/schemas/WorkloadName" }
+        - name: status
+          in: query
+          schema: { $ref: "#/components/schemas/TaskStatus" }
+        - $ref: "#/components/parameters/PageLimit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: One page of tasks
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TaskPage" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/tasks/stop:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+    post:
+      operationId: stopTasks
+      tags: [control]
+      summary: Cancel each listed task that is queued or running
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/StopTasksRequest" }
+      responses:
+        "200":
+          description: Which tasks stopped and which were already finished or unknown
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StopTasksResponse" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/tasks/{task}/rerun:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/TaskPath"
+    post:
+      operationId: rerunTask
+      tags: [control]
+      summary: Submit the task's input again to the release it ran on
+      responses:
+        "201":
+          description: The new task
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Task" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/containers:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+    get:
+      operationId: listContainers
+      tags: [control]
+      summary: Containers, newest first
+      parameters:
+        - name: live
+          in: query
+          description: Only containers that have not stopped.
+          schema: { type: boolean, default: false }
+        - $ref: "#/components/parameters/PageLimit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: One page of containers
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ContainerPage" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/containers/{container}:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/ContainerPath"
+    get:
+      operationId: getContainer
+      tags: [control]
+      responses:
+        "200":
+          description: The container
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Container" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/containers/{container}/stop:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/ContainerPath"
+    post:
+      operationId: stopContainer
+      tags: [control]
+      summary: Stop the container now
+      description: >-
+        Its running attempts end as lost and retry by their policy. An active
+        workload starts a replacement when it still has work.
+      responses:
+        "200":
+          description: The container after the request
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Container" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/containers/{container}/logs:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/ContainerPath"
+    get:
+      operationId: streamContainerLogs
+      tags: [control]
+      summary: Log lines of the tasks the container ran, one JSON LogEntry per line
+      description: >-
+        A followed stream ends once the container has stopped and its lines
+        are drained, and writes a blank line after 15 seconds without entries.
+      parameters:
+        - $ref: "#/components/parameters/LogAfter"
+        - $ref: "#/components/parameters/LogTail"
+        - name: follow
+          in: query
+          schema: { type: boolean, default: false }
+      responses:
+        "200":
+          description: Newline-delimited LogEntry objects
+          content:
+            application/x-ndjson:
+              schema: { type: string, format: binary }
         default: { $ref: "#/components/responses/Error" }
 
   # Workload runtime: secrets and schedules.
@@ -680,6 +1091,627 @@ paths:
               schema: { $ref: "#/components/schemas/SchedulePage" }
         default: { $ref: "#/components/responses/Error" }
 
+  # Storage: volumes, disks, artifacts, queues and maps.
+
+  /v1/workspaces/{workspace}/volumes:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+    get:
+      operationId: listVolumes
+      tags: [storage]
+      summary: Volumes in the workspace, by name
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: A page of volumes
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VolumePage" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createVolume
+      tags: [storage]
+      summary: Create a volume, or return the active one of that name
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateVolumeRequest" }
+      responses:
+        "200":
+          description: The volume
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Volume" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/volumes/{volume}:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/VolumePath"
+    get:
+      operationId: getVolume
+      tags: [storage]
+      responses:
+        "200":
+          description: The volume
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Volume" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteVolume
+      tags: [storage]
+      summary: Delete a volume and its files
+      description: >-
+        Refused with `conflict` while a container that mounts the volume has
+        not stopped. The name is free at once; the files are removed in the
+        background.
+      responses:
+        "204": { description: Deleted }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/volumes/{volume}/files:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/VolumePath"
+    get:
+      operationId: listVolumeFiles
+      tags: [storage]
+      summary: The entries of one directory, files and directories by name
+      parameters:
+        - name: path
+          in: query
+          description: A directory relative to the volume root; empty is the root.
+          schema: { $ref: "#/components/schemas/VolumeRelativePath" }
+        - $ref: "#/components/parameters/Cursor"
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 1000 }
+      responses:
+        "200":
+          description: A page of entries
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VolumeFilePage" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: removeVolumeFiles
+      tags: [storage]
+      summary: Remove a file, or a directory and everything under it
+      parameters:
+        - name: path
+          in: query
+          required: true
+          schema: { $ref: "#/components/schemas/VolumeFilePath" }
+      responses:
+        "200":
+          description: The removed paths
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RemovedVolumeFiles" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/volumes/{volume}/files/stat:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/VolumePath"
+    get:
+      operationId: statVolumeFile
+      tags: [storage]
+      parameters:
+        - name: path
+          in: query
+          schema: { $ref: "#/components/schemas/VolumeRelativePath" }
+      responses:
+        "200":
+          description: The file or directory
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VolumeFile" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/volumes/{volume}/files/move:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/VolumePath"
+    post:
+      operationId: moveVolumeFile
+      tags: [storage]
+      summary: Move or rename a file or directory within the volume
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MoveVolumeFileRequest" }
+      responses:
+        "200":
+          description: The moved entry at its new path
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VolumeFile" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/volumes/{volume}/files/url:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/VolumePath"
+    post:
+      operationId: presignVolumeFile
+      tags: [storage]
+      summary: A presigned URL that reads, writes or uploads a part of one file
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PresignVolumeFileRequest" }
+      responses:
+        "200":
+          description: The URL
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PresignedUrl" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/volumes/{volume}/uploads:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/VolumePath"
+    post:
+      operationId: createVolumeUpload
+      tags: [storage]
+      summary: Start a multipart upload of one file and presign its parts
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateVolumeUploadRequest" }
+      responses:
+        "200":
+          description: The upload
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MultipartUpload" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/volumes/{volume}/uploads/complete:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/VolumePath"
+    post:
+      operationId: completeVolumeUpload
+      tags: [storage]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CompleteVolumeUploadRequest" }
+      responses:
+        "200":
+          description: The stored file
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VolumeFile" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/volumes/{volume}/uploads/abort:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/VolumePath"
+    post:
+      operationId: abortVolumeUpload
+      tags: [storage]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AbortVolumeUploadRequest" }
+      responses:
+        "204": { description: Aborted }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/disks:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+    get:
+      operationId: listDisks
+      tags: [storage]
+      summary: Disks in the workspace, by name
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: A page of disks
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DiskPage" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/disks/{disk}:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/DiskPath"
+    get:
+      operationId: getDisk
+      tags: [storage]
+      responses:
+        "200":
+          description: The disk
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Disk" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteDisk
+      tags: [storage]
+      summary: Delete a disk and everything written to it
+      description: Refused with `conflict` while a container holds the disk.
+      responses:
+        "204": { description: Deleted }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/artifacts:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+    get:
+      operationId: listArtifacts
+      tags: [storage]
+      summary: Stored, unexpired artifacts, newest first
+      parameters:
+        - name: task_id
+          in: query
+          schema: { type: string, format: uuid }
+        - name: app
+          in: query
+          schema: { $ref: "#/components/schemas/AppName" }
+        - name: search
+          in: query
+          description: Case-insensitive substring of the filename.
+          schema: { type: string, maxLength: 255 }
+        - name: content_type
+          in: query
+          description: A content type prefix, such as `image/`.
+          schema: { type: string, maxLength: 255 }
+        - name: created_after
+          in: query
+          description: Inclusive lower bound on the save time.
+          schema: { type: string, format: date-time }
+        - name: created_before
+          in: query
+          description: Exclusive upper bound on the save time.
+          schema: { type: string, format: date-time }
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: A page of artifacts
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ArtifactPage" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createArtifact
+      tags: [storage]
+      summary: Start saving an artifact for a task and presign its upload
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateArtifactRequest" }
+      responses:
+        "201":
+          description: The pending artifact and where to send its bytes
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ArtifactUpload" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/artifacts/summary:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+    get:
+      operationId: getArtifactSummary
+      tags: [storage]
+      summary: Stored artifact count, bytes and retention
+      responses:
+        "200":
+          description: The summary
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ArtifactSummary" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/artifacts/delete:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+    post:
+      operationId: deleteArtifacts
+      tags: [storage]
+      summary: Delete up to 100 artifacts
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DeleteArtifactsRequest" }
+      responses:
+        "200":
+          description: The ids that were deleted; unknown ids are left out
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeletedArtifacts" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/artifacts/{artifact}:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/ArtifactPath"
+    get:
+      operationId: getArtifact
+      tags: [storage]
+      responses:
+        "200":
+          description: The artifact
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Artifact" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteArtifact
+      tags: [storage]
+      responses:
+        "204": { description: Deleted }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/artifacts/{artifact}/complete:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/ArtifactPath"
+    post:
+      operationId: completeArtifact
+      tags: [storage]
+      summary: Record an uploaded artifact and start its retention
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CompleteArtifactRequest" }
+      responses:
+        "200":
+          description: The stored artifact
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Artifact" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/artifacts/{artifact}/url:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/ArtifactPath"
+    post:
+      operationId: presignArtifact
+      tags: [storage]
+      summary: A presigned GET for the artifact's bytes
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PresignArtifactRequest" }
+      responses:
+        "200":
+          description: The URL
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PresignedUrl" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/queues:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+    get:
+      operationId: listQueues
+      tags: [storage]
+      summary: Queues in the workspace, by name
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: A page of queues
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/QueuePage" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/queues/{queue}:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/QueuePath"
+    get:
+      operationId: getQueue
+      tags: [storage]
+      summary: The queue's size; a queue never written has size 0
+      responses:
+        "200":
+          description: The queue
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/QueueInfo" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteQueue
+      tags: [storage]
+      summary: Delete the queue and its messages
+      responses:
+        "204": { description: Deleted }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/queues/{queue}/messages:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/QueuePath"
+    post:
+      operationId: putQueueMessages
+      tags: [storage]
+      summary: Append messages in order, creating the queue on first use
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PutQueueMessagesRequest" }
+      responses:
+        "204": { description: Appended }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/queues/{queue}/pop:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/QueuePath"
+    post:
+      operationId: popQueueMessage
+      tags: [storage]
+      summary: Remove and return the oldest message
+      parameters:
+        - name: wait_seconds
+          in: query
+          description: Wait this long for a message when the queue is empty.
+          schema: { type: integer, minimum: 0, maximum: 60, default: 0 }
+      responses:
+        "200":
+          description: The message; `message` is absent when the queue is empty
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/QueueMessageResult" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/queues/{queue}/head:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/QueuePath"
+    get:
+      operationId: peekQueueMessage
+      tags: [storage]
+      summary: The oldest message without removing it
+      responses:
+        "200":
+          description: The message; `message` is absent when the queue is empty
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/QueueMessageResult" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/maps:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+    get:
+      operationId: listMaps
+      tags: [storage]
+      summary: Maps with at least one live key, by name
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: A page of maps
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MapPage" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/maps/{map}:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/MapPath"
+    get:
+      operationId: getMap
+      tags: [storage]
+      summary: Live key count and expiry statistics; a map never written is empty
+      responses:
+        "200":
+          description: The map
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MapInfo" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteMap
+      tags: [storage]
+      summary: Delete the map and its keys
+      responses:
+        "204": { description: Deleted }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/maps/{map}/keys:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/MapPath"
+    get:
+      operationId: listMapKeys
+      tags: [storage]
+      summary: Live keys in byte order, optionally with a prefix
+      parameters:
+        - name: prefix
+          in: query
+          schema: { type: string, maxLength: 1024 }
+        - $ref: "#/components/parameters/Cursor"
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 1000 }
+      responses:
+        "200":
+          description: A page of keys
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MapKeyPage" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/maps/{map}/entries/{key}:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/MapPath"
+      - $ref: "#/components/parameters/MapKeyPath"
+    get:
+      operationId: getMapEntry
+      tags: [storage]
+      responses:
+        "200":
+          description: The entry
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MapEntry" }
+        default: { $ref: "#/components/responses/Error" }
+    put:
+      operationId: setMapEntry
+      tags: [storage]
+      summary: Write a key, creating the map on first use
+      description: >-
+        With `if_revision` the write applies only while the key holds that
+        revision; with `if_absent` only while the key is missing. A failed
+        condition is a `conflict`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SetMapEntryRequest" }
+      responses:
+        "200":
+          description: The entry after the write
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MapEntryWrite" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteMapEntry
+      tags: [storage]
+      summary: Delete a key; a missing key is `not_found`
+      parameters:
+        - name: if_revision
+          in: query
+          schema: { type: string, pattern: "^[0-9]{1,20}$" }
+      responses:
+        "204": { description: Deleted }
   # Images
 
   /v1/workspaces/{workspace}/images/resolve:
@@ -1095,7 +2127,7 @@ components:
       name: cursor
       in: query
       description: The next_cursor of the previous page.
-      schema: { type: string, maxLength: 512 }
+      schema: { type: string, maxLength: 2048 }
     Limit:
       name: limit
       in: query
@@ -1127,6 +2159,69 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+    # Control packet parameters.
+    AppRefPath:
+      name: app
+      in: path
+      required: true
+      description: The app's name or id.
+      schema: { $ref: "#/components/schemas/AppRef" }
+    DeploymentPath:
+      name: deployment
+      in: path
+      required: true
+      description: The workload id.
+      schema: { type: string, format: uuid }
+    ContainerPath:
+      name: container
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    PageLimit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 1000, default: 100 }
+    LogAfter:
+      name: after
+      in: query
+      description: Return entries with an id greater than this.
+      schema: { type: integer, format: int64, minimum: 0, default: 0 }
+    LogTail:
+      name: tail
+      in: query
+      description: Start with only the last this many stored entries.
+      schema: { type: integer, minimum: 1, maximum: 1000 }
+
+    VolumePath:
+      name: volume
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/VolumeName" }
+    DiskPath:
+      name: disk
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/DiskName" }
+    ArtifactPath:
+      name: artifact
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    QueuePath:
+      name: queue
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/CollectionName" }
+    MapPath:
+      name: map
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/CollectionName" }
+    MapKeyPath:
+      name: key
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/MapKey" }
 
   responses:
     Error:
@@ -1239,10 +2334,7 @@ components:
       properties:
         name: { $ref: "#/components/schemas/Name" }
         cloud:
-          description: >-
-            aws creates the workspace in the caller's connected AWS account,
-            which must be ready; without it the workspace runs on LazyCloud.
-            The location never changes.
+          description: aws places the workspace in the caller's ready AWS connection, for good.
           type: string
           enum: [aws]
 
@@ -1506,36 +2598,41 @@ components:
       required: [functions]
       properties:
         functions:
+          description: At least one, unless prune deletes every deployed function.
           type: array
-          minItems: 1
           maxItems: 200
           items: { $ref: "#/components/schemas/FunctionSpec" }
         prune:
-          description: Stop every function of the app that is not listed.
+          description: Delete every function of the app that is not listed.
           type: boolean
           default: false
 
     Deployment:
       type: object
-      required: [app, releases, pruned]
+      required: [app, releases, pruned, removed_versions]
       properties:
         app: { $ref: "#/components/schemas/App" }
         releases:
           type: array
           items: { $ref: "#/components/schemas/Release" }
         pruned:
+          description: Functions the prune deleted.
           type: array
           items: { $ref: "#/components/schemas/WorkloadName" }
+        removed_versions:
+          description: Versions of the pruned functions.
+          type: integer
 
     App:
       type: object
-      required: [id, name, state, created_at]
+      required: [id, name, state, workloads, created_at]
       properties:
         id: { type: string, format: uuid }
         name: { $ref: "#/components/schemas/AppName" }
-        state:
-          type: string
-          enum: [active, paused]
+        state: { $ref: "#/components/schemas/AppState" }
+        workloads:
+          description: Deployed workloads that are not deleted.
+          type: integer
         created_at: { type: string, format: date-time }
 
     FunctionSpec:
@@ -1609,6 +2706,15 @@ components:
           default: false
         lifecycle_hooks:
           $ref: "#/components/schemas/LifecycleHooks"
+        volumes:
+          type: array
+          maxItems: 32
+          items: { $ref: "#/components/schemas/VolumeMountSpec" }
+        client_contract:
+          description: The signature `lazycloud app export` types clients from.
+          type: object
+          additionalProperties: true
+          x-go-type: json.RawMessage
         placement:
           $ref: "#/components/schemas/Placement"
 
@@ -1660,16 +2766,20 @@ components:
           type: integer
           minimum: 128
           maximum: 1572864
-        gpu:
+        disk_mib:
           description: >-
-            GPU models in order of preference; any last takes whatever has
-            capacity. Without gpu_count one card is reserved.
+            Writable layer limit; enforced where Docker has project quotas.
+          type: integer
+          minimum: 1024
+          maximum: 16777216
+        gpu:
+          description: GPU models by preference; any, last, takes whatever has capacity.
           type: array
           maxItems: 9
           uniqueItems: true
           items: { $ref: "#/components/schemas/GpuType" }
         gpu_count:
-          description: GPUs per container; needs gpu.
+          description: GPUs per container; a gpu list without it reserves one.
           type: integer
           minimum: 0
           maximum: 8
@@ -1718,11 +2828,13 @@ components:
 
     Release:
       type: object
-      required: [id, function, version, created_at, spec]
+      required: [id, function, created_at, spec]
       properties:
         id: { type: string, format: uuid }
         function: { $ref: "#/components/schemas/WorkloadName" }
-        version: { type: integer }
+        version:
+          description: The deployed version; absent for a release only working-tree calls use.
+          type: integer
         created_at: { type: string, format: date-time }
         spec: { $ref: "#/components/schemas/FunctionSpec" }
 
@@ -1764,7 +2876,31 @@ components:
           type: array
           minItems: 1
           maxItems: 1000
-          items: { $ref: "#/components/schemas/Payload" }
+          items: { $ref: "#/components/schemas/TaskInput" }
+        release_id:
+          description: Run on this release, such as a prepared one, instead of the active one.
+          type: string
+          format: uuid
+        parent_task_id:
+          description: The task that submits these, which becomes their parent.
+          type: string
+          format: uuid
+
+    TaskInput:
+      description: >-
+        A task's arguments. A cloudpickle input refers to each pending
+        FunctionCall it contains by the persistent id `("function_call",
+        task_id)` and lists those ids in `depends_on`; the task waits until
+        they succeed and the runner resolves each id to that task's result.
+      allOf:
+        - $ref: "#/components/schemas/Payload"
+        - type: object
+          properties:
+            depends_on:
+              type: array
+              maxItems: 100
+              uniqueItems: true
+              items: { type: string, format: uuid }
 
     SubmitTasksResponse:
       type: object
@@ -1780,8 +2916,20 @@ components:
 
     Task:
       type: object
-      required: [id, app, function, release_id, status, attempts, created_at, root_task_id]
+      required: [id, app, function, release_id, status, attempts, max_attempts, created_at, root_task_id]
       properties:
+        id: { type: string, format: uuid }
+        app: { $ref: "#/components/schemas/AppName" }
+        function: { $ref: "#/components/schemas/WorkloadName" }
+        release_id: { type: string, format: uuid }
+        version:
+          description: The deployed version of the release; absent for a working-tree release.
+          type: integer
+        status: { $ref: "#/components/schemas/TaskStatus" }
+        attempts:
+          description: Attempts started so far.
+          type: integer
+        max_attempts: { type: integer }
         parent_task_id:
           description: The running task that spawned this one.
           type: string
@@ -1794,22 +2942,61 @@ components:
           description: The cron occurrence that admitted the task.
           type: string
           format: date-time
-        id: { type: string, format: uuid }
-        app: { $ref: "#/components/schemas/AppName" }
-        function: { $ref: "#/components/schemas/WorkloadName" }
-        release_id: { type: string, format: uuid }
-        status: { $ref: "#/components/schemas/TaskStatus" }
-        attempts:
-          description: Attempts started so far.
-          type: integer
+        container_id:
+          description: The container of the latest attempt.
+          type: string
+          format: uuid
+        next_attempt_at:
+          description: When a queued task that already ran becomes due again.
+          type: string
+          format: date-time
+        pending: { $ref: "#/components/schemas/TaskPendingProgress" }
         created_at: { type: string, format: date-time }
         started_at: { type: string, format: date-time }
         finished_at: { type: string, format: date-time }
         failure: { $ref: "#/components/schemas/TaskFailure" }
 
+    TaskPendingProgress:
+      description: Why a queued task has not started, derived from current state on every read.
+      type: object
+      required: [reason, message, since, pending_since, observed_at]
+      properties:
+        reason: { $ref: "#/components/schemas/TaskPendingReason" }
+        message: { type: string }
+        since:
+          description: When the current reason began.
+          type: string
+          format: date-time
+        pending_since:
+          description: When the task last became due or was submitted.
+          type: string
+          format: date-time
+        observed_at: { type: string, format: date-time }
+
+    TaskPendingReason:
+      type: string
+      enum:
+        - queued
+        - dependencies
+        - retry
+        - capacity_busy
+        - capacity_unavailable
+        - capacity_limit
+        - provisioning_compute
+        - starting_container
+      x-enum-varnames:
+        - Queued
+        - Dependencies
+        - Retry
+        - CapacityBusy
+        - CapacityUnavailable
+        - CapacityLimit
+        - ProvisioningCompute
+        - StartingContainer
+
     FailureKind:
       type: string
-      enum: [user_error, load_error, timeout, lost, start_failed, system]
+      enum: [user_error, load_error, timeout, lost, start_failed, system, dependency_failed]
 
     TaskFailure:
       type: object
@@ -1828,9 +3015,10 @@ components:
 
     LogEntry:
       type: object
-      required: [id, attempt, stream, data, time]
+      required: [id, task_id, attempt, stream, data, time]
       properties:
         id: { type: integer, format: int64 }
+        task_id: { type: string, format: uuid }
         attempt: { type: integer }
         stream:
           type: string
@@ -1957,6 +3145,777 @@ components:
         next_cursor:
           description: Present when more schedules follow.
           type: string
+    # Storage
+
+    VolumeName:
+      type: string
+      pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$"
+
+    DiskName:
+      type: string
+      pattern: "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
+
+    CollectionName:
+      description: A queue or map name; any characters except control characters.
+      type: string
+      pattern: "^[^\\x00-\\x1f\\x7f]{1,255}$"
+
+    MapKey:
+      type: string
+      minLength: 1
+      maxLength: 1024
+      pattern: "^[^\\x00-\\x1f\\x7f]+$"
+
+    VolumeRelativePath:
+      description: >-
+        A path below the volume root; `.` or empty is the root, `..` is refused.
+      type: string
+      maxLength: 1024
+
+    VolumeFilePath:
+      description: A file or directory below the volume root.
+      type: string
+      minLength: 1
+      maxLength: 1024
+
+    WorkloadRef:
+      type: object
+      required: [app, kind, name]
+      properties:
+        app: { $ref: "#/components/schemas/AppName" }
+        kind:
+          type: string
+          enum: [function]
+        name: { $ref: "#/components/schemas/WorkloadName" }
+
+    VolumeMountSpec:
+      description: >-
+        A volume, or with `cloud_bucket` an S3 bucket, mounted into every
+        container of the workload. A platform volume is created on first use.
+      type: object
+      required: [name]
+      properties:
+        name: { $ref: "#/components/schemas/VolumeName" }
+        mount_path:
+          description: >-
+            Absolute, or relative to /volumes; the default is /volumes/<name>.
+          type: string
+          maxLength: 1024
+        read_only:
+          type: boolean
+          default: false
+        cloud_bucket: { $ref: "#/components/schemas/CloudBucketSpec" }
+
+    CloudBucketSpec:
+      type: object
+      required: [bucket]
+      properties:
+        bucket:
+          type: string
+          minLength: 3
+          maxLength: 63
+        prefix:
+          description: A key prefix ending in `/`, or empty for the whole bucket.
+          type: string
+          maxLength: 1024
+          default: ""
+        region: { type: string, maxLength: 64 }
+        endpoint:
+          description: An S3-compatible endpoint URL; AWS S3 when absent.
+          type: string
+          maxLength: 1024
+        force_path_style:
+          type: boolean
+          default: false
+        access_key_secret:
+          description: The workspace secret holding the access key id.
+          allOf: [{ $ref: "#/components/schemas/SecretName" }]
+        secret_key_secret:
+          description: The workspace secret holding the secret access key.
+          allOf: [{ $ref: "#/components/schemas/SecretName" }]
+
+    Volume:
+      type: object
+      required: [id, name, size_bytes, created_at, used_by]
+      properties:
+        id: { type: string, format: uuid }
+        name: { $ref: "#/components/schemas/VolumeName" }
+        size_bytes:
+          description: Bytes stored at the last measurement.
+          type: integer
+          format: int64
+        size_measured_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+        used_by:
+          description: Workloads whose active release mounts the volume.
+          type: array
+          items: { $ref: "#/components/schemas/WorkloadRef" }
+
+    VolumePage:
+      type: object
+      required: [volumes]
+      properties:
+        volumes:
+          type: array
+          items: { $ref: "#/components/schemas/Volume" }
+        next_cursor: { type: string }
+
+    CreateVolumeRequest:
+      type: object
+      required: [name]
+      properties:
+        name: { $ref: "#/components/schemas/VolumeName" }
+
+    VolumeFile:
+      type: object
+      required: [path, is_dir, size_bytes]
+      properties:
+        path:
+          description: The path relative to the volume root.
+          type: string
+        is_dir: { type: boolean }
+        size_bytes:
+          type: integer
+          format: int64
+        modified_at:
+          description: Absent for directories.
+          type: string
+          format: date-time
+
+    VolumeFilePage:
+      type: object
+      required: [files]
+      properties:
+        files:
+          type: array
+          items: { $ref: "#/components/schemas/VolumeFile" }
+        next_cursor: { type: string }
+
+    RemovedVolumeFiles:
+      type: object
+      required: [removed]
+      properties:
+        removed:
+          description: Removed file paths relative to the volume root.
+          type: array
+          items: { type: string }
+
+    MoveVolumeFileRequest:
+      type: object
+      required: [from, to]
+      properties:
+        from: { $ref: "#/components/schemas/VolumeFilePath" }
+        to: { $ref: "#/components/schemas/VolumeFilePath" }
+
+    PresignVolumeFileRequest:
+      type: object
+      required: [path, method]
+      properties:
+        path: { $ref: "#/components/schemas/VolumeFilePath" }
+        method:
+          type: string
+          enum: [get, head, put, upload_part]
+        expires_seconds:
+          type: integer
+          minimum: 1
+          maximum: 604800
+          default: 3600
+        upload_id:
+          description: Required for `upload_part`.
+          type: string
+          maxLength: 1024
+        part_number:
+          description: Required for `upload_part`.
+          type: integer
+          minimum: 1
+          maximum: 10000
+
+    PresignedUrl:
+      type: object
+      required: [url, expires_at]
+      properties:
+        url:
+          description: Absolute URL; the request carries no bearer token.
+          type: string
+        expires_at: { type: string, format: date-time }
+
+    UploadPart:
+      type: object
+      required: [number, offset, size_bytes, url]
+      properties:
+        number: { type: integer }
+        offset:
+          type: integer
+          format: int64
+        size_bytes:
+          type: integer
+          format: int64
+        url:
+          description: A presigned PUT of these bytes; its ETag completes a multipart upload.
+          type: string
+
+    Upload:
+      description: >-
+        Where to send bytes. With `upload_id` it is a multipart upload whose
+        part ETags complete it; without, `parts` holds one plain PUT.
+      type: object
+      required: [parts, expires_at]
+      properties:
+        upload_id: { type: string }
+        part_size_bytes:
+          type: integer
+          format: int64
+        parts:
+          type: array
+          items: { $ref: "#/components/schemas/UploadPart" }
+        expires_at: { type: string, format: date-time }
+
+    CompletedPart:
+      type: object
+      required: [number, etag]
+      properties:
+        number:
+          type: integer
+          minimum: 1
+          maximum: 10000
+        etag:
+          type: string
+          maxLength: 1024
+
+    CreateVolumeUploadRequest:
+      type: object
+      required: [path, size_bytes]
+      properties:
+        path: { $ref: "#/components/schemas/VolumeFilePath" }
+        size_bytes:
+          type: integer
+          format: int64
+          minimum: 0
+          maximum: 5497558138880
+        part_size_bytes:
+          type: integer
+          format: int64
+          minimum: 5242880
+          maximum: 5368709120
+          default: 5242880
+
+    MultipartUpload:
+      type: object
+      required: [upload_id, path, part_size_bytes, parts, expires_at]
+      properties:
+        upload_id: { type: string }
+        path: { type: string }
+        part_size_bytes:
+          type: integer
+          format: int64
+        parts:
+          type: array
+          items: { $ref: "#/components/schemas/UploadPart" }
+        expires_at: { type: string, format: date-time }
+
+    CompleteVolumeUploadRequest:
+      type: object
+      required: [path, upload_id, parts]
+      properties:
+        path: { $ref: "#/components/schemas/VolumeFilePath" }
+        upload_id:
+          type: string
+          maxLength: 1024
+        parts:
+          type: array
+          minItems: 1
+          maxItems: 10000
+          items: { $ref: "#/components/schemas/CompletedPart" }
+
+    AbortVolumeUploadRequest:
+      type: object
+      required: [path, upload_id]
+      properties:
+        path: { $ref: "#/components/schemas/VolumeFilePath" }
+        upload_id:
+          type: string
+          maxLength: 1024
+
+    DiskStatus:
+      type: string
+      enum: [detached, attached, saving]
+
+    Disk:
+      type: object
+      required: [id, name, size_bytes, stored_bytes, generation, status, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        name: { $ref: "#/components/schemas/DiskName" }
+        size_bytes:
+          type: integer
+          format: int64
+        stored_bytes:
+          description: Bytes the disk's published generations occupy in the object store.
+          type: integer
+          format: int64
+        generation:
+          description: The newest published generation; 0 before the first.
+          type: integer
+          format: int64
+        status: { $ref: "#/components/schemas/DiskStatus" }
+        holder_container_id:
+          description: The container holding the disk while attached or saving.
+          type: string
+          format: uuid
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    DiskPage:
+      type: object
+      required: [disks]
+      properties:
+        disks:
+          type: array
+          items: { $ref: "#/components/schemas/Disk" }
+        next_cursor: { type: string }
+
+    Artifact:
+      type: object
+      required: [id, filename, content_type, size_bytes, state, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        task_id: { type: string, format: uuid }
+        app: { $ref: "#/components/schemas/AppName" }
+        filename: { type: string }
+        content_type: { type: string }
+        size_bytes:
+          type: integer
+          format: int64
+        state:
+          type: string
+          enum: [uploading, stored]
+        created_at: { type: string, format: date-time }
+        stored_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+
+    ArtifactPage:
+      type: object
+      required: [artifacts]
+      properties:
+        artifacts:
+          type: array
+          items: { $ref: "#/components/schemas/Artifact" }
+        next_cursor: { type: string }
+
+    CreateArtifactRequest:
+      type: object
+      required: [task_id, filename, size_bytes]
+      properties:
+        task_id: { type: string, format: uuid }
+        filename:
+          description: A base name without `/`.
+          type: string
+          pattern: "^[^/\\x00-\\x1f\\x7f]{1,255}$"
+        content_type:
+          type: string
+          minLength: 1
+          maxLength: 255
+          default: application/octet-stream
+        size_bytes:
+          type: integer
+          format: int64
+          minimum: 0
+          maximum: 5497558138880
+
+    ArtifactUpload:
+      type: object
+      required: [artifact, upload]
+      properties:
+        artifact: { $ref: "#/components/schemas/Artifact" }
+        upload: { $ref: "#/components/schemas/Upload" }
+
+    CompleteArtifactRequest:
+      type: object
+      properties:
+        parts:
+          description: The ETag of every part of a multipart upload.
+          type: array
+          maxItems: 10000
+          items: { $ref: "#/components/schemas/CompletedPart" }
+
+    PresignArtifactRequest:
+      type: object
+      properties:
+        expires_seconds:
+          description: Capped at the artifact's remaining retention.
+          type: integer
+          minimum: 1
+          maximum: 604800
+          default: 3600
+        download:
+          description: Ask browsers to save the file rather than show it.
+          type: boolean
+          default: false
+
+    ArtifactSummary:
+      type: object
+      required: [count, size_bytes, retention_seconds]
+      properties:
+        count:
+          type: integer
+          format: int64
+        size_bytes:
+          type: integer
+          format: int64
+        retention_seconds:
+          description: How long new artifacts are kept under the workspace's plan.
+          type: integer
+          format: int64
+
+    DeleteArtifactsRequest:
+      type: object
+      required: [ids]
+      properties:
+        ids:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items: { type: string, format: uuid }
+
+    DeletedArtifacts:
+      type: object
+      required: [deleted]
+      properties:
+        deleted:
+          type: array
+          items: { type: string, format: uuid }
+
+    QueueInfo:
+      description: In a list, statistics count at most 100,001 messages.
+      type: object
+      required: [name, size]
+      properties:
+        name: { $ref: "#/components/schemas/CollectionName" }
+        size:
+          type: integer
+          format: int64
+        oldest_message_at: { type: string, format: date-time }
+
+    QueuePage:
+      type: object
+      required: [queues]
+      properties:
+        queues:
+          type: array
+          items: { $ref: "#/components/schemas/QueueInfo" }
+        next_cursor: { type: string }
+
+    PutQueueMessagesRequest:
+      type: object
+      required: [messages]
+      properties:
+        messages:
+          description: Message bodies, base64; each at most 1 MiB.
+          type: array
+          minItems: 1
+          maxItems: 1000
+          items: { type: string, format: byte }
+
+    QueueMessageResult:
+      type: object
+      properties:
+        message: { type: string, format: byte }
+
+    MapInfo:
+      description: In a list, statistics count at most 100,001 live keys.
+      type: object
+      required: [name, count, size_bytes, expiring_count]
+      properties:
+        name: { $ref: "#/components/schemas/CollectionName" }
+        count:
+          type: integer
+          format: int64
+        size_bytes:
+          type: integer
+          format: int64
+        expiring_count:
+          type: integer
+          format: int64
+        next_expiry_at: { type: string, format: date-time }
+
+    MapPage:
+      type: object
+      required: [maps]
+      properties:
+        maps:
+          type: array
+          items: { $ref: "#/components/schemas/MapInfo" }
+        next_cursor: { type: string }
+
+    MapKeyPage:
+      type: object
+      required: [keys]
+      properties:
+        keys:
+          type: array
+          items: { type: string }
+        next_cursor: { type: string }
+
+    MapEntry:
+      type: object
+      required: [key, value, revision, updated_at]
+      properties:
+        key: { type: string }
+        value:
+          description: >-
+            Base64 bytes; SDK values are JSON, or cloudpickle (first byte 0x80).
+          type: string
+          format: byte
+        revision:
+          description: Changes on every write; pass it as `if_revision` to compare and set.
+          type: string
+        expires_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    SetMapEntryRequest:
+      type: object
+      required: [value]
+      properties:
+        value:
+          description: At most 1 MiB, base64.
+          type: string
+          format: byte
+        ttl_seconds:
+          description: >-
+            Seconds to expiry, 0 for never; absent keeps an existing expiry.
+          type: integer
+          minimum: 0
+          maximum: 604800
+        if_revision:
+          type: string
+          pattern: "^[0-9]{1,20}$"
+        if_absent:
+          type: boolean
+          default: false
+
+    MapEntryWrite:
+      type: object
+      required: [revision]
+      properties:
+        revision: { type: string }
+        expires_at: { type: string, format: date-time }
+
+    # Control packet schemas.
+
+    AppRef:
+      description: An app name or id.
+      type: string
+      pattern: "^([a-z][a-z0-9_]{0,62}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$"
+
+    AppState:
+      type: string
+      enum: [active, paused, deleted]
+
+    LiveAppState:
+      type: string
+      enum: [active, paused]
+
+    WorkloadState:
+      description: Desired state. A paused app stops its active workloads too.
+      type: string
+      enum: [active, stopped, deleted]
+
+    DeploymentPlanAction:
+      description: >-
+        `add` deploys a new workload, `redeploy` deploys one that exists,
+        `retain` leaves an omitted one deployed and `remove` deletes an
+        omitted one with prune.
+      type: string
+      enum: [add, redeploy, retain, remove]
+
+    AppPage:
+      type: object
+      required: [apps]
+      properties:
+        apps:
+          type: array
+          items: { $ref: "#/components/schemas/App" }
+        next_cursor:
+          description: Present when another page follows.
+          type: string
+
+    WorkloadKind:
+      type: string
+      enum: [function]
+
+    DeploymentPlanRequest:
+      type: object
+      required: [workloads]
+      properties:
+        workloads:
+          type: array
+          maxItems: 200
+          items: { $ref: "#/components/schemas/WorkloadIdentity" }
+        prune:
+          type: boolean
+          default: false
+
+    WorkloadIdentity:
+      type: object
+      required: [kind, name]
+      properties:
+        kind: { $ref: "#/components/schemas/WorkloadKind" }
+        name: { $ref: "#/components/schemas/WorkloadName" }
+
+    DeploymentPlan:
+      type: object
+      required: [app, prune, items]
+      properties:
+        app: { $ref: "#/components/schemas/AppName" }
+        prune: { type: boolean }
+        items:
+          description: Listed workloads by kind and name, then omitted deployed ones.
+          type: array
+          items: { $ref: "#/components/schemas/DeploymentPlanItem" }
+
+    DeploymentPlanItem:
+      type: object
+      required: [kind, name, action, versions]
+      properties:
+        kind: { $ref: "#/components/schemas/WorkloadKind" }
+        name: { $ref: "#/components/schemas/WorkloadName" }
+        action: { $ref: "#/components/schemas/DeploymentPlanAction" }
+        versions:
+          description: Versions the workload has now.
+          type: integer
+
+    DeployedWorkload:
+      type: object
+      required: [id, app, name, kind, state, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        app: { $ref: "#/components/schemas/AppName" }
+        name: { $ref: "#/components/schemas/WorkloadName" }
+        kind: { $ref: "#/components/schemas/WorkloadKind" }
+        state: { $ref: "#/components/schemas/WorkloadState" }
+        app_state: { $ref: "#/components/schemas/AppState" }
+        version:
+          description: The active version.
+          type: integer
+        release_id:
+          description: The active release.
+          type: string
+          format: uuid
+        created_at: { type: string, format: date-time }
+        deployed_at:
+          description: When the active version was deployed.
+          type: string
+          format: date-time
+
+    DeploymentPage:
+      type: object
+      required: [deployments]
+      properties:
+        deployments:
+          type: array
+          items: { $ref: "#/components/schemas/DeployedWorkload" }
+        next_cursor: { type: string }
+
+    StartDeploymentRequest:
+      type: object
+      properties:
+        version:
+          description: Make this deployed version active before starting.
+          type: integer
+          minimum: 1
+
+    Version:
+      type: object
+      required: [release_id, version, active, created_at]
+      properties:
+        release_id: { type: string, format: uuid }
+        version: { type: integer }
+        active: { type: boolean }
+        created_at: { type: string, format: date-time }
+
+    VersionPage:
+      type: object
+      required: [versions]
+      properties:
+        versions:
+          type: array
+          items: { $ref: "#/components/schemas/Version" }
+        next_cursor: { type: string }
+
+    TaskPage:
+      type: object
+      required: [tasks]
+      properties:
+        tasks:
+          type: array
+          items: { $ref: "#/components/schemas/Task" }
+        next_cursor: { type: string }
+
+    StopTasksRequest:
+      type: object
+      required: [task_ids]
+      properties:
+        task_ids:
+          type: array
+          minItems: 1
+          maxItems: 1000
+          uniqueItems: true
+          items: { type: string, format: uuid }
+
+    StopTasksResponse:
+      type: object
+      required: [stopped, skipped]
+      properties:
+        stopped:
+          description: Tasks this request cancelled.
+          type: array
+          items: { type: string, format: uuid }
+        skipped:
+          description: Tasks that were already finished or are not in the workspace.
+          type: array
+          items: { type: string, format: uuid }
+
+    ContainerState:
+      type: string
+      enum: [pending, starting, ready, draining, stopped]
+
+    StopReason:
+      type: string
+      enum: [stopped, load_error, start_failed, crashed, out_of_memory, host_lost]
+
+    Container:
+      type: object
+      required: [id, app, function, release_id, state, slots, running_tasks, cpu_millis, memory_mib, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        app: { $ref: "#/components/schemas/AppName" }
+        function: { $ref: "#/components/schemas/WorkloadName" }
+        release_id: { type: string, format: uuid }
+        version:
+          description: The deployed version of the release; absent for a working-tree release.
+          type: integer
+        state: { $ref: "#/components/schemas/ContainerState" }
+        stop_reason: { $ref: "#/components/schemas/StopReason" }
+        exit_message: { type: string }
+        slots: { type: integer }
+        running_tasks:
+          description: Attempts running now.
+          type: integer
+        cpu_millis: { type: integer, format: int64 }
+        memory_mib: { type: integer, format: int64 }
+        created_at: { type: string, format: date-time }
+        ready_at: { type: string, format: date-time }
+        stopped_at: { type: string, format: date-time }
+
+    ContainerPage:
+      type: object
+      required: [containers]
+      properties:
+        containers:
+          type: array
+          items: { $ref: "#/components/schemas/Container" }
+        next_cursor: { type: string }
+
     # Images
 
     ImageId:
@@ -2142,7 +4101,7 @@ components:
           pattern: "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
         region: { $ref: "#/components/schemas/Region" }
         availability_zone:
-          description: An AWS availability zone id, such as use2-az1, or name, such as us-east-2a.
+          description: An AWS zone id such as use2-az1, or a name such as us-east-2a.
           type: string
           pattern: "^[A-Za-z0-9._:-]{1,128}$"
         preemptible:
@@ -2526,7 +4485,7 @@ components:
           type: string
           pattern: "^[0-9]{12}$"
         role_arn:
-          description: An existing role the platform assumes; it must require the returned external ID.
+          description: An existing role to assume; it must require the external ID.
           type: string
           pattern: "^arn:(aws|aws-us-gov|aws-cn):iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]{1,512}$"
         networks:

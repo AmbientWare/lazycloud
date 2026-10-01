@@ -29,6 +29,8 @@ services:
       - garage-data:/var/lib/garage
     ports:
       - "127.0.0.1:23900:3900"
+      # The admin API creates workspace buckets and host keys for volumes.
+      - "127.0.0.1:23903:3903"
     healthcheck:
       test: ["CMD", "/garage", "status"]
       interval: 2s

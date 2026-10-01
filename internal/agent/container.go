@@ -48,6 +48,7 @@ type container struct {
 	// which hooks, and which environment variables hold secrets.
 	runtime containerRuntime
 	logs    *logBatcher
+	disks   diskSet
 	// apiCalls bounds container API calls in flight.
 	apiCalls chan struct{}
 
@@ -75,6 +76,8 @@ type container struct {
 	stopping   bool
 	grace      time.Duration
 	loadError  *hostproto.RunnerError
+	// volumeLost says why the container was stopped for a dead mount.
+	volumeLost string
 	link       *link
 	claiming   bool
 	// build marks an image build container, which has no link or slots.
@@ -222,7 +225,21 @@ func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer)
 	c.mu.Lock()
 	c.link = l
 	c.mu.Unlock()
-	if err := c.a.createAndStart(ctx, c, spec, runtime, gpus); err != nil {
+	binds, workspaces, err := c.a.volumes.binds(ctx, c.id, spec.GetVolumes())
+	if err != nil {
+		return err
+	}
+	diskBinds, diskWorkspaces, err := c.attachDisks(ctx, spec.GetDisks())
+	if err != nil {
+		return err
+	}
+	binds = append(binds, diskBinds...)
+	for _, ws := range diskWorkspaces {
+		if !slices.Contains(workspaces, ws) {
+			workspaces = append(workspaces, ws)
+		}
+	}
+	if err := c.a.createAndStart(ctx, c, spec, runtime, binds, workspaces, gpus); err != nil {
 		return err
 	}
 	c.log.Info("container started",
@@ -301,6 +318,8 @@ func (c *container) observeExit(ctx context.Context) {
 		exit.Message = c.loadError.GetMessage()
 	case inspectErr == nil && state.OOMKilled:
 		exit.Reason = hostproto.ExitReason_EXIT_REASON_OUT_OF_MEMORY
+	case c.volumeLost != "":
+		exit.Message = c.volumeLost
 	}
 	c.mu.Unlock()
 	c.exited(exit)
@@ -338,9 +357,14 @@ func (c *container) cleanup(ctx context.Context) {
 	}
 	c.cleaned = true
 	c.mu.Unlock()
+	c.a.volumes.release(c.id)
+	c.a.volumes.releaseBuckets(ctx, c.id)
 	if err := c.a.removeContainer(ctx, c.dockerName()); err != nil {
 		c.log.Warn("removing docker container failed", "error", err)
 	}
+	// Disk leases live outside the container directory, for the release
+	// loop to retry until the server accepts.
+	c.a.requestRelease()
 	for _, dir := range []string{c.dir, c.linkDir()} {
 		if err := os.RemoveAll(dir); err != nil {
 			c.log.Warn("removing container directory failed", "dir", dir, "error", err)
@@ -365,7 +389,22 @@ func (c *container) detach() {
 	}
 }
 
-func (c *container) isExited() bool {
+// failVolume stops a container whose volume mount died; its exit reports
+// why.
+func (c *container) failVolume(ctx context.Context, reason string) {
+	c.mu.Lock()
+	if c.phase == hostproto.ContainerPhase_CONTAINER_PHASE_EXITED {
+		c.mu.Unlock()
+		return
+	}
+	c.volumeLost = reason
+	c.mu.Unlock()
+	if err := c.a.stopDocker(ctx, c.dockerName(), 0); err != nil {
+		c.log.Warn("stopping a container whose volume mount died failed", "error", err)
+	}
+}
+
+func (c *container) hasExited() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.phase == hostproto.ContainerPhase_CONTAINER_PHASE_EXITED
@@ -572,6 +611,7 @@ func (c *container) dispatch(task *hostproto.ClaimedTask) {
 		MaxAttempts:   task.GetMaxAttempts(),
 		RootTaskId:    task.GetRootTaskId(),
 		ParentTaskId:  task.GetParentTaskId(),
+		Dependencies:  task.GetDependencies(),
 	}}})
 }
 

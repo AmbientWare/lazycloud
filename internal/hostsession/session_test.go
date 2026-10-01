@@ -250,9 +250,9 @@ func TestReadyContainerClaimsCompletesAndReceivesCancels(t *testing.T) {
 
 	tasks, err := h.execution.Submit(t.Context(), execution.SubmitRequest{
 		Workspace: ws, App: "reports", Function: "summarize",
-		Inputs: []execution.Payload{
-			{Encoding: execution.EncodingJSON, Data: []byte(`{"args": [1], "kwargs": {}}`)},
-			{Encoding: execution.EncodingJSON, Data: []byte(`{"args": [2], "kwargs": {}}`)},
+		Inputs: []execution.TaskInput{
+			{Payload: execution.Payload{Encoding: execution.EncodingJSON, Data: []byte(`{"args": [1], "kwargs": {}}`)}},
+			{Payload: execution.Payload{Encoding: execution.EncodingJSON, Data: []byte(`{"args": [2], "kwargs": {}}`)}},
 		},
 	})
 	if err != nil {

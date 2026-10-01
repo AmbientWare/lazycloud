@@ -5,13 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
@@ -22,26 +20,39 @@ var (
 	// ErrNoResult means the task finished without a result: it failed or
 	// was cancelled.
 	ErrNoResult = errors.New("task has no result")
+	// ErrInvalidCursor means a page cursor did not come from this listing.
+	ErrInvalidCursor = errors.New("invalid page cursor")
+	// ErrInvalidFilter means a listing filter combination is unsupported.
+	ErrInvalidFilter = errors.New("invalid filter")
 )
 
 // Task is a task as callers see it.
 type Task struct {
-	ID         TaskID
-	App        string
-	Function   string
-	Release    uuid.UUID
-	Status     TaskStatus
-	Attempts   int
-	CreatedAt  time.Time
-	StartedAt  *time.Time
-	FinishedAt *time.Time
-	Failure    *Failure
+	ID       TaskID
+	App      string
+	Function string
+	Release  uuid.UUID
+	// Version is the release's deployed version, nil for a working-tree
+	// release.
+	Version     *int
+	Status      TaskStatus
+	Attempts    int
+	MaxAttempts int
 	// Parent is the task that spawned this one; Root is the root of its
 	// call graph, the task itself when nothing spawned it.
 	Parent *TaskID
 	Root   TaskID
 	// ScheduledFor is the cron occurrence that admitted the task.
 	ScheduledFor *time.Time
+	// Container ran the latest attempt.
+	Container *ContainerID
+	// NextAttemptAt is when a queued task that already ran is due again.
+	NextAttemptAt *time.Time
+	Pending       *PendingProgress
+	CreatedAt     time.Time
+	StartedAt     *time.Time
+	FinishedAt    *time.Time
+	Failure       *Failure
 }
 
 // GetTask reads a task in workspace. With wait above zero it holds until the
@@ -79,11 +90,35 @@ func (e *Execution) readTask(ctx context.Context, workspace identity.WorkspaceID
 	if err != nil {
 		return Task{}, fmt.Errorf("read task: %w", err)
 	}
+	task, err := taskFrom(row)
+	if err != nil {
+		return Task{}, err
+	}
+	tasks := []Task{task}
+	if err := e.addPending(ctx, tasks); err != nil {
+		return Task{}, err
+	}
+	return tasks[0], nil
+}
+
+func taskFrom(row TaskViewRow) (Task, error) {
 	task := Task{
 		ID: TaskID(row.ID), App: row.AppName, Function: row.FunctionName, Release: row.ReleaseID,
-		Status: TaskStatus(row.Status), Attempts: int(row.AttemptCount),
+		Version: versionOf(row.Version), Status: TaskStatus(row.Status),
+		Attempts: int(row.AttemptCount), MaxAttempts: int(row.MaxAttempts),
+		Parent: taskIDPtr(row.ParentTaskID), Root: TaskID(row.ID), ScheduledFor: row.ScheduledFor,
 		CreatedAt: row.CreatedAt, StartedAt: row.StartedAt, FinishedAt: row.FinishedAt,
-		Parent: (*TaskID)(row.ParentTaskID), Root: TaskID(row.RootTaskID), ScheduledFor: row.ScheduledFor,
+	}
+	if row.RootTaskID != nil {
+		task.Root = TaskID(*row.RootTaskID)
+	}
+	if len(row.ContainerIds) > 0 {
+		c := ContainerID(row.ContainerIds[0])
+		task.Container = &c
+	}
+	if task.Status == TaskQueued && task.Attempts > 0 {
+		at := row.AvailableAt
+		task.NextAttemptAt = &at
 	}
 	if row.Failure != nil {
 		task.Failure = &Failure{}
@@ -92,6 +127,98 @@ func (e *Execution) readTask(ctx context.Context, workspace identity.WorkspaceID
 		}
 	}
 	return task, nil
+}
+
+// TaskFilter narrows ListTasks.
+type TaskFilter struct {
+	App *string
+	// Function requires App.
+	Function *string
+	Status   *TaskStatus
+}
+
+// TaskPage is one page of tasks, newest first.
+type TaskPage struct {
+	Tasks []Task
+	Next  string
+}
+
+// ListTasks returns the workspace's tasks newest first, after the cursor.
+// Queued tasks carry their pending progress.
+func (e *Execution) ListTasks(ctx context.Context, workspace identity.WorkspaceID, filter TaskFilter, limit int, cursor string) (TaskPage, error) {
+	before := uuid.Max
+	if cursor != "" {
+		id, err := uuid.Parse(cursor)
+		if err != nil {
+			return TaskPage{}, ErrInvalidCursor
+		}
+		before = id
+	}
+	if filter.Function != nil && filter.App == nil {
+		return TaskPage{}, fmt.Errorf("%w: function needs app", ErrInvalidFilter)
+	}
+	var status *string
+	if filter.Status != nil {
+		s := string(*filter.Status)
+		status = &s
+	}
+	size := pageSize(limit)
+	var rows []TaskViewRow
+	if filter.App != nil {
+		app, err := e.queries.LiveAppID(ctx, LiveAppIDParams{WorkspaceID: uuid.UUID(workspace), Name: *filter.App})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return TaskPage{Tasks: []Task{}}, nil
+		}
+		if err != nil {
+			return TaskPage{}, fmt.Errorf("find app: %w", err)
+		}
+		r, err := e.queries.ListAppTasks(ctx, ListAppTasksParams{
+			WorkspaceID: uuid.UUID(workspace), AppID: app, Function: filter.Function, Status: status,
+			Before: before, MaxRows: size + 1,
+		})
+		if err != nil {
+			return TaskPage{}, fmt.Errorf("list app tasks: %w", err)
+		}
+		for _, row := range r {
+			rows = append(rows, TaskViewRow(row))
+		}
+	} else {
+		r, err := e.queries.ListTasks(ctx, ListTasksParams{
+			WorkspaceID: uuid.UUID(workspace), Status: status, Before: before, MaxRows: size + 1,
+		})
+		if err != nil {
+			return TaskPage{}, fmt.Errorf("list tasks: %w", err)
+		}
+		for _, row := range r {
+			rows = append(rows, TaskViewRow(row))
+		}
+	}
+	var page TaskPage
+	if len(rows) > int(size) {
+		rows = rows[:size]
+		page.Next = rows[len(rows)-1].ID.String()
+	}
+	page.Tasks = make([]Task, len(rows))
+	for n, row := range rows {
+		var err error
+		if page.Tasks[n], err = taskFrom(row); err != nil {
+			return TaskPage{}, err
+		}
+	}
+	if err := e.addPending(ctx, page.Tasks); err != nil {
+		return TaskPage{}, err
+	}
+	return page, nil
+}
+
+// maxPage bounds every page of a listing.
+const maxPage = 1000
+
+func pageSize(limit int) int32 {
+	if limit <= 0 {
+		return 100
+	}
+	return int32(min(limit, maxPage)) //nolint:gosec // Bounded by maxPage.
 }
 
 // TaskResult returns the value a succeeded task returned.
@@ -112,145 +239,27 @@ func (e *Execution) TaskResult(ctx context.Context, workspace identity.Workspace
 	return Payload{Encoding: Encoding(*row.Encoding), Data: row.Data}, nil
 }
 
-// LogStream names a task output stream.
-type LogStream string
-
-const (
-	LogStdout LogStream = "stdout"
-	LogStderr LogStream = "stderr"
-	LogSystem LogStream = "system"
-)
-
-// LogLine is output a host reports for an attempt.
-type LogLine struct {
-	Attempt AttemptID
-	Stream  LogStream
-	Data    string
-	Time    time.Time
-}
-
-// LogEntry is a stored log line.
-type LogEntry struct {
-	ID      int64
-	Attempt int
-	Stream  LogStream
-	Data    string
-	Time    time.Time
-}
-
-// AppendLogs stores lines in order in one statement. Lines for attempts that
-// do not run on container, or a container not assigned to host, are dropped.
-// Followers of each task wake on commit.
-func (e *Execution) AppendLogs(ctx context.Context, host compute.HostID, container ContainerID, lines []LogLine) error {
-	if len(lines) == 0 {
-		return nil
+// RerunTask submits the task's input again, with the same upstream tasks, to
+// the release it ran on. Admission applies as for any submit.
+func (e *Execution) RerunTask(ctx context.Context, workspace identity.WorkspaceID, id TaskID) (Task, error) {
+	row, err := e.queries.TaskForRerun(ctx, TaskForRerunParams{ID: uuid.UUID(id), WorkspaceID: uuid.UUID(workspace)})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Task{}, ErrNotFound
 	}
-	params := InsertLogsParams{
-		AttemptIds:  make([]uuid.UUID, len(lines)),
-		Streams:     make([]string, len(lines)),
-		Data:        make([]string, len(lines)),
-		LoggedAt:    make([]time.Time, len(lines)),
-		ContainerID: uuid.UUID(container),
-		HostID:      hostUUID(host),
+	if err != nil {
+		return Task{}, fmt.Errorf("read task: %w", err)
 	}
-	for n, line := range lines {
-		params.AttemptIds[n] = uuid.UUID(line.Attempt)
-		params.Streams[n] = string(line.Stream)
-		// PostgreSQL text cannot hold NUL.
-		params.Data[n] = strings.ReplaceAll(line.Data, "\x00", "�")
-		params.LoggedAt[n] = line.Time
+	deps := make([]TaskID, len(row.DependsOn))
+	for n, d := range row.DependsOn {
+		deps[n] = TaskID(d)
 	}
-	err := pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
-		tasks, err := e.queries.WithTx(tx).InsertLogs(ctx, params)
-		if err != nil {
-			return fmt.Errorf("insert logs: %w", err)
-		}
-		for _, task := range tasks {
-			if err := database.Notify(ctx, tx, database.ChannelTask, task.String()); err != nil {
-				return err
-			}
-		}
-		return nil
+	release := row.ReleaseID
+	tasks, err := e.Submit(ctx, SubmitRequest{
+		Workspace: workspace, App: row.AppName, Function: row.FunctionName, Release: &release,
+		Inputs: []TaskInput{{Payload: Payload{Encoding: Encoding(row.Encoding), Data: row.Data}, DependsOn: deps}},
 	})
 	if err != nil {
-		return fmt.Errorf("append logs: %w", err)
+		return Task{}, err
 	}
-	return nil
-}
-
-// logBatch bounds one read of a task's log.
-const logBatch = 500
-
-// StreamLogs passes the task's log entries after the cursor to emit in
-// batches. Without follow it ends once the stored entries are drained. With
-// follow it waits for more until the task is terminal and drained, or ctx
-// ends, and emits an empty batch whenever heartbeat passes without one, so
-// the transport can show the stream is alive. It returns ErrNotFound before
-// emitting anything for an unknown task.
-func (e *Execution) StreamLogs(ctx context.Context, listener *database.Listener, workspace identity.WorkspaceID, id TaskID, after int64, follow bool, heartbeat time.Duration, emit func([]LogEntry) error) error {
-	var wake <-chan struct{}
-	var idle *time.Timer
-	if follow {
-		var cancel func()
-		wake, cancel = listener.Subscribe(database.ChannelTask, id.String())
-		defer cancel()
-		idle = time.NewTimer(heartbeat)
-		defer idle.Stop()
-	}
-	send := func(batch []LogEntry) error {
-		if err := emit(batch); err != nil {
-			return err
-		}
-		if idle != nil {
-			idle.Reset(heartbeat)
-		}
-		return nil
-	}
-	for {
-		// Read the status before the entries: entries a terminal task wrote
-		// are all visible to the read that follows.
-		status, err := e.queries.TaskStatus(ctx, TaskStatusParams{ID: uuid.UUID(id), WorkspaceID: uuid.UUID(workspace)})
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrNotFound
-		}
-		if err != nil {
-			return fmt.Errorf("read task status: %w", err)
-		}
-		for {
-			rows, err := e.queries.TaskLogsAfter(ctx, TaskLogsAfterParams{TaskID: uuid.UUID(id), After: after, MaxEntries: logBatch})
-			if err != nil {
-				return fmt.Errorf("read task logs: %w", err)
-			}
-			if len(rows) > 0 {
-				batch := make([]LogEntry, len(rows))
-				for n, row := range rows {
-					batch[n] = LogEntry{ID: row.ID, Attempt: int(row.Attempt), Stream: LogStream(row.Stream), Data: row.Data, Time: row.LoggedAt}
-				}
-				if err := send(batch); err != nil {
-					return err
-				}
-				after = rows[len(rows)-1].ID
-			}
-			if len(rows) < logBatch {
-				break
-			}
-		}
-		if !follow || TaskStatus(status).Terminal() {
-			return nil
-		}
-		select {
-		case <-wake:
-		case <-idle.C:
-			if err := send(nil); err != nil {
-				return err
-			}
-		case <-ctx.Done():
-			return nil
-		}
-	}
-}
-
-func hostUUID(host compute.HostID) *uuid.UUID {
-	id := uuid.UUID(host)
-	return &id
+	return tasks[0], nil
 }

@@ -33,6 +33,7 @@ packages it installs, dotfiles, and its working trees.
 
 DISK_NAME_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 MIN_DISK_SIZE_BYTES = 1024**3
+DISK_BLOCK_BYTES = 4096
 DISK_VOLUME_THROUGHPUT_MIBPS = 500
 """Throughput provisioned on each disk's provider volume.
 
@@ -116,7 +117,8 @@ def validate_disk_name(value: str) -> str:
 def parse_disk_size_bytes(value: str | int) -> int:
     """Disk size in bytes from a size such as ``"100Gi"`` or a byte count.
 
-    Sizes are whole mebibytes, the same units memory takes.
+    Sizes are whole mebibytes, the same units memory takes. A byte count must
+    be whole 4096-byte filesystem blocks.
     """
     if isinstance(value, int):
         size = value
@@ -131,6 +133,9 @@ def parse_disk_size_bytes(value: str | int) -> int:
         raise ValueError(msg)
     if size > MAX_DISK_SIZE_BYTES:
         msg = "disk size must be at most 1Ti"
+        raise ValueError(msg)
+    if size % DISK_BLOCK_BYTES:
+        msg = f"disk size must be a multiple of {DISK_BLOCK_BYTES} bytes"
         raise ValueError(msg)
     return size
 
@@ -296,6 +301,7 @@ def disk_manifest_key(disk_id: str, generation: int) -> str:
 
 __all__ = [
     "DEFAULT_DISK_FILESYSTEM",
+    "DISK_BLOCK_BYTES",
     "DISK_FLATTEN_DEPTH",
     "DISK_HOST_RESERVE_BYTES",
     "DISK_NAME_PATTERN",

@@ -12,99 +12,97 @@ import (
 	"github.com/google/uuid"
 )
 
-const insertLogs = `-- name: InsertLogs :many
-with line as (
-    select i as ord, ($1::uuid[])[i] as attempt_id, ($2::text[])[i] as stream,
-           ($3::text[])[i] as data, ($4::timestamptz[])[i] as logged_at
-    from generate_subscripts($1::uuid[], 1) as i
-), inserted as (
-    insert into task_logs (task_id, attempt, stream, data, logged_at)
-    select a.task_id, a.number, line.stream, line.data, line.logged_at
-    from line
-    join attempts a on a.id = line.attempt_id
-    join containers c on c.id = a.container_id
-    where c.id = $5 and c.host_id = $6
-    order by line.ord
-    returning task_id
-)
-select distinct task_id from inserted
+const listAppTasks = `-- name: ListAppTasks :many
+select t.id, a.name as app_name, w.name as function_name, t.release_id, r.version, t.status,
+       t.attempt_count, t.max_attempts, t.parent_task_id, t.root_task_id, t.available_at,
+       t.created_at, t.started_at, t.finished_at, t.failure, t.scheduled_for,
+       -- The latest attempt's container, as zero or one element: a scalar
+       -- subquery keeps the per-row index lookup, and the array keeps sqlc
+       -- from reading it as non-null.
+       array(select at.container_id from attempts at
+             where at.task_id = t.id and at.number = t.attempt_count)::uuid[] as container_ids
+from workloads w
+join apps a on a.id = w.app_id
+cross join lateral (
+    select id, workspace_id, workload_id, release_id, status, attempt_count, max_attempts, available_at, current_attempt_id, failure, created_at, started_at, finished_at, unmet_dependencies, parent_task_id, root_task_id, scheduled_for from tasks t
+    where t.workload_id = w.id
+      and ($1::text is null or t.status = $1::text)
+      and t.id < $2
+    order by t.id desc
+    limit $3
+) t
+join releases r on r.id = t.release_id
+where a.workspace_id = $4 and a.id = $5
+  and ($6::text is null or w.name = $6::text)
+order by t.id desc
+limit $3
 `
 
-type InsertLogsParams struct {
-	AttemptIds  []uuid.UUID
-	Streams     []string
-	Data        []string
-	LoggedAt    []time.Time
-	ContainerID uuid.UUID
-	HostID      *uuid.UUID
+type ListAppTasksParams struct {
+	Status      *string
+	Before      uuid.UUID
+	MaxRows     int32
+	WorkspaceID uuid.UUID
+	AppID       uuid.UUID
+	Function    *string
 }
 
-// Lines keep their order. Lines for attempts outside the container or host
-// are dropped. Returns the tasks that received lines.
-func (q *Queries) InsertLogs(ctx context.Context, arg InsertLogsParams) ([]uuid.UUID, error) {
-	rows, err := q.db.Query(ctx, insertLogs,
-		arg.AttemptIds,
-		arg.Streams,
-		arg.Data,
-		arg.LoggedAt,
-		arg.ContainerID,
-		arg.HostID,
+type ListAppTasksRow struct {
+	ID           uuid.UUID
+	AppName      string
+	FunctionName string
+	ReleaseID    uuid.UUID
+	Version      *int32
+	Status       string
+	AttemptCount int32
+	MaxAttempts  int32
+	ParentTaskID *uuid.UUID
+	RootTaskID   *uuid.UUID
+	AvailableAt  time.Time
+	CreatedAt    time.Time
+	StartedAt    *time.Time
+	FinishedAt   *time.Time
+	Failure      []byte
+	ScheduledFor *time.Time
+	ContainerIds []uuid.UUID
+}
+
+// Like ListTasks for one app's functions: each workload's recent index
+// yields at most a page, and the pages merge.
+func (q *Queries) ListAppTasks(ctx context.Context, arg ListAppTasksParams) ([]ListAppTasksRow, error) {
+	rows, err := q.db.Query(ctx, listAppTasks,
+		arg.Status,
+		arg.Before,
+		arg.MaxRows,
+		arg.WorkspaceID,
+		arg.AppID,
+		arg.Function,
 	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []uuid.UUID
+	var items []ListAppTasksRow
 	for rows.Next() {
-		var task_id uuid.UUID
-		if err := rows.Scan(&task_id); err != nil {
-			return nil, err
-		}
-		items = append(items, task_id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const taskLogsAfter = `-- name: TaskLogsAfter :many
-select id, attempt, stream, data, logged_at
-from task_logs
-where task_id = $1 and id > $2
-order by id
-limit $3
-`
-
-type TaskLogsAfterParams struct {
-	TaskID     uuid.UUID
-	After      int64
-	MaxEntries int32
-}
-
-type TaskLogsAfterRow struct {
-	ID       int64
-	Attempt  int32
-	Stream   string
-	Data     string
-	LoggedAt time.Time
-}
-
-func (q *Queries) TaskLogsAfter(ctx context.Context, arg TaskLogsAfterParams) ([]TaskLogsAfterRow, error) {
-	rows, err := q.db.Query(ctx, taskLogsAfter, arg.TaskID, arg.After, arg.MaxEntries)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []TaskLogsAfterRow
-	for rows.Next() {
-		var i TaskLogsAfterRow
+		var i ListAppTasksRow
 		if err := rows.Scan(
 			&i.ID,
-			&i.Attempt,
-			&i.Stream,
-			&i.Data,
-			&i.LoggedAt,
+			&i.AppName,
+			&i.FunctionName,
+			&i.ReleaseID,
+			&i.Version,
+			&i.Status,
+			&i.AttemptCount,
+			&i.MaxAttempts,
+			&i.ParentTaskID,
+			&i.RootTaskID,
+			&i.AvailableAt,
+			&i.CreatedAt,
+			&i.StartedAt,
+			&i.FinishedAt,
+			&i.Failure,
+			&i.ScheduledFor,
+			&i.ContainerIds,
 		); err != nil {
 			return nil, err
 		}
@@ -114,6 +112,228 @@ func (q *Queries) TaskLogsAfter(ctx context.Context, arg TaskLogsAfterParams) ([
 		return nil, err
 	}
 	return items, nil
+}
+
+const listTasks = `-- name: ListTasks :many
+select t.id, a.name as app_name, w.name as function_name, t.release_id, r.version, t.status,
+       t.attempt_count, t.max_attempts, t.parent_task_id, t.root_task_id, t.available_at,
+       t.created_at, t.started_at, t.finished_at, t.failure, t.scheduled_for,
+       -- The latest attempt's container, as zero or one element: a scalar
+       -- subquery keeps the per-row index lookup, and the array keeps sqlc
+       -- from reading it as non-null.
+       array(select at.container_id from attempts at
+             where at.task_id = t.id and at.number = t.attempt_count)::uuid[] as container_ids
+from tasks t
+join workloads w on w.id = t.workload_id
+join apps a on a.id = w.app_id
+join releases r on r.id = t.release_id
+where t.workspace_id = $1
+  and ($2::text is null or t.status = $2::text)
+  and t.id < $3
+order by t.id desc
+limit $4
+`
+
+type ListTasksParams struct {
+	WorkspaceID uuid.UUID
+	Status      *string
+	Before      uuid.UUID
+	MaxRows     int32
+}
+
+type ListTasksRow struct {
+	ID           uuid.UUID
+	AppName      string
+	FunctionName string
+	ReleaseID    uuid.UUID
+	Version      *int32
+	Status       string
+	AttemptCount int32
+	MaxAttempts  int32
+	ParentTaskID *uuid.UUID
+	RootTaskID   *uuid.UUID
+	AvailableAt  time.Time
+	CreatedAt    time.Time
+	StartedAt    *time.Time
+	FinishedAt   *time.Time
+	Failure      []byte
+	ScheduledFor *time.Time
+	ContainerIds []uuid.UUID
+}
+
+// Newest first below the cursor, from the workspace's recent index.
+func (q *Queries) ListTasks(ctx context.Context, arg ListTasksParams) ([]ListTasksRow, error) {
+	rows, err := q.db.Query(ctx, listTasks,
+		arg.WorkspaceID,
+		arg.Status,
+		arg.Before,
+		arg.MaxRows,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListTasksRow
+	for rows.Next() {
+		var i ListTasksRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.AppName,
+			&i.FunctionName,
+			&i.ReleaseID,
+			&i.Version,
+			&i.Status,
+			&i.AttemptCount,
+			&i.MaxAttempts,
+			&i.ParentTaskID,
+			&i.RootTaskID,
+			&i.AvailableAt,
+			&i.CreatedAt,
+			&i.StartedAt,
+			&i.FinishedAt,
+			&i.Failure,
+			&i.ScheduledFor,
+			&i.ContainerIds,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const liveAppID = `-- name: LiveAppID :one
+select id from apps where workspace_id = $1 and name = $2 and state <> 'deleted'
+`
+
+type LiveAppIDParams struct {
+	WorkspaceID uuid.UUID
+	Name        string
+}
+
+func (q *Queries) LiveAppID(ctx context.Context, arg LiveAppIDParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, liveAppID, arg.WorkspaceID, arg.Name)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
+const pendingFacts = `-- name: PendingFacts :many
+with task as (
+    select t.id, t.release_id, t.unmet_dependencies, t.attempt_count, t.available_at, t.created_at,
+           latest.finished_at as last_finished_at
+    from tasks t
+    left join attempts latest on latest.task_id = t.id and latest.number = t.attempt_count
+    where t.id = any($1::uuid[]) and t.status = 'queued'
+), live as (
+    select c.release_id,
+           min(c.assigned_at) filter (where c.state = 'starting')::timestamptz as starting_since,
+           min(c.created_at) filter (where c.state = 'pending')::timestamptz as unplaced_since,
+           count(*) filter (where c.state = 'pending' and c.capacity_wait = 'provisioning') as provisioning,
+           count(*) filter (where c.state = 'pending' and c.capacity_wait = 'limit') as limited,
+           count(*) filter (where c.state = 'ready') as ready
+    from containers c
+    where c.release_id in (select release_id from task) and c.state <> 'stopped'
+    group by c.release_id
+)
+select task.id, task.unmet_dependencies, task.attempt_count, task.available_at, task.created_at,
+       task.last_finished_at, live.starting_since, live.unplaced_since,
+       coalesce(live.ready, 0)::int as ready, coalesce(live.provisioning, 0)::int as provisioning,
+       coalesce(live.limited, 0)::int as limited, now()::timestamptz as observed_at
+from task
+left join live on live.release_id = task.release_id
+`
+
+type PendingFactsRow struct {
+	ID                uuid.UUID
+	UnmetDependencies int32
+	AttemptCount      int32
+	AvailableAt       time.Time
+	CreatedAt         time.Time
+	LastFinishedAt    *time.Time
+	StartingSince     *time.Time
+	UnplacedSince     *time.Time
+	Ready             int32
+	Provisioning      int32
+	Limited           int32
+	ObservedAt        time.Time
+}
+
+// What a queued task waits for, from the release's live containers: the
+// earliest starting and unplaced containers and whether any is ready.
+// Reads the containers_live_release partial index once per release.
+func (q *Queries) PendingFacts(ctx context.Context, ids []uuid.UUID) ([]PendingFactsRow, error) {
+	rows, err := q.db.Query(ctx, pendingFacts, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PendingFactsRow
+	for rows.Next() {
+		var i PendingFactsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.UnmetDependencies,
+			&i.AttemptCount,
+			&i.AvailableAt,
+			&i.CreatedAt,
+			&i.LastFinishedAt,
+			&i.StartingSince,
+			&i.UnplacedSince,
+			&i.Ready,
+			&i.Provisioning,
+			&i.Limited,
+			&i.ObservedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const taskForRerun = `-- name: TaskForRerun :one
+select t.release_id, a.name as app_name, w.name as function_name, i.encoding, i.data,
+       array(select d.depends_on from task_dependencies d where d.task_id = t.id order by d.depends_on)::uuid[] as depends_on
+from tasks t
+join workloads w on w.id = t.workload_id
+join apps a on a.id = w.app_id
+join task_inputs i on i.task_id = t.id
+where t.id = $1 and t.workspace_id = $2
+`
+
+type TaskForRerunParams struct {
+	ID          uuid.UUID
+	WorkspaceID uuid.UUID
+}
+
+type TaskForRerunRow struct {
+	ReleaseID    uuid.UUID
+	AppName      string
+	FunctionName string
+	Encoding     string
+	Data         []byte
+	DependsOn    []uuid.UUID
+}
+
+func (q *Queries) TaskForRerun(ctx context.Context, arg TaskForRerunParams) (TaskForRerunRow, error) {
+	row := q.db.QueryRow(ctx, taskForRerun, arg.ID, arg.WorkspaceID)
+	var i TaskForRerunRow
+	err := row.Scan(
+		&i.ReleaseID,
+		&i.AppName,
+		&i.FunctionName,
+		&i.Encoding,
+		&i.Data,
+		&i.DependsOn,
+	)
+	return i, err
 }
 
 const taskResult = `-- name: TaskResult :one
@@ -141,29 +361,19 @@ func (q *Queries) TaskResult(ctx context.Context, arg TaskResultParams) (TaskRes
 	return i, err
 }
 
-const taskStatus = `-- name: TaskStatus :one
-select status from tasks where id = $1 and workspace_id = $2
-`
-
-type TaskStatusParams struct {
-	ID          uuid.UUID
-	WorkspaceID uuid.UUID
-}
-
-func (q *Queries) TaskStatus(ctx context.Context, arg TaskStatusParams) (string, error) {
-	row := q.db.QueryRow(ctx, taskStatus, arg.ID, arg.WorkspaceID)
-	var status string
-	err := row.Scan(&status)
-	return status, err
-}
-
 const taskView = `-- name: TaskView :one
-select t.id, a.name as app_name, w.name as function_name, t.release_id, t.status,
-       t.attempt_count, t.created_at, t.started_at, t.finished_at, t.failure,
-       t.parent_task_id, coalesce(t.root_task_id, t.id)::uuid as root_task_id, t.scheduled_for
+select t.id, a.name as app_name, w.name as function_name, t.release_id, r.version, t.status,
+       t.attempt_count, t.max_attempts, t.parent_task_id, t.root_task_id, t.available_at,
+       t.created_at, t.started_at, t.finished_at, t.failure, t.scheduled_for,
+       -- The latest attempt's container, as zero or one element: a scalar
+       -- subquery keeps the per-row index lookup, and the array keeps sqlc
+       -- from reading it as non-null.
+       array(select at.container_id from attempts at
+             where at.task_id = t.id and at.number = t.attempt_count)::uuid[] as container_ids
 from tasks t
 join workloads w on w.id = t.workload_id
 join apps a on a.id = w.app_id
+join releases r on r.id = t.release_id
 where t.id = $1 and t.workspace_id = $2
 `
 
@@ -177,15 +387,19 @@ type TaskViewRow struct {
 	AppName      string
 	FunctionName string
 	ReleaseID    uuid.UUID
+	Version      *int32
 	Status       string
 	AttemptCount int32
+	MaxAttempts  int32
+	ParentTaskID *uuid.UUID
+	RootTaskID   *uuid.UUID
+	AvailableAt  time.Time
 	CreatedAt    time.Time
 	StartedAt    *time.Time
 	FinishedAt   *time.Time
 	Failure      []byte
-	ParentTaskID *uuid.UUID
-	RootTaskID   uuid.UUID
 	ScheduledFor *time.Time
+	ContainerIds []uuid.UUID
 }
 
 func (q *Queries) TaskView(ctx context.Context, arg TaskViewParams) (TaskViewRow, error) {
@@ -196,15 +410,19 @@ func (q *Queries) TaskView(ctx context.Context, arg TaskViewParams) (TaskViewRow
 		&i.AppName,
 		&i.FunctionName,
 		&i.ReleaseID,
+		&i.Version,
 		&i.Status,
 		&i.AttemptCount,
+		&i.MaxAttempts,
+		&i.ParentTaskID,
+		&i.RootTaskID,
+		&i.AvailableAt,
 		&i.CreatedAt,
 		&i.StartedAt,
 		&i.FinishedAt,
 		&i.Failure,
-		&i.ParentTaskID,
-		&i.RootTaskID,
 		&i.ScheduledFor,
+		&i.ContainerIds,
 	)
 	return i, err
 }

@@ -18,7 +18,7 @@ func (a *Agent) allocateGPUs(c *container, n int) ([]string, error) {
 	defer a.mu.Unlock()
 	taken := map[string]bool{}
 	for _, other := range a.containers {
-		if other == c || other.isExited() {
+		if other == c || other.hasExited() {
 			continue
 		}
 		for _, uuid := range other.gpus {

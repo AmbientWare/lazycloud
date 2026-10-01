@@ -61,7 +61,7 @@ class WorkspaceRequest(BaseModel):
     cloud: Annotated[
         Literal["aws"] | None,
         Field(
-            description="aws creates the workspace in the caller's connected AWS account, which must be ready; without it the workspace runs on LazyCloud. The location never changes."
+            description="aws places the workspace in the caller's ready AWS connection, for good."
         ),
     ] = None
 
@@ -242,18 +242,6 @@ class UploadTarget(BaseModel):
     expires_at: AwareDatetime
 
 
-class State(str, Enum):
-    active = "active"
-    paused = "paused"
-
-
-class App(BaseModel):
-    id: UUID
-    name: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
-    state: State
-    created_at: AwareDatetime
-
-
 class SourceRef(BaseModel):
     sha256: Annotated[
         str, Field(description="Lowercase hex SHA-256 digest", pattern="^[0-9a-f]{64}$")
@@ -286,7 +274,7 @@ class Autoscaler(BaseModel):
     tasks_per_container: Annotated[int, Field(ge=1, le=10000)] = 1
 
 
-class State1(str, Enum):
+class State(str, Enum):
     active = "active"
     stopped = "stopped"
 
@@ -302,8 +290,8 @@ class Payload(BaseModel):
     data: Base64Bytes | None = None
 
 
-class SubmitTasksRequest(BaseModel):
-    inputs: Annotated[list[Payload], Field(max_length=1000, min_length=1)]
+class TaskInput(Payload):
+    depends_on: Annotated[list[UUID] | None, Field(max_length=100)] = None
 
 
 class TaskStatus(str, Enum):
@@ -314,6 +302,17 @@ class TaskStatus(str, Enum):
     cancelled = "cancelled"
 
 
+class TaskPendingReason(str, Enum):
+    Queued = "queued"
+    Dependencies = "dependencies"
+    Retry = "retry"
+    CapacityBusy = "capacity_busy"
+    CapacityUnavailable = "capacity_unavailable"
+    CapacityLimit = "capacity_limit"
+    ProvisioningCompute = "provisioning_compute"
+    StartingContainer = "starting_container"
+
+
 class FailureKind(str, Enum):
     user_error = "user_error"
     load_error = "load_error"
@@ -321,6 +320,7 @@ class FailureKind(str, Enum):
     lost = "lost"
     start_failed = "start_failed"
     system = "system"
+    dependency_failed = "dependency_failed"
 
 
 class TaskFailure(BaseModel):
@@ -342,6 +342,7 @@ class Stream(str, Enum):
 
 class LogEntry(BaseModel):
     id: int
+    task_id: UUID
     attempt: int
     stream: Stream
     data: Annotated[str, Field(description="One line of output without its trailing newline.")]
@@ -435,6 +436,532 @@ class SchedulePage(BaseModel):
     next_cursor: Annotated[str | None, Field(description="Present when more schedules follow.")] = (
         None
     )
+
+
+class MapKey(RootModel[str]):
+    root: Annotated[str, Field(max_length=1024, min_length=1, pattern="^[^\\x00-\\x1f\\x7f]+$")]
+
+
+class VolumeRelativePath(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="A path below the volume root; `.` or empty is the root, `..` is refused.",
+            max_length=1024,
+        ),
+    ]
+
+
+class WorkloadRef(BaseModel):
+    app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
+    kind: Literal["function"]
+    name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
+
+
+class CloudBucketSpec(BaseModel):
+    bucket: Annotated[str, Field(max_length=63, min_length=3)]
+    prefix: Annotated[
+        str,
+        Field(
+            description="A key prefix ending in `/`, or empty for the whole bucket.",
+            max_length=1024,
+        ),
+    ] = ""
+    region: Annotated[str | None, Field(max_length=64)] = None
+    endpoint: Annotated[
+        str | None,
+        Field(description="An S3-compatible endpoint URL; AWS S3 when absent.", max_length=1024),
+    ] = None
+    force_path_style: bool = False
+    access_key_secret: Annotated[
+        str | None,
+        Field(
+            description="The workspace secret holding the access key id.",
+            pattern="^[A-Za-z_][A-Za-z0-9_]{0,239}$",
+        ),
+    ] = None
+    secret_key_secret: Annotated[
+        str | None,
+        Field(
+            description="The workspace secret holding the secret access key.",
+            pattern="^[A-Za-z_][A-Za-z0-9_]{0,239}$",
+        ),
+    ] = None
+
+
+class Volume(BaseModel):
+    id: UUID
+    name: Annotated[str, Field(pattern="^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")]
+    size_bytes: Annotated[int, Field(description="Bytes stored at the last measurement.")]
+    size_measured_at: AwareDatetime | None = None
+    created_at: AwareDatetime
+    used_by: Annotated[
+        list[WorkloadRef], Field(description="Workloads whose active release mounts the volume.")
+    ]
+
+
+class VolumePage(BaseModel):
+    volumes: list[Volume]
+    next_cursor: str | None = None
+
+
+class CreateVolumeRequest(BaseModel):
+    name: Annotated[str, Field(pattern="^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")]
+
+
+class VolumeFile(BaseModel):
+    path: Annotated[str, Field(description="The path relative to the volume root.")]
+    is_dir: bool
+    size_bytes: int
+    modified_at: Annotated[AwareDatetime | None, Field(description="Absent for directories.")] = (
+        None
+    )
+
+
+class VolumeFilePage(BaseModel):
+    files: list[VolumeFile]
+    next_cursor: str | None = None
+
+
+class RemovedVolumeFiles(BaseModel):
+    removed: Annotated[
+        list[str], Field(description="Removed file paths relative to the volume root.")
+    ]
+
+
+class MoveVolumeFileRequest(BaseModel):
+    from_: Annotated[
+        str,
+        Field(
+            alias="from",
+            description="A file or directory below the volume root.",
+            max_length=1024,
+            min_length=1,
+        ),
+    ]
+    to: Annotated[
+        str,
+        Field(
+            description="A file or directory below the volume root.", max_length=1024, min_length=1
+        ),
+    ]
+
+
+class Method(str, Enum):
+    get = "get"
+    head = "head"
+    put = "put"
+    upload_part = "upload_part"
+
+
+class PresignVolumeFileRequest(BaseModel):
+    path: Annotated[
+        str,
+        Field(
+            description="A file or directory below the volume root.", max_length=1024, min_length=1
+        ),
+    ]
+    method: Method
+    expires_seconds: Annotated[int, Field(ge=1, le=604800)] = 3600
+    upload_id: Annotated[
+        str | None, Field(description="Required for `upload_part`.", max_length=1024)
+    ] = None
+    part_number: Annotated[
+        int | None, Field(description="Required for `upload_part`.", ge=1, le=10000)
+    ] = None
+
+
+class PresignedUrl(BaseModel):
+    url: Annotated[str, Field(description="Absolute URL; the request carries no bearer token.")]
+    expires_at: AwareDatetime
+
+
+class UploadPart(BaseModel):
+    number: int
+    offset: int
+    size_bytes: int
+    url: Annotated[
+        str,
+        Field(description="A presigned PUT of these bytes; its ETag completes a multipart upload."),
+    ]
+
+
+class Upload(BaseModel):
+    upload_id: str | None = None
+    part_size_bytes: int | None = None
+    parts: list[UploadPart]
+    expires_at: AwareDatetime
+
+
+class CompletedPart(BaseModel):
+    number: Annotated[int, Field(ge=1, le=10000)]
+    etag: Annotated[str, Field(max_length=1024)]
+
+
+class CreateVolumeUploadRequest(BaseModel):
+    path: Annotated[
+        str,
+        Field(
+            description="A file or directory below the volume root.", max_length=1024, min_length=1
+        ),
+    ]
+    size_bytes: Annotated[int, Field(ge=0, le=5497558138880)]
+    part_size_bytes: Annotated[int, Field(ge=5242880, le=5368709120)] = 5242880
+
+
+class MultipartUpload(BaseModel):
+    upload_id: str
+    path: str
+    part_size_bytes: int
+    parts: list[UploadPart]
+    expires_at: AwareDatetime
+
+
+class CompleteVolumeUploadRequest(BaseModel):
+    path: Annotated[
+        str,
+        Field(
+            description="A file or directory below the volume root.", max_length=1024, min_length=1
+        ),
+    ]
+    upload_id: Annotated[str, Field(max_length=1024)]
+    parts: Annotated[list[CompletedPart], Field(max_length=10000, min_length=1)]
+
+
+class AbortVolumeUploadRequest(BaseModel):
+    path: Annotated[
+        str,
+        Field(
+            description="A file or directory below the volume root.", max_length=1024, min_length=1
+        ),
+    ]
+    upload_id: Annotated[str, Field(max_length=1024)]
+
+
+class DiskStatus(str, Enum):
+    detached = "detached"
+    attached = "attached"
+    saving = "saving"
+
+
+class Disk(BaseModel):
+    id: UUID
+    name: Annotated[str, Field(pattern="^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")]
+    size_bytes: int
+    stored_bytes: Annotated[
+        int, Field(description="Bytes the disk's published generations occupy in the object store.")
+    ]
+    generation: Annotated[
+        int, Field(description="The newest published generation; 0 before the first.")
+    ]
+    status: DiskStatus
+    holder_container_id: Annotated[
+        UUID | None, Field(description="The container holding the disk while attached or saving.")
+    ] = None
+    created_at: AwareDatetime
+    updated_at: AwareDatetime
+
+
+class DiskPage(BaseModel):
+    disks: list[Disk]
+    next_cursor: str | None = None
+
+
+class State1(str, Enum):
+    uploading = "uploading"
+    stored = "stored"
+
+
+class Artifact(BaseModel):
+    id: UUID
+    task_id: UUID | None = None
+    app: Annotated[str | None, Field(pattern="^[a-z][a-z0-9_]{0,62}$")] = None
+    filename: str
+    content_type: str
+    size_bytes: int
+    state: State1
+    created_at: AwareDatetime
+    stored_at: AwareDatetime | None = None
+    expires_at: AwareDatetime | None = None
+
+
+class ArtifactPage(BaseModel):
+    artifacts: list[Artifact]
+    next_cursor: str | None = None
+
+
+class CreateArtifactRequest(BaseModel):
+    task_id: UUID
+    filename: Annotated[
+        str, Field(description="A base name without `/`.", pattern="^[^/\\x00-\\x1f\\x7f]{1,255}$")
+    ]
+    content_type: Annotated[str, Field(max_length=255, min_length=1)] = "application/octet-stream"
+    size_bytes: Annotated[int, Field(ge=0, le=5497558138880)]
+
+
+class ArtifactUpload(BaseModel):
+    artifact: Artifact
+    upload: Upload
+
+
+class CompleteArtifactRequest(BaseModel):
+    parts: Annotated[
+        list[CompletedPart] | None,
+        Field(description="The ETag of every part of a multipart upload.", max_length=10000),
+    ] = None
+
+
+class PresignArtifactRequest(BaseModel):
+    expires_seconds: Annotated[
+        int, Field(description="Capped at the artifact's remaining retention.", ge=1, le=604800)
+    ] = 3600
+    download: Annotated[
+        bool, Field(description="Ask browsers to save the file rather than show it.")
+    ] = False
+
+
+class ArtifactSummary(BaseModel):
+    count: int
+    size_bytes: int
+    retention_seconds: Annotated[
+        int, Field(description="How long new artifacts are kept under the workspace's plan.")
+    ]
+
+
+class DeleteArtifactsRequest(BaseModel):
+    ids: Annotated[list[UUID], Field(max_length=100, min_length=1)]
+
+
+class DeletedArtifacts(BaseModel):
+    deleted: list[UUID]
+
+
+class QueueInfo(BaseModel):
+    name: Annotated[
+        str,
+        Field(
+            description="A queue or map name; any characters except control characters.",
+            pattern="^[^\\x00-\\x1f\\x7f]{1,255}$",
+        ),
+    ]
+    size: int
+    oldest_message_at: AwareDatetime | None = None
+
+
+class QueuePage(BaseModel):
+    queues: list[QueueInfo]
+    next_cursor: str | None = None
+
+
+class PutQueueMessagesRequest(BaseModel):
+    messages: Annotated[
+        list[Base64Bytes],
+        Field(
+            description="Message bodies, base64; each at most 1 MiB.", max_length=1000, min_length=1
+        ),
+    ]
+
+
+class QueueMessageResult(BaseModel):
+    message: Base64Bytes | None = None
+
+
+class MapInfo(BaseModel):
+    name: Annotated[
+        str,
+        Field(
+            description="A queue or map name; any characters except control characters.",
+            pattern="^[^\\x00-\\x1f\\x7f]{1,255}$",
+        ),
+    ]
+    count: int
+    size_bytes: int
+    expiring_count: int
+    next_expiry_at: AwareDatetime | None = None
+
+
+class MapPage(BaseModel):
+    maps: list[MapInfo]
+    next_cursor: str | None = None
+
+
+class MapKeyPage(BaseModel):
+    keys: list[str]
+    next_cursor: str | None = None
+
+
+class MapEntry(BaseModel):
+    key: str
+    value: Annotated[
+        Base64Bytes,
+        Field(description="Base64 bytes; SDK values are JSON, or cloudpickle (first byte 0x80)."),
+    ]
+    revision: Annotated[
+        str,
+        Field(description="Changes on every write; pass it as `if_revision` to compare and set."),
+    ]
+    expires_at: AwareDatetime | None = None
+    updated_at: AwareDatetime
+
+
+class SetMapEntryRequest(BaseModel):
+    value: Annotated[Base64Bytes, Field(description="At most 1 MiB, base64.")]
+    ttl_seconds: Annotated[
+        int | None,
+        Field(
+            description="Seconds to expiry, 0 for never; absent keeps an existing expiry.",
+            ge=0,
+            le=604800,
+        ),
+    ] = None
+    if_revision: Annotated[str | None, Field(pattern="^[0-9]{1,20}$")] = None
+    if_absent: bool = False
+
+
+class MapEntryWrite(BaseModel):
+    revision: str
+    expires_at: AwareDatetime | None = None
+
+
+class AppRef(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="An app name or id.",
+            pattern="^([a-z][a-z0-9_]{0,62}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$",
+        ),
+    ]
+
+
+class AppState(str, Enum):
+    active = "active"
+    paused = "paused"
+    deleted = "deleted"
+
+
+class LiveAppState(str, Enum):
+    active = "active"
+    paused = "paused"
+
+
+class WorkloadState(str, Enum):
+    active = "active"
+    stopped = "stopped"
+    deleted = "deleted"
+
+
+class DeploymentPlanAction(str, Enum):
+    add = "add"
+    redeploy = "redeploy"
+    retain = "retain"
+    remove = "remove"
+
+
+class WorkloadIdentity(BaseModel):
+    kind: Literal["function"]
+    name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
+
+
+class DeploymentPlanItem(BaseModel):
+    kind: Literal["function"]
+    name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
+    action: DeploymentPlanAction
+    versions: Annotated[int, Field(description="Versions the workload has now.")]
+
+
+class DeployedWorkload(BaseModel):
+    id: UUID
+    app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
+    name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
+    kind: Literal["function"]
+    state: WorkloadState
+    app_state: AppState | None = None
+    version: Annotated[int | None, Field(description="The active version.")] = None
+    release_id: Annotated[UUID | None, Field(description="The active release.")] = None
+    created_at: AwareDatetime
+    deployed_at: Annotated[
+        AwareDatetime | None, Field(description="When the active version was deployed.")
+    ] = None
+
+
+class DeploymentPage(BaseModel):
+    deployments: list[DeployedWorkload]
+    next_cursor: str | None = None
+
+
+class StartDeploymentRequest(BaseModel):
+    version: Annotated[
+        int | None, Field(description="Make this deployed version active before starting.", ge=1)
+    ] = None
+
+
+class Version(BaseModel):
+    release_id: UUID
+    version: int
+    active: bool
+    created_at: AwareDatetime
+
+
+class VersionPage(BaseModel):
+    versions: list[Version]
+    next_cursor: str | None = None
+
+
+class StopTasksRequest(BaseModel):
+    task_ids: Annotated[list[UUID], Field(max_length=1000, min_length=1)]
+
+
+class StopTasksResponse(BaseModel):
+    stopped: Annotated[list[UUID], Field(description="Tasks this request cancelled.")]
+    skipped: Annotated[
+        list[UUID],
+        Field(description="Tasks that were already finished or are not in the workspace."),
+    ]
+
+
+class ContainerState(str, Enum):
+    pending = "pending"
+    starting = "starting"
+    ready = "ready"
+    draining = "draining"
+    stopped = "stopped"
+
+
+class StopReason(str, Enum):
+    stopped = "stopped"
+    load_error = "load_error"
+    start_failed = "start_failed"
+    crashed = "crashed"
+    out_of_memory = "out_of_memory"
+    host_lost = "host_lost"
+
+
+class Container(BaseModel):
+    id: UUID
+    app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
+    function: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
+    release_id: UUID
+    version: Annotated[
+        int | None,
+        Field(
+            description="The deployed version of the release; absent for a working-tree release."
+        ),
+    ] = None
+    state: ContainerState
+    stop_reason: StopReason | None = None
+    exit_message: str | None = None
+    slots: int
+    running_tasks: Annotated[int, Field(description="Attempts running now.")]
+    cpu_millis: int
+    memory_mib: int
+    created_at: AwareDatetime
+    ready_at: AwareDatetime | None = None
+    stopped_at: AwareDatetime | None = None
+
+
+class ContainerPage(BaseModel):
+    containers: list[Container]
+    next_cursor: str | None = None
 
 
 class ImageArchitecture(str, Enum):
@@ -568,7 +1095,7 @@ class Placement(BaseModel):
     availability_zone: Annotated[
         str | None,
         Field(
-            description="An AWS availability zone id, such as use2-az1, or name, such as us-east-2a.",
+            description="An AWS zone id such as use2-az1, or a name such as us-east-2a.",
             pattern="^[A-Za-z0-9._:-]{1,128}$",
         ),
     ] = None
@@ -913,7 +1440,7 @@ class AwsConnectionRequest(BaseModel):
     role_arn: Annotated[
         str | None,
         Field(
-            description="An existing role the platform assumes; it must require the returned external ID.",
+            description="An existing role to assume; it must require the external ID.",
             pattern="^arn:(aws|aws-us-gov|aws-cn):iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]{1,512}$",
         ),
     ] = None
@@ -997,6 +1524,14 @@ class SourceUpload(BaseModel):
     upload: UploadTarget | None = None
 
 
+class App(BaseModel):
+    id: UUID
+    name: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
+    state: AppState
+    workloads: Annotated[int, Field(description="Deployed workloads that are not deleted.")]
+    created_at: AwareDatetime
+
+
 class ImageSpec(BaseModel):
     python_version: Annotated[
         PythonVersion, Field(description="The Python minor version the runtime is mounted for.")
@@ -1012,39 +1547,48 @@ class Resources(BaseModel):
     cpu_limit_millis: Annotated[int | None, Field(ge=125, le=192000)] = None
     memory_mib: Annotated[int, Field(ge=128, le=1572864)]
     memory_limit_mib: Annotated[int | None, Field(ge=128, le=1572864)] = None
+    disk_mib: Annotated[
+        int | None,
+        Field(
+            description="Writable layer limit; enforced where Docker has project quotas.",
+            ge=1024,
+            le=16777216,
+        ),
+    ] = None
     gpu: Annotated[
         list[GpuType] | None,
         Field(
-            description="GPU models in order of preference; any last takes whatever has capacity. Without gpu_count one card is reserved.",
+            description="GPU models by preference; any, last, takes whatever has capacity.",
             max_length=9,
         ),
     ] = None
     gpu_count: Annotated[
-        int | None, Field(description="GPUs per container; needs gpu.", ge=0, le=8)
+        int | None,
+        Field(description="GPUs per container; a gpu list without it reserves one.", ge=0, le=8),
     ] = None
 
 
-class Task(BaseModel):
+class SubmitTasksRequest(BaseModel):
+    inputs: Annotated[list[TaskInput], Field(max_length=1000, min_length=1)]
+    release_id: Annotated[
+        UUID | None,
+        Field(
+            description="Run on this release, such as a prepared one, instead of the active one."
+        ),
+    ] = None
     parent_task_id: Annotated[
-        UUID | None, Field(description="The running task that spawned this one.")
+        UUID | None, Field(description="The task that submits these, which becomes their parent.")
     ] = None
-    root_task_id: Annotated[
-        UUID,
-        Field(description="The root of the call graph; the task itself when nothing spawned it."),
+
+
+class TaskPendingProgress(BaseModel):
+    reason: TaskPendingReason
+    message: str
+    since: Annotated[AwareDatetime, Field(description="When the current reason began.")]
+    pending_since: Annotated[
+        AwareDatetime, Field(description="When the task last became due or was submitted.")
     ]
-    scheduled_for: Annotated[
-        AwareDatetime | None, Field(description="The cron occurrence that admitted the task.")
-    ] = None
-    id: UUID
-    app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
-    function: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
-    release_id: UUID
-    status: TaskStatus
-    attempts: Annotated[int, Field(description="Attempts started so far.")]
-    created_at: AwareDatetime
-    started_at: AwareDatetime | None = None
-    finished_at: AwareDatetime | None = None
-    failure: TaskFailure | None = None
+    observed_at: AwareDatetime
 
 
 class LifecycleHooks(BaseModel):
@@ -1055,6 +1599,40 @@ class LifecycleHooks(BaseModel):
     on_retry: Annotated[list[HookReference] | None, Field(max_length=16)] = None
     on_failure: Annotated[list[HookReference] | None, Field(max_length=16)] = None
     on_finish: Annotated[list[HookReference] | None, Field(max_length=16)] = None
+
+
+class VolumeMountSpec(BaseModel):
+    name: Annotated[str, Field(pattern="^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")]
+    mount_path: Annotated[
+        str | None,
+        Field(
+            description="Absolute, or relative to /volumes; the default is /volumes/<name>.",
+            max_length=1024,
+        ),
+    ] = None
+    read_only: bool = False
+    cloud_bucket: CloudBucketSpec | None = None
+
+
+class AppPage(BaseModel):
+    apps: list[App]
+    next_cursor: Annotated[str | None, Field(description="Present when another page follows.")] = (
+        None
+    )
+
+
+class DeploymentPlanRequest(BaseModel):
+    workloads: Annotated[list[WorkloadIdentity], Field(max_length=200)]
+    prune: bool = False
+
+
+class DeploymentPlan(BaseModel):
+    app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
+    prune: bool
+    items: Annotated[
+        list[DeploymentPlanItem],
+        Field(description="Listed workloads by kind and name, then omitted deployed ones."),
+    ]
 
 
 class ImageDefinition(BaseModel):
@@ -1174,13 +1752,23 @@ class FunctionSpec(BaseModel):
         bool, Field(description="Run the concurrency slots as threads of one runner process.")
     ] = False
     lifecycle_hooks: LifecycleHooks | None = None
+    volumes: Annotated[list[VolumeMountSpec] | None, Field(max_length=32)] = None
+    client_contract: Annotated[
+        dict[str, Any] | None,
+        Field(description="The signature `lazycloud app export` types clients from."),
+    ] = None
     placement: Placement | None = None
 
 
 class Release(BaseModel):
     id: UUID
     function: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
-    version: int
+    version: Annotated[
+        int | None,
+        Field(
+            description="The deployed version; absent for a release only working-tree calls use."
+        ),
+    ] = None
     created_at: AwareDatetime
     spec: FunctionSpec
 
@@ -1188,23 +1776,73 @@ class Release(BaseModel):
 class Function(BaseModel):
     name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
     app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
-    state: State1
+    state: State
     active_release: Release
     schedule: Schedule | None = None
 
 
-class SubmitTasksResponse(BaseModel):
+class Task(BaseModel):
+    id: UUID
+    app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
+    function: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
+    release_id: UUID
+    version: Annotated[
+        int | None,
+        Field(
+            description="The deployed version of the release; absent for a working-tree release."
+        ),
+    ] = None
+    status: TaskStatus
+    attempts: Annotated[int, Field(description="Attempts started so far.")]
+    max_attempts: int
+    parent_task_id: Annotated[
+        UUID | None, Field(description="The running task that spawned this one.")
+    ] = None
+    root_task_id: Annotated[
+        UUID,
+        Field(description="The root of the call graph; the task itself when nothing spawned it."),
+    ]
+    scheduled_for: Annotated[
+        AwareDatetime | None, Field(description="The cron occurrence that admitted the task.")
+    ] = None
+    container_id: Annotated[
+        UUID | None, Field(description="The container of the latest attempt.")
+    ] = None
+    next_attempt_at: Annotated[
+        AwareDatetime | None,
+        Field(description="When a queued task that already ran becomes due again."),
+    ] = None
+    pending: TaskPendingProgress | None = None
+    created_at: AwareDatetime
+    started_at: AwareDatetime | None = None
+    finished_at: AwareDatetime | None = None
+    failure: TaskFailure | None = None
+
+
+class TaskPage(BaseModel):
     tasks: list[Task]
+    next_cursor: str | None = None
 
 
 class DeploymentRequest(BaseModel):
-    functions: Annotated[list[FunctionSpec], Field(max_length=200, min_length=1)]
+    functions: Annotated[
+        list[FunctionSpec],
+        Field(
+            description="At least one, unless prune deletes every deployed function.",
+            max_length=200,
+        ),
+    ]
     prune: Annotated[
-        bool, Field(description="Stop every function of the app that is not listed.")
+        bool, Field(description="Delete every function of the app that is not listed.")
     ] = False
 
 
 class Deployment(BaseModel):
     app: App
     releases: list[Release]
-    pruned: list[WorkloadName]
+    pruned: Annotated[list[WorkloadName], Field(description="Functions the prune deleted.")]
+    removed_versions: Annotated[int, Field(description="Versions of the pruned functions.")]
+
+
+class SubmitTasksResponse(BaseModel):
+    tasks: list[Task]

@@ -42,6 +42,9 @@ type Owners struct {
 	Compute       *compute.Compute
 	// Listener wakes waits on task and image build changes. It must listen
 	// on database.ChannelTask, ChannelImageBuild and ChannelImageBuildLog.
+	// Listener wakes waits on task, image build and queue changes. It must
+	// listen on database.ChannelTask, ChannelImageBuild, ChannelImageBuildLog
+	// and storage.ChannelQueue.
 	Listener *database.Listener
 }
 
@@ -267,6 +270,7 @@ var errInvalidRequest = errors.New("invalid request")
 func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 	var (
 		tooMany        *execution.TooManyPendingError
+		unknownTask    *execution.UnknownTaskError
 		invalidSpec    *control.InvalidSpecError
 		sourceMissing  *control.SourceMissingError
 		tooLarge       *http.MaxBytesError
@@ -282,6 +286,8 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		computeClash   *compute.ConflictError
 		computeInvalid *compute.InvalidError
 		computeDown    *compute.UnavailableError
+		storageInput   *storage.InvalidError
+		storageState   *storage.ConflictError
 	)
 	switch {
 	case errors.Is(err, identity.ErrUnauthenticated):
@@ -305,11 +311,19 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		writeJSONError(w, http.StatusNotFound, apitypes.NotFound, "not found")
 	case errors.Is(err, execution.ErrNoResult):
 		writeJSONError(w, http.StatusNotFound, apitypes.NotFound, "the task finished without a result")
+	case errors.Is(err, control.ErrVersionNotFound):
+		writeJSONError(w, http.StatusNotFound, apitypes.NotFound, "the deployment has no such version")
+	case errors.As(err, &unknownTask):
+		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, unknownTask.Error())
+	case errors.Is(err, control.ErrInvalidCursor), errors.Is(err, execution.ErrInvalidCursor):
+		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, "the cursor is not from this listing")
+	case errors.Is(err, execution.ErrInvalidFilter), errors.Is(err, execution.ErrInvalidSubmit):
+		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, err.Error())
 	case errors.As(err, &invalidSpec):
 		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, invalidSpec.Error())
 	case errors.As(err, &sourceMissing):
 		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, sourceMissing.Error())
-	case errors.Is(err, storage.ErrInvalidDigest), errors.Is(err, errInvalidRequest):
+	case errors.Is(err, storage.ErrInvalidDigest), errors.Is(err, errInvalidRequest), errors.Is(err, control.ErrNothingToDeploy):
 		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, err.Error())
 	case errors.As(err, &invalidImage):
 		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, err.Error())
@@ -327,6 +341,16 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		writeJSONError(w, http.StatusConflict, apitypes.Conflict, "the function is stopped or its app is paused")
 	case errors.Is(err, execution.ErrTaskNotFinished):
 		writeJSONError(w, http.StatusConflict, apitypes.TaskNotFinished, "the task has not finished")
+	case errors.Is(err, storage.ErrNotFound):
+		writeJSONError(w, http.StatusNotFound, apitypes.NotFound, "not found")
+	case errors.As(err, &storageInput):
+		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, storageInput.Error())
+	case errors.As(err, &storageState):
+		writeJSONError(w, http.StatusConflict, apitypes.Conflict, storageState.Error())
+	case errors.Is(err, storage.ErrTooLarge):
+		writeJSONError(w, http.StatusRequestEntityTooLarge, apitypes.PayloadTooLarge, "a value is larger than 1 MiB")
+	case errors.Is(err, storage.ErrBucketsUnconfigured):
+		writeJSONError(w, http.StatusNotImplemented, apitypes.Unsupported, "this server has no workspace bucket provider")
 	case errors.As(err, &secretMissing):
 		writeJSONError(w, http.StatusNotFound, apitypes.NotFound, secretMissing.Error())
 	case errors.As(err, &secretExists):

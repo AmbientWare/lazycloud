@@ -50,11 +50,11 @@ func decodeCursor(cursor *string, v any) error {
 	return nil
 }
 
-func limitOf(limit *int) int {
+func pageLimit[T ~int](limit *T) int {
 	if limit == nil {
 		return defaultPageSize
 	}
-	return *limit
+	return int(*limit)
 }
 
 // GetComputeSummary summarizes a workspace's compute.
@@ -94,7 +94,7 @@ func (s *Server) ListComputeWorkloads(ctx context.Context, req ListComputeWorklo
 	if err := decodeCursor(req.Params.Cursor, &after); err != nil {
 		return nil, err
 	}
-	limit := limitOf(req.Params.Limit)
+	limit := pageLimit(req.Params.Limit)
 	rows, err := s.owners.Compute.Workloads(ctx, ws.ID, after, limit+1)
 	if err != nil {
 		return nil, err
@@ -165,7 +165,7 @@ func (s *Server) ListWorkspaceMachines(ctx context.Context, req ListWorkspaceMac
 	if err := decodeCursor(req.Params.Cursor, &after); err != nil {
 		return nil, err
 	}
-	limit := limitOf(req.Params.Limit)
+	limit := pageLimit(req.Params.Limit)
 	rows, err := s.owners.Compute.WorkspaceMachines(ctx, ws.ID, after, limit+1)
 	if err != nil {
 		return nil, err
@@ -183,7 +183,7 @@ func (s *Server) ListMachines(ctx context.Context, req ListMachinesRequestObject
 	if err := decodeCursor(req.Params.Cursor, &after); err != nil {
 		return nil, err
 	}
-	limit := limitOf(req.Params.Limit)
+	limit := pageLimit(req.Params.Limit)
 	rows, err := s.owners.Compute.AccountMachines(ctx, p.User, after, limit+1)
 	if err != nil {
 		return nil, err
@@ -288,7 +288,7 @@ func (s *Server) ListComputeInstances(ctx context.Context, req ListComputeInstan
 	if err := decodeCursor(req.Params.Cursor, &before); err != nil {
 		return nil, err
 	}
-	limit := limitOf(req.Params.Limit)
+	limit := pageLimit(req.Params.Limit)
 	rows, err := s.owners.Compute.Instances(ctx, p.User, before, limit+1)
 	if err != nil {
 		return nil, err

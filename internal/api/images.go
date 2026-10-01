@@ -138,17 +138,25 @@ func (l buildLogStream) VisitStreamImageBuildLogsResponse(w http.ResponseWriter)
 // runs exactly that image. A reference the caller sent is replaced.
 func (s *Server) checkImages(ctx context.Context, workspace identity.WorkspaceID, req *apitypes.DeploymentRequest) error {
 	for n := range req.Functions {
-		image := &req.Functions[n].Image
-		image.Reference = nil
-		if image.ImageId == nil {
-			continue
+		if err := s.pinImage(ctx, workspace, &req.Functions[n]); err != nil {
+			return err
 		}
-		reference, err := s.owners.Images.Deployable(ctx, workspace, *image.ImageId, string(image.PythonVersion))
-		if err != nil {
-			return fmt.Errorf("function %s: %w", req.Functions[n].Name, err)
-		}
-		image.Reference = &reference
 	}
+	return nil
+}
+
+// pinImage does checkImages for one function spec.
+func (s *Server) pinImage(ctx context.Context, workspace identity.WorkspaceID, spec *apitypes.FunctionSpec) error {
+	image := &spec.Image
+	image.Reference = nil
+	if image.ImageId == nil {
+		return nil
+	}
+	reference, err := s.owners.Images.Deployable(ctx, workspace, *image.ImageId, string(image.PythonVersion))
+	if err != nil {
+		return fmt.Errorf("function %s: %w", spec.Name, err)
+	}
+	image.Reference = &reference
 	return nil
 }
 

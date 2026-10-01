@@ -140,6 +140,8 @@ func newJoinFlags(name string) *joinFlags {
 	f.StringVar(&cfg.RuntimeDir, "runtime-dir", envOr("LAZYCLOUD_RUNTIME_DIR", filepath.Join(release, "runtime")), "managed Python runtimes, one directory per version")
 	f.StringVar(&cfg.SupervisorPath, "supervisor", envOr("LAZYCLOUD_SUPERVISOR", filepath.Join(release, "supervisor")), "static supervisor binary mounted into containers")
 	f.StringVar(&cfg.OCIRuntime, "oci-runtime", envOr("LAZYCLOUD_OCI_RUNTIME", "runc"), "Docker runtime for workload containers (runsc in production)")
+	f.StringVar(&cfg.GeeseFSPath, "geesefs", envOr("LAZYCLOUD_GEESEFS", filepath.Join(release, "geesefs")), "pinned GeeseFS binary that mounts volumes; volumes are unavailable without it")
+	f.StringVar(&cfg.MountImage, "mount-image", envOr("LAZYCLOUD_MOUNT_IMAGE", agent.DefaultMountImage), "image that runs GeeseFS for volume mounts")
 	f.StringVar(&cfg.BuildNetwork, "build-network", envOr("LAZYCLOUD_BUILD_NETWORK", "bridge"), "Docker network for image builds")
 	f.StringVar(&j.maxCPU, "max-cpu", os.Getenv("LAZYCLOUD_MAX_CPU"), "CPU cores to offer, such as 2 or 1.5; default detects")
 	f.StringVar(&j.maxMemory, "max-memory", os.Getenv("LAZYCLOUD_MAX_MEMORY"), "memory to offer, such as 16gib or 4096 (MB); default detects")
@@ -208,7 +210,10 @@ func (j *joinFlags) parse(args []string) error {
 	if cfg.Limits.GPUs != nil && len(cfg.Limits.GPUIDs) > 0 {
 		return errors.New("--gpu-ids and --max-gpus cannot both be set")
 	}
-	for _, path := range []*string{&cfg.StateDir, &cfg.RuntimeDir, &cfg.SupervisorPath, &cfg.JoinTokenFile} {
+	if _, err := os.Stat(cfg.GeeseFSPath); err != nil {
+		cfg.GeeseFSPath = ""
+	}
+	for _, path := range []*string{&cfg.StateDir, &cfg.RuntimeDir, &cfg.SupervisorPath, &cfg.JoinTokenFile, &cfg.GeeseFSPath} {
 		if *path == "" {
 			continue
 		}

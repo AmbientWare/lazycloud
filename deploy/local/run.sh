@@ -12,6 +12,9 @@ export LAZYCLOUD_OBJECT_STORE_REGION=garage
 export LAZYCLOUD_OBJECT_STORE_BUCKET=lazycloud
 export LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID=GK1a2b3c4d5e6f708192a3b4c5
 export LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY=6c6f63616c2d6c617a79636c6f75642d6465762d7365637265742d6b65792d31
+export LAZYCLOUD_WORKSPACE_BUCKET_PROVIDER=garage
+export LAZYCLOUD_GARAGE_ADMIN_URL=http://127.0.0.1:23903
+export LAZYCLOUD_GARAGE_ADMIN_TOKEN=local-garage-admin
 # The master key that wraps secret data keys; generated once per state dir.
 export LAZYCLOUD_SECRETS_KEY_FILE="$PWD/$state/secrets.key"
 # Local callbacks may target this machine.
@@ -39,6 +42,7 @@ start() {
   go build -o bin/server ./cmd/server
   go build -o bin/scheduler ./cmd/scheduler
   go build -o bin/agent ./cmd/agent
+  deploy/local/fetch-geesefs.sh
   [ -d "$state/runtime/3.12" ] || deploy/local/build-runtime.sh "$state/runtime"
 
   bin/server migrate
@@ -56,7 +60,7 @@ start() {
   join=""
   [ -f "$state/join-token" ] && join=$(cat "$state/join-token")
   bin/agent join -server 127.0.0.1:8081 -join-token "$join" -state-dir "$PWD/$state/agent" \
-    -runtime-dir "$PWD/$state/runtime" -supervisor "$PWD/bin/supervisor" -oci-runtime runc -build-network host \
+    -runtime-dir "$PWD/$state/runtime" -supervisor "$PWD/bin/supervisor" -geesefs "$PWD/bin/geesefs" -oci-runtime runc -build-network host \
     >"$state/logs/agent.log" 2>&1 &
   echo $! >"$state/agent.pid"
 

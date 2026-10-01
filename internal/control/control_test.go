@@ -54,8 +54,8 @@ func TestDeployVersionsOnlyChangedSpecs(t *testing.T) {
 	c := NewControl(pool)
 
 	first := deploy(t, c, ws, false, function("summarize"), function("export"))
-	if first.Releases[0].Version != 1 || first.Releases[1].Version != 1 {
-		t.Fatalf("first deploy versions %d, %d; want 1, 1", first.Releases[0].Version, first.Releases[1].Version)
+	if *first.Releases[0].Version != 1 || *first.Releases[1].Version != 1 {
+		t.Fatalf("first deploy versions %d, %d; want 1, 1", *first.Releases[0].Version, *first.Releases[1].Version)
 	}
 	if spec := first.Releases[0].Spec; *spec.TimeoutSeconds != 3600 || spec.RetryPolicy.MaxAttempts != 1 || *spec.Autoscaler.MaxContainers != 1 {
 		t.Fatalf("defaults not resolved: %+v", spec)
@@ -73,9 +73,9 @@ func TestDeployVersionsOnlyChangedSpecs(t *testing.T) {
 	changed := function("summarize")
 	changed.Concurrency = new(4)
 	next := deploy(t, c, ws, false, changed, function("export"))
-	if next.Releases[0].Version != 2 || next.Releases[1].Id != first.Releases[1].Id {
+	if *next.Releases[0].Version != 2 || next.Releases[1].Id != first.Releases[1].Id {
 		t.Fatalf("changed deploy: summarize v%d, export reused %v; want v2 and reuse",
-			next.Releases[0].Version, next.Releases[1].Id == first.Releases[1].Id)
+			*next.Releases[0].Version, next.Releases[1].Id == first.Releases[1].Id)
 	}
 	got, err := c.GetFunction(t.Context(), ws, "reports", "summarize")
 	if err != nil {
@@ -86,16 +86,16 @@ func TestDeployVersionsOnlyChangedSpecs(t *testing.T) {
 	}
 
 	pruned := deploy(t, c, ws, true, changed)
-	if len(pruned.Pruned) != 1 || pruned.Pruned[0] != "export" {
-		t.Fatalf("pruned %v, want [export]", pruned.Pruned)
+	if len(pruned.Pruned) != 1 || pruned.Pruned[0] != "export" || pruned.RemovedVersions != 1 {
+		t.Fatalf("pruned %v removing %d versions, want [export] removing 1", pruned.Pruned, pruned.RemovedVersions)
 	}
-	if export, err := c.GetFunction(t.Context(), ws, "reports", "export"); err != nil || export.State != apitypes.FunctionStateStopped {
-		t.Fatalf("pruned function state %v, err %v; want stopped", export.State, err)
+	if _, err := c.GetFunction(t.Context(), ws, "reports", "export"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("pruned function read error %v, want not found", err)
 	}
-	// Deploying a stopped function again reactivates its release.
+	// A pruned function is deleted, so deploying it again starts over.
 	again := deploy(t, c, ws, false, function("export"))
-	if again.Releases[0].Id != first.Releases[1].Id {
-		t.Fatal("redeploying an unchanged stopped function created a release")
+	if again.Releases[0].Id == first.Releases[1].Id || *again.Releases[0].Version != 1 {
+		t.Fatalf("redeploying a pruned function reused %v at v%d", again.Releases[0].Id, *again.Releases[0].Version)
 	}
 	if export, _ := c.GetFunction(t.Context(), ws, "reports", "export"); export.State != apitypes.FunctionStateActive {
 		t.Fatalf("redeployed function state %v, want active", export.State)
