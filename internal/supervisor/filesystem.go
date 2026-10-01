@@ -89,7 +89,9 @@ func writeArchive(w io.Writer, root string, skip map[string]bool) error {
 	hardlinks := make(map[[2]uint64]string)
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
-			if errors.Is(walkErr, fs.ErrNotExist) {
+			// A directory the container's user cannot read is left out,
+			// as a non-root container's /root is.
+			if errors.Is(walkErr, fs.ErrNotExist) || errors.Is(walkErr, fs.ErrPermission) {
 				return nil
 			}
 			return walkErr
@@ -160,17 +162,25 @@ func archiveEntry(archive *tar.Writer, root, path string, info fs.FileInfo, hard
 			hardlinks[key] = header.Name
 		}
 	}
+	var file *os.File
+	if header.Typeflag == tar.TypeReg {
+		// A file the container's user cannot read, such as /etc/shadow for
+		// a non-root user, is left out rather than failing the image.
+		file, err = os.Open(path) //nolint:gosec // the archive reads the whole filesystem
+		if errors.Is(err, fs.ErrPermission) || errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("open %s: %w", path, err)
+		}
+		defer func() { _ = file.Close() }()
+	}
 	if err := archive.WriteHeader(header); err != nil {
 		return fmt.Errorf("write archive header for %s: %w", path, err)
 	}
-	if header.Typeflag != tar.TypeReg {
+	if file == nil {
 		return nil
 	}
-	file, err := os.Open(path) //nolint:gosec // the archive reads the whole filesystem
-	if err != nil {
-		return fmt.Errorf("open %s: %w", path, err)
-	}
-	defer func() { _ = file.Close() }()
 	// The header holds the size at stat; a file that grew is cut there and
 	// one that shrank fails the archive.
 	if _, err := io.CopyN(archive, file, header.Size); err != nil {
