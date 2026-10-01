@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/storage"
 )
 
@@ -238,6 +239,12 @@ func (s *Server) CreateArtifact(ctx context.Context, req CreateArtifactRequestOb
 	ws, err := s.workspace(ctx, req.Workspace)
 	if err != nil {
 		return nil, err
+	}
+	// Inside a container an artifact belongs to the task whose attempt is
+	// running there, which the container API established; the body cannot
+	// name another task.
+	if c, ok := containerFrom(ctx); ok && (c.Task == nil || *c.Task != req.Body.TaskId) {
+		return nil, identity.ErrForbidden
 	}
 	upload, err := s.owners.Storage.CreateArtifact(ctx, ws.ID, *req.Body)
 	if err != nil {

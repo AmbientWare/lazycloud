@@ -14,7 +14,9 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/AmbientWare/lazycloud/internal/compute"
+	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
+	"github.com/AmbientWare/lazycloud/internal/hostsession"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/storage"
 	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
@@ -130,6 +132,61 @@ func TestCloudBucketKeysComeFromWorkspaceSecrets(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	t.Fatal("a container without its bucket secret was not failed")
+}
+
+// TestContainerStorageCallsActForTheirTask: queues, maps and artifacts work
+// through the container API, and an artifact saved there belongs to the
+// task running on the container, whatever the body names.
+func TestContainerStorageCallsActForTheirTask(t *testing.T) {
+	h := start(t)
+	host, ctx := h.enroll()
+	ws, container := h.startingContainer(host)
+	if _, err := h.pool.Exec(t.Context(), "update containers set state = 'ready', ready_at = now()"); err != nil {
+		t.Fatal(err)
+	}
+	tasks, err := h.execution.Submit(t.Context(), execution.SubmitRequest{
+		Workspace: ws, App: "reports", Function: "summarize",
+		Inputs: []execution.Payload{{Encoding: execution.EncodingJSON, Data: []byte(`{"args": []}`)}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	running := tasks[0].ID.String()
+	if claim, err := h.client.ClaimTasks(ctx, &hostproto.ClaimTasksRequest{ContainerId: container.String(), MaxTasks: 1}); err != nil || len(claim.GetTasks()) != 1 {
+		t.Fatalf("claim %v, %v", claim, err)
+	}
+	asTask := map[string]string{hostsession.TaskHeader: running}
+
+	reply, err := call(ctx, h.client, container, "POST", "/v1/workspaces/ws/queues/jobs/messages", []byte(`{"messages": ["IjEi"]}`), asTask)
+	if err != nil || reply.status != 204 {
+		t.Fatalf("queue put: %d %s %v", reply.status, reply.body, err)
+	}
+	reply, err = call(ctx, h.client, container, "POST", "/v1/workspaces/ws/queues/jobs/pop", nil, nil)
+	if err != nil || reply.status != 200 || !strings.Contains(string(reply.body), "IjEi") {
+		t.Fatalf("queue pop: %d %s %v", reply.status, reply.body, err)
+	}
+	reply, err = call(ctx, h.client, container, "PUT", "/v1/workspaces/ws/maps/cache/entries/k", []byte(`{"value": "MQ=="}`), nil)
+	if err != nil || reply.status != 200 {
+		t.Fatalf("map set: %d %s %v", reply.status, reply.body, err)
+	}
+
+	artifact := func(task string, headers map[string]string) int {
+		body := []byte(`{"task_id": "` + task + `", "filename": "out.txt", "size_bytes": 1}`)
+		reply, err := call(ctx, h.client, container, "POST", "/v1/workspaces/ws/artifacts", body, headers)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return reply.status
+	}
+	if status := artifact(running, asTask); status != 201 {
+		t.Fatalf("artifact for the running task: %d", status)
+	}
+	if status := artifact(uuid.NewString(), asTask); status != 403 {
+		t.Fatalf("artifact naming another task: %d", status)
+	}
+	if status := artifact(running, nil); status != 403 {
+		t.Fatalf("artifact without the calling task: %d", status)
+	}
 }
 
 func TestDiskLeaseOverTheHostConnection(t *testing.T) {
