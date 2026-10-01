@@ -11,12 +11,12 @@ where r.id = @release_id and a.workspace_id = @workspace_id;
 -- name: InsertInstance :one
 insert into containers (
     workspace_id, release_id, state, slots, cpu_millis, memory_bytes, gpu_count, rate_class,
-    purpose, keep_warm_seconds, command, snapshot_id, block_network, allow_list, exposed_ports
+    purpose, keep_warm_seconds, command, snapshot_id, block_network, allow_list, exposed_ports, created_by_container
 )
 values (
     @workspace_id, @release_id, 'pending', 1, @cpu_millis, @memory_bytes, @gpu_count, @rate_class,
     @purpose, sqlc.narg('keep_warm_seconds'), sqlc.narg('command')::text[], sqlc.narg('snapshot_id'),
-    @block_network, @allow_list::text[], @exposed_ports::int[]
+    @block_network, @allow_list::text[], @exposed_ports::int[], sqlc.narg('created_by_container')
 )
 returning id, created_at;
 
@@ -256,7 +256,7 @@ order by r.version desc nulls last, c.ready_at, c.id;
 -- name: ContainerRoute :one
 -- A live container with what routing to it needs.
 select c.id, c.host_id, c.state, c.purpose, c.exposed_ports, c.workspace_id, ws.name as workspace_name,
-       w.id as workload_id, w.kind, a.state as app_state, w.desired_state, r.spec
+       w.id as workload_id, w.kind, a.state as app_state, w.desired_state, r.spec, c.created_by_container
 from containers c
 join releases r on r.id = c.release_id
 join workloads w on w.id = r.workload_id
@@ -278,7 +278,16 @@ where r.id = @id and w.kind in ('pod', 'sandbox');
 update containers
 set block_network = @block_network, allow_list = @allow_list::text[], network_version = network_version + 1
 where id = @id and workspace_id = @workspace_id and state <> 'stopped'
-returning host_id, block_network, allow_list;
+returning host_id, block_network, allow_list, network_version;
+
+-- name: ContainerNetworkApplied :one
+select state, network_applied_version, network_error from containers where id = @id;
+
+-- name: RecordNetworkApplied :one
+-- Keeps the newest version a host reports for a container it holds.
+update containers set network_applied_version = @version, network_error = sqlc.narg('error')
+where id = @id and host_id = @host_id and network_applied_version < @version
+returning id;
 
 -- name: ContainerNetwork :one
 select block_network, allow_list from containers where id = @id and workspace_id = @workspace_id;
@@ -338,3 +347,29 @@ order by 1;
 
 -- name: ContainerReleaseOf :one
 select release_id::uuid as release_id from containers where id = @id and release_id is not null;
+
+-- name: StopUnservedPendingInstances :many
+-- Pending instances and shell containers whose workload stopped, app
+-- paused or workspace is being deleted never start.
+update containers c
+set state = 'stopped', stop_reason = 'stopped', exit_message = 'the workload stopped', stopped_at = now()
+from releases r
+join workloads w on w.id = r.workload_id
+join apps a on a.id = w.app_id
+join workspaces ws on ws.id = a.workspace_id
+where r.id = c.release_id and c.purpose <> 'serve' and c.state = 'pending'
+  and (w.desired_state <> 'active' or a.state <> 'active' or ws.state <> 'active')
+returning c.id;
+
+-- name: DrainUnservedInstances :many
+-- Running instances and shell containers of such workloads drain; their
+-- hosts stop them.
+update containers c
+set state = 'draining', drain_started_at = now()
+from releases r
+join workloads w on w.id = r.workload_id
+join apps a on a.id = w.app_id
+join workspaces ws on ws.id = a.workspace_id
+where r.id = c.release_id and c.purpose <> 'serve' and c.state in ('starting', 'ready')
+  and (w.desired_state <> 'active' or a.state <> 'active' or ws.state <> 'active')
+returning c.id, c.host_id;

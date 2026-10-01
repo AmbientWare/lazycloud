@@ -19,8 +19,15 @@ const netfilterTable = "lazycloud"
 // maxAllowedRanges bounds an allow list.
 const maxAllowedRanges = 10
 
+// An untagged Ethernet frame carries its EtherType at byte 12 and its
+// packet after 14 bytes.
+const (
+	etherTypeOffset     = 12
+	ethernetHeaderBytes = 14
+)
+
 // NetworkPolicy is the argument of `supervisor netfilter`: block drops all
-// IP egress; an allow list permits only those ranges and wins over block.
+// egress but ARP; an allow list permits only those ranges and wins over block.
 type NetworkPolicy struct {
 	Block bool     `json:"block"`
 	Allow []string `json:"allow"`
@@ -75,37 +82,40 @@ func ApplyNetworkPolicy(raw string) error {
 	return nil
 }
 
+// addEgressChain drops every frame on device but ARP and IP packets to an
+// allowed range. It reads the EtherType and destination from the frame
+// itself rather than the packet's protocol metadata, which a raw socket
+// sets freely; anything not Ethernet-framed IPv4, IPv6 or ARP, such as a
+// VLAN tag, is dropped.
 func addEgressChain(conn *nftables.Conn, table *nftables.Table, device string, allowed []netip.Prefix) {
-	accept := nftables.ChainPolicyAccept
+	drop := nftables.ChainPolicyDrop
 	chain := conn.AddChain(&nftables.Chain{
 		Name: "egress-" + device, Table: table, Type: nftables.ChainTypeFilter,
-		Hooknum: nftables.ChainHookEgress, Priority: nftables.ChainPriorityFilter, Policy: &accept, Device: device,
+		Hooknum: nftables.ChainHookEgress, Priority: nftables.ChainPriorityFilter, Policy: &drop, Device: device,
 	})
 	rule := func(exprs ...expr.Any) { conn.AddRule(&nftables.Rule{Table: table, Chain: chain, Exprs: exprs}) }
-	protocol := func(etherType uint16) []expr.Any {
+	etherType := func(kind uint16) []expr.Any {
 		data := make([]byte, 2)
-		binary.BigEndian.PutUint16(data, etherType)
+		binary.BigEndian.PutUint16(data, kind)
 		return []expr.Any{
-			&expr.Meta{Key: expr.MetaKeyPROTOCOL, Register: 1},
+			&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseLLHeader, Offset: etherTypeOffset, Len: 2},
 			&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: data},
 		}
 	}
-	verdict := func(kind expr.VerdictKind) expr.Any { return &expr.Verdict{Kind: kind} }
-	rule(append(protocol(unix.ETH_P_ARP), verdict(expr.VerdictAccept))...)
+	accept := &expr.Verdict{Kind: expr.VerdictAccept}
+	rule(append(etherType(unix.ETH_P_ARP), accept)...)
 	for _, prefix := range allowed {
-		etherType, offset := uint16(unix.ETH_P_IP), uint32(16)
+		kind, offset := uint16(unix.ETH_P_IP), uint32(ethernetHeaderBytes+16)
 		if prefix.Addr().Is6() {
-			etherType, offset = unix.ETH_P_IPV6, 24
+			kind, offset = unix.ETH_P_IPV6, ethernetHeaderBytes+24
 		}
 		addr := prefix.Addr().AsSlice()
 		mask := net.CIDRMask(prefix.Bits(), len(addr)*8)
-		rule(append(protocol(etherType),
-			&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseNetworkHeader, Offset: offset, Len: uint32(len(addr))},         //nolint:gosec // 4 or 16
+		rule(append(etherType(kind),
+			&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseLLHeader, Offset: offset, Len: uint32(len(addr))},              //nolint:gosec // 4 or 16
 			&expr.Bitwise{SourceRegister: 1, DestRegister: 1, Len: uint32(len(addr)), Mask: mask, Xor: make([]byte, len(addr))}, //nolint:gosec // see above
 			&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: addr},
-			verdict(expr.VerdictAccept),
+			accept,
 		)...)
 	}
-	rule(append(protocol(unix.ETH_P_IP), verdict(expr.VerdictDrop))...)
-	rule(append(protocol(unix.ETH_P_IPV6), verdict(expr.VerdictDrop))...)
 }

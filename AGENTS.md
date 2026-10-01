@@ -55,6 +55,8 @@ guidance file. These files contain development standards and constraints.
   not ignore returned errors or panic for expected failure. Avoid unsafe and cgo
   unless a demonstrated need is documented. Memory safety does not prove
   authorization or distributed concurrency.
+- `./check.sh` runs every formatter and linter as CI does; `--fix` applies the
+  formatters first.
 - Use uv from the root for Python, Ruff for formatting/imports and Bun for web.
   Preserve declared Python support, including Python 3.10+ for SDK and runner.
   Use Pydantic at Python wire boundaries.

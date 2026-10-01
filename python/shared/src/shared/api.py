@@ -2968,6 +2968,10 @@ class Container(BaseModel):
         str | None, Field(description="The name of the host the container was placed on.")
     ] = None
     gpu_count: int | None = None
+    expires_at: Annotated[
+        AwareDatetime | None,
+        Field(description="When an instance with a timeout stops unless it is used again."),
+    ] = None
 
 
 class ContainerPage(BaseModel):

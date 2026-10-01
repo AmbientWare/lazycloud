@@ -115,8 +115,14 @@ func TestInstancesStopOnceIdleAndConnectionsKeepThemUp(t *testing.T) {
 		t.Fatalf("instance = %+v", inst)
 	}
 	readyOnHost(t, pool, e, inst.ID)
-
-	// Planning never counts or drains an instance.
+	// The container listing shows when the instance expires.
+	view, err := e.GetContainer(t.Context(), f.workspace, inst.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.ExpiresAt == nil || time.Until(*view.ExpiresAt) <= 0 || time.Until(*view.ExpiresAt) > time.Minute {
+		t.Fatalf("instance with a 60s timeout expires at %v", view.ExpiresAt)
+	}
 	if _, err := e.PlanPods(t.Context(), logger); err != nil {
 		t.Fatal(err)
 	}
@@ -456,3 +462,30 @@ AAAEB8pXQ0j+M3l0eYkqsmqUgW6v4G6ExUm7h2vqC4M3wPOS8acQNNRzh90eTcyMlzscI+
 Ptp/zWkhxkBBzlbQQ3ESAAAAB3Rlc3RrZXkBAgMEBQY=
 -----END OPENSSH PRIVATE KEY-----
 `
+
+func TestInstancesEndWithTheirWorkload(t *testing.T) {
+	pool := dbtest.New(t)
+	e := NewExecution(pool)
+	f := deployedPod(t, pool, "sandbox", 600)
+	running, err := e.CreateInstance(t.Context(), f.workspace, InstanceRequest{Release: &f.release})
+	if err != nil {
+		t.Fatal(err)
+	}
+	readyOnHost(t, pool, e, running.ID)
+	pending, err := e.CreateInstance(t.Context(), f.workspace, InstanceRequest{Release: &f.release})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(t.Context(), "update apps set state = 'paused'"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.StopIdle(t.Context(), slog.New(slog.DiscardHandler)); err != nil {
+		t.Fatal(err)
+	}
+	if got := containerState(t, pool, uuid.UUID(running.ID)); got != ContainerDraining {
+		t.Fatalf("a running instance of a paused app is %s", got)
+	}
+	if got := containerState(t, pool, uuid.UUID(pending.ID)); got != ContainerStopped {
+		t.Fatalf("a pending instance of a paused app is %s", got)
+	}
+}

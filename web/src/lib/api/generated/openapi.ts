@@ -4551,6 +4551,11 @@ export interface components {
             /** @description The name of the host the container was placed on. */
             host?: string;
             gpu_count?: number;
+            /**
+             * Format: date-time
+             * @description When an instance with a timeout stops unless it is used again.
+             */
+            expires_at?: string;
         };
         /**
          * @description serve containers are the ones a deployment's count asks for; an instance or shell was started on request and has its own lifetime.

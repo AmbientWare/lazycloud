@@ -36,8 +36,13 @@ type control struct {
 	// ssh is nil when the container serves no SSH.
 	ssh *ssh.ServerConfig
 
+	// path is the socket the API is served on.
+	path string
 	// ctx ends every long-lived connection when the server closes.
-	ctx    context.Context //nolint:containedctx // the lifetime of hijacked connections
+	ctx context.Context //nolint:containedctx // the lifetime of hijacked connections
+	// mu guards cancel and server, which release and a later listen
+	// replace.
+	mu     sync.Mutex
 	cancel context.CancelFunc
 	server *http.Server
 	// handlers counts requests in flight, including hijacked connections,
@@ -76,14 +81,39 @@ func (c *control) listen(ctx context.Context, path string) error {
 		_ = listener.Close()
 		return err
 	}
+	server := &http.Server{Handler: c.routes(), ReadHeaderTimeout: 10 * time.Second}
+	c.mu.Lock()
+	c.path = path
 	c.ctx, c.cancel = context.WithCancel(context.WithoutCancel(ctx))
-	c.server = &http.Server{Handler: c.routes(), ReadHeaderTimeout: 10 * time.Second}
+	c.server = server
+	c.mu.Unlock()
 	c.served.Go(func() {
-		if err := c.server.Serve(listener); !errors.Is(err, http.ErrServerClosed) {
+		if err := server.Serve(listener); !errors.Is(err, http.ErrServerClosed) {
 			c.log.Error("control API stopped", "error", err)
 		}
 	})
 	return nil
+}
+
+// release closes the socket and every connection on it, sessions
+// included; processes keep running.
+func (c *control) release() {
+	c.mu.Lock()
+	server, cancel := c.server, c.cancel
+	c.server = nil
+	c.mu.Unlock()
+	if server == nil {
+		return
+	}
+	_ = server.Close()
+	cancel()
+	c.served.Wait()
+	c.handlers.Wait()
+}
+
+// reopen serves the API on its socket again after release.
+func (c *control) reopen(ctx context.Context) error {
+	return c.listen(ctx, c.path)
 }
 
 func ownLikeParent(path string) error {
@@ -110,12 +140,7 @@ func ownLikeParent(path string) error {
 // close stops the server, ends every connection and process it started, and
 // waits for them.
 func (c *control) close() {
-	if c.server != nil {
-		_ = c.server.Close()
-		c.cancel()
-		c.served.Wait()
-		c.handlers.Wait()
-	}
+	c.release()
 	c.procs.close()
 }
 

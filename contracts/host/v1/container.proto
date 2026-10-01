@@ -26,6 +26,8 @@ message SupervisorMessage {
     OutputChunk output = 4;
     // A pod's command ended on its own; the supervisor exits with its code.
     CommandExited command_exited = 90;
+    // The supervisor closed its sockets for a Detach.
+    Detached detached = 91;
   }
 }
 
@@ -73,6 +75,7 @@ message SupervisorCommand {
     // Reload restarts every runner once its current work finishes, so new
     // source in the workspace takes effect.
     Reload reload = 30;
+    Detach detach = 90;
   }
 }
 
@@ -143,3 +146,12 @@ message CancelSlot {
 message Drain {}
 
 message Reload {}
+
+// Detach precedes a checkpoint, which no runtime takes while the container
+// holds a socket on the host. The supervisor closes its control and HTTP
+// sockets and every connection on them, answers Detached, and opens them
+// again once it reconnects after the agent closed and reopened the link.
+// A container restored from the checkpoint does the same on its new link.
+message Detach {}
+
+message Detached {}

@@ -64,6 +64,10 @@ func httpFromLabels(labels map[string]string) *hostproto.HttpServing {
 // pidsLimit bounds processes per container.
 const pidsLimit = 4096
 
+// runtimeRunsc is gVisor's runtime, which confines a privileged container to
+// its sandbox kernel.
+const runtimeRunsc = "runsc"
+
 func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostproto.StartContainer, runtime string, binds []mount.Mount, workspaces []string, gpus []string, restore *restorePoint) error {
 	env := make([]string, 0, len(spec.GetEnvironment())+len(spec.GetSecrets())+8)
 	for _, key := range slices.Sorted(maps.Keys(spec.GetEnvironment())) {
@@ -129,14 +133,20 @@ func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostprot
 	} else {
 		mounts = append(mounts, mount.Mount{Type: mount.TypeBind, Source: c.workspaceDir(), Target: containerWorkspace})
 	}
+	privileged := false
 	if c.docker {
-		// A Docker daemon needs cgroups, mounts, iptables and device nodes
-		// that only a privileged container has under runc. That gives the
-		// workload the host kernel's full privilege: it can escape the
-		// container, so runc hosts must only run trusted tenants' Docker
-		// workloads. gVisor confines a privileged container to its sandbox
-		// kernel.
+		// A Docker daemon needs mounts, cgroups and device nodes. Under
+		// runsc every capability stays inside the sandbox kernel; gVisor
+		// cannot start a privileged container. Under runc only a privileged
+		// container has them, which gives the workload the host kernel's
+		// full privilege, so prepare refuses it unless the operator allowed
+		// it.
 		user = "0"
+		if a.cfg.OCIRuntime == runtimeRunsc {
+			capAdd = []string{"ALL"}
+		} else {
+			privileged = true
+		}
 	}
 	limit := int64(pidsLimit)
 	resources := spec.GetResources()
@@ -153,7 +163,7 @@ func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostprot
 		},
 		HostConfig: &containertypes.HostConfig{
 			Runtime:     a.cfg.OCIRuntime,
-			Privileged:  c.docker,
+			Privileged:  privileged,
 			CapAdd:      capAdd,
 			SecurityOpt: securityOpt,
 			Mounts:      append(mounts, binds...),

@@ -70,7 +70,18 @@ container.
   nftables netdev egress filter on the container's interfaces, from a helper
   container in the container's network namespace with NET_ADMIN, before the
   command starts; `UpdateNetwork` (versioned by `network_version`) changes
-  it later.
+  it later. The filter reads the frame's own EtherType and destination and
+  drops all but ARP and allowed ranges, so a raw socket's protocol label
+  cannot slip past it. A policy refuses `docker_enabled` (nested containers
+  bypass it) and snapshot restores (restored processes resume before the
+  filter); an automatic snapshot then starts cold.
+- Isolation. The agent connects only to a socket inode inside the link
+  directory, never through a link the workload left there, which resolves
+  on the host. The directory is sticky and world-writable so any container
+  user creates its sockets. Containers other than serving functions get no
+  platform API; a function reaches only the instances it started, and no
+  workload control. `docker_enabled` runs privileged only under runsc or
+  with the agent's `-allow-privileged-docker`.
 - Snapshots. `SnapshotContainer` makes the agent run `docker checkpoint
   create --leave-running`, upload the archive to
   `workspaces/<ws>/snapshots/<id>.tar` and report `CompleteSnapshot`; a host
@@ -89,6 +100,9 @@ container.
   it from the image on first use, binds `/proc`, `/dev`, `/sys`,
   `/run/lazycloud`, `/etc/hosts`, `/etc/resolv.conf` and the other mounts
   into it, and chroots, so the command and every session see it as `/`.
+  It then drops CAP_SYS_ADMIN from every thread's bounding and ambient sets
+  and sets no_new_privs, so no process in the devbox can mount; AppArmor
+  stays unconfined for the container's life.
   Phases come from the container state and its start stages (`image`,
   `disk`).
 
@@ -150,6 +164,26 @@ server, scheduler and agent from this branch, images cached:
 | Filesystem image of a sandbox (tar, import, push, register) | 4.4 s |
 | A devbox connection whose start fails | fails in 1.8 s with the start error, not at the 175 s deadline |
 
+## Under gVisor
+
+runsc 20260928 (`--host-uds=all`, no `--net-raw`, no `--nvproxy`), Docker 29,
+an unprivileged agent. `LAZYCLOUD_TEST_OCI_RUNTIME=runsc` runs the agent and
+supervisor Docker tests under it; all pass but the GPU test.
+
+| Check | Result |
+| --- | --- |
+| Functions, endpoints, pods, sandboxes on the private stack | `double.remote(21)` 42, endpoint 42, live pod and sandbox suites pass, `dmesg` says gVisor |
+| Supervisor sockets created inside the sandbox | link, control, HTTP and port tunnels work; the agent's link-refusing dial holds (`TestSupervisorSocketsAreNeverReachedThroughALink`) |
+| Network block, allow list, update | netfilter test and live: open reaches 1.1.1.1, block refuses, `allow 1.1.1.1/32` reaches it and refuses 8.8.8.8; each update returns once the host applied it |
+| Raw-socket bypass | not possible: gVisor refuses packet sockets without `--net-raw` (the test skips); under runc the EtherType filter drops it |
+| Devbox root switch and capability drop | `TestDevboxRootPersistsWritesAndKeepsProc` passes: CapBnd and CapEff lack CAP_SYS_ADMIN, NoNewPrivs 1, `mount` fails |
+| `docker_enabled` | runs with every capability instead of privileged, which gVisor cannot start; `docker info` 29.8.2 in a sandbox, a nested `docker run` printed its output; refused under runc without `-allow-privileged-docker` |
+| Filesystem images | include gVisor's tmpfs `/tmp`; a sandbox from the image read both files |
+| Memory snapshots | the checkpoint is taken after the supervisor detaches (0.18 s), and the pod serves again 0.5 s later (`TestSnapshotUnderRunscDetachesAndKeepsServing`); reading it needs a root agent, so an unprivileged one reports `unsupported`. With a root agent `snapshot_memory()` uploads in 0.2 s and the sandbox keeps answering |
+| Restore from a snapshot (root agent) | fails in Docker, not here: `docker start --checkpoint` of a runsc container answers `bind-mount /proc/0/ns/net ... no such file or directory`, with or without a network, and plain `docker checkpoint create` then `docker start --checkpoint` on one container fails with `content ... already exists`. Both reproduce with the docker CLI alone. A requested restore fails the start with that message; an automatic one starts cold |
+| Devbox on an NBD root disk (root agent) | live `test_ssh_config_makes_plain_ssh_reach_a_devbox`: deploy, seed the root disk (137 MB stored, generation 1), plain `ssh -F`, `lazycloud devbox <name> ssh -- echo devbox-ok`, `devbox status`, delete |
+| Everything above again with the root agent | `runsc_live.py` and the live suite pass |
+
 ## Intentional differences from the reference
 
 - Paths follow the new API (`/v1/workspaces/{ws}/instances`,
@@ -179,17 +213,18 @@ server, scheduler and agent from this branch, images cached:
 
 ## Gaps
 
-- Devbox root disks and every disk attach need root, `nbd-client` and the
-  nbd module; this host has none, so a devbox start fails here with that
-  reason. The root switch is verified with a host directory standing in for
-  the disk (`TestDevboxRootPersistsWritesAndKeepsProc`), not with a disk.
-- Memory snapshots and restores need CRIU (runc) or gVisor; neither is
-  installed, so only the `unsupported` path and the restore fallback ran.
-  Under runc a CRIU checkpoint does not carry the writable layer, and a
-  restore needs a root agent to place the checkpoint in Docker's directory.
-- gVisor: the netdev egress filter, dockerd and the root switch are
-  unverified under runsc.
-- `docker_enabled` runs the container privileged under runc.
+- Restoring runsc checkpoints through Docker 29 fails inside Docker (see
+  "Under gVisor"); it needs a Docker fix or runsc restore without Docker.
+  CRIU is not installed, so runc checkpoints only reach `unsupported`.
+- Disks need a plan with a disk allowance; the private stack's account was
+  made complimentary (`server admin set-complimentary`) to get one.
+- GPUs under runsc need `--nvproxy` in the runtime's arguments; this host's
+  runsc has none, so `TestAgentGivesContainersFreeGPUs` times out there.
+- A checkpoint closes the container's open shells, tunnels and HTTP
+  connections, since no runtime saves a host socket.
+- Under runc `docker_enabled` needs `-allow-privileged-docker` and gives the
+  workload host privilege; `LAZYCLOUD_ALLOW_PRIVILEGED_DOCKER=true` sets it
+  for `deploy/local/run.sh`.
 - The TCP ingress needs a wildcard certificate and a listener in the Helm
   chart (operations).
 - Dashboard pages come with the web packet; their operations are below.
@@ -198,7 +233,8 @@ server, scheduler and agent from this branch, images cached:
 
 - Pod page: `GET .../containers?deployment=&live=` (instances: state,
   `ready_at`/`stopped_at` for uptime, `host`, `gpu_count`, `kind`,
-  `purpose`), `POST .../deployments/{d}/scale`, `GET .../deployments/{d}`
+  `purpose`, `expires_at` for an instance with a timeout),
+  `POST .../deployments/{d}/scale`, `GET .../deployments/{d}`
   (`role`, `scaling`, `url`), the container drawer's
   `GET .../containers/{c}`, `GET .../containers/{c}/metrics`.
 - Devbox page: `GET .../deployments/{d}/devbox` (phase, reason,

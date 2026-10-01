@@ -9,18 +9,24 @@ import (
 	"maps"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/moby/moby/api/types/jsonstream"
 	"github.com/moby/moby/client"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	"golang.org/x/sys/unix"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 )
 
 // maxPublishes bounds filesystem images being imported and pushed at once.
 const maxPublishes = 2
+
+// unlimitedDiskArchiveBytes bounds the archive of a container without a disk
+// limit, beside its attached disks.
+const unlimitedDiskArchiveBytes = 64 << 30
 
 // publishFilesystem starts a PublishFilesystem once per request id.
 func (a *Agent) publishFilesystem(request *hostproto.PublishFilesystem) {
@@ -97,7 +103,13 @@ func (a *Agent) pushFilesystem(ctx context.Context, request *hostproto.PublishFi
 
 	tag := request.GetRepository() + ":fs-" + request.GetRequestId()
 	began := time.Now()
-	archive := &countingReader{r: response.Body}
+	// The supervisor's socket answers for the workload, so the archive is
+	// held to what the container can store.
+	var storage map[string]string
+	if inspect.Container.HostConfig != nil {
+		storage = inspect.Container.HostConfig.StorageOpt
+	}
+	archive := &countingReader{r: response.Body, max: c.archiveBound(storage)}
 	imported, err := a.docker.ImageImport(ctx, client.ImageImportSource{Source: archive, SourceName: "-"}, tag, client.ImageImportOptions{
 		Changes:  changes,
 		Message:  "lazycloud filesystem of container " + c.id,
@@ -127,7 +139,6 @@ func (a *Agent) pushFilesystem(ctx context.Context, request *hostproto.PublishFi
 		return "", "", fmt.Errorf("push %s: %w", tag, err)
 	}
 	defer func() { _ = pushed.Close() }()
-	var digest string
 	for message, err := range pushed.JSONMessages(ctx) {
 		if err != nil {
 			return "", "", fmt.Errorf("push %s: %w", tag, err)
@@ -135,15 +146,14 @@ func (a *Agent) pushFilesystem(ctx context.Context, request *hostproto.PublishFi
 		if message.Error != nil {
 			return "", "", fmt.Errorf("push %s: %w", tag, message.Error)
 		}
-		if message.Aux != nil {
-			var aux struct {
-				Digest string `json:"Digest"`
-			}
-			if json.Unmarshal(*message.Aux, &aux) == nil && aux.Digest != "" {
-				digest = aux.Digest
-			}
-		}
 	}
+	// The push output names the digest only on some Docker versions; the
+	// registry is the authority on what the tag now points to.
+	pushedAt, err := a.docker.DistributionInspect(ctx, tag, client.DistributionInspectOptions{EncodedRegistryAuth: options.RegistryAuth})
+	if err != nil {
+		return "", "", fmt.Errorf("read the pushed digest of %s: %w", tag, err)
+	}
+	digest := pushedAt.Descriptor.Digest.String()
 	if !strings.HasPrefix(digest, "sha256:") {
 		return "", "", fmt.Errorf("push %s: the registry reported no digest", tag)
 	}
@@ -152,15 +162,41 @@ func (a *Agent) pushFilesystem(ctx context.Context, request *hostproto.PublishFi
 	return request.GetRepository() + "@" + digest, source.Architecture, nil
 }
 
-// countingReader counts the bytes read through it.
+// archiveBound is the most a container's filesystem archive may hold: its
+// disk limit, or unlimitedDiskArchiveBytes, and the size of every attached
+// disk.
+func (c *container) archiveBound(storage map[string]string) int64 {
+	bound := int64(unlimitedDiskArchiveBytes)
+	if size, err := strconv.ParseInt(storage["size"], 10, 64); err == nil && size > 0 {
+		bound = size
+	}
+	c.disks.mu.Lock()
+	defer c.disks.mu.Unlock()
+	for _, d := range c.disks.disks {
+		var fs unix.Statfs_t
+		if err := unix.Statfs(c.a.diskMount(c.id, d.Name), &fs); err == nil {
+			bound += int64(fs.Blocks) * fs.Bsize //nolint:gosec // block counts fit
+		}
+	}
+	return bound
+}
+
+// errArchiveTooLarge ends an archive longer than its container can store.
+var errArchiveTooLarge = errors.New("the filesystem archive is larger than the container's disks")
+
+// countingReader counts the bytes read through it and fails past max.
 type countingReader struct {
-	r io.Reader
-	n int64
+	r   io.Reader
+	n   int64
+	max int64
 }
 
 func (c *countingReader) Read(p []byte) (int, error) {
 	n, err := c.r.Read(p)
 	c.n += int64(n)
+	if c.n > c.max {
+		return n, errArchiveTooLarge
+	}
 	return n, err //nolint:wrapcheck // readers compare io.EOF
 }
 

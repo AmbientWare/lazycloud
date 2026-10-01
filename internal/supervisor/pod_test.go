@@ -215,3 +215,38 @@ func TestArchiveKeepsLinksAndAttributesAndSkipsMountsAndSockets(t *testing.T) {
 		t.Fatalf("directory %v", entries)
 	}
 }
+
+// A Detach closes the control socket, keeping the pod's processes, until
+// the next connection opens it again.
+func TestDetachClosesTheControlSocketUntilTheNextConnection(t *testing.T) {
+	h := startSupervisor(t)
+	c := h.accept()
+	socket := filepath.Join(filepath.Dir(h.socket), "control.sock")
+	c.configurePod(t, &hostproto.PodProcess{}, socket)
+	c.until(t, isReady)
+	ctl := &controlHarness{t: t, socket: socket, client: unixClient(socket)}
+	cwd := t.TempDir()
+	var p apitypes.Process
+	if status, _ := ctl.do(http.MethodPost, "/processes", apitypes.ProcessRequest{Args: []string{"sleep", "100"}, Cwd: &cwd}, &p); status != http.StatusCreated {
+		t.Fatalf("start: %d", status)
+	}
+
+	c.send(t, &hostproto.SupervisorCommand{Body: &hostproto.SupervisorCommand_Detach{Detach: &hostproto.Detach{}}})
+	c.until(t, func(m *hostproto.SupervisorMessage) bool { return m.GetDetached() != nil })
+	if _, err := os.Stat(socket); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the control socket remains after a detach: %v", err)
+	}
+	close(c.end)
+
+	c = h.accept()
+	c.until(t, isReady)
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		var got apitypes.Process
+		if status, _ := ctl.do(http.MethodGet, "/processes/"+p.ProcessId, nil, &got); status == http.StatusOK && got.Running {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the control API did not come back with its process")
+		}
+	}
+}

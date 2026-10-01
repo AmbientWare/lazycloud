@@ -13,6 +13,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, JsonValue, ValidationError
 from shared.api import (
+    CommandItem,
     ContainerFile,
     ContainerLifecycle,
     ContainerState,
@@ -23,6 +24,7 @@ from shared.api import (
     Instance,
     NetworkPolicy,
     PodKind,
+    PodSpec,
     Process,
     ProcessRequest,
     ReplaceInFilesRequest,
@@ -1619,9 +1621,9 @@ class Sandbox(ControlClientConfigMixin):
 
         del handler
         self.require_supported()
-        pod: dict[str, Any] = {"kind": PodKind.sandbox.value, "command": list(self.command)}
+        pod = PodSpec(kind=PodKind.sandbox, command=[CommandItem(item) for item in self.command])
         if self.ports:
-            pod["ports"] = _sandbox_port_mapping(self.ports)
+            pod.ports = _sandbox_port_mapping(self.ports)
         return container_function_spec(
             self,
             label="sandbox",

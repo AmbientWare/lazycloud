@@ -428,9 +428,8 @@ def test_sandbox_processes_start_poll_stream_and_kill(fake_api: FakeApi) -> None
         return json_reply(_process(False, exit_code=0, stdout="hi\n", stderr="warn\n"))
 
     fake_api.route("POST", f"{BOX}/processes/p1/kill")(_no_content)
-    fake_api.route("GET", f"{BOX}/processes")(
-        lambda request: json_reply({"processes": [{**_process(True), "cwd": "/tmp"}]})
-    )
+    processes: dict[str, object] = {"processes": [{**_process(True), "cwd": "/tmp"}]}
+    fake_api.route("GET", f"{BOX}/processes")(lambda request: json_reply(processes))
 
     result = sandbox.run("echo 'hi there'", cwd="/tmp", env={"A": "1"})
     process = sandbox.process.exec("sleep", "10")
@@ -458,7 +457,7 @@ def test_sandbox_file_operations_map_to_the_container_file_routes(
 ) -> None:
     sandbox = _sandbox(fake_api)
     files = f"{BOX}/files"
-    entry = {
+    entry: dict[str, object] = {
         "name": "a.txt",
         "mode": 0o100644,
         "size": 3,
@@ -471,26 +470,27 @@ def test_sandbox_file_operations_map_to_the_container_file_routes(
     fake_api.route("PUT", f"{files}/content")(_no_content)
     fake_api.route("GET", f"{files}/content")(lambda request: (200, {}, b"abc"))
     fake_api.route("GET", f"{files}/stat")(lambda request: json_reply(entry))
-    fake_api.route("GET", files)(
-        lambda request: json_reply(
-            {"files": [entry], "truncated": request.query["path"] == ["big"]}
-        )
-    )
+
+    def listing(request: ApiRequest) -> Reply:
+        payload: dict[str, object] = {
+            "files": [entry],
+            "truncated": request.query["path"] == ["big"],
+        }
+        return json_reply(payload)
+
+    fake_api.route("GET", files)(listing)
     fake_api.route("DELETE", files)(_no_content)
     fake_api.route("POST", f"{BOX}/directories")(_no_content)
     fake_api.route("DELETE", f"{BOX}/directories")(_no_content)
-    fake_api.route("POST", f"{files}/find")(
-        lambda request: json_reply(
-            {
-                "matches": [
-                    {"path": "a.txt", "line": 1, "column": 2, "text": "abc"},
-                    {"path": "a.txt", "line": 3, "column": 1, "text": "b"},
-                    {"path": "b.txt", "line": 1, "column": 1, "text": "b"},
-                ],
-                "truncated": False,
-            }
-        )
-    )
+    find_reply: dict[str, object] = {
+        "matches": [
+            {"path": "a.txt", "line": 1, "column": 2, "text": "abc"},
+            {"path": "a.txt", "line": 3, "column": 1, "text": "b"},
+            {"path": "b.txt", "line": 1, "column": 1, "text": "b"},
+        ],
+        "truncated": False,
+    }
+    fake_api.route("POST", f"{files}/find")(lambda request: json_reply(find_reply))
     fake_api.route("POST", f"{files}/replace")(
         lambda request: json_reply({"files": 1, "replacements": 2})
     )
@@ -536,9 +536,8 @@ def test_sandbox_ports_network_lifetime_snapshots_and_termination(fake_api: Fake
     fake_api.route("POST", f"{BOX}/ports")(
         lambda request: json_reply({"port": 3000, "url": "https://3000.example.test"})
     )
-    fake_api.route("GET", f"{BOX}/ports")(
-        lambda request: json_reply({"ports": [{"port": 3000, "url": "https://3000.example.test"}]})
-    )
+    ports: dict[str, object] = {"ports": [{"port": 3000, "url": "https://3000.example.test"}]}
+    fake_api.route("GET", f"{BOX}/ports")(lambda request: json_reply(ports))
     fake_api.route("PUT", f"{BOX}/network")(lambda request: json_reply(request.json()))
     fake_api.route("GET", f"{BOX}/network")(
         lambda request: json_reply({"block_network": True, "allow_list": []})
@@ -586,7 +585,7 @@ def test_sandbox_listing_stats_and_timeline(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_api: FakeApi
 ) -> None:
     tools = _project(tmp_path, monkeypatch)
-    row = {
+    row: dict[str, object] = {
         "id": CONTAINER,
         "release_id": RELEASE,
         "app": "tools",
@@ -595,7 +594,8 @@ def test_sandbox_listing_stats_and_timeline(
         "gpu": [],
         "created_at": NOW,
     }
-    fake_api.route("GET", f"{TEAM}/sandboxes")(lambda request: json_reply({"sandboxes": [row]}))
+    sandboxes: dict[str, object] = {"sandboxes": [row]}
+    fake_api.route("GET", f"{TEAM}/sandboxes")(lambda request: json_reply(sandboxes))
     fake_api.route("GET", f"{TEAM}/sandboxes/stats")(
         lambda request: json_reply(
             {

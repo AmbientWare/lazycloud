@@ -175,6 +175,10 @@ message ContainerReport {
   repeated StartupStage startup = 80;
   // The snapshot the start could not restore; the container started cold.
   string restore_failed = 90;
+  // The newest UpdateNetwork version the host applied, or failed to apply
+  // with network_error; the container then keeps its previous policy.
+  int32 network_version = 91;
+  string network_error = 92;
 }
 
 enum StartupStageKind {
@@ -270,6 +274,9 @@ message ServerMessage {
 message UpdateNetwork {
   string container_id = 1;
   NetworkPolicy policy = 2;
+  // Orders the container's policy changes; the host reports the newest it
+  // applied in ContainerReport.network_version.
+  int32 version = 90;
 }
 
 // SnapshotContainer checkpoints a running container's memory and writable

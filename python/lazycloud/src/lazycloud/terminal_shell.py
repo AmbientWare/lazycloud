@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from types import FrameType
 from typing import Protocol
 
+from pydantic import BaseModel, StrictInt, ValidationError
+
 # The server's default when a client names no terminal type.
 SHELL_DEFAULT_TERM = "xterm-256color"
 _MAX_MESSAGE_BYTES = 16 * 1024 * 1024
@@ -261,19 +263,26 @@ class _ServerState:
     exit_code: int | None = None
 
 
+class _ShellControl(BaseModel):
+    """A text message of the shell protocol: an exit or an error."""
+
+    type: str
+    message: str | None = None
+    code: StrictInt | None = None
+
+
 def _control_message(text: str) -> int:
     """The exit code a server text message carries; an error message raises."""
     try:
-        message = json.loads(text)
-    except ValueError as exc:
+        message = _ShellControl.model_validate_json(text)
+    except ValidationError as exc:
         raise ShellConnectionError("shell backend sent an invalid text message") from exc
-    kind = message.get("type") if isinstance(message, dict) else None
-    if kind == "error":
-        raise ShellConnectionError(str(message.get("message") or "shell error"))
-    if kind != "exit":
-        raise ShellConnectionError(f"shell backend sent an unknown message type {kind!r}")
-    code = message.get("code")
-    if isinstance(code, bool) or not isinstance(code, int):
+    if message.type == "error":
+        raise ShellConnectionError(message.message or "shell error")
+    if message.type != "exit":
+        raise ShellConnectionError(f"shell backend sent an unknown message type {message.type!r}")
+    code = message.code
+    if code is None:
         raise ShellConnectionError("shell backend sent an invalid exit code")
     if not 0 <= code <= 255:
         raise ShellConnectionError("shell backend exit code is outside the valid range")

@@ -5825,6 +5825,10 @@ components:
           description: The name of the host the container was placed on.
           type: string
         gpu_count: { type: integer }
+        expires_at:
+          description: When an instance with a timeout stops unless it is used again.
+          type: string
+          format: date-time
 
     ContainerPurpose:
       description: >-

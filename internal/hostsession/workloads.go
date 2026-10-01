@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
@@ -38,8 +39,12 @@ func (s *Server) podWorkload(ctx context.Context, start execution.StartCommand) 
 	}
 	out.Devbox = p.Kind == apitypes.PodKindDevbox
 	out.Idle = out.Devbox && len(out.Command) == 0
-	for _, port := range execution.PodPorts(spec) {
-		out.Ports = append(out.Ports, int32(port)) //nolint:gosec // The schema bounds ports.
+	// A pod is ready once its first port answers. A sandbox is ready once
+	// its command started: its ports are for what runs in it later.
+	if p.Kind != apitypes.PodKindSandbox {
+		for _, port := range execution.PodPorts(spec) {
+			out.Ports = append(out.Ports, int32(port)) //nolint:gosec // The schema bounds ports.
+		}
 	}
 	if h := p.HealthCheck; h != nil && h.Port != nil {
 		out.Health = &hostproto.HealthCheck{Path: h.Path, Port: int32(*h.Port)} //nolint:gosec // The schema bounds ports.
@@ -138,12 +143,25 @@ func (sess *session) syncWorkloads(ctx context.Context, commands execution.HostC
 		}
 		msg := &hostproto.UpdateNetwork{
 			ContainerId: n.Container.String(), Policy: &hostproto.NetworkPolicy{Block: n.Policy.Block, Allow: n.Policy.Allow},
+			Version: int32(n.Version), //nolint:gosec // Versions count policy changes.
 		}
 		if err := sess.send(&hostproto.ServerMessage{CommandId: id, Body: &hostproto.ServerMessage_Network{Network: msg}}); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func isHexDigest(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for _, c := range s {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func valueOr[T any](v *T, def T) T {
@@ -208,6 +226,13 @@ func (s *Server) CompleteFilesystemImage(ctx context.Context, req *hostproto.Com
 		architecture = "amd64"
 	}
 	err = s.execution.FinishFilesystemImage(ctx, hostFrom(ctx), container, request, failure, func(ws identity.WorkspaceID) (string, error) {
+		// The host names only a digest in the repository this workspace's
+		// images go to.
+		repository, _, _ := s.images.FilesystemTarget(ws)
+		digest, ok := strings.CutPrefix(req.GetReference(), repository+"@sha256:")
+		if !ok || !isHexDigest(digest) {
+			return "", fmt.Errorf("the host reported %q, not an image in %s", req.GetReference(), repository)
+		}
 		return s.images.RegisterFilesystem(ctx, ws, req.GetReference(), architecture, python)
 	})
 	if errors.Is(err, execution.ErrStaleSnapshot) {

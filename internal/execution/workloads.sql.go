@@ -33,6 +33,23 @@ func (q *Queries) ContainerNetwork(ctx context.Context, arg ContainerNetworkPara
 	return i, err
 }
 
+const containerNetworkApplied = `-- name: ContainerNetworkApplied :one
+select state, network_applied_version, network_error from containers where id = $1
+`
+
+type ContainerNetworkAppliedRow struct {
+	State                 string
+	NetworkAppliedVersion int32
+	NetworkError          *string
+}
+
+func (q *Queries) ContainerNetworkApplied(ctx context.Context, id uuid.UUID) (ContainerNetworkAppliedRow, error) {
+	row := q.db.QueryRow(ctx, containerNetworkApplied, id)
+	var i ContainerNetworkAppliedRow
+	err := row.Scan(&i.State, &i.NetworkAppliedVersion, &i.NetworkError)
+	return i, err
+}
+
 const containerReleaseOf = `-- name: ContainerReleaseOf :one
 select release_id::uuid as release_id from containers where id = $1 and release_id is not null
 `
@@ -46,7 +63,7 @@ func (q *Queries) ContainerReleaseOf(ctx context.Context, id uuid.UUID) (uuid.UU
 
 const containerRoute = `-- name: ContainerRoute :one
 select c.id, c.host_id, c.state, c.purpose, c.exposed_ports, c.workspace_id, ws.name as workspace_name,
-       w.id as workload_id, w.kind, a.state as app_state, w.desired_state, r.spec
+       w.id as workload_id, w.kind, a.state as app_state, w.desired_state, r.spec, c.created_by_container
 from containers c
 join releases r on r.id = c.release_id
 join workloads w on w.id = r.workload_id
@@ -56,18 +73,19 @@ where c.id = $1
 `
 
 type ContainerRouteRow struct {
-	ID            uuid.UUID
-	HostID        *uuid.UUID
-	State         string
-	Purpose       string
-	ExposedPorts  []int32
-	WorkspaceID   uuid.UUID
-	WorkspaceName string
-	WorkloadID    uuid.UUID
-	Kind          string
-	AppState      string
-	DesiredState  string
-	Spec          []byte
+	ID                 uuid.UUID
+	HostID             *uuid.UUID
+	State              string
+	Purpose            string
+	ExposedPorts       []int32
+	WorkspaceID        uuid.UUID
+	WorkspaceName      string
+	WorkloadID         uuid.UUID
+	Kind               string
+	AppState           string
+	DesiredState       string
+	Spec               []byte
+	CreatedByContainer *uuid.UUID
 }
 
 // A live container with what routing to it needs.
@@ -87,6 +105,7 @@ func (q *Queries) ContainerRoute(ctx context.Context, id uuid.UUID) (ContainerRo
 		&i.AppState,
 		&i.DesiredState,
 		&i.Spec,
+		&i.CreatedByContainer,
 	)
 	return i, err
 }
@@ -290,6 +309,45 @@ func (q *Queries) DrainServeContainersOfWorkload(ctx context.Context, workloadID
 	return items, nil
 }
 
+const drainUnservedInstances = `-- name: DrainUnservedInstances :many
+update containers c
+set state = 'draining', drain_started_at = now()
+from releases r
+join workloads w on w.id = r.workload_id
+join apps a on a.id = w.app_id
+join workspaces ws on ws.id = a.workspace_id
+where r.id = c.release_id and c.purpose <> 'serve' and c.state in ('starting', 'ready')
+  and (w.desired_state <> 'active' or a.state <> 'active' or ws.state <> 'active')
+returning c.id, c.host_id
+`
+
+type DrainUnservedInstancesRow struct {
+	ID     uuid.UUID
+	HostID *uuid.UUID
+}
+
+// Running instances and shell containers of such workloads drain; their
+// hosts stop them.
+func (q *Queries) DrainUnservedInstances(ctx context.Context) ([]DrainUnservedInstancesRow, error) {
+	rows, err := q.db.Query(ctx, drainUnservedInstances)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DrainUnservedInstancesRow
+	for rows.Next() {
+		var i DrainUnservedInstancesRow
+		if err := rows.Scan(&i.ID, &i.HostID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const endContainerLeases = `-- name: EndContainerLeases :exec
 update container_leases set expires_at = least(expires_at, now())
 where holder_id = $1 and container_id = any($2::uuid[])
@@ -330,30 +388,31 @@ func (q *Queries) ExposePort(ctx context.Context, arg ExposePortParams) ([]int32
 const insertInstance = `-- name: InsertInstance :one
 insert into containers (
     workspace_id, release_id, state, slots, cpu_millis, memory_bytes, gpu_count, rate_class,
-    purpose, keep_warm_seconds, command, snapshot_id, block_network, allow_list, exposed_ports
+    purpose, keep_warm_seconds, command, snapshot_id, block_network, allow_list, exposed_ports, created_by_container
 )
 values (
     $1, $2, 'pending', 1, $3, $4, $5, $6,
     $7, $8, $9::text[], $10,
-    $11, $12::text[], $13::int[]
+    $11, $12::text[], $13::int[], $14
 )
 returning id, created_at
 `
 
 type InsertInstanceParams struct {
-	WorkspaceID     uuid.UUID
-	ReleaseID       *uuid.UUID
-	CpuMillis       int64
-	MemoryBytes     int64
-	GpuCount        int32
-	RateClass       string
-	Purpose         string
-	KeepWarmSeconds *int32
-	Command         []string
-	SnapshotID      *uuid.UUID
-	BlockNetwork    bool
-	AllowList       []string
-	ExposedPorts    []int32
+	WorkspaceID        uuid.UUID
+	ReleaseID          *uuid.UUID
+	CpuMillis          int64
+	MemoryBytes        int64
+	GpuCount           int32
+	RateClass          string
+	Purpose            string
+	KeepWarmSeconds    *int32
+	Command            []string
+	SnapshotID         *uuid.UUID
+	BlockNetwork       bool
+	AllowList          []string
+	ExposedPorts       []int32
+	CreatedByContainer *uuid.UUID
 }
 
 type InsertInstanceRow struct {
@@ -376,6 +435,7 @@ func (q *Queries) InsertInstance(ctx context.Context, arg InsertInstanceParams) 
 		arg.BlockNetwork,
 		arg.AllowList,
 		arg.ExposedPorts,
+		arg.CreatedByContainer,
 	)
 	var i InsertInstanceRow
 	err := row.Scan(&i.ID, &i.CreatedAt)
@@ -909,6 +969,32 @@ func (q *Queries) ReadyPodContainers(ctx context.Context, workloadID uuid.UUID) 
 	return items, nil
 }
 
+const recordNetworkApplied = `-- name: RecordNetworkApplied :one
+update containers set network_applied_version = $1, network_error = $2
+where id = $3 and host_id = $4 and network_applied_version < $1
+returning id
+`
+
+type RecordNetworkAppliedParams struct {
+	Version int32
+	Error   *string
+	ID      uuid.UUID
+	HostID  *uuid.UUID
+}
+
+// Keeps the newest version a host reports for a container it holds.
+func (q *Queries) RecordNetworkApplied(ctx context.Context, arg RecordNetworkAppliedParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, recordNetworkApplied,
+		arg.Version,
+		arg.Error,
+		arg.ID,
+		arg.HostID,
+	)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
 const sandboxCreatedDays = `-- name: SandboxCreatedDays :many
 select (date_trunc('day', c.created_at at time zone 'UTC') at time zone 'UTC')::timestamptz as day, count(*)::int as created
 from containers c
@@ -1004,7 +1090,7 @@ const setContainerNetwork = `-- name: SetContainerNetwork :one
 update containers
 set block_network = $1, allow_list = $2::text[], network_version = network_version + 1
 where id = $3 and workspace_id = $4 and state <> 'stopped'
-returning host_id, block_network, allow_list
+returning host_id, block_network, allow_list, network_version
 `
 
 type SetContainerNetworkParams struct {
@@ -1015,9 +1101,10 @@ type SetContainerNetworkParams struct {
 }
 
 type SetContainerNetworkRow struct {
-	HostID       *uuid.UUID
-	BlockNetwork bool
-	AllowList    []string
+	HostID         *uuid.UUID
+	BlockNetwork   bool
+	AllowList      []string
+	NetworkVersion int32
 }
 
 func (q *Queries) SetContainerNetwork(ctx context.Context, arg SetContainerNetworkParams) (SetContainerNetworkRow, error) {
@@ -1028,7 +1115,12 @@ func (q *Queries) SetContainerNetwork(ctx context.Context, arg SetContainerNetwo
 		arg.WorkspaceID,
 	)
 	var i SetContainerNetworkRow
-	err := row.Scan(&i.HostID, &i.BlockNetwork, &i.AllowList)
+	err := row.Scan(
+		&i.HostID,
+		&i.BlockNetwork,
+		&i.AllowList,
+		&i.NetworkVersion,
+	)
 	return i, err
 }
 
@@ -1086,6 +1178,40 @@ returning c.id
 
 func (q *Queries) StopPendingServeContainersOfWorkload(ctx context.Context, workloadID uuid.UUID) ([]uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, stopPendingServeContainersOfWorkload, workloadID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const stopUnservedPendingInstances = `-- name: StopUnservedPendingInstances :many
+update containers c
+set state = 'stopped', stop_reason = 'stopped', exit_message = 'the workload stopped', stopped_at = now()
+from releases r
+join workloads w on w.id = r.workload_id
+join apps a on a.id = w.app_id
+join workspaces ws on ws.id = a.workspace_id
+where r.id = c.release_id and c.purpose <> 'serve' and c.state = 'pending'
+  and (w.desired_state <> 'active' or a.state <> 'active' or ws.state <> 'active')
+returning c.id
+`
+
+// Pending instances and shell containers whose workload stopped, app
+// paused or workspace is being deleted never start.
+func (q *Queries) StopUnservedPendingInstances(ctx context.Context) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, stopUnservedPendingInstances)
 	if err != nil {
 		return nil, err
 	}

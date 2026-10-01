@@ -2952,10 +2952,13 @@ type Container struct {
 	CreatedAt time.Time `json:"created_at"`
 
 	// ExitCode How the container's command exited, once it has.
-	ExitCode    *int         `json:"exit_code,omitempty"`
-	ExitMessage *string      `json:"exit_message,omitempty"`
-	Function    WorkloadName `json:"function"`
-	GpuCount    *int         `json:"gpu_count,omitempty"`
+	ExitCode    *int    `json:"exit_code,omitempty"`
+	ExitMessage *string `json:"exit_message,omitempty"`
+
+	// ExpiresAt When an instance with a timeout stops unless it is used again.
+	ExpiresAt *time.Time   `json:"expires_at,omitempty"`
+	Function  WorkloadName `json:"function"`
+	GpuCount  *int         `json:"gpu_count,omitempty"`
 
 	// Host The name of the host the container was placed on.
 	Host *string            `json:"host,omitempty"`

@@ -99,6 +99,10 @@ type Config struct {
 	// OCIRuntime is the Docker runtime name, runc locally and runsc in
 	// production.
 	OCIRuntime string
+	// AllowPrivilegedDocker lets docker_enabled containers run privileged
+	// under a runtime other than runsc, where they hold the host kernel's
+	// full privilege. Only hosts serving trusted tenants set it.
+	AllowPrivilegedDocker bool
 	// GeeseFSPath is the pinned GeeseFS binary that mounts workspace volume
 	// buckets; empty means the host mounts no volumes.
 	GeeseFSPath string

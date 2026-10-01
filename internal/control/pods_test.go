@@ -74,6 +74,17 @@ func TestPodDefinitionsRejectWhatTheyCannotRun(t *testing.T) {
 			s.Pod.Tcp, s.Authorized = new(true), new(true)
 			return s
 		}(), "requires a public Pod"},
+		"docker with a network policy": {func() apitypes.FunctionSpec {
+			s := pod("web", apitypes.PodKindSandbox)
+			s.DockerEnabled, s.Pod.BlockNetwork = new(true), new(true)
+			return s
+		}(), "cannot be combined"},
+		"checkpoint with a network policy": {func() apitypes.FunctionSpec {
+			s := pod("web", apitypes.PodKindPod)
+			s.Checkpoint = &apitypes.CheckpointSpec{ReadinessPath: new("/"), ReadinessPort: new(8080)}
+			s.Pod.BlockNetwork = new(true)
+			return s
+		}(), "restored pod would run before"},
 		"bad cidr": {func() apitypes.FunctionSpec {
 			s := pod("web", apitypes.PodKindPod)
 			s.Pod.AllowList = &[]string{"example.com"}

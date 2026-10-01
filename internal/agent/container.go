@@ -72,6 +72,8 @@ type container struct {
 	disks   diskSet
 	// apiCalls bounds container API calls in flight.
 	apiCalls chan struct{}
+	// detached receives the supervisor's answer to a Detach.
+	detached chan struct{}
 
 	// work covers preparation, claims and log delivery; claims stop earlier
 	// when the container begins stopping.
@@ -146,6 +148,7 @@ func (a *Agent) newContainer(id, handler string, slots int, httpServing *hostpro
 		slotFree:   make(chan struct{}, 1),
 		gone:       make(chan struct{}),
 		apiCalls:   make(chan struct{}, maxContainerAPICalls),
+		detached:   make(chan struct{}, 1),
 	}
 	if httpServing != nil {
 		c.requests = socketTransport(filepath.Join(c.linkDir(), httpSocketName))
@@ -210,6 +213,8 @@ func (c *container) snapshot() *hostproto.ContainerReport {
 		RunningAttempts: running,
 		Startup:         slices.Clone(c.startup),
 		RestoreFailed:   c.restoreFailed,
+		NetworkVersion:  c.network.reportedVersion(),
+		NetworkError:    c.network.reportedFailure(),
 	}
 }
 
@@ -269,6 +274,12 @@ func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer)
 	pod := spec.GetPod()
 	if pod == nil && spec.GetFunction().GetHandler() == "" {
 		return fmt.Errorf("start has neither a function handler nor a pod")
+	}
+	if spec.GetDocker() && c.a.cfg.OCIRuntime != runtimeRunsc && !c.a.cfg.AllowPrivilegedDocker {
+		return fmt.Errorf("this host runs containers with %s, where a Docker daemon needs host privilege; it runs docker_enabled containers only under runsc or with -allow-privileged-docker", c.a.cfg.OCIRuntime)
+	}
+	if spec.GetDocker() && restricts(pod.GetNetwork()) {
+		return fmt.Errorf("a container with docker_enabled cannot limit its network: nested containers would bypass the policy")
 	}
 	// Functions run the managed Python runner; a pod mounts the runtime
 	// only when the start names one.
@@ -344,7 +355,7 @@ func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer)
 			workspaces = append(workspaces, ws)
 		}
 	}
-	restore, err := c.prepareRestore(ctx, spec.GetRestore())
+	restore, err := c.prepareRestore(ctx, spec.GetRestore(), restricts(pod.GetNetwork()))
 	if err != nil {
 		return err
 	}
@@ -650,6 +661,11 @@ func (c *container) onSupervisorMessage(ctx context.Context, m *hostproto.Superv
 		c.onFinished(body.Finished)
 	case *hostproto.SupervisorMessage_CommandExited:
 		c.onCommandExited(body.CommandExited)
+	case *hostproto.SupervisorMessage_Detached:
+		select {
+		case c.detached <- struct{}{}:
+		default:
+		}
 	case *hostproto.SupervisorMessage_Output:
 		// Output outside an attempt, such as import-time prints and HTTP
 		// requests, goes to the container's own log.

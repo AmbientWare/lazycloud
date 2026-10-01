@@ -57,6 +57,7 @@ type Edge struct {
 	bodies        bodyBudget
 	relay         *relaying
 	tcp           tcpURLs
+	tcpTargets    tcpTargets
 	podWaits      podWaits
 	holds         containerHolds
 	// records queues finished requests for writeRequests; droppedRecords

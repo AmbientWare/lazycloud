@@ -34,7 +34,13 @@ func resolvePod(spec apitypes.FunctionSpec, out *apitypes.FunctionSpec) error {
 		return nil
 	}
 	p := *spec.Pod
+	docker := spec.DockerEnabled != nil && *spec.DockerEnabled
+	limited := (p.BlockNetwork != nil && *p.BlockNetwork) || (p.AllowList != nil && len(*p.AllowList) > 0)
 	switch {
+	case docker && limited:
+		return invalid("docker_enabled cannot be combined with block_network or allow_list: nested containers would bypass the policy")
+	case spec.Checkpoint != nil && limited:
+		return invalid("checkpoint cannot be combined with block_network or allow_list: a restored pod would run before its filter applies")
 	case !p.Kind.Valid():
 		return invalid(fmt.Sprintf("unknown pod kind %q", p.Kind))
 	case spec.Handler != nil:

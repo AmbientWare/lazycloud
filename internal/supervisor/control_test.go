@@ -220,8 +220,8 @@ func TestProcessOutputIsCappedAndLateOutputMarksTruncated(t *testing.T) {
 	// A background child keeps the pipes open after the leader exits; the
 	// result comes a second after the exit with the output marked
 	// incomplete.
-	p := h.start([]string{"sh", "-c", "sleep 5 & echo leader"}, nil)
 	started := time.Now()
+	p := h.start([]string{"sh", "-c", "sleep 5 & echo leader"}, nil)
 	late := h.wait(p.ProcessId)
 	if late.Stdout != "leader\n" || !late.StdoutTruncated || !late.StderrTruncated || *late.ExitCode != 0 {
 		t.Fatalf("late output %+v", late)

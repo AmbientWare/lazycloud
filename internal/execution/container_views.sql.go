@@ -18,6 +18,7 @@ select c.id, a.name as app_name, w.name as function_name, r.id as release_id, r.
        c.created_at, c.ready_at, c.stopped_at,
        (select count(*) from attempts at where at.container_id = c.id and at.state = 'running')::int as running,
        w.kind, c.purpose, c.exit_code, c.gpu_count, h.name as host_name,
+       c.keep_warm_seconds, c.active_until,
        coalesce(r.spec #>> '{image,reference}', '')::text as image
 from containers c
 join releases r on r.id = c.release_id
@@ -33,27 +34,29 @@ type ContainerViewParams struct {
 }
 
 type ContainerViewRow struct {
-	ID           uuid.UUID
-	AppName      string
-	FunctionName string
-	ReleaseID    uuid.UUID
-	Version      *int32
-	State        string
-	StopReason   *string
-	ExitMessage  *string
-	Slots        int32
-	CpuMillis    int64
-	MemoryBytes  int64
-	CreatedAt    time.Time
-	ReadyAt      *time.Time
-	StoppedAt    *time.Time
-	Running      int32
-	Kind         string
-	Purpose      string
-	ExitCode     *int32
-	GpuCount     int32
-	HostName     *string
-	Image        string
+	ID              uuid.UUID
+	AppName         string
+	FunctionName    string
+	ReleaseID       uuid.UUID
+	Version         *int32
+	State           string
+	StopReason      *string
+	ExitMessage     *string
+	Slots           int32
+	CpuMillis       int64
+	MemoryBytes     int64
+	CreatedAt       time.Time
+	ReadyAt         *time.Time
+	StoppedAt       *time.Time
+	Running         int32
+	Kind            string
+	Purpose         string
+	ExitCode        *int32
+	GpuCount        int32
+	HostName        *string
+	KeepWarmSeconds *int32
+	ActiveUntil     *time.Time
+	Image           string
 }
 
 func (q *Queries) ContainerView(ctx context.Context, arg ContainerViewParams) (ContainerViewRow, error) {
@@ -80,6 +83,8 @@ func (q *Queries) ContainerView(ctx context.Context, arg ContainerViewParams) (C
 		&i.ExitCode,
 		&i.GpuCount,
 		&i.HostName,
+		&i.KeepWarmSeconds,
+		&i.ActiveUntil,
 		&i.Image,
 	)
 	return i, err
@@ -101,6 +106,7 @@ select c.id, a.name as app_name, w.name as function_name, r.id as release_id, r.
        c.created_at, c.ready_at, c.stopped_at,
        (select count(*) from attempts at where at.container_id = c.id and at.state = 'running')::int as running,
        w.kind, c.purpose, c.exit_code, c.gpu_count, h.name as host_name,
+       c.keep_warm_seconds, c.active_until,
        coalesce(r.spec #>> '{image,reference}', '')::text as image
 from containers c
 join releases r on r.id = c.release_id
@@ -126,27 +132,29 @@ type ListContainersParams struct {
 }
 
 type ListContainersRow struct {
-	ID           uuid.UUID
-	AppName      string
-	FunctionName string
-	ReleaseID    uuid.UUID
-	Version      *int32
-	State        string
-	StopReason   *string
-	ExitMessage  *string
-	Slots        int32
-	CpuMillis    int64
-	MemoryBytes  int64
-	CreatedAt    time.Time
-	ReadyAt      *time.Time
-	StoppedAt    *time.Time
-	Running      int32
-	Kind         string
-	Purpose      string
-	ExitCode     *int32
-	GpuCount     int32
-	HostName     *string
-	Image        string
+	ID              uuid.UUID
+	AppName         string
+	FunctionName    string
+	ReleaseID       uuid.UUID
+	Version         *int32
+	State           string
+	StopReason      *string
+	ExitMessage     *string
+	Slots           int32
+	CpuMillis       int64
+	MemoryBytes     int64
+	CreatedAt       time.Time
+	ReadyAt         *time.Time
+	StoppedAt       *time.Time
+	Running         int32
+	Kind            string
+	Purpose         string
+	ExitCode        *int32
+	GpuCount        int32
+	HostName        *string
+	KeepWarmSeconds *int32
+	ActiveUntil     *time.Time
+	Image           string
 }
 
 // Newest first below the cursor, from the workspace's recent index.
@@ -187,6 +195,8 @@ func (q *Queries) ListContainers(ctx context.Context, arg ListContainersParams) 
 			&i.ExitCode,
 			&i.GpuCount,
 			&i.HostName,
+			&i.KeepWarmSeconds,
+			&i.ActiveUntil,
 			&i.Image,
 		); err != nil {
 			return nil, err
@@ -205,6 +215,7 @@ select c.id, a.name as app_name, w.name as function_name, r.id as release_id, r.
        c.created_at, c.ready_at, c.stopped_at,
        (select count(*) from attempts at where at.container_id = c.id and at.state = 'running')::int as running,
        w.kind, c.purpose, c.exit_code, c.gpu_count, h.name as host_name,
+       c.keep_warm_seconds, c.active_until,
        coalesce(r.spec #>> '{image,reference}', '')::text as image
 from containers c
 join releases r on r.id = c.release_id
@@ -231,27 +242,29 @@ type ListLiveContainersParams struct {
 }
 
 type ListLiveContainersRow struct {
-	ID           uuid.UUID
-	AppName      string
-	FunctionName string
-	ReleaseID    uuid.UUID
-	Version      *int32
-	State        string
-	StopReason   *string
-	ExitMessage  *string
-	Slots        int32
-	CpuMillis    int64
-	MemoryBytes  int64
-	CreatedAt    time.Time
-	ReadyAt      *time.Time
-	StoppedAt    *time.Time
-	Running      int32
-	Kind         string
-	Purpose      string
-	ExitCode     *int32
-	GpuCount     int32
-	HostName     *string
-	Image        string
+	ID              uuid.UUID
+	AppName         string
+	FunctionName    string
+	ReleaseID       uuid.UUID
+	Version         *int32
+	State           string
+	StopReason      *string
+	ExitMessage     *string
+	Slots           int32
+	CpuMillis       int64
+	MemoryBytes     int64
+	CreatedAt       time.Time
+	ReadyAt         *time.Time
+	StoppedAt       *time.Time
+	Running         int32
+	Kind            string
+	Purpose         string
+	ExitCode        *int32
+	GpuCount        int32
+	HostName        *string
+	KeepWarmSeconds *int32
+	ActiveUntil     *time.Time
+	Image           string
 }
 
 // Like ListContainers for containers that have not stopped, from the
@@ -293,6 +306,8 @@ func (q *Queries) ListLiveContainers(ctx context.Context, arg ListLiveContainers
 			&i.ExitCode,
 			&i.GpuCount,
 			&i.HostName,
+			&i.KeepWarmSeconds,
+			&i.ActiveUntil,
 			&i.Image,
 		); err != nil {
 			return nil, err

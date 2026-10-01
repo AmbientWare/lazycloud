@@ -34,4 +34,5 @@ jobs:
       - run: uv sync --frozen --group dev
       - run: uv run --frozen --group dev ruff check python
       - run: uv run --frozen --group dev ruff format --check python
+      - run: uv run --frozen --group dev basedpyright python
       - run: uv run --frozen --group dev pytest -x

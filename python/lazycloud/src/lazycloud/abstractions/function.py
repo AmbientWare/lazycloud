@@ -848,6 +848,14 @@ def _volume_spec(volume: VolumeMount) -> dict[str, Any]:
     return spec
 
 
+def _memory_mib(value: str | int) -> int:
+    mib = parse_memory_mib(value)
+    if mib is None:
+        msg = "memory needs a size such as 512Mi"
+        raise FunctionOperationError(msg)
+    return mib
+
+
 def _resources(cpu: Any, memory: Any, disk: str | None) -> dict[str, int]:
     """Reservations, plus ceilings when `cpu` or `memory` is a `(reserve, limit)` pair.
 
@@ -857,15 +865,17 @@ def _resources(cpu: Any, memory: Any, disk: str | None) -> dict[str, int]:
     memory = DEFAULT_FUNCTION_MEMORY if memory is None else memory
     resources: dict[str, int] = {}
     if isinstance(cpu, tuple | list):
-        resources["cpu_millis"] = round(float(cpu[0]) * 1000)
-        resources["cpu_limit_millis"] = round(float(cpu[1]) * 1000)
+        reserve_cpu, limit_cpu = cast("tuple[float, float]", cpu)
+        resources["cpu_millis"] = round(float(reserve_cpu) * 1000)
+        resources["cpu_limit_millis"] = round(float(limit_cpu) * 1000)
     else:
         resources["cpu_millis"] = round(float(cpu) * 1000)
     if isinstance(memory, tuple | list):
-        resources["memory_mib"] = parse_memory_mib(memory[0])
-        resources["memory_limit_mib"] = parse_memory_mib(memory[1])
+        reserve, limit = cast("tuple[str | int, str | int]", memory)
+        resources["memory_mib"] = _memory_mib(reserve)
+        resources["memory_limit_mib"] = _memory_mib(limit)
     else:
-        resources["memory_mib"] = parse_memory_mib(memory)
+        resources["memory_mib"] = _memory_mib(memory)
     disk_mib = parse_memory_mib(disk)
     if disk_mib is not None:
         resources["disk_mib"] = disk_mib

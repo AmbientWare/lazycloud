@@ -19,6 +19,8 @@ from lazycloud._examples.sandboxed_coding_agent.project.sandboxed_coding_agent.a
     validate_patch_path,
     validate_patch_plan,
 )
+from shared.api import Sandbox as SandboxRow
+from shared.api import SandboxStatus
 
 from lazycloud import Sandbox, SandboxProcessResponse
 
@@ -286,3 +288,37 @@ def test_orchestrator_terminates_the_sandbox_when_process_control_fails(
         run_agent()
 
     assert instance.terminated is True
+
+
+def test_sandbox_inspection_returns_json_ready_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+    sandbox = agent_module.sandbox
+    rows = [
+        SandboxRow.model_validate(
+            {
+                "id": "0192f0a0-0000-7000-8000-0000000000c1",
+                "release_id": "0192f0a0-0000-7000-8000-0000000000a1",
+                "app": "agent",
+                "name": name,
+                "status": SandboxStatus.running,
+                "gpu": [],
+                "created_at": "2026-10-01T12:00:00Z",
+            }
+        )
+        for name in (sandbox.name, "other")
+    ]
+
+    def listed(self: Sandbox, limit: int) -> list[SandboxRow]:
+        del self, limit
+        return rows
+
+    monkeypatch.setattr(Sandbox, "list", listed)
+
+    inspected = agent_module.inspect_sandboxes()
+
+    assert json.loads(json.dumps(inspected)) == [
+        {
+            "id": "0192f0a0-0000-7000-8000-0000000000c1",
+            "status": "running",
+            "created_at": "2026-10-01T12:00:00+00:00",
+        }
+    ]

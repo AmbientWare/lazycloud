@@ -114,7 +114,7 @@ async def upload_document(filename: str, request: Request) -> UploadAccepted:
 @api.get("/api/jobs/status", response_model=JobStatusResponse)
 async def job_status(x_job_token: str = Header(alias="X-Job-Token")) -> JobStatusResponse:
     task, claims = _task_from_token(x_job_token)
-    view = await asyncio.to_thread(task.status)
+    view = await asyncio.to_thread(task.view)
     task_status = view.status.value
     if task_status in FAILED_STATUSES:
         upload_path(DATA_ROOT, claims.document_id, claims.suffix).unlink(missing_ok=True)
@@ -128,7 +128,7 @@ async def job_status(x_job_token: str = Header(alias="X-Job-Token")) -> JobStatu
 @api.get("/api/jobs/result", response_model=OcrResult)
 async def job_result(x_job_token: str = Header(alias="X-Job-Token")) -> OcrResult:
     task, claims = _task_from_token(x_job_token)
-    view = await asyncio.to_thread(task.status)
+    view = await asyncio.to_thread(task.view)
     if view.status.value != "succeeded":
         raise HTTPException(status_code=409, detail="OCR result is not ready")
     destination = result_path(DATA_ROOT, claims.document_id)
@@ -145,7 +145,7 @@ async def job_result(x_job_token: str = Header(alias="X-Job-Token")) -> OcrResul
 @api.delete("/api/jobs", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_job(x_job_token: str = Header(alias="X-Job-Token")) -> Response:
     task, claims = _task_from_token(x_job_token)
-    view = await asyncio.to_thread(task.status)
+    view = await asyncio.to_thread(task.view)
     if view.status.value not in TERMINAL_STATUSES:
         raise HTTPException(status_code=409, detail="a running OCR job cannot be deleted")
     remove_document_files(DATA_ROOT, claims.document_id, claims.suffix)

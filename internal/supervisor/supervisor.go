@@ -11,12 +11,14 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
@@ -78,6 +80,11 @@ type Supervisor struct {
 	// workers are the HTTP workers of an HTTP workload.
 	workers httpWorkers
 
+	// sockets are the ones served on the host's side of the container;
+	// detached says a Detach closed them until the next connection.
+	sockets  []hostSocket
+	detached atomic.Bool
+
 	configured chan struct{}
 	drain      chan struct{}
 	// finishing is closed once nothing more will be pushed to out.
@@ -102,6 +109,12 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	conn, err := grpc.NewClient("unix:"+cfg.Socket,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		// The link comes back within seconds of an agent restart or a
+		// checkpoint.
+		grpc.WithConnectParams(grpc.ConnectParams{
+			Backoff:           backoff.Config{BaseDelay: minBackoff, Multiplier: 1.6, Jitter: 0.2, MaxDelay: maxBackoff},
+			MinConnectTimeout: time.Second,
+		}),
 		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(MaxMessageBytes), grpc.MaxCallSendMsgSize(MaxMessageBytes)),
 	)
 	if err != nil {
@@ -160,6 +173,13 @@ func (s *Supervisor) work(ctx context.Context) error {
 			s.loadFailed(&hostproto.RunnerError{Type: "DevboxRootError", Message: err.Error()})
 			return ErrLoadFailed
 		}
+		// A Docker daemon keeps the privileged container's capabilities.
+		if !cfg.GetDocker() {
+			if err := dropMountPrivilege(); err != nil {
+				s.loadFailed(&hostproto.RunnerError{Type: "DevboxRootError", Message: err.Error()})
+				return ErrLoadFailed
+			}
+		}
 	}
 	if path := cfg.GetControlSocket(); path != "" {
 		ctl, err := newControl(s.log, s.children, cfg.GetPod().GetSsh())
@@ -171,6 +191,8 @@ func (s *Supervisor) work(ctx context.Context) error {
 			return ErrLoadFailed
 		}
 		defer ctl.close()
+		s.holdSocket(ctl)
+		defer s.dropSocket(ctl)
 	}
 	if cfg.GetDocker() {
 		docker, err := s.startDocker(ctx)
@@ -192,10 +214,9 @@ func (s *Supervisor) work(ctx context.Context) error {
 			return ErrLoadFailed
 		}
 	}
-	var served sync.WaitGroup
 	var serveErr error
 	if front != nil {
-		served.Go(func() { serveErr = front.serve() })
+		s.holdSocket(front)
 	}
 	g, gctx := errgroup.WithContext(ctx)
 	// HTTP workers admit concurrent requests themselves.
@@ -209,8 +230,8 @@ func (s *Supervisor) work(ctx context.Context) error {
 	err := g.Wait()
 	if front != nil {
 		// Every slot has finished its requests.
-		front.close()
-		served.Wait()
+		s.dropSocket(front)
+		serveErr = front.close()
 	}
 	if err != nil {
 		return fmt.Errorf("run slots: %w", err)
@@ -250,6 +271,7 @@ func (s *Supervisor) connect(ctx context.Context, client hostproto.ContainerLink
 	if err != nil {
 		return false, fmt.Errorf("connect to agent: %w", err)
 	}
+	s.reattach(ctx)
 	if ready := s.readyMessage(); ready != nil {
 		if err := stream.Send(ready); err != nil {
 			return true, fmt.Errorf("send slots ready: %w", err)
@@ -322,9 +344,61 @@ func (s *Supervisor) handle(command *hostproto.SupervisorCommand) {
 		s.onDrain()
 	case *hostproto.SupervisorCommand_Reload:
 		s.onReload()
+	case *hostproto.SupervisorCommand_Detach:
+		s.onDetach()
 	default:
 		s.log.Warn("ignoring unknown supervisor command")
 	}
+}
+
+// hostSocket is a socket served on the host's side of the container,
+// which no checkpoint can hold.
+type hostSocket interface {
+	release()
+	reopen(ctx context.Context) error
+}
+
+func (s *Supervisor) holdSocket(h hostSocket) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sockets = append(s.sockets, h)
+}
+
+func (s *Supervisor) dropSocket(h hostSocket) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sockets = slices.DeleteFunc(s.sockets, func(held hostSocket) bool { return held == h })
+}
+
+// onDetach closes the host sockets and their connections for a checkpoint.
+// The agent closes the link once Detached arrives, and the next connection
+// opens the sockets again.
+func (s *Supervisor) onDetach() {
+	s.mu.Lock()
+	sockets := slices.Clone(s.sockets)
+	s.mu.Unlock()
+	s.detached.Store(true)
+	for _, h := range sockets {
+		h.release()
+	}
+	s.log.Info("detached for a checkpoint")
+	s.out.push(&hostproto.SupervisorMessage{Body: &hostproto.SupervisorMessage_Detached{Detached: &hostproto.Detached{}}})
+}
+
+// reattach opens again the sockets a Detach closed.
+func (s *Supervisor) reattach(ctx context.Context) {
+	if !s.detached.Swap(false) {
+		return
+	}
+	s.mu.Lock()
+	sockets := slices.Clone(s.sockets)
+	s.mu.Unlock()
+	for _, h := range sockets {
+		if err := h.reopen(ctx); err != nil {
+			s.log.Error("reopening a socket after a checkpoint failed", "error", err)
+		}
+	}
+	s.log.Info("reattached after a checkpoint")
 }
 
 // onConfigure creates the slots. The agent sends Configure on every

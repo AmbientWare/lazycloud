@@ -318,6 +318,15 @@ type runningAgent struct {
 	done   chan error
 }
 
+// testRuntime is the Docker runtime workload containers run with:
+// LAZYCLOUD_TEST_OCI_RUNTIME, runsc for gVisor, or runc.
+func testRuntime() string {
+	if runtime := os.Getenv("LAZYCLOUD_TEST_OCI_RUNTIME"); runtime != "" {
+		return runtime
+	}
+	return "runc"
+}
+
 // startAgent runs an agent; configure adjusts its configuration.
 func (e *env) startAgent(configure ...func(*Config)) *runningAgent {
 	e.t.Helper()
@@ -335,7 +344,7 @@ func (e *env) startAgent(configure ...func(*Config)) *runningAgent {
 		JoinToken:       e.server.joinToken,
 		RuntimeDir:      runtimeDir,
 		SupervisorPath:  supervisorBinary,
-		OCIRuntime:      "runc",
+		OCIRuntime:      testRuntime(),
 		GeeseFSPath:     e.geesefs,
 		MountImage:      DefaultMountImage,
 		BuildNetwork:    "host",
