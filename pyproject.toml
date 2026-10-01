@@ -2,7 +2,7 @@
 name = "workspace"
 version = "0.1.0"
 description = "LazyCloud Python clients and user-code runtime."
-requires-python = ">=3.12"
+requires-python = ">=3.10"
 
 [dependency-groups]
 dev = [
