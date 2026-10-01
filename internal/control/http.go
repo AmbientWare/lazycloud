@@ -55,6 +55,9 @@ const (
 	httpKeepWarmSeconds = 180
 )
 
+// defaultMethods are an endpoint's methods unless it names others.
+var defaultMethods = []apitypes.HttpMethod{apitypes.HttpMethodGET, apitypes.HttpMethodPOST} //nolint:gochecknoglobals // a constant list
+
 // resolveHTTP fills the HTTP defaults of a resolved spec. Methods apply only
 // to endpoints, which answer on their route; ASGI apps own every path.
 func resolveHTTP(spec apitypes.FunctionSpec, out *apitypes.FunctionSpec) error {
@@ -75,7 +78,7 @@ func resolveHTTP(spec apitypes.FunctionSpec, out *apitypes.FunctionSpec) error {
 	h.Workers = orDefault(h.Workers, 1)
 	if h.Kind == apitypes.HttpKindEndpoint {
 		h.Route = orDefault(h.Route, "/")
-		methods := []apitypes.HttpMethod{apitypes.HttpMethodGET, apitypes.HttpMethodPOST}
+		methods := slices.Clone(defaultMethods)
 		if h.Methods != nil {
 			methods = nil
 			for _, m := range *h.Methods {
@@ -85,10 +88,12 @@ func resolveHTTP(spec apitypes.FunctionSpec, out *apitypes.FunctionSpec) error {
 			}
 		}
 		h.Methods = &methods
-	} else if h.Methods != nil || (h.Route != nil && *h.Route != "/") {
+	} else if (h.Methods != nil && !slices.Equal(*h.Methods, defaultMethods)) || (h.Route != nil && *h.Route != "/") {
+		// The request validator fills the schema's defaults, so only values
+		// other than them were asked for.
 		return &InvalidSpecError{Function: spec.Name, Reason: "route and methods apply to endpoints; an ASGI app answers every path"}
 	} else {
-		h.Route = nil
+		h.Route, h.Methods = nil, nil
 	}
 	out.Http = &h
 	return nil

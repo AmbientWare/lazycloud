@@ -100,9 +100,6 @@ def deploy_functions(
             if deployment.pruned:
                 summary += f"; stopped {', '.join(item.root for item in deployment.pruned)}"
             step.done(summary)
-        for release in deployment.releases:
-            if release.url:
-                terminal.detail(f"{release.function}: {release.url}")
         deployments.append(deployment)
     return deployments
 
