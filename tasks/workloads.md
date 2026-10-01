@@ -194,6 +194,7 @@ supervisor Docker tests under it; all pass but the GPU test.
 | Restore from a snapshot | through Docker with a network holder (above): with the docker CLI a counting process resumed where it stopped 0.15 s after `docker start --checkpoint`, with a new environment value, a new mount source and working egress. Without one Docker fails with `bind-mount /proc/0/ns/net` (moby#50750). `TestSnapshotUnderRunscRestoresARunningPod` checks it end to end with a root agent |
 | Devbox on an NBD root disk (root agent) | live `test_ssh_config_makes_plain_ssh_reach_a_devbox`: deploy, seed the root disk (137 MB stored, generation 1), plain `ssh -F`, `lazycloud devbox <name> ssh -- echo devbox-ok`, `devbox status`, delete |
 | Everything above again with the root agent | `runsc_live.py` and the live suite pass |
+| With network holders and a root agent (snapshot-restore) | `runsc_live.py` (functions, endpoints, sandbox ports, block, allow list, filesystem image, snapshot upload, docker) and the live suite with the devbox pass; the first restore on the snapshot's host hit moby#42900, fixed with the restore marker, and waits on a rebuilt root agent |
 
 ## Intentional differences from the reference
 
