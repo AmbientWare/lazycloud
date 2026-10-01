@@ -34,7 +34,9 @@ func TestRestoreReproducesLayer(t *testing.T) {
 	if published.StoredBytesAdded < 20<<20 || published.StoredBytesAdded >= 24<<20 {
 		t.Fatalf("stored %d new bytes for 20MiB of data beside 10MiB of zeros", published.StoredBytesAdded)
 	}
-	if published.ManifestKey != store.Prefix+"disks/"+diskID+"/manifests/000000000001.json" {
+	// The key carries the digest, so another manifest of generation 1 could
+	// never replace this one.
+	if published.ManifestKey != store.Prefix+"disks/"+diskID+"/manifests/000000000001-"+published.ManifestSHA256+".json" {
 		t.Fatalf("manifest stored at %s", published.ManifestKey)
 	}
 	again, err := uploadFile(ctx, objects, diskID, source, 2, 1)
