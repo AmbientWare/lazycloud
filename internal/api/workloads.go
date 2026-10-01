@@ -102,7 +102,7 @@ func (s *Server) devbox(ctx context.Context, ws identity.Workspace, deployment u
 	out := apitypes.Devbox{
 		DeploymentId: view.Workload, Name: view.Name, App: view.App, SshCommand: command,
 		SshHost: execution.SSHAlias(ws.Name, view.App, view.Name), Phase: view.Phase,
-		OpenConnections: view.Connections, IdleDeadline: view.IdleDeadline,
+		OpenConnections: view.Connections, IdleDeadline: view.IdleDeadline, Resources: &view.Spec.Resources,
 		ContainerId: (*uuid.UUID)(view.Container), FailedContainerId: (*uuid.UUID)(view.Failed),
 	}
 	if view.Reason != "" {

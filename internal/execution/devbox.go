@@ -110,6 +110,19 @@ func (e *Execution) PodView(ctx context.Context, workspace identity.WorkspaceID,
 	return out, nil
 }
 
+// PodStartFailure says why a container of the pod created since since
+// failed to start, or "" when none has.
+func (e *Execution) PodStartFailure(ctx context.Context, workload uuid.UUID, since time.Time) (string, error) {
+	reason, err := e.queries.PodStartFailedSince(ctx, PodStartFailedSinceParams{WorkloadID: workload, Since: since})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("read pod start failure: %w", err)
+	}
+	return reason, nil
+}
+
 // livePhase is what a live container is doing: placed or not, then the
 // first start stage its host has not finished.
 func livePhase(state ContainerState, placed bool, stages []string, disks bool) apitypes.DevboxPhase {

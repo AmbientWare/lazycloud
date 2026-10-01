@@ -3325,6 +3325,9 @@ type Devbox struct {
 	// PhaseReason Why the last start failed.
 	PhaseReason *string `json:"phase_reason,omitempty"`
 
+	// Resources Reservations the container always keeps. CPU above the reservation is shared up to `cpu_limit_millis`, by default the reservation plus 16 cores. Memory above the reservation is allowed up to `memory_limit_mib`, by default four times the reservation, at least 1 GiB and at most 8 GiB above it; the container is killed beyond it.
+	Resources *Resources `json:"resources,omitempty"`
+
 	// SshCommand The CLI command that connects, with --app when the name is shared.
 	SshCommand string `json:"ssh_command"`
 

@@ -127,3 +127,27 @@ func (q *Queries) DevboxWorkload(ctx context.Context, arg DevboxWorkloadParams) 
 	)
 	return i, err
 }
+
+const podStartFailedSince = `-- name: PodStartFailedSince :one
+select coalesce(c.exit_message, c.stop_reason)::text as reason
+from containers c
+join releases r on r.id = c.release_id
+where r.workload_id = $1 and c.purpose = 'serve' and c.created_at >= $2
+  and c.state = 'stopped' and c.stop_reason in ('start_failed', 'load_error', 'crashed', 'out_of_memory')
+order by c.stopped_at desc
+limit 1
+`
+
+type PodStartFailedSinceParams struct {
+	WorkloadID uuid.UUID
+	Since      time.Time
+}
+
+// Why the newest serve container of the workload created after @since
+// failed to start, for a connection waiting on it.
+func (q *Queries) PodStartFailedSince(ctx context.Context, arg PodStartFailedSinceParams) (string, error) {
+	row := q.db.QueryRow(ctx, podStartFailedSince, arg.WorkloadID, arg.Since)
+	var reason string
+	err := row.Scan(&reason)
+	return reason, err
+}

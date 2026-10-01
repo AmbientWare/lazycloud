@@ -3155,8 +3155,8 @@ class PodSpec(BaseModel):
         bool, Field(description="Serve the first port as raw TCP behind TLS with SNI.")
     ] = False
     ssh: Annotated[
-        bool, Field(description="Serve SSH through `lazycloud ssh`; always on for a devbox.")
-    ] = False
+        bool | None, Field(description="Serve SSH through `lazycloud ssh`; always on for a devbox.")
+    ] = None
     health_check: HealthCheck | None = None
     block_network: bool = False
     allow_list: Annotated[
@@ -3191,6 +3191,7 @@ class Devbox(BaseModel):
         ),
     ] = None
     disk: DevboxDisk | None = None
+    resources: Resources | None = None
 
 
 class SandboxStats(BaseModel):

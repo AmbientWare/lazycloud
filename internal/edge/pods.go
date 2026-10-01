@@ -36,6 +36,7 @@ var (
 	errPortNotExposed = errors.New("the port is not exposed")
 	errPodStopped     = errors.New("the pod is stopped")
 	errPodNotReady    = errors.New("no container of the pod became ready in time")
+	errPodStartFailed = errors.New("the pod failed to start")
 )
 
 // portLabel splits <uuid>-<port>.
@@ -151,6 +152,7 @@ func (e *Edge) podContainer(ctx context.Context, t podTarget, deadline time.Time
 		return execution.ContainerID{}, uuid.Nil, errPodStopped
 	}
 	woken := false
+	var wokeAt time.Time
 	for {
 		wake := e.podWaits.subscribe(t.workload)
 		ready, err := e.execution.ReadyPodContainers(ctx, t.workload)
@@ -170,7 +172,19 @@ func (e *Edge) podContainer(ctx context.Context, t podTarget, deadline time.Time
 		if pick >= 0 {
 			return ready[pick].Container, ready[pick].Host, nil
 		}
+		if woken {
+			// A start that failed since the wake fails the connection at
+			// once instead of at its deadline.
+			reason, err := e.execution.PodStartFailure(ctx, t.workload, wokeAt)
+			if err != nil {
+				return execution.ContainerID{}, uuid.Nil, err
+			}
+			if reason != "" {
+				return execution.ContainerID{}, uuid.Nil, fmt.Errorf("%w: %s", errPodStartFailed, reason)
+			}
+		}
 		if !woken {
+			wokeAt = time.Now().Add(-time.Second)
 			if err := e.execution.WakePod(ctx, t.workspace, t.workload); err != nil {
 				var conflict *execution.ConflictError
 				if errors.As(err, &conflict) {
@@ -333,7 +347,7 @@ func (e *Edge) failPod(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, errPodStopped):
 		writeError(w, http.StatusNotFound, "the pod is stopped")
-	case errors.Is(err, errPodNotReady), errors.Is(err, ErrContainerUnreachable):
+	case errors.Is(err, errPodNotReady), errors.Is(err, ErrContainerUnreachable), errors.Is(err, errPodStartFailed):
 		writeError(w, http.StatusServiceUnavailable, err.Error())
 	default:
 		e.fail(w, r, err)

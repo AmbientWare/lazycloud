@@ -145,9 +145,9 @@ def status(
         raise ClientError(f"Several apps have a devbox named {name}; select one with --app")
     host = matches.hosts[0]
     box = client.devbox(host.deployment_id)
-    resources = client.api.get_function(
-        client.workspace, host.app, name
-    ).active_release.spec.resources
+    resources = box.resources
+    if resources is None:
+        raise ClientError(f"'{name}' is no longer a devbox; check devbox list")
     emit(
         ctx,
         payload=box.model_dump(mode="json"),
