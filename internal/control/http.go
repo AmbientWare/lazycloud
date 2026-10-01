@@ -52,6 +52,7 @@ var defaultMethods = []apitypes.HttpMethod{apitypes.HttpMethodGET, apitypes.Http
 // resolveHTTP fills the HTTP defaults of a resolved spec. Methods apply only
 // to endpoints, which answer on their route; ASGI apps own every path.
 func resolveHTTP(spec apitypes.FunctionSpec, out *apitypes.FunctionSpec) error {
+	out.Authorized = orDefault(spec.Authorized, true)
 	if spec.Http == nil {
 		return nil
 	}
@@ -73,7 +74,6 @@ func resolveHTTP(spec apitypes.FunctionSpec, out *apitypes.FunctionSpec) error {
 	if spec.KeepWarmSeconds == nil && !warmFloor {
 		out.KeepWarmSeconds = new(httpKeepWarmSeconds)
 	}
-	h.Authorized = orDefault(h.Authorized, true)
 	h.Workers = orDefault(h.Workers, 1)
 	if h.Kind == apitypes.HttpKindEndpoint {
 		h.Route = orDefault(h.Route, "/")

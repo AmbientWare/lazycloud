@@ -1456,6 +1456,8 @@ type FunctionState string
 
 // FunctionSpec defines model for FunctionSpec.
 type FunctionSpec struct {
+	// Authorized Whether HTTP requests to the workload's URLs need a bearer token for the workspace. Without one a function, endpoint or ASGI app is public; the API's own routes always authenticate.
+	Authorized *bool       `json:"authorized,omitempty"`
 	Autoscaler *Autoscaler `json:"autoscaler,omitempty"`
 
 	// CallbackUrl Receives a signed POST when a task is retried or finishes.
@@ -1514,11 +1516,9 @@ type HttpMethod string
 
 // HttpSpec Makes the workload answer HTTP. Its slots are `workers` processes, each handling `concurrency` requests at once.
 type HttpSpec struct {
-	// Authorized Require a bearer token for the workspace.
-	Authorized *bool         `json:"authorized,omitempty"`
-	Domain     *Hostname     `json:"domain,omitempty"`
-	Kind       HttpKind      `json:"kind"`
-	Methods    *[]HttpMethod `json:"methods,omitempty"`
+	Domain  *Hostname     `json:"domain,omitempty"`
+	Kind    HttpKind      `json:"kind"`
+	Methods *[]HttpMethod `json:"methods,omitempty"`
 
 	// Route The path an endpoint answers on.
 	Route   *string `json:"route,omitempty"`

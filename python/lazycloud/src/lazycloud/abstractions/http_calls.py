@@ -71,11 +71,10 @@ def http_function_spec(
     methods: list[str] | None = None,
 ) -> ApiFunctionSpec:
     """The API definition of an HTTP workload for an uploaded source and a ready image."""
-    from lazycloud.abstractions.function import _resources
+    from lazycloud.abstractions.function import _resources, _volume_spec
 
     http: dict[str, Any] = {
         "kind": kind,
-        "authorized": owner.authorized is not False,
         "workers": owner.workers,
     }
     if route is not None:
@@ -116,6 +115,10 @@ def http_function_spec(
         spec["environment"] = dict(owner.env)
     if owner.secrets:
         spec["secrets"] = list(dict.fromkeys(owner.secrets))
+    if owner.volumes:
+        spec["volumes"] = [_volume_spec(volume) for volume in owner.volumes]
+    if owner.authorized is False:
+        spec["authorized"] = False
     try:
         on_start = lifecycle_hook_references(owner.on_start)
     except (TypeError, ValueError) as exc:
@@ -141,7 +144,11 @@ def unsupported_http_options(owner: Any) -> list[str]:
     if owner.gpu is not None or owner.gpu_count:
         found.append("gpu")
     declared: dict[str, bool] = {
-        "volumes": bool(owner.volumes),
+        # Hosts have no credentials of their own for a user's bucket.
+        "cloud bucket without key secrets": any(
+            volume.config is not None and volume.config.get("auth_mode") != "secret_references"
+            for volume in owner.volumes
+        ),
         "callback_url": bool(owner.callback_url),
         "checkpoint_enabled": bool(owner.checkpoint_enabled),
         "docker_enabled": bool(getattr(owner, "docker_enabled", False)),

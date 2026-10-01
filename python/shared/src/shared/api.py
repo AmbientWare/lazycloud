@@ -1388,9 +1388,6 @@ class HttpSpec(BaseModel):
             pattern="^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$",
         ),
     ] = None
-    authorized: Annotated[bool, Field(description="Require a bearer token for the workspace.")] = (
-        True
-    )
     workers: Annotated[int, Field(ge=1, le=64)] = 1
 
 
@@ -1454,6 +1451,12 @@ class FunctionSpec(BaseModel):
         Field(description="The signature `lazycloud app export` types clients from."),
     ] = None
     http: HttpSpec | None = None
+    authorized: Annotated[
+        bool | None,
+        Field(
+            description="Whether HTTP requests to the workload's URLs need a bearer token for the workspace. Without one a function, endpoint or ASGI app is public; the API's own routes always authenticate."
+        ),
+    ] = None
 
 
 class Release(BaseModel):

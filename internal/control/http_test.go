@@ -45,7 +45,7 @@ func TestDeployEndpointResolvesHTTPDefaultsAndClaimsItsSubdomain(t *testing.T) {
 	spec := d.Releases[0].Spec
 	h := spec.Http
 	if *spec.TimeoutSeconds != 180 || *spec.KeepWarmSeconds != 180 || spec.RetryPolicy.MaxAttempts != 1 ||
-		*h.Route != "/" || len(*h.Methods) != 2 || !*h.Authorized || *h.Workers != 1 {
+		*h.Route != "/" || len(*h.Methods) != 2 || !*spec.Authorized || *h.Workers != 1 {
 		t.Fatalf("endpoint defaults not resolved: %+v http %+v", spec, h)
 	}
 

@@ -1,6 +1,9 @@
 package acceptance
 
 import (
+	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"slices"
 	"sort"
@@ -8,7 +11,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/control"
 )
 
 const endpointApp = `
@@ -145,5 +151,66 @@ func TestEndpointGetsItsSecretsAndRunsOnStartFirst(t *testing.T) {
 	status, _, body := p.call(http.MethodGet, w.Url, "")
 	if status != http.StatusOK || body != `{"key": "s3cret", "started": ["s3cret"]}` {
 		t.Fatalf("whoami: %d %s", status, body)
+	}
+}
+
+const publicApp = `
+def total(values: list[int]) -> int:
+    return sum(values)
+
+
+async def echo(scope, receive, send):
+    if scope["type"] != "http":
+        return
+    auth = dict(scope["headers"]).get(b"authorization", b"")
+    await send({"type": "http.response.start", "status": 200, "headers": [(b"content-type", b"text/plain")]})
+    await send({"type": "http.response.body", "body": b"auth=" + auth})
+`
+
+// A public function or app answers without a token on every URL it has, and
+// an app sees the caller's own Authorization header, which the platform did
+// not consume.
+func TestPublicWorkloadsAnswerWithoutAToken(t *testing.T) {
+	p := startPlatform(t)
+	source := p.upload(map[string]string{"app.py": publicApp})
+	public := false
+	fn := spec("total", "app:total", source, nil)
+	fn.Authorized = &public
+	app := spec("echo", "app:echo", source, &apitypes.HttpSpec{Kind: apitypes.HttpKindAsgi})
+	app.Authorized = &public
+	d := p.deploy("open", fn, app)
+
+	fnHost := control.Subdomain(uuid.UUID(p.workspace.ID), "open", "total", apitypes.WorkloadKindFunction)
+	for _, url := range []string{
+		fmt.Sprintf("http://%s.lazycloud.localhost:%s/", fnHost, p.port()),
+		fmt.Sprintf("http://%s-latest.lazycloud.localhost:%s/", fnHost, p.port()),
+		fmt.Sprintf("http://%s.lazycloud.localhost:%s/", d.Releases[0].Id, p.port()),
+	} {
+		resp, err := p.request(http.MethodPost, url, "", strings.NewReader(`{"values": [1, 2, 3]}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out apitypes.Invocation
+		err = json.NewDecoder(resp.Body).Decode(&out)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK || err != nil || out.Result == nil || string(*out.Result) != "6" {
+			t.Fatalf("public function at %s: %d %v %+v", url, resp.StatusCode, err, out)
+		}
+	}
+
+	w := p.describe("open", apitypes.WorkloadKindAsgi, "echo")
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, w.Url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Basic dXNlcjpwdw==")
+	resp, err := p.client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || string(body) != "auth=Basic dXNlcjpwdw==" {
+		t.Fatalf("public app: %d %s", resp.StatusCode, body)
 	}
 }

@@ -306,7 +306,6 @@ class Function(Generic[P, R]):
                 volume.config is not None and volume.config.get("auth_mode") != "secret_references"
                 for volume in self.volumes
             ),
-            "authorized": self.authorized is not DEFAULT_FUNCTION_AUTHORIZED,
             "docker_enabled": self.docker_enabled,
             "preemptible": self.preemptible is not DEFAULT_WORKLOAD_PREEMPTIBLE,
             "region": self.region is not None,
@@ -372,6 +371,8 @@ class Function(Generic[P, R]):
             spec["secrets"] = list(dict.fromkeys(self.secrets))
         if self.in_process:
             spec["in_process"] = True
+        if self.authorized is False:
+            spec["authorized"] = False
         try:
             callback_url = normalize_callback_url(self.callback_url)
             hooks = self._lifecycle_hooks()

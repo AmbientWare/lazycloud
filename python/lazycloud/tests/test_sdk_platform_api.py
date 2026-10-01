@@ -481,14 +481,15 @@ def test_deploy_maps_endpoint_and_asgi_options_to_http_specs(
         "kind": "endpoint",
         "route": "/count",
         "methods": ["POST"],
-        "authorized": False,
         "workers": 2,
     }
+    assert api["authorized"] is False
     assert (api["concurrency"], api["timeout_seconds"], api["keep_warm_seconds"]) == (8, 180, 180)
     assert api["max_pending_tasks"] == 100
     assert api["retry_policy"]["max_attempts"] == 1
     assert service["handler"] == "reports:web"
-    assert service["http"] == {"kind": "asgi", "authorized": True, "workers": 1}
+    assert service["http"] == {"kind": "asgi", "workers": 1}
+    assert "authorized" not in service
     assert (service["concurrency"], service["keep_warm_seconds"]) == (4, 60)
 
 

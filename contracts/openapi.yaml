@@ -2730,6 +2730,12 @@ components:
           x-go-type: json.RawMessage
         http:
           $ref: "#/components/schemas/HttpSpec"
+        authorized:
+          description: >-
+            Whether HTTP requests to the workload's URLs need a bearer token
+            for the workspace. Without one a function, endpoint or ASGI app is
+            public; the API's own routes always authenticate.
+          type: boolean
 
     SourceRef:
       type: object
@@ -4103,10 +4109,6 @@ components:
           default: [GET, POST]
         domain:
           $ref: "#/components/schemas/Hostname"
-        authorized:
-          description: Require a bearer token for the workspace.
-          type: boolean
-          default: true
         workers:
           type: integer
           minimum: 1

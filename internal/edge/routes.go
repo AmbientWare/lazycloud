@@ -74,6 +74,9 @@ func newRelease(id, workload uuid.UUID, version *int32, rawSpec []byte) (*releas
 	if spec.MaxPendingTasks != nil {
 		r.maxPending = *spec.MaxPendingTasks
 	}
+	if spec.Authorized != nil {
+		r.authorized = *spec.Authorized
+	}
 	if spec.RetryPolicy != nil {
 		r.attempts = max(1, spec.RetryPolicy.MaxAttempts)
 	}
@@ -83,9 +86,6 @@ func newRelease(id, workload uuid.UUID, version *int32, rawSpec []byte) (*releas
 			workers = *h.Workers
 		}
 		r.capacity = max(1, workers*concurrency)
-		if h.Authorized != nil {
-			r.authorized = *h.Authorized
-		}
 		if h.Route != nil {
 			r.route = *h.Route
 		}
