@@ -1,14 +1,12 @@
+import type { LogSource } from "@/lib/api/logs";
+
 export type TaskListKeyParts = {
   mode: "page" | "infinite";
   limit: number;
+  app: string | null;
+  function: string | null;
   status: string | null;
-  deploymentId: string | null;
-  appId: string | null;
-  stubIds: string | null;
-  kind: string | null;
-  createdAfter: string | null;
-  createdBefore: string | null;
-  createdWithinSeconds: number | null;
+  version: number | null;
   search: string | null;
   rootOnly: boolean;
 };
@@ -72,32 +70,24 @@ export const workspaceQueryKeys = {
     lists: (workspaceId: string) => [...workspaceRoot(workspaceId), "tasks", "list"] as const,
     list: (workspaceId: string, options: TaskListKeyParts) =>
       [...workspaceRoot(workspaceId), "tasks", "list", options] as const,
+    // Under the task lists, so the changes that refresh those refresh these.
+    requests: (workspaceId: string, app: string, name: string, limit: number) =>
+      [...workspaceRoot(workspaceId), "tasks", "list", "requests", { app, name, limit }] as const,
     details: (workspaceId: string) => [...workspaceRoot(workspaceId), "tasks", "detail"] as const,
     detail: (workspaceId: string, taskId: string) =>
       [...workspaceRoot(workspaceId), "tasks", "detail", taskId] as const,
+    request: (workspaceId: string, requestId: string) =>
+      [...workspaceRoot(workspaceId), "tasks", "detail", "request", requestId] as const,
     callGraphs: (workspaceId: string) =>
       [...workspaceRoot(workspaceId), "tasks", "call-graph"] as const,
     callGraph: (workspaceId: string, rootTaskId: string) =>
       [...workspaceRoot(workspaceId), "tasks", "call-graph", rootTaskId] as const,
     aggregates: (workspaceId: string) =>
       [...workspaceRoot(workspaceId), "tasks", "aggregate"] as const,
-    metrics: (workspaceId: string, hours: number, appId: string | null) =>
-      [...workspaceRoot(workspaceId), "tasks", "aggregate", "metrics", hours, appId] as const,
-    buckets: (
-      workspaceId: string,
-      windowSeconds: number,
-      appId: string | null,
-      stubId: string | null,
-    ) =>
-      [
-        ...workspaceRoot(workspaceId),
-        "tasks",
-        "aggregate",
-        "buckets",
-        windowSeconds,
-        appId,
-        stubId,
-      ] as const,
+    metrics: (workspaceId: string, hours: number, app: string | null) =>
+      [...workspaceRoot(workspaceId), "tasks", "aggregate", "metrics", hours, app] as const,
+    buckets: (workspaceId: string, windowSeconds: number, app: string | null, fn: string | null) =>
+      [...workspaceRoot(workspaceId), "tasks", "aggregate", "buckets", windowSeconds, app, fn] as const,
     latency: (
       workspaceId: string,
       stubIds: string,
@@ -119,16 +109,14 @@ export const workspaceQueryKeys = {
     lists: (workspaceId: string) => [...workspaceRoot(workspaceId), "containers", "list"] as const,
     list: (
       workspaceId: string,
-      options: { appId: string | null; stubIds: string | null; statuses: string | null },
+      options: { app: string | null; function: string | null; live: boolean },
     ) => [...workspaceRoot(workspaceId), "containers", "list", options] as const,
     details: (workspaceId: string) =>
       [...workspaceRoot(workspaceId), "containers", "detail"] as const,
     detail: (workspaceId: string, containerId: string) =>
       [...workspaceRoot(workspaceId), "containers", "detail", containerId] as const,
-    eventSummaries: (workspaceId: string) =>
-      [...workspaceRoot(workspaceId), "containers", "event-summary"] as const,
-    eventSummary: (workspaceId: string, containerId: string) =>
-      [...workspaceRoot(workspaceId), "containers", "event-summary", containerId] as const,
+    lifecycle: (workspaceId: string, containerId: string) =>
+      [...workspaceRoot(workspaceId), "containers", "lifecycle", containerId] as const,
     metrics: (workspaceId: string, containerId: string) =>
       [...workspaceRoot(workspaceId), "containers", "metrics", containerId] as const,
     files: (workspaceId: string, containerId: string, path?: string) =>
@@ -195,15 +183,8 @@ export const workspaceQueryKeys = {
       [...workspaceRoot(workspaceId), "collections", "map", name, "value", key] as const,
   },
   logs: {
-    history: (
-      workspaceId: string,
-      scope: {
-        appId: string | null;
-        stubId: string | null;
-        taskId: string | null;
-        containerId: string | null;
-      },
-    ) => [...workspaceRoot(workspaceId), "logs", "history", scope] as const,
+    history: (workspaceId: string, source: LogSource) =>
+      [...workspaceRoot(workspaceId), "logs", "history", source] as const,
   },
   resources: {
     list: (workspaceId: string, configKey: string) =>

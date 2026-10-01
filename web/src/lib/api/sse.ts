@@ -1,8 +1,4 @@
-import { ApiError, api, ok, type Schemas } from "@/lib/api/client";
-import { viewChangeFrames } from "@/lib/api/changes";
-import { openLogStream, viewLogRecord } from "@/lib/api/logs";
-import { readNdjson } from "@/lib/api/ndjson";
-import { workspaceName } from "@/lib/api/workspaces";
+import { ApiError } from "@/lib/api/client";
 
 export type ServerSentEvent = {
   id: string;
@@ -13,9 +9,7 @@ export type ServerSentEvent = {
 /**
  * Consume a `text/event-stream` response over fetch, authenticated by the
  * session cookie. Resolves when the server closes the stream; rejects on
- * network or HTTP errors. A log stream is read from the API's newline-delimited
- * log endpoints and delivered as the same events; the workspace change stream
- * is read from the API's and delivered as the reference's change events.
+ * network or HTTP errors.
  */
 export async function streamServerSentEvents(
   url: string,
@@ -31,22 +25,6 @@ export async function streamServerSentEvents(
     onEvent: (event: ServerSentEvent) => void;
   },
 ): Promise<void> {
-  const target = new URL(url, "http://dashboard.invalid");
-  if (target.pathname === "/api/v1/logs/stream") {
-    await streamLogs(target.searchParams, { signal, lastEventId, onOpen, onEvent });
-    return;
-  }
-  if (target.pathname === "/api/v1/events/changes/stream") {
-    const workspaceId = target.searchParams.get("workspace") ?? "";
-    const workspace = encodeURIComponent(workspaceName(workspaceId));
-    await streamServerSentEvents(`/v1/workspaces/${workspace}/changes/stream`, {
-      signal,
-      lastEventId,
-      onOpen,
-      onEvent: (frame) => viewChangeFrames(frame, workspaceId).forEach(onEvent),
-    });
-    return;
-  }
   const headers = new Headers({ Accept: "text/event-stream" });
   if (lastEventId) headers.set("Last-Event-ID", lastEventId);
 
@@ -102,58 +80,4 @@ export async function streamServerSentEvents(
   }
   if (buffer) consumeLine(buffer);
   dispatch();
-}
-
-/**
- * Follow the log lines of the scope the log viewer names: the newest `limit`
- * lines, then each new one, resuming after the last delivered line.
- */
-async function streamLogs(
-  params: URLSearchParams,
-  {
-    signal,
-    lastEventId,
-    onOpen,
-    onEvent,
-  }: {
-    signal: AbortSignal;
-    lastEventId?: string;
-    onOpen?: () => void;
-    onEvent: (event: ServerSentEvent) => void;
-  },
-): Promise<void> {
-  const workspace = workspaceName(params.get("workspace") ?? "");
-  const after = lastEventId ? Number(lastEventId) : 0;
-  const body = await openLogStream(
-    workspace,
-    async (app, name) => {
-      const page = await ok(
-        api.GET("/v1/workspaces/{workspace}/deployments", {
-          params: { path: { workspace }, query: { app, name } },
-        }),
-      );
-      return page.deployments[0]?.id;
-    },
-    {
-      taskId: params.get("task_id") ?? undefined,
-      containerId: params.get("container_id") ?? undefined,
-      stubId: params.get("stub_id") ?? undefined,
-    },
-    {
-      after: after || undefined,
-      tail: Number(params.get("limit") ?? "200"),
-      follow: params.get("follow") === "true",
-      signal,
-    },
-  );
-  onOpen?.();
-  await readNdjson<Schemas["LogEntry"]>(body, (entry) =>
-    onEvent({ id: String(entry.id), event: "message", data: JSON.stringify(viewLogRecord(entry)) }),
-  );
-  // A followed task or container stream ends with the task or container; no
-  // line can follow, so stay open rather than reconnect to an ended scope.
-  await new Promise<void>((resolve) => {
-    if (signal.aborted) resolve();
-    else signal.addEventListener("abort", () => resolve(), { once: true });
-  });
 }

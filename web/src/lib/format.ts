@@ -6,8 +6,6 @@ import {
   type MemoryRequest,
 } from "@/lib/api/schemas/resources";
 
-import { isKnownTaskStatus, isTerminalTaskStatus } from "@/lib/api/schemas/tasks";
-
 import type { RowValue } from "@/lib/api/resources";
 
 export function displayValue(value: RowValue): string {
@@ -63,60 +61,26 @@ export function shareLabel(share: number): string {
   return `${Math.round(percent)}%`;
 }
 
-export type StatusTone = "success" | "warning" | "danger" | "muted";
-
-/**
- * Status palette: green for healthy/complete, amber for pending/in-progress,
- * red for failures, neutral for inactive/cancelled and anything unknown.
- */
-export function statusTone(value: RowValue): StatusTone {
-  const normalized = String(value ?? "").toLowerCase();
-  if (
-    [
-      "ok",
-      "ready",
-      "active",
-      "deployed",
-      "true",
-      "running",
-      "complete",
-      "completed",
-      "success",
-      "healthy",
-    ].includes(normalized)
-  ) {
-    return "success";
-  }
-  if (
-    ["pending", "queued", "starting", "retrying", "retry", "building", "warning"].includes(
-      normalized,
-    )
-  ) {
-    return "warning";
-  }
-  if (["failed", "error", "timeout", "expired", "unhealthy", "not ok"].includes(normalized)) {
-    return "danger";
-  }
-  return "muted";
-}
-
 export type TaskActivityBand = "succeeded" | "inFlight" | "failed" | "other";
 
 /**
- * Which band of an activity bar a task status belongs to.
- *
- * Parts company with `statusTone` on `running`, which a chip paints healthy
- * green because a running task is a working one. Over a window of finished
- * work it is not a task that succeeded, and counting it as one is what lets an
- * app whose queue never drained read as an app where everything worked. A
- * status this build does not know lands in `other` for the same reason.
+ * Which band of an activity bar a task status belongs to. A running task is
+ * in flight, not a success: over a window of finished work, counting it as
+ * one would let an app whose queue never drained read as one where
+ * everything worked. Cancelled work is neither.
  */
 export function taskActivityBand(status: string): TaskActivityBand {
-  const normalized = status.toLowerCase();
-  if (!isKnownTaskStatus(normalized)) return "other";
-  if (!isTerminalTaskStatus(normalized)) return "inFlight";
-  if (statusTone(normalized) === "danger") return "failed";
-  return normalized === "complete" ? "succeeded" : "other";
+  switch (status) {
+    case "succeeded":
+      return "succeeded";
+    case "failed":
+      return "failed";
+    case "queued":
+    case "running":
+      return "inFlight";
+    default:
+      return "other";
+  }
 }
 
 export function formatDuration(milliseconds: number): string {
@@ -173,40 +137,6 @@ export function startupBetween(
 
 function isTimestamp(value: string): boolean {
   return /^\d{4}-\d{2}-\d{2}T/.test(value);
-}
-
-/**
- * Why a container stopped, in the words its owner needs.
- *
- * Mirrors `StopContainerReason.describe` in `shared/container_requests.py`, and
- * changes with it. UNKNOWN is absent on purpose: it is the column default, so
- * it also means the reason has not arrived, and a container still running
- * would otherwise be handed a cause.
- */
-const STOP_REASONS: Record<string, string | undefined> = {
-  TTL: "It reached its time limit",
-  USER: "It was stopped from this account",
-  SCHEDULER: "The platform moved the work",
-  PREEMPTED: "Its machine was reclaimed",
-  ADMIN: "The platform stopped it",
-  UNFUNDED: "The account has no payment method on file",
-  MEMORY_EVICTED:
-    "The machine ran out of memory and this container was using the most above its request",
-  DISK_FULL: "One of its disks ran out of space to save its changes",
-  DISK_UNAVAILABLE: "One of its disks could not be read from workspace storage",
-};
-
-/**
- * The label for a terminal container's stop reason, or null when there is
- * nothing truthful to say — still running, or a reason this build does not
- * know, which renders nothing rather than a raw wire value.
- */
-export function stopReasonLabel(
-  terminationReason: string | undefined,
-  status: string,
-): string | null {
-  if (status === "running" || status === "pending") return null;
-  return (terminationReason && STOP_REASONS[terminationReason]) || null;
 }
 
 /**

@@ -10,8 +10,7 @@ import {
 import { focusManager, useQueryClient, type Query, type QueryKey } from "@tanstack/react-query";
 
 import { useEventStream } from "@/hooks/useEventStream";
-import { withWorkspace } from "@/lib/api/client";
-import { workspaceChangeEventSchema } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 import { accountQueryKeys, workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 import {
   WorkspaceLiveUpdatesContext,
@@ -38,11 +37,10 @@ const EXPENSIVE_MIN_INTERVAL_MS = 15_000;
 /**
  * Backstop sweep for changes the server never published.
  *
- * A reconnect replays what it missed, but `WorkspaceChangeService.publish`
- * logs and drops the event when Redis is unavailable, and nothing replays a
- * change that was never written. This sweep is the only recovery from that, so
- * it is paced for a rare dropped publish rather than for freshness, which the
- * stream already owns.
+ * A reconnect replays what it missed or answers with a reset, but a change
+ * the server failed to record is never sent. This sweep is the only recovery
+ * from that, so it is paced for a rare lost change rather than for freshness,
+ * which the stream already owns.
  */
 const RECOVERY_INTERVAL_MS = 300_000;
 
@@ -53,10 +51,11 @@ type ExpensiveTarget = {
 };
 
 export function WorkspaceLiveUpdatesProvider({
-  workspaceId,
+  workspace,
   children,
 }: {
-  workspaceId: string;
+  /** The workspace's name. */
+  workspace: string;
   children: ReactNode;
 }) {
   const queryClient = useQueryClient();
@@ -67,7 +66,7 @@ export function WorkspaceLiveUpdatesProvider({
   const [contractInvalid, setContractInvalid] = useState(false);
 
   const visible = useSyncExternalStore(subscribeToVisibility, isVisible, alwaysVisible);
-  const streamUrl = withWorkspace("/api/v1/events/changes/stream", workspaceId);
+  const streamUrl = `/v1/workspaces/${encodeURIComponent(workspace)}/changes/stream`;
 
   const invalidateTarget = useCallback(
     (queryKey: QueryKey) =>
@@ -134,39 +133,40 @@ export function WorkspaceLiveUpdatesProvider({
       (query.state.status !== "error" || query.meta.workspaceLiveRecoverErrors !== false);
     // Both roots: capacity is keyed by account, so a stream that missed events has
     // to catch up records that do not live under this workspace's key.
-    for (const queryKey of [workspaceQueryKeys.root(workspaceId), accountQueryKeys.root()]) {
+    for (const queryKey of [workspaceQueryKeys.root(workspace), accountQueryKeys.root()]) {
       void queryClient.invalidateQueries({
         queryKey,
         refetchType: "active",
         predicate: critical,
       });
     }
-  }, [queryClient, workspaceId]);
+  }, [queryClient, workspace]);
 
   const onEvent = useCallback(
     (frame: { id: string; event: string; data: string }) => {
-      // An entry id is a resume point: the stream hook sends it as `Last-Event-ID`
-      // and the server replays everything after it.
+      // An event id is a resume point: the stream hook sends it as
+      // `Last-Event-ID` and the server replays everything after it.
       if (frame.id) resumable.current = true;
-      if (frame.event !== "workspace.change") return;
-      let payload: unknown;
+      // The server no longer holds the changes since the last id, so
+      // everything shown is reloaded.
+      if (frame.event === "reset") {
+        reconcileCriticalQueries();
+        return;
+      }
+      if (frame.event !== "change") return;
+      let event: Schemas["ChangeEvent"];
       try {
-        payload = JSON.parse(frame.data);
+        event = JSON.parse(frame.data) as Schemas["ChangeEvent"];
       } catch {
         setContractInvalid(true);
         return;
       }
-      const parsed = workspaceChangeEventSchema.safeParse(payload);
-      if (!parsed.success || parsed.data.workspace_id !== workspaceId) {
-        setContractInvalid(true);
-        return;
-      }
       setContractInvalid(false);
-      for (const target of workspaceInvalidationTargets(workspaceId, parsed.data)) {
-        enqueue(target);
+      for (const change of event.changes) {
+        for (const target of workspaceInvalidationTargets(workspace, change)) enqueue(target);
       }
     },
-    [enqueue, workspaceId],
+    [enqueue, reconcileCriticalQueries, workspace],
   );
 
   const onOpen = useCallback(() => {

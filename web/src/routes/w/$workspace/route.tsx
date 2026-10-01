@@ -59,7 +59,7 @@ function WorkspaceLayout() {
         <WorkspaceContext.Provider value={contextValue}>
           <WorkspaceLiveUpdatesProvider
             key={contextValue.workspace.id}
-            workspaceId={contextValue.workspace.id}
+            workspace={contextValue.workspace.name}
           >
             <AppShell />
           </WorkspaceLiveUpdatesProvider>

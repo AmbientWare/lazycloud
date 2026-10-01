@@ -12,105 +12,90 @@ export type EventStreamStatus =
   "idle" | "connecting" | "open" | "reconnecting" | "closed" | "error";
 
 /**
- * Follow a server-sent-event endpoint with automatic reconnect and
- * `Last-Event-ID` resume. `onEvent` receives every parsed frame.
- *
- * When `reconnect` is false the hook stops after the server closes the stream
- * (used for streams that end at a terminal state, e.g. task event streams).
+ * One connection of a resumable stream. It calls `onOpen` once the server
+ * answers, keeps its resume point in `cursor`, which lives as long as the
+ * subscription, and resolves "done" when nothing more can arrive or
+ * "reconnect" when the server ended a stream that has more to send.
  */
-export function useEventStream(
-  url: string | null,
-  {
-    enabled = true,
-    reconnect = true,
-    onEvent,
-    onOpen,
-    onReconnect,
-  }: {
-    enabled?: boolean;
-    reconnect?: boolean;
-    onEvent: (event: ServerSentEvent) => void;
-    onOpen?: () => void;
-    onReconnect?: () => void;
-  },
+export type StreamConnect = (session: {
+  signal: AbortSignal;
+  cursor: { value?: string };
+  onOpen: () => void;
+}) => Promise<"done" | "reconnect">;
+
+/**
+ * Keep a stream connected while `key` is set: reconnect with jittered
+ * exponential backoff after a close or a failure, reset the backoff once a
+ * connection stays up, and stop on "done" or a client error the server will
+ * answer the same way again. A new key starts a new subscription; `connect`
+ * is read on each attempt, so it may change between renders.
+ */
+export function useReconnectingStream(
+  key: string | null,
+  connect: StreamConnect,
+  { onOpen, onReconnect }: { onOpen?: () => void; onReconnect?: () => void } = {},
 ): EventStreamStatus {
   const [status, setStatus] = useState<EventStreamStatus>("connecting");
-  const onEventRef = useRef(onEvent);
+  const connectRef = useRef(connect);
   const onOpenRef = useRef(onOpen);
   const onReconnectRef = useRef(onReconnect);
-  const active = !!url && enabled;
 
   useEffect(() => {
-    onEventRef.current = onEvent;
+    connectRef.current = connect;
     onOpenRef.current = onOpen;
     onReconnectRef.current = onReconnect;
   });
 
   useEffect(() => {
-    if (!url || !enabled) return;
-    const streamUrl = url;
-
+    if (key === null) return;
     const controller = new AbortController();
-    let lastEventId: string | undefined;
+    const cursor: { value?: string } = {};
     let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
-    let stableConnectionTimer: ReturnType<typeof setTimeout> | undefined;
-    let stopped = false;
+    let stableTimer: ReturnType<typeof setTimeout> | undefined;
     let hasConnected = false;
-    let reconnectAttempt = 0;
+    let attempt = 0;
 
-    function clearStableConnectionTimer() {
-      if (stableConnectionTimer !== undefined) {
-        clearTimeout(stableConnectionTimer);
-        stableConnectionTimer = undefined;
-      }
-    }
+    const clearStableTimer = () => {
+      if (stableTimer !== undefined) clearTimeout(stableTimer);
+      stableTimer = undefined;
+    };
 
-    function scheduleReconnect() {
-      const exponentialDelay = Math.min(
-        INITIAL_RECONNECT_DELAY_MS * 2 ** reconnectAttempt,
-        MAX_RECONNECT_DELAY_MS,
-      );
-      const jitter = exponentialDelay * RECONNECT_JITTER_RATIO * (Math.random() * 2 - 1);
-      reconnectAttempt += 1;
+    const scheduleReconnect = () => {
+      const delay = Math.min(INITIAL_RECONNECT_DELAY_MS * 2 ** attempt, MAX_RECONNECT_DELAY_MS);
+      const jitter = delay * RECONNECT_JITTER_RATIO * (Math.random() * 2 - 1);
+      attempt += 1;
       setStatus("reconnecting");
-      reconnectTimer = setTimeout(connect, Math.round(exponentialDelay + jitter));
-    }
+      reconnectTimer = setTimeout(run, Math.round(delay + jitter));
+    };
 
-    function connect() {
-      setStatus(hasConnected || reconnectAttempt > 0 ? "reconnecting" : "connecting");
-      streamServerSentEvents(streamUrl, {
-        signal: controller.signal,
-        lastEventId,
-        onOpen: () => {
-          const recovered = hasConnected || reconnectAttempt > 0;
-          hasConnected = true;
-          clearStableConnectionTimer();
-          stableConnectionTimer = setTimeout(() => {
-            reconnectAttempt = 0;
-            stableConnectionTimer = undefined;
-          }, STABLE_CONNECTION_RESET_MS);
-          setStatus("open");
-          onOpenRef.current?.();
-          if (recovered) onReconnectRef.current?.();
-        },
-        onEvent: (event) => {
-          reconnectAttempt = 0;
-          if (event.id) lastEventId = event.id;
-          onEventRef.current(event);
-        },
-      })
-        .then(() => {
-          clearStableConnectionTimer();
-          if (stopped) return;
-          if (reconnect) {
-            scheduleReconnect();
-          } else {
-            setStatus("closed");
-          }
+    function run() {
+      setStatus(hasConnected || attempt > 0 ? "reconnecting" : "connecting");
+      connectRef
+        .current({
+          signal: controller.signal,
+          cursor,
+          onOpen: () => {
+            const recovered = hasConnected || attempt > 0;
+            hasConnected = true;
+            clearStableTimer();
+            stableTimer = setTimeout(() => {
+              attempt = 0;
+              stableTimer = undefined;
+            }, STABLE_CONNECTION_RESET_MS);
+            setStatus("open");
+            onOpenRef.current?.();
+            if (recovered) onReconnectRef.current?.();
+          },
+        })
+        .then((outcome) => {
+          clearStableTimer();
+          if (controller.signal.aborted) return;
+          if (outcome === "done") setStatus("closed");
+          else scheduleReconnect();
         })
         .catch((error: unknown) => {
-          clearStableConnectionTimer();
-          if (stopped || controller.signal.aborted) return;
+          clearStableTimer();
+          if (controller.signal.aborted) return;
           if (
             error instanceof ApiError &&
             error.status >= 400 &&
@@ -121,23 +106,54 @@ export function useEventStream(
             setStatus("error");
             return;
           }
-          if (reconnect) {
-            scheduleReconnect();
-          } else {
-            setStatus("error");
-          }
+          scheduleReconnect();
         });
     }
 
-    connect();
-
+    run();
     return () => {
-      stopped = true;
       if (reconnectTimer !== undefined) clearTimeout(reconnectTimer);
-      clearStableConnectionTimer();
+      clearStableTimer();
       controller.abort();
     };
-  }, [enabled, reconnect, url]);
+  }, [key]);
 
-  return active ? status : "idle";
+  return key === null ? "idle" : status;
+}
+
+/**
+ * Follow a server-sent-event endpoint, resuming with `Last-Event-ID` after
+ * each reconnect. `onEvent` receives every parsed frame.
+ */
+export function useEventStream(
+  url: string | null,
+  {
+    enabled = true,
+    onEvent,
+    onOpen,
+    onReconnect,
+  }: {
+    enabled?: boolean;
+    onEvent: (event: ServerSentEvent) => void;
+    onOpen?: () => void;
+    onReconnect?: () => void;
+  },
+): EventStreamStatus {
+  const key = url && enabled ? url : null;
+  return useReconnectingStream(
+    key,
+    async ({ signal, cursor, onOpen: opened }) => {
+      await streamServerSentEvents(key ?? "", {
+        signal,
+        lastEventId: cursor.value,
+        onOpen: opened,
+        onEvent: (event) => {
+          if (event.id) cursor.value = event.id;
+          onEvent(event);
+        },
+      });
+      return "reconnect";
+    },
+    { onOpen, onReconnect },
+  );
 }
