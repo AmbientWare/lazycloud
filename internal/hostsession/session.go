@@ -539,7 +539,7 @@ func permanentStartFailure(err error) (string, bool) {
 	case err == nil:
 		return "", false
 	case errors.As(err, &missing):
-		return "the release names secret " + missing.Name + ", which the workspace does not have", true
+		return missing.Error(), true
 	case errors.As(err, &unreadable):
 		return "secret " + unreadable.Name + " cannot be read", true
 	case errors.Is(err, errImageUnpinned):

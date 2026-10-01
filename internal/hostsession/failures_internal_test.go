@@ -16,7 +16,7 @@ func TestOnlyPermanentStartErrorsFailTheContainer(t *testing.T) {
 		permanent bool
 		reason    string
 	}{
-		{fmt.Errorf("resolve: %w", &secrets.NotFoundError{Name: "API_KEY"}), true, "the release names secret API_KEY, which the workspace does not have"},
+		{fmt.Errorf("resolve: %w", &secrets.NotFoundError{Name: "API_KEY"}), true, "secret not found: API_KEY"},
 		{&secrets.UnreadableError{Name: "API_KEY", Err: errors.New("key 7 gone")}, true, "secret API_KEY cannot be read"},
 		{fmt.Errorf("release names image img_1: %w", errImageUnpinned), true, "the release's image has no pinned reference; deploy it again"},
 		{errors.New("presign source download: connection refused"), false, ""},
