@@ -145,9 +145,7 @@ func (s *Server) checkImages(ctx context.Context, workspace identity.WorkspaceID
 	return nil
 }
 
-// pinImage rejects a definition naming an image the workspace cannot run and
-// pins the image's reference into it. A reference the caller sent is
-// replaced.
+// pinImage does checkImages for one function spec.
 func (s *Server) pinImage(ctx context.Context, workspace identity.WorkspaceID, spec *apitypes.FunctionSpec) error {
 	image := &spec.Image
 	image.Reference = nil

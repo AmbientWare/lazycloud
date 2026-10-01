@@ -4,30 +4,30 @@ import mimetypes
 import shutil
 import tempfile
 import zipfile
-from collections.abc import Iterable
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import BinaryIO, NamedTuple, Protocol
+from uuid import UUID
 
 from pydantic import JsonValue
-from shared.app_identity import NAME
-from shared.http import artifacts
-from shared.http.artifacts import (
-    ArtifactPublicUrlRequest,
-    ArtifactPublicUrlResponse,
-    ArtifactSaveResponse,
-    ArtifactStatRequest,
-    ArtifactStatResponse,
+from shared.api import (
+    CompleteArtifactRequest,
+    CreateArtifactRequest,
+    ErrorCode,
+    PresignArtifactRequest,
 )
-from shared.http.errors import HttpApiError
+from shared.app_identity import NAME
 from shared.task_context import current_task_id
 from typing_extensions import Self
 
-from lazycloud.control import ControlClientConfig, resolve_control_client_config
+from lazycloud.clients.api import ApiConnectionError, ApiError
+from lazycloud.clients.storage import StorageClient, upload_file_parts
+from lazycloud.control import resolve_control_client_config, storage_client
 
 DEFAULT_ARTIFACT_CHUNK_SIZE_BYTES = 1024 * 1024
+_REMOTE_STAT_MODE = "0644"
 
 
 @dataclass(frozen=True)
@@ -48,31 +48,6 @@ class SavedArtifact:
     filename: str = ""
     remote: bool = False
     expires_at: datetime | None = None
-
-
-class ArtifactSaveClient(Protocol):
-    def artifact_save_stream(
-        self,
-        task_id: str,
-        filename: str,
-        chunks: Iterable[bytes],
-        *,
-        content_type: str = "application/octet-stream",
-    ) -> ArtifactSaveResponse: ...
-
-
-class ArtifactMetadataClient(Protocol):
-    def delete(self, artifact_id: str) -> None: ...
-
-    def artifact_stat(self, request: ArtifactStatRequest) -> ArtifactStatResponse: ...
-
-    def artifact_public_url(
-        self, request: ArtifactPublicUrlRequest
-    ) -> ArtifactPublicUrlResponse: ...
-
-
-class ArtifactRemoteClient(ArtifactSaveClient, ArtifactMetadataClient, Protocol):
-    pass
 
 
 class Stat(NamedTuple):
@@ -106,7 +81,7 @@ class Artifact:
             raise FileNotFoundError(self.path)
         self.value = str(self.path)
         self.content_type = content_type
-        self._client: ArtifactRemoteClient | None = None
+        self._client: StorageClient | None = None
         self.task_id = task_id if task_id is not None else current_task_id()
         self.workspace = workspace
         self.endpoint: str | None = None
@@ -135,7 +110,7 @@ class Artifact:
 
     def _bind_control(
         self,
-        client: ArtifactRemoteClient | None = None,
+        client: StorageClient | None = None,
         *,
         workspace: str | None = None,
         endpoint: str | None = None,
@@ -198,31 +173,31 @@ class Artifact:
         return result
 
     def stat(self) -> ArtifactStat | Stat:
-        if self.id:
-            try:
-                response = self._artifact_client().artifact_stat(
-                    ArtifactStatRequest(
-                        id=self.id,
-                        task_id=self._remote_task_id(),
-                        filename=self._remote_filename(),
-                    )
-                )
-            except HttpApiError as exc:
-                if exc.status_code == 404:
-                    raise ArtifactNotFoundError(exc.detail or "artifact not found") from exc
-                raise ArtifactReadError(exc.detail or "failed to read artifact") from exc
-            if response.stat is None:
-                raise ArtifactNotFoundError("artifact not found")
-            return _remote_stat(response.stat)
-        return self._local_stat()
+        """The saved artifact's size and times once saved remotely, else the local file's."""
+        if not self.id:
+            return self._local_stat()
+        try:
+            stored = self._artifact_client().get_artifact(self._remote_id())
+        except ApiError as exc:
+            if exc.code is ErrorCode.not_found:
+                raise ArtifactNotFoundError(exc.message or "artifact not found") from exc
+            raise ArtifactReadError(exc.message or "failed to read artifact") from exc
+        except ApiConnectionError as exc:
+            raise ArtifactReadError(str(exc)) from exc
+        stamp = stored.stored_at or stored.created_at
+        return Stat(mode=_REMOTE_STAT_MODE, size=stored.size_bytes, atime=stamp, mtime=stamp)
 
     def delete(self) -> None:
         if not self.id:
             raise ArtifactNotSavedError("artifact has not been saved remotely")
         try:
-            self._artifact_client().delete(self.id)
-        except HttpApiError as exc:
-            raise ArtifactDeleteError(exc.detail or "failed to delete artifact") from exc
+            self._artifact_client().delete_artifact(self._remote_id())
+        except ApiError as exc:
+            if exc.code is ErrorCode.not_found:
+                raise ArtifactNotFoundError(exc.message or "artifact not found") from exc
+            raise ArtifactDeleteError(exc.message or "failed to delete artifact") from exc
+        except ApiConnectionError as exc:
+            raise ArtifactDeleteError(str(exc)) from exc
 
     def exists(self) -> bool:
         if not self.id:
@@ -248,6 +223,10 @@ class Artifact:
         task_id: str | None = None,
         chunk_size: int = DEFAULT_ARTIFACT_CHUNK_SIZE_BYTES,
     ) -> SavedArtifact:
+        """Save the artifact for a task, or package it locally when there is no task.
+
+        A directory is zipped first. The bytes go straight to the object store.
+        """
         effective_client = self._client
         effective_task_id = task_id or self.task_id
         if effective_client is not None or effective_task_id:
@@ -261,7 +240,7 @@ class Artifact:
 
     def save_remote(
         self,
-        client: ArtifactSaveClient,
+        client: StorageClient,
         *,
         task_id: str,
         target_dir: str | Path | None = None,
@@ -280,19 +259,26 @@ class Artifact:
         *,
         base_url: str | None = None,
     ) -> str:
+        """A URL anyone can download the saved artifact from for `expires` seconds.
+
+        The platform caps the lifetime at the artifact's remaining retention.
+        """
         if not self.id:
             if base_url is not None:
                 return self._local_public_url(base_url=base_url)
             raise ArtifactNotSavedError("artifact has not been saved remotely")
-        response = self._artifact_client().artifact_public_url(
-            ArtifactPublicUrlRequest(
-                id=self.id,
-                task_id=self._remote_task_id(),
-                filename=self._remote_filename(),
-                expires=expires,
-            )
+        request = (
+            PresignArtifactRequest(expires_seconds=expires)
+            if expires > 0
+            else PresignArtifactRequest()
         )
-        return response.public_url
+        try:
+            response = self._artifact_client().presign_artifact(self._remote_id(), request)
+        except ApiError as exc:
+            if exc.code is ErrorCode.not_found:
+                raise ArtifactNotFoundError(exc.message or "artifact not found") from exc
+            raise ArtifactReadError(exc.message or "failed to presign artifact") from exc
+        return response.url
 
     def zip_dir(
         self,
@@ -323,55 +309,68 @@ class Artifact:
 
     def _save_local(self, *, target_dir: str | Path | None = None) -> SavedArtifact:
         packaged = self.package(target_dir=target_dir)
-        stat = ArtifactStat(
-            path=packaged,
-            name=packaged.name,
-            size=packaged.stat().st_size,
-            is_dir=False,
-            packaged=self.path.is_dir(),
-        )
-        return SavedArtifact(path=packaged, stat=stat)
+        return SavedArtifact(path=packaged, stat=self._packaged_stat(packaged))
 
     def _save_remote(
         self,
-        client: ArtifactSaveClient,
+        client: StorageClient,
         *,
         task_id: str,
         target_dir: str | Path | None = None,
         chunk_size: int = DEFAULT_ARTIFACT_CHUNK_SIZE_BYTES,
     ) -> SavedArtifact:
+        if chunk_size <= 0:
+            msg = "artifact chunk size must be positive"
+            raise ValueError(msg)
         if not task_id:
             raise ArtifactTaskIdError("task_id is required to save an artifact remotely")
-        packaged = self.package(target_dir=target_dir)
         try:
-            response = client.artifact_save_stream(
-                task_id,
-                packaged.name,
-                _file_chunks(packaged, chunk_size=chunk_size),
-                content_type=self.content_type or guess_content_type(packaged),
+            task = UUID(task_id)
+        except ValueError as exc:
+            raise ArtifactTaskIdError(f"task_id {task_id!r} is not a task id") from exc
+        packaged = self.package(target_dir=target_dir)
+        stat = self._packaged_stat(packaged)
+        try:
+            created = client.create_artifact(
+                CreateArtifactRequest(
+                    task_id=task,
+                    filename=packaged.name,
+                    content_type=self.content_type or guess_content_type(packaged),
+                    size_bytes=stat.size,
+                )
             )
-        except HttpApiError as exc:
-            raise ArtifactSaveError(exc.detail or "failed to save artifact") from exc
-        stat = ArtifactStat(
+            parts = upload_file_parts(packaged, created.upload.parts)
+            stored = client.complete_artifact(
+                created.artifact.id,
+                CompleteArtifactRequest(parts=parts)
+                if created.upload.upload_id is not None
+                else CompleteArtifactRequest(),
+            )
+        except (ApiError, ApiConnectionError) as exc:
+            message = exc.message if isinstance(exc, ApiError) else str(exc)
+            raise ArtifactSaveError(message or "failed to save artifact") from exc
+        saved = SavedArtifact(
+            path=packaged,
+            stat=stat,
+            artifact_id=str(stored.id),
+            task_id=task_id,
+            filename=stored.filename,
+            remote=True,
+            expires_at=stored.expires_at,
+        )
+        self.id = saved.artifact_id
+        self.task_id = saved.task_id
+        self.filename = saved.filename
+        return saved
+
+    def _packaged_stat(self, packaged: Path) -> ArtifactStat:
+        return ArtifactStat(
             path=packaged,
             name=packaged.name,
             size=packaged.stat().st_size,
             is_dir=False,
             packaged=self.path.is_dir(),
         )
-        saved = SavedArtifact(
-            path=packaged,
-            stat=stat,
-            artifact_id=response.id,
-            task_id=task_id,
-            filename=packaged.name,
-            remote=True,
-            expires_at=response.expires_at,
-        )
-        self.id = saved.artifact_id
-        self.task_id = saved.task_id
-        self.filename = saved.filename
-        return saved
 
     def _local_stat(self) -> ArtifactStat:
         if not self.path.exists():
@@ -391,7 +390,7 @@ class Artifact:
             return self.path.resolve().as_uri()
         return f"{base_url.rstrip('/')}/{self.path.as_posix().lstrip('/')}"
 
-    def _artifact_client(self) -> ArtifactRemoteClient:
+    def _artifact_client(self) -> StorageClient:
         if self._client is None:
             config = resolve_control_client_config(
                 workspace=self.workspace,
@@ -399,16 +398,14 @@ class Artifact:
                 token=self.token,
                 timeout_seconds=self.timeout_seconds,
             )
-            self._client = _default_artifact_client(config)
+            self._client = storage_client(config)
         return self._client
 
-    def _remote_task_id(self) -> str:
-        if not self.task_id:
-            raise ArtifactTaskIdError("task_id is required to read saved artifact metadata")
-        return self.task_id
-
-    def _remote_filename(self) -> str:
-        return self.filename or (self.zipped_path.name if self.path.is_dir() else self.path.name)
+    def _remote_id(self) -> UUID:
+        try:
+            return UUID(self.id)
+        except (TypeError, ValueError) as exc:
+            raise ArtifactNotFoundError(f"artifact {self.id!r} not found") from exc
 
 
 class ArtifactSaveError(RuntimeError):
@@ -439,26 +436,6 @@ class ArtifactTaskIdError(RuntimeError):
     pass
 
 
-def _default_artifact_client(config: ControlClientConfig) -> ArtifactRemoteClient:
-    from lazycloud.clients.artifact.control import ArtifactControlClient
-
-    return ArtifactControlClient.from_endpoint(
-        config.endpoint,
-        token=config.token,
-        timeout_seconds=config.timeout_seconds,
-        workspace=config.workspace,
-    )
-
-
-def _remote_stat(stat: artifacts.ArtifactStat) -> Stat:
-    return Stat(
-        mode=stat.mode,
-        size=stat.size or 0,
-        atime=stat.atime,
-        mtime=stat.mtime,
-    )
-
-
 def guess_content_type(path: Path) -> str:
     """Name the type from the filename when the caller did not give one.
 
@@ -470,29 +447,14 @@ def guess_content_type(path: Path) -> str:
     return guessed or "application/octet-stream"
 
 
-def _file_chunks(path: Path, *, chunk_size: int) -> Iterable[bytes]:
-    if chunk_size <= 0:
-        msg = "artifact chunk size must be positive"
-        raise ValueError(msg)
-    if path.stat().st_size == 0:
-        yield b""
-        return
-    with path.open("rb") as file:
-        while chunk := file.read(chunk_size):
-            yield chunk
-
-
 __all__ = [
     "DEFAULT_ARTIFACT_CHUNK_SIZE_BYTES",
     "Artifact",
     "ArtifactCannotRunLocallyError",
     "ArtifactDeleteError",
-    "ArtifactMetadataClient",
     "ArtifactNotFoundError",
     "ArtifactNotSavedError",
     "ArtifactReadError",
-    "ArtifactRemoteClient",
-    "ArtifactSaveClient",
     "ArtifactSaveError",
     "ArtifactStat",
     "ArtifactTaskIdError",

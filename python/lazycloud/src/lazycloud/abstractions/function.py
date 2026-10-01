@@ -301,8 +301,11 @@ class Function(Generic[P, R]):
         if self.gpu is not None or self.gpu_count:
             found.append("gpu")
         declared = {
-            "disk": self.disk is not None,
-            "volumes": bool(self.volumes),
+            # Hosts have no credentials of their own for a user's bucket.
+            "cloud bucket without key secrets": any(
+                volume.config is not None and volume.config.get("auth_mode") != "secret_references"
+                for volume in self.volumes
+            ),
             "authorized": self.authorized is not DEFAULT_FUNCTION_AUTHORIZED,
             "docker_enabled": self.docker_enabled,
             "preemptible": self.preemptible is not DEFAULT_WORKLOAD_PREEMPTIBLE,
@@ -340,7 +343,7 @@ class Function(Generic[P, R]):
                 "python_version": python_minor_version(image.python_version),
                 "image_id": image.image_id,
             },
-            "resources": _resources(self.cpu, self.memory),
+            "resources": _resources(self.cpu, self.memory, self.disk),
             "retry_policy": policy.model_dump(
                 mode="json",
                 include={"max_attempts", "delay_seconds", "backoff", "max_delay_seconds"},
@@ -361,6 +364,8 @@ class Function(Generic[P, R]):
             spec["max_pending_tasks"] = self.max_pending_tasks
         if self.env:
             spec["environment"] = dict(self.env)
+        if self.volumes:
+            spec["volumes"] = [_volume_spec(volume) for volume in self.volumes]
         if self.cron:
             spec["cron"] = self.cron
         if self.secrets:
@@ -785,8 +790,35 @@ def _map_args(input_value: Any) -> tuple[Any, ...]:
     return (input_value,)
 
 
-def _resources(cpu: Any, memory: Any) -> dict[str, int]:
-    """Reservations, plus ceilings when `cpu` or `memory` is a `(reserve, limit)` pair."""
+def _volume_spec(volume: VolumeMount) -> dict[str, Any]:
+    """The API mount of a volume, or of a cloud bucket whose keys are the
+    workspace secrets its config names."""
+    spec: dict[str, Any] = {
+        "name": volume.name,
+        "mount_path": volume.mount_path,
+        "read_only": volume.read_only,
+    }
+    config = volume.config
+    if config is not None:
+        bucket: dict[str, Any] = {
+            "bucket": config["bucket_name"],
+            "prefix": config.get("prefix") or "",
+            "force_path_style": bool(config.get("force_path_style")),
+            "access_key_secret": config["access_key"],
+            "secret_key_secret": config["secret_key"],
+        }
+        for field_name, key in (("region", "region"), ("endpoint", "endpoint_url")):
+            if config.get(key):
+                bucket[field_name] = config[key]
+        spec["cloud_bucket"] = bucket
+    return spec
+
+
+def _resources(cpu: Any, memory: Any, disk: str | None) -> dict[str, int]:
+    """Reservations, plus ceilings when `cpu` or `memory` is a `(reserve, limit)` pair.
+
+    `disk` limits the container's writable layer, such as "10Gi".
+    """
     cpu = DEFAULT_FUNCTION_CPU if cpu is None else cpu
     memory = DEFAULT_FUNCTION_MEMORY if memory is None else memory
     resources: dict[str, int] = {}
@@ -800,6 +832,9 @@ def _resources(cpu: Any, memory: Any) -> dict[str, int]:
         resources["memory_limit_mib"] = parse_memory_mib(memory[1])
     else:
         resources["memory_mib"] = parse_memory_mib(memory)
+    disk_mib = parse_memory_mib(disk)
+    if disk_mib is not None:
+        resources["disk_mib"] = disk_mib
     return resources
 
 

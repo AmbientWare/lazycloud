@@ -1,5 +1,8 @@
-// Package storage owns object bytes: source archives in an S3-compatible
-// object store and the records of which archives each workspace has stored.
+// Package storage owns object bytes and their metadata: source archives,
+// volumes, disks, artifacts, queues and maps. PostgreSQL holds metadata and
+// authority; an S3-compatible object store holds the bytes. Each workspace's
+// volumes and disks live in a bucket of their own, so a host can be given
+// short-lived credentials that reach one workspace alone.
 package storage
 
 import (
@@ -56,14 +59,21 @@ type Config struct {
 	Bucket          string
 	AccessKeyID     string
 	SecretAccessKey string
+	// Workspaces configures the buckets that hold volumes and disks.
+	Workspaces WorkspaceBuckets
 }
 
 // Storage is the storage owner.
 type Storage struct {
+	pool    *pgxpool.Pool
 	queries *Queries
 	client  *s3.Client
 	presign *s3.PresignClient
 	bucket  string
+	config  Config
+	buckets bucketProvider
+	// orphanAge is the sweep's orphanAge; tests in this package shorten it.
+	orphanAge time.Duration
 }
 
 // NewStorage returns the storage owner over pool and the configured bucket.
@@ -78,7 +88,10 @@ func NewStorage(pool *pgxpool.Pool, cfg Config) *Storage {
 		RequestChecksumCalculation: aws.RequestChecksumCalculationWhenRequired,
 		ResponseChecksumValidation: aws.ResponseChecksumValidationWhenRequired,
 	})
-	return &Storage{queries: New(pool), client: client, presign: s3.NewPresignClient(client), bucket: cfg.Bucket}
+	return &Storage{
+		pool: pool, queries: New(pool), client: client, presign: s3.NewPresignClient(client), bucket: cfg.Bucket,
+		config: cfg, buckets: newBucketProvider(cfg, client), orphanAge: orphanAge,
+	}
 }
 
 // UploadTarget is a presigned request that stores an object's bytes.

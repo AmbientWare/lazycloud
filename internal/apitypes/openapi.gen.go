@@ -31,6 +31,24 @@ func (e AppState) Valid() bool {
 	}
 }
 
+// Defines values for ArtifactState.
+const (
+	Stored    ArtifactState = "stored"
+	Uploading ArtifactState = "uploading"
+)
+
+// Valid indicates whether the value is a known member of the ArtifactState enum.
+func (e ArtifactState) Valid() bool {
+	switch e {
+	case Stored:
+		return true
+	case Uploading:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ContainerLogEntryStream.
 const (
 	ContainerLogEntryStreamStderr ContainerLogEntryStream = "stderr"
@@ -181,6 +199,27 @@ func (e DeviceTokenStatus) Valid() bool {
 	case DeviceTokenStatusPending:
 		return true
 	case DeviceTokenStatusSlowDown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DiskStatus.
+const (
+	Attached DiskStatus = "attached"
+	Detached DiskStatus = "detached"
+	Saving   DiskStatus = "saving"
+)
+
+// Valid indicates whether the value is a known member of the DiskStatus enum.
+func (e DiskStatus) Valid() bool {
+	switch e {
+	case Attached:
+		return true
+	case Detached:
+		return true
+	case Saving:
 		return true
 	default:
 		return false
@@ -622,6 +661,30 @@ func (e PayloadEncoding) Valid() bool {
 	}
 }
 
+// Defines values for PresignVolumeFileRequestMethod.
+const (
+	PresignVolumeFileRequestMethodGet        PresignVolumeFileRequestMethod = "get"
+	PresignVolumeFileRequestMethodHead       PresignVolumeFileRequestMethod = "head"
+	PresignVolumeFileRequestMethodPut        PresignVolumeFileRequestMethod = "put"
+	PresignVolumeFileRequestMethodUploadPart PresignVolumeFileRequestMethod = "upload_part"
+)
+
+// Valid indicates whether the value is a known member of the PresignVolumeFileRequestMethod enum.
+func (e PresignVolumeFileRequestMethod) Valid() bool {
+	switch e {
+	case PresignVolumeFileRequestMethodGet:
+		return true
+	case PresignVolumeFileRequestMethodHead:
+		return true
+	case PresignVolumeFileRequestMethodPut:
+		return true
+	case PresignVolumeFileRequestMethodUploadPart:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for PreviewKind.
 const (
 	PreviewKindAsgi     PreviewKind = "asgi"
@@ -865,6 +928,21 @@ func (e WorkloadKind) Valid() bool {
 	}
 }
 
+// Defines values for WorkloadRefKind.
+const (
+	WorkloadRefKindFunction WorkloadRefKind = "function"
+)
+
+// Valid indicates whether the value is a known member of the WorkloadRefKind enum.
+func (e WorkloadRefKind) Valid() bool {
+	switch e {
+	case WorkloadRefKindFunction:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for WorkloadState.
 const (
 	WorkloadStateActive  WorkloadState = "active"
@@ -925,6 +1003,13 @@ func (e WorkspaceState) Valid() bool {
 	}
 }
 
+// AbortVolumeUploadRequest defines model for AbortVolumeUploadRequest.
+type AbortVolumeUploadRequest struct {
+	// Path A file or directory below the volume root.
+	Path     VolumeFilePath `json:"path"`
+	UploadId string         `json:"upload_id"`
+}
+
 // AcceptedInvitation defines model for AcceptedInvitation.
 type AcceptedInvitation struct {
 	Member    Member    `json:"member"`
@@ -959,11 +1044,93 @@ type AppRef = string
 // AppState defines model for AppState.
 type AppState string
 
+// Artifact defines model for Artifact.
+type Artifact struct {
+	App         *AppName            `json:"app,omitempty"`
+	ContentType string              `json:"content_type"`
+	CreatedAt   time.Time           `json:"created_at"`
+	ExpiresAt   *time.Time          `json:"expires_at,omitempty"`
+	Filename    string              `json:"filename"`
+	Id          openapi_types.UUID  `json:"id"`
+	SizeBytes   int64               `json:"size_bytes"`
+	State       ArtifactState       `json:"state"`
+	StoredAt    *time.Time          `json:"stored_at,omitempty"`
+	TaskId      *openapi_types.UUID `json:"task_id,omitempty"`
+}
+
+// ArtifactState defines model for Artifact.State.
+type ArtifactState string
+
+// ArtifactPage defines model for ArtifactPage.
+type ArtifactPage struct {
+	Artifacts  []Artifact `json:"artifacts"`
+	NextCursor *string    `json:"next_cursor,omitempty"`
+}
+
+// ArtifactSummary defines model for ArtifactSummary.
+type ArtifactSummary struct {
+	Count int64 `json:"count"`
+
+	// RetentionSeconds How long new artifacts are kept under the workspace's plan.
+	RetentionSeconds int64 `json:"retention_seconds"`
+	SizeBytes        int64 `json:"size_bytes"`
+}
+
+// ArtifactUpload defines model for ArtifactUpload.
+type ArtifactUpload struct {
+	Artifact Artifact `json:"artifact"`
+
+	// Upload Where to send bytes. With `upload_id` it is a multipart upload whose part ETags complete it; without, `parts` holds one plain PUT.
+	Upload Upload `json:"upload"`
+}
+
 // Autoscaler defines model for Autoscaler.
 type Autoscaler struct {
 	MaxContainers     *int `json:"max_containers,omitempty"`
 	MinContainers     *int `json:"min_containers,omitempty"`
 	TasksPerContainer *int `json:"tasks_per_container,omitempty"`
+}
+
+// CloudBucketSpec defines model for CloudBucketSpec.
+type CloudBucketSpec struct {
+	// AccessKeySecret The workspace secret holding the access key id.
+	AccessKeySecret *SecretName `json:"access_key_secret,omitempty"`
+	Bucket          string      `json:"bucket"`
+
+	// Endpoint An S3-compatible endpoint URL; AWS S3 when absent.
+	Endpoint       *string `json:"endpoint,omitempty"`
+	ForcePathStyle *bool   `json:"force_path_style,omitempty"`
+
+	// Prefix A key prefix ending in `/`, or empty for the whole bucket.
+	Prefix *string `json:"prefix,omitempty"`
+	Region *string `json:"region,omitempty"`
+
+	// SecretKeySecret The workspace secret holding the secret access key.
+	SecretKeySecret *SecretName `json:"secret_key_secret,omitempty"`
+}
+
+// CollectionName A queue or map name; any characters except control characters.
+type CollectionName = string
+
+// CompleteArtifactRequest defines model for CompleteArtifactRequest.
+type CompleteArtifactRequest struct {
+	// Parts The ETag of every part of a multipart upload.
+	Parts *[]CompletedPart `json:"parts,omitempty"`
+}
+
+// CompleteVolumeUploadRequest defines model for CompleteVolumeUploadRequest.
+type CompleteVolumeUploadRequest struct {
+	Parts []CompletedPart `json:"parts"`
+
+	// Path A file or directory below the volume root.
+	Path     VolumeFilePath `json:"path"`
+	UploadId string         `json:"upload_id"`
+}
+
+// CompletedPart defines model for CompletedPart.
+type CompletedPart struct {
+	Etag   string `json:"etag"`
+	Number int    `json:"number"`
 }
 
 // Container defines model for Container.
@@ -1010,12 +1177,46 @@ type ContainerPage struct {
 // ContainerState defines model for ContainerState.
 type ContainerState string
 
+// CreateArtifactRequest defines model for CreateArtifactRequest.
+type CreateArtifactRequest struct {
+	ContentType *string `json:"content_type,omitempty"`
+
+	// Filename A base name without `/`.
+	Filename  string             `json:"filename"`
+	SizeBytes int64              `json:"size_bytes"`
+	TaskId    openapi_types.UUID `json:"task_id"`
+}
+
+// CreateVolumeRequest defines model for CreateVolumeRequest.
+type CreateVolumeRequest struct {
+	Name VolumeName `json:"name"`
+}
+
+// CreateVolumeUploadRequest defines model for CreateVolumeUploadRequest.
+type CreateVolumeUploadRequest struct {
+	PartSizeBytes *int64 `json:"part_size_bytes,omitempty"`
+
+	// Path A file or directory below the volume root.
+	Path      VolumeFilePath `json:"path"`
+	SizeBytes int64          `json:"size_bytes"`
+}
+
 // CreatedToken defines model for CreatedToken.
 type CreatedToken struct {
 	Record Token `json:"record"`
 
 	// Token The secret; it is not shown again.
 	Token string `json:"token"`
+}
+
+// DeleteArtifactsRequest defines model for DeleteArtifactsRequest.
+type DeleteArtifactsRequest struct {
+	Ids []openapi_types.UUID `json:"ids"`
+}
+
+// DeletedArtifacts defines model for DeletedArtifacts.
+type DeletedArtifacts struct {
+	Deleted []openapi_types.UUID `json:"deleted"`
 }
 
 // DeliveryState What became of an email: `queued` until the provider accepts it, then `sent`, and `delivered`, `bounced` or `complained` as the provider reports; `failed` when delivery gave up; `discarded` when it was withdrawn before sending.
@@ -1154,6 +1355,37 @@ type DeviceTokenResponse struct {
 // DeviceTokenStatus defines model for DeviceTokenStatus.
 type DeviceTokenStatus string
 
+// Disk defines model for Disk.
+type Disk struct {
+	CreatedAt time.Time `json:"created_at"`
+
+	// Generation The newest published generation; 0 before the first.
+	Generation int64 `json:"generation"`
+
+	// HolderContainerId The container holding the disk while attached or saving.
+	HolderContainerId *openapi_types.UUID `json:"holder_container_id,omitempty"`
+	Id                openapi_types.UUID  `json:"id"`
+	Name              DiskName            `json:"name"`
+	SizeBytes         int64               `json:"size_bytes"`
+	Status            DiskStatus          `json:"status"`
+
+	// StoredBytes Bytes the disk's published generations occupy in the object store.
+	StoredBytes int64     `json:"stored_bytes"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// DiskName defines model for DiskName.
+type DiskName = string
+
+// DiskPage defines model for DiskPage.
+type DiskPage struct {
+	Disks      []Disk  `json:"disks"`
+	NextCursor *string `json:"next_cursor,omitempty"`
+}
+
+// DiskStatus defines model for DiskStatus.
+type DiskStatus string
+
 // DnsRecord defines model for DnsRecord.
 type DnsRecord struct {
 	Name  string `json:"name"`
@@ -1262,9 +1494,10 @@ type FunctionSpec struct {
 	RetryPolicy *RetryPolicy `json:"retry_policy,omitempty"`
 
 	// Secrets Secrets the container receives as environment variables of the same name.
-	Secrets        *[]SecretName `json:"secrets,omitempty"`
-	Source         SourceRef     `json:"source"`
-	TimeoutSeconds *int          `json:"timeout_seconds,omitempty"`
+	Secrets        *[]SecretName      `json:"secrets,omitempty"`
+	Source         SourceRef          `json:"source"`
+	TimeoutSeconds *int               `json:"timeout_seconds,omitempty"`
+	Volumes        *[]VolumeMountSpec `json:"volumes,omitempty"`
 }
 
 // HookReferences defines model for HookReferences.
@@ -1517,6 +1750,51 @@ type LogEntry struct {
 // LogEntryStream defines model for LogEntry.Stream.
 type LogEntryStream string
 
+// MapEntry defines model for MapEntry.
+type MapEntry struct {
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+	Key       string     `json:"key"`
+
+	// Revision Changes on every write; pass it as `if_revision` to compare and set.
+	Revision  string    `json:"revision"`
+	UpdatedAt time.Time `json:"updated_at"`
+
+	// Value Base64 bytes; SDK values are JSON, or cloudpickle (first byte 0x80).
+	Value []byte `json:"value"`
+}
+
+// MapEntryWrite defines model for MapEntryWrite.
+type MapEntryWrite struct {
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+	Revision  string     `json:"revision"`
+}
+
+// MapInfo In a list, statistics count at most 100,001 live keys.
+type MapInfo struct {
+	Count         int64 `json:"count"`
+	ExpiringCount int64 `json:"expiring_count"`
+
+	// Name A queue or map name; any characters except control characters.
+	Name         CollectionName `json:"name"`
+	NextExpiryAt *time.Time     `json:"next_expiry_at,omitempty"`
+	SizeBytes    int64          `json:"size_bytes"`
+}
+
+// MapKey defines model for MapKey.
+type MapKey = string
+
+// MapKeyPage defines model for MapKeyPage.
+type MapKeyPage struct {
+	Keys       []string `json:"keys"`
+	NextCursor *string  `json:"next_cursor,omitempty"`
+}
+
+// MapPage defines model for MapPage.
+type MapPage struct {
+	Maps       []MapInfo `json:"maps"`
+	NextCursor *string   `json:"next_cursor,omitempty"`
+}
+
 // Me defines model for Me.
 type Me struct {
 	User       User        `json:"user"`
@@ -1544,6 +1822,24 @@ type MemberRoleRequest struct {
 	Role InvitationRole `json:"role"`
 }
 
+// MoveVolumeFileRequest defines model for MoveVolumeFileRequest.
+type MoveVolumeFileRequest struct {
+	// From A file or directory below the volume root.
+	From VolumeFilePath `json:"from"`
+
+	// To A file or directory below the volume root.
+	To VolumeFilePath `json:"to"`
+}
+
+// MultipartUpload defines model for MultipartUpload.
+type MultipartUpload struct {
+	ExpiresAt     time.Time    `json:"expires_at"`
+	PartSizeBytes int64        `json:"part_size_bytes"`
+	Parts         []UploadPart `json:"parts"`
+	Path          string       `json:"path"`
+	UploadId      string       `json:"upload_id"`
+}
+
 // Name defines model for Name.
 type Name = string
 
@@ -1556,6 +1852,41 @@ type Payload struct {
 
 // PayloadEncoding defines model for Payload.Encoding.
 type PayloadEncoding string
+
+// PresignArtifactRequest defines model for PresignArtifactRequest.
+type PresignArtifactRequest struct {
+	// Download Ask browsers to save the file rather than show it.
+	Download *bool `json:"download,omitempty"`
+
+	// ExpiresSeconds Capped at the artifact's remaining retention.
+	ExpiresSeconds *int `json:"expires_seconds,omitempty"`
+}
+
+// PresignVolumeFileRequest defines model for PresignVolumeFileRequest.
+type PresignVolumeFileRequest struct {
+	ExpiresSeconds *int                           `json:"expires_seconds,omitempty"`
+	Method         PresignVolumeFileRequestMethod `json:"method"`
+
+	// PartNumber Required for `upload_part`.
+	PartNumber *int `json:"part_number,omitempty"`
+
+	// Path A file or directory below the volume root.
+	Path VolumeFilePath `json:"path"`
+
+	// UploadId Required for `upload_part`.
+	UploadId *string `json:"upload_id,omitempty"`
+}
+
+// PresignVolumeFileRequestMethod defines model for PresignVolumeFileRequest.Method.
+type PresignVolumeFileRequestMethod string
+
+// PresignedUrl defines model for PresignedUrl.
+type PresignedUrl struct {
+	ExpiresAt time.Time `json:"expires_at"`
+
+	// Url Absolute URL; the request carries no bearer token.
+	Url string `json:"url"`
+}
 
 // Preview defines model for Preview.
 type Preview struct {
@@ -1592,6 +1923,31 @@ type PreviewSync struct {
 	Written int `json:"written"`
 }
 
+// PutQueueMessagesRequest defines model for PutQueueMessagesRequest.
+type PutQueueMessagesRequest struct {
+	// Messages Message bodies, base64; each at most 1 MiB.
+	Messages [][]byte `json:"messages"`
+}
+
+// QueueInfo In a list, statistics count at most 100,001 messages.
+type QueueInfo struct {
+	// Name A queue or map name; any characters except control characters.
+	Name            CollectionName `json:"name"`
+	OldestMessageAt *time.Time     `json:"oldest_message_at,omitempty"`
+	Size            int64          `json:"size"`
+}
+
+// QueueMessageResult defines model for QueueMessageResult.
+type QueueMessageResult struct {
+	Message *[]byte `json:"message,omitempty"`
+}
+
+// QueuePage defines model for QueuePage.
+type QueuePage struct {
+	NextCursor *string     `json:"next_cursor,omitempty"`
+	Queues     []QueueInfo `json:"queues"`
+}
+
 // Release defines model for Release.
 type Release struct {
 	CreatedAt time.Time          `json:"created_at"`
@@ -1606,10 +1962,19 @@ type Release struct {
 	Version *int `json:"version,omitempty"`
 }
 
+// RemovedVolumeFiles defines model for RemovedVolumeFiles.
+type RemovedVolumeFiles struct {
+	// Removed Removed file paths relative to the volume root.
+	Removed []string `json:"removed"`
+}
+
 // Resources Reservations the container always keeps. CPU above the reservation is shared up to `cpu_limit_millis`, by default the reservation plus 16 cores. Memory above the reservation is allowed up to `memory_limit_mib`, by default four times the reservation, at least 1 GiB and at most 8 GiB above it; the container is killed beyond it.
 type Resources struct {
 	CpuLimitMillis *int `json:"cpu_limit_millis,omitempty"`
 	CpuMillis      int  `json:"cpu_millis"`
+
+	// DiskMib Writable layer limit; enforced where Docker has project quotas.
+	DiskMib        *int `json:"disk_mib,omitempty"`
 	MemoryLimitMib *int `json:"memory_limit_mib,omitempty"`
 	MemoryMib      int  `json:"memory_mib"`
 }
@@ -1703,6 +2068,18 @@ type SecretValue struct {
 // SecretValueUpdate defines model for SecretValueUpdate.
 type SecretValueUpdate struct {
 	Value SecretText `json:"value"`
+}
+
+// SetMapEntryRequest defines model for SetMapEntryRequest.
+type SetMapEntryRequest struct {
+	IfAbsent   *bool   `json:"if_absent,omitempty"`
+	IfRevision *string `json:"if_revision,omitempty"`
+
+	// TtlSeconds Seconds to expiry, 0 for never; absent keeps an existing expiry.
+	TtlSeconds *int `json:"ttl_seconds,omitempty"`
+
+	// Value At most 1 MiB, base64.
+	Value []byte `json:"value"`
 }
 
 // Sha256 Lowercase hex SHA-256 digest
@@ -1895,6 +2272,24 @@ type TokenList struct {
 // TokenStatus defines model for TokenStatus.
 type TokenStatus string
 
+// Upload Where to send bytes. With `upload_id` it is a multipart upload whose part ETags complete it; without, `parts` holds one plain PUT.
+type Upload struct {
+	ExpiresAt     time.Time    `json:"expires_at"`
+	PartSizeBytes *int64       `json:"part_size_bytes,omitempty"`
+	Parts         []UploadPart `json:"parts"`
+	UploadId      *string      `json:"upload_id,omitempty"`
+}
+
+// UploadPart defines model for UploadPart.
+type UploadPart struct {
+	Number    int   `json:"number"`
+	Offset    int64 `json:"offset"`
+	SizeBytes int64 `json:"size_bytes"`
+
+	// Url A presigned PUT of these bytes; its ETag completes a multipart upload.
+	Url string `json:"url"`
+}
+
 // UploadTarget Send the archive bytes with this request, then register the digest again.
 type UploadTarget struct {
 	ExpiresAt time.Time          `json:"expires_at"`
@@ -1939,6 +2334,63 @@ type VersionPage struct {
 	Versions   []Version `json:"versions"`
 }
 
+// Volume defines model for Volume.
+type Volume struct {
+	CreatedAt time.Time          `json:"created_at"`
+	Id        openapi_types.UUID `json:"id"`
+	Name      VolumeName         `json:"name"`
+
+	// SizeBytes Bytes stored at the last measurement.
+	SizeBytes      int64      `json:"size_bytes"`
+	SizeMeasuredAt *time.Time `json:"size_measured_at,omitempty"`
+
+	// UsedBy Workloads whose active release mounts the volume.
+	UsedBy []WorkloadRef `json:"used_by"`
+}
+
+// VolumeFile defines model for VolumeFile.
+type VolumeFile struct {
+	IsDir bool `json:"is_dir"`
+
+	// ModifiedAt Absent for directories.
+	ModifiedAt *time.Time `json:"modified_at,omitempty"`
+
+	// Path The path relative to the volume root.
+	Path      string `json:"path"`
+	SizeBytes int64  `json:"size_bytes"`
+}
+
+// VolumeFilePage defines model for VolumeFilePage.
+type VolumeFilePage struct {
+	Files      []VolumeFile `json:"files"`
+	NextCursor *string      `json:"next_cursor,omitempty"`
+}
+
+// VolumeFilePath A file or directory below the volume root.
+type VolumeFilePath = string
+
+// VolumeMountSpec A volume, or with `cloud_bucket` an S3 bucket, mounted into every container of the workload. A platform volume is created on first use.
+type VolumeMountSpec struct {
+	CloudBucket *CloudBucketSpec `json:"cloud_bucket,omitempty"`
+
+	// MountPath Absolute, or relative to /volumes; the default is /volumes/<name>.
+	MountPath *string    `json:"mount_path,omitempty"`
+	Name      VolumeName `json:"name"`
+	ReadOnly  *bool      `json:"read_only,omitempty"`
+}
+
+// VolumeName defines model for VolumeName.
+type VolumeName = string
+
+// VolumePage defines model for VolumePage.
+type VolumePage struct {
+	NextCursor *string  `json:"next_cursor,omitempty"`
+	Volumes    []Volume `json:"volumes"`
+}
+
+// VolumeRelativePath A path below the volume root; `.` or empty is the root, `..` is refused.
+type VolumeRelativePath = string
+
 // WorkloadIdentity defines model for WorkloadIdentity.
 type WorkloadIdentity struct {
 	// Kind A function runs tasks; an endpoint or ASGI app serves HTTP. Realtime apps are ASGI apps.
@@ -1951,6 +2403,16 @@ type WorkloadKind string
 
 // WorkloadName defines model for WorkloadName.
 type WorkloadName = string
+
+// WorkloadRef defines model for WorkloadRef.
+type WorkloadRef struct {
+	App  AppName         `json:"app"`
+	Kind WorkloadRefKind `json:"kind"`
+	Name WorkloadName    `json:"name"`
+}
+
+// WorkloadRefKind defines model for WorkloadRef.Kind.
+type WorkloadRefKind string
 
 // WorkloadState Desired state. A paused app stops its active workloads too.
 type WorkloadState string
@@ -1990,6 +2452,9 @@ type AppPath = AppName
 // AppRefPath An app name or id.
 type AppRefPath = AppRef
 
+// ArtifactPath defines model for ArtifactPath.
+type ArtifactPath = openapi_types.UUID
+
 // ContainerPath defines model for ContainerPath.
 type ContainerPath = openapi_types.UUID
 
@@ -1998,6 +2463,9 @@ type Cursor = string
 
 // DeploymentPath defines model for DeploymentPath.
 type DeploymentPath = openapi_types.UUID
+
+// DiskPath defines model for DiskPath.
+type DiskPath = DiskName
 
 // EndpointPath defines model for EndpointPath.
 type EndpointPath = WorkloadName
@@ -2029,11 +2497,20 @@ type LogAfter = int64
 // LogTail defines model for LogTail.
 type LogTail = int
 
+// MapKeyPath defines model for MapKeyPath.
+type MapKeyPath = MapKey
+
+// MapPath A queue or map name; any characters except control characters.
+type MapPath = CollectionName
+
 // PageLimit defines model for PageLimit.
 type PageLimit = int
 
 // PreviewPath defines model for PreviewPath.
 type PreviewPath = openapi_types.UUID
+
+// QueuePath A queue or map name; any characters except control characters.
+type QueuePath = CollectionName
 
 // SecretPath An environment variable name; the LAZYCLOUD_ prefix is reserved.
 type SecretPath = SecretName
@@ -2046,6 +2523,9 @@ type UserCodePath = string
 
 // VersionQuery defines model for VersionQuery.
 type VersionQuery = int
+
+// VolumePath defines model for VolumePath.
+type VolumePath = VolumeName
 
 // WorkspacePath defines model for WorkspacePath.
 type WorkspacePath = Name
@@ -2109,6 +2589,28 @@ type InvokeFunctionVersionParams struct {
 	WaitSeconds *InvokeWait `form:"wait_seconds,omitempty" json:"wait_seconds,omitempty"`
 }
 
+// ListArtifactsParams defines parameters for ListArtifacts.
+type ListArtifactsParams struct {
+	TaskId *openapi_types.UUID `form:"task_id,omitempty" json:"task_id,omitempty"`
+	App    *AppName            `form:"app,omitempty" json:"app,omitempty"`
+
+	// Search Case-insensitive substring of the filename.
+	Search *string `form:"search,omitempty" json:"search,omitempty"`
+
+	// ContentType A content type prefix, such as `image/`.
+	ContentType *string `form:"content_type,omitempty" json:"content_type,omitempty"`
+
+	// CreatedAfter Inclusive lower bound on the save time.
+	CreatedAfter *time.Time `form:"created_after,omitempty" json:"created_after,omitempty"`
+
+	// CreatedBefore Exclusive upper bound on the save time.
+	CreatedBefore *time.Time `form:"created_before,omitempty" json:"created_before,omitempty"`
+
+	// Cursor The next_cursor of the previous page.
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+	Limit  *Limit  `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
 // ListContainersParams defines parameters for ListContainers.
 type ListContainersParams struct {
 	// Live Only containers that have not stopped.
@@ -2157,6 +2659,13 @@ type ListDeploymentVersionsParams struct {
 	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
 }
 
+// ListDisksParams defines parameters for ListDisks.
+type ListDisksParams struct {
+	// Cursor The next_cursor of the previous page.
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+	Limit  *Limit  `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
 // GetImageBuildParams defines parameters for GetImageBuild.
 type GetImageBuildParams struct {
 	// WaitSeconds Hold the request until the build finishes or this many seconds pass.
@@ -2178,6 +2687,27 @@ type BuildImageParams struct {
 	Force *bool `form:"force,omitempty" json:"force,omitempty"`
 }
 
+// ListMapsParams defines parameters for ListMaps.
+type ListMapsParams struct {
+	// Cursor The next_cursor of the previous page.
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+	Limit  *Limit  `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// DeleteMapEntryParams defines parameters for DeleteMapEntry.
+type DeleteMapEntryParams struct {
+	IfRevision *string `form:"if_revision,omitempty" json:"if_revision,omitempty"`
+}
+
+// ListMapKeysParams defines parameters for ListMapKeys.
+type ListMapKeysParams struct {
+	Prefix *string `form:"prefix,omitempty" json:"prefix,omitempty"`
+
+	// Cursor The next_cursor of the previous page.
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+	Limit  *int    `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
 // GetPreviewParams defines parameters for GetPreview.
 type GetPreviewParams struct {
 	// WaitSeconds Hold the request until the container is ready or the preview stops, or this many seconds pass.
@@ -2188,6 +2718,19 @@ type GetPreviewParams struct {
 type StreamPreviewOutputParams struct {
 	After  *int64 `form:"after,omitempty" json:"after,omitempty"`
 	Follow *bool  `form:"follow,omitempty" json:"follow,omitempty"`
+}
+
+// ListQueuesParams defines parameters for ListQueues.
+type ListQueuesParams struct {
+	// Cursor The next_cursor of the previous page.
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+	Limit  *Limit  `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// PopQueueMessageParams defines parameters for PopQueueMessage.
+type PopQueueMessageParams struct {
+	// WaitSeconds Wait this long for a message when the queue is empty.
+	WaitSeconds *int `form:"wait_seconds,omitempty" json:"wait_seconds,omitempty"`
 }
 
 // ListSchedulesParams defines parameters for ListSchedules.
@@ -2235,6 +2778,33 @@ type StreamTaskLogsParams struct {
 	Follow *bool `form:"follow,omitempty" json:"follow,omitempty"`
 }
 
+// ListVolumesParams defines parameters for ListVolumes.
+type ListVolumesParams struct {
+	// Cursor The next_cursor of the previous page.
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+	Limit  *Limit  `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// RemoveVolumeFilesParams defines parameters for RemoveVolumeFiles.
+type RemoveVolumeFilesParams struct {
+	Path VolumeFilePath `form:"path" json:"path"`
+}
+
+// ListVolumeFilesParams defines parameters for ListVolumeFiles.
+type ListVolumeFilesParams struct {
+	// Path A directory relative to the volume root; empty is the root.
+	Path *VolumeRelativePath `form:"path,omitempty" json:"path,omitempty"`
+
+	// Cursor The next_cursor of the previous page.
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+	Limit  *int    `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// StatVolumeFileParams defines parameters for StatVolumeFile.
+type StatVolumeFileParams struct {
+	Path *VolumeRelativePath `form:"path,omitempty" json:"path,omitempty"`
+}
+
 // StartDeviceLoginJSONRequestBody defines body for StartDeviceLogin for application/json ContentType.
 type StartDeviceLoginJSONRequestBody = DeviceLoginRequest
 
@@ -2274,6 +2844,18 @@ type InvokeFunctionVersionJSONRequestBody = InvocationBody
 // CreatePreviewJSONRequestBody defines body for CreatePreview for application/json ContentType.
 type CreatePreviewJSONRequestBody = PreviewRequest
 
+// CreateArtifactJSONRequestBody defines body for CreateArtifact for application/json ContentType.
+type CreateArtifactJSONRequestBody = CreateArtifactRequest
+
+// DeleteArtifactsJSONRequestBody defines body for DeleteArtifacts for application/json ContentType.
+type DeleteArtifactsJSONRequestBody = DeleteArtifactsRequest
+
+// CompleteArtifactJSONRequestBody defines body for CompleteArtifact for application/json ContentType.
+type CompleteArtifactJSONRequestBody = CompleteArtifactRequest
+
+// PresignArtifactJSONRequestBody defines body for PresignArtifact for application/json ContentType.
+type PresignArtifactJSONRequestBody = PresignArtifactRequest
+
 // StartDeploymentJSONRequestBody defines body for StartDeployment for application/json ContentType.
 type StartDeploymentJSONRequestBody = StartDeploymentRequest
 
@@ -2286,8 +2868,14 @@ type ResolveImageJSONRequestBody = ImageDefinition
 // CreateInvitationJSONRequestBody defines body for CreateInvitation for application/json ContentType.
 type CreateInvitationJSONRequestBody = InvitationRequest
 
+// SetMapEntryJSONRequestBody defines body for SetMapEntry for application/json ContentType.
+type SetMapEntryJSONRequestBody = SetMapEntryRequest
+
 // SetMemberRoleJSONRequestBody defines body for SetMemberRole for application/json ContentType.
 type SetMemberRoleJSONRequestBody = MemberRoleRequest
+
+// PutQueueMessagesJSONRequestBody defines body for PutQueueMessages for application/json ContentType.
+type PutQueueMessagesJSONRequestBody = PutQueueMessagesRequest
 
 // CreateSecretJSONRequestBody defines body for CreateSecret for application/json ContentType.
 type CreateSecretJSONRequestBody = SecretCreate
@@ -2303,3 +2891,21 @@ type CreateSourceUploadJSONRequestBody = SourceUploadRequest
 
 // StopTasksJSONRequestBody defines body for StopTasks for application/json ContentType.
 type StopTasksJSONRequestBody = StopTasksRequest
+
+// CreateVolumeJSONRequestBody defines body for CreateVolume for application/json ContentType.
+type CreateVolumeJSONRequestBody = CreateVolumeRequest
+
+// MoveVolumeFileJSONRequestBody defines body for MoveVolumeFile for application/json ContentType.
+type MoveVolumeFileJSONRequestBody = MoveVolumeFileRequest
+
+// PresignVolumeFileJSONRequestBody defines body for PresignVolumeFile for application/json ContentType.
+type PresignVolumeFileJSONRequestBody = PresignVolumeFileRequest
+
+// CreateVolumeUploadJSONRequestBody defines body for CreateVolumeUpload for application/json ContentType.
+type CreateVolumeUploadJSONRequestBody = CreateVolumeUploadRequest
+
+// AbortVolumeUploadJSONRequestBody defines body for AbortVolumeUpload for application/json ContentType.
+type AbortVolumeUploadJSONRequestBody = AbortVolumeUploadRequest
+
+// CompleteVolumeUploadJSONRequestBody defines body for CompleteVolumeUpload for application/json ContentType.
+type CompleteVolumeUploadJSONRequestBody = CompleteVolumeUploadRequest

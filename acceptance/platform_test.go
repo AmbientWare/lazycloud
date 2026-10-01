@@ -80,6 +80,7 @@ type platform struct {
 	storage   *storage.Storage
 	execution *execution.Execution
 	edge      *edge.Edge
+	secrets   *secrets.Secrets
 	workspace identity.Workspace
 	token     string
 	// edgeAddr is where the edge listens; client dials it whatever the host.
@@ -155,6 +156,7 @@ func startPlatform(t *testing.T) *platform {
 		t.Fatal(err)
 	}
 	vault := secrets.NewSecrets(pool, masterKey)
+	p.secrets = vault
 	owners := api.Owners{
 		Identity: ident, Control: p.control, Storage: p.storage, Execution: p.execution, Images: im,
 		Secrets: vault, Schedules: schedules.NewSchedules(pool, p.execution), Listener: listener, Edge: p.edge,

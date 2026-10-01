@@ -114,3 +114,36 @@ func TestEndpointColdWarmAndScaleToZero(t *testing.T) {
 	}
 	t.Logf("last request to no live container: %s (keep_warm 2s)", time.Since(idleFrom))
 }
+
+const startupApp = `
+import os
+
+started = []
+
+
+def warm(context):
+    started.append(os.environ["API_KEY"])
+
+
+def whoami() -> dict:
+    return {"key": os.environ["API_KEY"], "started": started}
+`
+
+// An endpoint's container carries the secrets it names, and each worker runs
+// on_start before it takes a request.
+func TestEndpointGetsItsSecretsAndRunsOnStartFirst(t *testing.T) {
+	p := startPlatform(t)
+	if _, err := p.secrets.Set(t.Context(), p.workspace.ID, "API_KEY", "s3cret"); err != nil {
+		t.Fatal(err)
+	}
+	source := p.upload(map[string]string{"app.py": startupApp})
+	s := endpointSpec(source, "whoami", "app:whoami", "/")
+	s.Secrets = &[]string{"API_KEY"}
+	s.LifecycleHooks = &apitypes.LifecycleHooks{OnStart: &apitypes.HookReferences{"app:warm"}}
+	p.deploy("startup", s)
+	w := p.describe("startup", apitypes.WorkloadKindEndpoint, "whoami")
+	status, _, body := p.call(http.MethodGet, w.Url, "")
+	if status != http.StatusOK || body != `{"key": "s3cret", "started": ["s3cret"]}` {
+		t.Fatalf("whoami: %d %s", status, body)
+	}
+}

@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/google/uuid"
 	"github.com/moby/moby/client"
 	"google.golang.org/grpc"
@@ -70,6 +71,8 @@ type hostServer struct {
 	buildLogs []string
 	// appendDelay makes AppendLogs a slow consumer.
 	appendDelay time.Duration
+	// releases answers ReleaseDisk in disk tests.
+	releases *releases
 	// completeOutage fails CompleteTask as unavailable until it passes.
 	completeOutage time.Time
 }
@@ -228,6 +231,7 @@ type env struct {
 	stateDir string
 	docker   *client.Client
 	source   *hostproto.Source
+	geesefs  string
 }
 
 func newEnv(t *testing.T) *env {
@@ -264,7 +268,8 @@ func (e *env) removeContainers() {
 		return
 	}
 	for _, c := range list.Items {
-		if _, err := e.docker.ContainerRemove(ctx, c.ID, client.ContainerRemoveOptions{Force: true}); err != nil {
+		// The agent may be removing a container it saw exit.
+		if _, err := e.docker.ContainerRemove(ctx, c.ID, client.ContainerRemoveOptions{Force: true}); err != nil && !cerrdefs.IsNotFound(err) && !cerrdefs.IsConflict(err) {
 			e.t.Errorf("remove test container: %v", err)
 		}
 	}
@@ -299,6 +304,8 @@ func (e *env) startAgent() *runningAgent {
 		RuntimeDir:     runtimeDir,
 		SupervisorPath: supervisorBinary,
 		OCIRuntime:     "runc",
+		GeeseFSPath:    e.geesefs,
+		MountImage:     DefaultMountImage,
 		BuildNetwork:   "host",
 		Capacity:       &hostproto.Capacity{CpuMillis: 4000, MemoryBytes: 8 << 30},
 		Labels:         map[string]string{"lazycloud.agent": e.id},

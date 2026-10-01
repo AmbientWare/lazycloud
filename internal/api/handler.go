@@ -39,8 +39,9 @@ type Owners struct {
 	Notifications *notifications.Notifications
 	Secrets       *secrets.Secrets
 	Schedules     *schedules.Schedules
-	// Listener wakes waits on task and image build changes. It must listen
-	// on database.ChannelTask, ChannelImageBuild and ChannelImageBuildLog.
+	// Listener wakes waits on task, image build and queue changes. It must
+	// listen on database.ChannelTask, ChannelImageBuild, ChannelImageBuildLog
+	// and storage.ChannelQueue.
 	Listener *database.Listener
 	// Edge describes HTTP workloads and owns custom domains.
 	Edge *edge.Edge
@@ -278,6 +279,8 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		secretMissing  *secrets.NotFoundError
 		secretExists   *secrets.ExistsError
 		secretReserved *secrets.ReservedNameError
+		storageInput   *storage.InvalidError
+		storageState   *storage.ConflictError
 	)
 	switch {
 	case errors.Is(err, identity.ErrUnauthenticated):
@@ -333,6 +336,16 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		writeJSONError(w, http.StatusConflict, apitypes.Conflict, "the function is stopped or its app is paused")
 	case errors.Is(err, execution.ErrTaskNotFinished):
 		writeJSONError(w, http.StatusConflict, apitypes.TaskNotFinished, "the task has not finished")
+	case errors.Is(err, storage.ErrNotFound):
+		writeJSONError(w, http.StatusNotFound, apitypes.NotFound, "not found")
+	case errors.As(err, &storageInput):
+		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, storageInput.Error())
+	case errors.As(err, &storageState):
+		writeJSONError(w, http.StatusConflict, apitypes.Conflict, storageState.Error())
+	case errors.Is(err, storage.ErrTooLarge):
+		writeJSONError(w, http.StatusRequestEntityTooLarge, apitypes.PayloadTooLarge, "a value is larger than 1 MiB")
+	case errors.Is(err, storage.ErrBucketsUnconfigured):
+		writeJSONError(w, http.StatusNotImplemented, apitypes.Unsupported, "this server has no workspace bucket provider")
 	case errors.As(err, &secretMissing):
 		writeJSONError(w, http.StatusNotFound, apitypes.NotFound, secretMissing.Error())
 	case errors.As(err, &secretExists):

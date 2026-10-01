@@ -13,6 +13,7 @@ from shared.api import FunctionSpec as ApiFunctionSpec
 from shared.autoscaling import Autoscaler
 from shared.image_building.python import python_minor_version
 
+from lazycloud.abstractions.metadata import lifecycle_hook_references
 from lazycloud.clients.endpoints import get_http_workload
 from lazycloud.control import api_client, require_workspace, resolve_control_client_config
 from lazycloud.env import is_local
@@ -91,7 +92,7 @@ def http_function_spec(
             "python_version": python_minor_version(image.python_version),
             "image_id": image.image_id,
         },
-        "resources": _resources(owner.cpu, owner.memory),
+        "resources": _resources(owner.cpu, owner.memory, owner.disk),
         "concurrency": concurrency,
         "http": http,
     }
@@ -113,6 +114,18 @@ def http_function_spec(
         )
     if owner.env:
         spec["environment"] = dict(owner.env)
+    if owner.secrets:
+        spec["secrets"] = list(dict.fromkeys(owner.secrets))
+    try:
+        on_start = lifecycle_hook_references(owner.on_start)
+    except (TypeError, ValueError) as exc:
+        from lazycloud.abstractions.function import FunctionOperationError
+
+        msg = f"{kind} {owner.resource_name} has invalid options: {exc}"
+        raise FunctionOperationError(msg) from exc
+    if on_start:
+        # Workers run on_start once each, before they take requests.
+        spec["lifecycle_hooks"] = {"on_start": list(on_start)}
     try:
         return ApiFunctionSpec.model_validate(spec)
     except ValidationError as exc:
@@ -128,11 +141,8 @@ def unsupported_http_options(owner: Any) -> list[str]:
     if owner.gpu is not None or owner.gpu_count:
         found.append("gpu")
     declared: dict[str, bool] = {
-        "disk": owner.disk is not None,
-        "secrets": bool(owner.secrets),
         "volumes": bool(owner.volumes),
         "callback_url": bool(owner.callback_url),
-        "on_start": owner.on_start is not None,
         "checkpoint_enabled": bool(owner.checkpoint_enabled),
         "docker_enabled": bool(getattr(owner, "docker_enabled", False)),
         "region": owner.region is not None,
