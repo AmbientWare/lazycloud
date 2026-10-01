@@ -362,6 +362,8 @@ test("an invited account previews the invitation and joins the workspace", async
   baseURL,
 }) => {
   test.skip(!invitation || !guestSession, "WEB_E2E_INVITATION and WEB_E2E_GUEST_SESSION");
+  // The link is single-use, so one project spends it.
+  test.skip(test.info().project.name !== "chromium", "the invitation is spent by chromium");
   await signIn(page, baseURL!, guestSession);
   await page.goto(new URL(invitation).pathname);
   await expect(page.getByRole("heading", { name: `Join ${workspace}` })).toBeVisible();
