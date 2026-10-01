@@ -189,7 +189,9 @@ select pg_try_advisory_xact_lock(hashtextextended('execution-planning', 0))::boo
 -- name: HasLiveWork :one
 -- Whether anything exists that time alone can advance: a queued or running
 -- task, or a live container (pending, starting, ready or draining). Each
--- check reads a partial index of live rows, so history costs nothing.
-select (exists (select 1 from tasks where status = 'queued')
-        or exists (select 1 from tasks where status = 'running')
-        or exists (select 1 from containers where state <> 'stopped'))::bool as live;
+-- check takes the first entry of a partial index of live rows: ordering by
+-- the indexed column, which EXISTS would drop, keeps the planner from
+-- scanning history for a match.
+select ((select 1 from tasks where status = 'queued' order by release_id limit 1) is not null
+        or (select 1 from tasks where status = 'running' order by release_id limit 1) is not null
+        or (select 1 from containers where state <> 'stopped' order by release_id limit 1) is not null)::bool as live;

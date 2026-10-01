@@ -165,14 +165,16 @@ func (q *Queries) DrainIdleContainers(ctx context.Context, arg DrainIdleContaine
 }
 
 const hasLiveWork = `-- name: HasLiveWork :one
-select (exists (select 1 from tasks where status = 'queued')
-        or exists (select 1 from tasks where status = 'running')
-        or exists (select 1 from containers where state <> 'stopped'))::bool as live
+select ((select 1 from tasks where status = 'queued' order by release_id limit 1) is not null
+        or (select 1 from tasks where status = 'running' order by release_id limit 1) is not null
+        or (select 1 from containers where state <> 'stopped' order by release_id limit 1) is not null)::bool as live
 `
 
 // Whether anything exists that time alone can advance: a queued or running
 // task, or a live container (pending, starting, ready or draining). Each
-// check reads a partial index of live rows, so history costs nothing.
+// check takes the first entry of a partial index of live rows: ordering by
+// the indexed column, which EXISTS would drop, keeps the planner from
+// scanning history for a match.
 func (q *Queries) HasLiveWork(ctx context.Context) (bool, error) {
 	row := q.db.QueryRow(ctx, hasLiveWork)
 	var live bool
