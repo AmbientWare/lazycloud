@@ -1,76 +1,46 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { activeWorkspaceDefaults } from "./fixtures/workspaces";
+import { activeWorkspace, signIn, workspaceRoute, type Schemas } from "./fixtures/workspaces";
 
-const workspaceDefaults = activeWorkspaceDefaults;
+const firstApp: Schemas["App"] = {
+  id: "app-1",
+  name: "quickstart",
+  state: "active",
+  workloads: 1,
+  created_at: "2026-01-02T10:00:00Z",
+};
 
-const firstAppItem = {
-  app: {
-    id: "app-1",
-    workspace_id: "workspace-test",
-    stub_id: "stub-1",
-    name: "quickstart",
-    version: 1,
-    public: false,
-    active: true,
-    created_at: "2026-01-02T10:00:00Z",
-    updated_at: "2026-01-02T10:00:00Z",
-  },
-  latest_workload: {
-    id: "stub-1",
-    workspace_id: "workspace-test",
-    name: "hello",
-    kind: "function",
-    created_at: "2026-01-02T10:00:00Z",
-    updated_at: "2026-01-02T10:00:00Z",
-  },
-  latest_deployment: null,
+const firstWorkload: Schemas["DeployedWorkload"] = {
+  id: "stub-1",
+  app: "quickstart",
+  app_state: "active",
+  name: "hello",
+  kind: "function",
+  state: "active",
+  created_at: "2026-01-02T10:00:00Z",
 };
 
 async function mockSession(page: Page, beforeWorkspaceChange?: Promise<void>) {
-  const workspace = { id: "workspace-test", name: "acme", ...workspaceDefaults };
-  await page.addInitScript(() => {
-    localStorage.setItem("lazycloud_web_token", "test-token");
-  });
-  await page.route("**/api/v1/sessions/current", async (route) => {
-    await route.fulfill({
-      json: {
-        user: {
-          id: "user-test",
-          display_name: "Test User",
-          email: "test@example.com",
-          avatar_url: "",
-          github_user_id: "1234",
-          github_login: "test-user",
-          role: "member",
-          status: "active",
-          created_at: "2026-01-01T00:00:00Z",
-          updated_at: "2026-01-01T00:00:00Z",
-        },
-        workspaces: [workspace],
-      },
-    });
-  });
-  await page.route("**/api/v1/concurrency-limits*", async (route) => {
-    await route.fulfill({ json: { limits: [] } });
-  });
-  await page.route("**/api/v1/events/changes/stream*", async (route) => {
+  await signIn(page, [activeWorkspace("workspace-test", "acme")]);
+  await page.route(workspaceRoute("changes/stream"), async (route) => {
+    // A reconnect resumes after the change it already received, so it gets none.
+    if (await route.request().headerValue("last-event-id")) {
+      await route.fulfill({ contentType: "text/event-stream", body: ": connected\n\n" });
+      return;
+    }
     await beforeWorkspaceChange;
     await route.fulfill({
       status: 200,
       headers: { "content-type": "text/event-stream" },
       body: [
-        "id: 1710000000000-0",
-        "event: workspace.change",
+        "id: 1710000000000",
+        "event: change",
         `data: ${JSON.stringify({
-          event_id: "1710000000000-0",
+          seq: 1710000000000,
           occurred_at: "2026-07-13T15:30:00Z",
           workspace_id: "workspace-test",
-          topic: "apps",
-          change: "created",
-          resource_id: "app-1",
-          app_id: "app-1",
-        })}`,
+          changes: [{ topic: "apps", change: "created", resource_id: "app-1", app_id: "app-1" }],
+        } satisfies Schemas["ChangeEvent"])}`,
         "",
         "",
       ].join("\n"),
@@ -84,13 +54,19 @@ test("empty workspace guides the quickstart and flips to the grid live", async (
     publishWorkspaceChange = resolve;
   });
   await mockSession(page, workspaceChangeReady);
-  let appsRequests = 0;
-  await page.route("**/api/v1/apps/summaries*", async (route) => {
-    appsRequests += 1;
-    await route.fulfill({ json: { items: appsRequests < 2 ? [] : [firstAppItem] } });
+  let published = false;
+  await page.route(workspaceRoute("apps"), async (route) => {
+    await route.fulfill({ json: { apps: published ? [firstApp] : [] } });
   });
-  await page.route("**/api/v1/tasks/aggregate-by-time-window*", async (route) => {
-    await route.fulfill({ json: { items: [] } });
+  await page.route(workspaceRoute("deployments"), async (route) => {
+    await route.fulfill({ json: { deployments: published ? [firstWorkload] : [] } });
+  });
+  await page.route(workspaceRoute("containers"), async (route) => {
+    await route.fulfill({ json: { containers: [] } });
+  });
+  await page.route(workspaceRoute("metrics/activity"), async (route) => {
+    const now = new Date().toISOString();
+    await route.fulfill({ json: { window_seconds: 3600, start: now, end: now, series: [] } });
   });
 
   await page.goto("/w/acme/apps");
@@ -99,6 +75,7 @@ test("empty workspace guides the quickstart and flips to the grid live", async (
 
   // The workspace change stream invalidates the summary query; the next
   // response contains the first app and replaces the guided steps in place.
+  published = true;
   publishWorkspaceChange!();
   await expect(page.getByRole("link", { name: "quickstart" })).toBeVisible({ timeout: 15_000 });
   await expect(page.getByText("Deploy your first app")).not.toBeVisible();
@@ -106,17 +83,17 @@ test("empty workspace guides the quickstart and flips to the grid live", async (
 
 test("device approval page approves a pending CLI sign-in", async ({ page }) => {
   await mockSession(page);
-  const pendingCode = {
+  const pendingCode: Schemas["DeviceCode"] = {
     user_code: "BCDF-GHJK",
     client_name: "cli@laptop",
     status: "pending",
     created_at: "2026-01-02T10:00:00Z",
     expires_at: "2026-01-02T10:15:00Z",
   };
-  await page.route("**/api/v1/device-codes/BCDF-GHJK", async (route) => {
+  await page.route("**/v1/device-codes/BCDF-GHJK", async (route) => {
     await route.fulfill({ json: pendingCode });
   });
-  await page.route("**/api/v1/device-codes/BCDF-GHJK/approve", async (route) => {
+  await page.route("**/v1/device-codes/BCDF-GHJK/approve", async (route) => {
     await route.fulfill({ json: { ...pendingCode, status: "approved" } });
   });
 
