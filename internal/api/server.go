@@ -79,6 +79,9 @@ func (s *Server) DeployApp(ctx context.Context, req DeployAppRequestObject) (Dep
 			url := s.owners.Edge.DeployedURL(ws.ID, req.App, release.Spec)
 			deployment.Releases[n].Url = &url
 		}
+		if url := s.owners.Edge.PodURL(release.Id, release.Spec); release.Spec.Pod != nil && url != "" {
+			deployment.Releases[n].Url = &url
+		}
 	}
 	return DeployApp200JSONResponse(deployment), nil
 }
