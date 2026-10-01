@@ -1,32 +1,33 @@
 import { infiniteQueryOptions } from "@tanstack/react-query";
 
-import { apiRequest } from "@/lib/api/client";
+import { api, apiRequest, ok, type Schemas } from "@/lib/api/client";
 import {
-  billingAccountAdminListSchema,
   billingAccountAdminSchema,
   billingComplimentaryRequestSchema,
-  userRoleRequestSchema,
-  userSchema,
-  userStatusRequestSchema,
   type BillingAccountAdmin,
+  type BillingAccountAdminList,
   type PlatformRole,
   type User,
   type UserStatus,
 } from "@/lib/api/schemas";
+import { viewUser } from "@/lib/api/views";
 import {
   nextListCursor,
   selectInfiniteList,
   type InfiniteListQueryData,
 } from "@/lib/queries/infinite-list";
-import {
-  accountQueryKeys,
-  EVERY_ACCOUNT,
-  type AdminAccountsKeyParts,
-} from "@/lib/queries/workspace-keys";
+import { accountQueryKeys } from "@/lib/queries/workspace-keys";
 
 const ACCOUNTS = "/api/v1/billing/accounts";
-const USERS = "/api/v1/users";
 const PAGE_SIZE = 50;
+
+type AccountScope = {
+  search: string;
+  role: PlatformRole | null;
+  status: UserStatus | null;
+};
+
+const EVERY_ACCOUNT: AccountScope = { search: "", role: null, status: null };
 
 /**
  * Every account on the platform, as an administrator sees it.
@@ -34,20 +35,31 @@ const PAGE_SIZE = 50;
  * Admin-only on the server, which answers a member with 403. That is an
  * authorization decision rather than a dead token, so the client keeps the
  * session and the tab shows the refusal.
+ *
+ * Read from the users list until billing serves its account list; until then
+ * every row carries no billing standing and no recent spend.
  */
-export function billingAccountsQueryOptions(scope: AdminAccountsKeyParts = EVERY_ACCOUNT) {
+export function billingAccountsQueryOptions(scope: AccountScope = EVERY_ACCOUNT) {
   return infiniteQueryOptions({
     queryKey: accountQueryKeys.admin.accounts(scope),
     initialPageParam: "",
-    queryFn: ({ pageParam }) => {
-      const params = new URLSearchParams({ limit: String(PAGE_SIZE) });
-      if (pageParam) params.set("cursor", pageParam);
+    queryFn: async ({ pageParam }): Promise<BillingAccountAdminList> => {
       // Narrowed by the server. The list pages, so filtering what arrived would
       // hide every match that had not been fetched yet.
-      if (scope.search) params.set("search", scope.search);
-      if (scope.role) params.set("role", scope.role);
-      if (scope.status) params.set("status", scope.status);
-      return apiRequest(`${ACCOUNTS}?${params.toString()}`, billingAccountAdminListSchema);
+      const page = await ok(
+        api.GET("/v1/users", {
+          params: {
+            query: {
+              limit: PAGE_SIZE,
+              cursor: pageParam || undefined,
+              search: scope.search || undefined,
+              role: scope.role ?? undefined,
+              status: scope.status ?? undefined,
+            },
+          },
+        }),
+      );
+      return { data: page.users.map(unbilledAccount), next: page.next_cursor ?? "" };
     },
     getNextPageParam: nextListCursor,
   });
@@ -60,20 +72,16 @@ export function selectBillingAccountList(
   return selectInfiniteList(data, hasNextPage, (account) => account.user.id);
 }
 
-export function setUserRole(userId: string, role: PlatformRole): Promise<User> {
-  const request = userRoleRequestSchema.parse({ role });
-  return apiRequest(`${USERS}/${encodeURIComponent(userId)}/role`, userSchema, {
-    method: "PUT",
-    body: JSON.stringify(request),
-  });
+export async function setUserRole(user: string, role: PlatformRole): Promise<User> {
+  return viewUser(
+    await ok(api.PUT("/v1/users/{user}/role", { params: { path: { user } }, body: { role } })),
+  );
 }
 
-export function setUserStatus(userId: string, status: UserStatus): Promise<User> {
-  const request = userStatusRequestSchema.parse({ status });
-  return apiRequest(`${USERS}/${encodeURIComponent(userId)}/status`, userSchema, {
-    method: "PUT",
-    body: JSON.stringify(request),
-  });
+export async function setUserStatus(user: string, status: UserStatus): Promise<User> {
+  return viewUser(
+    await ok(api.PUT("/v1/users/{user}/status", { params: { path: { user } }, body: { status } })),
+  );
 }
 
 export function setComplimentary(
@@ -86,4 +94,16 @@ export function setComplimentary(
     billingAccountAdminSchema,
     { method: "PUT", body: JSON.stringify(request) },
   );
+}
+
+function unbilledAccount(user: Schemas["User"]): BillingAccountAdmin {
+  return {
+    user: viewUser(user),
+    status: null,
+    plan: null,
+    payment_method_on_file: false,
+    complimentary_since: null,
+    recent_cost_nanos: 0,
+    recent_cost_since: user.created_at,
+  };
 }

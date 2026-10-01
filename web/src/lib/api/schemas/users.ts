@@ -9,12 +9,6 @@ export type PlatformRole = z.infer<typeof platformRoleSchema>;
 export const userStatusSchema = z.enum(["active", "disabled"]);
 export type UserStatus = z.infer<typeof userStatusSchema>;
 
-export const userRoleRequestSchema = z.object({ role: platformRoleSchema }).strict();
-export type UserRoleRequest = z.infer<typeof userRoleRequestSchema>;
-
-export const userStatusRequestSchema = z.object({ status: userStatusSchema }).strict();
-export type UserStatusRequest = z.infer<typeof userStatusRequestSchema>;
-
 export const userSchema = z
   .object({
     id: z.string(),
