@@ -732,7 +732,7 @@ class ApiClient:
         path: str,
         *,
         body: BaseModel | None = None,
-        params: dict[str, str | int] | None = None,
+        params: Mapping[str, str | int] | None = None,
         read_timeout: float | None = None,
     ) -> None: ...
 
@@ -743,7 +743,7 @@ class ApiClient:
         path: str,
         *,
         body: BaseModel | None = None,
-        params: dict[str, str | int] | None = None,
+        params: Mapping[str, str | int] | None = None,
         read_timeout: float | None = None,
     ) -> ModelT | None:
         content = (
