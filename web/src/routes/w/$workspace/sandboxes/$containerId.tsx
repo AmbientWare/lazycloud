@@ -229,6 +229,10 @@ function SandboxFacts({ record }: { record: Schemas["Container"] }) {
           }
         />
         <Fact
+          label="Expires"
+          value={record.expires_at ? <LiveRelativeTime value={record.expires_at} /> : "No expiry"}
+        />
+        <Fact
           label="Version"
           value={record.version === undefined ? "None" : `v${record.version}`}
           mono

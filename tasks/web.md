@@ -82,7 +82,6 @@ visual parity.
 
 - Devbox root disks need `nbd-client` and root on the host; on this host a
   devbox start fails with that reason, which the page shows.
-- The sandbox Expires fact returns once `Container.expires_at` is served.
 - `lazycloud devbox ... ssh` fails with "No such command 'ssh-proxy'" in the
   CLI (workloads packet).
 

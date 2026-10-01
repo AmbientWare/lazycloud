@@ -15,7 +15,7 @@ SECRETS = "/v1/workspaces/team/secrets"
 NOW = "2026-09-30T12:00:00Z"
 
 
-def _secret(name: str) -> dict[str, str]:
+def _secret(name: str) -> dict[str, object]:
     return {"name": name, "created_at": NOW, "updated_at": NOW, "used_by": []}
 
 
