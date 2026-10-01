@@ -10,6 +10,78 @@ import (
 	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
+// Defines values for ActivityMeasure.
+const (
+	ActivityMeasureContainers ActivityMeasure = "containers"
+	ActivityMeasureCpu        ActivityMeasure = "cpu"
+	ActivityMeasureGpu        ActivityMeasure = "gpu"
+	ActivityMeasureMemory     ActivityMeasure = "memory"
+	ActivityMeasureTasks      ActivityMeasure = "tasks"
+)
+
+// Valid indicates whether the value is a known member of the ActivityMeasure enum.
+func (e ActivityMeasure) Valid() bool {
+	switch e {
+	case ActivityMeasureContainers:
+		return true
+	case ActivityMeasureCpu:
+		return true
+	case ActivityMeasureGpu:
+		return true
+	case ActivityMeasureMemory:
+		return true
+	case ActivityMeasureTasks:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ActivitySeriesKind.
+const (
+	ActivitySeriesKindApp        ActivitySeriesKind = "app"
+	ActivitySeriesKindOther      ActivitySeriesKind = "other"
+	ActivitySeriesKindUnassigned ActivitySeriesKind = "unassigned"
+)
+
+// Valid indicates whether the value is a known member of the ActivitySeriesKind enum.
+func (e ActivitySeriesKind) Valid() bool {
+	switch e {
+	case ActivitySeriesKindApp:
+		return true
+	case ActivitySeriesKindOther:
+		return true
+	case ActivitySeriesKindUnassigned:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ActivityUnit.
+const (
+	Cores     ActivityUnit = "cores"
+	Gibibytes ActivityUnit = "gibibytes"
+	Gpus      ActivityUnit = "gpus"
+	Starts    ActivityUnit = "starts"
+)
+
+// Valid indicates whether the value is a known member of the ActivityUnit enum.
+func (e ActivityUnit) Valid() bool {
+	switch e {
+	case Cores:
+		return true
+	case Gibibytes:
+		return true
+	case Gpus:
+		return true
+	case Starts:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AppState.
 const (
 	AppStateActive  AppState = "active"
@@ -43,6 +115,36 @@ func (e ArtifactState) Valid() bool {
 	case Stored:
 		return true
 	case Uploading:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AttemptOutcome.
+const (
+	AttemptOutcomeCancelled AttemptOutcome = "cancelled"
+	AttemptOutcomeFailed    AttemptOutcome = "failed"
+	AttemptOutcomeLost      AttemptOutcome = "lost"
+	AttemptOutcomeRunning   AttemptOutcome = "running"
+	AttemptOutcomeSucceeded AttemptOutcome = "succeeded"
+	AttemptOutcomeTimedOut  AttemptOutcome = "timed_out"
+)
+
+// Valid indicates whether the value is a known member of the AttemptOutcome enum.
+func (e AttemptOutcome) Valid() bool {
+	switch e {
+	case AttemptOutcomeCancelled:
+		return true
+	case AttemptOutcomeFailed:
+		return true
+	case AttemptOutcomeLost:
+		return true
+	case AttemptOutcomeRunning:
+		return true
+	case AttemptOutcomeSucceeded:
+		return true
+	case AttemptOutcomeTimedOut:
 		return true
 	default:
 		return false
@@ -106,6 +208,75 @@ func (e BillingStatus) Valid() bool {
 	case BillingStatusActive:
 		return true
 	case BillingStatusPastDue:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChangeKind.
+const (
+	ChangeKindCreated ChangeKind = "created"
+	ChangeKindDeleted ChangeKind = "deleted"
+	ChangeKindUpdated ChangeKind = "updated"
+)
+
+// Valid indicates whether the value is a known member of the ChangeKind enum.
+func (e ChangeKind) Valid() bool {
+	switch e {
+	case ChangeKindCreated:
+		return true
+	case ChangeKindDeleted:
+		return true
+	case ChangeKindUpdated:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChangeResetReason.
+const (
+	Behind        ChangeResetReason = "behind"
+	Missed        ChangeResetReason = "missed"
+	UnknownCursor ChangeResetReason = "unknown_cursor"
+)
+
+// Valid indicates whether the value is a known member of the ChangeResetReason enum.
+func (e ChangeResetReason) Valid() bool {
+	switch e {
+	case Behind:
+		return true
+	case Missed:
+		return true
+	case UnknownCursor:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChangeTopic.
+const (
+	ChangeTopicApps           ChangeTopic = "apps"
+	ChangeTopicContainers     ChangeTopic = "containers"
+	ChangeTopicDeployments    ChangeTopic = "deployments"
+	ChangeTopicStorageSecrets ChangeTopic = "storage.secrets"
+	ChangeTopicTasks          ChangeTopic = "tasks"
+)
+
+// Valid indicates whether the value is a known member of the ChangeTopic enum.
+func (e ChangeTopic) Valid() bool {
+	switch e {
+	case ChangeTopicApps:
+		return true
+	case ChangeTopicContainers:
+		return true
+	case ChangeTopicDeployments:
+		return true
+	case ChangeTopicStorageSecrets:
+		return true
+	case ChangeTopicTasks:
 		return true
 	default:
 		return false
@@ -574,6 +745,36 @@ func (e InvitationRole) Valid() bool {
 	}
 }
 
+// Defines values for LifecycleStageKind.
+const (
+	LifecycleStageKindCreate    LifecycleStageKind = "create"
+	LifecycleStageKindDraining  LifecycleStageKind = "draining"
+	LifecycleStageKindImage     LifecycleStageKind = "image"
+	LifecycleStageKindPlacement LifecycleStageKind = "placement"
+	LifecycleStageKindRuntime   LifecycleStageKind = "runtime"
+	LifecycleStageKindSource    LifecycleStageKind = "source"
+)
+
+// Valid indicates whether the value is a known member of the LifecycleStageKind enum.
+func (e LifecycleStageKind) Valid() bool {
+	switch e {
+	case LifecycleStageKindCreate:
+		return true
+	case LifecycleStageKindDraining:
+		return true
+	case LifecycleStageKindImage:
+		return true
+	case LifecycleStageKindPlacement:
+		return true
+	case LifecycleStageKindRuntime:
+		return true
+	case LifecycleStageKindSource:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for LiveAppState.
 const (
 	LiveAppStateActive LiveAppState = "active"
@@ -793,6 +994,33 @@ func (e StopReason) Valid() bool {
 	case StopReasonStartFailed:
 		return true
 	case StopReasonStopped:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskEventKind.
+const (
+	TaskEventKindAttemptFinished TaskEventKind = "attempt_finished"
+	TaskEventKindAttemptStarted  TaskEventKind = "attempt_started"
+	TaskEventKindFinished        TaskEventKind = "finished"
+	TaskEventKindRetryScheduled  TaskEventKind = "retry_scheduled"
+	TaskEventKindSubmitted       TaskEventKind = "submitted"
+)
+
+// Valid indicates whether the value is a known member of the TaskEventKind enum.
+func (e TaskEventKind) Valid() bool {
+	switch e {
+	case TaskEventKindAttemptFinished:
+		return true
+	case TaskEventKindAttemptStarted:
+		return true
+	case TaskEventKindFinished:
+		return true
+	case TaskEventKindRetryScheduled:
+		return true
+	case TaskEventKindSubmitted:
 		return true
 	default:
 		return false
@@ -1148,6 +1376,72 @@ type AcceptedInvitation struct {
 	Workspace Workspace `json:"workspace"`
 }
 
+// AccountActivity defines model for AccountActivity.
+type AccountActivity struct {
+	End           time.Time               `json:"end"`
+	Measure       ActivityMeasure         `json:"measure"`
+	Series        []AccountActivitySeries `json:"series"`
+	Start         time.Time               `json:"start"`
+	Total         float64                 `json:"total"`
+	Unit          ActivityUnit            `json:"unit"`
+	WindowSeconds int                     `json:"window_seconds"`
+}
+
+// AccountActivitySeries defines model for AccountActivitySeries.
+type AccountActivitySeries struct {
+	App     *AppName            `json:"app,omitempty"`
+	AppId   *openapi_types.UUID `json:"app_id,omitempty"`
+	Buckets []ActivityPoint     `json:"buckets"`
+
+	// Kind other folds the series past the limit; unassigned holds containers of no app, such as image builds.
+	Kind ActivitySeriesKind `json:"kind"`
+
+	// Total Starts in the range, or the average allocation over it.
+	Total     float64 `json:"total"`
+	Workspace *Name   `json:"workspace,omitempty"`
+}
+
+// AccountMetrics defines model for AccountMetrics.
+type AccountMetrics struct {
+	// Concurrency Live containers in the workspaces the caller owns, which plan limits apply to.
+	Concurrency Concurrency `json:"concurrency"`
+
+	// Containers Live containers in every workspace the caller is a member of.
+	Containers ContainerCounts `json:"containers"`
+}
+
+// ActivityBucket defines model for ActivityBucket.
+type ActivityBucket struct {
+	StatusCounts TaskStatusCounts `json:"status_counts"`
+	Timestamp    time.Time        `json:"timestamp"`
+}
+
+// ActivityMeasure defines model for ActivityMeasure.
+type ActivityMeasure string
+
+// ActivityPoint defines model for ActivityPoint.
+type ActivityPoint struct {
+	Timestamp time.Time `json:"timestamp"`
+	Value     float64   `json:"value"`
+}
+
+// ActivitySeries defines model for ActivitySeries.
+type ActivitySeries struct {
+	App     AppName             `json:"app"`
+	AppId   *openapi_types.UUID `json:"app_id,omitempty"`
+	Buckets []ActivityBucket    `json:"buckets"`
+
+	// Function Set when the activity was asked for one app.
+	Function *WorkloadName `json:"function,omitempty"`
+	Total    int           `json:"total"`
+}
+
+// ActivitySeriesKind other folds the series past the limit; unassigned holds containers of no app, such as image builds.
+type ActivitySeriesKind string
+
+// ActivityUnit defines model for ActivityUnit.
+type ActivityUnit string
+
 // App defines model for App.
 type App struct {
 	CreatedAt time.Time          `json:"created_at"`
@@ -1215,6 +1509,9 @@ type ArtifactUpload struct {
 	// Upload Where to send bytes. With `upload_id` it is a multipart upload whose part ETags complete it; without, `parts` holds one plain PUT.
 	Upload Upload `json:"upload"`
 }
+
+// AttemptOutcome defines model for AttemptOutcome.
+type AttemptOutcome string
 
 // AutomaticReload defines model for AutomaticReload.
 type AutomaticReload struct {
@@ -1321,12 +1618,53 @@ type BillingPreferences struct {
 // BillingStatus past_due refuses new work until the card on file is updated.
 type BillingStatus string
 
+// CallGraphNode defines model for CallGraphNode.
+type CallGraphNode struct {
+	App AppName `json:"app"`
+
+	// ContainerId The container of the latest attempt.
+	ContainerId *openapi_types.UUID `json:"container_id,omitempty"`
+	CreatedAt   time.Time           `json:"created_at"`
+
+	// DependsOn Upstream tasks whose results this task's input uses.
+	DependsOn    []openapi_types.UUID `json:"depends_on"`
+	FinishedAt   *time.Time           `json:"finished_at,omitempty"`
+	Function     WorkloadName         `json:"function"`
+	ParentTaskId *openapi_types.UUID  `json:"parent_task_id,omitempty"`
+	StartedAt    *time.Time           `json:"started_at,omitempty"`
+	Status       TaskStatus           `json:"status"`
+	TaskId       openapi_types.UUID   `json:"task_id"`
+}
+
 // CardRates What one card costs an hour on each kind of capacity.
 type CardRates struct {
 	ConnectedCloud int64 `json:"connected_cloud"`
 	PlatformFleet  int64 `json:"platform_fleet"`
 	SelfHosted     int64 `json:"self_hosted"`
 }
+
+// ChangeEvent The changes one statement committed in the workspace. A statement that changed many resources sends them grouped, with a count and no resource_id.
+type ChangeEvent struct {
+	Changes     []ResourceChange   `json:"changes"`
+	OccurredAt  time.Time          `json:"occurred_at"`
+	Seq         int64              `json:"seq"`
+	WorkspaceId openapi_types.UUID `json:"workspace_id"`
+}
+
+// ChangeKind defines model for ChangeKind.
+type ChangeKind string
+
+// ChangeReset defines model for ChangeReset.
+type ChangeReset struct {
+	// Reason behind: the client read too slowly and events were dropped. missed: the server lost its database connection and may have missed changes. unknown_cursor: Last-Event-ID is older than the events the server holds.
+	Reason ChangeResetReason `json:"reason"`
+}
+
+// ChangeResetReason behind: the client read too slowly and events were dropped. missed: the server lost its database connection and may have missed changes. unknown_cursor: Last-Event-ID is older than the events the server holds.
+type ChangeResetReason string
+
+// ChangeTopic defines model for ChangeTopic.
+type ChangeTopic string
 
 // CloudBucketSpec defines model for CloudBucketSpec.
 type CloudBucketSpec struct {
@@ -1388,6 +1726,21 @@ type ComputeRate struct {
 	NanosPerMemoryGibHour int64   `json:"nanos_per_memory_gib_hour"`
 }
 
+// Concurrency Live containers in the workspaces the caller owns, which plan limits apply to.
+type Concurrency struct {
+	CpuContainers int `json:"cpu_containers"`
+	Gpus          int `json:"gpus"`
+
+	// Limits Absent while the account's plan limits are unknown.
+	Limits *ConcurrencyLimits `json:"limits,omitempty"`
+}
+
+// ConcurrencyLimits defines model for ConcurrencyLimits.
+type ConcurrencyLimits struct {
+	MaxCpuContainers int `json:"max_cpu_containers"`
+	MaxGpus          int `json:"max_gpus"`
+}
+
 // Container defines model for Container.
 type Container struct {
 	App         AppName            `json:"app"`
@@ -1409,6 +1762,78 @@ type Container struct {
 
 	// Version The deployed version of the release; absent for a working-tree release.
 	Version *int `json:"version,omitempty"`
+}
+
+// ContainerCounts defines model for ContainerCounts.
+type ContainerCounts struct {
+	// Pending Waiting for a host or starting.
+	Pending int `json:"pending"`
+
+	// Running Ready or draining.
+	Running int `json:"running"`
+}
+
+// ContainerLifecycle defines model for ContainerLifecycle.
+type ContainerLifecycle struct {
+	App         *AppName           `json:"app,omitempty"`
+	AssignedAt  *time.Time         `json:"assigned_at,omitempty"`
+	ContainerId openapi_types.UUID `json:"container_id"`
+	CreatedAt   time.Time          `json:"created_at"`
+	ExitMessage *string            `json:"exit_message,omitempty"`
+	Function    *WorkloadName      `json:"function,omitempty"`
+
+	// Host The name of the host the container was placed on.
+	Host    *string    `json:"host,omitempty"`
+	ReadyAt *time.Time `json:"ready_at,omitempty"`
+
+	// Stages In the order they began.
+	Stages     []LifecycleStage `json:"stages"`
+	State      ContainerState   `json:"state"`
+	StopReason *StopReason      `json:"stop_reason,omitempty"`
+	StoppedAt  *time.Time       `json:"stopped_at,omitempty"`
+}
+
+// ContainerLifecycleList defines model for ContainerLifecycleList.
+type ContainerLifecycleList struct {
+	Lifecycles []ContainerLifecycle `json:"lifecycles"`
+}
+
+// ContainerLifecyclesRequest defines model for ContainerLifecyclesRequest.
+type ContainerLifecyclesRequest struct {
+	ContainerIds []openapi_types.UUID `json:"container_ids"`
+}
+
+// ContainerMetricPoint Use over the step that starts at timestamp. Counters are the bytes moved in interval_ms, the sampled time the point covers; memory and GPU memory are the peak.
+type ContainerMetricPoint struct {
+	// CpuMillicores Average CPU use over the interval.
+	CpuMillicores       float64 `json:"cpu_millicores"`
+	DiskReadBytes       int64   `json:"disk_read_bytes"`
+	DiskWriteBytes      int64   `json:"disk_write_bytes"`
+	GpuMemoryTotalBytes *int64  `json:"gpu_memory_total_bytes,omitempty"`
+	GpuMemoryUsedBytes  *int64  `json:"gpu_memory_used_bytes,omitempty"`
+	GpuType             *string `json:"gpu_type,omitempty"`
+
+	// GpuUtilizationPct Average over the container's GPUs; absent without one.
+	GpuUtilizationPct *float64  `json:"gpu_utilization_pct,omitempty"`
+	IntervalMs        int64     `json:"interval_ms"`
+	MemoryRssBytes    int64     `json:"memory_rss_bytes"`
+	MemorySwapBytes   int64     `json:"memory_swap_bytes"`
+	NetworkRecvBytes  int64     `json:"network_recv_bytes"`
+	NetworkSentBytes  int64     `json:"network_sent_bytes"`
+	Timestamp         time.Time `json:"timestamp"`
+}
+
+// ContainerMetrics defines model for ContainerMetrics.
+type ContainerMetrics struct {
+	ContainerId openapi_types.UUID `json:"container_id"`
+
+	// CpuTotalMillicores The container's CPU reservation.
+	CpuTotalMillicores int64 `json:"cpu_total_millicores"`
+
+	// MemoryTotalBytes The container's memory reservation.
+	MemoryTotalBytes int64                  `json:"memory_total_bytes"`
+	Points           []ContainerMetricPoint `json:"points"`
+	StepSeconds      int                    `json:"step_seconds"`
 }
 
 // ContainerPage defines model for ContainerPage.
@@ -1539,6 +1964,15 @@ type Deployment struct {
 type DeploymentPage struct {
 	Deployments []DeployedWorkload `json:"deployments"`
 	NextCursor  *string            `json:"next_cursor,omitempty"`
+}
+
+// DeploymentPerformance defines model for DeploymentPerformance.
+type DeploymentPerformance struct {
+	Buckets       []PerformanceBucket `json:"buckets"`
+	DeploymentId  openapi_types.UUID  `json:"deployment_id"`
+	End           time.Time           `json:"end"`
+	Start         time.Time           `json:"start"`
+	WindowSeconds int                 `json:"window_seconds"`
 }
 
 // DeploymentPlan defines model for DeploymentPlan.
@@ -1942,6 +2376,25 @@ type LifecycleHooks struct {
 	OnSuccess *HookReferences `json:"on_success,omitempty"`
 }
 
+// LifecycleStage defines model for LifecycleStage.
+type LifecycleStage struct {
+	// Cached For image, the image was already on the host.
+	Cached *bool `json:"cached,omitempty"`
+
+	// DurationMs Until finished_at, or until now while the stage runs.
+	DurationMs *int64 `json:"duration_ms,omitempty"`
+
+	// FinishedAt Absent while the stage runs.
+	FinishedAt *time.Time `json:"finished_at,omitempty"`
+
+	// Stage placement: waiting for a host. image: pulling the image, or finding it on the host. source: fetching the source. create: starting the container process. runtime: loading the handler. draining: from the stop request until the container stopped.
+	Stage     LifecycleStageKind `json:"stage"`
+	StartedAt time.Time          `json:"started_at"`
+}
+
+// LifecycleStageKind placement: waiting for a host. image: pulling the image, or finding it on the host. source: fetching the source. create: starting the container process. runtime: loading the handler. draining: from the stop request until the container stopped.
+type LifecycleStageKind string
+
 // LiveAppState defines model for LiveAppState.
 type LiveAppState string
 
@@ -2069,6 +2522,18 @@ type Payload struct {
 
 // PayloadEncoding defines model for Payload.Encoding.
 type PayloadEncoding string
+
+// PerformanceBucket defines model for PerformanceBucket.
+type PerformanceBucket struct {
+	ColdStarts int `json:"cold_starts"`
+
+	// Count Finished tasks with a run time.
+	Count        int              `json:"count"`
+	P50Ms        *float64         `json:"p50_ms,omitempty"`
+	P95Ms        *float64         `json:"p95_ms,omitempty"`
+	StatusCounts TaskStatusCounts `json:"status_counts"`
+	Timestamp    time.Time        `json:"timestamp"`
+}
 
 // PlacementRate defines model for PlacementRate.
 type PlacementRate struct {
@@ -2246,6 +2711,26 @@ type ReloadPauseReason string
 type RemovedVolumeFiles struct {
 	// Removed Removed file paths relative to the volume root.
 	Removed []string `json:"removed"`
+}
+
+// ResourceChange defines model for ResourceChange.
+type ResourceChange struct {
+	AppId       *openapi_types.UUID `json:"app_id,omitempty"`
+	Change      ChangeKind          `json:"change"`
+	ContainerId *openapi_types.UUID `json:"container_id,omitempty"`
+
+	// Count How many resources a grouped change covers.
+	Count        *int                `json:"count,omitempty"`
+	DeploymentId *openapi_types.UUID `json:"deployment_id,omitempty"`
+
+	// ResourceId The resource's id, or a secret's name.
+	ResourceId *string             `json:"resource_id,omitempty"`
+	RootTaskId *openapi_types.UUID `json:"root_task_id,omitempty"`
+
+	// Status The resource's state after the change.
+	Status *string             `json:"status,omitempty"`
+	TaskId *openapi_types.UUID `json:"task_id,omitempty"`
+	Topic  ChangeTopic         `json:"topic"`
 }
 
 // Resources Reservations the container always keeps. CPU above the reservation is shared up to `cpu_limit_millis`, by default the reservation plus 16 cores. Memory above the reservation is allowed up to `memory_limit_mib`, by default four times the reservation, at least 1 GiB and at most 8 GiB above it; the container is killed beyond it.
@@ -2476,6 +2961,47 @@ type Task struct {
 	Version *int `json:"version,omitempty"`
 }
 
+// TaskActivity defines model for TaskActivity.
+type TaskActivity struct {
+	End time.Time `json:"end"`
+
+	// Series Series with tasks in the range, most tasks first.
+	Series        []ActivitySeries `json:"series"`
+	Start         time.Time        `json:"start"`
+	WindowSeconds int              `json:"window_seconds"`
+}
+
+// TaskCallGraph defines model for TaskCallGraph.
+type TaskCallGraph struct {
+	// Nodes Every task of the graph, oldest first; parents precede their children.
+	Nodes      []CallGraphNode    `json:"nodes"`
+	RootTaskId openapi_types.UUID `json:"root_task_id"`
+
+	// Truncated The graph holds more than the 2,000 tasks returned.
+	Truncated bool `json:"truncated"`
+}
+
+// TaskEvent defines model for TaskEvent.
+type TaskEvent struct {
+	At time.Time `json:"at"`
+
+	// Attempt The attempt number, for attempt and retry events.
+	Attempt     *int                `json:"attempt,omitempty"`
+	AttemptId   *openapi_types.UUID `json:"attempt_id,omitempty"`
+	ContainerId *openapi_types.UUID `json:"container_id,omitempty"`
+
+	// DueAt For retry_scheduled, when the next attempt may start.
+	DueAt   *time.Time      `json:"due_at,omitempty"`
+	Kind    TaskEventKind   `json:"kind"`
+	Outcome *AttemptOutcome `json:"outcome,omitempty"`
+
+	// Status For finished, the task's final status.
+	Status *TaskStatus `json:"status,omitempty"`
+}
+
+// TaskEventKind defines model for TaskEventKind.
+type TaskEventKind string
+
 // TaskFailure defines model for TaskFailure.
 type TaskFailure struct {
 	// Exception The cloudpickled exception, when the runner could serialize it.
@@ -2498,6 +3024,25 @@ type TaskInput struct {
 
 // TaskInputEncoding defines model for TaskInput.Encoding.
 type TaskInputEncoding string
+
+// TaskMetrics defines model for TaskMetrics.
+type TaskMetrics struct {
+	AverageRuntimeMs *float64  `json:"average_runtime_ms,omitempty"`
+	End              time.Time `json:"end"`
+
+	// FailureRate Failed tasks over all tasks; 0 without tasks.
+	FailureRate  float64   `json:"failure_rate"`
+	RuntimeMsP50 *float64  `json:"runtime_ms_p50,omitempty"`
+	RuntimeMsP95 *float64  `json:"runtime_ms_p95,omitempty"`
+	RuntimeMsP99 *float64  `json:"runtime_ms_p99,omitempty"`
+	Start        time.Time `json:"start"`
+
+	// StartupMsP50 From submission to the start of the first attempt.
+	StartupMsP50 *float64         `json:"startup_ms_p50,omitempty"`
+	StartupMsP95 *float64         `json:"startup_ms_p95,omitempty"`
+	StatusCounts TaskStatusCounts `json:"status_counts"`
+	Total        int              `json:"total"`
+}
 
 // TaskPage defines model for TaskPage.
 type TaskPage struct {
@@ -2523,6 +3068,22 @@ type TaskPendingReason string
 
 // TaskStatus defines model for TaskStatus.
 type TaskStatus string
+
+// TaskStatusCounts defines model for TaskStatusCounts.
+type TaskStatusCounts struct {
+	Cancelled int `json:"cancelled"`
+	Failed    int `json:"failed"`
+	Queued    int `json:"queued"`
+	Running   int `json:"running"`
+	Succeeded int `json:"succeeded"`
+}
+
+// TaskTimeline defines model for TaskTimeline.
+type TaskTimeline struct {
+	Events []TaskEvent        `json:"events"`
+	Status TaskStatus         `json:"status"`
+	TaskId openapi_types.UUID `json:"task_id"`
+}
 
 // TermsVersion The published terms of a plan; a change names the exact terms chosen.
 type TermsVersion string
@@ -2910,6 +3471,12 @@ type PageLimit = int
 // QueuePath A queue or map name; any characters except control characters.
 type QueuePath = CollectionName
 
+// RangeEnd defines model for RangeEnd.
+type RangeEnd = time.Time
+
+// RangeStart defines model for RangeStart.
+type RangeStart = time.Time
+
 // SecretPath An environment variable name; the LAZYCLOUD_ prefix is reserved.
 type SecretPath = SecretName
 
@@ -2921,6 +3488,9 @@ type UserCodePath = string
 
 // VolumePath defines model for VolumePath.
 type VolumePath = VolumeName
+
+// WindowSeconds defines model for WindowSeconds.
+type WindowSeconds = int
 
 // WorkspacePath defines model for WorkspacePath.
 type WorkspacePath = Name
@@ -2961,6 +3531,21 @@ type ListCostsParams struct {
 	// Cursor The next_cursor of the previous page.
 	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
 	Limit  *int    `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// GetAccountActivityParams defines parameters for GetAccountActivity.
+type GetAccountActivityParams struct {
+	Measure *ActivityMeasure `form:"measure,omitempty" json:"measure,omitempty"`
+
+	// WindowSeconds Seconds per bucket. A range holds at most 500 buckets and 31 days.
+	WindowSeconds *WindowSeconds `form:"window_seconds,omitempty" json:"window_seconds,omitempty"`
+
+	// Start The start of the range, inclusive.
+	Start *RangeStart `form:"start,omitempty" json:"start,omitempty"`
+
+	// End The end of the range, exclusive; defaults to now.
+	End   *RangeEnd `form:"end,omitempty" json:"end,omitempty"`
+	Limit *int      `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
 // GetPricingParams defines parameters for GetPricing.
@@ -3019,6 +3604,12 @@ type ListArtifactsParams struct {
 	Limit  *Limit  `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
+// StreamChangesParams defines parameters for StreamChanges.
+type StreamChangesParams struct {
+	// LastEventID The id of the last event the client received.
+	LastEventID *string `json:"Last-Event-ID,omitempty"`
+}
+
 // ListContainersParams defines parameters for ListContainers.
 type ListContainersParams struct {
 	// Live Only containers that have not stopped.
@@ -3039,6 +3630,18 @@ type StreamContainerLogsParams struct {
 	Follow *bool    `form:"follow,omitempty" json:"follow,omitempty"`
 }
 
+// GetContainerMetricsParams defines parameters for GetContainerMetrics.
+type GetContainerMetricsParams struct {
+	// Start The start of the range, inclusive.
+	Start *RangeStart `form:"start,omitempty" json:"start,omitempty"`
+
+	// End The end of the range, exclusive; defaults to now.
+	End *RangeEnd `form:"end,omitempty" json:"end,omitempty"`
+
+	// StepSeconds Seconds per point; defaults to the finest step the range allows.
+	StepSeconds *int `form:"step_seconds,omitempty" json:"step_seconds,omitempty"`
+}
+
 // ListDeploymentsParams defines parameters for ListDeployments.
 type ListDeploymentsParams struct {
 	App   *AppName      `form:"app,omitempty" json:"app,omitempty"`
@@ -3057,6 +3660,18 @@ type StreamDeploymentLogsParams struct {
 	// Tail Start with only the last this many stored entries.
 	Tail   *LogTail `form:"tail,omitempty" json:"tail,omitempty"`
 	Follow *bool    `form:"follow,omitempty" json:"follow,omitempty"`
+}
+
+// GetDeploymentPerformanceParams defines parameters for GetDeploymentPerformance.
+type GetDeploymentPerformanceParams struct {
+	// WindowSeconds Seconds per bucket. A range holds at most 500 buckets and 31 days.
+	WindowSeconds *WindowSeconds `form:"window_seconds,omitempty" json:"window_seconds,omitempty"`
+
+	// Start The start of the range, inclusive.
+	Start *RangeStart `form:"start,omitempty" json:"start,omitempty"`
+
+	// End The end of the range, exclusive; defaults to now.
+	End *RangeEnd `form:"end,omitempty" json:"end,omitempty"`
 }
 
 // ListDeploymentVersionsParams defines parameters for ListDeploymentVersions.
@@ -3114,6 +3729,32 @@ type ListMapKeysParams struct {
 	// Cursor The next_cursor of the previous page.
 	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
 	Limit  *int    `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// GetTaskActivityParams defines parameters for GetTaskActivity.
+type GetTaskActivityParams struct {
+	// WindowSeconds Seconds per bucket. A range holds at most 500 buckets and 31 days.
+	WindowSeconds *WindowSeconds `form:"window_seconds,omitempty" json:"window_seconds,omitempty"`
+
+	// Start The start of the range, inclusive.
+	Start *RangeStart `form:"start,omitempty" json:"start,omitempty"`
+
+	// End The end of the range, exclusive; defaults to now.
+	End *RangeEnd `form:"end,omitempty" json:"end,omitempty"`
+	App *AppName  `form:"app,omitempty" json:"app,omitempty"`
+}
+
+// GetTaskMetricsParams defines parameters for GetTaskMetrics.
+type GetTaskMetricsParams struct {
+	// Start The start of the range, inclusive.
+	Start *RangeStart `form:"start,omitempty" json:"start,omitempty"`
+
+	// End The end of the range, exclusive; defaults to now.
+	End *RangeEnd `form:"end,omitempty" json:"end,omitempty"`
+	App *AppName  `form:"app,omitempty" json:"app,omitempty"`
+
+	// Function Requires `app`.
+	Function *WorkloadName `form:"function,omitempty" json:"function,omitempty"`
 }
 
 // ListQueuesParams defines parameters for ListQueues.
@@ -3257,6 +3898,9 @@ type CompleteArtifactJSONRequestBody = CompleteArtifactRequest
 
 // PresignArtifactJSONRequestBody defines body for PresignArtifact for application/json ContentType.
 type PresignArtifactJSONRequestBody = PresignArtifactRequest
+
+// ListContainerLifecyclesJSONRequestBody defines body for ListContainerLifecycles for application/json ContentType.
+type ListContainerLifecyclesJSONRequestBody = ContainerLifecyclesRequest
 
 // StartDeploymentJSONRequestBody defines body for StartDeployment for application/json ContentType.
 type StartDeploymentJSONRequestBody = StartDeploymentRequest

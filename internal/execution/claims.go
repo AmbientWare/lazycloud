@@ -38,6 +38,9 @@ type ClaimedTask struct {
 	// Dependencies are the results of the upstream tasks the input refers
 	// to.
 	Dependencies []DependencyResult
+	// TraceParent is the trace of the request that submitted the task;
+	// empty when it was not traced.
+	TraceParent string
 }
 
 // DependencyResult is an upstream task's result.
@@ -153,6 +156,9 @@ func (e *Execution) claimOnce(ctx context.Context, host compute.HostID, containe
 				MaxAttempts: int(row.MaxAttempts),
 				Input:       Payload{Encoding: Encoding(row.Encoding), Data: row.Data}, Deadline: row.DeadlineAt,
 				Root: TaskID(row.RootTaskID), Parent: (*TaskID)(row.ParentTaskID),
+			}
+			if row.Traceparent != nil {
+				claimed[n].TraceParent = *row.Traceparent
 			}
 			ids[n] = row.TaskID
 			index[row.TaskID] = n

@@ -24,7 +24,7 @@ select t.id, a.name as app_name, w.name as function_name, t.release_id, r.versio
 from workloads w
 join apps a on a.id = w.app_id
 cross join lateral (
-    select id, workspace_id, workload_id, release_id, status, attempt_count, max_attempts, available_at, current_attempt_id, failure, created_at, started_at, finished_at, unmet_dependencies, parent_task_id, root_task_id, scheduled_for from tasks t
+    select id, workspace_id, workload_id, release_id, status, attempt_count, max_attempts, available_at, current_attempt_id, failure, created_at, started_at, finished_at, unmet_dependencies, parent_task_id, root_task_id, scheduled_for, traceparent from tasks t
     where t.workload_id = w.id
       and ($1::text is null or t.status = $1::text)
       and t.id < $2

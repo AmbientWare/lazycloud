@@ -57,10 +57,10 @@ with input as materialized (
     from generate_subscripts($1::text[], 1) as i
 ), task as (
     insert into tasks (id, workspace_id, workload_id, release_id, status, max_attempts,
-                       parent_task_id, root_task_id, unmet_dependencies, scheduled_for)
+                       parent_task_id, root_task_id, unmet_dependencies, scheduled_for, traceparent)
     select input.id, $4, $5, $6, 'queued', $7,
            $8::uuid, $9::uuid, input.unmet,
-           $10::timestamptz
+           $10::timestamptz, $11::text
     from input
     order by input.ord
     returning tasks.id, tasks.created_at
@@ -85,6 +85,7 @@ type InsertTasksParams struct {
 	ParentTaskID *uuid.UUID
 	RootTaskID   *uuid.UUID
 	ScheduledFor *time.Time
+	Traceparent  *string
 }
 
 type InsertTasksRow struct {
@@ -105,6 +106,7 @@ func (q *Queries) InsertTasks(ctx context.Context, arg InsertTasksParams) ([]Ins
 		arg.ParentTaskID,
 		arg.RootTaskID,
 		arg.ScheduledFor,
+		arg.Traceparent,
 	)
 	if err != nil {
 		return nil, err

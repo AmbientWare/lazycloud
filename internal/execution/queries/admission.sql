@@ -40,10 +40,10 @@ with input as materialized (
     from generate_subscripts(@encodings::text[], 1) as i
 ), task as (
     insert into tasks (id, workspace_id, workload_id, release_id, status, max_attempts,
-                       parent_task_id, root_task_id, unmet_dependencies, scheduled_for)
+                       parent_task_id, root_task_id, unmet_dependencies, scheduled_for, traceparent)
     select input.id, @workspace_id, @workload_id, @release_id, 'queued', @max_attempts,
            sqlc.narg(parent_task_id)::uuid, sqlc.narg(root_task_id)::uuid, input.unmet,
-           sqlc.narg(scheduled_for)::timestamptz
+           sqlc.narg(scheduled_for)::timestamptz, sqlc.narg(traceparent)::text
     from input
     order by input.ord
     returning tasks.id, tasks.created_at
