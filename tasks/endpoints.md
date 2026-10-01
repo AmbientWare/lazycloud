@@ -50,13 +50,14 @@ SaaS, and the edge routes only verified ones.
 - Execution. No task per request. Each edge keeps in-flight and waiting
   counts per release in memory and upserts `endpoint_loads` leases (demand,
   keep-warm window peak, TTL 15 s); a cold request publishes at once and wakes
-  planning. `PlanEndpoints` sizes HTTP releases from the leases:
+  planning. `PlanServing` sizes HTTP releases from the leases:
   `clamp(ceil(max(demand, window peak) / tasks_per_container), min, max)`. A
   replaced release keeps its containers until the active release has a ready
   one, then drains; pinned `-vN` traffic keeps its own demand. Cold requests
   wait for the container-ready NOTIFY up to the request deadline.
-- Previews. A preview is a release with no version, with a `previews` lease
-  renewed while the CLI follows its output. Planning keeps exactly one
+- Previews. A preview is a release with a negative version from the
+  `preview_versions` sequence, with a `previews` lease renewed while the CLI
+  follows its output. Working-tree releases keep a null version. Planning keeps exactly one
   container while the lease lives. File sync goes over the data connection to
   the agent, which writes the workspace and tells the supervisor to restart
   its runners after in-flight work.
@@ -78,20 +79,73 @@ SaaS, and the edge routes only verified ones.
 
 ## Progress
 
-- [ ] 1 Contracts
-- [ ] 2 Control
-- [ ] 3 Host path and edge
-- [ ] 4 Planning
-- [ ] 5 ASGI, WebSockets, function invoke
-- [ ] 6 SDK
-- [ ] 7 Custom domains
-- [ ] 8 Serve
-- [ ] 9 Measurements
+- [x] 1 Contracts
+- [x] 2 Control
+- [x] 3 Host path and edge
+- [x] 4 Planning
+- [x] 5 ASGI, WebSockets, function invoke
+- [x] 6 SDK
+- [x] 7 Custom domains (provider unverified without credentials)
+- [x] 8 Serve
+- [x] 9 Measurements
 
 ## Intentional differences
 
-(recorded as they are decided)
+- The edge strips the caller's bearer token before forwarding; the reference
+  passed it to user code.
+- No task row per request and no `X-Task-Id` header. HTTP-invoked functions
+  still run as tasks.
+- A function preview is a release of the function; local calls target it
+  through the function's submit with `release_id`, which admits while the
+  preview's lease lives.
+- A deleted workload frees its subdomain and hostname, so redeploying the
+  same name claims the same URL.
+- Endpoint and ASGI specs reject `cron` and `in_process`; HTTP workers admit
+  concurrent requests themselves.
+
+## Gaps
+
+- Cloudflare for SaaS is implemented at the provider boundary but unverified:
+  no credentials locally. Without them `domain add` records the hostname and
+  it stays `awaiting_verification`.
+- The Team/Business plan gate on custom domains needs billing.
+- Public (`authorized=False`) functions, the `/invoke/stream` NDJSON variant,
+  endpoint shells, `checkpoint_enabled` and volumes on HTTP workloads are
+  unsupported and rejected by the SDK.
+- One edge per stream: a request reaches containers through the edge whose
+  data connection holds the agent's streams. Several server replicas need
+  stream routing between edges.
+- gVisor needs `--host-uds` for the supervisor's HTTP socket; only runc is
+  verified.
+- The reference docs say a domain may be a subdomain of a registered name;
+  its code and this rewrite require an exact match.
 
 ## Evidence
 
-(measurements and test names)
+Local, `go test -race`, real PostgreSQL, garage, registry and Docker (runc):
+
+- `TestEndpointColdWarmAndScaleToZero`: cold request through the edge 1.1-1.6 s;
+  warm p50 1.4-1.6 ms, p95 1.8-2.4 ms; no container 3.7-3.9 s after the last
+  request with keep_warm 2 s.
+- `TestWarmLatencyThroughTheEdgeAndDirect`: 500 sequential, edge p50 1.3 ms /
+  p95 1.6 ms against the supervisor socket direct p50 0.36 ms / p95 0.62 ms.
+- `TestEndpointServesAThousandConcurrentRequests`: 1000 concurrent 10 ms
+  requests on up to 2 containers of capacity 32 in 0.52-0.62 s, p50 275-400
+  ms, p95 450-574 ms.
+- `TestASGIStreamsUploadsUpgradesAndStripsTheToken`: first SSE event after
+  143 us, 3 events over 0.9 s; uploads, WebSocket upgrade, token stripped.
+- `TestEndpointQueuesPastCapacityAndRejectsPastMaxPending` (429),
+  `TestRedeployKeepsServingUntilTheNewReleaseIsReadyThenDrains`,
+  `TestEndpointThatFailsToLoadAnswersWithItsError` (1.1-1.3 s),
+  `TestFunctionsAreInvokedOverHTTP`, `TestEndpointGetsItsSecretsAndRunsOnStartFirst`.
+- `TestServePreviewSyncsSourceAndStops`: preview ready 1.3 s, sync to the
+  edited answer 1.2-1.4 s; `TestFunctionPreviewTakesTasksAndLapsesWithoutAFollower`.
+- Control: `TestDeployEndpointResolvesHTTPDefaultsAndClaimsItsSubdomain`,
+  subdomain digests against the reference. Supervisor: `internal/supervisor/http_test.go`.
+  Runner: `python/runner/tests/test_http.py`. SDK:
+  `test_deploy_maps_endpoint_and_asgi_options_to_http_specs`.
+- Real CLI on a private stack: `lazycloud deploy` prints the URLs; curl with a
+  token answers, without one 401; `lazycloud serve api_demo:count_words`
+  prints the reference's output, URL after 1.8 s, edit answered 1.35 s after
+  save, Ctrl-C stops it; `lazycloud run` during a function serve ran on the
+  preview release.
