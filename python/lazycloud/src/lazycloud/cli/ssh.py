@@ -13,7 +13,7 @@ from shared.http.errors import HttpApiError
 from lazycloud.cli.components.errors import ClientError
 from lazycloud.cli.components.output import emit
 from lazycloud.cli.components.progress import ConnectingIndicator
-from lazycloud.cli.control import control_config, resource_client, ssh_client, workspace_client
+from lazycloud.cli.control import control_config, resource_client, ssh_client
 from lazycloud.clients.resource.control import ResourceControlClient
 from lazycloud.clients.ssh.control import SshControlClient
 from lazycloud.session.ssh import (
@@ -140,9 +140,7 @@ def ssh_cert(
 ) -> None:
     """Refresh the SSH certificate when it is missing or past half its lifetime."""
     with _setup_errors():
-        access = _access(
-            ssh_client(workspace=workspace), workspace or workspace_client().current().name
-        )
+        access = _access(ssh_client(workspace=workspace), workspace or control_config().workspace)
         refreshed = access.refresh_certificate(force=force)
     if quiet:
         return
