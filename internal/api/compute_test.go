@@ -83,9 +83,9 @@ func TestAgentInstallsServeOnlyVerifiedReleaseArchives(t *testing.T) {
 		}
 	}
 	for path, want := range map[string]int{
-		"/install/agent/2.0.0/linux/amd64":   404,
-		"/install/agent/1.0.0/linux/arm64":   404,
-		"/install/agent/1.0.0/darwin/amd64":  404,
+		"/install/agent/2.0.0/linux/amd64":    404,
+		"/install/agent/1.0.0/linux/arm64":    404,
+		"/install/agent/1.0.0/darwin/amd64":   404,
 		"/install/agent/..%2Fetc/linux/amd64": 404,
 	} {
 		if status, _, _ := e.get(path); status != want {

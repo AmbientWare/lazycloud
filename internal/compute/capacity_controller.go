@@ -288,7 +288,7 @@ func (p *purchasePlan) buy(r Requirement, later []Requirement) CapacityWait {
 		Name: "lazycloud-" + o.Type.Name, Kind: string(target.Kind), ConnectionID: target.Connection,
 		CpuMillis: cpu, MemoryBytes: memory, GpuType: o.Type.GPU, GpuCount: int32(o.Type.GPUCount), //nolint:gosec // Catalog GPU counts are small.
 		Region: o.Region, AvailabilityZone: o.Zone, AvailabilityZoneID: o.ZoneID, InstanceType: o.Type.Name,
-		Market: ptr(string(o.Market)),
+		Market:       ptr(string(o.Market)),
 		HourlyMicros: &o.HourlyMicros,
 	})
 	return WaitProvisioning
