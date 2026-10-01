@@ -29,6 +29,9 @@ services:
       - garage-data:/var/lib/garage
     ports:
       - "127.0.0.1:23900:3900"
+      # Workload containers reach the S3 API on the Docker bridge gateway,
+      # where presigned URLs point; loopback is the container's own.
+      - "${LAZYCLOUD_DOCKER_BRIDGE_IP:-172.17.0.1}:23900:3900"
       # The admin API creates workspace buckets and host keys for volumes.
       - "127.0.0.1:23903:3903"
     healthcheck:

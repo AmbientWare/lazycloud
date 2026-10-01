@@ -334,7 +334,14 @@ def test_artifacts_save_for_a_task(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert [item["filename"] for item in searched["artifacts"]] == ["plots.zip"]
     usage = _json("artifact", "usage")
     assert usage["count"] >= 3
-    assert set(usage) == {"count", "size_bytes", "retention_seconds"}
+    assert set(usage) == {
+        "count",
+        "size_bytes",
+        "estimated_monthly_nanos",
+        "accrued_nanos",
+        "accrued_since",
+        "retention_seconds",
+    }
 
     assert _json("artifact", "delete", zipped.artifact_id, "-y") == {"deleted": zipped.artifact_id}
     artifact.delete()
