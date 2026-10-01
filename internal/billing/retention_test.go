@@ -50,6 +50,7 @@ func TestUnfundedAccountsKeepTheirDataThirtyDaysAndAreWarned(t *testing.T) {
 	}
 
 	// Without credit for the whole period, the workspace's data goes.
+	f.exec("update credit_lots set spent_nanos = amount_nanos where user_id = $1", owner)
 	f.exec("update billing_balances set balance_nanos = 0 where user_id = $1", owner)
 	sweep()
 	if expired, err := f.billing.ExpiredUnfunded(t.Context()); err != nil || len(expired) != 0 {
