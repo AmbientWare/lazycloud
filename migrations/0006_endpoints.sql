@@ -4,8 +4,9 @@
 alter table workloads drop constraint workloads_kind_check;
 alter table workloads add constraint workloads_kind_check check (kind in ('function', 'endpoint', 'asgi'));
 
--- A preview release has no version; it never becomes active.
-alter table releases alter column version drop not null;
+-- Preview releases take negative versions from this sequence, so they never
+-- collide with deployed versions and never become active.
+create sequence preview_versions;
 
 -- The hostnames a deployed workload answers on. Control claims them in the
 -- deploy transaction, so no two workloads share a subdomain or a custom
