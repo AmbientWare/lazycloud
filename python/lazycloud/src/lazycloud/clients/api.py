@@ -320,6 +320,36 @@ class ApiClient:
         params: dict[str, int | str] | None = None,
         read_timeout: float | None = None,
     ) -> ModelT:
+        response = self._request(method, path, body=body, params=params, read_timeout=read_timeout)
+        try:
+            return model.model_validate_json(response.content)
+        except ValidationError as exc:
+            raise ApiError(
+                status_code=response.status_code,
+                code=None,
+                message=f"{method} {path} returned an invalid {model.__name__}: {exc}",
+            ) from exc
+
+    def _send_empty(
+        self,
+        method: str,
+        path: str,
+        *,
+        body: BaseModel | None = None,
+        params: dict[str, int | str] | None = None,
+    ) -> None:
+        """Send a request whose success has no body, such as a 204."""
+        self._request(method, path, body=body, params=params)
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        body: BaseModel | None,
+        params: dict[str, int | str] | None,
+        read_timeout: float | None = None,
+    ) -> httpx.Response:
         content = (
             body.model_dump_json(exclude_unset=True, by_alias=True).encode()
             if body is not None
@@ -343,14 +373,7 @@ class ApiClient:
             raise ApiConnectionError(method, path, str(exc) or type(exc).__name__) from exc
         if response.status_code >= 300:
             raise _api_error(response)
-        try:
-            return model.model_validate_json(response.content)
-        except ValidationError as exc:
-            raise ApiError(
-                status_code=response.status_code,
-                code=None,
-                message=f"{method} {path} returned an invalid {model.__name__}: {exc}",
-            ) from exc
+        return response
 
 
 def is_transient(error: Exception) -> bool:

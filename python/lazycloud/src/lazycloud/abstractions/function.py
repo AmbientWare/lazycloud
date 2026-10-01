@@ -291,9 +291,8 @@ class Function(Generic[P, R]):
         if self.gpu is not None or self.gpu_count:
             found.append("gpu")
         declared = {
-            "disk": self.disk is not None,
             "secrets": bool(self.secrets),
-            "volumes": bool(self.volumes),
+            "cloud bucket": any(volume.config is not None for volume in self.volumes),
             "cron": bool(self.cron),
             "callback_url": bool(self.callback_url),
             "authorized": self.authorized is not DEFAULT_FUNCTION_AUTHORIZED,
@@ -341,7 +340,7 @@ class Function(Generic[P, R]):
                 "python_version": python_minor_version(image.python_version),
                 "image_id": image.image_id,
             },
-            "resources": _resources(self.cpu, self.memory),
+            "resources": _resources(self.cpu, self.memory, self.disk),
             "retry_policy": policy.model_dump(
                 mode="json",
                 include={"max_attempts", "delay_seconds", "backoff", "max_delay_seconds"},
@@ -362,6 +361,15 @@ class Function(Generic[P, R]):
             spec["max_pending_tasks"] = self.max_pending_tasks
         if self.env:
             spec["environment"] = dict(self.env)
+        if self.volumes:
+            spec["volumes"] = [
+                {
+                    "name": volume.name,
+                    "mount_path": volume.mount_path,
+                    "read_only": volume.read_only,
+                }
+                for volume in self.volumes
+            ]
         try:
             return ApiFunctionSpec.model_validate(spec)
         except ValidationError as exc:
@@ -539,8 +547,11 @@ def _map_args(input_value: Any) -> tuple[Any, ...]:
     return (input_value,)
 
 
-def _resources(cpu: Any, memory: Any) -> dict[str, int]:
-    """Reservations, plus ceilings when `cpu` or `memory` is a `(reserve, limit)` pair."""
+def _resources(cpu: Any, memory: Any, disk: str | None) -> dict[str, int]:
+    """Reservations, plus ceilings when `cpu` or `memory` is a `(reserve, limit)` pair.
+
+    `disk` limits the container's writable layer, such as "10Gi".
+    """
     cpu = DEFAULT_FUNCTION_CPU if cpu is None else cpu
     memory = DEFAULT_FUNCTION_MEMORY if memory is None else memory
     resources: dict[str, int] = {}
@@ -554,6 +565,9 @@ def _resources(cpu: Any, memory: Any) -> dict[str, int]:
         resources["memory_limit_mib"] = parse_memory_mib(memory[1])
     else:
         resources["memory_mib"] = parse_memory_mib(memory)
+    disk_mib = parse_memory_mib(disk)
+    if disk_mib is not None:
+        resources["disk_mib"] = disk_mib
     return resources
 
 

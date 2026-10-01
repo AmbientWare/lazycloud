@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 from lazycloud.clients.compute.control import ComputeClient
-from lazycloud.clients.disk.control import DiskControlClient
 from lazycloud.clients.domain.control import DomainControlClient
 from lazycloud.clients.gateway.control import GatewayControlClient
 from lazycloud.clients.resource.control import ResourceControlClient
 from lazycloud.clients.secret.control import SecretControlClient
 from lazycloud.clients.ssh.control import SshControlClient
-from lazycloud.clients.volume.control import VolumeControlClient
+from lazycloud.clients.storage import StorageClient
 from lazycloud.clients.workspace.control import WorkspaceControlClient
-from lazycloud.control import ControlClientConfig, resolve_control_client_config
+from lazycloud.control import ControlClientConfig, resolve_control_client_config, storage_client
 from lazycloud.control_clients import (
     gateway_control_client,
     resource_control_client,
@@ -96,32 +95,12 @@ def secret_client(
     )
 
 
-def disk_client(
+def workspace_storage(
     *,
     workspace: str | None = None,
     timeout_seconds: float = 10.0,
-) -> DiskControlClient:
-    config = control_config(workspace=workspace, timeout_seconds=timeout_seconds)
-    return DiskControlClient.from_endpoint(
-        config.endpoint,
-        token=config.token,
-        timeout_seconds=config.timeout_seconds,
-        workspace=config.workspace,
-    )
-
-
-def volume_client(
-    *,
-    workspace: str | None = None,
-    timeout_seconds: float = 10.0,
-) -> VolumeControlClient:
-    config = control_config(workspace=workspace, timeout_seconds=timeout_seconds)
-    return VolumeControlClient.from_endpoint(
-        config.endpoint,
-        token=config.token,
-        timeout_seconds=config.timeout_seconds,
-        workspace=config.workspace,
-    )
+) -> StorageClient:
+    return storage_client(control_config(workspace=workspace, timeout_seconds=timeout_seconds))
 
 
 def workspace_client(
@@ -144,6 +123,6 @@ __all__ = [
     "gateway_client",
     "secret_client",
     "ssh_client",
-    "volume_client",
     "workspace_client",
+    "workspace_storage",
 ]

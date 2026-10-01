@@ -3,16 +3,13 @@ from __future__ import annotations
 import builtins
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
 from shared.disks import DISK_ROOT_MOUNT_PATH, DiskMount, parse_disk_size_bytes
-from shared.http.disks import DiskResponse
-from shared.http.errors import HttpApiError
 
-from lazycloud.control import resolve_control_client_config
-
-if TYPE_CHECKING:
-    from lazycloud.clients.disk.control import DiskControlClient
+from lazycloud.clients.api import ApiConnectionError, ApiError
+from lazycloud.clients.storage import StorageClient
+from lazycloud.control import resolve_control_client_config, storage_client
+from shared import api
 
 
 class DiskOperationError(RuntimeError):
@@ -25,7 +22,8 @@ class Disk:
 
     Mounted at ``/`` it holds the pod's whole writable root: installed packages,
     home directories and working trees all survive a stop, a redeploy, or a move
-    to another machine. One container writes a disk at a time.
+    to another machine. One container writes a disk at a time. Sizes run from
+    1Gi to 1Ti in whole 4096-byte blocks.
     """
 
     name: str
@@ -33,26 +31,26 @@ class Disk:
     mount_path: str = DISK_ROOT_MOUNT_PATH
 
     @staticmethod
-    def list(*, workspace: str | None = None) -> builtins.list[DiskResponse]:
-        """Every disk in the workspace."""
-        client = _disk_client(workspace)
-        disks: builtins.list[DiskResponse] = []
-        cursor = ""
+    def list(*, workspace: str | None = None) -> builtins.list[api.Disk]:
+        """Every disk in the workspace, by name."""
+        client = _storage(workspace)
+        disks: builtins.list[api.Disk] = []
+        cursor: str | None = None
         try:
             while True:
-                page = client.list(cursor=cursor)
-                disks.extend(page.data)
-                if not page.next:
+                page = client.list_disks(cursor=cursor)
+                disks.extend(page.disks)
+                if not page.next_cursor:
                     return disks
-                cursor = page.next
-        except HttpApiError as exc:
+                cursor = page.next_cursor
+        except (ApiError, ApiConnectionError) as exc:
             raise DiskOperationError(f"failed to list disks: {exc}") from exc
 
     def delete(self, *, workspace: str | None = None) -> None:
         """Delete this disk and everything written to it; refused while a container holds it."""
         try:
-            _disk_client(workspace).delete(self.name)
-        except HttpApiError as exc:
+            _storage(workspace).delete_disk(self.name)
+        except (ApiError, ApiConnectionError) as exc:
             raise DiskOperationError(f"failed to delete disk {self.name}: {exc}") from exc
 
     def mount(self) -> DiskMount:
@@ -67,16 +65,8 @@ def disk_mounts(disks: Iterable[Disk | DiskMount]) -> list[DiskMount]:
     return [disk.mount() if isinstance(disk, Disk) else disk for disk in disks]
 
 
-def _disk_client(workspace: str | None) -> DiskControlClient:
-    from lazycloud.clients.disk.control import DiskControlClient
-
-    config = resolve_control_client_config(workspace=workspace)
-    return DiskControlClient.from_endpoint(
-        config.endpoint,
-        token=config.token,
-        timeout_seconds=config.timeout_seconds,
-        workspace=config.workspace,
-    )
+def _storage(workspace: str | None) -> StorageClient:
+    return storage_client(resolve_control_client_config(workspace=workspace))
 
 
 __all__ = ["Disk", "DiskOperationError", "disk_mounts"]

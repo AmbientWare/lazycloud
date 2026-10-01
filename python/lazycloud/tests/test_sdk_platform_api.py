@@ -212,6 +212,11 @@ def test_deploy_uploads_the_source_once_and_maps_function_options(
         ('@app.function(secrets=["api-key"])', "secrets"),
         ('@app.function(cron="0 * * * *")', "cron"),
         ("@app.function(on_start=print)", "on_start"),
+        (
+            "@app.function(volumes=[lazycloud.CloudBucket("
+            '"models", "/models", lazycloud.CloudBucketConfig())])',
+            "cloud bucket",
+        ),
     ],
 )
 def test_unsupported_options_fail_before_any_request(

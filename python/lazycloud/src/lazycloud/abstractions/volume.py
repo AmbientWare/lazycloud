@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import urllib.request
+import math
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -17,42 +17,41 @@ from pydantic import (
     model_validator,
 )
 from shared.deployment_records import VolumeMount
-from shared.http import volumes
-from shared.http.volumes import (
-    AbortMultipartUploadRequest,
-    AbortMultipartUploadResponse,
-    CompleteMultipartUploadRequest,
-    CompleteMultipartUploadResponse,
-    CopyPathResponse,
-    CreateMultipartUploadRequest,
-    CreateMultipartUploadResponse,
-    CreatePresignedUrlResponse,
-    DeletePathRequest,
-    DeletePathResponse,
-    DeleteVolumeResponse,
-    GetFileServiceInfoResponse,
-    GetOrCreateVolumeResponse,
-    ListPathRequest,
-    ListPathResponse,
-    MovePathRequest,
-    MovePathResponse,
-    PathInfo,
-    PresignedUrlMethod,
-    StatPathRequest,
-    StatPathResponse,
-    VolumeInstance,
-)
+from shared.enums import StringEnum
 from shared.mounts import MountAuthMode, infer_mount_auth_mode, normalize_mount_prefix
 
-from lazycloud.control import (
-    ControlClientConfig,
-    ResourceControlBinding,
-    resolve_control_client_config,
+from lazycloud.clients.storage import (
+    StorageClient,
+    download_presigned,
+    get_presigned,
+    put_presigned,
+    upload_file_parts,
 )
+from lazycloud.control import ResourceControlBinding, resolve_control_client_config, storage_client
+from shared import api
 
 DEFAULT_VOLUME_MOUNT_ROOT = "/volumes"
 DEFAULT_MULTIPART_CHUNK_SIZE_BYTES = 5 * 1024 * 1024
 DEFAULT_VOLUME_DOWNLOAD_TIMEOUT_SECONDS = 30.0
+# put() sends files above this size as a multipart upload.
+MULTIPART_THRESHOLD_BYTES = 64 * 1024 * 1024
+_PUT_PART_SIZE_BYTES = 16 * 1024 * 1024
+_MAX_UPLOAD_PARTS = 10_000
+
+
+class PresignedUrlMethod(StringEnum):
+    GetObject = "get-object"
+    HeadObject = "head-object"
+    PutObject = "put-object"
+    UploadPart = "upload-part"
+
+
+_PRESIGN_METHODS = {
+    PresignedUrlMethod.GetObject: api.Method.get,
+    PresignedUrlMethod.HeadObject: api.Method.head,
+    PresignedUrlMethod.PutObject: api.Method.put,
+    PresignedUrlMethod.UploadPart: api.Method.upload_part,
+}
 
 
 class CloudBucketConfig(BaseModel):
@@ -123,7 +122,8 @@ class CloudBucketConfig(BaseModel):
 class VolumePathInfo:
     path: str
     size: int
-    modified_at: datetime
+    modified_at: datetime | None
+    """Absent for directories."""
     is_dir: bool
 
 
@@ -181,50 +181,6 @@ class MultipartAbort:
     volume_path: str
 
 
-class VolumeClient(Protocol):
-    def create(self, name: str) -> GetOrCreateVolumeResponse: ...
-
-    def delete(self, name: str) -> DeleteVolumeResponse: ...
-
-    def copy(self, path: str, content: bytes) -> CopyPathResponse: ...
-
-    def list_path(self, request: ListPathRequest) -> ListPathResponse: ...
-
-    def stat_path(self, request: StatPathRequest) -> StatPathResponse: ...
-
-    def move_path(self, request: MovePathRequest) -> MovePathResponse: ...
-
-    def delete_path(self, request: DeletePathRequest) -> DeletePathResponse: ...
-
-    def get_file_service_info(self) -> GetFileServiceInfoResponse: ...
-
-    def presigned_url(
-        self,
-        volume_name: str,
-        volume_path: str,
-        *,
-        method: PresignedUrlMethod = PresignedUrlMethod.GetObject,
-        expires: int = 0,
-        upload_id: str = "",
-        part_number: int = 0,
-    ) -> CreatePresignedUrlResponse: ...
-
-    def create_multipart_upload(
-        self,
-        request: CreateMultipartUploadRequest,
-    ) -> CreateMultipartUploadResponse: ...
-
-    def complete_multipart_upload(
-        self,
-        request: CompleteMultipartUploadRequest,
-    ) -> CompleteMultipartUploadResponse: ...
-
-    def abort_multipart_upload(
-        self,
-        request: AbortMultipartUploadRequest,
-    ) -> AbortMultipartUploadResponse: ...
-
-
 @runtime_checkable
 class VolumeExport(Protocol):
     def export(self) -> VolumeMount: ...
@@ -272,19 +228,21 @@ class CloudBucket:
 
 
 @dataclass(slots=True)
-class Volume(ResourceControlBinding[VolumeClient]):
+class Volume(ResourceControlBinding[StorageClient]):
     name: str
     mount_path: str | None = None
     workspace: str | None = None
     ready: bool = field(default=False, init=False)
     volume_id: str | None = field(default=None, init=False)
-    client: VolumeClient | None = field(default=None, init=False, repr=False)
+    client: StorageClient | None = field(default=None, init=False, repr=False)
     endpoint: str | None = field(default=None, init=False, repr=False)
     token: str | None = field(default=None, init=False, repr=False)
-    timeout_seconds: float = field(default=10.0, init=False, repr=False)
+    timeout_seconds: float = field(
+        default=DEFAULT_VOLUME_DOWNLOAD_TIMEOUT_SECONDS, init=False, repr=False
+    )
 
     @property
-    def control_client(self) -> VolumeClient:
+    def control_client(self) -> StorageClient:
         if self.client is None:
             config = resolve_control_client_config(
                 workspace=self.workspace,
@@ -292,24 +250,19 @@ class Volume(ResourceControlBinding[VolumeClient]):
                 token=self.token,
                 timeout_seconds=self.timeout_seconds,
             )
-            self.client = _default_volume_client(config)
+            self.client = storage_client(config)
         return self.client
 
     def get_or_create(self) -> bool:
-        response = self.control_client.create(self.name)
-        if response.volume is None:
-            return False
-        self.ready = True
-        self.volume_id = response.volume.id
+        self.create()
         return True
 
-    def create(self) -> VolumeInstance:
-        response = self.control_client.create(self.name)
-        if response.volume is None:
-            raise VolumeOperationError(f"failed to create volume: {self.name}")
+    def create(self) -> api.Volume:
+        """Create the volume, or return the one that already has this name."""
+        volume = self.control_client.create_volume(self.name)
         self.ready = True
-        self.volume_id = response.volume.id
-        return response.volume
+        self.volume_id = str(volume.id)
+        return volume
 
     def export(self) -> VolumeMount:
         return VolumeMount(name=self.name, mount_path=str(self.path()))
@@ -321,82 +274,76 @@ class Volume(ResourceControlBinding[VolumeClient]):
         return self.write_bytes(relative_path, content.encode("utf-8"))
 
     def write_bytes(self, relative_path: str | Path, content: bytes) -> str:
-        target = self._volume_path(relative_path)
-        self.control_client.copy(target, content)
-        return target
+        url = self.presigned_url(relative_path, method=PresignedUrlMethod.PutObject).url
+        put_presigned(url, content)
+        return self._volume_path(relative_path)
 
     def read_text(self, relative_path: str | Path, *, encoding: str = "utf-8") -> str:
         return self.read_bytes(relative_path).decode(encoding)
 
     def read_bytes(self, relative_path: str | Path) -> bytes:
-        url = self.presigned_url(relative_path, method=PresignedUrlMethod.GetObject).url
-        with urllib.request.urlopen(
-            url,
-            timeout=DEFAULT_VOLUME_DOWNLOAD_TIMEOUT_SECONDS,
-        ) as response:
-            return response.read()
+        return get_presigned(self.presigned_url(relative_path).url)
 
     def list(self, relative_path: str | Path = ".") -> list[str]:
         return [item.path for item in self.list_path(relative_path)]
 
     def list_path(self, relative_path: str | Path = ".") -> list[VolumePathInfo]:
-        path = self._volume_path(relative_path)
-        response = self.control_client.list_path(ListPathRequest(path=path))
-        return [_path_info(item) for item in response.path_infos]
+        """The entries of one directory; a missing directory is empty."""
+        path = _relative_path(relative_path).as_posix()
+        entries: list[VolumePathInfo] = []
+        cursor: str | None = None
+        while True:
+            page = self.control_client.list_volume_files(self.name, path, cursor=cursor)
+            entries.extend(_path_info(item) for item in page.files)
+            if not page.next_cursor:
+                return entries
+            cursor = page.next_cursor
 
     def stat(self, relative_path: str | Path) -> VolumePathInfo:
-        path = self._volume_path(relative_path)
-        response = self.control_client.stat_path(StatPathRequest(path=path))
-        if response.path_info is None:
-            raise VolumeOperationError(f"failed to stat volume path: {path}")
-        return _path_info(response.path_info)
+        path = _relative_path(relative_path).as_posix()
+        return _path_info(self.control_client.stat_volume_file(self.name, path))
 
     def put(self, source: str | Path, destination: str | Path | None = None) -> str:
+        """Upload a file or a directory tree and return `<volume>/<destination>`.
+
+        Files above 64 MiB go up as multipart uploads, a few parts at a time.
+        """
         source_path = Path(source).expanduser().resolve()
         if not source_path.exists():
             raise FileNotFoundError(source_path)
         destination_root = _relative_path(destination or source_path.name)
         if source_path.is_file():
-            return self.write_bytes(str(destination_root), source_path.read_bytes())
+            return self._upload_file(source_path, destination_root)
         for path in sorted(item for item in source_path.rglob("*") if item.is_file()):
             relative = path.relative_to(source_path)
-            self.write_bytes(
-                str(PurePosixPath(destination_root, relative.as_posix())),
-                path.read_bytes(),
-            )
-        return self._volume_path(str(destination_root))
+            self._upload_file(path, PurePosixPath(destination_root, relative.as_posix()))
+        return self._volume_path(destination_root)
 
     def get(self, source: str | Path, destination: str | Path) -> Path:
         destination_path = Path(destination).expanduser().resolve()
         destination_path.parent.mkdir(parents=True, exist_ok=True)
-        destination_path.write_bytes(self.read_bytes(source))
+        download_presigned(self.presigned_url(source).url, destination_path)
         return destination_path
 
     def move(self, source: str | Path, destination: str | Path) -> str:
-        source_path = self._volume_path(source)
-        destination_path = self._volume_path(destination)
-        response = self.control_client.move_path(
-            MovePathRequest(original_path=source_path, new_path=destination_path)
-        )
-        return response.new_path or destination_path
+        paths = _relative_path(source).as_posix(), _relative_path(destination).as_posix()
+        self.control_client.move_volume_file(self.name, *paths)
+        return self._volume_path(destination)
 
     def remove(self, relative_path: str | Path) -> tuple[str, ...]:
-        path = self._volume_path(relative_path)
-        response = self.control_client.delete_path(DeletePathRequest(path=path))
-        return response.deleted
+        """Remove a file, or a directory and everything in it; returns the removed files."""
+        path = _relative_path(relative_path).as_posix()
+        return tuple(self.control_client.remove_volume_files(self.name, path).removed)
 
     def delete(self) -> bool:
-        response = self.control_client.delete(self.name)
+        """Delete the volume and its files. The name is free again at once."""
+        self.control_client.delete_volume(self.name)
         self.ready = False
         self.volume_id = None
-        return response.deleted
+        return True
 
     def file_service_info(self) -> VolumeFileServiceInfo:
-        response = self.control_client.get_file_service_info()
-        return VolumeFileServiceInfo(
-            enabled=response.enabled,
-            command_version=response.command_version,
-        )
+        return VolumeFileServiceInfo()
 
     def presigned_url(
         self,
@@ -407,14 +354,14 @@ class Volume(ResourceControlBinding[VolumeClient]):
         upload_id: str | None = None,
         part_number: int | None = None,
     ) -> PresignedUrl:
-        response = self.control_client.presigned_url(
-            self.name,
-            str(_relative_path(relative_path)),
-            method=method,
-            expires=expires_seconds,
-            upload_id=upload_id or "",
-            part_number=part_number or 0,
+        request = api.PresignVolumeFileRequest(
+            path=_relative_path(relative_path).as_posix(),
+            method=_PRESIGN_METHODS[method],
+            expires_seconds=expires_seconds,
+            upload_id=upload_id,
+            part_number=part_number,
         )
+        response = self.control_client.presign_volume_file(self.name, request)
         return PresignedUrl(
             method=method,
             url=response.url,
@@ -430,21 +377,23 @@ class Volume(ResourceControlBinding[VolumeClient]):
         file_size: int,
         chunk_size: int = DEFAULT_MULTIPART_CHUNK_SIZE_BYTES,
     ) -> MultipartUploadPlan:
-        response = self.control_client.create_multipart_upload(
-            CreateMultipartUploadRequest(
-                volume_name=self.name,
-                volume_path=str(_relative_path(relative_path)),
-                file_size=file_size,
-                chunk_size=chunk_size,
-            )
-        )
+        """Start a multipart upload with every part presigned; the caller sends the parts."""
+        upload = self._start_upload(relative_path, file_size=file_size, chunk_size=chunk_size)
         return MultipartUploadPlan(
-            upload_id=response.upload_id,
+            upload_id=upload.upload_id,
             volume_name=self.name,
-            volume_path=str(_relative_path(relative_path)),
-            chunk_size=chunk_size,
+            volume_path=upload.path,
+            chunk_size=upload.part_size_bytes,
             file_size=file_size,
-            parts=[_file_upload_part(part) for part in response.file_upload_parts],
+            parts=[
+                FileUploadPart(
+                    number=part.number,
+                    start=part.offset,
+                    end=part.offset + part.size_bytes,
+                    url=part.url,
+                )
+                for part in upload.parts
+            ],
         )
 
     def complete_multipart_upload(
@@ -453,36 +402,53 @@ class Volume(ResourceControlBinding[VolumeClient]):
         relative_path: str | Path,
         completed_parts: list[CompletedPart],
     ) -> MultipartCompletion:
-        self.control_client.complete_multipart_upload(
-            CompleteMultipartUploadRequest(
-                upload_id=upload_id,
-                volume_name=self.name,
-                volume_path=str(_relative_path(relative_path)),
-                completed_parts=tuple(
-                    volumes.CompletedPart(number=part.number, etag=part.etag)
-                    for part in completed_parts
-                ),
-            )
+        path = _relative_path(relative_path).as_posix()
+        self._complete_upload(
+            upload_id,
+            path,
+            [api.CompletedPart(number=part.number, etag=part.etag) for part in completed_parts],
         )
         return MultipartCompletion(
             upload_id=upload_id,
             volume_name=self.name,
-            volume_path=str(_relative_path(relative_path)),
+            volume_path=path,
             completed_parts=completed_parts,
         )
 
     def abort_multipart_upload(self, upload_id: str, relative_path: str | Path) -> MultipartAbort:
-        self.control_client.abort_multipart_upload(
-            AbortMultipartUploadRequest(
-                upload_id=upload_id,
-                volume_name=self.name,
-                volume_path=str(_relative_path(relative_path)),
-            )
+        path = _relative_path(relative_path).as_posix()
+        self.control_client.abort_volume_upload(
+            self.name, api.AbortVolumeUploadRequest(path=path, upload_id=upload_id)
         )
-        return MultipartAbort(
-            upload_id=upload_id,
-            volume_name=self.name,
-            volume_path=str(_relative_path(relative_path)),
+        return MultipartAbort(upload_id=upload_id, volume_name=self.name, volume_path=path)
+
+    def _upload_file(self, source: Path, destination: PurePosixPath) -> str:
+        size = source.stat().st_size
+        if size <= MULTIPART_THRESHOLD_BYTES:
+            return self.write_bytes(destination, source.read_bytes())
+        part_size = max(_PUT_PART_SIZE_BYTES, math.ceil(size / _MAX_UPLOAD_PARTS))
+        upload = self._start_upload(destination, file_size=size, chunk_size=part_size)
+        try:
+            parts = upload_file_parts(source, upload.parts)
+            self._complete_upload(upload.upload_id, upload.path, parts)
+        except BaseException:
+            self.abort_multipart_upload(upload.upload_id, upload.path)
+            raise
+        return self._volume_path(destination)
+
+    def _start_upload(
+        self, relative_path: str | Path, *, file_size: int, chunk_size: int
+    ) -> api.MultipartUpload:
+        request = api.CreateVolumeUploadRequest(
+            path=_relative_path(relative_path).as_posix(),
+            size_bytes=file_size,
+            part_size_bytes=chunk_size,
+        )
+        return self.control_client.create_volume_upload(self.name, request)
+
+    def _complete_upload(self, upload_id: str, path: str, parts: list[api.CompletedPart]) -> None:
+        self.control_client.complete_volume_upload(
+            self.name, api.CompleteVolumeUploadRequest(path=path, upload_id=upload_id, parts=parts)
         )
 
     def _volume_path(self, relative_path: str | Path) -> str:
@@ -490,17 +456,6 @@ class Volume(ResourceControlBinding[VolumeClient]):
         if str(relative) == ".":
             return self.name
         return f"{self.name}/{relative.as_posix()}"
-
-
-def _default_volume_client(config: ControlClientConfig) -> VolumeClient:
-    from lazycloud.clients.volume.control import VolumeControlClient
-
-    return VolumeControlClient.from_endpoint(
-        config.endpoint,
-        token=config.token,
-        timeout_seconds=config.timeout_seconds,
-        workspace=config.workspace,
-    )
 
 
 def _default_mount_path(name: str) -> str:
@@ -529,21 +484,12 @@ def _relative_path(value: str | Path | PurePosixPath) -> PurePosixPath:
     return path
 
 
-def _path_info(info: PathInfo) -> VolumePathInfo:
+def _path_info(info: api.VolumeFile) -> VolumePathInfo:
     return VolumePathInfo(
         path=info.path,
-        size=info.size,
-        modified_at=info.mod_time,
+        size=info.size_bytes,
+        modified_at=info.modified_at,
         is_dir=info.is_dir,
-    )
-
-
-def _file_upload_part(part: volumes.FileUploadPart) -> FileUploadPart:
-    return FileUploadPart(
-        number=part.number,
-        start=part.start,
-        end=part.end,
-        url=part.url,
     )
 
 
@@ -551,6 +497,7 @@ __all__ = [
     "DEFAULT_MULTIPART_CHUNK_SIZE_BYTES",
     "DEFAULT_VOLUME_DOWNLOAD_TIMEOUT_SECONDS",
     "DEFAULT_VOLUME_MOUNT_ROOT",
+    "MULTIPART_THRESHOLD_BYTES",
     "CloudBucket",
     "CloudBucketConfig",
     "CompletedPart",
@@ -561,7 +508,6 @@ __all__ = [
     "PresignedUrl",
     "PresignedUrlMethod",
     "Volume",
-    "VolumeClient",
     "VolumeExport",
     "VolumeFileServiceInfo",
     "VolumeOperationError",
