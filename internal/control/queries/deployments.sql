@@ -31,6 +31,13 @@ join apps a on a.id = w.app_id
 left join releases r on r.id = w.active_release_id
 where a.workspace_id = @workspace_id and w.id = @id;
 
+-- name: WorkloadActiveRelease :one
+select r.id, w.name, r.version, r.created_at, r.spec
+from workloads w
+join apps a on a.id = w.app_id
+join releases r on r.id = w.active_release_id
+where a.workspace_id = @workspace_id and w.id = @id;
+
 -- name: LockWorkload :one
 -- A paused or deleted app still owns its workloads; deletion is checked by
 -- the caller.

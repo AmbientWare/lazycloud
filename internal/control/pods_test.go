@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 )
 
@@ -96,6 +98,28 @@ func TestPodDefinitionsRejectWhatTheyCannotRun(t *testing.T) {
 				t.Fatalf("resolve = %v, want %q", err, c.reason)
 			}
 		})
+	}
+}
+
+func TestDeploymentsOfEveryKindReadTheirActiveRelease(t *testing.T) {
+	pool, ws := fixture(t)
+	c := NewControl(pool)
+	deploy(t, c, ws, false, pod("web", apitypes.PodKindPod), pod("scratch", apitypes.PodKindSandbox))
+	page, err := c.ListDeployments(t.Context(), ws, DeploymentFilter{}, 10, "")
+	if err != nil || len(page.Deployments) != 2 {
+		t.Fatalf("deployments %+v %v", page.Deployments, err)
+	}
+	for _, d := range page.Deployments {
+		release, err := c.ActiveRelease(t.Context(), ws, WorkloadID(d.Id))
+		if err != nil {
+			t.Fatalf("%s release: %v", d.Name, err)
+		}
+		if release.Id != *d.ReleaseId || release.Spec.Pod == nil || (*release.Spec.Pod.Ports)["http"] != 8080 {
+			t.Fatalf("%s (%s) release %+v, want %v with its pod section", d.Name, d.Kind, release, *d.ReleaseId)
+		}
+	}
+	if _, err := c.ActiveRelease(t.Context(), ws, WorkloadID(uuid.New())); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("release of an unknown workload: %v", err)
 	}
 }
 

@@ -167,6 +167,13 @@ func (s *Server) GetDeployment(ctx context.Context, req GetDeploymentRequestObje
 	if err := s.podDeployment(ctx, &d); err != nil {
 		return nil, err
 	}
+	if d.ReleaseId != nil {
+		release, err := s.owners.Control.ActiveRelease(ctx, ws.ID, control.WorkloadID(req.Deployment))
+		if err != nil {
+			return nil, err
+		}
+		d.ActiveRelease = &release
+	}
 	return GetDeployment200JSONResponse(d), nil
 }
 

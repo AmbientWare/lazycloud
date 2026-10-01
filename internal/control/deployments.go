@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -95,6 +96,23 @@ func parseDeploymentCursor(cursor string) (string, string, error) {
 // GetDeployment reads a workload, deleted ones included.
 func (c *Control) GetDeployment(ctx context.Context, workspace identity.WorkspaceID, id WorkloadID) (apitypes.DeployedWorkload, error) {
 	return c.workloadView(ctx, c.queries, workspace, id)
+}
+
+// ActiveRelease reads the release a workload of any kind runs; ErrNotFound
+// when it has none.
+func (c *Control) ActiveRelease(ctx context.Context, workspace identity.WorkspaceID, id WorkloadID) (apitypes.Release, error) {
+	row, err := c.queries.WorkloadActiveRelease(ctx, WorkloadActiveReleaseParams{WorkspaceID: uuid.UUID(workspace), ID: uuid.UUID(id)})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return apitypes.Release{}, ErrNotFound
+	}
+	if err != nil {
+		return apitypes.Release{}, fmt.Errorf("read active release: %w", err)
+	}
+	var spec apitypes.FunctionSpec
+	if err := json.Unmarshal(row.Spec, &spec); err != nil {
+		return apitypes.Release{}, fmt.Errorf("decode release spec: %w", err)
+	}
+	return apitypes.Release{Id: row.ID, Function: row.Name, Version: versionOf(row.Version), CreatedAt: row.CreatedAt, Spec: spec}, nil
 }
 
 // StopDeployment stops admission to the workload. Planning drains its

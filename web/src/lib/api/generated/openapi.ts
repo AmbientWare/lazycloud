@@ -768,6 +768,7 @@ export interface paths {
             };
             cookie?: never;
         };
+        /** The deployment with the definition its active version runs */
         get: operations["getDeployment"];
         put?: never;
         post?: never;
@@ -4473,6 +4474,8 @@ export interface components {
             scaling?: components["schemas"]["Scaling"];
             /** @description Where a pod or HTTP workload answers. */
             url?: string;
+            /** @description The definition the active version runs; only getDeployment answers it. */
+            active_release?: components["schemas"]["Release"];
         };
         DeploymentPage: {
             deployments: components["schemas"]["DeployedWorkload"][];
@@ -7504,7 +7507,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The deployment */
+            /** @description The deployment and its active release */
             200: {
                 headers: {
                     [name: string]: unknown;

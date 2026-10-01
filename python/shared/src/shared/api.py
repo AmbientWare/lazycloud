@@ -2937,35 +2937,6 @@ class DeploymentPlan(BaseModel):
     ]
 
 
-class DeployedWorkload(BaseModel):
-    id: UUID
-    app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
-    name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
-    kind: WorkloadKind
-    state: WorkloadState
-    app_state: AppState | None = None
-    running_containers: Annotated[
-        int,
-        Field(
-            description="Containers of the workload's releases that are ready or draining.", ge=0
-        ),
-    ]
-    version: Annotated[int | None, Field(description="The active version.")] = None
-    release_id: Annotated[UUID | None, Field(description="The active release.")] = None
-    created_at: AwareDatetime
-    deployed_at: Annotated[
-        AwareDatetime | None, Field(description="When the active version was deployed.")
-    ] = None
-    role: PodRole | None = None
-    scaling: Scaling | None = None
-    url: Annotated[str | None, Field(description="Where a pod or HTTP workload answers.")] = None
-
-
-class DeploymentPage(BaseModel):
-    deployments: list[DeployedWorkload]
-    next_cursor: str | None = None
-
-
 class Container(BaseModel):
     id: UUID
     app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
@@ -3382,6 +3353,39 @@ class Task(BaseModel):
     started_at: AwareDatetime | None = None
     finished_at: AwareDatetime | None = None
     failure: TaskFailure | None = None
+
+
+class DeployedWorkload(BaseModel):
+    id: UUID
+    app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
+    name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
+    kind: WorkloadKind
+    state: WorkloadState
+    app_state: AppState | None = None
+    running_containers: Annotated[
+        int,
+        Field(
+            description="Containers of the workload's releases that are ready or draining.", ge=0
+        ),
+    ]
+    version: Annotated[int | None, Field(description="The active version.")] = None
+    release_id: Annotated[UUID | None, Field(description="The active release.")] = None
+    created_at: AwareDatetime
+    deployed_at: Annotated[
+        AwareDatetime | None, Field(description="When the active version was deployed.")
+    ] = None
+    role: PodRole | None = None
+    scaling: Scaling | None = None
+    url: Annotated[str | None, Field(description="Where a pod or HTTP workload answers.")] = None
+    active_release: Annotated[
+        Release | None,
+        Field(description="The definition the active version runs; only getDeployment answers it."),
+    ] = None
+
+
+class DeploymentPage(BaseModel):
+    deployments: list[DeployedWorkload]
+    next_cursor: str | None = None
 
 
 class TaskPage(BaseModel):

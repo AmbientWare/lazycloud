@@ -804,9 +804,10 @@ paths:
     get:
       operationId: getDeployment
       tags: [control]
+      summary: The deployment with the definition its active version runs
       responses:
         "200":
-          description: The deployment
+          description: The deployment and its active release
           content:
             application/json:
               schema: { $ref: "#/components/schemas/DeployedWorkload" }
@@ -5708,6 +5709,9 @@ components:
         url:
           description: Where a pod or HTTP workload answers.
           type: string
+        active_release:
+          description: The definition the active version runs; only getDeployment answers it.
+          allOf: [{ $ref: "#/components/schemas/Release" }]
 
     DeploymentPage:
       type: object

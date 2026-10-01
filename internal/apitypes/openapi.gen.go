@@ -3224,9 +3224,11 @@ type DeliveryState string
 
 // DeployedWorkload defines model for DeployedWorkload.
 type DeployedWorkload struct {
-	App       AppName   `json:"app"`
-	AppState  *AppState `json:"app_state,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
+	// ActiveRelease The definition the active version runs; only getDeployment answers it.
+	ActiveRelease *Release  `json:"active_release,omitempty"`
+	App           AppName   `json:"app"`
+	AppState      *AppState `json:"app_state,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
 
 	// DeployedAt When the active version was deployed.
 	DeployedAt *time.Time         `json:"deployed_at,omitempty"`
