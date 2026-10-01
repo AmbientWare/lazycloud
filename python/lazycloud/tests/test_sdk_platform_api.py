@@ -253,6 +253,64 @@ def test_deploy_maps_workload_runtime_options(
     }
 
 
+STORAGE_OPTIONS = """\
+import lazycloud
+
+app = lazycloud.App("reports")
+
+
+@app.function(
+    disk="10Gi",
+    volumes=[
+        lazycloud.Volume("data"),
+        lazycloud.CloudBucket(
+            "models",
+            "/models",
+            lazycloud.CloudBucketConfig(
+                bucket="user-models",
+                prefix="v1",
+                region="us-east-2",
+                access_key="AWS_KEY",
+                secret_key="AWS_SECRET",
+                read_only=True,
+            ),
+        ),
+    ],
+)
+def train() -> None:
+    pass
+"""
+
+
+def test_deploy_maps_storage_options(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_api: FakeApi
+) -> None:
+    reports = _project(tmp_path, monkeypatch, STORAGE_OPTIONS)
+    _serve_deployment(fake_api, stored=set())
+
+    reports.app.deploy()
+
+    (request,) = fake_api.calls("POST", "/v1/workspaces/team/apps/reports/deployments")
+    spec = request.json()["functions"][0]
+    assert spec["resources"]["disk_mib"] == 10 * 1024
+    assert spec["volumes"] == [
+        {"name": "data", "mount_path": "/volumes/data", "read_only": False},
+        {
+            "name": "models",
+            "mount_path": "/models",
+            "read_only": True,
+            "cloud_bucket": {
+                "bucket": "user-models",
+                "prefix": "v1/",
+                "region": "us-east-2",
+                "force_path_style": False,
+                "access_key_secret": "AWS_KEY",
+                "secret_key_secret": "AWS_SECRET",
+            },
+        },
+    ]
+
+
 @pytest.mark.parametrize(
     ("decorator", "option"),
     [
@@ -261,7 +319,7 @@ def test_deploy_maps_workload_runtime_options(
         (
             "@app.function(volumes=[lazycloud.CloudBucket("
             '"models", "/models", lazycloud.CloudBucketConfig())])',
-            "cloud bucket",
+            "cloud bucket without key secrets",
         ),
     ],
 )

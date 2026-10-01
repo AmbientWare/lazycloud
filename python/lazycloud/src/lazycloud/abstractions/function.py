@@ -293,7 +293,11 @@ class Function(Generic[P, R]):
         if self.gpu is not None or self.gpu_count:
             found.append("gpu")
         declared = {
-            "cloud bucket": any(volume.config is not None for volume in self.volumes),
+            # Hosts have no credentials of their own for a user's bucket.
+            "cloud bucket without key secrets": any(
+                volume.config is not None and volume.config.get("auth_mode") != "secret_references"
+                for volume in self.volumes
+            ),
             "authorized": self.authorized is not DEFAULT_FUNCTION_AUTHORIZED,
             "docker_enabled": self.docker_enabled,
             "preemptible": self.preemptible is not DEFAULT_WORKLOAD_PREEMPTIBLE,
@@ -349,14 +353,7 @@ class Function(Generic[P, R]):
         if self.env:
             spec["environment"] = dict(self.env)
         if self.volumes:
-            spec["volumes"] = [
-                {
-                    "name": volume.name,
-                    "mount_path": volume.mount_path,
-                    "read_only": volume.read_only,
-                }
-                for volume in self.volumes
-            ]
+            spec["volumes"] = [_volume_spec(volume) for volume in self.volumes]
         if self.cron:
             spec["cron"] = self.cron
         if self.secrets:
@@ -561,6 +558,30 @@ def _map_args(input_value: Any) -> tuple[Any, ...]:
     if _is_invocation_tuple(input_value) or _is_invocation_list(input_value):
         return tuple(input_value)
     return (input_value,)
+
+
+def _volume_spec(volume: VolumeMount) -> dict[str, Any]:
+    """The API mount of a volume, or of a cloud bucket whose keys are the
+    workspace secrets its config names."""
+    spec: dict[str, Any] = {
+        "name": volume.name,
+        "mount_path": volume.mount_path,
+        "read_only": volume.read_only,
+    }
+    config = volume.config
+    if config is not None:
+        bucket: dict[str, Any] = {
+            "bucket": config["bucket_name"],
+            "prefix": config.get("prefix") or "",
+            "force_path_style": bool(config.get("force_path_style")),
+            "access_key_secret": config["access_key"],
+            "secret_key_secret": config["secret_key"],
+        }
+        for field_name, key in (("region", "region"), ("endpoint", "endpoint_url")):
+            if config.get(key):
+                bucket[field_name] = config[key]
+        spec["cloud_bucket"] = bucket
+    return spec
 
 
 def _resources(cpu: Any, memory: Any, disk: str | None) -> dict[str, int]:
