@@ -54,6 +54,23 @@ type networkState struct {
 	applied  uint64
 	applying bool
 	started  bool
+	// wantVersion is the server's version of want; reported is the newest
+	// version applied or failed, with failure when it failed.
+	wantVersion int32
+	reported    int32
+	failure     string
+}
+
+func (n *networkState) reportedVersion() int32 {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.reported
+}
+
+func (n *networkState) reportedFailure() string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.failure
 }
 
 // restricts reports whether policy limits anything; an open policy at start
@@ -75,16 +92,22 @@ func (c *container) applyStartNetwork(ctx context.Context, policy *hostproto.Net
 	return c.drainNetwork(ctx, true)
 }
 
-// updateNetwork replaces the container's policy. An exited container's
-// update is ignored.
-func (c *container) updateNetwork(policy *hostproto.NetworkPolicy) {
+// updateNetwork replaces the container's policy with the server's version
+// of it, 0 when unknown. An exited container's update is ignored, and a
+// version already reported is only reported again.
+func (c *container) updateNetwork(policy *hostproto.NetworkPolicy, version int32) {
 	if c.hasExited() {
 		c.log.Info("ignoring a network policy update for an exited container")
 		return
 	}
 	n := &c.network
 	n.mu.Lock()
-	n.want = policy
+	if version > 0 && version <= n.reported {
+		n.mu.Unlock()
+		c.report()
+		return
+	}
+	n.want, n.wantVersion = policy, version
 	n.wanted++
 	if !n.started || n.applying {
 		n.mu.Unlock()
@@ -107,7 +130,7 @@ func (c *container) drainNetwork(ctx context.Context, starting bool) error {
 			n.mu.Unlock()
 			return nil
 		}
-		policy, generation := n.want, n.wanted
+		policy, generation, version := n.want, n.wanted, n.wantVersion
 		n.mu.Unlock()
 		err := c.applyNetwork(ctx, policy)
 		n.mu.Lock()
@@ -115,7 +138,17 @@ func (c *container) drainNetwork(ctx context.Context, starting bool) error {
 		if err != nil && starting {
 			n.applying = false
 		}
+		reported := version > n.reported
+		if reported {
+			n.reported, n.failure = version, ""
+			if err != nil {
+				n.failure = err.Error()
+			}
+		}
 		n.mu.Unlock()
+		if reported {
+			c.report()
+		}
 		switch {
 		case err == nil:
 		case starting:
@@ -169,7 +202,7 @@ func (c *container) resumeNetwork() {
 		c.log.Error("reading the pending network policy failed", "error", err)
 		return
 	}
-	c.updateNetwork(policy)
+	c.updateNetwork(policy, 0)
 }
 
 // netfilterRules is the netfilter subcommand's argument.

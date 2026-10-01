@@ -1,10 +1,13 @@
 package hostsession_test
 
 import (
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
@@ -111,5 +114,53 @@ func TestSandboxesDoNotWaitForTheirPorts(t *testing.T) {
 				t.Fatalf("%s start of %s waits for ports %v", c.kind, container, pod.GetPorts())
 			}
 		})
+	}
+}
+
+// A policy change on a placed container returns once its host applied it,
+// and says so when the host could not.
+func TestNetworkChangesWaitForTheHost(t *testing.T) {
+	h := start(t)
+	host, ctx := h.enroll()
+	ws, container := h.startingContainer(host)
+	if _, err := h.pool.Exec(t.Context(), "update containers set state = 'ready', ready_at = now()"); err != nil {
+		t.Fatal(err)
+	}
+	stream := open(t, ctx, h.client, &hostproto.ContainerReport{
+		ContainerId: container.String(), Phase: hostproto.ContainerPhase_CONTAINER_PHASE_READY, ObservedAt: timestamppb.Now(),
+	})
+	for _, c := range []struct {
+		failure string
+		applied bool
+	}{{"", true}, {"nft: the helper exited with code 1", false}} {
+		done := make(chan error, 1)
+		go func() {
+			_, err := h.execution.SetNetwork(t.Context(), h.listener, ws, container, execution.NetworkPolicy{Block: true, Allow: []string{}})
+			done <- err
+		}()
+		var update *hostproto.UpdateNetwork
+		for update == nil {
+			update = receive(t, stream).GetNetwork()
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("the change returned before the host applied it: %v", err)
+		case <-time.After(300 * time.Millisecond):
+		}
+		if err := stream.Send(&hostproto.HostMessage{Body: &hostproto.HostMessage_Container{Container: &hostproto.ContainerReport{
+			ContainerId: container.String(), Phase: hostproto.ContainerPhase_CONTAINER_PHASE_READY, ObservedAt: timestamppb.Now(),
+			NetworkVersion: update.GetVersion(), NetworkError: c.failure,
+		}}}); err != nil {
+			t.Fatal(err)
+		}
+		var unavailable *execution.UnavailableError
+		select {
+		case err := <-done:
+			if c.applied != (err == nil) || (!c.applied && !errors.As(err, &unavailable)) {
+				t.Fatalf("version %d with failure %q: %v", update.GetVersion(), c.failure, err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("the change never returned")
+		}
 	}
 }

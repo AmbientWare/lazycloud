@@ -31,6 +31,10 @@ alter table containers
     add column allow_list text[] not null default '{}',
     -- Counts policy changes after the start, which hosts apply in order.
     add column network_version integer not null default 0,
+    -- The newest policy version the host reported applying, and why it
+    -- could not when it failed.
+    add column network_applied_version integer not null default 0,
+    add column network_error text,
     -- Ports exposed after the start; a release's own ports are always
     -- exposed.
     add column exposed_ports integer[] not null default '{}',

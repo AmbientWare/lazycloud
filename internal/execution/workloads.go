@@ -15,6 +15,7 @@ import (
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/billing"
+	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
@@ -45,6 +46,12 @@ func (e *InvalidError) Error() string { return e.Reason }
 
 // ConflictError is a request the container or workload's state refuses.
 type ConflictError struct{ Reason string }
+
+// UnavailableError says an operation could not complete now, though it may
+// later.
+type UnavailableError struct{ Reason string }
+
+func (e *UnavailableError) Error() string { return e.Reason }
 
 func (e *ConflictError) Error() string { return e.Reason }
 
@@ -431,7 +438,7 @@ func ParseNetworkPolicy(block bool, allow []string) (NetworkPolicy, error) {
 
 // SetNetwork replaces a live container's outbound policy and wakes its
 // host, which applies it.
-func (e *Execution) SetNetwork(ctx context.Context, workspace identity.WorkspaceID, container ContainerID, policy NetworkPolicy) (NetworkPolicy, error) {
+func (e *Execution) SetNetwork(ctx context.Context, listener *database.Listener, workspace identity.WorkspaceID, container ContainerID, policy NetworkPolicy) (NetworkPolicy, error) {
 	var out NetworkPolicy
 	route, err := e.Route(ctx, container)
 	if err != nil {
@@ -440,6 +447,8 @@ func (e *Execution) SetNetwork(ctx context.Context, workspace identity.Workspace
 	if (policy.Block || len(policy.Allow) > 0) && route.Spec.DockerEnabled != nil && *route.Spec.DockerEnabled {
 		return NetworkPolicy{}, &InvalidError{Reason: "a container with docker_enabled cannot limit its network: nested containers would bypass the policy"}
 	}
+	var placed bool
+	var version int32
 	err = pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
 		row, err := e.queries.WithTx(tx).SetContainerNetwork(ctx, SetContainerNetworkParams{
 			BlockNetwork: policy.Block, AllowList: policy.Allow, ID: uuid.UUID(container), WorkspaceID: uuid.UUID(workspace),
@@ -451,7 +460,8 @@ func (e *Execution) SetNetwork(ctx context.Context, workspace identity.Workspace
 			return fmt.Errorf("set network: %w", err)
 		}
 		out = NetworkPolicy{Block: row.BlockNetwork, Allow: row.AllowList}
-		if row.HostID == nil {
+		placed, version = row.HostID != nil, row.NetworkVersion
+		if !placed {
 			return nil
 		}
 		return database.Notify(ctx, tx, database.ChannelHost, row.HostID.String())
@@ -459,7 +469,68 @@ func (e *Execution) SetNetwork(ctx context.Context, workspace identity.Workspace
 	if err != nil {
 		return NetworkPolicy{}, fmt.Errorf("set network policy: %w", err)
 	}
+	// A pending container starts with the policy in place. A placed one may
+	// run its command, so the change counts only once its host applied it.
+	if placed {
+		if err := e.waitNetwork(ctx, listener, container, version); err != nil {
+			return NetworkPolicy{}, err
+		}
+	}
 	return out, nil
+}
+
+// NetworkApplyTimeout bounds the wait for a host to apply a policy change,
+// inside the clients' 30-second request timeout.
+const NetworkApplyTimeout = 25 * time.Second
+
+// waitNetwork waits until the container's host applied version or newer.
+func (e *Execution) waitNetwork(ctx context.Context, listener *database.Listener, container ContainerID, version int32) error {
+	wake, cancel := listener.Subscribe(database.ChannelContainerOp, container.String())
+	defer cancel()
+	ctx, stop := context.WithTimeout(ctx, NetworkApplyTimeout)
+	defer stop()
+	poll := time.NewTicker(2 * time.Second)
+	defer poll.Stop()
+	for {
+		row, err := e.queries.ContainerNetworkApplied(ctx, uuid.UUID(container))
+		switch {
+		case err != nil:
+			return fmt.Errorf("read applied network policy: %w", err)
+		case row.NetworkAppliedVersion == version && row.NetworkError != nil:
+			return &UnavailableError{Reason: "the host could not apply the network policy, and the container keeps its previous one: " + *row.NetworkError}
+		case row.NetworkAppliedVersion >= version:
+			return nil
+		case ContainerState(row.State) == ContainerStopped:
+			return &ConflictError{Reason: "the container stopped"}
+		}
+		select {
+		case <-ctx.Done():
+			return &UnavailableError{Reason: fmt.Sprintf("the host did not confirm the network policy within %s; it still applies it", NetworkApplyTimeout)}
+		case <-wake:
+		case <-poll.C:
+		}
+	}
+}
+
+// NetworkApplied records the newest policy version a host applied to a
+// container it holds, or failed to apply, and wakes its waiters.
+func (e *Execution) NetworkApplied(ctx context.Context, host compute.HostID, container ContainerID, version int32, failure string) error {
+	var reason *string
+	if failure != "" {
+		reason = &failure
+	}
+	return pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error { //nolint:wrapcheck // Wrapped inside.
+		_, err := e.queries.WithTx(tx).RecordNetworkApplied(ctx, RecordNetworkAppliedParams{
+			Version: version, Error: reason, ID: uuid.UUID(container), HostID: hostUUID(host),
+		})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("record applied network policy: %w", err)
+		}
+		return database.Notify(ctx, tx, database.ChannelContainerOp, container.String())
+	})
 }
 
 // Network reads a container's outbound policy.

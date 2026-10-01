@@ -428,7 +428,7 @@ func (s *Server) SetContainerNetwork(ctx context.Context, req SetContainerNetwor
 	if err != nil {
 		return nil, err
 	}
-	p, err := s.owners.Execution.SetNetwork(ctx, ws.ID, execution.ContainerID(req.Container), policy)
+	p, err := s.owners.Execution.SetNetwork(ctx, s.owners.Listener, ws.ID, execution.ContainerID(req.Container), policy)
 	if err != nil {
 		return nil, err
 	}
@@ -567,6 +567,7 @@ func workloadError(w http.ResponseWriter, err error) bool {
 		invalid     *execution.InvalidError
 		conflict    *execution.ConflictError
 		unsupported *execution.UnsupportedError
+		unavailable *execution.UnavailableError
 	)
 	switch {
 	case errors.Is(err, errFromContainer):
@@ -577,6 +578,8 @@ func workloadError(w http.ResponseWriter, err error) bool {
 		writeJSONError(w, http.StatusConflict, apitypes.Conflict, conflict.Error())
 	case errors.As(err, &unsupported):
 		writeJSONError(w, http.StatusNotImplemented, apitypes.Unsupported, unsupported.Error())
+	case errors.As(err, &unavailable):
+		writeJSONError(w, http.StatusServiceUnavailable, apitypes.Unavailable, unavailable.Error())
 	case errors.Is(err, errStillStarting):
 		writeJSONError(w, http.StatusServiceUnavailable, apitypes.Unavailable, err.Error())
 	case errors.Is(err, edge.ErrContainerUnreachable), errors.Is(err, errContainerNotRunning):

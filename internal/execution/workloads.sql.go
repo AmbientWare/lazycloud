@@ -33,6 +33,23 @@ func (q *Queries) ContainerNetwork(ctx context.Context, arg ContainerNetworkPara
 	return i, err
 }
 
+const containerNetworkApplied = `-- name: ContainerNetworkApplied :one
+select state, network_applied_version, network_error from containers where id = $1
+`
+
+type ContainerNetworkAppliedRow struct {
+	State                 string
+	NetworkAppliedVersion int32
+	NetworkError          *string
+}
+
+func (q *Queries) ContainerNetworkApplied(ctx context.Context, id uuid.UUID) (ContainerNetworkAppliedRow, error) {
+	row := q.db.QueryRow(ctx, containerNetworkApplied, id)
+	var i ContainerNetworkAppliedRow
+	err := row.Scan(&i.State, &i.NetworkAppliedVersion, &i.NetworkError)
+	return i, err
+}
+
 const containerReleaseOf = `-- name: ContainerReleaseOf :one
 select release_id::uuid as release_id from containers where id = $1 and release_id is not null
 `
@@ -952,6 +969,32 @@ func (q *Queries) ReadyPodContainers(ctx context.Context, workloadID uuid.UUID) 
 	return items, nil
 }
 
+const recordNetworkApplied = `-- name: RecordNetworkApplied :one
+update containers set network_applied_version = $1, network_error = $2
+where id = $3 and host_id = $4 and network_applied_version < $1
+returning id
+`
+
+type RecordNetworkAppliedParams struct {
+	Version int32
+	Error   *string
+	ID      uuid.UUID
+	HostID  *uuid.UUID
+}
+
+// Keeps the newest version a host reports for a container it holds.
+func (q *Queries) RecordNetworkApplied(ctx context.Context, arg RecordNetworkAppliedParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, recordNetworkApplied,
+		arg.Version,
+		arg.Error,
+		arg.ID,
+		arg.HostID,
+	)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
 const sandboxCreatedDays = `-- name: SandboxCreatedDays :many
 select (date_trunc('day', c.created_at at time zone 'UTC') at time zone 'UTC')::timestamptz as day, count(*)::int as created
 from containers c
@@ -1047,7 +1090,7 @@ const setContainerNetwork = `-- name: SetContainerNetwork :one
 update containers
 set block_network = $1, allow_list = $2::text[], network_version = network_version + 1
 where id = $3 and workspace_id = $4 and state <> 'stopped'
-returning host_id, block_network, allow_list
+returning host_id, block_network, allow_list, network_version
 `
 
 type SetContainerNetworkParams struct {
@@ -1058,9 +1101,10 @@ type SetContainerNetworkParams struct {
 }
 
 type SetContainerNetworkRow struct {
-	HostID       *uuid.UUID
-	BlockNetwork bool
-	AllowList    []string
+	HostID         *uuid.UUID
+	BlockNetwork   bool
+	AllowList      []string
+	NetworkVersion int32
 }
 
 func (q *Queries) SetContainerNetwork(ctx context.Context, arg SetContainerNetworkParams) (SetContainerNetworkRow, error) {
@@ -1071,7 +1115,12 @@ func (q *Queries) SetContainerNetwork(ctx context.Context, arg SetContainerNetwo
 		arg.WorkspaceID,
 	)
 	var i SetContainerNetworkRow
-	err := row.Scan(&i.HostID, &i.BlockNetwork, &i.AllowList)
+	err := row.Scan(
+		&i.HostID,
+		&i.BlockNetwork,
+		&i.AllowList,
+		&i.NetworkVersion,
+	)
 	return i, err
 }
 

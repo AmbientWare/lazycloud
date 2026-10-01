@@ -213,6 +213,8 @@ func (c *container) snapshot() *hostproto.ContainerReport {
 		RunningAttempts: running,
 		Startup:         slices.Clone(c.startup),
 		RestoreFailed:   c.restoreFailed,
+		NetworkVersion:  c.network.reportedVersion(),
+		NetworkError:    c.network.reportedFailure(),
 	}
 }
 

@@ -143,6 +143,7 @@ func (sess *session) syncWorkloads(ctx context.Context, commands execution.HostC
 		}
 		msg := &hostproto.UpdateNetwork{
 			ContainerId: n.Container.String(), Policy: &hostproto.NetworkPolicy{Block: n.Policy.Block, Allow: n.Policy.Allow},
+			Version: int32(n.Version), //nolint:gosec // Versions count policy changes.
 		}
 		if err := sess.send(&hostproto.ServerMessage{CommandId: id, Body: &hostproto.ServerMessage_Network{Network: msg}}); err != nil {
 			return err

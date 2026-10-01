@@ -278,7 +278,16 @@ where r.id = @id and w.kind in ('pod', 'sandbox');
 update containers
 set block_network = @block_network, allow_list = @allow_list::text[], network_version = network_version + 1
 where id = @id and workspace_id = @workspace_id and state <> 'stopped'
-returning host_id, block_network, allow_list;
+returning host_id, block_network, allow_list, network_version;
+
+-- name: ContainerNetworkApplied :one
+select state, network_applied_version, network_error from containers where id = @id;
+
+-- name: RecordNetworkApplied :one
+-- Keeps the newest version a host reports for a container it holds.
+update containers set network_applied_version = @version, network_error = sqlc.narg('error')
+where id = @id and host_id = @host_id and network_applied_version < @version
+returning id;
 
 -- name: ContainerNetwork :one
 select block_network, allow_list from containers where id = @id and workspace_id = @workspace_id;

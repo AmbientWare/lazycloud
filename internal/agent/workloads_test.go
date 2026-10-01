@@ -478,8 +478,8 @@ func TestPodCommandExitReportsItsCode(t *testing.T) {
 }
 
 // A blocked pod reaches nothing from its first instruction on; an update
-// allowing one address opens exactly that, and an update for an exited
-// container is ignored.
+// allowing one address opens exactly that once the host reports it, and an
+// update for an exited container is ignored.
 func TestNetworkPolicyBlocksEgressUntilAllowed(t *testing.T) {
 	e := newEnv(t)
 	e.startAgent()
@@ -504,8 +504,13 @@ while True:
 		t.Fatal("the pod reached the network before its policy applied")
 	}
 	session.send(t, &hostproto.ServerMessage{CommandId: uuid.NewString(), Body: &hostproto.ServerMessage_Network{Network: &hostproto.UpdateNetwork{
-		ContainerId: id, Policy: &hostproto.NetworkPolicy{Allow: []string{target + "/32"}},
+		ContainerId: id, Policy: &hostproto.NetworkPolicy{Allow: []string{target + "/32"}}, Version: 1,
 	}}})
+	// The host reports the version once the filter is in place.
+	session.until(t, 30*time.Second, func(m *hostproto.HostMessage) bool {
+		r := m.GetContainer()
+		return r.GetContainerId() == id && r.GetNetworkVersion() == 1 && r.GetNetworkError() == ""
+	})
 	waitLog(t, e.server, id, "reach open")
 	session.send(t, stopCommand(id, 0))
 	session.phase(t, id, hostproto.ContainerPhase_CONTAINER_PHASE_EXITED)

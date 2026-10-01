@@ -215,7 +215,7 @@ func (a *Agent) handle(command *hostproto.ServerMessage) {
 		a.update(body.Update)
 	case *hostproto.ServerMessage_Network:
 		if c := a.lookup(body.Network.GetContainerId()); c != nil {
-			c.updateNetwork(body.Network.GetPolicy())
+			c.updateNetwork(body.Network.GetPolicy(), body.Network.GetVersion())
 		}
 	case *hostproto.ServerMessage_Snapshot:
 		a.snapshot(body.Snapshot)

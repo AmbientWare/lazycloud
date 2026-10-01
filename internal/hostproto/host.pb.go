@@ -1123,8 +1123,12 @@ type ContainerReport struct {
 	Startup []*StartupStage `protobuf:"bytes,80,rep,name=startup,proto3" json:"startup,omitempty"`
 	// The snapshot the start could not restore; the container started cold.
 	RestoreFailed string `protobuf:"bytes,90,opt,name=restore_failed,json=restoreFailed,proto3" json:"restore_failed,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// The newest UpdateNetwork version the host applied, or failed to apply
+	// with network_error; the container then keeps its previous policy.
+	NetworkVersion int32  `protobuf:"varint,91,opt,name=network_version,json=networkVersion,proto3" json:"network_version,omitempty"`
+	NetworkError   string `protobuf:"bytes,92,opt,name=network_error,json=networkError,proto3" json:"network_error,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *ContainerReport) Reset() {
@@ -1202,6 +1206,20 @@ func (x *ContainerReport) GetStartup() []*StartupStage {
 func (x *ContainerReport) GetRestoreFailed() string {
 	if x != nil {
 		return x.RestoreFailed
+	}
+	return ""
+}
+
+func (x *ContainerReport) GetNetworkVersion() int32 {
+	if x != nil {
+		return x.NetworkVersion
+	}
+	return 0
+}
+
+func (x *ContainerReport) GetNetworkError() string {
+	if x != nil {
+		return x.NetworkError
 	}
 	return ""
 }
@@ -1882,9 +1900,12 @@ func (*ServerMessage_PublishFilesystem) isServerMessage_Body() {}
 
 // UpdateNetwork replaces a running container's outbound policy.
 type UpdateNetwork struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ContainerId   string                 `protobuf:"bytes,1,opt,name=container_id,json=containerId,proto3" json:"container_id,omitempty"`
-	Policy        *NetworkPolicy         `protobuf:"bytes,2,opt,name=policy,proto3" json:"policy,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	ContainerId string                 `protobuf:"bytes,1,opt,name=container_id,json=containerId,proto3" json:"container_id,omitempty"`
+	Policy      *NetworkPolicy         `protobuf:"bytes,2,opt,name=policy,proto3" json:"policy,omitempty"`
+	// Orders the container's policy changes; the host reports the newest it
+	// applied in ContainerReport.network_version.
+	Version       int32 `protobuf:"varint,90,opt,name=version,proto3" json:"version,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1931,6 +1952,13 @@ func (x *UpdateNetwork) GetPolicy() *NetworkPolicy {
 		return x.Policy
 	}
 	return nil
+}
+
+func (x *UpdateNetwork) GetVersion() int32 {
+	if x != nil {
+		return x.Version
+	}
+	return 0
 }
 
 // SnapshotContainer checkpoints a running container's memory and writable
@@ -5927,7 +5955,7 @@ const file_host_v1_host_proto_rawDesc = "" +
 	"containers\x12#\n" +
 	"\ragent_version\x18\x04 \x01(\tR\fagentVersion\x12\x1c\n" +
 	"\tupdatable\x18F \x01(\bR\tupdatable\x12)\n" +
-	"\x10rejected_version\x18G \x01(\tR\x0frejectedVersion\"\xed\x02\n" +
+	"\x10rejected_version\x18G \x01(\tR\x0frejectedVersion\"\xbb\x03\n" +
 	"\x0fContainerReport\x12!\n" +
 	"\fcontainer_id\x18\x01 \x01(\tR\vcontainerId\x127\n" +
 	"\x05phase\x18\x02 \x01(\x0e2!.lazycloud.host.v1.ContainerPhaseR\x05phase\x124\n" +
@@ -5936,7 +5964,9 @@ const file_host_v1_host_proto_rawDesc = "" +
 	"observedAt\x12)\n" +
 	"\x10running_attempts\x18\x05 \x03(\tR\x0frunningAttempts\x129\n" +
 	"\astartup\x18P \x03(\v2\x1f.lazycloud.host.v1.StartupStageR\astartup\x12%\n" +
-	"\x0erestore_failed\x18Z \x01(\tR\rrestoreFailed\"\xd7\x01\n" +
+	"\x0erestore_failed\x18Z \x01(\tR\rrestoreFailed\x12'\n" +
+	"\x0fnetwork_version\x18[ \x01(\x05R\x0enetworkVersion\x12#\n" +
+	"\rnetwork_error\x18\\ \x01(\tR\fnetworkError\"\xd7\x01\n" +
 	"\fStartupStage\x127\n" +
 	"\x04kind\x18\x01 \x01(\x0e2#.lazycloud.host.v1.StartupStageKindR\x04kind\x129\n" +
 	"\n" +
@@ -5988,10 +6018,11 @@ const file_host_v1_host_proto_rawDesc = "" +
 	"\anetwork\x18Z \x01(\v2 .lazycloud.host.v1.UpdateNetworkH\x00R\anetwork\x12B\n" +
 	"\bsnapshot\x18[ \x01(\v2$.lazycloud.host.v1.SnapshotContainerH\x00R\bsnapshot\x12U\n" +
 	"\x12publish_filesystem\x18\\ \x01(\v2$.lazycloud.host.v1.PublishFilesystemH\x00R\x11publishFilesystemB\x06\n" +
-	"\x04body\"l\n" +
+	"\x04body\"\x86\x01\n" +
 	"\rUpdateNetwork\x12!\n" +
 	"\fcontainer_id\x18\x01 \x01(\tR\vcontainerId\x128\n" +
-	"\x06policy\x18\x02 \x01(\v2 .lazycloud.host.v1.NetworkPolicyR\x06policy\"\xe7\x01\n" +
+	"\x06policy\x18\x02 \x01(\v2 .lazycloud.host.v1.NetworkPolicyR\x06policy\x12\x18\n" +
+	"\aversion\x18Z \x01(\x05R\aversion\"\xe7\x01\n" +
 	"\x11SnapshotContainer\x12!\n" +
 	"\fcontainer_id\x18\x01 \x01(\tR\vcontainerId\x12\x1f\n" +
 	"\vsnapshot_id\x18\x02 \x01(\tR\n" +
