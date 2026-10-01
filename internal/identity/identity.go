@@ -387,6 +387,20 @@ func (i *Identity) CreateToken(ctx context.Context, email, workspace, name strin
 	return token, nil
 }
 
+// CreateSession opens a browser session for the user with email, as a GitHub
+// sign-in would, and returns its cookie value. It is the admin command's way
+// into the dashboard where no GitHub App is configured, such as a local stack.
+func (i *Identity) CreateSession(ctx context.Context, email string) (Session, error) {
+	user, err := i.queries.UserByEmail(ctx, &email)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Session{}, fmt.Errorf("user %s: %w", email, ErrNotFound)
+	}
+	if err != nil {
+		return Session{}, fmt.Errorf("read user: %w", err)
+	}
+	return openSession(ctx, i.queries, UserID(user.ID))
+}
+
 // Housekeeping removes expired sessions and device codes. It is bounded per
 // call; the scheduler runs it periodically.
 func (i *Identity) Housekeeping(ctx context.Context, logger *slog.Logger) error {
