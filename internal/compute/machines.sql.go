@@ -328,6 +328,42 @@ func (q *Queries) PinnedDeployments(ctx context.Context, arg PinnedDeploymentsPa
 	return items, nil
 }
 
+const pinnedMachine = `-- name: PinnedMachine :one
+select h.id, h.phase, h.state, h.capacity_state, h.last_seen_at
+from hosts h
+join host_workspaces hw on hw.host_id = h.id and hw.workspace_id = $1
+where h.kind = 'machine' and h.name = $2 and h.phase <> 'deleted'
+limit 1
+`
+
+type PinnedMachineParams struct {
+	WorkspaceID uuid.UUID
+	Name        string
+}
+
+type PinnedMachineRow struct {
+	ID            uuid.UUID
+	Phase         string
+	State         string
+	CapacityState string
+	LastSeenAt    *time.Time
+}
+
+// The machine of this name that serves the workspace, with whether it takes
+// work now.
+func (q *Queries) PinnedMachine(ctx context.Context, arg PinnedMachineParams) (PinnedMachineRow, error) {
+	row := q.db.QueryRow(ctx, pinnedMachine, arg.WorkspaceID, arg.Name)
+	var i PinnedMachineRow
+	err := row.Scan(
+		&i.ID,
+		&i.Phase,
+		&i.State,
+		&i.CapacityState,
+		&i.LastSeenAt,
+	)
+	return i, err
+}
+
 const replaceMachineWorkspaces = `-- name: ReplaceMachineWorkspaces :exec
 with gone as (
     delete from host_workspaces where host_id = $1 and workspace_id <> all($2::uuid[])
@@ -473,4 +509,15 @@ func (q *Queries) WorkspaceMachines(ctx context.Context, arg WorkspaceMachinesPa
 		return nil, err
 	}
 	return items, nil
+}
+
+const workspaceName = `-- name: WorkspaceName :one
+select name from workspaces where id = $1
+`
+
+func (q *Queries) WorkspaceName(ctx context.Context, id uuid.UUID) (string, error) {
+	row := q.db.QueryRow(ctx, workspaceName, id)
+	var name string
+	err := row.Scan(&name)
+	return name, err
 }

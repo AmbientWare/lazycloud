@@ -21,6 +21,8 @@ export LAZYCLOUD_SECRETS_KEY_FILE="$PWD/$state/secrets.key"
 export LAZYCLOUD_CALLBACK_ALLOW_PRIVATE=1
 export LAZYCLOUD_IMAGE_REGISTRY=127.0.0.1:25000
 export LAZYCLOUD_IMAGE_REGISTRY_INSECURE=true
+# Agent release archives `lazycloud machine join` installs from.
+export LAZYCLOUD_AGENT_DIST_DIR="$PWD/$state/agent-dist"
 
 stop() {
   for name in agent scheduler server; do
@@ -46,6 +48,11 @@ start() {
   [ -d "$state/runtime/3.12" ] || deploy/local/build-runtime.sh "$state/runtime"
 
   bin/server migrate
+  # This tree's agent is the release joined machines install and update to.
+  release="local-$(sha256sum bin/agent | cut -c1-12)"
+  [ -f "$LAZYCLOUD_AGENT_DIST_DIR/$release/lazycloud-agent-linux-amd64.tar.gz" ] ||
+    deploy/agent/build-bundle.sh --python 3.12 "$LAZYCLOUD_AGENT_DIST_DIR" "$release" >/dev/null
+  bin/server admin publish-agent-release -version "$release" -dist "$LAZYCLOUD_AGENT_DIST_DIR" >/dev/null
   if [ ! -f "$state/token" ]; then
     bin/server admin create-user --email dev@lazycloud.local --admin >/dev/null
     bin/server admin create-workspace --name dev --owner-email dev@lazycloud.local >/dev/null

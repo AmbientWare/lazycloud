@@ -56,6 +56,11 @@ aws` and `cloud authorize` put the same fleet in a customer account.
 - `Enroll` with a machine token sets the host token, capacity, GPUs and
   preflight, and moves to `joining`; a failed error-severity check moves to
   `failed/host_preflight_failed`. The first session moves to `ready`.
+- A deploy or working-tree release pinned to a machine that does not serve
+  the workspace is refused. A run (a working-tree release) pinned to a
+  machine that is missing or not ready fails at admission and never falls
+  back; a deployed call is admitted and waits for its machine
+  (`TestRunsPinnedToAnUnavailableMachineFailAtOnce`).
 - Remove retires the host (`state = retired`, `phase = deleted`, token
   cleared) and stops its containers through execution in the same
   transaction, so running attempts retry. The agent's next call is refused
@@ -216,17 +221,18 @@ release archive published with `server admin publish-agent-release`, on a
   sudo); the unit and rollback wrapper ran under `systemd --user`.
 - Plan gates (Business for connected clouds, Team for region pinning) belong
   to billing.
-- Runs and sandboxes pinned to a missing machine wait instead of failing at
-  once.
 - Image builds for workspaces in a connected account run on platform hosts,
   and their volumes' bucket placement belongs to storage.
 - Dashboard pages come with the web packet.
 
 ## Try it
 
-1. `deploy/agent/build-bundle.sh --python 3.12 <dist> v1`, run the server
-   with `LAZYCLOUD_AGENT_DIST_DIR=<dist>`, then `server admin
-   publish-agent-release -version v1 -dist <dist>`.
+1. `deploy/local/run.sh start` builds this tree's agent into an archive
+   and publishes it with `server admin publish-agent-release`, the release
+   joined machines install and update to. Elsewhere, run
+   `deploy/agent/build-bundle.sh <dist> <version>`, serve `<dist>` with
+   `LAZYCLOUD_AGENT_DIST_DIR` and publish the same way; the release pipeline
+   (operations packet) calls these two steps.
 2. `lazycloud machine join --name m1 --workspaces dev` on the host.
 3. Deploy `@app.function(machine="m1")` and call it.
 4. For EC2 capacity, set `LAZYCLOUD_FLEET_NETWORKS`, the node role and

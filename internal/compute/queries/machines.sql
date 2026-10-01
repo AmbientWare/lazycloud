@@ -108,3 +108,15 @@ select h.id, h.name, h.phase, h.phase_message, h.phase_at, h.failure, h.state, h
              where hw.host_id = h.id order by w.name)::text[] as workspaces
 from hosts h
 where h.id = @id;
+
+-- name: PinnedMachine :one
+-- The machine of this name that serves the workspace, with whether it takes
+-- work now.
+select h.id, h.phase, h.state, h.capacity_state, h.last_seen_at
+from hosts h
+join host_workspaces hw on hw.host_id = h.id and hw.workspace_id = @workspace_id
+where h.kind = 'machine' and h.name = @name and h.phase <> 'deleted'
+limit 1;
+
+-- name: WorkspaceName :one
+select name from workspaces where id = @id;
