@@ -85,9 +85,9 @@ func (c *Compute) launch(ctx context.Context, logger *slog.Logger, h ClaimLaunch
 	if !ok {
 		return false, c.failLaunch(ctx, h, fmt.Sprintf("no subnet in %s %s", h.Region, h.AvailabilityZone), false)
 	}
-	image := cpuImage
-	if h.GpuCount > 0 {
-		image = gpuImage
+	image, ok := c.nodeImage(h.ConnectionID == nil, h.Region, h.GpuCount > 0)
+	if !ok {
+		return false, c.failLaunch(ctx, h, "no node image for "+h.Region, false)
 	}
 	tags := []ec2types.Tag{
 		{Key: aws.String(tagFleet), Value: aws.String(c.fleet.Name)},
@@ -168,6 +168,25 @@ func (c *Compute) launch(ctx context.Context, logger *slog.Logger, h ClaimLaunch
 	logger.InfoContext(ctx, "instance launched", "host_id", h.ID, "instance_id", aws.ToString(instance.InstanceId),
 		"instance_type", h.InstanceType, "region", h.Region, "zone", zone, "market", deref(h.Market))
 	return true, nil
+}
+
+// nodeImage is the AMI a host launches from. Platform hosts use the baked
+// images when the fleet names them; a region the bake did not reach has
+// none. Connection hosts launch from the stock images.
+func (c *Compute) nodeImage(platform bool, region string, gpu bool) (string, bool) {
+	images := c.fleet.Images
+	if !platform || images == nil {
+		if gpu {
+			return gpuImage, true
+		}
+		return cpuImage, true
+	}
+	byRegion := images.CPU
+	if gpu {
+		byRegion = images.GPU
+	}
+	image, ok := byRegion[region]
+	return image, ok && image != ""
 }
 
 // failLaunch fails a host that could not launch; cool also skips its offer

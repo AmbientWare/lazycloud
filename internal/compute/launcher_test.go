@@ -150,6 +150,38 @@ func TestCapacityRefusalCoolsTheOfferAndTheNextPassBuysAnother(t *testing.T) {
 	}
 }
 
+func TestPlatformHostsLaunchFromTheBakedNodeImageOfTheirRegion(t *testing.T) {
+	o, emulator, _ := launchFleet(t, compute.Fleet{Images: &compute.NodeImages{CPU: map[string]string{"us-east-2": "ami-0baked"}}})
+	emulator.on("RunInstances", launched(t))
+	alice := newUser(t, o.pool, "alice@example.com")
+	host := requestedHost(t, o, newWorkspace(t, o.pool, "dev", alice), `{}`)
+	if n := launch(t, o); n != 1 {
+		t.Fatalf("launched %d, want 1", n)
+	}
+	calls := emulator.calls("RunInstances")
+	if len(calls) != 1 || calls[0].Form.Get("ClientToken") != host.String() || calls[0].Form.Get("ImageId") != "ami-0baked" {
+		t.Fatalf("RunInstances %v, want the baked us-east-2 image", calls)
+	}
+}
+
+// A region the bake did not reach launches nothing rather than a stock
+// image without gVisor.
+func TestPlatformHostsWithoutANodeImageForTheirRegionFail(t *testing.T) {
+	o, emulator, _ := launchFleet(t, compute.Fleet{Images: &compute.NodeImages{CPU: map[string]string{"us-west-2": "ami-0west"}}})
+	emulator.on("RunInstances", launched(t))
+	alice := newUser(t, o.pool, "alice@example.com")
+	host := requestedHost(t, o, newWorkspace(t, o.pool, "dev", alice), `{}`)
+	if n := launch(t, o); n != 0 {
+		t.Fatalf("launched %d without a node image", n)
+	}
+	if phase, _ := hostPhase(t, o.pool, host); phase != string(compute.PhaseFailed) {
+		t.Fatalf("host without a node image is %s, want failed", phase)
+	}
+	if n := len(emulator.calls("RunInstances")); n != 0 {
+		t.Fatalf("%d RunInstances calls for a host without an image", n)
+	}
+}
+
 func TestLaunchErrorsRetryWithTheSameClientTokenUntilBounded(t *testing.T) {
 	o, emulator, _ := launchFleet(t, compute.Fleet{})
 	var failing atomic.Bool
