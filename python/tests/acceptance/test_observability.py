@@ -213,9 +213,7 @@ def test_observability_end_to_end(
     assert batch.status_code == 200 and len(batch.json()["lifecycles"]) >= 2
 
     # Workload performance and workspace metrics.
-    deployments = get(api, f"{ws}/deployments", app=app)["deployments"]
-    burn = next(d for d in deployments if d["name"] == "burn")
-    perf = get(api, f"{ws}/deployments/{burn['id']}/performance")
+    perf = get(api, f"{ws}/apps/{app}/workloads/function/burn/performance")
     bucket = perf["buckets"][-1]
     assert bucket["count"] == 1 and bucket["cold_starts"] == 1 and bucket["p50_ms"] >= 8000, perf
     task_metrics = get(api, f"{ws}/metrics/tasks", app=app)

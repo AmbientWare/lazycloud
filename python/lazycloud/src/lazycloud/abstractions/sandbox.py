@@ -30,8 +30,8 @@ from shared.api import (
     ReplaceInFilesRequest,
     SandboxStatus,
     StopReason,
+    WorkloadSpec,
 )
-from shared.api import FunctionSpec as ApiFunctionSpec
 from shared.api import Sandbox as SandboxRow
 from shared.api import SandboxStats as SandboxStatsResponse
 from shared.app_identity import SANDBOX_COMPOSE_OVERRIDE_PATH
@@ -1613,18 +1613,18 @@ class Sandbox(ControlClientConfigMixin):
         if unsupported:
             raise UnsupportedFeatureError(f"sandbox {self.name}", unsupported)
 
-    def function_spec(
+    def workload_spec(
         self, *, handler: object = None, source_sha256: str, image: ImageBuildResult
-    ) -> ApiFunctionSpec:
+    ) -> WorkloadSpec:
         """The API definition of this sandbox for an uploaded source and a ready image."""
-        from lazycloud.abstractions.pod import container_function_spec
+        from lazycloud.abstractions.pod import container_workload_spec
 
         del handler
         self.require_supported()
         pod = PodSpec(kind=PodKind.sandbox, command=[CommandItem(item) for item in self.command])
         if self.ports:
             pod.ports = _sandbox_port_mapping(self.ports)
-        return container_function_spec(
+        return container_workload_spec(
             self,
             label="sandbox",
             pod=pod,
@@ -1641,14 +1641,14 @@ class Sandbox(ControlClientConfigMixin):
 
         Without `sync_local_dir` the sandbox's /workspace starts empty.
         """
-        from lazycloud.session.deployment import prepare_function_release
+        from lazycloud.session.deployment import prepare_release
 
         if workspace is not None and workspace != self.workspace:
             self.workspace = workspace
             self.client = None
         client = self.control_client
         try:
-            release = prepare_function_release(
+            release = prepare_release(
                 self, client=client.api, workspace=client.workspace, terminal=self.terminal
             )
         except SdkError as exc:

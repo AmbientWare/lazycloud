@@ -9,12 +9,11 @@ from urllib.parse import urlencode
 
 import httpx
 from pydantic import JsonValue, ValidationError
-from shared.api import FunctionSpec as ApiFunctionSpec
+from shared.api import WorkloadKind, WorkloadSpec
 from shared.autoscaling import Autoscaler
 from shared.image_building.python import python_minor_version
 
 from lazycloud.abstractions.metadata import lifecycle_hook_references
-from lazycloud.clients.endpoints import get_http_workload
 from lazycloud.control import api_client, require_workspace, resolve_control_client_config
 from lazycloud.env import is_local
 from lazycloud.exceptions import SdkError
@@ -56,7 +55,7 @@ class EndpointResponse:
         return parse_json_value(self.text)
 
 
-def http_function_spec(
+def http_workload_spec(
     owner: Any,
     *,
     kind: str,
@@ -69,7 +68,7 @@ def http_function_spec(
     retry_policy: Any = None,
     route: str | None = None,
     methods: list[str] | None = None,
-) -> ApiFunctionSpec:
+) -> WorkloadSpec:
     """The API definition of an HTTP workload for an uploaded source and a ready image."""
     from lazycloud.abstractions.function import _resources, _volume_spec
 
@@ -84,6 +83,7 @@ def http_function_spec(
     if owner.domain:
         http["domain"] = owner.domain.strip().rstrip(".").lower()
     spec: dict[str, Any] = {
+        "kind": "endpoint" if kind == "endpoint" else "asgi",
         "name": owner.resource_name,
         "handler": handler,
         "source": {"sha256": source_sha256},
@@ -135,7 +135,7 @@ def http_function_spec(
         # Workers run on_start once each, before they take requests.
         spec["lifecycle_hooks"] = {"on_start": list(on_start)}
     try:
-        return ApiFunctionSpec.model_validate(spec)
+        return WorkloadSpec.model_validate(spec)
     except ValidationError as exc:
         from lazycloud.abstractions.function import FunctionOperationError
 
@@ -202,15 +202,17 @@ def resolve_url(
             return record.url, token, timeout
         if target == "served":
             raise InvocationTargetError(f"no active served {kind} target found for {name}")
-    workload = get_http_workload(
-        client,
+    workload = client.get_workload(
         workspace,
         owner._app_slug,
+        WorkloadKind.endpoint if kind == "endpoint" else WorkloadKind.asgi,
         options.deployment_name or name,
-        asgi=kind != "endpoint",
         version=options.deployment_version,
     )
-    url = workload.version_url if options.deployment_version is not None else workload.url
+    http = workload.http
+    if http is None:
+        raise InvocationTargetError(f"{kind} {name} has no HTTP address")
+    url = http.version_url if options.deployment_version is not None else http.url
     token = config.token if workload.release.spec.authorized is not False else None
     return url, token, timeout
 
@@ -268,7 +270,7 @@ __all__ = [
     "InvocationOptions",
     "InvocationTargetError",
     "InvocationTargetName",
-    "http_function_spec",
+    "http_workload_spec",
     "resolve_url",
     "send_request",
     "unsupported_http_options",

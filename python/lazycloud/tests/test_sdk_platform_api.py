@@ -52,7 +52,7 @@ RELEASE_ID = "0192f0a0-0000-7000-8000-000000000002"
 IMAGE_ID = "img_0123456789abcdef01234567"
 BUILD_ID = "0192f0a0-0000-7000-8000-0000000000b1"
 NOW = "2026-09-30T12:00:00Z"
-FUNCTION = "/v1/workspaces/team/apps/reports/functions/summarize_sales"
+FUNCTION = "/v1/workspaces/team/apps/reports/workloads/function/summarize_sales"
 TASKS = f"{FUNCTION}/tasks"
 
 REPORTS = """\
@@ -156,16 +156,16 @@ def _serve_deployment(api: FakeApi, *, stored: set[str]) -> None:
 
     @api.route("POST", "/v1/workspaces/team/apps/reports/deployments")
     def deploy(request: ApiRequest) -> Reply:
-        functions: list[dict[str, Any]] = request.json()["functions"]
+        workloads: list[dict[str, Any]] = request.json()["workloads"]
         releases: list[dict[str, object]] = [
             {
                 "id": RELEASE_ID,
-                "function": spec["name"],
+                "name": spec["name"],
                 "version": 1,
                 "created_at": NOW,
                 "spec": spec,
             }
-            for spec in functions
+            for spec in workloads
         ]
         return json_reply(
             {
@@ -176,12 +176,10 @@ def _serve_deployment(api: FakeApi, *, stored: set[str]) -> None:
             }
         )
 
-    @api.route("POST", "/v1/workspaces/team/apps/reports/functions/[^/]+/releases")
+    @api.route("POST", "/v1/workspaces/team/apps/reports/releases")
     def prepare(request: ApiRequest) -> Reply:
         spec: dict[str, Any] = request.json()
-        return json_reply(
-            {"id": RELEASE_ID, "function": spec["name"], "created_at": NOW, "spec": spec}
-        )
+        return json_reply({"id": RELEASE_ID, "name": spec["name"], "created_at": NOW, "spec": spec})
 
 
 def _app(*, workloads: int = 1, state: str = "active") -> dict[str, object]:
@@ -204,7 +202,7 @@ def test_deploy_uploads_the_source_once_and_maps_function_options(
 
     deployment = reports.app.deploy()
 
-    assert [release.function for release in deployment.releases] == ["summarize_sales"]
+    assert [release.name for release in deployment.releases] == ["summarize_sales"]
     (upload,) = fake_api.calls("PUT", "/upload/.*")
     sha = upload.path.rsplit("/", 1)[1]
     assert hashlib.sha256(upload.body).hexdigest() == sha
@@ -215,11 +213,12 @@ def test_deploy_uploads_the_source_once_and_maps_function_options(
     (request,) = fake_api.calls("POST", "/v1/workspaces/team/apps/reports/deployments")
     assert request.headers["authorization"] == f"Bearer {TOKEN}"
     body = request.json()
-    contract = body["functions"][0].pop("client_contract")
+    contract = body["workloads"][0].pop("client_contract")
     assert contract["operation"]["parameters"][0]["name"] == "values"
     assert body == {
-        "functions": [
+        "workloads": [
             {
+                "kind": "function",
                 "name": "summarize_sales",
                 "handler": "reports:summarize_sales",
                 "source": {"sha256": sha},
@@ -277,7 +276,7 @@ def test_deploy_maps_workload_runtime_options(
     reports.app.deploy()
 
     (request,) = fake_api.calls("POST", "/v1/workspaces/team/apps/reports/deployments")
-    spec = request.json()["functions"][0]
+    spec = request.json()["workloads"][0]
     assert spec["cron"] == "Every 5m"
     assert spec["secrets"] == ["API_TOKEN", "DB_URL"]
     assert spec["callback_url"] == "https://hooks.example.com/tasks"
@@ -327,7 +326,7 @@ def test_deploy_maps_storage_options(
     reports.app.deploy()
 
     (request,) = fake_api.calls("POST", "/v1/workspaces/team/apps/reports/deployments")
-    spec = request.json()["functions"][0]
+    spec = request.json()["workloads"][0]
     assert spec["resources"]["disk_mib"] == 10 * 1024
     assert spec["volumes"] == [
         {"name": "data", "mount_path": "/volumes/data", "read_only": False},
@@ -384,7 +383,7 @@ def test_deploy_maps_gpu_and_placement_options(
     reports.app.deploy()
 
     (request,) = fake_api.calls("POST", "/v1/workspaces/team/apps/reports/deployments")
-    specs = {spec["name"]: spec for spec in request.json()["functions"]}
+    specs = {spec["name"]: spec for spec in request.json()["workloads"]}
     assert specs["train"]["resources"] == {
         "cpu_millis": 125,
         "memory_mib": 128,
@@ -528,7 +527,7 @@ def test_deploy_builds_each_distinct_image_once_and_sends_its_id(
     assert resolve.json()["python_packages"] == ["numpy"]
     assert len(fake_api.calls("POST", "/v1/workspaces/team/images")) == 1
     (deploy,) = fake_api.calls("POST", "/v1/workspaces/team/apps/reports/deployments")
-    assert [spec["image"] for spec in deploy.json()["functions"]] == [
+    assert [spec["image"] for spec in deploy.json()["workloads"]] == [
         {"python_version": "3.12", "image_id": IMAGE_ID}
     ] * 2
     assert "python 3.12 · built" in capsys.readouterr().err
@@ -565,8 +564,9 @@ def test_deploy_maps_endpoint_and_asgi_options_to_http_specs(
     reports.app.deploy()
 
     (request,) = fake_api.calls("POST", "/v1/workspaces/team/apps/reports/deployments")
-    specs = {spec["name"]: spec for spec in request.json()["functions"]}
+    specs = {spec["name"]: spec for spec in request.json()["workloads"]}
     api, service = specs["api"], specs["service"]
+    assert (api["kind"], service["kind"]) == ("endpoint", "asgi")
     assert api["handler"] == "reports:api"
     assert api["http"] == {
         "kind": "endpoint",
@@ -594,6 +594,7 @@ def test_endpoint_request_sends_the_token_only_to_an_authorized_deployment(
     )
     reports = _project(tmp_path, monkeypatch, source)
     spec: dict[str, object] = {
+        "kind": "endpoint",
         "name": "api",
         "handler": "reports:api",
         "source": {"sha256": "0" * 64},
@@ -603,27 +604,33 @@ def test_endpoint_request_sends_the_token_only_to_an_authorized_deployment(
         "authorized": authorized,
     }
     url = f"{fake_api.url}/count"
-    fake_api.route("GET", "/v1/workspaces/team/apps/reports/endpoints/api")(
+    workload = "/v1/workspaces/team/apps/reports/workloads/endpoint/api"
+    fake_api.route("GET", workload)(
         lambda request: json_reply(
             {
-                "name": "api",
-                "app": "reports",
-                "kind": "endpoint",
-                "state": "active",
+                "workload": {
+                    "id": APP_ID,
+                    "app": "reports",
+                    "name": "api",
+                    "kind": "endpoint",
+                    "state": "active",
+                    "running_containers": 0,
+                    "created_at": NOW,
+                },
                 "release": {
                     "id": RELEASE_ID,
-                    "function": "api",
+                    "name": "api",
                     "version": 1,
                     "created_at": NOW,
                     "spec": spec,
                 },
-                "url": url,
-                "version_url": url,
-                "release_url": url,
-                "invoke_path": "/v1/workspaces/team/apps/reports/endpoints/api/invoke",
-                "version_invoke_path": (
-                    "/v1/workspaces/team/apps/reports/endpoints/api/versions/1/invoke"
-                ),
+                "http": {
+                    "url": url,
+                    "version_url": url,
+                    "release_url": url,
+                    "invoke_path": f"{workload}/invoke",
+                    "version_invoke_path": f"{workload}/versions/1/invoke",
+                },
             }
         )
     )
@@ -778,7 +785,7 @@ def test_spawn_map_submits_in_batches_and_keeps_input_order(
 
     assert list(reports.summarize_sales.map([[1], [2]])) == [1, 2]
     assert {r.json()["release_id"] for r in fake_api.calls("POST", TASKS)} == {RELEASE_ID}
-    assert len(fake_api.calls("POST", f"{FUNCTION}/releases")) == 1
+    assert len(fake_api.calls("POST", "/v1/workspaces/team/apps/reports/releases")) == 1
 
 
 def test_calls_inside_a_container_run_the_active_release_as_children(
@@ -1256,9 +1263,9 @@ def test_cli_deploy_of_a_file_deploys_its_app(
     result = CliRunner().invoke(build_public_cli(), ["--json", "deploy", "reports.py"])
 
     assert result.exit_code == 0, result.output
-    assert json.loads(result.stdout)["releases"][0]["function"] == "summarize_sales"
+    assert json.loads(result.stdout)["releases"][0]["name"] == "summarize_sales"
     (request,) = fake_api.calls("POST", "/v1/workspaces/team/apps/reports/deployments")
-    assert request.json()["functions"][0]["handler"] == "reports:summarize_sales"
+    assert request.json()["workloads"][0]["handler"] == "reports:summarize_sales"
 
     monkeypatch.setattr(sys, "path", [str(tmp_path), *sys.path])
     pruned = CliRunner().invoke(build_public_cli(), ["deploy", "reports.py", "--prune"])

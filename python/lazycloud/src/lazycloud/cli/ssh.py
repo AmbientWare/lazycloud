@@ -5,10 +5,9 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Annotated
-from uuid import UUID
 
 import typer
-from shared.api import DevboxPhase, PodRole, WorkloadState
+from shared.api import DevboxPhase, PodRole, WorkloadKind, WorkloadState
 
 from lazycloud.cli.components.errors import ClientError
 from lazycloud.cli.components.output import emit
@@ -106,20 +105,16 @@ class _DevboxPhase:
     client: WorkloadsClient
     pod: str
     app: str
-    _deployment_id: UUID | None = None
-    _resolved: bool = False
+    _devbox: bool | None = None
 
     def __call__(self) -> str | None:
-        if not self._resolved:
+        if self._devbox is None:
             # One name-filtered lookup; a failure leaves it for the next tick.
             listed = self.client.ssh_hosts(app=self.app, pod=self.pod).hosts
-            self._deployment_id = next(
-                (host.deployment_id for host in listed if host.role is PodRole.devbox), None
-            )
-            self._resolved = True
-        if self._deployment_id is None:
+            self._devbox = any(host.role is PodRole.devbox for host in listed)
+        if not self._devbox:
             return None
-        status = self.client.devbox(self._deployment_id)
+        status = self.client.devbox(self.app, self.pod)
         if status.phase is DevboxPhase.failed:
             return status.phase_reason
         return _PHASE_LABELS[status.phase]
@@ -242,7 +237,9 @@ def _one_host(
 
 def _unreachable(client: WorkloadsClient, pod: str, *, app: str | None) -> ClientError:
     """Why no active pod by this name serves SSH, from its deployments."""
-    deployments = client.api.list_deployments(client.workspace, app=app, name=pod).deployments
+    deployments = client.api.list_workloads(
+        client.workspace, app=app, kind=WorkloadKind.pod, name=pod
+    ).workloads
     if not deployments:
         return ClientError(
             f"no devbox or pod named {pod!r}",

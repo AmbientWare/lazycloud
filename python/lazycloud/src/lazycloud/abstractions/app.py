@@ -1004,7 +1004,7 @@ class App:
 
         Sandboxes are never deployed; each `create()` prepares its own release.
         """
-        from lazycloud.session.deployment import AppFunctions, Workload
+        from lazycloud.session.deployment import AppFunctions, WorkloadDefinition
 
         if prune and resource is not None:
             raise AppOperationError("pruning requires the complete app without a resource selector")
@@ -1015,7 +1015,7 @@ class App:
         )
         if not selected:
             raise AppOperationError(f"app {self.slug} has no functions to deploy")
-        workloads = tuple(cast("Workload", item) for item in selected)
+        workloads = tuple(cast("WorkloadDefinition", item) for item in selected)
         return AppFunctions(app=self.slug, functions=workloads, prune=prune)
 
     def serve(
