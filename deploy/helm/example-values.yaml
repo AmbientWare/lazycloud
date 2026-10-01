@@ -1,0 +1,48 @@
+# The shape of a deployment's values, with placeholders instead of real
+# identities. deploy/check.sh renders the chart with it. A real deployment
+# keeps its own file outside this repository.
+image:
+  registry: 000000000000.dkr.ecr.us-east-1.amazonaws.com/lazycloud/release
+  tag: v0.1.0
+
+externalSecrets:
+  enabled: true
+  region: us-east-1
+  readerRoleArn: arn:aws:iam::000000000000:role/example-secrets-reader
+  data:
+    LAZYCLOUD_DATABASE_URL: { document: example/platform, property: LAZYCLOUD_DATABASE_URL }
+    LAZYCLOUD_GITHUB_CLIENT_SECRET: { document: example/operator, property: LAZYCLOUD_GITHUB_CLIENT_SECRET }
+    LAZYCLOUD_RESEND_WEBHOOK_SECRET: { document: example/operator, property: LAZYCLOUD_RESEND_WEBHOOK_SECRET }
+    LAZYCLOUD_RESEND_API_KEY: { document: example/operator, property: LAZYCLOUD_RESEND_API_KEY }
+    secrets.key: { document: example/platform, property: LAZYCLOUD_SECRETS_MASTER_KEY, decodingStrategy: Base64 }
+
+networkPolicy:
+  enabled: true
+  ingressFrom:
+    - namespaceSelector:
+        matchLabels: { kubernetes.io/metadata.name: example-ingress }
+  hostCIDRs: [10.20.0.0/16]
+  nodeCIDRs: [10.0.0.0/16]
+  metricsFrom:
+    - namespaceSelector:
+        matchLabels: { kubernetes.io/metadata.name: example-monitoring }
+
+# No object store endpoint or keys: AWS S3 through the Pod Identity role.
+config:
+  LAZYCLOUD_LOG_FORMAT: json
+  LAZYCLOUD_OBJECT_STORE_REGION: us-east-1
+  LAZYCLOUD_OBJECT_STORE_BUCKET: example-objects
+  LAZYCLOUD_WORKSPACE_BUCKET_PROVIDER: aws
+  LAZYCLOUD_WORKSPACE_BUCKET_PREFIX: example-ws
+  LAZYCLOUD_WORKSPACE_BUCKET_ROLE_ARN: arn:aws:iam::000000000000:role/example-workspace-storage
+
+server:
+  config:
+    LAZYCLOUD_PUBLIC_URL: https://lazycloud.example.com
+    LAZYCLOUD_GITHUB_CLIENT_ID: Iv1.example
+    LAZYCLOUD_IMAGE_REGISTRY: 000000000000.dkr.ecr.us-east-1.amazonaws.com
+    LAZYCLOUD_IMAGE_REPOSITORY: lazycloud/workload-images
+
+scheduler:
+  config:
+    LAZYCLOUD_RESEND_FROM: LazyCloud <noreply@lazycloud.example.com>

@@ -116,9 +116,8 @@ func adminAccountOut(row AdminAccountRow, since time.Time) (apitypes.BillingAcco
 	out := apitypes.BillingAccountAdmin{
 		User: apitypes.User{
 			Id: row.ID, DisplayName: row.DisplayName, AvatarUrl: row.AvatarUrl, GithubLogin: row.GithubLogin,
-			IsAdmin: row.IsAdmin, CreatedAt: row.CreatedAt,
+			IsAdmin: row.IsAdmin, Status: apitypes.UserStatus(row.UserStatus), CreatedAt: row.CreatedAt,
 		},
-		UserStatus:          apitypes.UserStatus(row.UserStatus),
 		PaymentMethodOnFile: row.PaymentMethodAttachedAt != nil,
 		ComplimentarySince:  row.ComplimentarySince,
 		RecentCostNanos:     row.RecentCostNanos,

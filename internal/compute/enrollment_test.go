@@ -11,25 +11,25 @@ import (
 func TestEnrollmentAndSessionEpochs(t *testing.T) {
 	ctx := t.Context()
 	pool := dbtest.New(t)
-	c := NewCompute(pool)
+	c := NewCompute(pool, nil, Config{})
 	capacity := Capacity{CPUMillis: 4000, MemoryBytes: 8 << 30}
 
 	join, _, err := c.CreateJoinToken(ctx, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
-	host, token, err := c.Enroll(ctx, join, "host-a", capacity)
+	host, token, err := c.Enroll(ctx, join, HostReport{Hostname: "host-a", Capacity: capacity})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := c.Enroll(ctx, join, "host-b", capacity); !errors.Is(err, ErrInvalidJoinToken) {
+	if _, _, err := c.Enroll(ctx, join, HostReport{Hostname: "host-b", Capacity: capacity}); !errors.Is(err, ErrInvalidJoinToken) {
 		t.Fatalf("reused join token: got %v, want ErrInvalidJoinToken", err)
 	}
 	expired, _, err := c.CreateJoinToken(ctx, -time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := c.Enroll(ctx, expired, "host-c", capacity); !errors.Is(err, ErrInvalidJoinToken) {
+	if _, _, err := c.Enroll(ctx, expired, HostReport{Hostname: "host-c", Capacity: capacity}); !errors.Is(err, ErrInvalidJoinToken) {
 		t.Fatalf("expired join token: got %v, want ErrInvalidJoinToken", err)
 	}
 
@@ -40,14 +40,14 @@ func TestEnrollmentAndSessionEpochs(t *testing.T) {
 		t.Fatalf("join token as host token: got %v, want ErrUnknownHost", err)
 	}
 
-	first, err := c.OpenSession(ctx, host, "boot-1", capacity)
+	first, err := c.OpenSession(ctx, host, SessionOpen{BootID: "boot-1", Capacity: capacity})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if current, err := c.Touch(ctx, host, first); err != nil || !current {
 		t.Fatalf("touch first session: current=%v err=%v", current, err)
 	}
-	second, err := c.OpenSession(ctx, host, "boot-1", capacity)
+	second, err := c.OpenSession(ctx, host, SessionOpen{BootID: "boot-1", Capacity: capacity})
 	if err != nil {
 		t.Fatal(err)
 	}

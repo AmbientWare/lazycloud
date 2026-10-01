@@ -121,8 +121,8 @@ func TestWorkspaceDeletion(t *testing.T) {
 	if _, err := ident.GetWorkspace(ctx, admin, "doomed"); err == nil {
 		t.Fatal("workspace remains")
 	}
-	if left, err := store.DeleteWorkspaceObjects(ctx, doomed.ID); err != nil || left != 0 {
-		t.Fatalf("objects left %d %v", left, err)
+	if empty, err := store.DeleteWorkspaceObjects(ctx, doomed.ID); err != nil || !empty {
+		t.Fatalf("objects left: empty %v err %v", empty, err)
 	}
 	var rows int
 	if err := pool.QueryRow(ctx, `select (select count(*) from tasks where workspace_id = $1) + (select count(*) from containers where workspace_id = $1)

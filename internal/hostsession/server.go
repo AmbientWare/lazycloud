@@ -164,11 +164,14 @@ func (s *Server) authenticateStream(srv any, ss grpc.ServerStream, _ *grpc.Strea
 // grpcError maps owner errors to status codes. Unexpected errors are logged
 // and reported without detail.
 func (s *Server) grpcError(ctx context.Context, err error) error {
+	var refused *compute.IdentityError
 	switch {
 	case errors.Is(err, compute.ErrUnknownHost):
 		return status.Error(codes.Unauthenticated, "unknown host")
 	case errors.Is(err, compute.ErrInvalidJoinToken):
 		return status.Error(codes.PermissionDenied, "the join token is invalid, used or expired")
+	case errors.As(err, &refused):
+		return status.Error(codes.PermissionDenied, refused.Error())
 	case errors.Is(err, execution.ErrStaleAttempt):
 		return status.Error(codes.FailedPrecondition, "the attempt is no longer running on this container")
 	case errors.Is(err, execution.ErrNotAssigned):
@@ -191,13 +194,13 @@ func (s *Server) withLifetime(ctx context.Context) (context.Context, context.Can
 	return ctx, func() { stop(); cancel() }
 }
 
-// Enroll exchanges a join token for a host identity.
+// Enroll exchanges a join token or a cloud identity proof for a host
+// identity.
 func (s *Server) Enroll(ctx context.Context, req *hostproto.EnrollRequest) (*hostproto.EnrollResponse, error) {
-	capacity := compute.Capacity{CPUMillis: req.GetCapacity().GetCpuMillis(), MemoryBytes: req.GetCapacity().GetMemoryBytes()}
-	if req.GetHostname() == "" || capacity.CPUMillis <= 0 || capacity.MemoryBytes <= 0 {
+	if req.GetHostname() == "" || req.GetCapacity().GetCpuMillis() <= 0 || req.GetCapacity().GetMemoryBytes() <= 0 {
 		return nil, status.Error(codes.InvalidArgument, "hostname and positive capacity are required")
 	}
-	host, token, err := s.compute.Enroll(ctx, req.GetJoinToken(), req.GetHostname(), capacity)
+	host, token, err := s.enroll(ctx, req)
 	if err != nil {
 		return nil, s.grpcError(ctx, err)
 	}

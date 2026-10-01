@@ -1,0 +1,77 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scheduler
+  labels:
+    {{- include "lazycloud.labels" (list . "scheduler") | nindent 4 }}
+spec:
+  replicas: {{ .Values.scheduler.replicas }}
+  # Replicas share work through advisory locks; a rollout replaces one at a
+  # time without a surge.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: scheduler
+  template:
+    metadata:
+      labels:
+        {{- include "lazycloud.labels" (list . "scheduler") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccounts.scheduler }}
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: {{ .Values.scheduler.terminationGracePeriodSeconds }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      topologySpreadConstraints:
+        {{- include "lazycloud.spread" "scheduler" | trim | nindent 8 }}
+      volumes:
+        {{- include "lazycloud.masterKeyVolume" . | nindent 8 }}
+      containers:
+        - name: scheduler
+          image: {{ include "lazycloud.image" (list . "scheduler") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: LAZYCLOUD_HEALTH_ADDR
+              value: "0.0.0.0:8090"
+            - name: LAZYCLOUD_METRICS_ADDR
+              value: "0.0.0.0:9090"
+            - name: LAZYCLOUD_SECRETS_KEY_FILE
+              value: /run/lazycloud/secrets/secrets.key
+            {{- include "lazycloud.env" (list . "scheduler") | trim | nindent 12 }}
+          ports:
+            - name: health
+              containerPort: 8090
+            - name: metrics
+              containerPort: 9090
+          volumeMounts:
+            {{- include "lazycloud.masterKeyMount" . | nindent 12 }}
+          # Ready once every loop finished a pass; live while none stalled.
+          readinessProbe:
+            httpGet: { path: /readyz, port: health }
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet: { path: /healthz, port: health }
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.scheduler.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: scheduler
+  labels:
+    {{- include "lazycloud.labels" (list . "scheduler") | nindent 4 }}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: scheduler

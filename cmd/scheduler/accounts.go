@@ -81,20 +81,20 @@ func newAccountLoops(pool *pgxpool.Pool, exec *execution.Execution, im *images.I
 	return loops, func() { cancelEmail(); cancelDeletion() }, nil
 }
 
-func (a *accountLoops) start(ctx context.Context, group *errgroup.Group) {
+func (a *accountLoops) start(ctx context.Context, group *errgroup.Group, beats *heartbeats) {
 	if a.deliver {
 		group.Go(func() error {
-			return loop(ctx, emailTick, a.emailWake, nil, func(ctx context.Context) bool {
+			return loop(ctx, emailTick, a.emailWake, nil, beats.track("email delivery", emailTick, func(ctx context.Context) bool {
 				result, err := a.notifications.Deliver(ctx)
 				if err != nil {
 					a.logger.ErrorContext(ctx, "email delivery pass", "error", err)
 				}
 				return result.More
-			})
+			}))
 		})
 	}
 	group.Go(func() error {
-		return loop(ctx, housekeepingTick, nil, nil, func(ctx context.Context) bool {
+		return loop(ctx, housekeepingTick, nil, nil, beats.track("housekeeping", housekeepingTick, func(ctx context.Context) bool {
 			if err := a.identity.Housekeeping(ctx, a.logger); err != nil {
 				a.logger.ErrorContext(ctx, "identity housekeeping", "error", err)
 			}
@@ -102,13 +102,13 @@ func (a *accountLoops) start(ctx context.Context, group *errgroup.Group) {
 				a.logger.ErrorContext(ctx, "email purge", "error", err)
 			}
 			return false
-		})
+		}))
 	})
 	group.Go(func() error {
-		return loop(ctx, deletionTick, a.deletionWake, nil, func(ctx context.Context) bool {
-			a.deleteWorkspaces(ctx)
-			return false
-		})
+		return loop(ctx, deletionTick, a.deletionWake, nil, beats.track("workspace deletion", deletionTick, func(ctx context.Context) bool {
+			// A workspace with objects left reruns the pass at once.
+			return a.deleteWorkspaces(ctx)
+		}))
 	})
 }
 
@@ -118,14 +118,17 @@ func (a *accountLoops) start(ctx context.Context, group *errgroup.Group) {
 // live, storage deletes its objects and identity removes its rows. Every
 // step is idempotent, so a crash or a second scheduler replica repeats work
 // without harm. An upload presigned before the deletion and finished after
-// it leaves bytes under the deleted workspace's prefix.
-func (a *accountLoops) deleteWorkspaces(ctx context.Context) {
+// it leaves bytes under the deleted workspace's prefix. Each workspace
+// deletes a bounded chunk of objects per pass; deleteWorkspaces reports
+// whether one has objects left.
+func (a *accountLoops) deleteWorkspaces(ctx context.Context) (more bool) {
 	deleting, err := a.identity.DeletingWorkspaces(ctx, deletionBatch)
 	if err != nil {
 		a.logger.ErrorContext(ctx, "list deleting workspaces", "error", err)
-		return
+		return false
 	}
 	for _, ws := range deleting {
+		progressed(ctx)
 		if err := a.images.ReleaseWorkspace(ctx, ws.ID); err != nil {
 			a.logger.ErrorContext(ctx, "release workspace builds", "workspace", ws.Name, "error", err)
 			continue
@@ -138,9 +141,13 @@ func (a *accountLoops) deleteWorkspaces(ctx context.Context) {
 		if live > 0 {
 			continue
 		}
-		objects, err := a.storage.DeleteWorkspaceObjects(ctx, ws.ID)
+		empty, err := a.storage.DeleteWorkspaceObjects(ctx, ws.ID)
 		if err != nil {
 			a.logger.ErrorContext(ctx, "delete workspace objects", "workspace", ws.Name, "error", err)
+			continue
+		}
+		if !empty {
+			more = true
 			continue
 		}
 		removed, err := a.identity.FinishWorkspaceDeletion(ctx, ws.ID)
@@ -152,6 +159,7 @@ func (a *accountLoops) deleteWorkspaces(ctx context.Context) {
 			continue // A container became live; the next pass stops it.
 		}
 		a.logger.InfoContext(ctx, "workspace deleted", "workspace", ws.Name, "workspace_id", ws.ID.String(),
-			"objects", objects, "seconds", time.Since(ws.RequestedAt).Seconds())
+			"seconds", time.Since(ws.RequestedAt).Seconds())
 	}
+	return more
 }

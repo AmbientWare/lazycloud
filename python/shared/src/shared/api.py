@@ -4,7 +4,7 @@
 from __future__ import annotations
 from enum import Enum
 from typing import Annotated, Any, Literal
-from pydantic import AwareDatetime, Base64Bytes, BaseModel, Field, RootModel
+from pydantic import AwareDatetime, Base64Bytes, BaseModel, ConfigDict, Field, RootModel
 from uuid import UUID
 from typing_extensions import TypeAliasType
 
@@ -25,22 +25,30 @@ class ErrorCode(str, Enum):
     limit_reached = "limit_reached"
 
 
+class Name(RootModel[str]):
+    root: Annotated[str, Field(pattern="^[a-z][a-z0-9-]{0,62}$")]
+
+
 class WorkloadName(RootModel[str]):
     root: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
 
 
-class User(BaseModel):
-    id: UUID
-    email: Annotated[
-        str, Field(description="Empty when GitHub reported no verified primary address.")
-    ]
-    display_name: str
-    avatar_url: str
-    github_login: Annotated[
-        str, Field(description="Empty for accounts that have not signed in with GitHub.")
-    ]
-    is_admin: Annotated[bool, Field(description="Platform administrators reach every workspace.")]
-    created_at: AwareDatetime
+class UserStatus(str, Enum):
+    active = "active"
+    disabled = "disabled"
+
+
+class PlatformRole(str, Enum):
+    administrator = "administrator"
+    member = "member"
+
+
+class UserRoleRequest(BaseModel):
+    role: PlatformRole
+
+
+class UserStatusRequest(BaseModel):
+    status: UserStatus
 
 
 class WorkspaceState(str, Enum):
@@ -56,6 +64,12 @@ class WorkspaceRole(str, Enum):
 
 class WorkspaceRequest(BaseModel):
     name: Annotated[str, Field(pattern="^[a-z][a-z0-9-]{0,62}$")]
+    cloud: Annotated[
+        Literal["aws"] | None,
+        Field(
+            description="aws places the workspace in the caller's ready AWS connection, for good."
+        ),
+    ] = None
 
 
 class TokenStatus(str, Enum):
@@ -246,21 +260,6 @@ class PythonVersion(str, Enum):
     field_3_12 = "3.12"
     field_3_13 = "3.13"
     field_3_14 = "3.14"
-
-
-class Resources(BaseModel):
-    cpu_millis: Annotated[int, Field(ge=125, le=192000)]
-    cpu_limit_millis: Annotated[int | None, Field(ge=125, le=192000)] = None
-    memory_mib: Annotated[int, Field(ge=128, le=1572864)]
-    memory_limit_mib: Annotated[int | None, Field(ge=128, le=1572864)] = None
-    disk_mib: Annotated[
-        int | None,
-        Field(
-            description="Writable layer limit; enforced where Docker has project quotas.",
-            ge=1024,
-            le=16777216,
-        ),
-    ] = None
 
 
 class Backoff(str, Enum):
@@ -1393,6 +1392,519 @@ class AccountActivity(BaseModel):
     series: list[AccountActivitySeries]
 
 
+class GpuType(str, Enum):
+    T4 = "T4"
+    A10G = "A10G"
+    L4 = "L4"
+    L40S = "L40S"
+    A100_40 = "A100-40"
+    A100_80 = "A100-80"
+    H100 = "H100"
+    H200 = "H200"
+    any = "any"
+
+
+class Region(str, Enum):
+    us_east = "us-east"
+    us_west = "us-west"
+    eu_central = "eu-central"
+    eu_north = "eu-north"
+    ap_southeast = "ap-southeast"
+
+
+class Placement(BaseModel):
+    machine: Annotated[
+        str | None,
+        Field(
+            description="A joined machine of the workspace the workload must run on.",
+            pattern="^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$",
+        ),
+    ] = None
+    region: Region | None = None
+    availability_zone: Annotated[
+        str | None,
+        Field(
+            description="An AWS zone id such as use2-az1, or a name such as us-east-2a.",
+            pattern="^[A-Za-z0-9._:-]{1,128}$",
+        ),
+    ] = None
+    preemptible: Annotated[bool, Field(description="Allow capacity the provider can reclaim.")] = (
+        True
+    )
+
+
+class MachineLifecycle(str, Enum):
+    requested = "requested"
+    provisioning = "provisioning"
+    booting = "booting"
+    joining = "joining"
+    ready = "ready"
+    draining = "draining"
+    stopping = "stopping"
+    stopped = "stopped"
+    resuming = "resuming"
+    terminating = "terminating"
+    deleted = "deleted"
+    failed = "failed"
+
+
+class MachineFailure(str, Enum):
+    agent_download_failed = "agent_download_failed"
+    runtime_install_failed = "runtime_install_failed"
+    network_join_failed = "network_join_failed"
+    provider_identity_failed = "provider_identity_failed"
+    agent_enrollment_failed = "agent_enrollment_failed"
+    worker_image_pull_failed = "worker_image_pull_failed"
+    worker_start_failed = "worker_start_failed"
+    worker_readiness_failed = "worker_readiness_failed"
+    bootstrap_timed_out = "bootstrap_timed_out"
+    host_preflight_failed = "host_preflight_failed"
+    service_lost = "service_lost"
+    machine_record_deleted = "machine_record_deleted"
+    provider_stopped = "provider_stopped"
+    provider_terminated = "provider_terminated"
+    unknown = "unknown"
+
+
+class CapacityState(str, Enum):
+    available = "available"
+    draining = "draining"
+    preempting = "preempting"
+    cordoned = "cordoned"
+
+
+class Severity(str, Enum):
+    info = "info"
+    warning = "warning"
+    error = "error"
+
+
+class PreflightCheck(BaseModel):
+    name: str
+    ok: bool
+    message: str
+    severity: Severity
+    remediation: str
+
+
+class Machine(BaseModel):
+    id: UUID
+    name: str
+    workspaces: Annotated[
+        list[str], Field(description="Names of the workspaces the machine serves.")
+    ]
+    placement: Annotated[str, Field(description="machine:<id>")]
+    provider: Literal["agent"]
+    lifecycle: MachineLifecycle
+    lifecycle_message: str
+    lifecycle_failure: MachineFailure | None = None
+    lifecycle_at: AwareDatetime
+    cpu: Annotated[int, Field(description="Offered CPU in millicores.")]
+    memory: Annotated[int, Field(description="Offered memory in MiB.")]
+    gpu: str
+    gpu_count: int
+    connected: Annotated[
+        bool,
+        Field(description="The agent's session is open and reported within the liveness timeout."),
+    ]
+    schedulable: bool
+    capacity_state: CapacityState
+    capacity_reason: str
+    preflight_checks: list[PreflightCheck]
+    remediation: list[str]
+    last_seen_at: AwareDatetime | None = None
+    agent_version: str
+    created_at: AwareDatetime
+    updated_at: AwareDatetime
+
+
+class MachinePage(BaseModel):
+    machines: list[Machine]
+    next_cursor: Annotated[str | None, Field(description="Present when more machines follow.")] = (
+        None
+    )
+
+
+class GpuItem(RootModel[str]):
+    root: Annotated[str, Field(max_length=32)]
+
+
+class MachineJoinRequest(BaseModel):
+    name: Annotated[
+        str,
+        Field(
+            description="The name workloads pin to with machine=; unique in the account.",
+            pattern="^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$",
+        ),
+    ]
+    workspaces: Annotated[list[Name], Field(max_length=100, min_length=1)]
+    gpu: Annotated[
+        list[GpuItem] | None,
+        Field(
+            description="GPU models the machine contributes; the agent reports what it finds.",
+            max_length=8,
+        ),
+    ] = None
+    ttl_seconds: Annotated[int, Field(ge=60, le=86400)] = 1800
+
+
+class MachineJoinCommand(BaseModel):
+    command: Annotated[
+        str, Field(description="A shell command that installs the agent and joins the host.")
+    ]
+    expires_at: AwareDatetime
+    machine: Machine
+
+
+class MachineUpdate(BaseModel):
+    workspaces: Annotated[list[Name], Field(max_length=100, min_length=1)]
+
+
+class Market(str, Enum):
+    spot = "spot"
+    on_demand = "on_demand"
+
+
+class ComputeInstance(BaseModel):
+    id: UUID
+    placement: Annotated[str, Field(description="connection:<id>")]
+    provider: Literal["aws"]
+    region: str
+    availability_zone: str
+    instance_id: str
+    instance_type: str
+    market: Market | None = None
+    lifecycle: MachineLifecycle
+    lifecycle_message: str
+    lifecycle_failure: MachineFailure | None = None
+    lifecycle_at: AwareDatetime
+    connected: bool
+    capacity_state: CapacityState
+    capacity_reason: str
+    gpu: str | None = None
+    gpu_count: int
+    cpu_millicores: int
+    memory_mb: int
+    launch_attempt: int
+    booted_template_version: Annotated[
+        str, Field(description="The agent release the instance runs.")
+    ]
+    launched_at: AwareDatetime | None = None
+    created_at: AwareDatetime
+
+
+class ComputeInstancePage(BaseModel):
+    instances: list[ComputeInstance]
+    next_cursor: str | None = None
+
+
+class Instances(BaseModel):
+    total: int
+    ready: int
+    pending: int
+    degraded: int
+
+
+class Cost(BaseModel):
+    hourly_micros: int | None = None
+    daily_micros: int | None = None
+    currency: Literal["USD"]
+    estimated: bool
+
+
+class ComputeWorkload(BaseModel):
+    deployment_id: Annotated[UUID, Field(description="The workload id.")]
+    app: str
+    name: str
+    kind: Literal["function"]
+    machine: Annotated[
+        str, Field(description="The machine the workload is pinned to; empty when unpinned.")
+    ]
+    cpu_millicores: int
+    memory_mb: int
+    gpu: list[GpuType]
+    gpu_count: int
+
+
+class ComputeWorkloadPage(BaseModel):
+    workloads: list[ComputeWorkload]
+    next_cursor: str | None = None
+
+
+class AwsConnectionPhase(str, Enum):
+    awaiting_authorization = "awaiting_authorization"
+    validating = "validating"
+    ready = "ready"
+    degraded = "degraded"
+    reconnect_pending = "reconnect_pending"
+    retiring_authorization = "retiring_authorization"
+    disconnect_draining = "disconnect_draining"
+    revoking = "revoking"
+    verifying_revocation = "verifying_revocation"
+    action_required = "action_required"
+
+
+class AwsConnectionAction(str, Enum):
+    AwsAuthorize = "authorize"
+    AwsValidate = "validate"
+    AwsReconnect = "reconnect"
+    AwsCancelReconnect = "cancel_reconnect"
+    AwsRemove = "remove"
+    AwsRetry = "retry"
+
+
+class AwsAuthorizationPhase(str, Enum):
+    awaiting_authorization = "awaiting_authorization"
+    validating = "validating"
+    ready = "ready"
+    degraded = "degraded"
+    retiring = "retiring"
+    retired = "retired"
+
+
+class AwsAuthorizationError(str, Enum):
+    assume_role_denied = "assume_role_denied"
+    external_id_not_enforced = "external_id_not_enforced"
+    account_mismatch = "account_mismatch"
+    permission_drift = "permission_drift"
+    stack_drift = "stack_drift"
+    upstream_unavailable = "upstream_unavailable"
+
+
+class AuthorizationMode(str, Enum):
+    managed_stack = "managed_stack"
+    existing_role = "existing_role"
+
+
+class ManagedAuthorization(BaseModel):
+    stack_name: str
+    region: str
+    generation: int
+    stack_id: str | None = None
+    template_version: str
+    template_sha256: str
+
+
+class AwsAuthorizationGeneration(BaseModel):
+    generation: int
+    authorization_mode: AuthorizationMode
+    managed_authorization: ManagedAuthorization | None = None
+    phase: AwsAuthorizationPhase
+    last_validation_started_at: AwareDatetime | None = None
+    last_validated_at: AwareDatetime | None = None
+    error_code: AwsAuthorizationError | None = None
+    error_message: Annotated[str | None, Field(max_length=512)] = None
+    created_at: AwareDatetime
+    updated_at: AwareDatetime
+
+
+class AwsStackParameter(BaseModel):
+    ParameterKey: str
+    ParameterValue: str
+
+
+class Request(BaseModel):
+    StackName: str
+    TemplateBody: Annotated[str, Field(max_length=51200)]
+    Parameters: list[AwsStackParameter]
+    Capabilities: list[Literal["CAPABILITY_NAMED_IAM"]]
+    OnFailure: Literal["DELETE"]
+
+
+class AwsStackAction(BaseModel):
+    account_id: str
+    region: str
+    template_sha256: str
+    request: Request
+
+
+class AwsCustomerAction(BaseModel):
+    url: str | None = None
+    stack: AwsStackAction | None = None
+    label: str
+
+
+class AwsConnection(BaseModel):
+    id: UUID
+    account_id: Annotated[str, Field(description="The 12-digit AWS account id.")]
+    phase: AwsConnectionPhase
+    revision: int
+    hosts_workloads: Annotated[
+        bool, Field(description="New workloads can be placed in the account.")
+    ]
+    can_manage_existing_capacity: bool
+    available_actions: list[AwsConnectionAction]
+    detail: str
+    customer_action: AwsCustomerAction | None = None
+    next_retry_at: AwareDatetime | None = None
+    active_authorization: AwsAuthorizationGeneration | None = None
+    pending_authorization: AwsAuthorizationGeneration | None = None
+    retiring_authorization: AwsAuthorizationGeneration | None = None
+    created_at: AwareDatetime
+    updated_at: AwareDatetime
+
+
+class AwsConnectionEnvelope(BaseModel):
+    connection: AwsConnection | None = None
+
+
+class SubnetId(RootModel[str]):
+    root: Annotated[str, Field(max_length=128, min_length=1)]
+
+
+class AwsNetwork(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    vpc_id: Annotated[str, Field(max_length=128, min_length=1)]
+    subnet_ids: Annotated[list[SubnetId], Field(min_length=2)]
+    security_group_id: Annotated[str, Field(max_length=128, min_length=1)]
+
+
+class AwsConnectionRequest(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    account_id: Annotated[str, Field(pattern="^[0-9]{12}$")]
+    role_arn: Annotated[
+        str | None,
+        Field(
+            description="An existing role to assume; it must require the external ID.",
+            pattern="^arn:(aws|aws-us-gov|aws-cn):iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]{1,512}$",
+        ),
+    ] = None
+    networks: Annotated[
+        dict[str, AwsNetwork] | None,
+        Field(description="Per-region VPC, subnets and security group for an existing role."),
+    ] = None
+    external_id: Annotated[
+        str | None,
+        Field(
+            description="The external ID an existing role already requires.",
+            max_length=1224,
+            min_length=16,
+        ),
+    ] = None
+
+
+class AwsReconnectRequest(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    role_arn: Annotated[
+        str | None,
+        Field(
+            pattern="^arn:(aws|aws-us-gov|aws-cn):iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]{1,512}$"
+        ),
+    ] = None
+
+
+class Authorization(BaseModel):
+    stack: AwsStackAction | None = None
+    external_id: str | None = None
+
+
+class AwsConnectionAuthorization(BaseModel):
+    connection: AwsConnection
+    authorization: Authorization
+
+
+class FleetCapacity(BaseModel):
+    cpu_millicores: int
+    memory_mib: int
+    gpu_count: int
+
+
+class FleetState(str, Enum):
+    FleetServing = "serving"
+    FleetStarting = "starting"
+    FleetDraining = "draining"
+    FleetPreparing = "preparing"
+    FleetStopping = "stopping"
+    FleetUnavailable = "unavailable"
+    FleetFailed = "failed"
+    FleetTerminating = "terminating"
+    FleetStopped = "stopped"
+    FleetHibernateUnverified = "hibernate_unverified"
+    FleetImageSaved = "image_saved"
+
+
+class FleetStateCapacity(BaseModel):
+    state: FleetState
+    machines: int
+    capacity: FleetCapacity
+    allocated: FleetCapacity
+
+
+class FleetMarket(BaseModel):
+    preemptible: bool
+    gpu_type: Annotated[str, Field(description="Empty for CPU hosts.")]
+    warm_free: Annotated[FleetCapacity, Field(description="Unreserved capacity on serving hosts.")]
+    warm_target: Annotated[
+        FleetCapacity, Field(description="The idle capacity the headroom floor keeps.")
+    ]
+    reserve_ready: Annotated[
+        FleetCapacity, Field(description="Always zero; the fleet keeps no stopped reserves.")
+    ]
+    reserve_target: Annotated[
+        FleetCapacity, Field(description="Always zero; the fleet keeps no stopped reserves.")
+    ]
+    allocated: Annotated[
+        FleetCapacity, Field(description="Reservations of live containers on the market's hosts.")
+    ]
+    states: list[FleetStateCapacity]
+    reason: Annotated[str, Field(description="Why the market cannot grow, when it cannot.")]
+
+
+class Plan(BaseModel):
+    generated_at: AwareDatetime
+    expires_at: AwareDatetime
+    markets: list[FleetMarket]
+
+
+class Release1(BaseModel):
+    version: str
+    generation: int
+    complete: Annotated[bool, Field(description="Every connected platform host runs the release.")]
+    phases: dict[str, int]
+    pending_capacity_owners: int
+
+
+class FleetSummary(BaseModel):
+    observed_at: AwareDatetime
+    plan: Plan | None = None
+    release: Annotated[
+        Release1 | None, Field(description="The agent release platform hosts move to.")
+    ] = None
+
+
+class Provider(str, Enum):
+    FleetNodeAgent = "agent"
+    FleetNodeAws = "aws"
+
+
+class FleetNode(BaseModel):
+    id: UUID
+    machine_id: Annotated[str | None, Field(description="Set once the host enrolled.")] = None
+    instance_id: str | None = None
+    provider: Provider
+    region: str
+    instance_type: str
+    preemptible: bool
+    gpu_type: str
+    state: FleetState
+    capacity: FleetCapacity
+    allocated: FleetCapacity
+    containers: int
+    ready: Annotated[bool, Field(description="Serving and on the target agent release.")]
+
+
+class FleetNodePage(BaseModel):
+    nodes: list[FleetNode]
+    next_cursor: str | None = None
+    observed_at: AwareDatetime
+
+
 class PlanId(str, Enum):
     free = "free"
     team = "team"
@@ -1671,36 +2183,6 @@ class ComplimentaryRequest(BaseModel):
     complimentary: bool
 
 
-class PlatformRole(str, Enum):
-    admin = "admin"
-    user = "user"
-
-
-class UserStatus(str, Enum):
-    active = "active"
-    disabled = "disabled"
-
-
-class BillingAccountAdmin(BaseModel):
-    user: User
-    user_status: UserStatus
-    plan: PlanId | None = None
-    status: BillingStatus | None = None
-    payment_method_on_file: bool
-    complimentary_since: AwareDatetime | None = None
-    recent_cost_nanos: Annotated[
-        int, Field(description="Usage cost since recent_cost_since, waived or not.")
-    ]
-    recent_cost_since: AwareDatetime
-
-
-class BillingAccountAdminPage(BaseModel):
-    accounts: list[BillingAccountAdmin]
-    next_cursor: Annotated[str | None, Field(description="Present when more accounts follow.")] = (
-        None
-    )
-
-
 class UsageCostGroup(str, Enum):
     app = "app"
     workload = "workload"
@@ -1778,6 +2260,28 @@ class Error(BaseModel):
     message: str
 
 
+class User(BaseModel):
+    id: UUID
+    email: Annotated[
+        str, Field(description="Empty when GitHub reported no verified primary address.")
+    ]
+    display_name: str
+    avatar_url: str
+    github_login: Annotated[
+        str, Field(description="Empty for accounts that have not signed in with GitHub.")
+    ]
+    is_admin: Annotated[bool, Field(description="Platform administrators reach every workspace.")]
+    status: UserStatus
+    created_at: AwareDatetime
+
+
+class UserList(BaseModel):
+    users: list[User]
+    next_cursor: Annotated[
+        UUID | None, Field(description="Pass as `cursor` for the next page; absent after the last.")
+    ] = None
+
+
 class Workspace(BaseModel):
     id: UUID
     name: Annotated[str, Field(pattern="^[a-z][a-z0-9-]{0,62}$")]
@@ -1832,6 +2336,32 @@ class ImageSpec(BaseModel):
     image_id: Annotated[str | None, Field(pattern="^img_[0-9a-f]{24}$")] = None
     reference: Annotated[
         str | None, Field(description="The image by digest the release runs, set by the server.")
+    ] = None
+
+
+class Resources(BaseModel):
+    cpu_millis: Annotated[int, Field(ge=125, le=192000)]
+    cpu_limit_millis: Annotated[int | None, Field(ge=125, le=192000)] = None
+    memory_mib: Annotated[int, Field(ge=128, le=1572864)]
+    memory_limit_mib: Annotated[int | None, Field(ge=128, le=1572864)] = None
+    disk_mib: Annotated[
+        int | None,
+        Field(
+            description="Writable layer limit; enforced where Docker has project quotas.",
+            ge=1024,
+            le=16777216,
+        ),
+    ] = None
+    gpu: Annotated[
+        list[GpuType] | None,
+        Field(
+            description="GPU models by preference; any, last, takes whatever has capacity.",
+            max_length=9,
+        ),
+    ] = None
+    gpu_count: Annotated[
+        int | None,
+        Field(description="GPUs per container; a gpu list without it reserves one.", ge=0, le=8),
     ] = None
 
 
@@ -1963,6 +2493,23 @@ class ContainerMetrics(BaseModel):
     points: list[ContainerMetricPoint]
 
 
+class Connection(BaseModel):
+    account_id: str
+    phase: AwsConnectionPhase
+
+
+class ComputeSummary(BaseModel):
+    connection: Annotated[
+        Connection | None,
+        Field(
+            description="The connected account the workspace lives in; absent on platform compute."
+        ),
+    ] = None
+    instances: Instances
+    cost: Cost
+    workload_count: int
+
+
 class GpuRate(BaseModel):
     gpu_type: str
     nanos_per_card_hour: CardRates
@@ -1985,6 +2532,25 @@ class PricingCatalog(BaseModel):
     disk_rate: DiskRate | None = None
     placement_rates: list[PlacementRate]
     credit_purchase: CreditPurchaseTerms
+
+
+class BillingAccountAdmin(BaseModel):
+    user: User
+    plan: PlanId | None = None
+    status: BillingStatus | None = None
+    payment_method_on_file: bool
+    complimentary_since: AwareDatetime | None = None
+    recent_cost_nanos: Annotated[
+        int, Field(description="Usage cost since recent_cost_since, waived or not.")
+    ]
+    recent_cost_since: AwareDatetime
+
+
+class BillingAccountAdminPage(BaseModel):
+    accounts: list[BillingAccountAdmin]
+    next_cursor: Annotated[str | None, Field(description="Present when more accounts follow.")] = (
+        None
+    )
 
 
 class UsageCostInterval(BaseModel):
@@ -2063,6 +2629,7 @@ class FunctionSpec(BaseModel):
         bool, Field(description="Run the concurrency slots as threads of one runner process.")
     ] = False
     lifecycle_hooks: LifecycleHooks | None = None
+    placement: Placement | None = None
     volumes: Annotated[list[VolumeMountSpec] | None, Field(max_length=32)] = None
     client_contract: Annotated[
         dict[str, Any] | None,

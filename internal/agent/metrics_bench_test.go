@@ -25,7 +25,7 @@ func BenchmarkSampleContainer(b *testing.B) {
 }
 
 func TestParseGPUs(t *testing.T) {
-	gpus := parseGPUs([]byte("GPU-1, NVIDIA L4, 37, 1024, 23034\nGPU-2, NVIDIA L4, [N/A], 0, 23034\n"))
+	gpus := parseGPUSamples([]byte("GPU-1, NVIDIA L4, 37, 1024, 23034\nGPU-2, NVIDIA L4, [N/A], 0, 23034\n"))
 	g := gpus["GPU-1"]
 	if len(gpus) != 2 || g.GetUtilizationPercent() != 37 || g.GetMemoryUsedBytes() != 1024<<20 || g.GetName() != "NVIDIA L4" {
 		t.Fatalf("gpus %v", gpus)

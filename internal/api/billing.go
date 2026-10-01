@@ -214,7 +214,7 @@ func (s *Server) ListBillingAccounts(ctx context.Context, req ListBillingAccount
 		f.Search = *req.Params.Search
 	}
 	if req.Params.Role != nil {
-		admin := *req.Params.Role == apitypes.PlatformRoleAdmin
+		admin := *req.Params.Role == apitypes.PlatformRoleAdministrator
 		f.Admin = &admin
 	}
 	if req.Params.Cursor != nil {

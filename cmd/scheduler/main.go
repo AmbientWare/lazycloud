@@ -1,8 +1,13 @@
 // Command scheduler runs execution planning, placement, recovery, email
-// delivery and workspace deletion against PostgreSQL. Replicas are safe to
+// delivery, workspace deletion and the compute fleet against PostgreSQL. Replicas are safe to
 // run together: advisory locks serialize the planner and the placer, a
 // replica that finds a lock held skips the pass, and email and deletion
 // steps are claimed or idempotent.
+//
+// With LAZYCLOUD_HEALTH_ADDR set it serves /healthz, failing when a loop
+// stops finishing passes, and /readyz, true once every loop finished one. On
+// SIGTERM loops stop; a pass in flight is cancelled, its transaction rolls
+// back and another replica or the next start repeats it.
 package main
 
 import (
@@ -10,6 +15,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -18,6 +25,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/AmbientWare/lazycloud/internal/callbacks"
+	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/identity"
@@ -49,10 +57,18 @@ const (
 	sweepTick = 30 * time.Second
 	// purgeInterval paces deletion of finished callbacks.
 	purgeInterval = time.Minute
+	// fleetTick paces capacity planning, launches, retirement, preemption
+	// and connection steps; compute wakes cut it short.
+	fleetTick = 5 * time.Second
+	// reconcileTick paces comparing cloud hosts with the provider.
+	reconcileTick = time.Minute
 	// rollupTick paces folding container metric samples into minute
 	// points; a pass that is behind reruns at once.
 	rollupTick = 30 * time.Second
 )
+
+// version is stamped by the image build with -ldflags "-X main.version=...".
+var version = "dev"
 
 func main() {
 	format, err := telemetry.LogFormatFromEnv(telemetry.LogJSON)
@@ -61,13 +77,16 @@ func main() {
 		os.Exit(2)
 	}
 	logger := telemetry.NewLogger(os.Stderr, format, "scheduler")
-	if err := run(logger); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	err = run(ctx, logger)
+	stop()
+	if err != nil {
 		logger.Error("scheduler stopped", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run(logger *slog.Logger) error {
+func run(ctx context.Context, logger *slog.Logger) error {
 	telemetryConfig, err := telemetry.ConfigFromEnv("scheduler", "")
 	if err != nil {
 		return err
@@ -76,8 +95,6 @@ func run(logger *slog.Logger) error {
 	if url == "" {
 		return errors.New("LAZYCLOUD_DATABASE_URL is required")
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	pool, err := database.Open(ctx, url)
 	if err != nil {
@@ -95,6 +112,12 @@ func run(logger *slog.Logger) error {
 	defer func() { _ = tel.Shutdown(context.WithoutCancel(ctx)) }()
 	tel.RegisterPool(pool)
 	timed := newPassTimer(tel)
+	beats := newHeartbeats()
+	// every wraps a loop's pass with its deadline, heartbeat, trace and
+	// duration metric.
+	every := func(name string, interval time.Duration, pass func(context.Context) bool) func(context.Context) bool {
+		return beats.track(name, interval, timed(name, pass))
+	}
 	obs := observability.NewObservability(pool, observability.Config{}, logger)
 
 	objectStore, err := objectStoreFromEnv()
@@ -104,6 +127,19 @@ func run(logger *slog.Logger) error {
 	store := storage.NewStorage(pool, objectStore)
 	exec := execution.NewExecution(pool)
 	sched := scheduling.NewScheduling(pool, logger)
+	fleet, err := compute.LoadFleet(ctx, os.Getenv)
+	if err != nil {
+		return err
+	}
+	// Cloud instances reach the server across a network, so they always
+	// dial with TLS.
+	computeConfig := compute.Config{
+		InstallURL: os.Getenv("LAZYCLOUD_INSTALL_URL"), ServerAddress: os.Getenv("LAZYCLOUD_AGENT_SERVER_ADDR"), Fleet: fleet,
+	}
+	if err := computeConfig.CheckFleet(); err != nil {
+		return err
+	}
+	comp := compute.NewCompute(pool, exec, computeConfig)
 	keyFile := os.Getenv("LAZYCLOUD_SECRETS_KEY_FILE")
 	if keyFile == "" {
 		return errors.New("LAZYCLOUD_SECRETS_KEY_FILE is required: callbacks are signed with workspace secrets")
@@ -119,7 +155,13 @@ func run(logger *slog.Logger) error {
 	// Build recovery needs no registry: it only reads and moves build state.
 	im := images.NewImages(pool, exec, images.Config{})
 	listener := database.NewListener(pool, logger, database.ChannelExecution, database.ChannelImageBuild,
-		notifications.Channel, identity.ChannelWorkspace)
+		notifications.Channel, identity.ChannelWorkspace, compute.ChannelCompute)
+	fleetWake, cancelFleetWake := listener.Subscribe(compute.ChannelCompute, "")
+	defer cancelFleetWake()
+	capacityWake, cancelCapacityWake := listener.Subscribe(database.ChannelExecution, "")
+	defer cancelCapacityWake()
+	capacityFleetWake, cancelCapacityFleetWake := listener.Subscribe(compute.ChannelCompute, "")
+	defer cancelCapacityFleetWake()
 	buildWake, cancelBuildWake := listener.Subscribe(database.ChannelImageBuild, "")
 	defer cancelBuildWake()
 	accounts, cancelAccounts, err := newAccountLoops(pool, exec, im, listener, logger)
@@ -135,11 +177,19 @@ func run(logger *slog.Logger) error {
 	// value is enough: placement reads every pending container.
 	placeNow := make(chan struct{}, 1)
 
+	var healthListener net.Listener
+	if addr := os.Getenv("LAZYCLOUD_HEALTH_ADDR"); addr != "" {
+		var lc net.ListenConfig
+		if healthListener, err = lc.Listen(ctx, "tcp", addr); err != nil {
+			return fmt.Errorf("listen on %s: %w", addr, err)
+		}
+	}
+
 	group, ctx := errgroup.WithContext(ctx)
 	group.Go(func() error { return listener.Run(ctx) })
 	group.Go(func() error { return tel.ServeMetrics(ctx, logger) })
 	group.Go(func() error {
-		return loop(ctx, rollupTick, nil, nil, timed("metrics_rollup", func(ctx context.Context) bool {
+		return loop(ctx, rollupTick, nil, nil, every("metrics_rollup", rollupTick, func(ctx context.Context) bool {
 			result, err := obs.RollUp(ctx)
 			if err != nil {
 				logger.ErrorContext(ctx, "metrics rollup pass", "error", err)
@@ -149,7 +199,7 @@ func run(logger *slog.Logger) error {
 		}))
 	})
 	group.Go(func() error {
-		return loop(ctx, tick, planWake, nil, timed("plan", func(ctx context.Context) bool {
+		return loop(ctx, tick, planWake, nil, every("plan", tick, func(ctx context.Context) bool {
 			result, err := exec.Plan(ctx, logger)
 			if err != nil {
 				logger.ErrorContext(ctx, "planning pass", "error", err)
@@ -164,7 +214,7 @@ func run(logger *slog.Logger) error {
 		}))
 	})
 	group.Go(func() error {
-		return loop(ctx, tick, placeWake, placeNow, timed("place", func(ctx context.Context) bool {
+		return loop(ctx, tick, placeWake, placeNow, every("place", tick, func(ctx context.Context) bool {
 			result, err := sched.Place(ctx)
 			if err != nil {
 				logger.ErrorContext(ctx, "placement pass", "error", err)
@@ -173,7 +223,7 @@ func run(logger *slog.Logger) error {
 		}))
 	})
 	group.Go(func() error {
-		return loop(ctx, tick, nil, nil, timed("deadlines", func(ctx context.Context) bool {
+		return loop(ctx, tick, nil, nil, every("deadlines", tick, func(ctx context.Context) bool {
 			if _, err := exec.TimeOutAttempts(ctx, logger); err != nil {
 				logger.ErrorContext(ctx, "attempt deadline pass", "error", err)
 			}
@@ -184,7 +234,7 @@ func run(logger *slog.Logger) error {
 		}))
 	})
 	group.Go(func() error {
-		return loop(ctx, tick, nil, nil, timed("schedules", func(ctx context.Context) bool {
+		return loop(ctx, tick, nil, nil, every("schedules", tick, func(ctx context.Context) bool {
 			if _, err := crons.Fire(ctx, logger); err != nil {
 				logger.ErrorContext(ctx, "schedule pass", "error", err)
 			}
@@ -193,7 +243,7 @@ func run(logger *slog.Logger) error {
 	})
 	group.Go(func() error {
 		lastPurge := time.Now()
-		return loop(ctx, tick, nil, nil, timed("callbacks", func(ctx context.Context) bool {
+		return loop(ctx, tick, nil, nil, every("callbacks", tick, func(ctx context.Context) bool {
 			if _, err := deliverer.Deliver(ctx); err != nil {
 				logger.ErrorContext(ctx, "callback pass", "error", err)
 			}
@@ -207,7 +257,7 @@ func run(logger *slog.Logger) error {
 		}))
 	})
 	group.Go(func() error {
-		return loop(ctx, hostLossTick, nil, nil, timed("host_loss", func(ctx context.Context) bool {
+		return loop(ctx, hostLossTick, nil, nil, every("host_loss", hostLossTick, func(ctx context.Context) bool {
 			if _, err := exec.ReleaseLostHosts(ctx, logger); err != nil {
 				logger.ErrorContext(ctx, "host loss pass", "error", err)
 			}
@@ -215,20 +265,74 @@ func run(logger *slog.Logger) error {
 		}))
 	})
 	group.Go(func() error {
-		store.RunSweeper(ctx, sweepTick, logger)
-		return nil
+		return loop(ctx, fleetTick, capacityWake, capacityFleetWake, func(ctx context.Context) bool {
+			result, err := comp.PlanCapacity(ctx, logger)
+			if err != nil {
+				logger.ErrorContext(ctx, "capacity pass", "error", err)
+			}
+			return result.Skipped
+		})
 	})
 	group.Go(func() error {
-		return loop(ctx, buildRecoveryTick, buildWake, nil, timed("build_recovery", func(ctx context.Context) bool {
+		return loop(ctx, fleetTick, fleetWake, nil, func(ctx context.Context) bool {
+			if _, err := comp.Launch(ctx, logger); err != nil {
+				logger.ErrorContext(ctx, "launch pass", "error", err)
+			}
+			if _, err := comp.Retire(ctx, logger); err != nil {
+				logger.ErrorContext(ctx, "retire pass", "error", err)
+			}
+			if _, err := comp.Preempt(ctx, logger); err != nil {
+				logger.ErrorContext(ctx, "preempt pass", "error", err)
+			}
+			if _, err := comp.AdvanceConnections(ctx, logger); err != nil {
+				logger.ErrorContext(ctx, "connection pass", "error", err)
+			}
+			return false
+		})
+	})
+	group.Go(func() error {
+		return loop(ctx, reconcileTick, nil, nil, func(ctx context.Context) bool {
+			if err := comp.Reconcile(ctx, logger); err != nil {
+				logger.ErrorContext(ctx, "reconcile pass", "error", err)
+			}
+			return false
+		})
+	})
+	group.Go(func() error {
+		return loop(ctx, sweepTick, nil, nil, every("storage_sweep", sweepTick, func(ctx context.Context) bool {
+			if _, err := store.Sweep(ctx, logger); err != nil && ctx.Err() == nil {
+				logger.WarnContext(ctx, "storage sweep incomplete", "error", err)
+			}
+			return false
+		}))
+	})
+	group.Go(func() error {
+		return loop(ctx, buildRecoveryTick, buildWake, nil, every("build_recovery", buildRecoveryTick, func(ctx context.Context) bool {
 			if _, err := im.Recover(ctx, logger); err != nil {
 				logger.ErrorContext(ctx, "image build recovery pass", "error", err)
 			}
 			return false
 		}))
 	})
-	accounts.start(ctx, group)
+	accounts.start(ctx, group, beats)
 	newBillingLoops(pool, exec, store, logger).start(ctx, group)
-	logger.Info("scheduler started")
+	if healthListener != nil {
+		server := &http.Server{Handler: beats.handler(), ReadHeaderTimeout: 5 * time.Second}
+		group.Go(func() error {
+			if err := server.Serve(healthListener); !errors.Is(err, http.ErrServerClosed) {
+				return fmt.Errorf("serve health: %w", err)
+			}
+			return nil
+		})
+		group.Go(func() error {
+			<-ctx.Done()
+			if err := server.Close(); err != nil {
+				return fmt.Errorf("close health server: %w", err)
+			}
+			return nil
+		})
+	}
+	logger.Info("scheduler started", "version", version)
 	if err := group.Wait(); err != nil {
 		return fmt.Errorf("scheduler loops: %w", err)
 	}

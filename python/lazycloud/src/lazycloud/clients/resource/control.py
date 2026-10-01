@@ -5,7 +5,6 @@ from typing import Protocol, TypeVar
 
 from pydantic import BaseModel, JsonValue
 from shared.http.compute import (
-    MachineListResponse,
     UnitListResponse,
     WorkerListResponse,
 )
@@ -73,12 +72,6 @@ class ResourceControlClient:
             self.channel.get(
                 self._path(f"/api/v1/deployments/{url_path_segment(deployment_id)}/devbox")
             ),
-        )
-
-    def list_machines(self) -> MachineListResponse:
-        return _validate_response(
-            MachineListResponse,
-            self.channel.get(self._path("/api/v1/machines")),
         )
 
     def list_units(self) -> UnitListResponse:

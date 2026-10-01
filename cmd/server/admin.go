@@ -2,17 +2,23 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	iofs "io/fs"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/compute"
+	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
@@ -20,7 +26,7 @@ import (
 // once; only their digests are stored.
 func admin(ctx context.Context, args []string, out io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("admin needs a command: create-user, create-workspace, create-token, set-complimentary or create-join-token")
+		return errors.New("admin needs a command: create-user, create-workspace, create-token, set-complimentary, create-join-token or publish-agent-release")
 	}
 	command, args := args[0], args[1:]
 	fs := flag.NewFlagSet("admin "+command, flag.ContinueOnError)
@@ -79,11 +85,46 @@ func admin(ctx context.Context, args []string, out io.Writer) error {
 	case "create-join-token":
 		ttl := fs.Duration("ttl", time.Hour, "time the token stays valid")
 		run = func(pool *pgxpool.Pool) error {
-			token, _, err := compute.NewCompute(pool).CreateJoinToken(ctx, *ttl)
+			token, _, err := compute.NewCompute(pool, execution.NewExecution(pool), compute.Config{}).CreateJoinToken(ctx, *ttl)
 			if err != nil {
 				return err
 			}
 			return printLine(out, token)
+		}
+	case "publish-agent-release":
+		version := fs.String("version", "", "release version")
+		dist := fs.String("dist", env("LAZYCLOUD_AGENT_DIST_DIR", ""), "directory holding <version>/lazycloud-agent-linux-<arch>.tar.gz")
+		rollout := fs.Int("rollout", 100, "percent of updatable hosts that move to the release; publish again to widen it")
+		run = func(pool *pgxpool.Pool) error {
+			if !compute.ValidVersion(*version) || *dist == "" {
+				return errors.New("-version and -dist are required")
+			}
+			if *rollout < 0 || *rollout > 100 {
+				return errors.New("-rollout must be 0 to 100")
+			}
+			release := compute.AgentRelease{Version: *version, SHA256: map[string]string{}, RolloutPercent: *rollout}
+			for _, arch := range []string{"amd64", "arm64"} {
+				digest, err := fileSHA256(filepath.Join(*dist, *version, compute.ArchiveName(arch)))
+				if errors.Is(err, iofs.ErrNotExist) {
+					continue
+				}
+				if err != nil {
+					return err
+				}
+				release.SHA256[arch] = digest
+			}
+			if len(release.SHA256) == 0 {
+				return fmt.Errorf("no archive in %s", filepath.Join(*dist, *version))
+			}
+			if err := compute.NewCompute(pool, execution.NewExecution(pool), compute.Config{}).PublishAgentRelease(ctx, release); err != nil {
+				return err
+			}
+			for arch, digest := range release.SHA256 {
+				if err := printLine(out, arch+" "+digest); err != nil {
+					return err
+				}
+			}
+			return nil
 		}
 	default:
 		return fmt.Errorf("unknown admin command %q", command)
@@ -92,6 +133,19 @@ func admin(ctx context.Context, args []string, out io.Writer) error {
 		return fmt.Errorf("parse flags: %w", err)
 	}
 	return withPool(ctx, *dbURL, run)
+}
+
+func fileSHA256(path string) (string, error) {
+	f, err := os.Open(path) //nolint:gosec // An operator names the file.
+	if err != nil {
+		return "", fmt.Errorf("open archive: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", fmt.Errorf("hash archive: %w", err)
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 func printLine(out io.Writer, v any) error {

@@ -223,7 +223,18 @@ func (s *Server) CreateWorkspace(ctx context.Context, req CreateWorkspaceRequest
 	if err != nil {
 		return nil, err
 	}
-	ws, err := s.owners.Identity.CreateOwnedWorkspace(ctx, p, req.Body.Name)
+	var connection *uuid.UUID
+	if req.Body.Cloud != nil {
+		if !p.IsAdmin {
+			return nil, identity.ErrAdminRequired
+		}
+		id, err := s.owners.Compute.WorkspaceConnection(ctx, p.User)
+		if err != nil {
+			return nil, err
+		}
+		connection = &id
+	}
+	ws, err := s.owners.Identity.CreateOwnedWorkspaceIn(ctx, p, req.Body.Name, connection)
 	if err != nil {
 		return nil, err
 	}
@@ -413,7 +424,7 @@ func (s *Server) DeclineInvitation(ctx context.Context, req DeclineInvitationReq
 func userOut(u identity.User) apitypes.User {
 	return apitypes.User{
 		Id: uuid.UUID(u.ID), Email: u.Email, DisplayName: u.DisplayName, AvatarUrl: u.AvatarURL,
-		GithubLogin: u.GitHubLogin, IsAdmin: u.IsAdmin, CreatedAt: u.CreatedAt,
+		GithubLogin: u.GitHubLogin, IsAdmin: u.IsAdmin, Status: apitypes.UserStatus(u.Status), CreatedAt: u.CreatedAt,
 	}
 }
 

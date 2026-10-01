@@ -76,7 +76,7 @@ func TestOnlyAdministratorsSeeAndWaiveAccounts(t *testing.T) {
 		t.Fatalf("member lists accounts: %d %+v", status, failure)
 	}
 	var page apitypes.BillingAccountAdminPage
-	if status := e.do("GET", "/v1/billing/accounts?search=member%40&role=user", admin, nil, &page); status != http.StatusOK ||
+	if status := e.do("GET", "/v1/billing/accounts?search=member%40&role=member", admin, nil, &page); status != http.StatusOK ||
 		len(page.Accounts) != 1 || page.Accounts[0].User.Email != "member@example.com" {
 		t.Fatalf("search: %d %+v", status, page)
 	}

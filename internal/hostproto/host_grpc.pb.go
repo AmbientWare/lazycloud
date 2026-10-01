@@ -43,7 +43,8 @@ const (
 // results and logs travel on their own calls so large payloads never delay
 // commands or presence.
 type HostServiceClient interface {
-	// Enroll exchanges a single-use join token for a host identity.
+	// Enroll exchanges a single-use join token, or a cloud instance's identity
+	// proof, for a host identity.
 	Enroll(ctx context.Context, in *EnrollRequest, opts ...grpc.CallOption) (*EnrollResponse, error)
 	// Session is the host's control stream. The first HostMessage is Hello.
 	// Commands are derived from durable state and resent after reconnect, so
@@ -222,7 +223,8 @@ func (c *hostServiceClient) AppendImageBuildLogs(ctx context.Context, in *Append
 // results and logs travel on their own calls so large payloads never delay
 // commands or presence.
 type HostServiceServer interface {
-	// Enroll exchanges a single-use join token for a host identity.
+	// Enroll exchanges a single-use join token, or a cloud instance's identity
+	// proof, for a host identity.
 	Enroll(context.Context, *EnrollRequest) (*EnrollResponse, error)
 	// Session is the host's control stream. The first HostMessage is Hello.
 	// Commands are derived from durable state and resent after reconnect, so

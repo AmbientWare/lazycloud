@@ -49,10 +49,13 @@ type env struct {
 	pool      *pgxpool.Pool
 	url       string
 	execution *execution.Execution
+	compute   *compute.Compute
 	identity  *identity.Identity
 	github    *identitytest.GitHub
 	owner     string
 	outsider  string
+	// distDir holds agent release archives for /install/agent.
+	distDir string
 }
 
 func newEnv(t *testing.T) *env {
@@ -90,6 +93,8 @@ func newEnvWith(t *testing.T, changesConfig observability.ChangesConfig) *env {
 		ClientID: identitytest.ClientID, ClientSecret: identitytest.ClientSecret, OAuthURL: gh.URL, APIURL: gh.URL,
 	}})
 	e := execution.NewExecution(pool)
+	comp := compute.NewCompute(pool, e, compute.Config{InstallURL: "https://install.test", ServerAddress: "hosts.test:443"})
+	dist := t.TempDir()
 	logger := slog.New(slog.DiscardHandler)
 	bill := billing.NewBilling(pool, billing.Config{PublicURL: dashboardURL}, logger)
 	handler, err := api.NewHandler(api.Owners{
@@ -97,7 +102,8 @@ func newEnvWith(t *testing.T, changesConfig observability.ChangesConfig) *env {
 		Execution: e, Notifications: notifications.NewNotifications(pool, nil, logger), Listener: listener, Billing: bill,
 		Images:        images.NewImages(pool, e, images.Config{Registry: "registry.example.com", Repository: "lazycloud"}),
 		Observability: observability.NewObservability(pool, observability.Config{}, logger), Changes: changes,
-	}, api.Config{PublicURL: dashboardURL, ResendWebhookSecret: webhookSecret, ClientReleaseVersion: "9.9.9"}, logger)
+		Compute: comp,
+	}, api.Config{PublicURL: dashboardURL, ResendWebhookSecret: webhookSecret, ClientReleaseVersion: "9.9.9", AgentDistDir: dist}, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +132,10 @@ func newEnvWith(t *testing.T, changesConfig observability.ChangesConfig) *env {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &env{t: t, pool: pool, url: server.URL, execution: e, identity: id, github: gh, owner: owner, outsider: outsider}
+	return &env{
+		t: t, pool: pool, url: server.URL, execution: e, compute: comp, identity: id, github: gh, owner: owner, outsider: outsider,
+		distDir: dist,
+	}
 }
 
 // do sends a request and decodes the response into out. It is safe off the

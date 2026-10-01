@@ -5,6 +5,7 @@ select id, last_seen_at
 from hosts
 where state = 'online'
   and last_seen_at < now() - make_interval(secs => @timeout_seconds::float8)
+  and (updating_until is null or updating_until < now())
   and (last_seen_at, id) > (@after_seen_at::timestamptz, @after_id::uuid)
 order by last_seen_at, id
 limit @batch_size;
@@ -16,4 +17,5 @@ update hosts
 set state = 'lost'
 where id = @id
   and state = 'online'
-  and last_seen_at < now() - make_interval(secs => @timeout_seconds::float8);
+  and last_seen_at < now() - make_interval(secs => @timeout_seconds::float8)
+  and (updating_until is null or updating_until < now());

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -39,6 +40,10 @@ type session struct {
 	sent map[string]bool
 	// grants holds the expiry of the storage grant sent per workspace.
 	grants map[identity.WorkspaceID]time.Time
+	// live holds the containers the host runs as far as this session knows:
+	// reported and not exited, or started. A stop decided elsewhere, such as
+	// a machine removal or a preemption, reaches the host through it.
+	live map[execution.ContainerID]bool
 }
 
 // Session serves a host's control stream. Hello opens a session epoch and
@@ -69,13 +74,26 @@ func (s *Server) Session(stream grpc.BidiStreamingServer[hostproto.HostMessage, 
 	// Subscribe before reading durable state so no change is missed.
 	wake, unsubscribe := s.listener.Subscribe(database.ChannelHost, host.String())
 	defer unsubscribe()
-	epoch, err := s.compute.OpenSession(ctx, host, hello.GetBootId(), compute.Capacity{
-		CPUMillis: hello.GetCapacity().GetCpuMillis(), MemoryBytes: hello.GetCapacity().GetMemoryBytes(),
+	epoch, err := s.compute.OpenSession(ctx, host, compute.SessionOpen{
+		BootID: hello.GetBootId(), Capacity: capacityIn(hello.GetCapacity()), AgentVersion: hello.GetAgentVersion(),
 	})
 	if err != nil {
 		return s.grpcError(ctx, err)
 	}
-	sess := &session{server: s, stream: stream, host: host, sent: map[string]bool{}, grants: map[identity.WorkspaceID]time.Time{}}
+	sess := &session{server: s, stream: stream, host: host, sent: map[string]bool{}, live: map[execution.ContainerID]bool{},
+		grants: map[identity.WorkspaceID]time.Time{}}
+	for _, r := range reports {
+		sess.observe(r)
+	}
+	update, err := s.compute.UpdateFor(ctx, host, hello.GetAgentVersion(), hello.GetRejectedVersion(), hello.GetUpdatable())
+	if err != nil {
+		return s.grpcError(ctx, err)
+	}
+	if update != nil {
+		if err := sess.sendUpdate(ctx, update); err != nil {
+			return err
+		}
+	}
 	actions, err := s.execution.ReconcileHost(ctx, host, reports)
 	if err != nil {
 		return s.grpcError(ctx, err)
@@ -130,6 +148,13 @@ func (s *Server) Session(stream grpc.BidiStreamingServer[hostproto.HostMessage, 
 			if err := sess.sync(ctx); err != nil {
 				return err
 			}
+			// A removal wakes the session too; ending it at once makes the
+			// agent find its credential revoked without waiting for a touch.
+			if current, err := s.compute.Touch(ctx, host, epoch); err != nil {
+				return s.grpcError(ctx, err)
+			} else if !current {
+				return status.Error(codes.Aborted, "a newer session replaced this one")
+			}
 		case <-touch.C:
 			current, err := s.compute.Touch(ctx, host, epoch)
 			if err != nil {
@@ -140,6 +165,17 @@ func (s *Server) Session(stream grpc.BidiStreamingServer[hostproto.HostMessage, 
 			}
 			if err := sess.sync(ctx); err != nil {
 				return err
+			}
+			// A release published while the session is open, or widened
+			// to this host, reaches it here.
+			update, err := s.compute.UpdateFor(ctx, host, hello.GetAgentVersion(), hello.GetRejectedVersion(), hello.GetUpdatable())
+			if err != nil {
+				return s.grpcError(ctx, err)
+			}
+			if update != nil && !sess.sent["update:"+update.Version] {
+				if err := sess.sendUpdate(ctx, update); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -152,6 +188,7 @@ func (sess *session) handle(ctx context.Context, msg *hostproto.HostMessage) err
 		if err != nil {
 			return err
 		}
+		sess.observe(report)
 		actions, err := sess.server.execution.ApplyReport(ctx, sess.host, report)
 		if err != nil {
 			return sess.server.grpcError(ctx, err)
@@ -160,6 +197,14 @@ func (sess *session) handle(ctx context.Context, msg *hostproto.HostMessage) err
 		return sess.sendActions(actions)
 	case *hostproto.HostMessage_Metrics:
 		sess.server.offerMetrics(sess.host, body.Metrics)
+	case *hostproto.HostMessage_Interruption:
+		at := time.Now()
+		if body.Interruption.GetReclaimAt() != nil {
+			at = body.Interruption.GetReclaimAt().AsTime()
+		}
+		if err := sess.server.compute.ReportInterruption(ctx, sess.host, body.Interruption.GetReason(), at); err != nil {
+			return sess.server.grpcError(ctx, err)
+		}
 		return nil
 	case *hostproto.HostMessage_Ack:
 		// Acknowledgement is receipt only; the following report shows the
@@ -207,6 +252,7 @@ func (sess *session) sync(ctx context.Context) error {
 		if err := sess.send(msg); err != nil {
 			return err
 		}
+		sess.live[start.Container] = true
 	}
 	if err := sess.syncBuilds(ctx, derived); err != nil {
 		return err
@@ -229,8 +275,48 @@ func (sess *session) sync(ctx context.Context) error {
 			}
 		}
 	}
+	if err := sess.syncStopped(ctx, derived); err != nil {
+		return err
+	}
+	for id := range sess.sent {
+		if strings.HasPrefix(id, "update:") {
+			derived[id] = true
+		}
+	}
 	sess.sent = derived
 	return sess.refreshGrants(ctx)
+}
+
+// observe tracks whether the host still runs a reported container.
+func (sess *session) observe(report execution.ContainerReport) {
+	if report.Phase == execution.ReportExited {
+		delete(sess.live, report.Container)
+		return
+	}
+	sess.live[report.Container] = true
+}
+
+// syncStopped sends a stop for every container the host runs that is
+// already stopped.
+func (sess *session) syncStopped(ctx context.Context, derived map[string]bool) error {
+	ids := make([]execution.ContainerID, 0, len(sess.live))
+	for id := range sess.live {
+		ids = append(ids, id)
+	}
+	stopped, err := sess.server.execution.StoppedAmong(ctx, ids)
+	if err != nil {
+		return sess.server.grpcError(ctx, err)
+	}
+	for _, container := range stopped {
+		id := "stop:" + container.String()
+		derived[id] = true
+		if !sess.sent[id] {
+			if err := sess.send(stopMessage(id, container)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // sendActions sends the commands a report implied. They are not derived
@@ -298,6 +384,7 @@ func (s *Server) startMessage(ctx context.Context, id string, start execution.St
 			CpuMillis: start.CPUMillis, MemoryBytes: start.MemoryBytes,
 			CpuLimitMillis: start.CPULimitMillis, MemoryLimitBytes: start.MemoryLimitBytes,
 			DiskLimitBytes: diskLimit,
+			GpuCount:       gpusOf(start.Spec.Resources),
 		},
 		Function: &hostproto.FunctionWorkload{
 			Handler:   start.Spec.Handler,
@@ -403,4 +490,13 @@ func exitIn(e *hostproto.ContainerExit) execution.ContainerExit {
 		exit.Reason = execution.StopCrashed
 	}
 	return exit
+}
+
+// sendUpdate tells the agent to install a release and gives its host the
+// update window to restart in.
+func (sess *session) sendUpdate(ctx context.Context, update *compute.AgentUpdate) error {
+	if err := sess.server.compute.UpdateSent(ctx, sess.host); err != nil {
+		return sess.server.grpcError(ctx, err)
+	}
+	return sess.send(updateMessage(update))
 }
