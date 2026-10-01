@@ -1,10 +1,11 @@
 import { useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
-import { ApiProtocolError } from "@/lib/api/client";
-import type { CurrentSession, Workspace } from "@/lib/api/schemas";
-import { currentSessionQueryOptions } from "@/lib/queries/auth";
-import { updateWorkspace } from "@/lib/queries/workspace";
+import type { Schemas } from "@/lib/api/client";
+import { meQueryKey } from "@/lib/queries/auth";
+import { renameWorkspace } from "@/lib/queries/workspace";
+
+type Workspace = Schemas["Workspace"];
 
 type WorkspaceRenameMode = "editing" | "saving" | "saved" | "error";
 
@@ -18,6 +19,7 @@ type WorkspaceRenameState = {
 
 type RenameCommand = {
   workspaceId: string;
+  currentName: string;
   name: string;
 };
 
@@ -49,16 +51,12 @@ export function useWorkspaceRenameController({
 
   const rename = useMutation({
     mutationFn: async (command: RenameCommand) => {
-      const updated = await updateWorkspace(command.workspaceId, command.name);
-      if (updated.id !== command.workspaceId) {
-        throw new ApiProtocolError("The API returned a different workspace after rename");
-      }
-      return updated;
+      return renameWorkspace(command.currentName, command.name);
     },
     onSuccess: (updated, command) => {
       // The session is what the shell and this dialog read, so the rename has to land
       // there; a second list nothing observes would just go stale.
-      queryClient.setQueryData<CurrentSession>(currentSessionQueryOptions().queryKey, (session) =>
+      queryClient.setQueryData<Schemas["Me"]>(meQueryKey, (session) =>
         session
           ? {
               ...session,
@@ -138,7 +136,7 @@ export function useWorkspaceRenameController({
         error: null,
       };
       setState(savingState);
-      rename.mutate({ workspaceId: workspace.id, name });
+      rename.mutate({ workspaceId: workspace.id, currentName: workspace.name, name });
     },
   };
 }
@@ -162,7 +160,7 @@ function normalizeWorkspaceName(name: string): string {
 }
 
 function validWorkspaceName(name: string): boolean {
-  return /^[a-z][a-z0-9_-]{0,62}$/.test(name);
+  return /^[a-z][a-z0-9-]{0,62}$/.test(name);
 }
 
 function asError(error: unknown): Error {

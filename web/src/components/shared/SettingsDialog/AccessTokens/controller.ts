@@ -1,22 +1,19 @@
 import { useRef, useState } from "react";
-import {
-  useInfiniteQuery,
-  useQueryClient,
-  type InfiniteData,
-  type QueryClient,
-} from "@tanstack/react-query";
+import { useInfiniteQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 
-import type { AuthToken, TokenListResponse } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 import {
   createToken,
   revokeToken,
   selectTokenList,
   tokensQueryOptions,
   type CreateTokenInput,
+  type TokenPages,
 } from "@/lib/queries/tokens";
 import { accountQueryKeys } from "@/lib/queries/workspace-keys";
 
-type TokenPages = InfiniteData<TokenListResponse, string>;
+type AuthToken = Schemas["Token"];
+type TokenListResponse = Schemas["TokenList"];
 
 type CreateMode = "closed" | "drafting" | "creating" | "issued" | "error";
 type ActionMode = "idle" | "confirming" | "running" | "error";
@@ -108,7 +105,9 @@ export function useAccessTokensController(showDeviceTokens: boolean): AccessToke
             issued: {
               secret: result.token,
               name: result.record.name,
-              prefix: result.record.prefix,
+              // Enough of the secret to recognize it once masked; the API keeps
+              // only its digest.
+              prefix: result.token.slice(0, 6),
             },
           },
           action: { mode: "idle" },
@@ -200,7 +199,7 @@ function insertTokenRecord(queryClient: QueryClient, record: AuthToken): void {
     if (!current) return current;
     const [first, ...rest] = withoutToken(current.pages, record.id);
     if (!first) return current;
-    return { ...current, pages: [{ ...first, data: [record, ...first.data] }, ...rest] };
+    return { ...current, pages: [{ ...first, tokens: [record, ...first.tokens] }, ...rest] };
   });
 }
 
@@ -213,7 +212,7 @@ function removeTokenRecord(queryClient: QueryClient, tokenId: string): void {
 function withoutToken(pages: TokenListResponse[], tokenId: string): TokenListResponse[] {
   return pages.map((page) => ({
     ...page,
-    data: page.data.filter((token) => token.id !== tokenId),
+    tokens: page.tokens.filter((token) => token.id !== tokenId),
   }));
 }
 

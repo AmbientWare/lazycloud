@@ -17,7 +17,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { WorkspaceRenameDialog } from "@/components/shared/WorkspaceRename/Dialog";
-import type { Workspace } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 import { useWorkspace } from "@/lib/workspace-context";
 import { cn } from "@/lib/utils";
 
@@ -32,9 +32,9 @@ export function WorkspaceSwitcher({
 }) {
   const { workspace, workspaces } = useWorkspace();
   const { user } = useSession();
-  const [renaming, setRenaming] = useState<Workspace | null>(null);
+  const [renaming, setRenaming] = useState<Schemas["Workspace"] | null>(null);
   const [creating, setCreating] = useState(false);
-  const [viewingMembers, setViewingMembers] = useState<Workspace | null>(null);
+  const [viewingMembers, setViewingMembers] = useState<Schemas["Workspace"] | null>(null);
   const router = useRouter();
   const deletion = useWorkspaceDeletion();
   const path = useRouterState({ select: (state) => state.location.pathname });
@@ -69,9 +69,9 @@ export function WorkspaceSwitcher({
               {/* Named rather than shaded. Four statuses collapsed into two dot
                   colours, so a workspace mid-delete looked like a disabled one,
                   and the dot carried it for sighted readers alone. */}
-              {workspace.status === "active" ? null : (
+              {workspace.state === "active" ? null : (
                 <span className="shrink-0 text-[11px] font-normal text-muted-foreground">
-                  {workspace.status}
+                  {workspace.state}
                 </span>
               )}
             </span>
@@ -83,7 +83,7 @@ export function WorkspaceSwitcher({
               the workspaces below it, so it leads the menu instead of joining
               that list. Administrators only, which is who the platform lets
               create one at all. */}
-          {user.role === "administrator" ? (
+          {user.is_admin ? (
             <DropdownMenuItem className="min-h-10" onSelect={() => setCreating(true)}>
               <Plus className="text-muted-foreground" />
               Create workspace
@@ -101,9 +101,9 @@ export function WorkspaceSwitcher({
                   onSelect={() => switchWorkspace(item.name)}
                 >
                   <span className="min-w-0 flex-1 truncate">{item.name}</span>
-                  {item.status === "active" ? null : (
+                  {item.state === "active" ? null : (
                     <span className="shrink-0 text-[11px] text-muted-foreground">
-                      {item.status}
+                      {item.state}
                     </span>
                   )}
                   {item.id === workspace.id ? (
@@ -138,7 +138,7 @@ export function WorkspaceSwitcher({
                         onSelect={() => deletion.begin(item, item.id === workspace.id)}
                       >
                         <Trash2 />
-                        {item.status === "deleting" ? "Resume deleting" : "Delete"}
+                        {item.state === "deleting" ? "Resume deleting" : "Delete"}
                       </DropdownMenuItem>
                     ) : null}
                   </DropdownMenuSubContent>

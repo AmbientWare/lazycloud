@@ -2,11 +2,11 @@ import { Slot } from "@radix-ui/react-slot";
 import { cva, type VariantProps } from "class-variance-authority";
 import { useEffect, useState, type ComponentPropsWithoutRef, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
 import { ArrowRight, ArrowUpRight } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { useAuthToken } from "@/hooks/use-auth-token";
-import { githubSignInHref } from "@/lib/queries/auth";
+import { githubSignInHref, meQueryOptions } from "@/lib/queries/auth";
 import { cn } from "@/lib/utils";
 import { MarketingReveal } from "./MarketingReveal";
 
@@ -155,7 +155,9 @@ export function GetStartedButton({
   label?: string;
   variant?: "default" | "secondary";
 }) {
-  const token = useAuthToken();
+  // Signed in when the session cookie names a live session; the cookie is
+  // HttpOnly, so asking is the only way to know.
+  const token = useQuery(meQueryOptions()).data;
   const content = (
     <>
       <span>{token ? "Dashboard" : label}</span>

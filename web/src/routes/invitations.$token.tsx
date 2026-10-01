@@ -8,7 +8,7 @@ import { PreShellScreen } from "@/components/shared/PreShellScreen";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError } from "@/lib/api/client";
-import { currentSessionQueryOptions } from "@/lib/queries/auth";
+import { meQueryKey } from "@/lib/queries/auth";
 import {
   acceptInvitation,
   declineInvitation,
@@ -46,18 +46,16 @@ function InvitationPage() {
   const settle = async () => {
     // Accepting changes which workspaces the session reaches, so it has to be
     // re-read before anything navigates into the new one.
-    await queryClient.invalidateQueries({ queryKey: currentSessionQueryOptions().queryKey });
+    await queryClient.invalidateQueries({ queryKey: meQueryKey });
   };
 
   const accept = useMutation({
     mutationFn: () => acceptInvitation(token),
-    onSuccess: async () => {
-      const name = preview.data?.workspace_name;
-      toast.success(name ? `You joined ${name}` : "Invitation accepted");
+    onSuccess: async ({ workspace }) => {
+      const name = workspace.name;
+      toast.success(`You joined ${name}`);
       await settle();
-      await navigate(
-        name ? { to: "/w/$workspace", params: { workspace: name } } : { to: "/dashboard" },
-      );
+      await navigate({ to: "/w/$workspace", params: { workspace: name } });
     },
     onError: (error) => toast.error("Could not accept", { description: error.message }),
   });

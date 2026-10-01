@@ -1,27 +1,21 @@
-import { z } from "zod";
+import { api, ok, type Schemas } from "@/lib/api/client";
 
-import { apiRequest, postJson, withWorkspace } from "@/lib/api/client";
-import { workspaceSchema, type Workspace } from "@/lib/api/schemas";
+const path = (workspace: string) => ({ params: { path: { workspace } } });
+
+/** Administrators only: create a workspace owned by the signed-in account. 403 otherwise. */
+export function createWorkspace(name: string): Promise<Schemas["Workspace"]> {
+  return ok(api.POST("/v1/workspaces", { body: { name } }));
+}
 
 /**
- * Administrators only: create a workspace owned by the signed-in account. 403 otherwise.
- * A connection id places the workspace, its compute and its bucket, in that connected
- * AWS account for good.
+ * Administrators only: start deleting a workspace, or resume a deletion that has
+ * not finished. It refuses every other request at once and disappears once its
+ * tasks, containers and data are gone.
  */
-export function createWorkspace(name: string, connectionId: string | null): Promise<Workspace> {
-  return postJson("/api/v1/workspaces", workspaceSchema, { name, connection_id: connectionId });
+export function deleteWorkspace(workspace: string): Promise<Schemas["Workspace"]> {
+  return ok(api.DELETE("/v1/workspaces/{workspace}", path(workspace)));
 }
 
-/** Administrators only: irreversibly delete an empty, non-system workspace. */
-export function deleteWorkspace(workspaceId: string): Promise<null> {
-  return apiRequest(`/api/v1/workspaces/${encodeURIComponent(workspaceId)}`, z.null(), {
-    method: "DELETE",
-  });
-}
-
-export function updateWorkspace(workspaceId: string, name: string): Promise<Workspace> {
-  return apiRequest(withWorkspace("/api/v1/workspaces/current", workspaceId), workspaceSchema, {
-    method: "PATCH",
-    body: JSON.stringify({ name: name.trim() }),
-  });
+export function renameWorkspace(workspace: string, name: string): Promise<Schemas["Workspace"]> {
+  return ok(api.PATCH("/v1/workspaces/{workspace}", { ...path(workspace), body: { name } }));
 }

@@ -9,8 +9,7 @@ import { PreShellScreen } from "@/components/shared/PreShellScreen";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useSession } from "@/components/shared/AuthGate/session";
-import { ApiError } from "@/lib/api/client";
-import type { DeviceCode } from "@/lib/api/schemas";
+import { ApiError, type Schemas } from "@/lib/api/client";
 import {
   approveDeviceCodeMutationOptions,
   denyDeviceCodeMutationOptions,
@@ -121,7 +120,7 @@ function DeviceCodeDecision({
   deviceCode,
 }: {
   userCode: string;
-  deviceCode: DeviceCode;
+  deviceCode: Schemas["DeviceCode"];
 }) {
   const { user } = useSession();
   const queryClient = useQueryClient();

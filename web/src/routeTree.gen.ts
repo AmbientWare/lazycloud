@@ -12,7 +12,6 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as SigninRouteImport } from './routes/signin'
 import { Route as PricingRouteImport } from './routes/pricing'
 import { Route as DashboardRouteImport } from './routes/dashboard'
-import { Route as CallbackRouteImport } from './routes/callback'
 import { Route as ActivateRouteImport } from './routes/activate'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as LegalTermsRouteImport } from './routes/legal/terms'
@@ -45,11 +44,6 @@ const PricingRoute = PricingRouteImport.update({
 const DashboardRoute = DashboardRouteImport.update({
   id: '/dashboard',
   path: '/dashboard',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const CallbackRoute = CallbackRouteImport.update({
-  id: '/callback',
-  path: '/callback',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ActivateRoute = ActivateRouteImport.update({
@@ -151,7 +145,6 @@ const WWorkspaceAppsAppIdWorkloadsKindNameInstancesContainerIdRoute =
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/activate': typeof ActivateRoute
-  '/callback': typeof CallbackRoute
   '/dashboard': typeof DashboardRoute
   '/pricing': typeof PricingRoute
   '/signin': typeof SigninRoute
@@ -175,7 +168,6 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/activate': typeof ActivateRoute
-  '/callback': typeof CallbackRoute
   '/dashboard': typeof DashboardRoute
   '/pricing': typeof PricingRoute
   '/signin': typeof SigninRoute
@@ -199,7 +191,6 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/activate': typeof ActivateRoute
-  '/callback': typeof CallbackRoute
   '/dashboard': typeof DashboardRoute
   '/pricing': typeof PricingRoute
   '/signin': typeof SigninRoute
@@ -225,7 +216,6 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/activate'
-    | '/callback'
     | '/dashboard'
     | '/pricing'
     | '/signin'
@@ -249,7 +239,6 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/activate'
-    | '/callback'
     | '/dashboard'
     | '/pricing'
     | '/signin'
@@ -272,7 +261,6 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/activate'
-    | '/callback'
     | '/dashboard'
     | '/pricing'
     | '/signin'
@@ -297,7 +285,6 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ActivateRoute: typeof ActivateRoute
-  CallbackRoute: typeof CallbackRoute
   DashboardRoute: typeof DashboardRoute
   PricingRoute: typeof PricingRoute
   SigninRoute: typeof SigninRoute
@@ -328,13 +315,6 @@ declare module '@tanstack/react-router' {
       path: '/dashboard'
       fullPath: '/dashboard'
       preLoaderRoute: typeof DashboardRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/callback': {
-      id: '/callback'
-      path: '/callback'
-      fullPath: '/callback'
-      preLoaderRoute: typeof CallbackRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/activate': {
@@ -537,7 +517,6 @@ const WWorkspaceRouteRouteWithChildren = WWorkspaceRouteRoute._addFileChildren(
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ActivateRoute: ActivateRoute,
-  CallbackRoute: CallbackRoute,
   DashboardRoute: DashboardRoute,
   PricingRoute: PricingRoute,
   SigninRoute: SigninRoute,

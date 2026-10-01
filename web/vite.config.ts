@@ -213,26 +213,17 @@ export default defineConfig({
        Remote development requires listing the machine's hostname. */
     host: true,
     allowedHosts: devAllowedHosts,
+    /* The dashboard and the API share one origin, so the session cookie and the
+       Origin check on cookie-authenticated mutations work as they do in
+       production. The server's LAZYCLOUD_PUBLIC_URL must name this dev server.
+       changeOrigin rewrites Host only; the browser's Origin header passes through. */
     proxy: {
-      "/api": {
-        target: viteEnv.VITE_API_TARGET,
-        changeOrigin: true,
-        ws: true,
-      },
-      "/gateway": {
+      "/v1": {
         target: viteEnv.VITE_API_TARGET,
         changeOrigin: true,
         ws: true,
       },
       "/auth": {
-        target: viteEnv.VITE_API_TARGET,
-        changeOrigin: true,
-      },
-      "/health": {
-        target: viteEnv.VITE_API_TARGET,
-        changeOrigin: true,
-      },
-      "/metrics": {
         target: viteEnv.VITE_API_TARGET,
         changeOrigin: true,
       },

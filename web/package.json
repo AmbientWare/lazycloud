@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite dev",
     "routegen": "tsr generate",
+    "apigen": "openapi-typescript ../contracts/openapi.yaml -o src/lib/api/generated/openapi.ts",
     "build": "bun run routegen && vite build && test -f dist/client/index.html",
     "start": "node dist/server/index.mjs",
     "lint": "eslint .",
@@ -32,6 +33,7 @@
     "cmdk": "^1.1.1",
     "date-fns": "^4.4.0",
     "lucide-react": "^1.23.0",
+    "openapi-fetch": "0.17.0",
     "radix-ui": "^1.6.2",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
@@ -62,6 +64,7 @@
     "eslint-plugin-react-refresh": "^0.5.3",
     "globals": "^17.7.0",
     "jsdom": "^29.1.1",
+    "openapi-typescript": "7.13.0",
     "prettier": "^3.9.6",
     "tailwindcss": "^4.3.2",
     "typescript": "^6.0.3",

@@ -1,91 +1,80 @@
 import { queryOptions } from "@tanstack/react-query";
-import { z } from "zod";
 
-import { apiRequest } from "@/lib/api/client";
-import {
-  invitationPreviewSchema,
-  workspaceInvitationListSchema,
-  workspaceInvitationSchema,
-  workspaceMemberListSchema,
-  workspaceMemberSchema,
-  type InvitableRole,
-  type WorkspaceInvitation,
-  type WorkspaceMember,
-} from "@/lib/api/schemas";
+import { api, ok, type Schemas } from "@/lib/api/client";
 
 import { accountQueryKeys, workspaceQueryKeys } from "./workspace-keys";
 
-const workspacePath = (workspaceName: string) =>
-  `/api/v1/workspaces/${encodeURIComponent(workspaceName)}`;
+const workspacePath = (workspace: string) => ({ path: { workspace } });
 
-export function workspaceMembersQueryOptions(workspaceId: string, workspaceName: string) {
+export function workspaceMembersQueryOptions(workspace: string) {
   return queryOptions({
-    queryKey: workspaceQueryKeys.members(workspaceId),
-    queryFn: () => apiRequest(`${workspacePath(workspaceName)}/members`, workspaceMemberListSchema),
+    queryKey: workspaceQueryKeys.members(workspace),
+    queryFn: () =>
+      ok(api.GET("/v1/workspaces/{workspace}/members", { params: workspacePath(workspace) })),
     staleTime: 30_000,
   });
 }
 
-export function workspaceInvitationsQueryOptions(workspaceId: string, workspaceName: string) {
+export function workspaceInvitationsQueryOptions(workspace: string) {
   return queryOptions({
-    queryKey: workspaceQueryKeys.invitations(workspaceId),
+    queryKey: workspaceQueryKeys.invitations(workspace),
     queryFn: () =>
-      apiRequest(`${workspacePath(workspaceName)}/invitations`, workspaceInvitationListSchema),
+      ok(api.GET("/v1/workspaces/{workspace}/invitations", { params: workspacePath(workspace) })),
     staleTime: 30_000,
   });
 }
 
 export function inviteWorkspaceMember(
-  workspaceName: string,
+  workspace: string,
   email: string,
-  role: InvitableRole,
-): Promise<WorkspaceInvitation> {
-  return apiRequest(`${workspacePath(workspaceName)}/invitations`, workspaceInvitationSchema, {
-    method: "POST",
-    body: JSON.stringify({ email, role }),
-  });
-}
-
-export function resendWorkspaceInvitation(
-  workspaceName: string,
-  invitationId: string,
-): Promise<WorkspaceInvitation> {
-  return apiRequest(
-    `${workspacePath(workspaceName)}/invitations/${encodeURIComponent(invitationId)}/resend`,
-    workspaceInvitationSchema,
-    { method: "POST" },
+  role: Schemas["InvitationRole"],
+): Promise<Schemas["Invitation"]> {
+  return ok(
+    api.POST("/v1/workspaces/{workspace}/invitations", {
+      params: workspacePath(workspace),
+      body: { email, role },
+    }),
   );
 }
 
-export function revokeWorkspaceInvitation(
-  workspaceName: string,
-  invitationId: string,
-): Promise<null> {
-  return apiRequest(
-    `${workspacePath(workspaceName)}/invitations/${encodeURIComponent(invitationId)}`,
-    z.null(),
-    { method: "DELETE" },
+export function resendWorkspaceInvitation(
+  workspace: string,
+  invitation: string,
+): Promise<Schemas["Invitation"]> {
+  return ok(
+    api.POST("/v1/workspaces/{workspace}/invitations/{invitation}/resend", {
+      params: { path: { workspace, invitation } },
+    }),
+  );
+}
+
+export function revokeWorkspaceInvitation(workspace: string, invitation: string): Promise<void> {
+  return ok(
+    api.DELETE("/v1/workspaces/{workspace}/invitations/{invitation}", {
+      params: { path: { workspace, invitation } },
+    }),
   );
 }
 
 export function setWorkspaceMemberRole(
-  workspaceName: string,
-  userId: string,
-  role: InvitableRole,
-): Promise<WorkspaceMember> {
-  return apiRequest(
-    `${workspacePath(workspaceName)}/members/${encodeURIComponent(userId)}`,
-    workspaceMemberSchema,
-    { method: "PUT", body: JSON.stringify({ role }) },
+  workspace: string,
+  user: string,
+  role: Schemas["InvitationRole"],
+): Promise<Schemas["Member"]> {
+  return ok(
+    api.PATCH("/v1/workspaces/{workspace}/members/{user}", {
+      params: { path: { workspace, user } },
+      body: { role },
+    }),
   );
 }
 
 /** Remove a member, or leave when the id is your own. */
-export function removeWorkspaceMember(workspaceName: string, userId: string): Promise<null> {
-  return apiRequest(
-    `${workspacePath(workspaceName)}/members/${encodeURIComponent(userId)}`,
-    z.null(),
-    { method: "DELETE" },
+export function removeWorkspaceMember(workspace: string, user: string): Promise<void> {
+  return ok(
+    api.DELETE("/v1/workspaces/{workspace}/members/{user}", {
+      params: { path: { workspace, user } },
+    }),
   );
 }
 
@@ -93,23 +82,16 @@ export function removeWorkspaceMember(workspaceName: string, userId: string): Pr
 export function invitationPreviewQueryOptions(token: string) {
   return queryOptions({
     queryKey: accountQueryKeys.invitation(token),
-    queryFn: () =>
-      apiRequest(`/api/v1/invitations/${encodeURIComponent(token)}`, invitationPreviewSchema),
+    queryFn: () => ok(api.GET("/v1/invitations/{token}", { params: { path: { token } } })),
     retry: false,
     staleTime: 0,
   });
 }
 
-export function acceptInvitation(token: string): Promise<WorkspaceMember> {
-  return apiRequest(
-    `/api/v1/invitations/${encodeURIComponent(token)}/accept`,
-    workspaceMemberSchema,
-    { method: "POST" },
-  );
+export function acceptInvitation(token: string): Promise<Schemas["AcceptedInvitation"]> {
+  return ok(api.POST("/v1/invitations/{token}/accept", { params: { path: { token } } }));
 }
 
-export function declineInvitation(token: string): Promise<null> {
-  return apiRequest(`/api/v1/invitations/${encodeURIComponent(token)}/decline`, z.null(), {
-    method: "POST",
-  });
+export function declineInvitation(token: string): Promise<void> {
+  return ok(api.POST("/v1/invitations/{token}/decline", { params: { path: { token } } }));
 }

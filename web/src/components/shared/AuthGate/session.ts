@@ -1,10 +1,10 @@
 import { createContext, useContext } from "react";
 
-import type { User, Workspace } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 
 export type SessionContextValue = {
-  user: User;
-  workspaces: Workspace[];
+  user: Schemas["User"];
+  workspaces: Schemas["Workspace"][];
   logout: () => void;
 };
 

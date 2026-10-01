@@ -7,88 +7,62 @@ import { ApiErrorNotice } from "@/components/shared/ApiErrorNotice";
 import { ContentTransition } from "@/components/shared/ContentTransition";
 import { PreShellScreen } from "@/components/shared/PreShellScreen";
 import { Button } from "@/components/ui/button";
-import { ApiError, clearAuthToken } from "@/lib/api/client";
-import { useAuthToken } from "@/hooks/use-auth-token";
-import { currentSessionQueryOptions, signOut } from "@/lib/queries/auth";
+import { isApiError } from "@/lib/api/client";
+import { meQueryOptions, signOut } from "@/lib/queries/auth";
 import { SessionContext, type SessionContextValue } from "@/components/shared/AuthGate/session";
 import { SignInScreen } from "@/components/shared/AuthGate/SignInScreen";
 
 export function AuthGate({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  const token = useAuthToken();
   // One request answers both questions the shell needs: who is signed in, and which
   // workspaces they reach. Resolving them separately would let the two disagree.
-  const session = useQuery({
-    ...currentSessionQueryOptions(),
-    enabled: !!token,
-  });
+  const me = useQuery(meQueryOptions());
 
   const logout = useCallback(() => {
-    // The request names the session by the credential it carries, so it has to be
-    // issued before the browser forgets that credential. A failure to reach the
-    // server still signs the person out here; the session then ends at expiry.
-    void signOut().catch(() => undefined);
-    clearAuthToken();
-    queryClient.clear();
-    // Out to the public landing page rather than the sign-in screen. Signing out
-    // is leaving, and being handed the way back in is the one thing somebody who
-    // just left did not ask for; it also reads as though the sign-out failed.
-    void navigate({ to: "/" });
+    // The server ends the session the cookie names and clears the cookie. A
+    // failure to reach it still leaves the dashboard; the session then ends at
+    // expiry.
+    void signOut()
+      .catch(() => undefined)
+      .finally(() => {
+        queryClient.clear();
+        // Out to the public landing page rather than the sign-in screen. Signing
+        // out is leaving, and being handed the way back in is the one thing
+        // somebody who just left did not ask for.
+        void navigate({ to: "/" });
+      });
   }, [navigate, queryClient]);
 
   const contextValue = useMemo<SessionContextValue | null>(
-    () =>
-      session.data
-        ? {
-            user: session.data.user,
-            workspaces: session.data.workspaces,
-            logout,
-          }
-        : null,
-    [logout, session.data],
+    () => (me.data ? { user: me.data.user, workspaces: me.data.workspaces, logout } : null),
+    [logout, me.data],
   );
 
-  if (token === undefined) {
+  if (me.isPending) {
     return <LoadingScreen />;
   }
 
-  if (!token) {
-    return (
-      <SignInScreen
-        error={
-          session.error instanceof ApiError && session.error.status === 401
-            ? "Your session expired. Sign in again."
-            : undefined
-        }
-      />
-    );
-  }
-
-  if (session.isPending) {
-    return <LoadingScreen />;
-  }
-
-  if (session.isError || !contextValue) {
+  if (me.isError) {
     return (
       <PreShellScreen>
         <ApiErrorNotice
           title="Could not load your session"
-          error={
-            session.error instanceof ApiError
-              ? session.error
-              : new Error("Check your connection and try again.")
-          }
-          onRetry={() => void session.refetch()}
-          retrying={session.isFetching}
+          error={me.error}
+          onRetry={() => void me.refetch()}
+          retrying={me.isFetching}
         />
-        {session.error instanceof ApiError && session.error.status === 403 ? (
+        {isApiError(me.error, 403) ? (
           <Button variant="outline" onClick={logout}>
             Sign out
           </Button>
         ) : null}
       </PreShellScreen>
     );
+  }
+
+  if (!contextValue) {
+    return <SignInScreen />;
   }
 
   return <SessionContext.Provider value={contextValue}>{children}</SessionContext.Provider>;
