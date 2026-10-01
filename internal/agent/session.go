@@ -69,6 +69,7 @@ func (a *Agent) runSession(ctx context.Context) error {
 		a.mu.Unlock()
 	}()
 
+	a.metrics.sessions.Inc()
 	hello, exited := a.hello()
 	if err := stream.Send(hello); err != nil {
 		return fmt.Errorf("send hello: %w", err)

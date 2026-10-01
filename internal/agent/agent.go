@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/moby/moby/client"
+	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
@@ -117,6 +118,8 @@ type Agent struct {
 	work sync.WaitGroup
 	ctx  context.Context
 
+	metrics agentMetrics
+
 	mu         sync.Mutex
 	containers map[string]*container
 	session    *sessionOut
@@ -199,6 +202,11 @@ func Run(ctx context.Context, cfg Config) error {
 	if !a.diskQuota {
 		a.log.Warn("docker storage here cannot limit container disk; disk limits are not enforced")
 	}
+	var registerer prometheus.Registerer
+	if cfg.Telemetry != nil {
+		registerer = cfg.Telemetry.Registry
+	}
+	a.metrics = newAgentMetrics(a, registerer)
 	defer a.shutdown()
 	if err := a.removeBuildContainers(ctx); err != nil {
 		return err
