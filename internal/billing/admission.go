@@ -223,6 +223,62 @@ func AdmitMember(ctx context.Context, tx pgx.Tx, workspace uuid.UUID, who Candid
 	return nil
 }
 
+// AdmitDisk applies the plan's disk allowance inside the transaction that
+// creates or grows a disk. declaredBytes is what the workspace's live disks
+// would declare in total; Free allows none. The account must be able to pay
+// for the disk.
+func AdmitDisk(ctx context.Context, tx pgx.Tx, workspace uuid.UUID, declaredBytes int64) error {
+	q := New(tx)
+	owner, err := q.WorkspaceOwner(ctx, workspace)
+	if err != nil {
+		return fmt.Errorf("read workspace owner: %w", err)
+	}
+	s, err := readStanding(ctx, q, owner)
+	if err != nil {
+		return err
+	}
+	if err := s.fundsRefusal(); err != nil {
+		return err
+	}
+	limit := int64(s.entitlements.MaxWorkspaceDiskGiB) * bytesPerGiB
+	if declaredBytes > limit {
+		return &LimitError{Message: fmt.Sprintf("this workspace's disks would declare %s GiB, more than its plan allows (%d GiB)",
+			strings.TrimSuffix(fmt.Sprintf("%.1f", float64(declaredBytes)/float64(bytesPerGiB)), ".0"), s.entitlements.MaxWorkspaceDiskGiB)}
+	}
+	return nil
+}
+
+// AdmitCustomDomain refuses a custom domain to a workspace whose owner's
+// plan has none; Team and Business include them.
+func AdmitCustomDomain(ctx context.Context, tx pgx.Tx, workspace uuid.UUID) error {
+	q := New(tx)
+	owner, err := q.WorkspaceOwner(ctx, workspace)
+	if err != nil {
+		return fmt.Errorf("read workspace owner: %w", err)
+	}
+	return admitCapability(ctx, q, owner, func(e Entitlements) bool { return e.CustomDomains }, "custom domains require the Team plan")
+}
+
+// AdmitConnectedCloud refuses connecting a cloud account to an account whose
+// plan does not include it; Business does.
+func AdmitConnectedCloud(ctx context.Context, tx pgx.Tx, user uuid.UUID) error {
+	return admitCapability(ctx, New(tx), user, func(e Entitlements) bool { return e.ConnectedCloud }, "connected cloud accounts require the Business plan")
+}
+
+func admitCapability(ctx context.Context, q *Queries, user uuid.UUID, has func(Entitlements) bool, refusal string) error {
+	s, err := readStanding(ctx, q, user)
+	if err != nil {
+		return err
+	}
+	if s.changePending {
+		return planChangePending()
+	}
+	if !has(s.entitlements) {
+		return &PaymentRequiredError{Message: refusal}
+	}
+	return nil
+}
+
 // Retention is how long logs and artifacts of the workspace are kept, from
 // its owner's plan.
 func Retention(ctx context.Context, db DBTX, workspace uuid.UUID) (time.Duration, error) {

@@ -224,6 +224,44 @@ func TestWorkspaceAndMemberLimitsFollowThePlan(t *testing.T) {
 	}
 }
 
+func TestCapabilitiesFollowThePlan(t *testing.T) {
+	f := newFixture(t)
+	owner := f.user()
+	ws := f.workspace(owner)
+	gate := func(fn func(pgx.Tx) error) error {
+		t.Helper()
+		return pgx.BeginFunc(t.Context(), f.pool, fn)
+	}
+	domain := func(tx pgx.Tx) error { return AdmitCustomDomain(t.Context(), tx, ws) }
+	cloud := func(tx pgx.Tx) error { return AdmitConnectedCloud(t.Context(), tx, owner) }
+	disk := func(gib int64) func(pgx.Tx) error {
+		return func(tx pgx.Tx) error { return AdmitDisk(t.Context(), tx, ws, gib*bytesPerGiB) }
+	}
+	if err := gate(domain); !paymentRequired(err) || !strings.Contains(err.Error(), "Team plan") {
+		t.Fatalf("domain on Free: %v", err)
+	}
+	if err := gate(disk(1)); !limitReached(err) || !strings.Contains(err.Error(), "(0 GiB)") {
+		t.Fatalf("disk on Free: %v", err)
+	}
+	f.setAccount(owner, "terms_version = 'team-v3'")
+	if err := gate(domain); err != nil {
+		t.Fatalf("domain on Team: %v", err)
+	}
+	if err := gate(disk(1024)); err != nil {
+		t.Fatalf("1 TiB of disks on Team: %v", err)
+	}
+	if err := gate(disk(1025)); !limitReached(err) {
+		t.Fatalf("past Team's disks: %v", err)
+	}
+	if err := gate(cloud); !paymentRequired(err) || !strings.Contains(err.Error(), "Business plan") {
+		t.Fatalf("connected cloud on Team: %v", err)
+	}
+	f.setAccount(owner, "terms_version = 'business-v2'")
+	if err := gate(cloud); err != nil {
+		t.Fatalf("connected cloud on Business: %v", err)
+	}
+}
+
 func TestRetentionFollowsThePlan(t *testing.T) {
 	f := newFixture(t)
 	owner := f.user()
