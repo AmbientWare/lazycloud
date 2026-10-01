@@ -111,6 +111,39 @@ func (e LoadedType) Valid() bool {
 	}
 }
 
+// Defines values for OutputStream.
+const (
+	Stderr OutputStream = "stderr"
+	Stdout OutputStream = "stdout"
+)
+
+// Valid indicates whether the value is a known member of the OutputStream enum.
+func (e OutputStream) Valid() bool {
+	switch e {
+	case Stderr:
+		return true
+	case Stdout:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for OutputType.
+const (
+	OutputTypeOutput OutputType = "output"
+)
+
+// Valid indicates whether the value is a known member of the OutputType enum.
+func (e OutputType) Valid() bool {
+	switch e {
+	case OutputTypeOutput:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SucceededType.
 const (
 	SucceededTypeSucceeded SucceededType = "succeeded"
@@ -145,21 +178,51 @@ type Failed struct {
 // FailedType defines model for Failed.Type.
 type FailedType string
 
+// HookReferences defines model for HookReferences.
+type HookReferences = []string
+
 // Invoke The payload is the encoded Arguments.
 type Invoke struct {
-	AttemptId     string     `json:"attempt_id"`
-	InputEncoding Encoding   `json:"input_encoding"`
-	TaskId        string     `json:"task_id"`
-	Type          InvokeType `json:"type"`
+	AttemptId     string   `json:"attempt_id"`
+	AttemptNumber *int     `json:"attempt_number,omitempty"`
+	InputEncoding Encoding `json:"input_encoding"`
+
+	// MaxAttempts A failure of an attempt below this number is retried.
+	MaxAttempts *int `json:"max_attempts,omitempty"`
+
+	// ParentTaskId The task that spawned this one, when one did.
+	ParentTaskId *string `json:"parent_task_id,omitempty"`
+
+	// RootTaskId The root of the call graph; the task itself when nothing spawned it.
+	RootTaskId *string    `json:"root_task_id,omitempty"`
+	TaskId     string     `json:"task_id"`
+	Type       InvokeType `json:"type"`
 }
 
 // InvokeType defines model for Invoke.Type.
 type InvokeType string
 
+// LifecycleHooks `module:qualname` references called with one context argument. on_start runs once after the handler loads; a failure is a load failure. on_running runs before the handler. A success runs on_success then on_finish. A failure runs on_error, then on_retry when another attempt follows or on_failure when none does, then on_finish. Failures of these hooks are written to the attempt's stderr and do not change the outcome.
+type LifecycleHooks struct {
+	OnError   *HookReferences `json:"on_error,omitempty"`
+	OnFailure *HookReferences `json:"on_failure,omitempty"`
+	OnFinish  *HookReferences `json:"on_finish,omitempty"`
+	OnRetry   *HookReferences `json:"on_retry,omitempty"`
+	OnRunning *HookReferences `json:"on_running,omitempty"`
+	OnStart   *HookReferences `json:"on_start,omitempty"`
+	OnSuccess *HookReferences `json:"on_success,omitempty"`
+}
+
 // Load defines model for Load.
 type Load struct {
+	// Concurrency Attempts the runner may run at once, each on its own thread.
+	Concurrency *int `json:"concurrency,omitempty"`
+
 	// Handler module:qualname importable from the working directory
-	Handler         string              `json:"handler"`
+	Handler string `json:"handler"`
+
+	// Hooks `module:qualname` references called with one context argument. on_start runs once after the handler loads; a failure is a load failure. on_running runs before the handler. A success runs on_success then on_finish. A failure runs on_error, then on_retry when another attempt follows or on_failure when none does, then on_finish. Failures of these hooks are written to the attempt's stderr and do not change the outcome.
+	Hooks           *LifecycleHooks     `json:"hooks,omitempty"`
 	ProtocolVersion LoadProtocolVersion `json:"protocol_version"`
 	Type            LoadType            `json:"type"`
 }
@@ -186,6 +249,20 @@ type Loaded struct {
 
 // LoadedType defines model for Loaded.Type.
 type LoadedType string
+
+// Output Output an attempt wrote while the runner runs several attempts at once. Sent only for a `concurrency` above 1.
+type Output struct {
+	AttemptId string       `json:"attempt_id"`
+	Data      string       `json:"data"`
+	Stream    OutputStream `json:"stream"`
+	Type      OutputType   `json:"type"`
+}
+
+// OutputStream defines model for Output.Stream.
+type OutputStream string
+
+// OutputType defines model for Output.Type.
+type OutputType string
 
 // RunnerError defines model for RunnerError.
 type RunnerError struct {

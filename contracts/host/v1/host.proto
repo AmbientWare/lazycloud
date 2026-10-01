@@ -25,6 +25,11 @@ service HostService {
   rpc CompleteTask(CompleteTaskRequest) returns (CompleteTaskResponse);
   // AppendLogs stores output lines in order per attempt.
   rpc AppendLogs(AppendLogsRequest) returns (AppendLogsResponse);
+  // ContainerAPI carries one public API request a container made through its
+  // supervisor. The first APIRequest holds the head, later ones the body;
+  // the host half-closes after the body. The server answers with the head,
+  // then body chunks, and ends the stream after the last one.
+  rpc ContainerAPI(stream APIRequest) returns (stream APIResponse);
 }
 
 message EnrollRequest {
@@ -133,6 +138,11 @@ message StartContainer {
   Resources resources = 5;
   FunctionWorkload function = 6;
   map<string, string> environment = 7;
+  // Values of the secrets the release names, by name. The host passes them
+  // as environment variables and keeps them out of task output.
+  map<string, string> secrets = 10;
+  // The workspace name the container's SDK calls default to.
+  string workspace = 11;
 }
 
 message Source {
@@ -154,6 +164,21 @@ message Resources {
 message FunctionWorkload {
   string handler = 1;
   int32 slots = 2;
+  // Run every slot as a thread of one runner process.
+  bool in_process = 10;
+  LifecycleHooks hooks = 11;
+}
+
+// LifecycleHooks are `module:qualname` references the runner calls, in
+// order, around each attempt; on_start runs once per runner process.
+message LifecycleHooks {
+  repeated string on_start = 1;
+  repeated string on_running = 2;
+  repeated string on_success = 3;
+  repeated string on_error = 4;
+  repeated string on_retry = 5;
+  repeated string on_failure = 6;
+  repeated string on_finish = 7;
 }
 
 message StopContainer {
@@ -198,6 +223,11 @@ message ClaimedTask {
   PayloadEncoding input_encoding = 4;
   bytes input = 5;
   google.protobuf.Timestamp deadline = 6;
+  // The root of the task's call graph, which is the task itself when no
+  // task spawned it, and its parent when one did.
+  string root_task_id = 10;
+  string parent_task_id = 11;
+  int32 max_attempts = 12;
 }
 
 message CompleteTaskRequest {
@@ -251,3 +281,36 @@ message LogLine {
 }
 
 message AppendLogsResponse {}
+
+// APIRequest is one message of a container API call. Only the first carries
+// head; body chunks follow in order.
+message APIRequest {
+  APIRequestHead head = 1;
+  bytes body = 2;
+}
+
+message APIRequestHead {
+  // Set by the agent, which knows the container from the link socket.
+  string container_id = 1;
+  string method = 2;
+  // The request target: path and query.
+  string target = 3;
+  repeated APIHeader headers = 4;
+}
+
+message APIHeader {
+  string name = 1;
+  string value = 2;
+}
+
+// APIResponse is one message of a container API answer. Only the first
+// carries head.
+message APIResponse {
+  APIResponseHead head = 1;
+  bytes body = 2;
+}
+
+message APIResponseHead {
+  int32 status = 1;
+  repeated APIHeader headers = 2;
+}

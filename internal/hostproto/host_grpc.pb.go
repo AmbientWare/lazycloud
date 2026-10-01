@@ -24,6 +24,7 @@ const (
 	HostService_ClaimTasks_FullMethodName   = "/lazycloud.host.v1.HostService/ClaimTasks"
 	HostService_CompleteTask_FullMethodName = "/lazycloud.host.v1.HostService/CompleteTask"
 	HostService_AppendLogs_FullMethodName   = "/lazycloud.host.v1.HostService/AppendLogs"
+	HostService_ContainerAPI_FullMethodName = "/lazycloud.host.v1.HostService/ContainerAPI"
 )
 
 // HostServiceClient is the client API for HostService service.
@@ -49,6 +50,11 @@ type HostServiceClient interface {
 	CompleteTask(ctx context.Context, in *CompleteTaskRequest, opts ...grpc.CallOption) (*CompleteTaskResponse, error)
 	// AppendLogs stores output lines in order per attempt.
 	AppendLogs(ctx context.Context, in *AppendLogsRequest, opts ...grpc.CallOption) (*AppendLogsResponse, error)
+	// ContainerAPI carries one public API request a container made through its
+	// supervisor. The first APIRequest holds the head, later ones the body;
+	// the host half-closes after the body. The server answers with the head,
+	// then body chunks, and ends the stream after the last one.
+	ContainerAPI(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[APIRequest, APIResponse], error)
 }
 
 type hostServiceClient struct {
@@ -112,6 +118,19 @@ func (c *hostServiceClient) AppendLogs(ctx context.Context, in *AppendLogsReques
 	return out, nil
 }
 
+func (c *hostServiceClient) ContainerAPI(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[APIRequest, APIResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &HostService_ServiceDesc.Streams[1], HostService_ContainerAPI_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[APIRequest, APIResponse]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type HostService_ContainerAPIClient = grpc.BidiStreamingClient[APIRequest, APIResponse]
+
 // HostServiceServer is the server API for HostService service.
 // All implementations must embed UnimplementedHostServiceServer
 // for forward compatibility.
@@ -135,6 +154,11 @@ type HostServiceServer interface {
 	CompleteTask(context.Context, *CompleteTaskRequest) (*CompleteTaskResponse, error)
 	// AppendLogs stores output lines in order per attempt.
 	AppendLogs(context.Context, *AppendLogsRequest) (*AppendLogsResponse, error)
+	// ContainerAPI carries one public API request a container made through its
+	// supervisor. The first APIRequest holds the head, later ones the body;
+	// the host half-closes after the body. The server answers with the head,
+	// then body chunks, and ends the stream after the last one.
+	ContainerAPI(grpc.BidiStreamingServer[APIRequest, APIResponse]) error
 	mustEmbedUnimplementedHostServiceServer()
 }
 
@@ -159,6 +183,9 @@ func (UnimplementedHostServiceServer) CompleteTask(context.Context, *CompleteTas
 }
 func (UnimplementedHostServiceServer) AppendLogs(context.Context, *AppendLogsRequest) (*AppendLogsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AppendLogs not implemented")
+}
+func (UnimplementedHostServiceServer) ContainerAPI(grpc.BidiStreamingServer[APIRequest, APIResponse]) error {
+	return status.Error(codes.Unimplemented, "method ContainerAPI not implemented")
 }
 func (UnimplementedHostServiceServer) mustEmbedUnimplementedHostServiceServer() {}
 func (UnimplementedHostServiceServer) testEmbeddedByValue()                     {}
@@ -260,6 +287,13 @@ func _HostService_AppendLogs_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _HostService_ContainerAPI_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(HostServiceServer).ContainerAPI(&grpc.GenericServerStream[APIRequest, APIResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type HostService_ContainerAPIServer = grpc.BidiStreamingServer[APIRequest, APIResponse]
+
 // HostService_ServiceDesc is the grpc.ServiceDesc for HostService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -288,6 +322,12 @@ var HostService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "Session",
 			Handler:       _HostService_Session_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
+		},
+		{
+			StreamName:    "ContainerAPI",
+			Handler:       _HostService_ContainerAPI_Handler,
 			ServerStreams: true,
 			ClientStreams: true,
 		},
