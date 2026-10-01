@@ -5,12 +5,14 @@ import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { PanelError } from "@/components/shared/PanelError";
 import { ChartContainer, ChartTooltip } from "@/components/ui/chart";
 import { Skeleton } from "@/components/ui/skeleton";
-import { billedDimensions, type BilledDimension, type UsageCostBucket } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 import { formatCostNanos } from "@/lib/money";
 import { accountCostSeriesQueryOptions, type UsageCostWindow } from "@/lib/queries/usage";
 
 import { intervalLabel } from "./ranges";
-import { COST_DIMENSIONS } from "./cost-colors";
+import { BILLED_DIMENSIONS, COST_DIMENSIONS } from "./cost-colors";
+
+type BilledDimension = Schemas["BilledDimension"];
 
 type Interval = Record<BilledDimension, number> & {
   started_at: string;
@@ -24,7 +26,7 @@ export function SpendChart({
   caption,
 }: {
   window: UsageCostWindow;
-  bucket: UsageCostBucket;
+  bucket: Schemas["UsageCostBucket"];
   caption: string;
 }) {
   const series = useQuery(accountCostSeriesQueryOptions(window, bucket));
@@ -35,12 +37,12 @@ export function SpendChart({
   if (series.isError) {
     return <PanelError message={series.error.message} layout="centered" />;
   }
-  if (!series.data.data.some((interval) => interval.dimensions.length > 0)) {
+  if (!series.data.intervals.some((interval) => interval.dimensions.length > 0)) {
     return <PanelEmpty message={`No usage during ${caption}`} className="h-full" />;
   }
 
   const currency = series.data.currency;
-  const data: Interval[] = series.data.data.map((interval) => {
+  const data: Interval[] = series.data.intervals.map((interval) => {
     const row: Interval = {
       started_at: interval.started_at,
       cost: interval.cost_nanos,
@@ -102,7 +104,7 @@ export function SpendChart({
             );
           }}
         />
-        {billedDimensions.map((dimension) => (
+        {BILLED_DIMENSIONS.map((dimension) => (
           <Bar
             key={dimension}
             dataKey={dimension}

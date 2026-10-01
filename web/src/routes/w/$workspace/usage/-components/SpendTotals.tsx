@@ -1,13 +1,13 @@
 import { Skeleton } from "@/components/ui/skeleton";
-import { billedDimensions, type UsageCostSeries } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 import { formatCostNanos } from "@/lib/money";
-import { COST_DIMENSIONS } from "./cost-colors";
+import { BILLED_DIMENSIONS, COST_DIMENSIONS } from "./cost-colors";
 
 export function SpendTotals({
   series,
   error,
 }: {
-  series: UsageCostSeries | undefined;
+  series: Schemas["UsageCostSeries"] | undefined;
   error: Error | null;
 }) {
   return (
@@ -43,8 +43,8 @@ export function SpendTotals({
         </dl>
       </div>
       <dl aria-label="Usage by category" className="flex flex-wrap gap-x-5 gap-y-2 pb-1 text-xs">
-        {billedDimensions.map((dimension) => {
-          const totals = series?.data.flatMap((interval) =>
+        {BILLED_DIMENSIONS.map((dimension) => {
+          const totals = series?.intervals.flatMap((interval) =>
             interval.dimensions.filter((total) => total.dimension === dimension),
           );
           return (
