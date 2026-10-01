@@ -76,6 +76,9 @@ linters:
               desc: host runtime uses the host protocol
   exclusions:
     generated: strict
+    # check.sh installs the web packages, one of which ships Go sources.
+    paths:
+      - web/node_modules
     rules:
       - path: _test\.go
         linters:
