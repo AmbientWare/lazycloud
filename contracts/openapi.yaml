@@ -356,6 +356,7 @@ components:
         - unsupported
         - too_many_pending_tasks
         - task_not_finished
+        - unavailable
         - internal
 
     Name:
@@ -741,18 +742,17 @@ components:
           description: Micromamba provides Python and the base environment.
           type: boolean
           default: false
+        # Without a base image the image starts from the platform's Python
+        # image for python_version.
         base_image:
-          description: >-
-            A registry image to start from. Without one the image starts from
-            the platform's Python image for python_version.
+          description: A registry image to start from.
           type: string
           minLength: 1
           maxLength: 512
+        # Values are used for the build and never returned. Names other than
+        # the documented ones, such as GITHUB_USERNAME, are ignored.
         base_image_credentials:
-          description: >-
-            Registry credentials by their environment variable names, such as
-            GITHUB_USERNAME and GITHUB_TOKEN. Other names are ignored. Values
-            are used for the build and never returned.
+          description: Registry credentials by environment variable name.
           type: object
           maxProperties: 32
           additionalProperties: { type: string, maxLength: 65536 }
@@ -840,6 +840,7 @@ components:
     ImageBuildStatus:
       type: string
       enum: [building, succeeded, failed]
+      x-enum-varnames: [ImageBuildBuilding, ImageBuildSucceeded, ImageBuildFailed]
 
     ImageBuildPhase:
       description: >-
@@ -848,6 +849,7 @@ components:
         final.
       type: string
       enum: [queued, starting, building, finished]
+      x-enum-varnames: [ImageBuildQueued, ImageBuildStarting, ImageBuildRunning, ImageBuildFinished]
 
     ImageBuild:
       type: object

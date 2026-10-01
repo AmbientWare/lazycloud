@@ -19,6 +19,7 @@ class ErrorCode(str, Enum):
     unsupported = "unsupported"
     too_many_pending_tasks = "too_many_pending_tasks"
     task_not_finished = "task_not_finished"
+    unavailable = "unavailable"
     internal = "internal"
 
 
@@ -230,16 +231,16 @@ class Image(BaseModel):
 
 
 class ImageBuildStatus(str, Enum):
-    building = "building"
-    succeeded = "succeeded"
-    failed = "failed"
+    ImageBuildBuilding = "building"
+    ImageBuildSucceeded = "succeeded"
+    ImageBuildFailed = "failed"
 
 
 class ImageBuildPhase(str, Enum):
-    queued = "queued"
-    starting = "starting"
-    building = "building"
-    finished = "finished"
+    ImageBuildQueued = "queued"
+    ImageBuildStarting = "starting"
+    ImageBuildRunning = "building"
+    ImageBuildFinished = "finished"
 
 
 class ImageBuild(BaseModel):
@@ -313,18 +314,11 @@ class ImageDefinition(BaseModel):
     ] = False
     base_image: Annotated[
         str | None,
-        Field(
-            description="A registry image to start from. Without one the image starts from the platform's Python image for python_version.",
-            max_length=512,
-            min_length=1,
-        ),
+        Field(description="A registry image to start from.", max_length=512, min_length=1),
     ] = None
     base_image_credentials: Annotated[
         dict[str, BaseImageCredentialsAdditionalProperty] | None,
-        Field(
-            description="Registry credentials by their environment variable names, such as GITHUB_USERNAME and GITHUB_TOKEN. Other names are ignored. Values are used for the build and never returned.",
-            max_length=32,
-        ),
+        Field(description="Registry credentials by environment variable name.", max_length=32),
     ] = None
     architecture: Architecture = Architecture.amd64
     python_packages: Annotated[list[PythonPackage] | None, Field(max_length=1000)] = None

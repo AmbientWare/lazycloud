@@ -1,0 +1,150 @@
+package hostsession
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"time"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/execution"
+	"github.com/AmbientWare/lazycloud/internal/hostproto"
+	"github.com/AmbientWare/lazycloud/internal/images"
+	"github.com/AmbientWare/lazycloud/internal/storage"
+)
+
+// maxBuildLogLine bounds one stored line of build output.
+const maxBuildLogLine = 16 << 10
+
+// imagePull is how a host pulls a function's image: a resolved image by
+// digest, or the platform's image for its Python version.
+func (s *Server) imagePull(ctx context.Context, spec apitypes.ImageSpec) (images.Pull, error) {
+	if spec.ImageId == nil {
+		return images.Pull{Reference: strings.ReplaceAll(s.config.ImageTemplate, "{version}", string(spec.PythonVersion))}, nil
+	}
+	return s.images.PullOf(ctx, *spec.ImageId)
+}
+
+func registryAuthOut(auth *images.Auth) *hostproto.RegistryAuth {
+	if auth == nil {
+		return nil
+	}
+	return &hostproto.RegistryAuth{Username: auth.Username, Password: auth.Password, IdentityToken: auth.IdentityToken}
+}
+
+// syncBuilds sends start commands for the build containers starting on the
+// host that this session has not sent yet, and records them in derived.
+func (sess *session) syncBuilds(ctx context.Context, derived map[string]bool) error {
+	starts, err := sess.server.execution.BuildStarts(ctx, sess.host)
+	if err != nil {
+		return sess.server.grpcError(ctx, err)
+	}
+	for _, start := range starts {
+		id := "start:" + start.Container.String()
+		derived[id] = true
+		if sess.sent[id] {
+			continue
+		}
+		msg, err := sess.server.buildStartMessage(ctx, id, start)
+		if err != nil {
+			return sess.server.grpcError(ctx, err)
+		}
+		if err := sess.send(msg); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Server) buildStartMessage(ctx context.Context, id string, start execution.BuildStart) (*hostproto.ServerMessage, error) {
+	command, err := s.images.BuildCommandOf(ctx, start)
+	if err != nil {
+		return nil, err
+	}
+	build := &hostproto.ImageBuild{
+		BuildId:          command.Build.String(),
+		Attempt:          int32(command.Attempt), //nolint:gosec // At most two attempts.
+		Dockerfile:       command.Dockerfile,
+		Platform:         command.Platform,
+		PushRepository:   command.PushRepository,
+		CacheRef:         command.CacheRef,
+		InsecureRegistry: command.Insecure,
+		RegistryAuth:     map[string]*hostproto.RegistryAuth{},
+		Deadline:         timestamppb.New(command.Deadline),
+	}
+	for host, auth := range command.Auth {
+		build.RegistryAuth[host] = registryAuthOut(&auth)
+	}
+	if command.Context != nil {
+		var digest storage.Digest
+		copy(digest[:], command.Context)
+		url, expires, err := s.storage.SourceURL(ctx, command.ContextWorkspace, digest)
+		if err != nil {
+			return nil, err
+		}
+		build.Context = &hostproto.Source{Sha256: digest.String(), Url: url, UrlExpiresAt: timestamppb.New(expires)}
+	}
+	cpu, memory, memoryLimit := images.BuildResources()
+	return &hostproto.ServerMessage{CommandId: id, Body: &hostproto.ServerMessage_Start{Start: &hostproto.StartContainer{
+		ContainerId: start.Container.String(),
+		Resources:   &hostproto.Resources{CpuMillis: cpu, MemoryBytes: memory, MemoryLimitBytes: memoryLimit},
+		Build:       build,
+	}}}, nil
+}
+
+// CompleteImageBuild records a build container's outcome.
+func (s *Server) CompleteImageBuild(ctx context.Context, req *hostproto.CompleteImageBuildRequest) (*hostproto.CompleteImageBuildResponse, error) {
+	container, err := parseContainer(req.GetContainerId())
+	if err != nil {
+		return nil, err
+	}
+	var outcome images.BuildOutcome
+	switch o := req.GetOutcome().(type) {
+	case *hostproto.CompleteImageBuildRequest_Digest:
+		outcome.Digest = o.Digest
+	case *hostproto.CompleteImageBuildRequest_Failure:
+		outcome.Failure = o.Failure
+		if outcome.Failure == "" {
+			outcome.Failure = "the build failed"
+		}
+	default:
+		return nil, status.Error(codes.InvalidArgument, "an outcome is required")
+	}
+	err = s.images.CompleteBuild(ctx, hostFrom(ctx), container, outcome)
+	var invalid *images.InvalidError
+	if errors.As(err, &invalid) {
+		return nil, status.Error(codes.InvalidArgument, invalid.Error())
+	}
+	if err != nil {
+		return nil, s.grpcError(ctx, err)
+	}
+	return &hostproto.CompleteImageBuildResponse{}, nil
+}
+
+// AppendImageBuildLogs stores a build container's output.
+func (s *Server) AppendImageBuildLogs(ctx context.Context, req *hostproto.AppendImageBuildLogsRequest) (*hostproto.AppendImageBuildLogsResponse, error) {
+	container, err := parseContainer(req.GetContainerId())
+	if err != nil {
+		return nil, err
+	}
+	lines := make([]images.LogLine, len(req.GetLines()))
+	for n, line := range req.GetLines() {
+		data := line.GetData()
+		if len(data) > maxBuildLogLine {
+			data = data[:maxBuildLogLine]
+		}
+		at := time.Now()
+		if line.GetTime() != nil {
+			at = line.GetTime().AsTime()
+		}
+		lines[n] = images.LogLine{Data: strings.ReplaceAll(strings.ToValidUTF8(data, "�"), "\x00", ""), Time: at}
+	}
+	if err := s.images.AppendLogs(ctx, hostFrom(ctx), container, lines); err != nil {
+		return nil, s.grpcError(ctx, err)
+	}
+	return &hostproto.AppendImageBuildLogsResponse{}, nil
+}

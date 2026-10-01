@@ -39,6 +39,7 @@ const (
 	TaskNotFinished     ErrorCode = "task_not_finished"
 	TooManyPendingTasks ErrorCode = "too_many_pending_tasks"
 	Unauthenticated     ErrorCode = "unauthenticated"
+	Unavailable         ErrorCode = "unavailable"
 	Unsupported         ErrorCode = "unsupported"
 )
 
@@ -62,6 +63,8 @@ func (e ErrorCode) Valid() bool {
 	case TooManyPendingTasks:
 		return true
 	case Unauthenticated:
+		return true
+	case Unavailable:
 		return true
 	case Unsupported:
 		return true
@@ -138,22 +141,22 @@ func (e ImageArchitecture) Valid() bool {
 
 // Defines values for ImageBuildPhase.
 const (
-	ImageBuildPhaseBuilding ImageBuildPhase = "building"
-	ImageBuildPhaseFinished ImageBuildPhase = "finished"
-	ImageBuildPhaseQueued   ImageBuildPhase = "queued"
-	ImageBuildPhaseStarting ImageBuildPhase = "starting"
+	ImageBuildFinished ImageBuildPhase = "finished"
+	ImageBuildQueued   ImageBuildPhase = "queued"
+	ImageBuildRunning  ImageBuildPhase = "building"
+	ImageBuildStarting ImageBuildPhase = "starting"
 )
 
 // Valid indicates whether the value is a known member of the ImageBuildPhase enum.
 func (e ImageBuildPhase) Valid() bool {
 	switch e {
-	case ImageBuildPhaseBuilding:
+	case ImageBuildFinished:
 		return true
-	case ImageBuildPhaseFinished:
+	case ImageBuildQueued:
 		return true
-	case ImageBuildPhaseQueued:
+	case ImageBuildRunning:
 		return true
-	case ImageBuildPhaseStarting:
+	case ImageBuildStarting:
 		return true
 	default:
 		return false
@@ -162,19 +165,19 @@ func (e ImageBuildPhase) Valid() bool {
 
 // Defines values for ImageBuildStatus.
 const (
-	ImageBuildStatusBuilding  ImageBuildStatus = "building"
-	ImageBuildStatusFailed    ImageBuildStatus = "failed"
-	ImageBuildStatusSucceeded ImageBuildStatus = "succeeded"
+	ImageBuildBuilding  ImageBuildStatus = "building"
+	ImageBuildFailed    ImageBuildStatus = "failed"
+	ImageBuildSucceeded ImageBuildStatus = "succeeded"
 )
 
 // Valid indicates whether the value is a known member of the ImageBuildStatus enum.
 func (e ImageBuildStatus) Valid() bool {
 	switch e {
-	case ImageBuildStatusBuilding:
+	case ImageBuildBuilding:
 		return true
-	case ImageBuildStatusFailed:
+	case ImageBuildFailed:
 		return true
-	case ImageBuildStatusSucceeded:
+	case ImageBuildSucceeded:
 		return true
 	default:
 		return false
@@ -318,25 +321,25 @@ func (e RetryPolicyBackoff) Valid() bool {
 
 // Defines values for TaskStatus.
 const (
-	TaskStatusCancelled TaskStatus = "cancelled"
-	TaskStatusFailed    TaskStatus = "failed"
-	TaskStatusQueued    TaskStatus = "queued"
-	TaskStatusRunning   TaskStatus = "running"
-	TaskStatusSucceeded TaskStatus = "succeeded"
+	Cancelled TaskStatus = "cancelled"
+	Failed    TaskStatus = "failed"
+	Queued    TaskStatus = "queued"
+	Running   TaskStatus = "running"
+	Succeeded TaskStatus = "succeeded"
 )
 
 // Valid indicates whether the value is a known member of the TaskStatus enum.
 func (e TaskStatus) Valid() bool {
 	switch e {
-	case TaskStatusCancelled:
+	case Cancelled:
 		return true
-	case TaskStatusFailed:
+	case Failed:
 		return true
-	case TaskStatusQueued:
+	case Queued:
 		return true
-	case TaskStatusRunning:
+	case Running:
 		return true
-	case TaskStatusSucceeded:
+	case Succeeded:
 		return true
 	default:
 		return false
@@ -491,10 +494,10 @@ type ImageBuildStatus string
 type ImageDefinition struct {
 	Architecture *ImageDefinitionArchitecture `json:"architecture,omitempty"`
 
-	// BaseImage A registry image to start from. Without one the image starts from the platform's Python image for python_version.
+	// BaseImage A registry image to start from.
 	BaseImage *string `json:"base_image,omitempty"`
 
-	// BaseImageCredentials Registry credentials by their environment variable names, such as GITHUB_USERNAME and GITHUB_TOKEN. Other names are ignored. Values are used for the build and never returned.
+	// BaseImageCredentials Registry credentials by environment variable name.
 	BaseImageCredentials *map[string]string `json:"base_image_credentials,omitempty"`
 	Commands             *[]string          `json:"commands,omitempty"`
 	Context              *SourceRef         `json:"context,omitempty"`
