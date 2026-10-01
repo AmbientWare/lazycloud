@@ -2,7 +2,7 @@ import { queryOptions, type QueryClient } from "@tanstack/react-query";
 
 import { api, ok, type Schemas } from "@/lib/api/client";
 
-import { allPages, listDeployments, newestFirst } from "./deployments";
+import { allPages, listWorkloads, newestFirst } from "./deployments";
 import { workspaceLiveQueryMeta, workspaceQueryKeys } from "./workspace-keys";
 
 function listApps(workspace: string): Promise<Schemas["App"][]> {
@@ -71,7 +71,7 @@ export function appActivityQueryOptions(workspace: string, app: string) {
 export type AppSummary = {
   app: Schemas["App"];
   /** Deployed workloads, newest deploy first. */
-  workloads: Schemas["DeployedWorkload"][];
+  workloads: Schemas["Workload"][];
   activity: Schemas["ActivitySeries"] | undefined;
 };
 
@@ -85,7 +85,7 @@ export function appSummariesQueryOptions(workspace: string) {
     queryFn: async (): Promise<AppSummary[]> => {
       const [apps, workloads, activity] = await Promise.all([
         listApps(workspace),
-        listDeployments(workspace),
+        listWorkloads(workspace),
         taskActivity(workspace),
       ]);
       const series = new Map(activity.series.map((item) => [item.app, item]));
@@ -101,7 +101,7 @@ export function appSummariesQueryOptions(workspace: string) {
 
 export function invalidateAppLists(queryClient: QueryClient, workspace: string) {
   return Promise.all(
-    [workspaceQueryKeys.apps.root(workspace), workspaceQueryKeys.deployments.root(workspace)].map(
+    [workspaceQueryKeys.apps.root(workspace), workspaceQueryKeys.workloads.root(workspace)].map(
       (queryKey) => queryClient.invalidateQueries({ queryKey }),
     ),
   );

@@ -138,8 +138,8 @@ func (l buildLogStream) VisitStreamImageBuildLogsResponse(w http.ResponseWriter)
 // and pins each named image's reference into the request, so the release
 // runs exactly that image.
 func (s *Server) checkImages(ctx context.Context, workspace identity.WorkspaceID, req *apitypes.DeploymentRequest) error {
-	for n := range req.Functions {
-		if err := s.pinImage(ctx, workspace, &req.Functions[n]); err != nil {
+	for n := range req.Workloads {
+		if err := s.pinImage(ctx, workspace, &req.Workloads[n]); err != nil {
 			return err
 		}
 	}
@@ -148,7 +148,7 @@ func (s *Server) checkImages(ctx context.Context, workspace identity.WorkspaceID
 
 // pinImage does checkImages for one function spec, and refuses a pin to a
 // machine that does not serve the workspace.
-func (s *Server) pinImage(ctx context.Context, workspace identity.WorkspaceID, spec *apitypes.FunctionSpec) error {
+func (s *Server) pinImage(ctx context.Context, workspace identity.WorkspaceID, spec *apitypes.WorkloadSpec) error {
 	if machine := compute.PinnedMachine(*spec); machine != "" {
 		if err := s.owners.Compute.CheckMachineServes(ctx, workspace, machine); err != nil {
 			return err

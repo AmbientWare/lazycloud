@@ -31,7 +31,7 @@ export function AppWorkloadsSection({
   workspace: string;
   app: string;
   /** Every deployed workload of the app, newest deploy first. */
-  workloads: Schemas["DeployedWorkload"][] | undefined;
+  workloads: Schemas["Workload"][] | undefined;
   pending: boolean;
   error: string | undefined;
 }) {

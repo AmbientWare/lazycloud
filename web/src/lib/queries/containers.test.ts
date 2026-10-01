@@ -30,36 +30,21 @@ function api(handle: (url: URL) => unknown) {
   return fetchMock;
 }
 
+const checkout = { app: "shop", kind: "pod", name: "checkout" } as const;
+
 describe("container pagination", () => {
   it("asks the server for one workload's live containers and keeps what it answers", async () => {
     const fetchMock = api(() => ({ containers: [container("one"), container("two")] }));
     const page = await testQueryClient().fetchInfiniteQuery(
-      containersQueryOptions("workspace", { app: "shop", function: "checkout", live: true }),
+      containersQueryOptions("workspace", checkout, { live: true }),
     );
 
     const request = new URL((fetchMock.mock.calls[0]?.[0] as Request).url);
-    expect(request.pathname).toBe("/v1/workspaces/workspace/containers");
-    expect(Object.fromEntries(request.searchParams)).toEqual({
-      app: "shop",
-      function: "checkout",
-      live: "true",
-      limit: "100",
-    });
+    expect(request.pathname).toBe(
+      "/v1/workspaces/workspace/apps/shop/workloads/pod/checkout/containers",
+    );
+    expect(Object.fromEntries(request.searchParams)).toEqual({ live: "true", limit: "100" });
     expect(page.pages[0]?.data.map((item) => item.id)).toEqual(["one", "two"]);
-  });
-
-  it("asks the server for one deployment's containers, stopped ones included", async () => {
-    const fetchMock = api(() => ({ containers: [container("one")] }));
-    await testQueryClient().fetchInfiniteQuery(
-      containersQueryOptions("workspace", { deployment: "deployment-1" }),
-    );
-
-    const request = new URL((fetchMock.mock.calls[0]?.[0] as Request).url);
-    expect(Object.fromEntries(request.searchParams)).toEqual({
-      deployment: "deployment-1",
-      live: "false",
-      limit: "100",
-    });
   });
 
   it("bounds retained pages and refresh requests after scrolling through a long list", async () => {
@@ -68,7 +53,10 @@ describe("container pagination", () => {
       return { containers: [container(`container-${page}`)], next_cursor: String(page + 1) };
     });
     const client = testQueryClient({ defaultOptions: { queries: { retry: false } } });
-    const observer = new InfiniteQueryObserver(client, containersQueryOptions("workspace"));
+    const observer = new InfiniteQueryObserver(
+      client,
+      containersQueryOptions("workspace", checkout),
+    );
     try {
       for (let page = 0; page < 12; page++) await observer.fetchNextPage();
       const beforeRefresh = fetchMock.mock.calls.length;

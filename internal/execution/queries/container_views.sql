@@ -14,7 +14,6 @@ join apps a on a.id = w.app_id
 left join hosts h on h.id = c.host_id
 where c.workspace_id = @workspace_id
   and (sqlc.narg(app)::text is null or a.name = sqlc.narg(app)::text)
-  and (sqlc.narg(function)::text is null or w.name = sqlc.narg(function)::text)
   and c.id < @before
   and (sqlc.narg('workload_id')::uuid is null or r.workload_id = sqlc.narg('workload_id'))
 order by c.id desc
@@ -38,7 +37,6 @@ left join hosts h on h.id = c.host_id
 where c.workspace_id = @workspace_id
   and c.state <> 'stopped'
   and (sqlc.narg(app)::text is null or a.name = sqlc.narg(app)::text)
-  and (sqlc.narg(function)::text is null or w.name = sqlc.narg(function)::text)
   and c.id < @before
   and (sqlc.narg('workload_id')::uuid is null or r.workload_id = sqlc.narg('workload_id'))
 order by c.id desc

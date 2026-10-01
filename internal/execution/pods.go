@@ -212,18 +212,18 @@ func billingModels(models []string) []billing.GPUType {
 type Pod struct {
 	Workload uuid.UUID
 	Name     string
-	Spec     apitypes.FunctionSpec
+	Spec     apitypes.WorkloadSpec
 }
 
-func (e *Execution) lockPod(ctx context.Context, q *Queries, workspace identity.WorkspaceID, workload uuid.UUID) (LockPodWorkloadRow, apitypes.FunctionSpec, error) {
+func (e *Execution) lockPod(ctx context.Context, q *Queries, workspace identity.WorkspaceID, workload uuid.UUID) (LockPodWorkloadRow, apitypes.WorkloadSpec, error) {
 	row, err := q.LockPodWorkload(ctx, LockPodWorkloadParams{ID: workload, WorkspaceID: uuid.UUID(workspace)})
 	if errors.Is(err, pgx.ErrNoRows) {
-		return row, apitypes.FunctionSpec{}, ErrNotFound
+		return row, apitypes.WorkloadSpec{}, ErrNotFound
 	}
 	if err != nil {
-		return row, apitypes.FunctionSpec{}, fmt.Errorf("lock pod: %w", err)
+		return row, apitypes.WorkloadSpec{}, fmt.Errorf("lock pod: %w", err)
 	}
-	var spec apitypes.FunctionSpec
+	var spec apitypes.WorkloadSpec
 	if row.Spec != nil {
 		if err := json.Unmarshal(row.Spec, &spec); err != nil {
 			return row, spec, fmt.Errorf("decode release spec: %w", err)

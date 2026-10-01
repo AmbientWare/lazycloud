@@ -1,4 +1,8 @@
+import type { Schemas } from "@/lib/api/client";
 import type { LogSource } from "@/lib/api/logs";
+
+/** A workload's address: /apps/{app}/workloads/{kind}/{name}. */
+export type WorkloadRef = Pick<Schemas["Workload"], "app" | "kind" | "name">;
 
 export type TaskListKeyParts = {
   mode: "page" | "infinite";
@@ -34,6 +38,9 @@ export type AccountCostSeriesKeyParts = {
 
 const workspaceRoot = (workspaceId: string) => ["workspace", workspaceId] as const;
 
+const workloadKey = (workspace: string, { app, kind, name }: WorkloadRef) =>
+  [...workspaceRoot(workspace), "workloads", "detail", app, kind, name] as const;
+
 export const workspaceQueryKeys = {
   root: workspaceRoot,
   apps: {
@@ -46,28 +53,21 @@ export const workspaceQueryKeys = {
     activity: (workspace: string, app: string) =>
       [...workspaceRoot(workspace), "apps", "activity", app] as const,
   },
-  search: (workspaceName: string, group: "apps" | "deployments" | "tasks", term: string) =>
+  search: (workspaceName: string, group: "apps" | "workloads" | "tasks", term: string) =>
     [...workspaceRoot(workspaceName), "search", group, term] as const,
   members: (workspaceId: string) => [...workspaceRoot(workspaceId), "members"] as const,
   invitations: (workspaceId: string) => [...workspaceRoot(workspaceId), "invitations"] as const,
-  deployments: {
-    root: (workspace: string) => [...workspaceRoot(workspace), "deployments"] as const,
+  workloads: {
+    root: (workspace: string) => [...workspaceRoot(workspace), "workloads"] as const,
     list: (workspace: string, app: string | null) =>
-      [...workspaceRoot(workspace), "deployments", "list", { app }] as const,
-    workload: (workspace: string, app: string, kind: string, name: string) =>
-      [...workspaceRoot(workspace), "deployments", "workload", app, kind, name] as const,
-    versions: (workspace: string, deployment: string) =>
-      [...workspaceRoot(workspace), "deployments", "versions", deployment] as const,
-    devbox: (workspace: string, deployment: string) =>
-      [...workspaceRoot(workspace), "deployments", "devbox", deployment] as const,
-    performance: (workspace: string, deployment: string, windowSeconds: number) =>
-      [
-        ...workspaceRoot(workspace),
-        "deployments",
-        "performance",
-        deployment,
-        windowSeconds,
-      ] as const,
+      [...workspaceRoot(workspace), "workloads", "list", { app }] as const,
+    detail: workloadKey,
+    versions: (workspace: string, workload: WorkloadRef) =>
+      [...workloadKey(workspace, workload), "versions"] as const,
+    devbox: (workspace: string, { app, name }: Pick<WorkloadRef, "app" | "name">) =>
+      [...workloadKey(workspace, { app, kind: "pod", name }), "devbox"] as const,
+    performance: (workspace: string, workload: WorkloadRef, windowSeconds: number) =>
+      [...workloadKey(workspace, workload), "performance", windowSeconds] as const,
   },
   tasks: {
     root: (workspace: string) => [...workspaceRoot(workspace), "tasks"] as const,
@@ -93,15 +93,8 @@ export const workspaceQueryKeys = {
   containers: {
     root: (workspace: string) => [...workspaceRoot(workspace), "containers"] as const,
     lists: (workspace: string) => [...workspaceRoot(workspace), "containers", "list"] as const,
-    list: (
-      workspace: string,
-      options: {
-        app: string | null;
-        function: string | null;
-        deployment: string | null;
-        live: boolean;
-      },
-    ) => [...workspaceRoot(workspace), "containers", "list", options] as const,
+    list: (workspace: string, { app, kind, name }: WorkloadRef, live: boolean) =>
+      [...workspaceRoot(workspace), "containers", "list", { app, kind, name, live }] as const,
     details: (workspace: string) => [...workspaceRoot(workspace), "containers", "detail"] as const,
     detail: (workspace: string, containerId: string) =>
       [...workspaceRoot(workspace), "containers", "detail", containerId] as const,

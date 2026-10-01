@@ -19,7 +19,7 @@ func TestControlRoutesAuthorizeValidateAndRoute(t *testing.T) {
 	var apiErr apitypes.Error
 	for _, path := range []string{
 		"/v1/workspaces/acme/apps",
-		"/v1/workspaces/acme/deployments",
+		"/v1/workspaces/acme/workloads",
 		"/v1/workspaces/acme/tasks",
 		"/v1/workspaces/acme/containers",
 	} {
@@ -40,7 +40,7 @@ func TestControlRoutesAuthorizeValidateAndRoute(t *testing.T) {
 	if status := e.do("POST", "/v1/workspaces/acme/apps/"+apps.Apps[0].Id.String()+"/pause", e.owner, nil, &app); status != 200 || app.State != apitypes.AppStatePaused {
 		t.Fatalf("pause by id: %d %+v", status, app)
 	}
-	fnPath := "/v1/workspaces/acme/apps/reports/functions/summarize_sales/tasks"
+	fnPath := "/v1/workspaces/acme/apps/reports/workloads/function/summarize_sales/tasks"
 	raw := json.RawMessage(`{"args": [], "kwargs": {}}`)
 	submit := apitypes.SubmitTasksRequest{Inputs: []apitypes.TaskInput{{Encoding: apitypes.TaskInputEncodingJson, Value: &raw}}}
 	if status := e.do("POST", fnPath, e.owner, submit, &apiErr); status != http.StatusConflict {
@@ -80,17 +80,31 @@ func TestControlRoutesAuthorizeValidateAndRoute(t *testing.T) {
 		t.Fatalf("rerun: %d %+v", status, rerun)
 	}
 
-	var deployments apitypes.DeploymentPage
-	if status := e.do("GET", "/v1/workspaces/acme/deployments?app=reports", e.owner, nil, &deployments); status != 200 || len(deployments.Deployments) != 1 {
-		t.Fatalf("deployments: %d %+v", status, deployments)
+	var workloads apitypes.WorkloadPage
+	if status := e.do("GET", "/v1/workspaces/acme/workloads?app=reports&kind=function", e.owner, nil, &workloads); status != 200 || len(workloads.Workloads) != 1 {
+		t.Fatalf("workloads: %d %+v", status, workloads)
 	}
-	deployment := "/v1/workspaces/acme/deployments/" + deployments.Deployments[0].Id.String()
+	deployment := "/v1/workspaces/acme/apps/reports/workloads/function/summarize_sales"
+	var detail apitypes.WorkloadDetail
+	if status := e.do("GET", deployment, e.owner, nil, &detail); status != 200 || detail.Workload.Id != workloads.Workloads[0].Id ||
+		detail.Release.Spec.Handler == nil || detail.Http != nil {
+		t.Fatalf("describe: %d %+v", status, detail)
+	}
+	for _, other := range []string{"/v1/workspaces/acme/apps/reports/workloads/endpoint/summarize_sales", "/v1/workspaces/acme/apps/reports/workloads/function/other"} {
+		if status := e.do("GET", other, e.owner, nil, &apiErr); status != http.StatusNotFound {
+			t.Fatalf("describe %s: %d %+v", other, status, apiErr)
+		}
+	}
+	var containers apitypes.ContainerPage
+	if status := e.do("GET", deployment+"/containers?live=true", e.owner, nil, &containers); status != 200 {
+		t.Fatalf("workload containers: %d %+v", status, containers)
+	}
 	var versions apitypes.VersionPage
 	if status := e.do("GET", deployment+"/versions", e.owner, nil, &versions); status != 200 || len(versions.Versions) != 1 {
 		t.Fatalf("versions: %d %+v", status, versions)
 	}
-	var started apitypes.DeployedWorkload
-	if status := e.do("POST", deployment+"/start", e.owner, apitypes.StartDeploymentRequest{Version: ptr(3)}, &apiErr); status != http.StatusNotFound {
+	var started apitypes.Workload
+	if status := e.do("POST", deployment+"/start", e.owner, apitypes.StartWorkloadRequest{Version: ptr(3)}, &apiErr); status != http.StatusNotFound {
 		t.Fatalf("start on a missing version: %d %+v", status, apiErr)
 	}
 	if status := e.do("POST", deployment+"/start", e.owner, nil, &started); status != 200 || started.State != apitypes.WorkloadStateActive {
@@ -103,7 +117,7 @@ func TestControlRoutesAuthorizeValidateAndRoute(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+e.owner)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil || resp.StatusCode != 200 || resp.Header.Get("Content-Type") != "application/x-ndjson" {
-		t.Fatalf("deployment logs: %v %v", resp, err)
+		t.Fatalf("workload logs: %v %v", resp, err)
 	}
 	_ = resp.Body.Close()
 	if status := e.do("GET", "/v1/workspaces/acme/containers/"+task.Id.String()+"/logs", e.owner, nil, &apiErr); status != http.StatusNotFound {

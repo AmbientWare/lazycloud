@@ -14,7 +14,7 @@ import (
 )
 
 // PinnedMachine returns the machine a spec pins, or "" when it pins none.
-func PinnedMachine(spec apitypes.FunctionSpec) string {
+func PinnedMachine(spec apitypes.WorkloadSpec) string {
 	if spec.Placement == nil || spec.Placement.Machine == nil {
 		return ""
 	}

@@ -58,7 +58,7 @@ from (select g * 86.4 as s from generate_series(1, 30000) g) x`, uuid.UUID(f.wor
 		return err
 	})
 	measure("deployment performance, 24 h", func() error {
-		_, err := f.obs.DeploymentPerformance(ctx, f.workspace, f.workload, observability.RangeQuery{})
+		_, err := f.obs.WorkloadPerformance(ctx, f.workspace, f.workload, observability.RangeQuery{})
 		return err
 	})
 	measure("account container starts, 24 h", func() error {

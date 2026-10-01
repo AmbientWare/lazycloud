@@ -1,6 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 
 import { RouteErrorFallback } from "@/components/shared/ErrorBoundary";
+import { isWorkloadKind } from "@/lib/queries/deployments";
 import { useWorkspace } from "@/lib/workspace-context";
 
 import { PodInstanceDrawer } from "./-workloads/PodInstanceDrawer";
@@ -16,6 +17,8 @@ function PodInstanceDrawerRoute() {
   const { app, kind, name, containerId } = Route.useParams();
   const { workspace } = useWorkspace();
   const navigate = useNavigate();
+  // The workload page shows an unknown kind as not found.
+  if (!isWorkloadKind(kind)) return null;
 
   return (
     <PodInstanceDrawer

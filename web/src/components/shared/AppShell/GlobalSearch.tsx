@@ -23,7 +23,7 @@ import { ContentTransition } from "@/components/shared/ContentTransition";
 import { formatKind } from "@/lib/format";
 import {
   appSearchQueryOptions,
-  deploymentSearchQueryOptions,
+  workloadSearchQueryOptions,
   taskSearchQueryOptions,
 } from "@/lib/queries/search";
 import { useWorkspace } from "@/lib/workspace-context";
@@ -56,7 +56,7 @@ export function GlobalSearch({
   // matched here.
   const apps = useQuery({ ...appSearchQueryOptions(workspace.name, deferredQuery), enabled: open });
   const workloads = useQuery({
-    ...deploymentSearchQueryOptions(workspace.name, deferredQuery),
+    ...workloadSearchQueryOptions(workspace.name, deferredQuery),
     enabled: open,
   });
   const tasks = useQuery({

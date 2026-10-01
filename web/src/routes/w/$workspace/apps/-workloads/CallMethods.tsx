@@ -3,7 +3,8 @@ import { ChevronRight } from "lucide-react";
 
 import { CopyButton } from "@/components/shared/CopyButton";
 import { highlight, type CodeLanguage } from "@/components/ui/code-syntax";
-import { invokeUrl, type Workload } from "@/lib/queries/deployments";
+import type { Schemas } from "@/lib/api/client";
+import { invokeUrl } from "@/lib/queries/deployments";
 
 import {
   clientContract,
@@ -15,9 +16,15 @@ import {
 } from "./playground-form";
 import { pythonCall, sourceImport, sourceSnippet } from "./call-snippets";
 
-export function CallMethods({ workspace, workload }: { workspace: string; workload: Workload }) {
-  const { deployment, release } = workload;
-  const kind = deployment.kind;
+export function CallMethods({
+  workspace,
+  detail,
+}: {
+  workspace: string;
+  detail: Schemas["WorkloadDetail"];
+}) {
+  const { workload, release } = detail;
+  const kind = workload.kind;
   const contract = clientContract(release.spec.client_contract);
   const methods = release.spec.http?.methods ?? [];
   const asgi = kind === "asgi";
@@ -25,7 +32,7 @@ export function CallMethods({ workspace, workload }: { workspace: string; worklo
   const method = asgi && methods.includes("GET") ? "GET" : "POST";
   const source = release.spec.handler ? sourceImport(release.spec.handler) : null;
   const pythonRequired = pythonOnlyReason(contract);
-  const url = invokeUrl(workspace, workload);
+  const url = invokeUrl(workspace, detail);
 
   return (
     <div className="content-transition min-w-0 divide-y divide-border/70 px-4 py-1">
@@ -34,7 +41,7 @@ export function CallMethods({ workspace, workload }: { workspace: string; worklo
       ) : (
         <CallSection title="Typed Python package">
           <Code
-            text={`lazycloud app export ${shellSingleQuote(deployment.app)} --workspace ${shellSingleQuote(workspace)}`}
+            text={`lazycloud app export ${shellSingleQuote(workload.app)} --workspace ${shellSingleQuote(workspace)}`}
             language="shell"
             label="Export typed package"
           />

@@ -12,10 +12,10 @@ import { Button } from "@/components/ui/button";
 import type { Schemas } from "@/lib/api/client";
 import { invalidateAppLists } from "@/lib/queries/apps";
 import {
-  deleteDeploymentMutationOptions,
+  deleteWorkloadMutationOptions,
   selectVersionList,
-  startDeploymentMutationOptions,
-  stopDeploymentMutationOptions,
+  startWorkloadMutationOptions,
+  stopWorkloadMutationOptions,
   versionsInfiniteQueryOptions,
   workloadRunning,
 } from "@/lib/queries/deployments";
@@ -26,9 +26,9 @@ export function VersionHistory({
   workload,
 }: {
   workspace: string;
-  workload: Schemas["DeployedWorkload"];
+  workload: Schemas["Workload"];
 }) {
-  const versions = useInfiniteQuery(versionsInfiniteQueryOptions(workspace, workload.id));
+  const versions = useInfiniteQuery(versionsInfiniteQueryOptions(workspace, workload));
   const list = selectVersionList(versions.data, versions.hasNextPage);
   if (versions.isPending) return <RowsSkeleton rows={3} height="h-12" />;
   if (versions.isError && !versions.isFetchNextPageError) {
@@ -89,7 +89,7 @@ function VersionRow({
   workspace,
 }: {
   version: Schemas["Version"];
-  workload: Schemas["DeployedWorkload"];
+  workload: Schemas["Workload"];
   latest: boolean;
   deletable: boolean;
   workspace: string;
@@ -99,15 +99,15 @@ function VersionRow({
   const navigate = useNavigate();
   const refresh = () => invalidateAppLists(queryClient, workspace);
   const start = useMutation({
-    ...startDeploymentMutationOptions(workspace, workload.id, version.version),
+    ...startWorkloadMutationOptions(workspace, workload, version.version),
     onSuccess: refresh,
   });
   const stop = useMutation({
-    ...stopDeploymentMutationOptions(workspace, workload.id),
+    ...stopWorkloadMutationOptions(workspace, workload),
     onSuccess: refresh,
   });
   const remove = useMutation({
-    ...deleteDeploymentMutationOptions(workspace, workload.id),
+    ...deleteWorkloadMutationOptions(workspace, workload),
     onSuccess: async () => {
       await refresh();
       await navigate({

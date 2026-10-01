@@ -314,7 +314,7 @@ func clampInt32(n int) int32 {
 // spec for a request that has none, so the edge can refuse the request at
 // once instead of letting it wait for a container planning will not start.
 // It returns billing's PaymentRequiredError or LimitError.
-func (e *Execution) AdmitCold(ctx context.Context, workspace uuid.UUID, spec apitypes.FunctionSpec) error {
+func (e *Execution) AdmitCold(ctx context.Context, workspace uuid.UUID, spec apitypes.WorkloadSpec) error {
 	req := billing.Request{Workspace: workspace, Cold: true}
 	if r := spec.Resources; r.GpuCount != nil && *r.GpuCount > 0 {
 		req.GPUs = *r.GpuCount

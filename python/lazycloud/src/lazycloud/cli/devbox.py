@@ -144,7 +144,7 @@ def status(
     if len(matches.hosts) > 1 or matches.next_cursor:
         raise ClientError(f"Several apps have a devbox named {name}; select one with --app")
     host = matches.hosts[0]
-    box = client.devbox(host.deployment_id)
+    box = client.devbox(host.app, host.pod)
     resources = box.resources
     if resources is None:
         raise ClientError(f"'{name}' is no longer a devbox; check devbox list")

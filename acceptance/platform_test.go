@@ -363,18 +363,28 @@ func (p *platform) upload(files map[string]string) string {
 }
 
 // deploy deploys specs into app and returns its releases.
-func (p *platform) deploy(app string, specs ...apitypes.FunctionSpec) apitypes.Deployment {
+func (p *platform) deploy(app string, specs ...apitypes.WorkloadSpec) apitypes.Deployment {
 	p.t.Helper()
-	d, err := p.control.Deploy(p.t.Context(), p.workspace.ID, app, apitypes.DeploymentRequest{Functions: specs})
+	d, err := p.control.Deploy(p.t.Context(), p.workspace.ID, app, apitypes.DeploymentRequest{Workloads: specs})
 	if err != nil {
 		p.t.Fatalf("deploy: %v", err)
 	}
 	return d
 }
 
-func (p *platform) describe(app string, kind apitypes.WorkloadKind, name string) apitypes.HttpWorkload {
+// describe returns where a deployed HTTP workload answers.
+func (p *platform) describe(app string, kind apitypes.WorkloadKind, name string) apitypes.HttpUrls {
 	p.t.Helper()
-	w, err := p.edge.Describe(p.t.Context(), p.workspace.ID, app, kind, name, nil)
+	ctx := p.t.Context()
+	id, err := p.control.FindWorkload(ctx, p.workspace.ID, control.WorkloadRef{App: app, Kind: kind, Name: name})
+	if err != nil {
+		p.t.Fatalf("find %s: %v", name, err)
+	}
+	release, err := p.control.Release(ctx, p.workspace.ID, id, nil)
+	if err != nil {
+		p.t.Fatalf("release of %s: %v", name, err)
+	}
+	w, err := p.edge.HTTPUrls(ctx, p.workspace.Name, app, uuid.UUID(id), release)
 	if err != nil {
 		p.t.Fatalf("describe %s: %v", name, err)
 	}
@@ -414,9 +424,17 @@ func (p *platform) call(method, url string, body string) (int, http.Header, stri
 	return resp.StatusCode, resp.Header, string(data)
 }
 
-func spec(name, handler, source string, http *apitypes.HttpSpec) apitypes.FunctionSpec {
-	return apitypes.FunctionSpec{
-		Name: name, Handler: new(handler), Source: apitypes.SourceRef{Sha256: source},
+func spec(name, handler, source string, http *apitypes.HttpSpec) apitypes.WorkloadSpec {
+	kind := apitypes.WorkloadKindFunction
+	switch {
+	case http == nil:
+	case http.Kind == apitypes.HttpKindEndpoint:
+		kind = apitypes.WorkloadKindEndpoint
+	default:
+		kind = apitypes.WorkloadKindAsgi
+	}
+	return apitypes.WorkloadSpec{
+		Kind: kind, Name: name, Handler: new(handler), Source: apitypes.SourceRef{Sha256: source},
 		Image:     apitypes.ImageSpec{PythonVersion: apitypes.N312},
 		Resources: apitypes.Resources{CpuMillis: 250, MemoryMib: 256},
 		Http:      http,

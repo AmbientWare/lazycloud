@@ -36,12 +36,3 @@ where w.app_id = @app_id and w.desired_state <> 'deleted'
   and not (w.kind || ':' || w.name = any(@keep::text[]))
 returning w.name,
           (select count(*) from releases r where r.workload_id = w.id and r.version > 0)::int as versions;
-
--- name: FunctionRelease :one
-select w.name, w.desired_state, a.name as app_name,
-       r.id, r.version, r.spec, r.created_at
-from workloads w
-join apps a on a.id = w.app_id
-join releases r on r.id = w.active_release_id
-where a.workspace_id = @workspace_id and a.name = @app_name and a.state <> 'deleted'
-  and w.kind = 'function' and w.name = @name and w.desired_state <> 'deleted';

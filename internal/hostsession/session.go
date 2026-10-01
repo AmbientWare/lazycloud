@@ -482,7 +482,7 @@ func stopMessage(id string, container execution.ContainerID, grace time.Duration
 
 // httpServing configures an HTTP workload's workers, or nil for a task
 // workload. Each worker admits the spec's concurrency.
-func httpServing(spec apitypes.FunctionSpec) *hostproto.HttpServing {
+func httpServing(spec apitypes.WorkloadSpec) *hostproto.HttpServing {
 	if spec.Http == nil {
 		return nil
 	}

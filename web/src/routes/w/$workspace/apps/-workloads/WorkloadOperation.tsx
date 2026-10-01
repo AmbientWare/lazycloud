@@ -3,24 +3,24 @@ import { Fact } from "@/components/shared/Fact";
 import { FactGrid } from "@/components/shared/Fact/FactGrid";
 import { LiveRelativeTime } from "@/components/shared/LiveTime";
 import type { Schemas } from "@/lib/api/client";
-import { invokeUrl, workloadRunning, type Workload } from "@/lib/queries/deployments";
+import { invokeUrl, workloadRunning } from "@/lib/queries/deployments";
 
 export function WorkloadOperation({
   workspace,
-  workload,
+  detail,
 }: {
   workspace: string;
-  workload: Workload;
+  detail: Schemas["WorkloadDetail"];
 }) {
-  const { deployment, release } = workload;
-  const kind = deployment.kind;
+  const { workload, release } = detail;
+  const kind = workload.kind;
   const invokable = kind === "function" || kind === "endpoint" || kind === "asgi";
 
   return (
     <div className="flex min-w-0 flex-wrap items-start gap-x-8 gap-y-3">
       {invokable ? (
-        workloadRunning(deployment) ? (
-          <InvokeTarget url={invokeUrl(workspace, workload)} />
+        workloadRunning(workload) ? (
+          <InvokeTarget url={invokeUrl(workspace, detail)} />
         ) : (
           <p className="text-sm text-muted-foreground">
             This version is stopped and cannot accept requests.
@@ -28,9 +28,9 @@ export function WorkloadOperation({
         )
       ) : null}
       {/* A schedule is a property of the workload, not a kind of it. */}
-      {release.spec.cron ? <ScheduleFacts workload={workload} /> : null}
+      {release.spec.cron ? <ScheduleFacts detail={detail} /> : null}
       {kind === "pod" ? <PodFacts pod={release.spec.pod} /> : null}
-      {kind === "endpoint" || kind === "asgi" ? <HttpFacts workload={workload} /> : null}
+      {kind === "endpoint" || kind === "asgi" ? <HttpFacts detail={detail} /> : null}
     </div>
   );
 }
@@ -64,24 +64,22 @@ function InvokeTarget({ url }: { url: string }) {
   );
 }
 
-function HttpFacts({ workload }: { workload: Workload }) {
-  const http = workload.release.spec.http;
+function HttpFacts({ detail }: { detail: Schemas["WorkloadDetail"] }) {
+  const http = detail.release.spec.http;
   return (
     <FactGrid columns={2} className="max-w-xl">
       <Fact label="Route" value={http?.route || "/"} mono />
       <Fact
         label="Methods"
-        value={
-          workload.deployment.kind === "asgi" ? "All" : http?.methods?.join(", ") || "GET, POST"
-        }
+        value={detail.workload.kind === "asgi" ? "All" : http?.methods?.join(", ") || "GET, POST"}
         mono
       />
     </FactGrid>
   );
 }
 
-function ScheduleFacts({ workload }: { workload: Workload }) {
-  const { schedule, deployment } = workload;
+function ScheduleFacts({ detail }: { detail: Schemas["WorkloadDetail"] }) {
+  const { schedule, workload } = detail;
   return (
     <FactGrid columns={4} className="content-transition max-w-3xl">
       <Fact label="Schedule" value={schedule?.cron ?? "Not registered"} mono />
@@ -91,7 +89,7 @@ function ScheduleFacts({ workload }: { workload: Workload }) {
         value={
           !schedule ? (
             "-"
-          ) : deployment.state !== "active" ? (
+          ) : workload.state !== "active" ? (
             "Disabled"
           ) : (
             <LiveRelativeTime value={schedule.next_run_at} />

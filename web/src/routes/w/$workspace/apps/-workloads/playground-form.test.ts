@@ -80,7 +80,7 @@ describe("buildBody", () => {
 });
 
 describe("snippets", () => {
-  const url = "http://127.0.0.1:9000/v1/workspaces/dev/apps/demo/functions/square/invoke";
+  const url = "http://127.0.0.1:9000/v1/workspaces/dev/apps/demo/workloads/function/square/invoke";
 
   it("shell-escapes single quotes in the payload", () => {
     const snippet = curlSnippet(url, { label: "it's" });

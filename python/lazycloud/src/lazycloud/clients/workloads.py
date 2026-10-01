@@ -42,9 +42,17 @@ from shared.api import (
     SshHostPage,
     Ttl,
     TtlRequest,
+    WorkloadKind,
 )
 
-from lazycloud.clients.api import ApiClient, ApiConnectionError, _api_error, _path, _query
+from lazycloud.clients.api import (
+    ApiClient,
+    ApiConnectionError,
+    _api_error,
+    _path,
+    _query,
+    workload_path,
+)
 
 # Added to a long poll's hold so the read does not time out first.
 _WAIT_MARGIN_SECONDS = 15.0
@@ -261,10 +269,9 @@ class WorkloadsClient:
 
     # Devboxes and SSH
 
-    def devbox(self, deployment_id: UUID) -> Devbox:
-        return self.api._send(
-            Devbox, "GET", self._path("deployments", str(deployment_id), "devbox")
-        )
+    def devbox(self, app: str, name: str) -> Devbox:
+        path = workload_path(self.workspace, app, WorkloadKind.pod, name, "devbox")
+        return self.api._send(Devbox, "GET", path)
 
     def create_ssh_certificate(self, public_key: str) -> SshCertificate:
         return self.api._send(
@@ -303,7 +310,9 @@ class WorkloadsClient:
         return websocket_url(self.api.endpoint, f"{self._container(container_id, 'shell')}?{query}")
 
     def ssh_tunnel_url(self, app: str, pod: str) -> str:
-        return websocket_url(self.api.endpoint, self._path("apps", app, "pods", pod, "ssh"))
+        return websocket_url(
+            self.api.endpoint, workload_path(self.workspace, app, WorkloadKind.pod, pod, "ssh")
+        )
 
     def _raw(
         self,

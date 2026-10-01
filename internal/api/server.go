@@ -11,7 +11,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
-	"github.com/AmbientWare/lazycloud/internal/control"
 	"github.com/AmbientWare/lazycloud/internal/edge"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/identity"
@@ -63,7 +62,7 @@ func (s *Server) CreateSourceUpload(ctx context.Context, req CreateSourceUploadR
 	return out, nil
 }
 
-// DeployApp makes the app's functions match the request.
+// DeployApp makes the app's workloads match the request.
 func (s *Server) DeployApp(ctx context.Context, req DeployAppRequestObject) (DeployAppResponseObject, error) {
 	ws, err := s.workspace(ctx, req.Workspace)
 	if err != nil {
@@ -79,7 +78,7 @@ func (s *Server) DeployApp(ctx context.Context, req DeployAppRequestObject) (Dep
 	for n, release := range deployment.Releases {
 		if release.Spec.Http != nil {
 			url := s.owners.Edge.DeployedURL(ws.ID, req.App, release.Spec)
-			path := edge.InvokePath(ws.Name, req.App, control.KindOf(release.Spec), release.Function, nil)
+			path := edge.InvokePath(ws.Name, req.App, release.Spec.Kind, release.Name, nil)
 			deployment.Releases[n].Url, deployment.Releases[n].InvokePath = &url, &path
 		}
 		if url := s.owners.Edge.PodURL(release.Id, release.Spec); release.Spec.Pod != nil && url != "" {
@@ -87,27 +86,6 @@ func (s *Server) DeployApp(ctx context.Context, req DeployAppRequestObject) (Dep
 		}
 	}
 	return DeployApp200JSONResponse(deployment), nil
-}
-
-// GetFunction returns a function and its active release.
-func (s *Server) GetFunction(ctx context.Context, req GetFunctionRequestObject) (GetFunctionResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
-	fn, err := s.owners.Control.GetFunction(ctx, ws.ID, req.App, req.Function)
-	if err != nil {
-		return nil, err
-	}
-	schedule, err := s.owners.Schedules.ForFunction(ctx, ws.ID, req.App, req.Function)
-	if err != nil {
-		return nil, err
-	}
-	if schedule != nil {
-		out := scheduleOut(*schedule)
-		fn.Schedule = &out
-	}
-	return GetFunction200JSONResponse(fn), nil
 }
 
 // SubmitTasks admits one task per input.
@@ -132,7 +110,7 @@ func (s *Server) SubmitTasks(ctx context.Context, req SubmitTasksRequestObject) 
 		}
 	}
 	submit := execution.SubmitRequest{
-		Workspace: ws.ID, App: req.App, Function: req.Function, Inputs: inputs, Release: req.Body.ReleaseId,
+		Workspace: ws.ID, App: req.App, Function: req.Name, Inputs: inputs, Release: req.Body.ReleaseId,
 	}
 	switch c, ok := containerFrom(ctx); {
 	case ok && c.Task != nil:
@@ -203,17 +181,17 @@ const logHeartbeat = 15 * time.Second
 
 // StreamTaskLogs writes the task's log entries as NDJSON.
 func (s *Server) StreamTaskLogs(ctx context.Context, req StreamTaskLogsRequestObject) (StreamTaskLogsResponseObject, error) {
-	return s.logStream(ctx, req.Workspace, execution.LogSource{Kind: execution.LogsOfTask, ID: req.Task},
+	ws, err := s.workspace(ctx, req.Workspace)
+	if err != nil {
+		return nil, err
+	}
+	return s.logStream(ctx, ws, execution.LogSource{Kind: execution.LogsOfTask, ID: req.Task},
 		req.Params.After, req.Params.Tail, req.Params.Follow)
 }
 
 // logStream checks the source before the response starts, so an unknown one
 // is an error response rather than an empty stream.
-func (s *Server) logStream(ctx context.Context, workspace string, source execution.LogSource, after *int64, tail *int, follow *bool) (logStream, error) {
-	ws, err := s.workspace(ctx, workspace)
-	if err != nil {
-		return logStream{}, err
-	}
+func (s *Server) logStream(ctx context.Context, ws identity.Workspace, source execution.LogSource, after *int64, tail *int, follow *bool) (logStream, error) {
 	if err := s.owners.Execution.CheckLogSource(ctx, ws.ID, source); err != nil {
 		return logStream{}, err
 	}
@@ -246,7 +224,7 @@ type logStream struct {
 
 func (l logStream) VisitStreamTaskLogsResponse(w http.ResponseWriter) error { return l.visit(w) }
 
-func (l logStream) VisitStreamDeploymentLogsResponse(w http.ResponseWriter) error {
+func (l logStream) VisitStreamWorkloadLogsResponse(w http.ResponseWriter) error {
 	return l.visit(w)
 }
 

@@ -54,7 +54,7 @@ async def app(scope, receive, send):
     await answer(b"ok")
 `
 
-func faultSpec(source string) apitypes.FunctionSpec {
+func faultSpec(source string) apitypes.WorkloadSpec {
 	s := spec("faults", "app:app", source, &apitypes.HttpSpec{Kind: apitypes.HttpKindAsgi})
 	one, timeout := 1, 15
 	s.Concurrency, s.TimeoutSeconds = &one, &timeout

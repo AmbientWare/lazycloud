@@ -46,7 +46,7 @@ func TestMeasureChangeFanout(t *testing.T) {
 	t.Logf("%d streams: %d goroutines (client and server), heap %.1f KiB per stream",
 		streams, runtime.NumGoroutine()-goroutines, float64(after.HeapAlloc-before.HeapAlloc)/streams/1024)
 
-	fnPath := "/v1/workspaces/acme/apps/reports/functions/summarize_sales/tasks"
+	fnPath := "/v1/workspaces/acme/apps/reports/workloads/function/summarize_sales/tasks"
 	raw := json.RawMessage(`{"args": [], "kwargs": {}}`)
 	submit := apitypes.SubmitTasksRequest{Inputs: []apitypes.TaskInput{{Encoding: apitypes.TaskInputEncodingJson, Value: &raw}}}
 	for round := range 3 {

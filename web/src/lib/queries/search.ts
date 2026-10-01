@@ -25,19 +25,19 @@ export function appSearchQueryOptions(workspaceName: string, term: string) {
 }
 
 /** Deployed workloads whose app or workload name contains the term. */
-export function deploymentSearchQueryOptions(workspaceName: string, term: string) {
+export function workloadSearchQueryOptions(workspaceName: string, term: string) {
   return queryOptions({
-    queryKey: workspaceQueryKeys.search(workspaceName, "deployments", term),
-    queryFn: async (): Promise<Schemas["DeployedWorkload"][]> => {
+    queryKey: workspaceQueryKeys.search(workspaceName, "workloads", term),
+    queryFn: async (): Promise<Schemas["Workload"][]> => {
       const page = await ok(
-        api.GET("/v1/workspaces/{workspace}/deployments", {
+        api.GET("/v1/workspaces/{workspace}/workloads", {
           params: {
             path: { workspace: workspaceName },
             query: { limit: RESULT_LIMIT, search: term || undefined },
           },
         }),
       );
-      return page.deployments;
+      return page.workloads;
     },
   });
 }

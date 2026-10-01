@@ -1,9 +1,10 @@
 import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
 
-import { api, ok, type Schemas } from "@/lib/api/client";
+import { ApiError, api, ok, type Schemas } from "@/lib/api/client";
+import { workloadKindValues } from "@/lib/api/generated/openapi";
 
 import { nextListCursor, selectInfiniteList, type InfiniteListQueryData } from "./infinite-list";
-import { workspaceLiveQueryMeta, workspaceQueryKeys } from "./workspace-keys";
+import { workspaceLiveQueryMeta, workspaceQueryKeys, type WorkloadRef } from "./workspace-keys";
 
 /** Every page of a cursor listing, for a list that answers a whole view. */
 export async function allPages<T>(
@@ -20,126 +21,68 @@ export async function allPages<T>(
 }
 
 /** Deployed workloads, by app and name, of the workspace or one app. */
-export function listDeployments(
-  workspace: string,
-  app?: string,
-): Promise<Schemas["DeployedWorkload"][]> {
+export function listWorkloads(workspace: string, app?: string): Promise<Schemas["Workload"][]> {
   return allPages(async (cursor) => {
     const page = await ok(
-      api.GET("/v1/workspaces/{workspace}/deployments", {
+      api.GET("/v1/workspaces/{workspace}/workloads", {
         params: { path: { workspace }, query: { app, limit: 1000, cursor } },
       }),
     );
-    return { items: page.deployments, next: page.next_cursor };
+    return { items: page.workloads, next: page.next_cursor };
   });
 }
 
 /** Deployed workloads of the workspace, or of one app, newest deploy first. */
-export function deploymentsQueryOptions(workspace: string, app?: string) {
+export function workloadsQueryOptions(workspace: string, app?: string) {
   return queryOptions({
-    queryKey: workspaceQueryKeys.deployments.list(workspace, app ?? null),
-    queryFn: async () => newestFirst(await listDeployments(workspace, app)),
+    queryKey: workspaceQueryKeys.workloads.list(workspace, app ?? null),
+    queryFn: async () => newestFirst(await listWorkloads(workspace, app)),
     meta: workspaceLiveQueryMeta(true),
   });
 }
 
-export function deployedAt(workload: Schemas["DeployedWorkload"]): string {
+export function deployedAt(workload: Schemas["Workload"]): string {
   return workload.deployed_at ?? workload.created_at;
 }
 
-export function newestFirst(
-  workloads: Schemas["DeployedWorkload"][],
-): Schemas["DeployedWorkload"][] {
+export function newestFirst(workloads: Schemas["Workload"][]): Schemas["Workload"][] {
   return [...workloads].sort((left, right) => deployedAt(right).localeCompare(deployedAt(left)));
 }
 
 /** Whether the workload admits work: started, in a running app, on a deployed version. */
-export function workloadRunning(workload: Schemas["DeployedWorkload"]): boolean {
+export function workloadRunning(workload: Schemas["Workload"]): boolean {
   return workload.state === "active" && workload.app_state !== "paused";
 }
 
-/** A workload the page names that its app does not deploy. */
-export class WorkloadNotFoundError extends Error {
-  constructor(name: string) {
-    super(`No deployed workload named ${name} in this app`);
-    this.name = "WorkloadNotFoundError";
-  }
+/** Whether a route's kind segment names a workload kind the API addresses. */
+export function isWorkloadKind(kind: string): kind is Schemas["WorkloadKind"] {
+  return (workloadKindValues as readonly string[]).includes(kind);
 }
 
-export type Workload = {
-  deployment: Schemas["DeployedWorkload"];
-  /** The active release: the definition the workload runs. */
-  release: Schemas["Release"];
-  /** Where an endpoint or ASGI app answers; null for a function. */
-  http: Schemas["HttpWorkload"] | null;
-  /** A scheduled function's next and last runs. */
-  schedule: Schemas["Schedule"] | null;
-};
+/** Whether the app deploys no live workload of that kind and name. */
+export function workloadNotFound(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 404;
+}
 
-/**
- * One deployed workload by app, kind and name, with its active definition.
- * Every fetch asks the server for exactly that workload; one it does not
- * deploy is a WorkloadNotFoundError.
- */
-export function workloadQueryOptions(workspace: string, app: string, kind: string, name: string) {
+const workloadPath = (workspace: string, { app, kind, name }: WorkloadRef) => ({
+  workspace,
+  app,
+  kind,
+  name,
+});
+
+/** One deployed workload, the definition its active version runs and where it answers. */
+export function workloadQueryOptions(workspace: string, workload: WorkloadRef) {
   return queryOptions({
-    queryKey: workspaceQueryKeys.deployments.workload(workspace, app, kind, name),
-    queryFn: async (): Promise<Workload> => {
-      const page = await ok(
-        api.GET("/v1/workspaces/{workspace}/deployments", {
-          params: { path: { workspace }, query: { app, name, limit: 1 } },
+    queryKey: workspaceQueryKeys.workloads.detail(workspace, workload),
+    queryFn: ({ signal }) =>
+      ok(
+        api.GET("/v1/workspaces/{workspace}/apps/{app}/workloads/{kind}/{name}", {
+          params: { path: workloadPath(workspace, workload) },
+          signal,
         }),
-      );
-      const deployment = page.deployments.find(
-        (item) => item.app === app && item.name === name && item.kind === kind,
-      );
-      if (!deployment) throw new WorkloadNotFoundError(name);
-      const path = { workspace, app };
-      switch (deployment.kind) {
-        // A pod, devbox or sandbox has no read of its own; reading its
-        // deployment answers its active release.
-        case "pod":
-        case "sandbox": {
-          const { active_release: release, ...detail } = await ok(
-            api.GET("/v1/workspaces/{workspace}/deployments/{deployment}", {
-              params: { path: { workspace, deployment: deployment.id } },
-            }),
-          );
-          if (!release) throw new Error(`${name} has no active version`);
-          return { deployment: detail, release, http: null, schedule: null };
-        }
-        case "function": {
-          const fn = await ok(
-            api.GET("/v1/workspaces/{workspace}/apps/{app}/functions/{function}", {
-              params: { path: { ...path, function: name } },
-            }),
-          );
-          return {
-            deployment,
-            release: fn.active_release,
-            http: null,
-            schedule: fn.schedule ?? null,
-          };
-        }
-        case "endpoint": {
-          const http = await ok(
-            api.GET("/v1/workspaces/{workspace}/apps/{app}/endpoints/{endpoint}", {
-              params: { path: { ...path, endpoint: name } },
-            }),
-          );
-          return { deployment, release: http.release, http, schedule: null };
-        }
-        case "asgi": {
-          const http = await ok(
-            api.GET("/v1/workspaces/{workspace}/apps/{app}/asgi/{endpoint}", {
-              params: { path: { ...path, endpoint: name } },
-            }),
-          );
-          return { deployment, release: http.release, http, schedule: null };
-        }
-      }
-    },
-    retry: (failures, error) => !(error instanceof WorkloadNotFoundError) && failures < 2,
+      ),
+    retry: (failures, error) => !workloadNotFound(error) && failures < 2,
     meta: workspaceLiveQueryMeta(true),
   });
 }
@@ -148,22 +91,22 @@ export function workloadQueryOptions(workspace: string, app: string, kind: strin
  * Where the workload answers callers: an endpoint or ASGI app on its own
  * host, a function on this origin's invoke operation.
  */
-export function invokeUrl(workspace: string, { deployment, http }: Workload): string {
+export function invokeUrl(workspace: string, { workload, http }: Schemas["WorkloadDetail"]) {
   if (http) return http.url;
-  const path = [workspace, deployment.app, deployment.name].map(encodeURIComponent);
-  return `${window.location.origin}/v1/workspaces/${path[0]}/apps/${path[1]}/functions/${path[2]}/invoke`;
+  const [ws, app, name] = [workspace, workload.app, workload.name].map(encodeURIComponent);
+  return `${window.location.origin}/v1/workspaces/${ws}/apps/${app}/workloads/function/${name}/invoke`;
 }
 
 /** The workload's deployed versions, newest first. */
-export function versionsInfiniteQueryOptions(workspace: string, deployment: string) {
+export function versionsInfiniteQueryOptions(workspace: string, workload: WorkloadRef) {
   return infiniteQueryOptions({
-    queryKey: workspaceQueryKeys.deployments.versions(workspace, deployment),
+    queryKey: workspaceQueryKeys.workloads.versions(workspace, workload),
     initialPageParam: "",
     queryFn: async ({ pageParam }) => {
       const page = await ok(
-        api.GET("/v1/workspaces/{workspace}/deployments/{deployment}/versions", {
+        api.GET("/v1/workspaces/{workspace}/apps/{app}/workloads/{kind}/{name}/versions", {
           params: {
-            path: { workspace, deployment },
+            path: workloadPath(workspace, workload),
             query: { limit: 100, cursor: pageParam || undefined },
           },
         }),
@@ -185,74 +128,71 @@ export function selectVersionList(
 /** Run time percentiles, outcomes and cold starts per hour over the last day. */
 export function performanceQueryOptions(
   workspace: string,
-  deployment: string,
+  workload: WorkloadRef,
   windowSeconds = 3600,
 ) {
   return queryOptions({
-    queryKey: workspaceQueryKeys.deployments.performance(workspace, deployment, windowSeconds),
+    queryKey: workspaceQueryKeys.workloads.performance(workspace, workload, windowSeconds),
     queryFn: () =>
       ok(
-        api.GET("/v1/workspaces/{workspace}/deployments/{deployment}/performance", {
-          params: { path: { workspace, deployment }, query: { window_seconds: windowSeconds } },
+        api.GET("/v1/workspaces/{workspace}/apps/{app}/workloads/{kind}/{name}/performance", {
+          params: {
+            path: workloadPath(workspace, workload),
+            query: { window_seconds: windowSeconds },
+          },
         }),
       ),
     meta: workspaceLiveQueryMeta(true),
   });
 }
 
-const deploymentPath = (workspace: string, deployment: string) => ({
-  params: { path: { workspace, deployment } },
-});
-
 /** Starts the workload, on `version` when one is named, which then becomes the active one. */
-export function startDeploymentMutationOptions(
+export function startWorkloadMutationOptions(
   workspace: string,
-  deployment: string,
+  workload: WorkloadRef,
   version?: number,
 ) {
   return {
     mutationFn: () =>
       ok(
-        api.POST("/v1/workspaces/{workspace}/deployments/{deployment}/start", {
-          ...deploymentPath(workspace, deployment),
+        api.POST("/v1/workspaces/{workspace}/apps/{app}/workloads/{kind}/{name}/start", {
+          params: { path: workloadPath(workspace, workload) },
           body: version === undefined ? {} : { version },
         }),
       ),
   };
 }
 
-export function stopDeploymentMutationOptions(workspace: string, deployment: string) {
+export function stopWorkloadMutationOptions(workspace: string, workload: WorkloadRef) {
   return {
     mutationFn: () =>
       ok(
-        api.POST(
-          "/v1/workspaces/{workspace}/deployments/{deployment}/stop",
-          deploymentPath(workspace, deployment),
-        ),
+        api.POST("/v1/workspaces/{workspace}/apps/{app}/workloads/{kind}/{name}/stop", {
+          params: { path: workloadPath(workspace, workload) },
+        }),
       ),
   };
 }
 
 /** Deletes the workload with every version of it. */
-export function deleteDeploymentMutationOptions(workspace: string, deployment: string) {
+export function deleteWorkloadMutationOptions(workspace: string, workload: WorkloadRef) {
   return {
     mutationFn: () =>
       ok(
-        api.DELETE(
-          "/v1/workspaces/{workspace}/deployments/{deployment}",
-          deploymentPath(workspace, deployment),
-        ),
+        api.DELETE("/v1/workspaces/{workspace}/apps/{app}/workloads/{kind}/{name}", {
+          params: { path: workloadPath(workspace, workload) },
+        }),
       ),
   };
 }
 
 /** Holds a pod at a number of containers until the next scale. */
-export function scaleDeploymentMutationOptions(workspace: string, deployment: string) {
+export function scaleWorkloadMutationOptions(workspace: string, workload: WorkloadRef) {
   return {
     mutationFn: (containers: number) =>
       ok(
-        api.POST("/v1/workspaces/{workspace}/deployments/{deployment}/scale", {
-          ...deploymentPath(workspace, deployment),
+        api.POST("/v1/workspaces/{workspace}/apps/{app}/workloads/{kind}/{name}/scale", {
+          params: { path: workloadPath(workspace, workload) },
           body: { containers },
         }),
       ),
@@ -263,6 +203,11 @@ const SETTLED_DEVBOX_PHASES = new Set<Schemas["DevboxPhase"]>(["running", "stopp
 const SETTLED_DEVBOX_REFRESH_MS = 15_000;
 const CHANGING_DEVBOX_REFRESH_MS = 3_000;
 
+/** A devbox is always a pod, so its app and name address it. */
+type DevboxRef = Pick<WorkloadRef, "app" | "name">;
+
+const devboxPath = (workspace: string, { app, name }: DevboxRef) => ({ workspace, app, name });
+
 /**
  * A devbox's status. Connections and the idle deadline change without a
  * workspace change, so it refreshes on an interval: quickly while the devbox
@@ -271,15 +216,15 @@ const CHANGING_DEVBOX_REFRESH_MS = 3_000;
  */
 export function devboxQueryOptions(
   workspace: string,
-  deployment: string,
+  devbox: DevboxRef,
   { awaitingChange = false }: { awaitingChange?: boolean } = {},
 ) {
   return queryOptions({
-    queryKey: workspaceQueryKeys.deployments.devbox(workspace, deployment),
+    queryKey: workspaceQueryKeys.workloads.devbox(workspace, devbox),
     queryFn: ({ signal }) =>
       ok(
-        api.GET("/v1/workspaces/{workspace}/deployments/{deployment}/devbox", {
-          ...deploymentPath(workspace, deployment),
+        api.GET("/v1/workspaces/{workspace}/apps/{app}/workloads/pod/{name}/devbox", {
+          params: { path: devboxPath(workspace, devbox) },
           signal,
         }),
       ),
@@ -292,27 +237,25 @@ export function devboxQueryOptions(
 }
 
 /** Starts the devbox now; the server answers with its status without waiting. */
-export function startDevboxMutationOptions(workspace: string, deployment: string) {
+export function startDevboxMutationOptions(workspace: string, devbox: DevboxRef) {
   return {
     mutationFn: () =>
       ok(
-        api.POST(
-          "/v1/workspaces/{workspace}/deployments/{deployment}/devbox/start",
-          deploymentPath(workspace, deployment),
-        ),
+        api.POST("/v1/workspaces/{workspace}/apps/{app}/workloads/pod/{name}/devbox/start", {
+          params: { path: devboxPath(workspace, devbox) },
+        }),
       ),
   };
 }
 
-/** Stops the devbox's container now; its deployment stays on. */
-export function stopDevboxMutationOptions(workspace: string, deployment: string) {
+/** Stops the devbox's container now; its workload stays on. */
+export function stopDevboxMutationOptions(workspace: string, devbox: DevboxRef) {
   return {
     mutationFn: () =>
       ok(
-        api.POST(
-          "/v1/workspaces/{workspace}/deployments/{deployment}/devbox/stop",
-          deploymentPath(workspace, deployment),
-        ),
+        api.POST("/v1/workspaces/{workspace}/apps/{app}/workloads/pod/{name}/devbox/stop", {
+          params: { path: devboxPath(workspace, devbox) },
+        }),
       ),
   };
 }

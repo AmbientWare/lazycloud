@@ -27,6 +27,7 @@ from types import ModuleType
 import lazycloud.config
 import pytest
 from lazycloud.clients.api import ApiClient
+from shared.api import WorkloadKind
 
 from lazycloud import Secret
 
@@ -256,14 +257,13 @@ def test_workload_runtime_end_to_end(
     assert events[(flaky.task_id, "failed")]["attempt_number"] == 2
 
     # The schedule fires within a minute and records its run.
-    function = platform.get_function(WORKSPACE, app, "tick")
-    assert function.schedule is not None
-    assert (function.schedule.cron, function.schedule.timezone) == ("*/1 * * * *", "UTC")
+    schedule = platform.get_workload(WORKSPACE, app, WorkloadKind.function, "tick").schedule
+    assert schedule is not None
+    assert (schedule.cron, schedule.timezone) == ("*/1 * * * *", "UTC")
     deadline = time.monotonic() + 90
-    schedule = function.schedule
     while time.monotonic() < deadline and schedule.last_task_id is None:
         time.sleep(1)
-        schedule = platform.get_function(WORKSPACE, app, "tick").schedule
+        schedule = platform.get_workload(WORKSPACE, app, WorkloadKind.function, "tick").schedule
         assert schedule is not None
     assert schedule.last_task_id is not None, "the schedule never fired"
     task = platform.get_task(WORKSPACE, schedule.last_task_id, wait_seconds=60)

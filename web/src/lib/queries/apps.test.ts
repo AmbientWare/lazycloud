@@ -18,7 +18,7 @@ function app(name: string, running = 0): Schemas["App"] {
   };
 }
 
-function workload(appName: string, name: string, deployedAt: string): Schemas["DeployedWorkload"] {
+function workload(appName: string, name: string, deployedAt: string): Schemas["Workload"] {
   return {
     id: `${appName}-${name}`,
     app: appName,
@@ -46,12 +46,12 @@ it("builds every app's card from complete lists and never reads containers", asy
           cursor ? { apps: [app("shop", 2)] } : { apps: [app("blog", 3)], next_cursor: "blog" },
         );
       }
-      if (url.pathname.endsWith("/deployments")) {
+      if (url.pathname.endsWith("/workloads")) {
         return Response.json(
           cursor
-            ? { deployments: [workload("shop", "checkout", "2026-07-10T12:00:00Z")] }
+            ? { workloads: [workload("shop", "checkout", "2026-07-10T12:00:00Z")] }
             : {
-                deployments: [
+                workloads: [
                   workload("blog", "render", "2026-07-09T12:00:00Z"),
                   workload("blog", "publish", "2026-07-10T09:00:00Z"),
                 ],

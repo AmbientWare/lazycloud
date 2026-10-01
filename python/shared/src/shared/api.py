@@ -283,11 +283,6 @@ class Autoscaler(BaseModel):
     tasks_per_container: Annotated[int, Field(ge=1, le=10000)] = 1
 
 
-class State(str, Enum):
-    active = "active"
-    stopped = "stopped"
-
-
 class Encoding(str, Enum):
     json = "json"
     cloudpickle = "cloudpickle"
@@ -663,7 +658,7 @@ class DiskPage(BaseModel):
     next_cursor: str | None = None
 
 
-class State1(str, Enum):
+class State(str, Enum):
     uploading = "uploading"
     stored = "stored"
 
@@ -675,7 +670,7 @@ class Artifact(BaseModel):
     filename: str
     content_type: str
     size_bytes: int
-    state: State1
+    state: State
     created_at: AwareDatetime
     stored_at: AwareDatetime | None = None
     expires_at: AwareDatetime | None = None
@@ -882,7 +877,7 @@ class DeploymentPlanItem(BaseModel):
     versions: Annotated[int, Field(description="Versions the workload has now.")]
 
 
-class StartDeploymentRequest(BaseModel):
+class StartWorkloadRequest(BaseModel):
     version: Annotated[
         int | None, Field(description="Make this deployed version active before starting.", ge=1)
     ] = None
@@ -1052,9 +1047,19 @@ class HttpMethod(str, Enum):
     TRACE = "TRACE"
 
 
-class State2(str, Enum):
-    active = "active"
-    stopped = "stopped"
+class HttpUrls(BaseModel):
+    url: Annotated[str, Field(description="Follows the active release across deploys.")]
+    version_url: Annotated[str, Field(description="Pinned to the release's version.")]
+    release_url: Annotated[str, Field(description="Addresses the release by id.")]
+    invoke_path: Annotated[
+        str, Field(description="The workload on the API host; append the request's path.")
+    ]
+    version_invoke_path: Annotated[
+        str, Field(description="The API-host path pinned to the release's version.")
+    ]
+    domain_url: Annotated[
+        str | None, Field(description="The custom hostname, once its registration is ready.")
+    ] = None
 
 
 class InvocationBody(BaseModel):
@@ -1379,8 +1384,8 @@ class PerformanceBucket(BaseModel):
     status_counts: TaskStatusCounts
 
 
-class DeploymentPerformance(BaseModel):
-    deployment_id: UUID
+class WorkloadPerformance(BaseModel):
+    workload_id: UUID
     window_seconds: int
     start: AwareDatetime
     end: AwareDatetime
@@ -2937,6 +2942,35 @@ class DeploymentPlan(BaseModel):
     ]
 
 
+class Workload(BaseModel):
+    id: UUID
+    app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
+    name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
+    kind: WorkloadKind
+    state: WorkloadState
+    app_state: AppState | None = None
+    running_containers: Annotated[
+        int,
+        Field(
+            description="Containers of the workload's releases that are ready or draining.", ge=0
+        ),
+    ]
+    version: Annotated[int | None, Field(description="The active version.")] = None
+    release_id: Annotated[UUID | None, Field(description="The active release.")] = None
+    created_at: AwareDatetime
+    deployed_at: Annotated[
+        AwareDatetime | None, Field(description="When the active version was deployed.")
+    ] = None
+    role: PodRole | None = None
+    scaling: Scaling | None = None
+    url: Annotated[str | None, Field(description="Where a pod or HTTP workload answers.")] = None
+
+
+class WorkloadPage(BaseModel):
+    workloads: list[Workload]
+    next_cursor: str | None = None
+
+
 class Container(BaseModel):
     id: UUID
     app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
@@ -3218,7 +3252,8 @@ class Me(BaseModel):
     workspaces: list[Workspace]
 
 
-class FunctionSpec(BaseModel):
+class WorkloadSpec(BaseModel):
+    kind: WorkloadKind
     name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
     handler: Annotated[
         str | None,
@@ -3294,7 +3329,7 @@ class FunctionSpec(BaseModel):
 
 class Release(BaseModel):
     id: UUID
-    function: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
+    name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
     version: Annotated[
         int | None,
         Field(
@@ -3302,23 +3337,15 @@ class Release(BaseModel):
         ),
     ] = None
     created_at: AwareDatetime
-    spec: FunctionSpec
+    spec: WorkloadSpec
     url: Annotated[
         str | None,
-        Field(description="Where an HTTP workload answers, following the active release."),
+        Field(description="Where a pod or HTTP workload answers, following the active release."),
     ] = None
     invoke_path: Annotated[
         str | None,
         Field(description="The HTTP workload on the API host, following the active release."),
     ] = None
-
-
-class Function(BaseModel):
-    name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
-    app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
-    state: State
-    active_release: Release
-    schedule: Schedule | None = None
 
 
 class Task(BaseModel):
@@ -3359,62 +3386,23 @@ class Task(BaseModel):
     failure: TaskFailure | None = None
 
 
-class DeployedWorkload(BaseModel):
-    id: UUID
-    app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
-    name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
-    kind: WorkloadKind
-    state: WorkloadState
-    app_state: AppState | None = None
-    running_containers: Annotated[
-        int,
+class WorkloadDetail(BaseModel):
+    workload: Workload
+    release: Annotated[
+        Release,
         Field(
-            description="Containers of the workload's releases that are ready or draining.", ge=0
+            description="The definition the active version runs, or the version the request names."
         ),
     ]
-    version: Annotated[int | None, Field(description="The active version.")] = None
-    release_id: Annotated[UUID | None, Field(description="The active release.")] = None
-    created_at: AwareDatetime
-    deployed_at: Annotated[
-        AwareDatetime | None, Field(description="When the active version was deployed.")
-    ] = None
-    role: PodRole | None = None
-    scaling: Scaling | None = None
-    url: Annotated[str | None, Field(description="Where a pod or HTTP workload answers.")] = None
-    active_release: Annotated[
-        Release | None,
-        Field(description="The definition the active version runs; only getDeployment answers it."),
-    ] = None
-
-
-class DeploymentPage(BaseModel):
-    deployments: list[DeployedWorkload]
-    next_cursor: str | None = None
+    http: HttpUrls | None = None
+    schedule: Annotated[Schedule | None, Field(description="When a scheduled function runs.")] = (
+        None
+    )
 
 
 class TaskPage(BaseModel):
     tasks: list[Task]
     next_cursor: str | None = None
-
-
-class HttpWorkload(BaseModel):
-    name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
-    app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
-    kind: HttpKind
-    state: State2
-    release: Release
-    url: Annotated[str, Field(description="Follows the active release across deploys.")]
-    version_url: Annotated[str, Field(description="Pinned to the release's version.")]
-    release_url: Annotated[str, Field(description="Addresses the release by id.")]
-    invoke_path: Annotated[
-        str, Field(description="The workload on the API host; append the request's path.")
-    ]
-    version_invoke_path: Annotated[
-        str, Field(description="The API-host path pinned to the release's version.")
-    ]
-    domain_url: Annotated[
-        str | None, Field(description="The custom hostname, once its registration is ready.")
-    ] = None
 
 
 class Invocation(BaseModel):
@@ -3425,30 +3413,30 @@ class Invocation(BaseModel):
 
 
 class PreviewRequest(BaseModel):
-    spec: FunctionSpec
+    spec: WorkloadSpec
     timeout_seconds: Annotated[
         int, Field(description="Stop after this long; 0 runs until stopped.", ge=0, le=86400)
     ] = 0
 
 
 class DeploymentRequest(BaseModel):
-    functions: Annotated[
-        list[FunctionSpec],
+    workloads: Annotated[
+        list[WorkloadSpec],
         Field(
-            description="At least one, unless prune deletes every deployed function.",
+            description="At least one, unless prune deletes every deployed workload.",
             max_length=200,
         ),
     ]
     prune: Annotated[
-        bool, Field(description="Delete every function of the app that is not listed.")
+        bool, Field(description="Delete every workload of the app that is not listed.")
     ] = False
 
 
 class Deployment(BaseModel):
     app: App
     releases: list[Release]
-    pruned: Annotated[list[WorkloadName], Field(description="Functions the prune deleted.")]
-    removed_versions: Annotated[int, Field(description="Versions of the pruned functions.")]
+    pruned: Annotated[list[WorkloadName], Field(description="Workloads the prune deleted.")]
+    removed_versions: Annotated[int, Field(description="Versions of the pruned workloads.")]
 
 
 class SubmitTasksResponse(BaseModel):

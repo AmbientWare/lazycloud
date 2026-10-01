@@ -68,7 +68,7 @@ func (e *Execution) CreateSnapshot(ctx context.Context, workspace identity.Works
 		if ContainerState(row.State) != ContainerReady || row.HostID == nil {
 			return &ConflictError{Reason: "only a running container can be snapshotted"}
 		}
-		var spec apitypes.FunctionSpec
+		var spec apitypes.WorkloadSpec
 		if err := json.Unmarshal(row.Spec, &spec); err != nil {
 			return fmt.Errorf("decode release spec: %w", err)
 		}
@@ -132,7 +132,7 @@ func (e *Execution) WaitSnapshot(ctx context.Context, listener *database.Listene
 // Checkpointable says whether a container may be snapshotted, and so
 // whether its host prepares it to be: pods, sandboxes and devboxes, and
 // functions with checkpoints. A shell container never is.
-func Checkpointable(kind apitypes.WorkloadKind, purpose ContainerPurpose, spec apitypes.FunctionSpec) bool {
+func Checkpointable(kind apitypes.WorkloadKind, purpose ContainerPurpose, spec apitypes.WorkloadSpec) bool {
 	if purpose == PurposeShell {
 		return false
 	}
@@ -236,7 +236,7 @@ func (e *Execution) workloadCommands(ctx context.Context, host compute.HostID, o
 			Deadline: row.CreatedAt.Add(SnapshotDeadline),
 		}
 		if row.Automatic {
-			var spec apitypes.FunctionSpec
+			var spec apitypes.WorkloadSpec
 			if err := json.Unmarshal(row.Spec, &spec); err != nil {
 				return fmt.Errorf("decode release spec: %w", err)
 			}

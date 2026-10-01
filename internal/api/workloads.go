@@ -21,8 +21,8 @@ import (
 // Pods, devboxes, sandboxes, instances and SSH. Container operations that
 // reach the supervisor are in container_proxy.go.
 
-// podDeployment adds a pod's role, count and URL to its deployment.
-func (s *Server) podDeployment(ctx context.Context, d *apitypes.DeployedWorkload) error {
+// podWorkload adds a pod's role, count and URL to its workload.
+func (s *Server) podWorkload(ctx context.Context, d *apitypes.Workload) error {
 	if d.Kind != apitypes.WorkloadKindPod || d.ReleaseId == nil {
 		return nil
 	}
@@ -57,31 +57,41 @@ func (s *Server) podDeployment(ctx context.Context, d *apitypes.DeployedWorkload
 	return nil
 }
 
-// ScaleDeployment holds a pod at a number of containers.
-func (s *Server) ScaleDeployment(ctx context.Context, req ScaleDeploymentRequestObject) (ScaleDeploymentResponseObject, error) {
+// ScaleWorkload holds a pod at a number of containers.
+func (s *Server) ScaleWorkload(ctx context.Context, req ScaleWorkloadRequestObject) (ScaleWorkloadResponseObject, error) {
 	if err := refuseContainer(ctx); err != nil {
 		return nil, err
 	}
-	ws, err := s.workspace(ctx, req.Workspace)
+	ws, id, err := s.findWorkload(ctx, req.Workspace, req.App, req.Kind, req.Name)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.owners.Execution.ScalePod(ctx, ws.ID, req.Deployment, req.Body.Containers); err != nil {
+	if err := s.owners.Execution.ScalePod(ctx, ws.ID, uuid.UUID(id), req.Body.Containers); err != nil {
 		return nil, err
 	}
-	d, err := s.owners.Control.GetDeployment(ctx, ws.ID, control.WorkloadID(req.Deployment))
+	w, err := s.workloadOut(ctx, ws, id)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.podDeployment(ctx, &d); err != nil {
-		return nil, err
+	return ScaleWorkload200JSONResponse(w), nil
+}
+
+// findDevbox resolves the pod a devbox route names and reads the devbox.
+func (s *Server) findDevbox(ctx context.Context, workspace, app, name string) (identity.Workspace, control.WorkloadID, apitypes.Devbox, error) {
+	if err := refuseContainer(ctx); err != nil {
+		return identity.Workspace{}, control.WorkloadID{}, apitypes.Devbox{}, err
 	}
-	return ScaleDeployment200JSONResponse(d), nil
+	ws, id, err := s.findWorkload(ctx, workspace, app, apitypes.WorkloadKindPod, name)
+	if err != nil {
+		return ws, id, apitypes.Devbox{}, err
+	}
+	box, err := s.devbox(ctx, ws, uuid.UUID(id))
+	return ws, id, box, err
 }
 
 func (s *Server) devbox(ctx context.Context, ws identity.Workspace, deployment uuid.UUID) (apitypes.Devbox, error) {
 	var disk *apitypes.Disk
-	saving := func(spec apitypes.FunctionSpec) (bool, error) {
+	saving := func(spec apitypes.WorkloadSpec) (bool, error) {
 		d, err := s.rootDisk(ctx, ws.ID, spec)
 		disk = d
 		return d != nil && d.Status == apitypes.Saving, err
@@ -128,7 +138,7 @@ func (s *Server) devbox(ctx context.Context, ws identity.Workspace, deployment u
 }
 
 // rootDisk is a devbox's root disk, nil before its first start.
-func (s *Server) rootDisk(ctx context.Context, ws identity.WorkspaceID, spec apitypes.FunctionSpec) (*apitypes.Disk, error) {
+func (s *Server) rootDisk(ctx context.Context, ws identity.WorkspaceID, spec apitypes.WorkloadSpec) (*apitypes.Disk, error) {
 	if spec.Disks == nil {
 		return nil, nil //nolint:nilnil // A pod without disks has no root disk.
 	}
@@ -150,45 +160,27 @@ func (s *Server) rootDisk(ctx context.Context, ws identity.WorkspaceID, spec api
 
 // GetDevbox reads a devbox.
 func (s *Server) GetDevbox(ctx context.Context, req GetDevboxRequestObject) (GetDevboxResponseObject, error) {
-	if err := refuseContainer(ctx); err != nil {
-		return nil, err
-	}
-	ws, err := s.workspace(ctx, req.Workspace)
+	_, _, box, err := s.findDevbox(ctx, req.Workspace, req.App, req.Name)
 	if err != nil {
 		return nil, err
 	}
-	out, err := s.devbox(ctx, ws, req.Deployment)
-	if err != nil {
-		return nil, err
-	}
-	return GetDevbox200JSONResponse(out), nil
+	return GetDevbox200JSONResponse(box), nil
 }
 
-// StartDevbox starts a devbox now, activating a stopped deployment first.
+// StartDevbox starts a devbox now, activating a stopped workload first.
 func (s *Server) StartDevbox(ctx context.Context, req StartDevboxRequestObject) (StartDevboxResponseObject, error) {
-	if err := refuseContainer(ctx); err != nil {
-		return nil, err
-	}
-	ws, err := s.workspace(ctx, req.Workspace)
+	ws, id, _, err := s.findDevbox(ctx, req.Workspace, req.App, req.Name)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := s.devbox(ctx, ws, req.Deployment); err != nil {
+	// Starting an active workload changes nothing.
+	if _, err := s.owners.Control.StartWorkload(ctx, ws.ID, id, nil); err != nil {
 		return nil, err
 	}
-	d, err := s.owners.Control.GetDeployment(ctx, ws.ID, control.WorkloadID(req.Deployment))
-	if err != nil {
+	if err := s.owners.Execution.WakePod(ctx, ws.ID, uuid.UUID(id)); err != nil {
 		return nil, err
 	}
-	if d.State != apitypes.WorkloadStateActive {
-		if _, err := s.owners.Control.StartDeployment(ctx, ws.ID, control.WorkloadID(req.Deployment), nil); err != nil {
-			return nil, err
-		}
-	}
-	if err := s.owners.Execution.WakePod(ctx, ws.ID, req.Deployment); err != nil {
-		return nil, err
-	}
-	out, err := s.devbox(ctx, ws, req.Deployment)
+	out, err := s.devbox(ctx, ws, uuid.UUID(id))
 	if err != nil {
 		return nil, err
 	}
@@ -197,20 +189,14 @@ func (s *Server) StartDevbox(ctx context.Context, req StartDevboxRequestObject) 
 
 // StopDevbox stops a devbox until its next connection or start.
 func (s *Server) StopDevbox(ctx context.Context, req StopDevboxRequestObject) (StopDevboxResponseObject, error) {
-	if err := refuseContainer(ctx); err != nil {
-		return nil, err
-	}
-	ws, err := s.workspace(ctx, req.Workspace)
+	ws, id, _, err := s.findDevbox(ctx, req.Workspace, req.App, req.Name)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := s.devbox(ctx, ws, req.Deployment); err != nil {
+	if err := s.owners.Execution.ParkPod(ctx, ws.ID, uuid.UUID(id)); err != nil {
 		return nil, err
 	}
-	if err := s.owners.Execution.ParkPod(ctx, ws.ID, req.Deployment); err != nil {
-		return nil, err
-	}
-	out, err := s.devbox(ctx, ws, req.Deployment)
+	out, err := s.devbox(ctx, ws, uuid.UUID(id))
 	if err != nil {
 		return nil, err
 	}

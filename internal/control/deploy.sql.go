@@ -49,47 +49,6 @@ func (q *Queries) ActiveRelease(ctx context.Context, id uuid.UUID) (ActiveReleas
 	return i, err
 }
 
-const functionRelease = `-- name: FunctionRelease :one
-select w.name, w.desired_state, a.name as app_name,
-       r.id, r.version, r.spec, r.created_at
-from workloads w
-join apps a on a.id = w.app_id
-join releases r on r.id = w.active_release_id
-where a.workspace_id = $1 and a.name = $2 and a.state <> 'deleted'
-  and w.kind = 'function' and w.name = $3 and w.desired_state <> 'deleted'
-`
-
-type FunctionReleaseParams struct {
-	WorkspaceID uuid.UUID
-	AppName     string
-	Name        string
-}
-
-type FunctionReleaseRow struct {
-	Name         string
-	DesiredState string
-	AppName      string
-	ID           uuid.UUID
-	Version      *int32
-	Spec         []byte
-	CreatedAt    time.Time
-}
-
-func (q *Queries) FunctionRelease(ctx context.Context, arg FunctionReleaseParams) (FunctionReleaseRow, error) {
-	row := q.db.QueryRow(ctx, functionRelease, arg.WorkspaceID, arg.AppName, arg.Name)
-	var i FunctionReleaseRow
-	err := row.Scan(
-		&i.Name,
-		&i.DesiredState,
-		&i.AppName,
-		&i.ID,
-		&i.Version,
-		&i.Spec,
-		&i.CreatedAt,
-	)
-	return i, err
-}
-
 const insertRelease = `-- name: InsertRelease :one
 insert into releases (workload_id, version, spec, spec_digest, source_sha256)
 values ($1, $2, $3, $4, $5)

@@ -29,8 +29,8 @@ from shared.api import (
     SubmitTasksRequest,
     TaskInput,
     TaskStatus,
+    WorkloadSpec,
 )
-from shared.api import FunctionSpec as ApiFunctionSpec
 from shared.autoscaling import Autoscaler
 from shared.callbacks import normalize_callback_url
 from shared.deployment_records import (
@@ -322,13 +322,14 @@ class Function(Generic[P, R]):
         if unsupported:
             raise UnsupportedFeatureError(f"function {self.resource_name}", unsupported)
 
-    def function_spec(
+    def workload_spec(
         self, *, handler: str, source_sha256: str, image: ImageBuildResult
-    ) -> ApiFunctionSpec:
+    ) -> WorkloadSpec:
         """The API definition of this function for an uploaded source and a ready image."""
         self.require_supported()
         policy = self._retry_policy()
         spec: dict[str, Any] = {
+            "kind": "function",
             "name": self.resource_name,
             "handler": handler,
             "source": {"sha256": source_sha256},
@@ -396,7 +397,7 @@ class Function(Generic[P, R]):
         if contract is not None:
             spec["client_contract"] = contract.model_dump(mode="json")
         try:
-            return ApiFunctionSpec.model_validate(spec)
+            return WorkloadSpec.model_validate(spec)
         except ValidationError as exc:
             msg = f"function {self.resource_name} has invalid options: {exc}"
             raise FunctionOperationError(msg) from exc
@@ -411,10 +412,10 @@ class Function(Generic[P, R]):
 
         Calls from this process run on that release until it is prepared again.
         """
-        from lazycloud.session.deployment import prepare_function_release
+        from lazycloud.session.deployment import prepare_release
 
         client, selected_workspace = self._session(workspace)
-        release = prepare_function_release(
+        release = prepare_release(
             self,
             client=client,
             workspace=selected_workspace,
