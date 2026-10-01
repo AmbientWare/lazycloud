@@ -58,6 +58,9 @@ message HostMessage {
     Hello hello = 1;
     ContainerReport container = 2;
     Ack ack = 3;
+    // A sample of every running container, sent every few seconds. The
+    // server drops samples it cannot keep up with.
+    ContainerMetrics metrics = 80;
   }
 }
 
@@ -103,6 +106,62 @@ message ContainerReport {
   // Attempts the container is running. The server cancels any whose durable
   // state is no longer running, which covers cancels lost in a disconnect.
   repeated string running_attempts = 5;
+  // How long each finished stage of the start took, restated in every
+  // report once known.
+  repeated StartupStage startup = 80;
+}
+
+enum StartupStageKind {
+  STARTUP_STAGE_KIND_UNSPECIFIED = 0;
+  // Pulling the image, or finding it on the host.
+  STARTUP_STAGE_KIND_IMAGE = 1;
+  // Fetching and extracting the source archive.
+  STARTUP_STAGE_KIND_SOURCE = 2;
+  // Creating and starting the container process.
+  STARTUP_STAGE_KIND_CREATE = 3;
+  // The supervisor loading the handler in every slot.
+  STARTUP_STAGE_KIND_RUNTIME = 4;
+}
+
+message StartupStage {
+  StartupStageKind kind = 1;
+  google.protobuf.Timestamp started_at = 2;
+  google.protobuf.Timestamp finished_at = 3;
+  // For the image stage: the image was already on the host.
+  bool cached = 4;
+}
+
+message ContainerMetrics {
+  repeated ContainerSample samples = 1;
+}
+
+// ContainerSample is one container's use since its previous sample. The
+// first reading after a container starts or the agent restarts only primes
+// the counters and is not sent.
+message ContainerSample {
+  string container_id = 1;
+  // Time covered since the previous sample.
+  uint32 interval_ms = 2;
+  // CPU time used in the interval.
+  uint64 cpu_usage_usec = 3;
+  // Anonymous and mapped file memory, and swap, when sampled.
+  uint64 memory_rss_bytes = 4;
+  uint64 memory_swap_bytes = 5;
+  // Bytes moved in the interval.
+  uint64 network_rx_bytes = 6;
+  uint64 network_tx_bytes = 7;
+  uint64 disk_read_bytes = 8;
+  uint64 disk_write_bytes = 9;
+  // The container's GPUs, when it has any.
+  repeated GPUSample gpus = 10;
+}
+
+message GPUSample {
+  string uuid = 1;
+  string name = 2;
+  uint32 utilization_percent = 3;
+  uint64 memory_used_bytes = 4;
+  uint64 memory_total_bytes = 5;
 }
 
 message ContainerExit {
@@ -270,6 +329,9 @@ message ClaimedTask {
   int32 max_attempts = 12;
   // The results of the upstream tasks the input refers to.
   repeated DependencyResult dependencies = 60;
+  // The W3C traceparent of the request that submitted the task, when it
+  // was traced; the host's spans for the attempt join that trace.
+  string traceparent = 80;
 }
 
 // DependencyResult is an upstream task's result that a dependent's input
