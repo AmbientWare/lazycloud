@@ -1,4 +1,4 @@
-import type { MachineLifecycle } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 
 type Tone = "success" | "warning" | "danger" | "muted";
 
@@ -8,9 +8,9 @@ export function capacityBadge({
   connected,
   capacityState,
 }: {
-  lifecycle: MachineLifecycle;
+  lifecycle: Schemas["MachineLifecycle"];
   connected: boolean;
-  capacityState: "available" | "draining" | "preempting" | "cordoned";
+  capacityState: Schemas["CapacityState"];
 }): { label: string; tone: Tone } | null {
   if (lifecycle === "ready" && !connected) return { label: "Offline", tone: "danger" };
   switch (capacityState) {

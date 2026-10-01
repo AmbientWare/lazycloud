@@ -11,7 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import type { UnitMachine, Workspace } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 import { updateMachineWorkspaces } from "@/lib/queries/compute";
 import { accountQueryKeys } from "@/lib/queries/workspace-keys";
 import { useWorkspace } from "@/lib/workspace-context";
@@ -26,7 +26,7 @@ export function WorkspaceChecklist({
   onChange,
   disabled = false,
 }: {
-  workspaces: Workspace[];
+  workspaces: readonly Pick<Schemas["Workspace"], "id" | "name">[];
   selected: ReadonlySet<string>;
   onChange: (next: Set<string>) => void;
   disabled?: boolean;
@@ -61,7 +61,7 @@ export function EditMachineWorkspacesDialog({
   machine,
   onOpenChange,
 }: {
-  machine: UnitMachine | null;
+  machine: Schemas["Machine"] | null;
   onOpenChange: (open: boolean) => void;
 }) {
   return (
@@ -77,7 +77,7 @@ function EditMachineWorkspacesForm({
   machine,
   onDone,
 }: {
-  machine: UnitMachine;
+  machine: Schemas["Machine"];
   onDone: () => void;
 }) {
   const { workspaces } = useWorkspace();

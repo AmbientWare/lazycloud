@@ -21,12 +21,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import type {
-  AwsConnection,
-  ComputeSummary,
-  ConnectionMachine,
-  UnitMachine,
-} from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 import {
   awsConnectionQueryOptions,
   computeSummaryQueryOptions,
@@ -42,17 +37,21 @@ import { AwsConnectionDialog } from "./AwsConnectionDialog";
 import { JoinMachineDialog } from "./JoinMachineDialog";
 import { EditMachineWorkspacesDialog } from "./MachineWorkspaces";
 
+type AwsConnection = Schemas["AwsConnection"];
+type ComputeInstance = Schemas["ComputeInstance"];
+type Machine = Schemas["Machine"];
+
 export function ComputeSettings({ onUpgrade }: { onUpgrade: () => void }) {
   const { workspace } = useWorkspace();
   const connection = useQuery(awsConnectionQueryOptions());
   const billing = useQuery(billingSummaryQueryOptions());
   const instances = useQuery(connectionMachinesQueryOptions());
-  const summary = useQuery(computeSummaryQueryOptions(workspace.id));
+  const summary = useQuery(computeSummaryQueryOptions(workspace.name));
   const machines = useQuery(machinesQueryOptions());
   const [expandedProvider, setExpandedProvider] = useState<"aws" | null>(null);
   const [awsDialogOpen, setAwsDialogOpen] = useState(false);
   const [joinDialogOpen, setJoinDialogOpen] = useState(false);
-  const [editingMachine, setEditingMachine] = useState<UnitMachine | null>(null);
+  const [editingMachine, setEditingMachine] = useState<Machine | null>(null);
   const loadError = connection.error ?? instances.error ?? summary.error;
 
   if (connection.isPending || instances.isPending || summary.isPending || billing.isPending) {
@@ -69,9 +68,9 @@ export function ComputeSettings({ onUpgrade }: { onUpgrade: () => void }) {
 
   // The server classifies by placement: the connection's list holds machines
   // placed on the connection, the self-hosted list those placed on themselves.
-  const awsInstances = instances.data?.data ?? [];
+  const awsInstances = instances.data?.instances ?? [];
   const counts = summary.data?.instances ?? { total: 0, ready: 0, pending: 0, degraded: 0 };
-  const selfHostedMachines = machines.data?.data ?? [];
+  const selfHostedMachines = machines.data?.machines ?? [];
 
   return (
     <div className="flex min-h-full flex-col gap-4 sm:min-h-0 sm:flex-1 sm:overflow-hidden">
@@ -121,8 +120,8 @@ function ConnectedCloudsPanel({
   onUpgrade,
 }: {
   connection: AwsConnection | null;
-  instances: ConnectionMachine[];
-  counts: ComputeSummary["instances"];
+  instances: ComputeInstance[];
+  counts: Schemas["ComputeSummary"]["instances"];
   expanded: boolean;
   onToggle: () => void;
   onManageAws: () => void;
@@ -241,8 +240,8 @@ function CloudProviderRow({
   onManage,
 }: {
   connection: AwsConnection;
-  instances: ConnectionMachine[];
-  counts: ComputeSummary["instances"];
+  instances: ComputeInstance[];
+  counts: Schemas["ComputeSummary"]["instances"];
   expanded: boolean;
   onToggle: () => void;
   onManage: () => void;
@@ -314,7 +313,7 @@ function CloudProviderRow({
   );
 }
 
-function CloudInstances({ instances }: { instances: ConnectionMachine[] }) {
+function CloudInstances({ instances }: { instances: ComputeInstance[] }) {
   return (
     <section className="min-w-0 p-4">
       {instances.length === 0 ? (
@@ -381,11 +380,11 @@ function SelfHostedPanel({
   onJoin,
   onEditWorkspaces,
 }: {
-  machines: UnitMachine[];
+  machines: Machine[];
   loading: boolean;
   error: Error | null;
   onJoin: () => void;
-  onEditWorkspaces: (machine: UnitMachine) => void;
+  onEditWorkspaces: (machine: Machine) => void;
 }) {
   return (
     <Panel

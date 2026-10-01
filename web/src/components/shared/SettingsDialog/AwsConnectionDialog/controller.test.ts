@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { AwsConnection } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 import {
   createAwsConnection,
   reconnectAwsConnection,
@@ -45,7 +45,7 @@ describe("AWS connection controller", () => {
     const failure = new Error("AWS is unavailable");
     createMock.mockRejectedValueOnce(failure).mockResolvedValueOnce({
       connection: awsConnection(),
-      authorization: { stack: null, external_id: null },
+      authorization: {},
     });
     const { result } = renderController(queryClient, vi.fn());
 
@@ -159,7 +159,7 @@ function deferred<T>() {
   return { promise, resolve: resolvePromise };
 }
 
-function awsConnection(phase: "ready" | "disconnect_draining" = "ready"): AwsConnection {
+function awsConnection(phase: "ready" | "disconnect_draining" = "ready"): Schemas["AwsConnection"] {
   return {
     id: "00000000-0000-4000-8000-000000000001",
     account_id: "123456789012",
@@ -179,20 +179,14 @@ function awsConnection(phase: "ready" | "disconnect_draining" = "ready"): AwsCon
       phase: "ready",
       last_validation_started_at: "2026-07-20T00:00:00Z",
       last_validated_at: "2026-07-20T00:00:01Z",
-      error_code: null,
-      error_message: null,
       created_at: "2026-07-20T00:00:00Z",
       updated_at: "2026-07-20T00:00:01Z",
     },
-    pending_authorization: null,
-    retiring_authorization: null,
     revision: 1,
     hosts_workloads: phase === "ready",
     can_manage_existing_capacity: phase === "ready",
     available_actions: phase === "ready" ? ["validate", "reconnect", "remove"] : [],
     detail: "AWS connection state",
-    customer_action: null,
-    next_retry_at: null,
     created_at: "2026-07-20T00:00:00Z",
     updated_at: "2026-07-20T00:00:01Z",
   };
