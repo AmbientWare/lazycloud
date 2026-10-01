@@ -53,30 +53,33 @@ func (c *Compute) Launch(ctx context.Context, logger *slog.Logger) (int, error) 
 	}
 	launched := 0
 	for _, h := range claimed {
-		if err := c.launch(ctx, logger, h); err != nil {
+		started, err := c.launch(ctx, logger, h)
+		if err != nil {
 			if ctx.Err() != nil {
 				return launched, err
 			}
 			logger.ErrorContext(ctx, "launch host", "host_id", h.ID, "error", err)
 			continue
 		}
-		launched++
+		if started {
+			launched++
+		}
 	}
 	return launched, nil
 }
 
-func (c *Compute) launch(ctx context.Context, logger *slog.Logger, h ClaimLaunchesRow) error {
+func (c *Compute) launch(ctx context.Context, logger *slog.Logger, h ClaimLaunchesRow) (bool, error) {
 	target, err := c.launchTarget(ctx, h.ConnectionID, h.Region)
 	if err != nil {
-		return c.failLaunch(ctx, h, err.Error(), false)
+		return false, c.failLaunch(ctx, h, err.Error(), false)
 	}
 	release, err := c.TargetRelease(ctx)
 	if err != nil {
-		return c.failLaunch(ctx, h, "no agent release is published", false)
+		return false, c.failLaunch(ctx, h, "no agent release is published", false)
 	}
 	subnet, ok := subnetFor(target.network, h.AvailabilityZone, h.ID)
 	if !ok {
-		return c.failLaunch(ctx, h, fmt.Sprintf("no subnet in %s %s", h.Region, h.AvailabilityZone), false)
+		return false, c.failLaunch(ctx, h, fmt.Sprintf("no subnet in %s %s", h.Region, h.AvailabilityZone), false)
 	}
 	image := cpuImage
 	if h.GpuCount > 0 {
@@ -132,14 +135,14 @@ func (c *Compute) launch(ctx context.Context, logger *slog.Logger, h ClaimLaunch
 		code := awsCode(err)
 		switch {
 		case capacityRefusal(code) || strings.HasPrefix(code, "InvalidParameter") || code == "UnauthorizedOperation":
-			return c.failLaunch(ctx, h, describeAWSError(err), true)
+			return false, c.failLaunch(ctx, h, describeAWSError(err), true)
 		case h.LaunchAttempts >= maxLaunchAttempts:
-			return c.failLaunch(ctx, h, describeAWSError(err), false)
+			return false, c.failLaunch(ctx, h, describeAWSError(err), false)
 		}
-		return fmt.Errorf("run instance: %w", err)
+		return false, fmt.Errorf("run instance: %w", err)
 	}
 	if len(out.Instances) != 1 {
-		return fmt.Errorf("run instance returned %d instances", len(out.Instances))
+		return false, fmt.Errorf("run instance returned %d instances", len(out.Instances))
 	}
 	instance := out.Instances[0]
 	zone := aws.ToString(instance.Placement.AvailabilityZone)
@@ -151,15 +154,15 @@ func (c *Compute) launch(ctx context.Context, logger *slog.Logger, h ClaimLaunch
 		ID: h.ID, InstanceID: instance.InstanceId, AvailabilityZone: zone, AvailabilityZoneID: zoneID,
 	})
 	if err != nil {
-		return fmt.Errorf("record launch: %w", err)
+		return false, fmt.Errorf("record launch: %w", err)
 	}
 	if n == 0 {
 		// The host stopped being wanted while it launched.
-		return c.terminate(ctx, target.scope, h.Region, aws.ToString(instance.InstanceId))
+		return false, c.terminate(ctx, target.scope, h.Region, aws.ToString(instance.InstanceId))
 	}
 	logger.InfoContext(ctx, "instance launched", "host_id", h.ID, "instance_id", aws.ToString(instance.InstanceId),
 		"instance_type", h.InstanceType, "region", h.Region, "zone", zone, "market", deref(h.Market))
-	return nil
+	return true, nil
 }
 
 // failLaunch fails a host that could not launch; cool also skips its offer
