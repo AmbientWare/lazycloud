@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -117,6 +118,23 @@ func TestVolumesMountThroughWorkspaceBucket(t *testing.T) {
 	if string(body) != "hello volume" {
 		t.Fatalf("bucket holds %q", body)
 	}
+	info, err := os.Stat(filepath.Join(e.stateDir, "mounts"))
+	if err != nil || info.Mode().Perm() != 0o700 {
+		t.Fatalf("mount directory mode %v err=%v, want 0700", info.Mode().Perm(), err)
+	}
+
+	// A mount that dies stops the containers using it.
+	timeout := 10
+	if _, err := e.docker.ContainerStop(t.Context(), mounterName(workspace), client.ContainerStopOptions{Timeout: &timeout}); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{writer, reader.GetStart().GetContainerId()} {
+		report := s.phase(t, id, exited)
+		if !strings.Contains(report.GetExit().GetMessage(), "volume mount") {
+			t.Fatalf("exit of a container on a dead mount: %v", report.GetExit())
+		}
+	}
+
 	t.Cleanup(func() {
 		ctx := context.Background()
 		pages := s3.NewListObjectsV2Paginator(store, &s3.ListObjectsV2Input{Bucket: aws.String(testBucket), Prefix: aws.String("volumes/" + volume + "/")})

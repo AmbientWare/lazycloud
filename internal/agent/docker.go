@@ -167,9 +167,12 @@ func (a *Agent) adopt(ctx context.Context) error {
 				return err
 			}
 			c.link, c.started = l, true
-			if err := c.loadDisks(); err != nil {
+			disks, err := a.loadLeases(c.id)
+			if err != nil {
 				c.log.Error("reading disk leases failed", "error", err)
-			} else if len(c.disks.disks) > 0 {
+			}
+			c.disks.disks = disks
+			if len(disks) > 0 {
 				a.goOwned(func(context.Context) { c.publishLoop(c.work) }) //nolint:contextcheck // Publishing lasts as long as the container's work.
 			}
 			l.serve()

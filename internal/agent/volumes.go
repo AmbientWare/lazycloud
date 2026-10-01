@@ -42,8 +42,13 @@ const (
 	mountWait = 30 * time.Second
 	// mountIdle is how long a mount nothing uses stays up.
 	mountIdle = 5 * time.Minute
-	// geesefsMemoryMiB bounds the cache of one workspace mount.
-	geesefsMemoryMiB = 512
+	// geesefsMemoryMiB bounds the cache of one workspace mount, and
+	// mounterMemoryBytes the whole mount container.
+	geesefsMemoryMiB   = 512
+	mounterMemoryBytes = 1 << 30
+	mounterPidsLimit   = 256
+	// grantMargin is how long a stored key must still be valid to mount.
+	grantMargin = time.Minute
 )
 
 // DefaultMountImage runs volume mount containers; GeeseFS needs only sh,
@@ -61,14 +66,16 @@ type volumes struct {
 	users map[string]map[string]struct{}
 	// idleSince is when a workspace mount lost its last user.
 	idleSince map[string]time.Time
-	// starting serializes mount creation per workspace.
+	// starting serializes starting and stopping each workspace's mount.
 	starting map[string]*sync.Mutex
+	// stopping marks mounts the agent itself is stopping.
+	stopping map[string]bool
 }
 
 func newVolumes(a *Agent) *volumes {
 	return &volumes{
 		a: a, granted: map[string]chan struct{}{}, users: map[string]map[string]struct{}{},
-		idleSince: map[string]time.Time{}, starting: map[string]*sync.Mutex{},
+		idleSince: map[string]time.Time{}, starting: map[string]*sync.Mutex{}, stopping: map[string]bool{},
 	}
 }
 
@@ -221,11 +228,7 @@ func (v *volumes) ensureMount(ctx context.Context, workspace, container string) 
 		return "", err
 	}
 	v.mu.Lock()
-	lock, ok := v.starting[workspace]
-	if !ok {
-		lock = &sync.Mutex{}
-		v.starting[workspace] = lock
-	}
+	lock := v.lockFor(workspace)
 	v.addUser(workspace, container)
 	v.mu.Unlock()
 	lock.Lock()
@@ -252,6 +255,16 @@ func (v *volumes) ensureMount(ctx context.Context, workspace, container string) 
 		}
 	}
 	return root, nil
+}
+
+// lockFor returns the workspace's mount lock; v.mu is held.
+func (v *volumes) lockFor(workspace string) *sync.Mutex {
+	lock, ok := v.starting[workspace]
+	if !ok {
+		lock = &sync.Mutex{}
+		v.starting[workspace] = lock
+	}
+	return lock
 }
 
 // addUser records a user; v.mu is held.
@@ -320,8 +333,13 @@ func (v *volumes) startMounter(ctx context.Context, workspace string) error {
 	if err := v.a.removeContainer(ctx, mounterName(workspace)); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(v.mountDir(), 0o755); err != nil { //nolint:gosec // Workload containers bind from it.
+	// Only the agent (and root, which Docker runs as) may walk into the
+	// mounts; workloads reach their own volume through a bind.
+	if err := os.MkdirAll(v.mountDir(), 0o700); err != nil {
 		return fmt.Errorf("create mount directory: %w", err)
+	}
+	if err := os.Chmod(v.mountDir(), 0o700); err != nil { //nolint:gosec // A directory needs its search bit.
+		return fmt.Errorf("restrict mount directory: %w", err)
 	}
 	uid, gid := "0", "0"
 	if os.Geteuid() != 0 {
@@ -358,7 +376,8 @@ exit 1`, target, strings.Join(quoted, " "))
 		labels = map[string]string{}
 	}
 	labels[labelHost], labels[labelKind], labels[labelWorkspace] = v.a.identity.HostID, kindMount, workspace
-	_, err = v.a.docker.ContainerCreate(ctx, client.ContainerCreateOptions{
+	mounterPids := int64(mounterPidsLimit)
+	created, err := v.a.docker.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Name: mounterName(workspace),
 		Config: &containertypes.Config{
 			Image:      v.a.cfg.MountImage,
@@ -370,7 +389,11 @@ exit 1`, target, strings.Join(quoted, " "))
 			NetworkMode: "host",
 			CapAdd:      []string{"SYS_ADMIN"},
 			SecurityOpt: []string{"apparmor=unconfined"},
-			Resources:   containertypes.Resources{Devices: []containertypes.DeviceMapping{{PathOnHost: "/dev/fuse", PathInContainer: "/dev/fuse", CgroupPermissions: "rwm"}}},
+			Resources: containertypes.Resources{
+				Devices:   []containertypes.DeviceMapping{{PathOnHost: "/dev/fuse", PathInContainer: "/dev/fuse", CgroupPermissions: "rwm"}},
+				Memory:    mounterMemoryBytes,
+				PidsLimit: &mounterPids,
+			},
 			Mounts: []mount.Mount{
 				{Type: mount.TypeBind, Source: v.a.cfg.GeeseFSPath, Target: "/opt/lazycloud/bin/geesefs", ReadOnly: true},
 				{Type: mount.TypeBind, Source: v.storageDir(workspace), Target: "/creds", ReadOnly: true},
@@ -384,14 +407,57 @@ exit 1`, target, strings.Join(quoted, " "))
 	if err != nil {
 		return fmt.Errorf("create volume mount container: %w", err)
 	}
+	v.mu.Lock()
+	delete(v.stopping, workspace)
+	v.mu.Unlock()
 	if _, err := v.a.docker.ContainerStart(ctx, mounterName(workspace), client.ContainerStartOptions{}); err != nil {
 		return fmt.Errorf("start volume mount container: %w", err)
 	}
+	id := created.ID
+	v.a.goOwned(func(ctx context.Context) { v.watch(ctx, workspace, id) })
 	return nil
 }
 
-// stopMounter stops a workspace mount; GeeseFS unmounts on SIGTERM.
+// watch waits for a mount container to exit. Unless the agent stopped it,
+// the mount under every user is dead, so their containers stop and report
+// the exit rather than run on with a broken volume.
+func (v *volumes) watch(ctx context.Context, workspace, id string) {
+	wait := v.a.docker.ContainerWait(ctx, id, client.ContainerWaitOptions{Condition: containertypes.WaitConditionNotRunning})
+	select {
+	case <-ctx.Done():
+		return
+	case <-wait.Result:
+	case err := <-wait.Error:
+		if !cerrdefs.IsNotFound(err) {
+			if ctx.Err() == nil {
+				v.a.log.Warn("watching a volume mount failed", "workspace", workspace, "error", err)
+			}
+			return
+		}
+	}
+	v.mu.Lock()
+	deliberate := v.stopping[workspace]
+	users := make([]string, 0, len(v.users[workspace]))
+	for user := range v.users[workspace] {
+		users = append(users, user)
+	}
+	v.mu.Unlock()
+	if deliberate {
+		return
+	}
+	v.a.log.Error("volume mount exited; stopping its containers", "workspace", workspace, "containers", len(users), "logs", v.mounterLogs(ctx, workspace))
+	for _, user := range users {
+		if c := v.a.lookup(user); c != nil {
+			c.failVolume(ctx, "the volume mount for workspace "+workspace+" exited")
+		}
+	}
+}
+
+// stopMounter stops a workspace mount; its script unmounts on SIGTERM.
 func (v *volumes) stopMounter(ctx context.Context, workspace string) error {
+	v.mu.Lock()
+	v.stopping[workspace] = true
+	v.mu.Unlock()
 	if err := v.a.stopDocker(ctx, mounterName(workspace), stopKillSeconds); err != nil {
 		return err
 	}
@@ -404,7 +470,15 @@ func (v *volumes) adopt(summaries []containertypes.Summary) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	for _, s := range summaries {
-		if s.State != containertypes.StateRunning || s.Labels[labelWorkspaces] == "" {
+		if s.State != containertypes.StateRunning {
+			continue
+		}
+		if s.Labels[labelKind] == kindMount {
+			workspace, id := s.Labels[labelWorkspace], s.ID
+			v.a.goOwned(func(ctx context.Context) { v.watch(ctx, workspace, id) })
+			continue
+		}
+		if s.Labels[labelWorkspaces] == "" {
 			continue
 		}
 		for _, workspace := range strings.Split(s.Labels[labelWorkspaces], ",") {
@@ -416,7 +490,10 @@ func (v *volumes) adopt(summaries []containertypes.Summary) {
 		return
 	}
 	for _, entry := range entries {
-		if _, err := os.Stat(filepath.Join(v.storageDir(entry.Name()), "location.json")); err == nil {
+		// A stored grant counts only while its key is valid; otherwise
+		// starts wait for the fresh one the server sends.
+		c, err := v.credentials(entry.Name())
+		if _, statErr := os.Stat(filepath.Join(v.storageDir(entry.Name()), "location.json")); err == nil && statErr == nil && time.Until(c.expires) > grantMargin {
 			ch := v.grantChannel(entry.Name())
 			select {
 			case <-ch:
@@ -446,12 +523,9 @@ func (v *volumes) pruneIdle(ctx context.Context) {
 		if idle && since.IsZero() {
 			v.idleSince[workspace], since = now, now
 		}
-		lock := v.starting[workspace]
+		lock := v.lockFor(workspace)
 		v.mu.Unlock()
-		if !idle || now.Sub(since) < mountIdle {
-			continue
-		}
-		if lock != nil && !lock.TryLock() {
+		if !idle || now.Sub(since) < mountIdle || !lock.TryLock() {
 			continue
 		}
 		v.mu.Lock()
@@ -464,10 +538,30 @@ func (v *volumes) pruneIdle(ctx context.Context) {
 				v.a.log.Info("stopped idle volume mount", "workspace", workspace)
 			}
 		}
-		if lock != nil {
-			lock.Unlock()
-		}
+		lock.Unlock()
 	}
+}
+
+// storedCredentials is a workspace's current key with its expiry parsed.
+type storedCredentials struct {
+	processCredentials
+	expires time.Time
+}
+
+// credentials reads the workspace's current key.
+func (v *volumes) credentials(workspace string) (storedCredentials, error) {
+	var c storedCredentials
+	data, err := os.ReadFile(filepath.Join(v.storageDir(workspace), "credentials.json"))
+	if err != nil {
+		return c, fmt.Errorf("read storage credentials: %w", err)
+	}
+	if err := json.Unmarshal(data, &c.processCredentials); err != nil {
+		return c, fmt.Errorf("decode storage credentials: %w", err)
+	}
+	if c.expires, err = time.Parse(time.RFC3339, c.Expiration); err != nil {
+		return c, fmt.Errorf("storage credential expiry: %w", err)
+	}
+	return c, nil
 }
 
 var errNoVolumeSupport = errors.New("this agent has no GeeseFS binary for volume mounts")

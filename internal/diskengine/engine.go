@@ -32,6 +32,9 @@ var (
 	ErrInsufficientSpace = errors.New("insufficient space")
 	// ErrNotAttached marks an operation that needs the disk mounted here.
 	ErrNotAttached = errors.New("disk is not attached")
+	// ErrNoLocalState marks a disk this host never restored, as after a
+	// failed attach: it holds nothing to publish.
+	ErrNoLocalState = errors.New("disk has no local state")
 	// ErrCredentialsExpired marks store credentials the callback returned
 	// already expired.
 	ErrCredentialsExpired = errors.New("storage credentials expired")

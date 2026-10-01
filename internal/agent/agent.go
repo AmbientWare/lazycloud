@@ -94,6 +94,10 @@ type Agent struct {
 	// diskEngine attaches durable disks; diskErr says why it cannot here.
 	diskEngine *diskengine.Engine
 	diskErr    error
+	// diskLocks holds a mutex per disk id that serializes publishing.
+	diskLocks sync.Map
+	// releaseNow wakes the disk release loop.
+	releaseNow chan struct{}
 	// host carries claims, completions and logs on a connection separate from
 	// the session, so large payloads never delay commands.
 	host    hostproto.HostServiceClient
@@ -172,6 +176,7 @@ func Run(ctx context.Context, cfg Config) error {
 		control:    hostproto.NewHostServiceClient(control),
 		ctx:        ctx,
 		containers: make(map[string]*container),
+		releaseNow: make(chan struct{}, 1),
 	}
 	a.volumes = newVolumes(a)
 	a.diskEngine = diskengine.New(filepath.Join(cfg.StateDir, "disks", "engine"), a.log.With("component", "disk"))
@@ -194,6 +199,7 @@ func Run(ctx context.Context, cfg Config) error {
 	a.recoverDisks(ctx)
 	a.log.Info("agent started", "containers", len(a.containers), "cpu_millis", capacity.GetCpuMillis(), "memory_bytes", capacity.GetMemoryBytes())
 	a.goOwned(a.pruneExited)
+	a.goOwned(a.releaseLoop)
 	a.sessions(ctx)
 	return nil
 }

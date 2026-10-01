@@ -242,7 +242,7 @@ func requireState(p diskPaths) (*diskState, error) {
 		return nil, err
 	}
 	if state == nil {
-		return nil, fmt.Errorf("%w: disk %s has no local state under %s", ErrInvalid, p.id, p.root)
+		return nil, fmt.Errorf("%w: %w: disk %s under %s", ErrInvalid, ErrNoLocalState, p.id, p.root)
 	}
 	return state, nil
 }
