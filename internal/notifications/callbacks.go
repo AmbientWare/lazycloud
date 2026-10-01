@@ -22,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/AmbientWare/lazycloud/internal/identity"
@@ -39,6 +40,9 @@ const (
 	// deliveryConcurrency bounds callbacks in flight per scheduler.
 	deliveryConcurrency = 16
 	maxResponseBytes    = 64 << 10
+	// maxCallbackResultBytes bounds the result a callback carries; a larger
+	// one is left out and marked, and the receiver reads it from the API.
+	maxCallbackResultBytes = 256 << 10
 	// Finished callbacks are kept a week for inspection, then purged.
 	retainSeconds = 7 * 24 * 3600
 	purgeBatch    = 1000
@@ -122,11 +126,24 @@ func publicAddress(ctx context.Context, host string, allowPrivate bool) (netip.A
 	return addrs[0].Unmap(), nil
 }
 
-// sharedAddressSpace is the carrier-grade NAT range, which is not public.
-var sharedAddressSpace = netip.MustParsePrefix("100.64.0.0/10") //nolint:gochecknoglobals // constant prefix
+// nonPublic are global unicast ranges that still reach private networks:
+// carrier-grade NAT and the NAT64 prefixes, which embed IPv4 addresses.
+var nonPublic = []netip.Prefix{ //nolint:gochecknoglobals // constant prefixes
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("64:ff9b::/96"),
+	netip.MustParsePrefix("64:ff9b:1::/48"),
+}
 
 func isPublic(addr netip.Addr) bool {
-	return addr.IsGlobalUnicast() && !addr.IsPrivate() && !sharedAddressSpace.Contains(addr)
+	if !addr.IsGlobalUnicast() || addr.IsPrivate() {
+		return false
+	}
+	for _, prefix := range nonPublic {
+		if prefix.Contains(addr) {
+			return false
+		}
+	}
+	return true
 }
 
 // Deliver sends due callbacks until none is due, with at most
@@ -209,7 +226,17 @@ func (c *Callbacks) deliverOne(ctx context.Context, row CallbackDeliveriesRow, d
 // send posts one callback. retry reports whether a later attempt could
 // succeed.
 func (c *Callbacks) send(ctx context.Context, row CallbackDeliveriesRow) (retry bool, err error) {
-	body, err := callbackBody(row)
+	var result *CallbackResultRow
+	if row.Event == "succeeded" {
+		r, err := c.queries.CallbackResult(ctx, CallbackResultParams{TaskID: row.TaskID, MaxBytes: maxCallbackResultBytes})
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return true, fmt.Errorf("read task result: %w", err)
+		}
+		if err == nil {
+			result = &r
+		}
+	}
+	body, err := callbackBody(row, result)
 	if err != nil {
 		return false, err
 	}
@@ -261,8 +288,9 @@ type callbackFailure struct {
 	Traceback string `json:"traceback,omitempty"`
 }
 
-// callbackBody is the reference's body, compact with sorted keys.
-func callbackBody(row CallbackDeliveriesRow) ([]byte, error) {
+// callbackBody is the reference's body, compact with sorted keys. A result
+// above maxCallbackResultBytes is left out and data_omitted is set.
+func callbackBody(row CallbackDeliveriesRow, result *CallbackResultRow) ([]byte, error) {
 	body := map[string]any{
 		"task_id":         row.TaskID.String(),
 		"root_task_id":    row.RootTaskID.String(),
@@ -288,13 +316,14 @@ func callbackBody(row CallbackDeliveriesRow) ([]byte, error) {
 		}
 		body["error"] = f
 	}
-	if row.ResultEncoding != nil {
-		switch *row.ResultEncoding {
-		case "json":
-			body["data"] = map[string]any{"encoding": "json", "value": json.RawMessage(row.ResultData)}
-		default:
-			body["data"] = map[string]any{"encoding": *row.ResultEncoding, "data": row.ResultData}
-		}
+	switch {
+	case result == nil:
+	case result.Data == nil:
+		body["data_omitted"] = true
+	case result.Encoding == "json":
+		body["data"] = map[string]any{"encoding": "json", "value": json.RawMessage(result.Data)}
+	default:
+		body["data"] = map[string]any{"encoding": result.Encoding, "data": result.Data}
 	}
 	encoded, err := json.Marshal(body)
 	if err != nil {

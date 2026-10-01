@@ -16,13 +16,19 @@ returning c.id, c.deliveries;
 
 -- name: CallbackDeliveries :many
 select c.id, c.task_id, c.workspace_id, c.url, c.event, c.attempt, c.max_attempts, c.failure,
-       coalesce(t.root_task_id, t.id)::uuid as root_task_id, t.failure as task_failure, t.finished_at,
-       r.encoding as result_encoding, r.data as result_data
+       coalesce(t.root_task_id, t.id)::uuid as root_task_id, t.failure as task_failure, t.finished_at
 from task_callbacks c
 join tasks t on t.id = c.task_id
-left join task_results r on r.task_id = c.task_id and c.event = 'succeeded'
 where c.id = any(@ids::bigint[])
 order by c.id;
+
+-- name: CallbackResult :one
+-- The task's result for one delivery: its data only when it is at most
+-- max_bytes, so no batch holds large results.
+select encoding,
+       (case when octet_length(data) <= @max_bytes::int then data end)::bytea as data
+from task_results
+where task_id = @task_id;
 
 -- name: FinishCallback :exec
 update task_callbacks

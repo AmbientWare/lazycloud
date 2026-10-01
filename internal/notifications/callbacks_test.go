@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -189,5 +191,40 @@ func TestCallbacksNeverReachPrivateAddresses(t *testing.T) {
 	}
 	if s, n := state(t, pool); s != "failed" || n != 1 || len(srv.requests()) != 0 {
 		t.Fatalf("a loopback target: %s after %d, %d requests (%s)", s, n, len(srv.requests()), lastError)
+	}
+}
+
+func TestALargeResultIsLeftOutOfTheCallback(t *testing.T) {
+	t.Parallel()
+	pool := dbtest.New(t)
+	srv := &target{}
+	server := httptest.NewServer(srv)
+	defer server.Close()
+	_, task := callback(t, pool, server.URL)
+	big := `"` + strings.Repeat("x", maxCallbackResultBytes) + `"`
+	if _, err := pool.Exec(t.Context(), "update task_results set data = $1 where task_id = $2", []byte(big), task); err != nil {
+		t.Fatal(err)
+	}
+	deliverUntil(t, NewCallbacks(pool, newSecrets(t, pool), CallbackConfig{AllowPrivateTargets: true}, slog.New(slog.DiscardHandler)), pool)
+	got := srv.requests()
+	var body map[string]any
+	if err := json.Unmarshal(got[0].body, &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["data"] != nil || body["data_omitted"] != true || len(got[0].body) > 4096 {
+		t.Fatalf("a callback for a large result: %d bytes, data_omitted %v", len(got[0].body), body["data_omitted"])
+	}
+}
+
+func TestNonPublicAddresses(t *testing.T) {
+	t.Parallel()
+	for addr, public := range map[string]bool{
+		"8.8.8.8": true, "2606:4700::1111": true,
+		"10.0.0.1": false, "127.0.0.1": false, "169.254.169.254": false, "100.64.0.1": false,
+		"::1": false, "fd00::1": false, "64:ff9b::a9fe:a9fe": false, "64:ff9b:1::1": false,
+	} {
+		if got := isPublic(netip.MustParseAddr(addr).Unmap()); got != public {
+			t.Errorf("isPublic(%s) = %v", addr, got)
+		}
 	}
 }

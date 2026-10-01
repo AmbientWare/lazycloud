@@ -14,29 +14,25 @@ import (
 
 const callbackDeliveries = `-- name: CallbackDeliveries :many
 select c.id, c.task_id, c.workspace_id, c.url, c.event, c.attempt, c.max_attempts, c.failure,
-       coalesce(t.root_task_id, t.id)::uuid as root_task_id, t.failure as task_failure, t.finished_at,
-       r.encoding as result_encoding, r.data as result_data
+       coalesce(t.root_task_id, t.id)::uuid as root_task_id, t.failure as task_failure, t.finished_at
 from task_callbacks c
 join tasks t on t.id = c.task_id
-left join task_results r on r.task_id = c.task_id and c.event = 'succeeded'
 where c.id = any($1::bigint[])
 order by c.id
 `
 
 type CallbackDeliveriesRow struct {
-	ID             int64
-	TaskID         uuid.UUID
-	WorkspaceID    uuid.UUID
-	Url            string
-	Event          string
-	Attempt        int32
-	MaxAttempts    int32
-	Failure        []byte
-	RootTaskID     uuid.UUID
-	TaskFailure    []byte
-	FinishedAt     *time.Time
-	ResultEncoding *string
-	ResultData     []byte
+	ID          int64
+	TaskID      uuid.UUID
+	WorkspaceID uuid.UUID
+	Url         string
+	Event       string
+	Attempt     int32
+	MaxAttempts int32
+	Failure     []byte
+	RootTaskID  uuid.UUID
+	TaskFailure []byte
+	FinishedAt  *time.Time
 }
 
 func (q *Queries) CallbackDeliveries(ctx context.Context, ids []int64) ([]CallbackDeliveriesRow, error) {
@@ -60,8 +56,6 @@ func (q *Queries) CallbackDeliveries(ctx context.Context, ids []int64) ([]Callba
 			&i.RootTaskID,
 			&i.TaskFailure,
 			&i.FinishedAt,
-			&i.ResultEncoding,
-			&i.ResultData,
 		); err != nil {
 			return nil, err
 		}
@@ -71,6 +65,32 @@ func (q *Queries) CallbackDeliveries(ctx context.Context, ids []int64) ([]Callba
 		return nil, err
 	}
 	return items, nil
+}
+
+const callbackResult = `-- name: CallbackResult :one
+select encoding,
+       (case when octet_length(data) <= $1::int then data end)::bytea as data
+from task_results
+where task_id = $2
+`
+
+type CallbackResultParams struct {
+	MaxBytes int32
+	TaskID   uuid.UUID
+}
+
+type CallbackResultRow struct {
+	Encoding string
+	Data     []byte
+}
+
+// The task's result for one delivery: its data only when it is at most
+// max_bytes, so no batch holds large results.
+func (q *Queries) CallbackResult(ctx context.Context, arg CallbackResultParams) (CallbackResultRow, error) {
+	row := q.db.QueryRow(ctx, callbackResult, arg.MaxBytes, arg.TaskID)
+	var i CallbackResultRow
+	err := row.Scan(&i.Encoding, &i.Data)
+	return i, err
 }
 
 const claimDueCallbacks = `-- name: ClaimDueCallbacks :many
