@@ -126,9 +126,22 @@ end $$;
 
 -- Each trigger function reads its statement's transition tables, so a
 -- statement that changes many rows sends one notification per workspace.
+-- A batch submit that cannot fit one notification is grouped before any
+-- item is built.
 create function observe_created_tasks() returns trigger
 language plpgsql as $$
 begin
+    if (select count(*) from new_rows) > 24 then
+        perform publish_changes(c.workspace_id, c.items) from (
+            select g.workspace_id, jsonb_agg(jsonb_build_object(
+                'topic', 'tasks', 'change', 'created', 'app_id', w.app_id, 'deployment_id', g.workload_id,
+                'count', g.tasks)) as items
+            from (select workspace_id, workload_id, count(*) as tasks from new_rows group by 1, 2) g
+            join workloads w on w.id = g.workload_id
+            group by g.workspace_id
+        ) c;
+        return null;
+    end if;
     perform publish_changes(c.workspace_id, c.items) from (
         select n.workspace_id, jsonb_agg(jsonb_strip_nulls(jsonb_build_object(
             'topic', 'tasks', 'change', 'created', 'resource_id', n.id, 'task_id', n.id,
