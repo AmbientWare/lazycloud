@@ -41,56 +41,50 @@ visual parity.
 ## Progress
 
 - [x] Foundation: sign-in, sign-out, `/activate`, invitations, tokens,
-  workspaces, members
-- [x] Apps, workloads, versions, schedules, tasks, task drawer, logs,
-  containers
+  workspaces, members, search
+- [x] Apps, workloads, versions, schedules, playground, tasks, task drawer,
+  logs, containers, endpoint and ASGI request records, domains
 - [x] Storage: secrets, volumes, disks, artifacts, queues, maps
 - [x] Observability: activity, task metrics, latency, container metrics,
   call graph, lifecycle, account metrics, live changes
-- [x] Admin users (operations), compute, machines, AWS connection, fleet
-- [x] Billing, usage, pricing, complimentary grants
-- [x] Invoke URLs, the function playground's HTTP invoke, endpoint and ASGI
-  workloads, their request records in Activity and the task drawer, domains
-- [ ] Pods, devboxes, sandboxes and shells: wait for the workloads packet
+- [x] Admin users, billing, usage, pricing, compute, machines, AWS
+  connection, fleet
+- [x] Pods, devboxes, sandboxes, shells and container files on the
+  workloads API, and the app card's Devbox chip
+- [x] Rewrite: components read the generated types; `lib/api/schemas`,
+  `views.ts`, `directory.ts`, the workspace name registry and the old
+  request helpers are gone
 - [x] Stack journeys in `web/tests/e2e/stack.spec.ts` against a private stack
 
 ## Intentional differences from the reference
 
 - `/callback` receives no code. The server's GitHub callback sets the
   cookie, and the page confirms it with `/v1/me`.
-- Listed tokens show no prefix. The API stores only digests.
+- Workspace and app URLs carry names, `/w/$workspace/apps/$app`, as the API
+  addresses them. The reference used the app ID.
+- Status chips show the API's words: queued, running, succeeded, failed,
+  cancelled. A timeout shows through the task's failure.
 - Log history has no backward paging.
-- App URLs carry the app name, `/w/$workspace/apps/$app`, as the API
-  does. The reference used the app ID.
 - Deleting a workload deletes every version of it. In the version list only
-  a workload's one remaining version offers Delete, and the app's workload
-  list says the delete takes every version.
+  a workload's one remaining version offers Delete.
 - Map keys need at least one character.
 - Endpoint and ASGI requests are the edge's request records, listed where
-  the reference listed their tasks. A request is complete, failed for a
-  5xx answer, or cancelled when the caller left first (499). A
-  workspace-wide list of them shows each app's newest page only.
+  the reference listed their tasks. A request is succeeded, failed for a
+  5xx answer, or cancelled when the caller left first (499).
+- Removed because the API keeps no such data and the product does not need
+  it: the volume "updated" time, the queue write rate, the Tasks page's
+  single-value Type filter, and the container tab's Worker and Working
+  directory rows.
+- The playground covers functions and endpoints, as the reference did; an
+  ASGI app answers on its same-origin path but has no playground.
 
 ## Gaps
 
-Data the API does not provide yet. Components show their empty state or the
-server's error.
-
-- To restore when the workloads packet merges pod and devbox kinds: the app
-  card's "Devbox" count chip (removed because it was always 0) and the pod,
-  devbox, sandbox and shell pages, as the reference has them.
-- Pods, devboxes, sandboxes and shells have no API. Sandbox and shell
-  panels show the server's "no such operation". The Pod instance drawer and
-  the devbox panels stay in place and show "Pods and devboxes have no API
-  yet" until the workloads packet serves them; the API lists no Pod or
-  devbox workload, so the app and workload pages show none.
-- Containers have no image, command, ports or exit code. Tasks carry no
-  handler, args or kwargs. Results have no rich display.
-- The artifact summary has no cost fields. Its tooltip reads "$0.00 accrued",
-  which is not true. Fixing that needs the cost data or a component change.
-- Volumes have no update time, queues have no write rate, and disks have no
-  workload reference.
-- `contracts/http_contract_cases.json` stays because a Python test reads it.
+- Devbox root disks need `nbd-client` and root on the host; on this host a
+  devbox start fails with that reason, which the page shows.
+- The sandbox Expires fact returns once `Container.expires_at` is served.
+- `lazycloud devbox ... ssh` fails with "No such command 'ssh-proxy'" in the
+  CLI (workloads packet).
 
 ## Pre-existing UI issues for the user to decide
 
@@ -107,18 +101,20 @@ Both also fail on the reference's own specs. The specs mark them
 
 ## Evidence
 
-- `bun run typecheck`, `lint`, `format:check`, `build` and vitest
-  (124 tests) pass. The mocked smoke, onboarding and marketing specs pass
-  on both projects apart from the two fixme tests.
-- The stack journeys pass on chromium and mobile against server, scheduler
-  and agent on private ports. They cover sign-in, workspace create, rename,
-  invite and delete, deploy with the SDK, playground invoke, task drawer
-  logs and container, tokens, `/activate`, secrets, volume upload and
-  download, queues, maps, task artifacts, and accepting an invitation.
-- An endpoint deployed to the local stack shows its invoke URL, route and
-  methods, and its request records open in the drawer. Its requests hang
-  locally and end as 499 after the caller's timeout. That path belongs to
-  the endpoints packet and is unverified here.
-- Before and after screenshots of Apps, the app, the workload, Tasks, the
-  task drawer, Secrets, Tokens and sign-in match in layout and copy. Only
-  the data differs.
+- Handwritten `web/src` (generated types and tests excluded) is 35,519
+  lines against 38,799 in the reference UI it replaced; the full diff is
+  +6,467 / -9,377 lines including tests.
+- typecheck, lint, format:check, build and vitest (120 tests) pass. `bun run
+  apigen` leaves the generated types unchanged. The mocked smoke, onboarding
+  and marketing specs pass on both projects apart from the two fixme tests.
+- Go: gofmt, go vet, golangci-lint and `go test -race ./cmd/... ./internal/...`
+  pass. Python: ruff and pytest (379 tests) pass.
+- The stack journeys pass on chromium and mobile against a server,
+  scheduler and agent built from this tree on private ports: sign-in,
+  workspaces, deploy with the SDK, function playground, task drawer logs
+  and container, the endpoint playground, an ASGI app on its same-origin
+  path, tokens, `/activate`, secrets, volumes, queues, maps, artifacts and
+  invitations.
+- Before and after screenshots of 20 main pages match in layout and copy.
+  The differences are data, the API status words and the removed elements
+  above.
