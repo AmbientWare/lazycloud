@@ -150,6 +150,17 @@ export function GlobalSearch({
     return next.slice(0, 30);
   }, [apps.data, normalizedQuery, tasks.data, workspace.name, workloads.data]);
 
+  // Results arrive in group order. When the highlighted result drops out of the
+  // list, highlight the first one so Enter always opens something.
+  const ordered = useMemo(
+    () => GROUPS.flatMap((group) => results.filter((result) => result.group === group)),
+    [results],
+  );
+  const [selected, setSelected] = useState("");
+  const highlighted = ordered.some((result) => result.key === selected)
+    ? selected
+    : (ordered[0]?.key ?? "");
+
   const openResult = (result: SearchResult) => {
     onOpenChange(false);
     setQuery("");
@@ -170,6 +181,8 @@ export function GlobalSearch({
       title="Search workspace"
       description="Search this workspace by name or ID."
       shouldFilter={false}
+      value={highlighted}
+      onValueChange={setSelected}
       className="top-[12svh] flex max-h-[76svh] w-[calc(100%-1.5rem)] translate-y-0 gap-0 border-border bg-popover shadow-2xl sm:max-w-xl"
     >
       <CommandInput

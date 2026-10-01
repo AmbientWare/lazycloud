@@ -89,6 +89,15 @@ it("asks the server for matching apps, workloads and tasks", async () => {
     .filter((url) => url.searchParams.get("search") === "greet")
     .map((url) => url.pathname.split("/").at(-1));
   expect([...new Set(searched)].sort()).toEqual(["apps", "deployments", "tasks"]);
+
+  // The query filtered out the highlighted "Apps" destination, so the first
+  // remaining result is highlighted and Enter opens it.
+  const highlighted = document.querySelector('[cmdk-item][data-selected="true"]');
+  expect(highlighted?.textContent).toContain("greet");
+  fireEvent.keyDown(screen.getByPlaceholderText("Search workspace…"), { key: "Enter" });
+  await vi.waitFor(() =>
+    expect(router.state.location.pathname).toBe("/w/dev/apps/journey/workloads/function/greet"),
+  );
 });
 
 function task(id: string): Schemas["Task"] {
