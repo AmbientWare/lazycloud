@@ -143,7 +143,7 @@ func newJoinFlags(name string) *joinFlags {
 	f.StringVar(&cfg.BuildNetwork, "build-network", envOr("LAZYCLOUD_BUILD_NETWORK", "bridge"), "Docker network for image builds")
 	f.StringVar(&j.maxCPU, "max-cpu", os.Getenv("LAZYCLOUD_MAX_CPU"), "CPU cores to offer, such as 2 or 1.5; default detects")
 	f.StringVar(&j.maxMemory, "max-memory", os.Getenv("LAZYCLOUD_MAX_MEMORY"), "memory to offer, such as 16gib or 4096 (MB); default detects")
-	f.StringVar(&j.maxGPUs, "max-gpus", os.Getenv("LAZYCLOUD_MAX_GPUS"), "offer the first N detected GPUs")
+	f.StringVar(&j.maxGPUs, "max-gpus", os.Getenv("LAZYCLOUD_MAX_GPUS"), "offer the first N detected GPUs; 0 offers none")
 	f.StringVar(&j.gpuIDs, "gpu-ids", os.Getenv("LAZYCLOUD_GPU_IDS"), "comma-separated GPU indexes or UUIDs to offer")
 	f.Func("label", "key=value label added to every container (repeatable)", func(value string) error {
 		key, val, ok := strings.Cut(value, "=")
@@ -195,17 +195,17 @@ func (j *joinFlags) parse(args []string) error {
 	}
 	if j.maxGPUs != "" {
 		n, err := strconv.Atoi(j.maxGPUs)
-		if err != nil || n <= 0 {
-			return errors.New("max gpus must be a positive number")
+		if err != nil || n < 0 {
+			return errors.New("max gpus must be a number of GPUs")
 		}
-		cfg.Limits.GPUs = n
+		cfg.Limits.GPUs = &n
 	}
 	for id := range strings.SplitSeq(j.gpuIDs, ",") {
 		if id = strings.TrimSpace(id); id != "" {
 			cfg.Limits.GPUIDs = append(cfg.Limits.GPUIDs, id)
 		}
 	}
-	if cfg.Limits.GPUs > 0 && len(cfg.Limits.GPUIDs) > 0 {
+	if cfg.Limits.GPUs != nil && len(cfg.Limits.GPUIDs) > 0 {
 		return errors.New("--gpu-ids and --max-gpus cannot both be set")
 	}
 	for _, path := range []*string{&cfg.StateDir, &cfg.RuntimeDir, &cfg.SupervisorPath, &cfg.JoinTokenFile} {

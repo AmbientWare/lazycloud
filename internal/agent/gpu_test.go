@@ -24,7 +24,7 @@ func TestAgentGivesContainersFreeGPUs(t *testing.T) {
 		t.Skip("needs an NVIDIA GPU and the NVIDIA container runtime")
 	}
 	e := newEnv(t)
-	all := e.startAgent(func(cfg *Config) { cfg.Limits.GPUs = len(devices) })
+	all := e.startAgent(func(cfg *Config) { cfg.Limits.GPUs = new(len(devices)) })
 	s := e.session()
 
 	first := e.gpuStart(int32(len(devices)))
@@ -57,7 +57,7 @@ func TestAgentGivesContainersFreeGPUs(t *testing.T) {
 
 	// An adopted container keeps its devices.
 	all.stop()
-	e.startAgent(func(cfg *Config) { cfg.Limits.GPUs = len(devices) })
+	e.startAgent(func(cfg *Config) { cfg.Limits.GPUs = new(len(devices)) })
 	s = e.session()
 	busy(s)
 

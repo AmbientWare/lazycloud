@@ -40,8 +40,9 @@ const (
 type Limits struct {
 	CPUMillis   int64
 	MemoryBytes int64
-	// GPUs offers the first GPUs detected; GPUIDs names them instead.
-	GPUs   int
+	// GPUs offers the first GPUs detected, none when zero; nil offers all.
+	// GPUIDs names them instead.
+	GPUs   *int
 	GPUIDs []string
 }
 
@@ -163,11 +164,12 @@ func selectGPUs(gpus []gpuDevice, limits Limits) ([]gpuDevice, *hostproto.Prefli
 			}
 		}
 		return selected, check("capacity.gpu_ids", true, fmt.Sprintf("using %d GPUs", len(selected)), "")
-	case limits.GPUs > 0:
-		if limits.GPUs > len(gpus) {
-			return nil, check("capacity.max_gpus", false, fmt.Sprintf("requested %d GPUs, detected %d", limits.GPUs, len(gpus)), "lower --max-gpus")
+	case limits.GPUs != nil:
+		n := *limits.GPUs
+		if n > len(gpus) {
+			return nil, check("capacity.max_gpus", false, fmt.Sprintf("requested %d GPUs, detected %d", n, len(gpus)), "lower --max-gpus")
 		}
-		return gpus[:limits.GPUs], check("capacity.max_gpus", true, fmt.Sprintf("using %d GPUs", limits.GPUs), "")
+		return gpus[:n], check("capacity.max_gpus", true, fmt.Sprintf("using %d GPUs", n), "")
 	case len(gpus) > 0:
 		return gpus, check("capacity.max_gpus", true, fmt.Sprintf("using %d GPUs", len(gpus)), "")
 	}
