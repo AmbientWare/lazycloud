@@ -42,14 +42,7 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	supervisorBinary = filepath.Join(dir, "supervisor")
-	// LAZYCLOUD_TEST_SUPERVISOR_SOURCE builds the supervisor from another
-	// checkout, as while its stream is not merged.
-	source := "../../cmd/supervisor"
-	if checkout := os.Getenv("LAZYCLOUD_TEST_SUPERVISOR_SOURCE"); checkout != "" {
-		source = "./cmd/supervisor"
-	}
-	build := exec.CommandContext(context.Background(), "go", "build", "-o", supervisorBinary, source)
-	build.Dir = os.Getenv("LAZYCLOUD_TEST_SUPERVISOR_SOURCE")
+	build := exec.CommandContext(context.Background(), "go", "build", "-o", supervisorBinary, "../../cmd/supervisor")
 	build.Env = append(os.Environ(), "CGO_ENABLED=0")
 	build.Stdout, build.Stderr = os.Stdout, os.Stderr
 	if err := build.Run(); err != nil {

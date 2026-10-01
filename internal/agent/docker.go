@@ -118,12 +118,14 @@ func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostprot
 		mounts = append(mounts, mount.Mount{Type: mount.TypeBind, Source: runtime, Target: containerRuntimeDir, ReadOnly: true})
 	}
 	workingDir, user := containerWorkspace, containerUser()
-	var capAdd []string
+	var capAdd, securityOpt []string
 	if spec.GetPod().GetDevbox() {
 		// The supervisor binds the system directories into the root disk
-		// and switches into it, which takes root and CAP_SYS_ADMIN.
+		// and switches into it, which takes root and CAP_SYS_ADMIN, and an
+		// AppArmor profile that allows mounts.
 		workingDir, user = "/", "0"
 		capAdd = append(capAdd, "SYS_ADMIN")
+		securityOpt = append(securityOpt, "apparmor=unconfined")
 	} else {
 		mounts = append(mounts, mount.Mount{Type: mount.TypeBind, Source: c.workspaceDir(), Target: containerWorkspace})
 	}
@@ -150,12 +152,13 @@ func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostprot
 			User:       user,
 		},
 		HostConfig: &containertypes.HostConfig{
-			Runtime:    a.cfg.OCIRuntime,
-			Privileged: c.docker,
-			CapAdd:     capAdd,
-			Mounts:     append(mounts, binds...),
-			Resources:  containerResources(resources, a.capacity, limit, gpus),
-			StorageOpt: a.diskLimit(resources),
+			Runtime:     a.cfg.OCIRuntime,
+			Privileged:  c.docker,
+			CapAdd:      capAdd,
+			SecurityOpt: securityOpt,
+			Mounts:      append(mounts, binds...),
+			Resources:   containerResources(resources, a.capacity, limit, gpus),
+			StorageOpt:  a.diskLimit(resources),
 		},
 	}
 	id, err := a.createContainer(ctx, c.dockerName(), options)
