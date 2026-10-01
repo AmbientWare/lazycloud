@@ -48,7 +48,8 @@ function openStream(
             ...options,
             params: { path: { workspace, container: source.container }, query },
           }),
-  ) as Promise<ReadableStream<Uint8Array>>;
+    // An empty body sent with Content-Length 0 arrives without a stream.
+  ).then((body) => (body as ReadableStream<Uint8Array> | undefined) ?? new Blob().stream());
 }
 
 /** The newest `LOG_HISTORY_LINES` stored lines of the source, oldest first. */
