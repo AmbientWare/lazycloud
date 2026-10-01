@@ -92,6 +92,7 @@ func (e *Edge) listenChanges(ctx context.Context) error {
 				case channelEndpoint:
 					if id, err := uuid.Parse(n.Payload); err == nil {
 						e.markChanged(id)
+						e.podWaits.wake(id)
 					}
 				}
 			case <-debounce:

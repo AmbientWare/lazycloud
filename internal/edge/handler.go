@@ -45,6 +45,12 @@ var hopHeaders = []string{ //nolint:gochecknoglobals // a constant list
 // admits the request and forwards it to a container, or runs a function.
 func (e *Edge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	if label, under := e.urls.hostLabel(r.Host); under {
+		if id, port, ok := portLabel(label); ok {
+			e.servePod(w, r, id, port)
+			return
+		}
+	}
 	t, err := e.resolve(ctx, r.Host)
 	if err != nil {
 		e.fail(w, r, err)

@@ -34,27 +34,29 @@ func (q *Queries) ContainerNetwork(ctx context.Context, arg ContainerNetworkPara
 }
 
 const containerRoute = `-- name: ContainerRoute :one
-select c.id, c.host_id, c.state, c.purpose, c.exposed_ports, c.workspace_id, w.id as workload_id, w.kind,
-       a.state as app_state, w.desired_state, r.spec
+select c.id, c.host_id, c.state, c.purpose, c.exposed_ports, c.workspace_id, ws.name as workspace_name,
+       w.id as workload_id, w.kind, a.state as app_state, w.desired_state, r.spec
 from containers c
 join releases r on r.id = c.release_id
 join workloads w on w.id = r.workload_id
 join apps a on a.id = w.app_id
+join workspaces ws on ws.id = c.workspace_id
 where c.id = $1
 `
 
 type ContainerRouteRow struct {
-	ID           uuid.UUID
-	HostID       *uuid.UUID
-	State        string
-	Purpose      string
-	ExposedPorts []int32
-	WorkspaceID  uuid.UUID
-	WorkloadID   uuid.UUID
-	Kind         string
-	AppState     string
-	DesiredState string
-	Spec         []byte
+	ID            uuid.UUID
+	HostID        *uuid.UUID
+	State         string
+	Purpose       string
+	ExposedPorts  []int32
+	WorkspaceID   uuid.UUID
+	WorkspaceName string
+	WorkloadID    uuid.UUID
+	Kind          string
+	AppState      string
+	DesiredState  string
+	Spec          []byte
 }
 
 // A live container with what routing to it needs.
@@ -68,6 +70,7 @@ func (q *Queries) ContainerRoute(ctx context.Context, id uuid.UUID) (ContainerRo
 		&i.Purpose,
 		&i.ExposedPorts,
 		&i.WorkspaceID,
+		&i.WorkspaceName,
 		&i.WorkloadID,
 		&i.Kind,
 		&i.AppState,
@@ -634,6 +637,42 @@ on conflict (workload_id) do update set woken_at = null, parked = true
 func (q *Queries) ParkPod(ctx context.Context, workloadID uuid.UUID) error {
 	_, err := q.db.Exec(ctx, parkPod, workloadID)
 	return err
+}
+
+const podRelease = `-- name: PodRelease :one
+select r.id, r.workload_id, w.kind, a.workspace_id, ws.name as workspace_name, r.spec,
+       (w.desired_state = 'active' and a.state = 'active')::bool as accepting
+from releases r
+join workloads w on w.id = r.workload_id
+join apps a on a.id = w.app_id
+join workspaces ws on ws.id = a.workspace_id
+where r.id = $1 and w.kind in ('pod', 'sandbox')
+`
+
+type PodReleaseRow struct {
+	ID            uuid.UUID
+	WorkloadID    uuid.UUID
+	Kind          string
+	WorkspaceID   uuid.UUID
+	WorkspaceName string
+	Spec          []byte
+	Accepting     bool
+}
+
+// A pod or sandbox release with what routing to it needs.
+func (q *Queries) PodRelease(ctx context.Context, id uuid.UUID) (PodReleaseRow, error) {
+	row := q.db.QueryRow(ctx, podRelease, id)
+	var i PodReleaseRow
+	err := row.Scan(
+		&i.ID,
+		&i.WorkloadID,
+		&i.Kind,
+		&i.WorkspaceID,
+		&i.WorkspaceName,
+		&i.Spec,
+		&i.Accepting,
+	)
+	return i, err
 }
 
 const podReleases = `-- name: PodReleases :many

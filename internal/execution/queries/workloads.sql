@@ -255,13 +255,24 @@ order by r.version desc nulls last, c.ready_at, c.id;
 
 -- name: ContainerRoute :one
 -- A live container with what routing to it needs.
-select c.id, c.host_id, c.state, c.purpose, c.exposed_ports, c.workspace_id, w.id as workload_id, w.kind,
-       a.state as app_state, w.desired_state, r.spec
+select c.id, c.host_id, c.state, c.purpose, c.exposed_ports, c.workspace_id, ws.name as workspace_name,
+       w.id as workload_id, w.kind, a.state as app_state, w.desired_state, r.spec
 from containers c
 join releases r on r.id = c.release_id
 join workloads w on w.id = r.workload_id
 join apps a on a.id = w.app_id
+join workspaces ws on ws.id = c.workspace_id
 where c.id = @id;
+
+-- name: PodRelease :one
+-- A pod or sandbox release with what routing to it needs.
+select r.id, r.workload_id, w.kind, a.workspace_id, ws.name as workspace_name, r.spec,
+       (w.desired_state = 'active' and a.state = 'active')::bool as accepting
+from releases r
+join workloads w on w.id = r.workload_id
+join apps a on a.id = w.app_id
+join workspaces ws on ws.id = a.workspace_id
+where r.id = @id and w.kind in ('pod', 'sandbox');
 
 -- name: SetContainerNetwork :one
 update containers

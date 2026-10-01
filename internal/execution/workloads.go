@@ -474,7 +474,9 @@ type ContainerRoute struct {
 	State     ContainerState
 	Purpose   ContainerPurpose
 	Workspace identity.WorkspaceID
-	Workload  uuid.UUID
+	// WorkspaceName is what authorizing a caller needs.
+	WorkspaceName string
+	Workload      uuid.UUID
 	Kind      apitypes.WorkloadKind
 	// Accepting is false once the workload is stopped or its app paused.
 	Accepting bool
@@ -494,13 +496,44 @@ func (e *Execution) Route(ctx context.Context, container ContainerID) (Container
 	}
 	out := ContainerRoute{
 		ID: ContainerID(row.ID), Host: row.HostID, State: ContainerState(row.State), Purpose: ContainerPurpose(row.Purpose),
-		Workspace: identity.WorkspaceID(row.WorkspaceID), Workload: row.WorkloadID, Kind: apitypes.WorkloadKind(row.Kind),
-		Accepting: row.AppState == "active" && row.DesiredState == "active",
+		Workspace: identity.WorkspaceID(row.WorkspaceID), WorkspaceName: row.WorkspaceName, Workload: row.WorkloadID,
+		Kind: apitypes.WorkloadKind(row.Kind), Accepting: row.AppState == "active" && row.DesiredState == "active",
 	}
 	if err := json.Unmarshal(row.Spec, &out.Spec); err != nil {
 		return ContainerRoute{}, fmt.Errorf("decode release spec: %w", err)
 	}
 	out.Ports = exposedPorts(out.Spec, row.ExposedPorts)
+	return out, nil
+}
+
+// PodRoute is a pod or sandbox release as routing to it sees it.
+type PodRoute struct {
+	Release       uuid.UUID
+	Workload      uuid.UUID
+	Kind          apitypes.WorkloadKind
+	Workspace     identity.WorkspaceID
+	WorkspaceName string
+	Accepting     bool
+	Spec          apitypes.FunctionSpec
+}
+
+// PodRelease reads a pod or sandbox release for routing; ErrNotFound for
+// any other release.
+func (e *Execution) PodRelease(ctx context.Context, release uuid.UUID) (PodRoute, error) {
+	row, err := e.queries.PodRelease(ctx, release)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return PodRoute{}, ErrNotFound
+	}
+	if err != nil {
+		return PodRoute{}, fmt.Errorf("read pod release: %w", err)
+	}
+	out := PodRoute{
+		Release: row.ID, Workload: row.WorkloadID, Kind: apitypes.WorkloadKind(row.Kind),
+		Workspace: identity.WorkspaceID(row.WorkspaceID), WorkspaceName: row.WorkspaceName, Accepting: row.Accepting,
+	}
+	if err := json.Unmarshal(row.Spec, &out.Spec); err != nil {
+		return PodRoute{}, fmt.Errorf("decode release spec: %w", err)
+	}
 	return out, nil
 }
 
