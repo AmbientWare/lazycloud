@@ -109,10 +109,30 @@ func (e *Edge) listenChanges(ctx context.Context) error {
 }
 
 func (e *Edge) reloadRoutes(ctx context.Context) error {
+	e.reloading.Lock()
+	defer e.reloading.Unlock()
+	return e.reloadLocked(ctx)
+}
+
+func (e *Edge) reloadLocked(ctx context.Context) error {
+	started := time.Now()
 	routes, err := e.loadRoutes(ctx)
 	if err != nil {
 		return err
 	}
 	e.routes.Store(routes)
+	e.reloadStarted = started
 	return nil
+}
+
+// reloadOnMiss reloads the route table for a request that arrived at since
+// and found no route, unless a reload that began after it already finished.
+// Reloads are serialized, so misses never run more than one at a time.
+func (e *Edge) reloadOnMiss(ctx context.Context, since time.Time) error {
+	e.reloading.Lock()
+	defer e.reloading.Unlock()
+	if e.reloadStarted.After(since) {
+		return nil
+	}
+	return e.reloadLocked(ctx)
 }

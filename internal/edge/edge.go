@@ -42,8 +42,12 @@ type Edge struct {
 	logger    *slog.Logger
 
 	routes atomic.Pointer[routeTable]
-	auth   authCache
-	hosts  hostStreams
+	// reloading serializes route reloads; reloadStarted is when the last
+	// finished one began.
+	reloading     sync.Mutex
+	reloadStarted time.Time
+	auth          authCache
+	hosts         hostStreams
 
 	// mu guards releases, versions, workloads and loads. It is held only for
 	// map and counter updates, never across I/O.

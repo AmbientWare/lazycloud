@@ -151,9 +151,9 @@ func (d *dataLink) forward(ctx context.Context) {
 		}
 		d.mu.Unlock()
 	}()
-	ctx, cancel := context.WithCancel(ctx)
+	streamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	stream, err := d.client.Forward(ctx)
+	stream, err := d.client.Forward(streamCtx)
 	if err != nil {
 		return
 	}
@@ -173,7 +173,7 @@ func (d *dataLink) forward(ctx context.Context) {
 	head := first.GetHead()
 	switch kind := head.GetKind().(type) {
 	case *hostproto.RequestHead_Http:
-		d.serveHTTP(ctx, stream, in, d.a.lookup(head.GetContainerId()), kind.Http)
+		d.serveHTTP(streamCtx, stream, in, d.a.lookup(head.GetContainerId()), kind.Http)
 	case *hostproto.RequestHead_Sync:
 		d.serveSync(stream, in, d.a.lookup(head.GetContainerId()))
 	default:

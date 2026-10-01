@@ -157,21 +157,37 @@ type target struct {
 // resolve finds what a request host names: a custom hostname, a deployment
 // label (latest or a pinned version), a release id or a container id.
 func (e *Edge) resolve(ctx context.Context, host string) (target, error) {
+	arrived := time.Now()
 	label, under := e.urls.hostLabel(host)
-	routes := e.routes.Load()
-	if !under {
-		if w := routes.byHostname[label]; w != nil && w.active != nil {
-			return target{workload: w, release: w.active, latest: true}, nil
+	if under {
+		if id, err := uuid.Parse(label); err == nil {
+			return e.resolveID(ctx, id)
 		}
-		return target{}, errNoRoute
-	}
-	if id, err := uuid.Parse(label); err == nil {
-		return e.resolveID(ctx, id)
 	}
 	subdomain, version := deploymentLabel(label)
-	w := routes.bySubdomain[subdomain]
+	lookup := func(routes *routeTable) *workload {
+		if !under {
+			return routes.byHostname[label]
+		}
+		return routes.bySubdomain[subdomain]
+	}
+	w := lookup(e.routes.Load())
+	if w == nil || w.active == nil {
+		// A deploy that committed moments ago may not have reached the table
+		// yet; misses reload it at most every missReload.
+		if err := e.reloadOnMiss(ctx, arrived); err != nil {
+			return target{}, err
+		}
+		w = lookup(e.routes.Load())
+	}
 	if w == nil {
 		return target{}, errNoRoute
+	}
+	if !under {
+		if w.active == nil {
+			return target{}, errNoRoute
+		}
+		return target{workload: w, release: w.active, latest: true}, nil
 	}
 	if version == 0 {
 		if w.active == nil {
