@@ -101,3 +101,15 @@ select id, name, kind from workloads where id = any(@ids::uuid[]);
 
 -- name: DiskNames :many
 select id, name from disks where id = any(@ids::uuid[]) and state = 'active';
+
+-- name: WorkspaceArtifactCost :one
+-- What the workspace's stored artifacts cost from @since, read through the
+-- ledger's source key: artifacts are metered per app, and artifacts no app
+-- owns under the workspace's own id.
+select coalesce(sum(l.cost_nanos), 0)::bigint
+from (
+    select a.id as source_id from apps a where a.workspace_id = @workspace_id
+    union all
+    select w.id from workspaces w where w.id = @workspace_id
+) s
+join ledger_entries l on l.source_kind = 'artifacts' and l.source_id = s.source_id and l.started_at >= @since;

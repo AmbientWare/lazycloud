@@ -369,6 +369,31 @@ func (q *Queries) WorkloadNames(ctx context.Context, ids []uuid.UUID) ([]Workloa
 	return items, nil
 }
 
+const workspaceArtifactCost = `-- name: WorkspaceArtifactCost :one
+select coalesce(sum(l.cost_nanos), 0)::bigint
+from (
+    select a.id as source_id from apps a where a.workspace_id = $1
+    union all
+    select w.id from workspaces w where w.id = $1
+) s
+join ledger_entries l on l.source_kind = 'artifacts' and l.source_id = s.source_id and l.started_at >= $2
+`
+
+type WorkspaceArtifactCostParams struct {
+	WorkspaceID uuid.UUID
+	Since       time.Time
+}
+
+// What the workspace's stored artifacts cost from @since, read through the
+// ledger's source key: artifacts are metered per app, and artifacts no app
+// owns under the workspace's own id.
+func (q *Queries) WorkspaceArtifactCost(ctx context.Context, arg WorkspaceArtifactCostParams) (int64, error) {
+	row := q.db.QueryRow(ctx, workspaceArtifactCost, arg.WorkspaceID, arg.Since)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const workspaceNames = `-- name: WorkspaceNames :many
 select id, name from workspaces where id = any($1::uuid[])
 `
