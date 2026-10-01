@@ -13,7 +13,6 @@ from lazycloud.clients.api import ApiClient
 from lazycloud.exceptions import SdkError
 from lazycloud.references import (
     HandlerReferenceError,
-    dotted_reference,
     source_root_handler_reference,
 )
 from lazycloud.source_sync import (
@@ -101,14 +100,46 @@ def deploy_functions(
             if deployment.pruned:
                 summary += f"; stopped {', '.join(item.root for item in deployment.pruned)}"
             step.done(summary)
+        for release in deployment.releases:
+            if release.url:
+                terminal.detail(f"{release.function}: {release.url}")
         deployments.append(deployment)
     return deployments
+
+
+def prepare_spec(
+    workload: Function[..., Any],
+    *,
+    client: ApiClient,
+    workspace: str,
+    source_root: str | Path | None = None,
+    terminal: Terminal | None = None,
+) -> tuple[FunctionSpec, tuple[str, ...]]:
+    """Ready one workload's image and source, as a deploy does, without deploying it.
+
+    Returns the definition and the module prefix its files sit under in the
+    container's workspace.
+    """
+    terminal = terminal or Terminal(quiet=True)
+    root = Path(source_root or ".").expanduser().resolve()
+    if not root.is_dir():
+        raise DeploymentOperationError(f"source root is not a directory: {root}")
+    workload.require_supported()
+    handler, prefix = _source_placement(workload, root)
+    image = _prepare_images([workload], client=client, workspace=workspace, terminal=terminal)
+    if ensure_source_ignore_file(root):
+        terminal.detail(SOURCE_IGNORE_FILE_WRITTEN_NOTICE)
+    source = _upload_source(
+        client, workspace=workspace, root=root, archive_prefix=prefix, terminal=terminal
+    )
+    spec = workload.function_spec(handler=handler, source_sha256=source, image=image[id(workload)])
+    return spec, prefix
 
 
 def _source_placement(function: Function[..., Any], root: Path) -> tuple[str, tuple[str, ...]]:
     """The handler reference inside the archive and the archive's module prefix."""
     try:
-        reference = source_root_handler_reference(dotted_reference(function.func), root)
+        reference = source_root_handler_reference(function.handler_reference(), root)
     except HandlerReferenceError as exc:
         raise DeploymentOperationError(str(exc)) from exc
     return reference.handler, reference.archive_prefix
@@ -162,4 +193,4 @@ def _prepare_images(
     return results
 
 
-__all__ = ["AppFunctions", "DeploymentOperationError", "deploy_functions"]
+__all__ = ["AppFunctions", "DeploymentOperationError", "deploy_functions", "prepare_spec"]

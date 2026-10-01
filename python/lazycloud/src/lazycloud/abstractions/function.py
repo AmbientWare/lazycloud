@@ -16,6 +16,7 @@ from typing import (
     TypeVar,
     overload,
 )
+from uuid import UUID
 
 from pydantic import ValidationError
 from shared.api import (
@@ -70,6 +71,7 @@ from lazycloud.client_contracts import (
     schema_from_contract_return,
 )
 from lazycloud.clients.api import ApiClient, ApiError
+from lazycloud.clients.endpoints import submit_preview_tasks
 from lazycloud.control import api_client, require_workspace, resolve_control_client_config
 from lazycloud.env import called_on_import, is_local
 from lazycloud.exceptions import (
@@ -84,7 +86,7 @@ from lazycloud.terminal import Terminal, TerminalStep
 from lazycloud.values import cloudpickle_bytes
 
 if TYPE_CHECKING:
-    from shared.api import Deployment
+    from shared.api import Deployment, Preview
 
 
 # Inputs per submit request; the API rejects larger batches.
@@ -322,6 +324,10 @@ class Function(Generic[P, R]):
             found.append("retry_policy.retry_on_statuses")
         return found
 
+    def handler_reference(self) -> str:
+        """The `module:qualname` the runner imports."""
+        return dotted_reference(self.func)
+
     def require_supported(self) -> None:
         unsupported = self.unsupported_options()
         if unsupported:
@@ -386,8 +392,17 @@ class Function(Generic[P, R]):
             terminal=self.terminal,
         )[0]
 
-    def serve(self, **_: object) -> None:
-        raise UnsupportedFeatureError(f"function {self.resource_name}", ["serve"])
+    def serve(self, *, timeout: int = 0, sync_dir: str | None = None) -> Preview:
+        """Run a preview container that follows the working tree until Ctrl+C.
+
+        `.remote()`, `.spawn()`, `.map()` and `lazycloud run` from this machine
+        go to the preview while it runs.
+        """
+        from lazycloud.abstractions.serve import serve_workload
+
+        return serve_workload(
+            self, kind="function", authorized=True, timeout=timeout, sync_dir=sync_dir or "."
+        )
 
     def shell(self, **_: object) -> None:
         raise UnsupportedFeatureError(f"function {self.resource_name}", ["shell"])
@@ -474,13 +489,17 @@ class Function(Generic[P, R]):
             raise FunctionOperationError(msg)
         self.require_supported()
         client, workspace = self._session()
+        preview = self._preview(client, workspace)
         tasks: list[Task] = []
         for start in range(0, len(inputs), MAX_SUBMIT_BATCH):
             request = SubmitTasksRequest(inputs=inputs[start : start + MAX_SUBMIT_BATCH])
             try:
-                response = client.submit_tasks(
-                    workspace, self._app_slug, self.resource_name, request
-                )
+                if preview is not None:
+                    response = submit_preview_tasks(client, workspace, preview, request)
+                else:
+                    response = client.submit_tasks(
+                        workspace, self._app_slug, self.resource_name, request
+                    )
             except SdkError as exc:
                 error: SdkError = exc
                 if isinstance(exc, ApiError) and exc.code is ErrorCode.not_found:
@@ -492,6 +511,22 @@ class Function(Generic[P, R]):
                 ) from exc
             tasks.extend(Task(str(item.id), workspace, client) for item in response.tasks)
         return tasks
+
+    def _preview(self, client: ApiClient, workspace: str) -> UUID | None:
+        """The running preview of this function started from this machine, if any."""
+        if not is_local():
+            return None
+        from lazycloud.abstractions.serve import read_serve_preview
+
+        record = read_serve_preview(
+            kind="function",
+            name=self.resource_name,
+            app=self._app_slug,
+            workspace=workspace,
+            endpoint=client.endpoint,
+            client=client,
+        )
+        return UUID(record.preview_id) if record is not None else None
 
     def _session(self, workspace: str | None = None) -> tuple[ApiClient, str]:
         config = resolve_control_client_config(workspace=workspace or self.workspace)

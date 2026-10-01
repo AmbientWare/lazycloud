@@ -10,6 +10,7 @@ from shared.api import Deployment
 from lazycloud._invocation import prepare_arguments
 from lazycloud._terminal.cards import result_card
 from lazycloud.abstractions.app import App
+from lazycloud.abstractions.endpoint import ASGI, Endpoint
 from lazycloud.abstractions.function import Function
 from lazycloud.abstractions.shell import Shell, ShellSession
 from lazycloud.cli.components.context import current_workspace
@@ -86,7 +87,7 @@ def deploy(
         else:
             target = loaded[0]
             attach_terminal(target)
-            if isinstance(target, Function):
+            if isinstance(target, Function | Endpoint | ASGI):
                 deployments = [target.deploy(workspace=selected_workspace, source_root=source_root)]
             else:
                 invoke_handler_method(
@@ -114,6 +115,11 @@ def _deployment_summary(deployment: Deployment) -> dict[str, JsonValue]:
         "app": deployment.app.name,
         "functions": [f"{release.function} v{release.version}" for release in deployment.releases],
     }
+    urls = [release.url for release in deployment.releases if release.url]
+    if len(urls) == 1 and len(deployment.releases) == 1:
+        summary["url"] = urls[0]
+    elif urls:
+        summary["urls"] = list(urls)
     if deployment.pruned:
         summary["stopped"] = [item.root for item in deployment.pruned]
     return summary

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from lazycloud.clients.compute.control import ComputeClient
 from lazycloud.clients.disk.control import DiskControlClient
-from lazycloud.clients.domain.control import DomainControlClient
 from lazycloud.clients.gateway.control import GatewayControlClient
 from lazycloud.clients.resource.control import ResourceControlClient
 from lazycloud.clients.secret.control import SecretControlClient
@@ -60,20 +59,6 @@ def compute_client(
 ) -> ComputeClient:
     config = control_config(workspace=workspace, timeout_seconds=timeout_seconds)
     return ComputeClient.from_endpoint(
-        config.endpoint,
-        token=config.token,
-        timeout_seconds=config.timeout_seconds,
-        workspace=config.workspace,
-    )
-
-
-def domain_client(
-    *,
-    workspace: str | None = None,
-    timeout_seconds: float = 10.0,
-) -> DomainControlClient:
-    config = control_config(workspace=workspace, timeout_seconds=timeout_seconds)
-    return DomainControlClient.from_endpoint(
         config.endpoint,
         token=config.token,
         timeout_seconds=config.timeout_seconds,
