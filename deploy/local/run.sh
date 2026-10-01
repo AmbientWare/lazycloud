@@ -15,6 +15,10 @@ export LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY=6c6f63616c2d6c617a79636c6f75642d
 export LAZYCLOUD_WORKSPACE_BUCKET_PROVIDER=garage
 export LAZYCLOUD_GARAGE_ADMIN_URL=http://127.0.0.1:23903
 export LAZYCLOUD_GARAGE_ADMIN_TOKEN=local-garage-admin
+# The master key that wraps secret data keys; generated once per state dir.
+export LAZYCLOUD_SECRETS_KEY_FILE="$PWD/$state/secrets.key"
+# Local callbacks may target this machine.
+export LAZYCLOUD_CALLBACK_ALLOW_PRIVATE=1
 export LAZYCLOUD_IMAGE_REGISTRY=127.0.0.1:25000
 export LAZYCLOUD_IMAGE_REGISTRY_INSECURE=true
 
@@ -29,6 +33,9 @@ stop() {
 
 start() {
   mkdir -p "$state/logs" bin
+  if [ ! -f "$LAZYCLOUD_SECRETS_KEY_FILE" ]; then
+    (umask 077 && head -c 32 /dev/urandom >"$LAZYCLOUD_SECRETS_KEY_FILE")
+  fi
   docker compose up -d --wait postgres object-store registry >/dev/null
   docker compose run --rm object-store-bootstrap >/dev/null
   CGO_ENABLED=0 go build -o bin/supervisor ./cmd/supervisor

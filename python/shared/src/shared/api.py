@@ -353,6 +353,95 @@ class LogEntry(BaseModel):
     time: AwareDatetime
 
 
+class HookReference(RootModel[str]):
+    root: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_.]*:[A-Za-z_][A-Za-z0-9_.]*$")]
+
+
+class SecretName(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="An environment variable name; the LAZYCLOUD_ prefix is reserved.",
+            pattern="^[A-Za-z_][A-Za-z0-9_]{0,239}$",
+        ),
+    ]
+
+
+class SecretCreate(BaseModel):
+    name: Annotated[
+        str,
+        Field(
+            description="An environment variable name; the LAZYCLOUD_ prefix is reserved.",
+            pattern="^[A-Za-z_][A-Za-z0-9_]{0,239}$",
+        ),
+    ]
+    value: Annotated[str, Field(max_length=65536)]
+
+
+class SecretValueUpdate(BaseModel):
+    value: Annotated[str, Field(max_length=65536)]
+
+
+class Secret(BaseModel):
+    name: Annotated[
+        str,
+        Field(
+            description="An environment variable name; the LAZYCLOUD_ prefix is reserved.",
+            pattern="^[A-Za-z_][A-Za-z0-9_]{0,239}$",
+        ),
+    ]
+    created_at: AwareDatetime
+    updated_at: AwareDatetime
+
+
+class SecretValue(BaseModel):
+    name: Annotated[
+        str,
+        Field(
+            description="An environment variable name; the LAZYCLOUD_ prefix is reserved.",
+            pattern="^[A-Za-z_][A-Za-z0-9_]{0,239}$",
+        ),
+    ]
+    value: str
+    created_at: AwareDatetime
+    updated_at: AwareDatetime
+
+
+class SecretPage(BaseModel):
+    secrets: list[Secret]
+    next_cursor: Annotated[str | None, Field(description="Present when more secrets follow.")] = (
+        None
+    )
+
+
+class Schedule(BaseModel):
+    cron: Annotated[str, Field(description="The normalized expression.")]
+    timezone: Literal["UTC"]
+    next_run_at: AwareDatetime
+    last_run_at: Annotated[
+        AwareDatetime | None, Field(description="When the last handled occurrence was due.")
+    ] = None
+    last_task_id: Annotated[
+        UUID | None, Field(description="The task the last occurrence admitted.")
+    ] = None
+    last_error: Annotated[
+        str | None, Field(description="Why the last occurrence admitted no task.")
+    ] = None
+
+
+class ScheduledFunction(BaseModel):
+    app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
+    function: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
+    schedule: Schedule
+
+
+class SchedulePage(BaseModel):
+    schedules: list[ScheduledFunction]
+    next_cursor: Annotated[str | None, Field(description="Present when more schedules follow.")] = (
+        None
+    )
+
+
 class MapKey(RootModel[str]):
     root: Annotated[str, Field(max_length=1024, min_length=1, pattern="^[^\\x00-\\x1f\\x7f]+$")]
 
@@ -760,7 +849,7 @@ EnvAdditionalProperty = TypeAliasType(
 )
 
 
-class Secret(RootModel[str]):
+class Secret1(RootModel[str]):
     root: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_]{0,127}$")]
 
 
@@ -880,9 +969,22 @@ class ImageSpec(BaseModel):
         PythonVersion, Field(description="The Python minor version the runtime is mounted for.")
     ]
     image_id: Annotated[str | None, Field(pattern="^img_[0-9a-f]{24}$")] = None
+    reference: Annotated[
+        str | None, Field(description="The image by digest the release runs, set by the server.")
+    ] = None
 
 
 class Task(BaseModel):
+    parent_task_id: Annotated[
+        UUID | None, Field(description="The running task that spawned this one.")
+    ] = None
+    root_task_id: Annotated[
+        UUID,
+        Field(description="The root of the call graph; the task itself when nothing spawned it."),
+    ]
+    scheduled_for: Annotated[
+        AwareDatetime | None, Field(description="The cron occurrence that admitted the task.")
+    ] = None
     id: UUID
     app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
     function: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
@@ -893,6 +995,16 @@ class Task(BaseModel):
     started_at: AwareDatetime | None = None
     finished_at: AwareDatetime | None = None
     failure: TaskFailure | None = None
+
+
+class LifecycleHooks(BaseModel):
+    on_start: Annotated[list[HookReference] | None, Field(max_length=16)] = None
+    on_running: Annotated[list[HookReference] | None, Field(max_length=16)] = None
+    on_success: Annotated[list[HookReference] | None, Field(max_length=16)] = None
+    on_error: Annotated[list[HookReference] | None, Field(max_length=16)] = None
+    on_retry: Annotated[list[HookReference] | None, Field(max_length=16)] = None
+    on_failure: Annotated[list[HookReference] | None, Field(max_length=16)] = None
+    on_finish: Annotated[list[HookReference] | None, Field(max_length=16)] = None
 
 
 class VolumeMountSpec(BaseModel):
@@ -941,7 +1053,7 @@ class ImageDefinition(BaseModel):
     ] = None
     context: SourceRef | None = None
     secrets: Annotated[
-        list[Secret] | None,
+        list[Secret1] | None,
         Field(description="Workspace secrets the build reads as build arguments.", max_length=64),
     ] = None
     gpu: Annotated[
@@ -978,12 +1090,36 @@ class FunctionSpec(BaseModel):
         Field(description="Tasks one container runs at once, one process per slot.", ge=1, le=256),
     ] = 1
     keep_warm_seconds: Annotated[
-        int,
-        Field(description="Idle time before a container above the minimum stops.", ge=0, le=86400),
-    ] = 10
+        int | None,
+        Field(
+            description="Idle seconds before a container above the minimum stops.", ge=-1, le=86400
+        ),
+    ] = None
     autoscaler: Autoscaler | None = None
     max_pending_tasks: Annotated[int, Field(ge=1, le=1000000)] = 100
     environment: dict[str, str] | None = None
+    cron: Annotated[
+        str | None,
+        Field(description="Run the function on this UTC schedule.", max_length=160, min_length=1),
+    ] = None
+    secrets: Annotated[
+        list[SecretName] | None,
+        Field(
+            description="Secrets the container receives as environment variables of the same name.",
+            max_length=100,
+        ),
+    ] = None
+    callback_url: Annotated[
+        str | None,
+        Field(
+            description="Receives a signed POST when a task is retried or finishes.",
+            max_length=2048,
+        ),
+    ] = None
+    in_process: Annotated[
+        bool, Field(description="Run the concurrency slots as threads of one runner process.")
+    ] = False
+    lifecycle_hooks: LifecycleHooks | None = None
     volumes: Annotated[list[VolumeMountSpec] | None, Field(max_length=32)] = None
 
 
@@ -1000,6 +1136,7 @@ class Function(BaseModel):
     app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
     state: State1
     active_release: Release
+    schedule: Schedule | None = None
 
 
 class SubmitTasksResponse(BaseModel):

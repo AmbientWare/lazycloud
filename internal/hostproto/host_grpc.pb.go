@@ -28,6 +28,7 @@ const (
 	HostService_RecordDiskGeneration_FullMethodName = "/lazycloud.host.v1.HostService/RecordDiskGeneration"
 	HostService_RecordDiskCollection_FullMethodName = "/lazycloud.host.v1.HostService/RecordDiskCollection"
 	HostService_ReleaseDisk_FullMethodName          = "/lazycloud.host.v1.HostService/ReleaseDisk"
+	HostService_ContainerAPI_FullMethodName         = "/lazycloud.host.v1.HostService/ContainerAPI"
 	HostService_CompleteImageBuild_FullMethodName   = "/lazycloud.host.v1.HostService/CompleteImageBuild"
 	HostService_AppendImageBuildLogs_FullMethodName = "/lazycloud.host.v1.HostService/AppendImageBuildLogs"
 )
@@ -65,6 +66,11 @@ type HostServiceClient interface {
 	RecordDiskCollection(ctx context.Context, in *RecordDiskCollectionRequest, opts ...grpc.CallOption) (*RecordDiskCollectionResponse, error)
 	// ReleaseDisk ends the lease after the final publish.
 	ReleaseDisk(ctx context.Context, in *ReleaseDiskRequest, opts ...grpc.CallOption) (*ReleaseDiskResponse, error)
+	// ContainerAPI carries one public API request a container made through its
+	// supervisor. The first APIRequest holds the head, later ones the body;
+	// the host half-closes after the body. The server answers with the head,
+	// then body chunks, and ends the stream after the last one.
+	ContainerAPI(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[APIRequest, APIResponse], error)
 	// CompleteImageBuild records the outcome of a build container's attempt.
 	// A container that no longer runs the build returns FAILED_PRECONDITION.
 	CompleteImageBuild(ctx context.Context, in *CompleteImageBuildRequest, opts ...grpc.CallOption) (*CompleteImageBuildResponse, error)
@@ -173,6 +179,19 @@ func (c *hostServiceClient) ReleaseDisk(ctx context.Context, in *ReleaseDiskRequ
 	return out, nil
 }
 
+func (c *hostServiceClient) ContainerAPI(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[APIRequest, APIResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &HostService_ServiceDesc.Streams[1], HostService_ContainerAPI_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[APIRequest, APIResponse]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type HostService_ContainerAPIClient = grpc.BidiStreamingClient[APIRequest, APIResponse]
+
 func (c *hostServiceClient) CompleteImageBuild(ctx context.Context, in *CompleteImageBuildRequest, opts ...grpc.CallOption) (*CompleteImageBuildResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CompleteImageBuildResponse)
@@ -226,6 +245,11 @@ type HostServiceServer interface {
 	RecordDiskCollection(context.Context, *RecordDiskCollectionRequest) (*RecordDiskCollectionResponse, error)
 	// ReleaseDisk ends the lease after the final publish.
 	ReleaseDisk(context.Context, *ReleaseDiskRequest) (*ReleaseDiskResponse, error)
+	// ContainerAPI carries one public API request a container made through its
+	// supervisor. The first APIRequest holds the head, later ones the body;
+	// the host half-closes after the body. The server answers with the head,
+	// then body chunks, and ends the stream after the last one.
+	ContainerAPI(grpc.BidiStreamingServer[APIRequest, APIResponse]) error
 	// CompleteImageBuild records the outcome of a build container's attempt.
 	// A container that no longer runs the build returns FAILED_PRECONDITION.
 	CompleteImageBuild(context.Context, *CompleteImageBuildRequest) (*CompleteImageBuildResponse, error)
@@ -267,6 +291,9 @@ func (UnimplementedHostServiceServer) RecordDiskCollection(context.Context, *Rec
 }
 func (UnimplementedHostServiceServer) ReleaseDisk(context.Context, *ReleaseDiskRequest) (*ReleaseDiskResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReleaseDisk not implemented")
+}
+func (UnimplementedHostServiceServer) ContainerAPI(grpc.BidiStreamingServer[APIRequest, APIResponse]) error {
+	return status.Error(codes.Unimplemented, "method ContainerAPI not implemented")
 }
 func (UnimplementedHostServiceServer) CompleteImageBuild(context.Context, *CompleteImageBuildRequest) (*CompleteImageBuildResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CompleteImageBuild not implemented")
@@ -446,6 +473,13 @@ func _HostService_ReleaseDisk_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _HostService_ContainerAPI_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(HostServiceServer).ContainerAPI(&grpc.GenericServerStream[APIRequest, APIResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type HostService_ContainerAPIServer = grpc.BidiStreamingServer[APIRequest, APIResponse]
+
 func _HostService_CompleteImageBuild_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(CompleteImageBuildRequest)
 	if err := dec(in); err != nil {
@@ -534,6 +568,12 @@ var HostService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "Session",
 			Handler:       _HostService_Session_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
+		},
+		{
+			StreamName:    "ContainerAPI",
+			Handler:       _HostService_ContainerAPI_Handler,
 			ServerStreams: true,
 			ClientStreams: true,
 		},

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -12,6 +13,9 @@ from typing_extensions import Self
 from lazycloud.clients.api import ApiClient
 from lazycloud.clients.storage import StorageClient
 from lazycloud.exceptions import ConfigurationError
+
+# Set by the platform in every workload container.
+CONTAINER_API_ENV = "LAZYCLOUD_CONTAINER_API"
 
 _CONTROL_WORKSPACE: ContextVar[str | None] = ContextVar(
     "lazycloud_control_workspace",
@@ -56,6 +60,8 @@ class ControlClientConfig:
     token: str | None
     workspace: str
     timeout_seconds: float
+    # The container API socket, inside a workload container without a token.
+    container_api: str | None = None
 
 
 class ControlClientConfigMixin:
@@ -85,13 +91,20 @@ def resolve_control_client_config(
 
     profile = get_profile()
     selected_workspace = workspace if workspace is not None else _CONTROL_WORKSPACE.get()
+    selected_token = token if token is not None else profile.token or None
+    # Inside a workload container the platform serves the API on a socket and
+    # knows the caller; a configured token or endpoint still takes precedence.
+    container_api = os.environ.get(CONTAINER_API_ENV, "").strip() or None
+    if selected_token is not None or (endpoint or "").strip():
+        container_api = None
     return ControlClientConfig(
         endpoint=endpoint_url(
             (endpoint or "").strip() or profile.resolved_endpoint(), tls=profile.tls
         ),
-        token=token if token is not None else profile.token or None,
+        token=selected_token,
         workspace=(selected_workspace if selected_workspace is not None else profile.workspace),
         timeout_seconds=timeout_seconds,
+        container_api=container_api,
     )
 
 
@@ -107,6 +120,12 @@ def endpoint_url(endpoint: str, *, tls: bool) -> str:
 
 
 def api_client(config: ControlClientConfig) -> ApiClient:
+    if config.container_api:
+        return ApiClient(
+            endpoint=config.endpoint,
+            container_api=config.container_api,
+            timeout_seconds=config.timeout_seconds,
+        )
     if not config.token:
         raise ConfigurationError(
             "no access token is configured; run `lazycloud login --token <token>`"

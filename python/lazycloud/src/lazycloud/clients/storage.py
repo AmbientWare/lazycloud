@@ -87,7 +87,7 @@ class StorageClient:
         return self.api._send(Volume, "GET", self._path("volumes", name))
 
     def delete_volume(self, name: str) -> None:
-        self.api._send_empty("DELETE", self._path("volumes", name))
+        self.api._send(None, "DELETE", self._path("volumes", name))
 
     def list_volume_files(
         self, volume: str, path: str, *, cursor: str | None = None
@@ -146,8 +146,8 @@ class StorageClient:
         )
 
     def abort_volume_upload(self, volume: str, request: AbortVolumeUploadRequest) -> None:
-        self.api._send_empty(
-            "POST", self._path("volumes", volume, "uploads", "abort"), body=request
+        self.api._send(
+            None, "POST", self._path("volumes", volume, "uploads", "abort"), body=request
         )
 
     # Disks
@@ -159,7 +159,7 @@ class StorageClient:
         return self.api._send(Disk, "GET", self._path("disks", name))
 
     def delete_disk(self, name: str) -> None:
-        self.api._send_empty("DELETE", self._path("disks", name))
+        self.api._send(None, "DELETE", self._path("disks", name))
 
     # Artifacts
 
@@ -207,7 +207,7 @@ class StorageClient:
         return self.api._send(Artifact, "GET", self._path("artifacts", str(artifact_id)))
 
     def delete_artifact(self, artifact_id: UUID) -> None:
-        self.api._send_empty("DELETE", self._path("artifacts", str(artifact_id)))
+        self.api._send(None, "DELETE", self._path("artifacts", str(artifact_id)))
 
     def complete_artifact(self, artifact_id: UUID, request: CompleteArtifactRequest) -> Artifact:
         return self.api._send(
@@ -228,11 +228,11 @@ class StorageClient:
         return self.api._send(QueueInfo, "GET", self._path("queues", name))
 
     def delete_queue(self, name: str) -> None:
-        self.api._send_empty("DELETE", self._path("queues", name))
+        self.api._send(None, "DELETE", self._path("queues", name))
 
     def put_queue_messages(self, name: str, messages: Sequence[bytes]) -> None:
         request = PutQueueMessagesRequest(messages=[base64.b64encode(item) for item in messages])
-        self.api._send_empty("POST", self._path("queues", name, "messages"), body=request)
+        self.api._send(None, "POST", self._path("queues", name, "messages"), body=request)
 
     def pop_queue_message(self, name: str, *, wait_seconds: int = 0) -> QueueMessageResult:
         return self.api._send(
@@ -255,7 +255,7 @@ class StorageClient:
         return self.api._send(MapInfo, "GET", self._path("maps", name))
 
     def delete_map(self, name: str) -> None:
-        self.api._send_empty("DELETE", self._path("maps", name))
+        self.api._send(None, "DELETE", self._path("maps", name))
 
     def list_map_keys(
         self, name: str, *, prefix: str | None = None, cursor: str | None = None
@@ -276,7 +276,8 @@ class StorageClient:
         )
 
     def delete_map_entry(self, name: str, key: str, *, if_revision: str | None = None) -> None:
-        self.api._send_empty(
+        self.api._send(
+            None,
             "DELETE",
             self._path("maps", name, "entries", key),
             params=_query(if_revision=if_revision),

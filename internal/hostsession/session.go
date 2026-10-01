@@ -13,11 +13,13 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/identity"
+	"github.com/AmbientWare/lazycloud/internal/secrets"
 )
 
 const (
@@ -176,6 +178,17 @@ func (sess *session) sync(ctx context.Context) error {
 			continue
 		}
 		msg, err := sess.server.startMessage(ctx, id, start)
+		var missing *secrets.NotFoundError
+		var unreadable *secrets.UnreadableError
+		if errors.As(err, &missing) || errors.As(err, &unreadable) {
+			// The container cannot start without the secret; it fails like
+			// a failed preparation and stops being derived, and the host's
+			// other containers are unaffected.
+			if err := sess.server.execution.StartFailed(ctx, sess.host, start.Container, err.Error()); err != nil {
+				return sess.server.grpcError(ctx, err)
+			}
+			continue
+		}
 		if err != nil {
 			return sess.server.grpcError(ctx, err)
 		}
@@ -255,6 +268,14 @@ func (s *Server) startMessage(ctx context.Context, id string, start execution.St
 	if start.Spec.Resources.DiskMib != nil {
 		diskLimit = int64(*start.Spec.Resources.DiskMib) << 20
 	}
+	var names []string
+	if start.Spec.Secrets != nil {
+		names = *start.Spec.Secrets
+	}
+	secretValues, err := s.config.Secrets.Resolve(ctx, start.Workspace, names)
+	if err != nil {
+		return nil, err
+	}
 	image, err := s.imagePull(ctx, start.Spec.Image)
 	if err != nil {
 		return nil, err
@@ -272,12 +293,32 @@ func (s *Server) startMessage(ctx context.Context, id string, start execution.St
 			DiskLimitBytes: diskLimit,
 		},
 		Function: &hostproto.FunctionWorkload{
-			Handler: start.Spec.Handler,
-			Slots:   int32(start.Slots), //nolint:gosec // The schema caps concurrency at 256.
+			Handler:   start.Spec.Handler,
+			Slots:     int32(start.Slots), //nolint:gosec // The schema caps concurrency at 256.
+			InProcess: start.Spec.InProcess != nil && *start.Spec.InProcess,
+			Hooks:     hooksOut(start.Spec.LifecycleHooks),
 		},
 		Environment: env,
 		Volumes:     volumes,
+		Secrets:     secretValues,
+		Workspace:   start.WorkspaceName,
 	}}}, nil
+}
+
+func hooksOut(h *apitypes.LifecycleHooks) *hostproto.LifecycleHooks {
+	if h == nil {
+		return &hostproto.LifecycleHooks{}
+	}
+	refs := func(r *apitypes.HookReferences) []string {
+		if r == nil {
+			return nil
+		}
+		return *r
+	}
+	return &hostproto.LifecycleHooks{
+		OnStart: refs(h.OnStart), OnRunning: refs(h.OnRunning), OnSuccess: refs(h.OnSuccess),
+		OnError: refs(h.OnError), OnRetry: refs(h.OnRetry), OnFailure: refs(h.OnFailure), OnFinish: refs(h.OnFinish),
+	}
 }
 
 func stopMessage(id string, container execution.ContainerID) *hostproto.ServerMessage {

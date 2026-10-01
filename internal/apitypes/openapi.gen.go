@@ -484,6 +484,21 @@ func (e RetryPolicyBackoff) Valid() bool {
 	}
 }
 
+// Defines values for ScheduleTimezone.
+const (
+	UTC ScheduleTimezone = "UTC"
+)
+
+// Valid indicates whether the value is a known member of the ScheduleTimezone enum.
+func (e ScheduleTimezone) Valid() bool {
+	switch e {
+	case UTC:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for TaskStatus.
 const (
 	TaskStatusCancelled TaskStatus = "cancelled"
@@ -873,6 +888,7 @@ type Function struct {
 	ActiveRelease Release       `json:"active_release"`
 	App           AppName       `json:"app"`
 	Name          WorkloadName  `json:"name"`
+	Schedule      *Schedule     `json:"schedule,omitempty"`
 	State         FunctionState `json:"state"`
 }
 
@@ -883,26 +899,44 @@ type FunctionState string
 type FunctionSpec struct {
 	Autoscaler *Autoscaler `json:"autoscaler,omitempty"`
 
+	// CallbackUrl Receives a signed POST when a task is retried or finishes.
+	CallbackUrl *string `json:"callback_url,omitempty"`
+
 	// Concurrency Tasks one container runs at once, one process per slot.
-	Concurrency *int               `json:"concurrency,omitempty"`
+	Concurrency *int `json:"concurrency,omitempty"`
+
+	// Cron Run the function on this UTC schedule.
+	Cron        *string            `json:"cron,omitempty"`
 	Environment *map[string]string `json:"environment,omitempty"`
 
 	// Handler module:qualname within the source archive
 	Handler string    `json:"handler"`
 	Image   ImageSpec `json:"image"`
 
-	// KeepWarmSeconds Idle time before a container above the minimum stops.
-	KeepWarmSeconds *int         `json:"keep_warm_seconds,omitempty"`
-	MaxPendingTasks *int         `json:"max_pending_tasks,omitempty"`
-	Name            WorkloadName `json:"name"`
+	// InProcess Run the concurrency slots as threads of one runner process.
+	InProcess *bool `json:"in_process,omitempty"`
+
+	// KeepWarmSeconds Idle seconds before a container above the minimum stops.
+	KeepWarmSeconds *int `json:"keep_warm_seconds,omitempty"`
+
+	// LifecycleHooks Callables the runner invokes with a context object, each a `module:qualname` reference into the source. on_start runs once per runner process after the handler loads, and its failure is a load error. The others run in the container around each attempt, in order; their failures are logged and do not change the outcome.
+	LifecycleHooks  *LifecycleHooks `json:"lifecycle_hooks,omitempty"`
+	MaxPendingTasks *int            `json:"max_pending_tasks,omitempty"`
+	Name            WorkloadName    `json:"name"`
 
 	// Resources Reservations the container always keeps. CPU above the reservation is shared up to `cpu_limit_millis`, by default the reservation plus 16 cores. Memory above the reservation is allowed up to `memory_limit_mib`, by default four times the reservation, at least 1 GiB and at most 8 GiB above it; the container is killed beyond it.
-	Resources      Resources          `json:"resources"`
-	RetryPolicy    *RetryPolicy       `json:"retry_policy,omitempty"`
+	Resources   Resources    `json:"resources"`
+	RetryPolicy *RetryPolicy `json:"retry_policy,omitempty"`
+
+	// Secrets Secrets the container receives as environment variables of the same name.
+	Secrets        *[]SecretName      `json:"secrets,omitempty"`
 	Source         SourceRef          `json:"source"`
 	TimeoutSeconds *int               `json:"timeout_seconds,omitempty"`
 	Volumes        *[]VolumeMountSpec `json:"volumes,omitempty"`
 }
+
+// HookReferences defines model for HookReferences.
+type HookReferences = []string
 
 // Image defines model for Image.
 type Image struct {
@@ -999,6 +1033,9 @@ type ImageSpec struct {
 
 	// PythonVersion The Python minor version the runtime is mounted for.
 	PythonVersion ImageSpecPythonVersion `json:"python_version"`
+
+	// Reference The image by digest the release runs, set by the server.
+	Reference *string `json:"reference,omitempty"`
 }
 
 // ImageSpecPythonVersion The Python minor version the runtime is mounted for.
@@ -1062,6 +1099,17 @@ type InvitationRequest struct {
 
 // InvitationRole The roles an invitation or role change grants; ownership is never offered.
 type InvitationRole string
+
+// LifecycleHooks Callables the runner invokes with a context object, each a `module:qualname` reference into the source. on_start runs once per runner process after the handler loads, and its failure is a load error. The others run in the container around each attempt, in order; their failures are logged and do not change the outcome.
+type LifecycleHooks struct {
+	OnError   *HookReferences `json:"on_error,omitempty"`
+	OnFailure *HookReferences `json:"on_failure,omitempty"`
+	OnFinish  *HookReferences `json:"on_finish,omitempty"`
+	OnRetry   *HookReferences `json:"on_retry,omitempty"`
+	OnRunning *HookReferences `json:"on_running,omitempty"`
+	OnStart   *HookReferences `json:"on_start,omitempty"`
+	OnSuccess *HookReferences `json:"on_success,omitempty"`
+}
 
 // LogEntry defines model for LogEntry.
 type LogEntry struct {
@@ -1279,6 +1327,84 @@ type RetryPolicy struct {
 // RetryPolicyBackoff defines model for RetryPolicy.Backoff.
 type RetryPolicyBackoff string
 
+// Schedule defines model for Schedule.
+type Schedule struct {
+	// Cron The normalized expression.
+	Cron string `json:"cron"`
+
+	// LastError Why the last occurrence admitted no task.
+	LastError *string `json:"last_error,omitempty"`
+
+	// LastRunAt When the last handled occurrence was due.
+	LastRunAt *time.Time `json:"last_run_at,omitempty"`
+
+	// LastTaskId The task the last occurrence admitted.
+	LastTaskId *openapi_types.UUID `json:"last_task_id,omitempty"`
+	NextRunAt  time.Time           `json:"next_run_at"`
+	Timezone   ScheduleTimezone    `json:"timezone"`
+}
+
+// ScheduleTimezone defines model for Schedule.Timezone.
+type ScheduleTimezone string
+
+// SchedulePage defines model for SchedulePage.
+type SchedulePage struct {
+	// NextCursor Present when more schedules follow.
+	NextCursor *string             `json:"next_cursor,omitempty"`
+	Schedules  []ScheduledFunction `json:"schedules"`
+}
+
+// ScheduledFunction defines model for ScheduledFunction.
+type ScheduledFunction struct {
+	App      AppName      `json:"app"`
+	Function WorkloadName `json:"function"`
+	Schedule Schedule     `json:"schedule"`
+}
+
+// Secret defines model for Secret.
+type Secret struct {
+	CreatedAt time.Time `json:"created_at"`
+
+	// Name An environment variable name; the LAZYCLOUD_ prefix is reserved.
+	Name      SecretName `json:"name"`
+	UpdatedAt time.Time  `json:"updated_at"`
+}
+
+// SecretCreate defines model for SecretCreate.
+type SecretCreate struct {
+	// Name An environment variable name; the LAZYCLOUD_ prefix is reserved.
+	Name  SecretName `json:"name"`
+	Value SecretText `json:"value"`
+}
+
+// SecretName An environment variable name; the LAZYCLOUD_ prefix is reserved.
+type SecretName = string
+
+// SecretPage defines model for SecretPage.
+type SecretPage struct {
+	// NextCursor Present when more secrets follow.
+	NextCursor *string  `json:"next_cursor,omitempty"`
+	Secrets    []Secret `json:"secrets"`
+}
+
+// SecretText defines model for SecretText.
+type SecretText = string
+
+// SecretValue defines model for SecretValue.
+type SecretValue struct {
+	CreatedAt time.Time `json:"created_at"`
+
+	// Name An environment variable name; the LAZYCLOUD_ prefix is reserved.
+	Name      SecretName `json:"name"`
+	UpdatedAt time.Time  `json:"updated_at"`
+	Value     string     `json:"value"`
+}
+
+// SecretValueUpdate defines model for SecretValueUpdate.
+type SecretValueUpdate struct {
+	Value SecretText `json:"value"`
+}
+
 // SetMapEntryRequest defines model for SetMapEntryRequest.
 type SetMapEntryRequest struct {
 	IfAbsent   *bool   `json:"if_absent,omitempty"`
@@ -1340,9 +1466,18 @@ type Task struct {
 	FinishedAt *time.Time         `json:"finished_at,omitempty"`
 	Function   WorkloadName       `json:"function"`
 	Id         openapi_types.UUID `json:"id"`
-	ReleaseId  openapi_types.UUID `json:"release_id"`
-	StartedAt  *time.Time         `json:"started_at,omitempty"`
-	Status     TaskStatus         `json:"status"`
+
+	// ParentTaskId The running task that spawned this one.
+	ParentTaskId *openapi_types.UUID `json:"parent_task_id,omitempty"`
+	ReleaseId    openapi_types.UUID  `json:"release_id"`
+
+	// RootTaskId The root of the call graph; the task itself when nothing spawned it.
+	RootTaskId openapi_types.UUID `json:"root_task_id"`
+
+	// ScheduledFor The cron occurrence that admitted the task.
+	ScheduledFor *time.Time `json:"scheduled_for,omitempty"`
+	StartedAt    *time.Time `json:"started_at,omitempty"`
+	Status       TaskStatus `json:"status"`
 }
 
 // TaskFailure defines model for TaskFailure.
@@ -1583,6 +1718,9 @@ type MapPath = CollectionName
 // QueuePath A queue or map name; any characters except control characters.
 type QueuePath = CollectionName
 
+// SecretPath An environment variable name; the LAZYCLOUD_ prefix is reserved.
+type SecretPath = SecretName
+
 // TaskPath defines model for TaskPath.
 type TaskPath = openapi_types.UUID
 
@@ -1630,14 +1768,14 @@ type ListArtifactsParams struct {
 	// CreatedBefore Exclusive upper bound on the save time.
 	CreatedBefore *time.Time `form:"created_before,omitempty" json:"created_before,omitempty"`
 
-	// Cursor The `next_cursor` of the previous page.
+	// Cursor The next_cursor of the previous page.
 	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
 	Limit  *Limit  `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
 // ListDisksParams defines parameters for ListDisks.
 type ListDisksParams struct {
-	// Cursor The `next_cursor` of the previous page.
+	// Cursor The next_cursor of the previous page.
 	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
 	Limit  *Limit  `form:"limit,omitempty" json:"limit,omitempty"`
 }
@@ -1665,7 +1803,7 @@ type BuildImageParams struct {
 
 // ListMapsParams defines parameters for ListMaps.
 type ListMapsParams struct {
-	// Cursor The `next_cursor` of the previous page.
+	// Cursor The next_cursor of the previous page.
 	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
 	Limit  *Limit  `form:"limit,omitempty" json:"limit,omitempty"`
 }
@@ -1679,14 +1817,14 @@ type DeleteMapEntryParams struct {
 type ListMapKeysParams struct {
 	Prefix *string `form:"prefix,omitempty" json:"prefix,omitempty"`
 
-	// Cursor The `next_cursor` of the previous page.
+	// Cursor The next_cursor of the previous page.
 	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
 	Limit  *int    `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
 // ListQueuesParams defines parameters for ListQueues.
 type ListQueuesParams struct {
-	// Cursor The `next_cursor` of the previous page.
+	// Cursor The next_cursor of the previous page.
 	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
 	Limit  *Limit  `form:"limit,omitempty" json:"limit,omitempty"`
 }
@@ -1695,6 +1833,20 @@ type ListQueuesParams struct {
 type PopQueueMessageParams struct {
 	// WaitSeconds Wait this long for a message when the queue is empty.
 	WaitSeconds *int `form:"wait_seconds,omitempty" json:"wait_seconds,omitempty"`
+}
+
+// ListSchedulesParams defines parameters for ListSchedules.
+type ListSchedulesParams struct {
+	// Cursor The next_cursor of the previous page.
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+	Limit  *Limit  `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// ListSecretsParams defines parameters for ListSecrets.
+type ListSecretsParams struct {
+	// Cursor The next_cursor of the previous page.
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+	Limit  *Limit  `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
 // GetTaskParams defines parameters for GetTask.
@@ -1714,7 +1866,7 @@ type StreamTaskLogsParams struct {
 
 // ListVolumesParams defines parameters for ListVolumes.
 type ListVolumesParams struct {
-	// Cursor The `next_cursor` of the previous page.
+	// Cursor The next_cursor of the previous page.
 	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
 	Limit  *Limit  `form:"limit,omitempty" json:"limit,omitempty"`
 }
@@ -1729,7 +1881,7 @@ type ListVolumeFilesParams struct {
 	// Path A directory relative to the volume root; empty is the root.
 	Path *VolumeRelativePath `form:"path,omitempty" json:"path,omitempty"`
 
-	// Cursor The `next_cursor` of the previous page.
+	// Cursor The next_cursor of the previous page.
 	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
 	Limit  *int    `form:"limit,omitempty" json:"limit,omitempty"`
 }
@@ -1789,6 +1941,15 @@ type SetMemberRoleJSONRequestBody = MemberRoleRequest
 
 // PutQueueMessagesJSONRequestBody defines body for PutQueueMessages for application/json ContentType.
 type PutQueueMessagesJSONRequestBody = PutQueueMessagesRequest
+
+// CreateSecretJSONRequestBody defines body for CreateSecret for application/json ContentType.
+type CreateSecretJSONRequestBody = SecretCreate
+
+// UpdateSecretJSONRequestBody defines body for UpdateSecret for application/json ContentType.
+type UpdateSecretJSONRequestBody = SecretValueUpdate
+
+// SetSecretJSONRequestBody defines body for SetSecret for application/json ContentType.
+type SetSecretJSONRequestBody = SecretValueUpdate
 
 // CreateSourceUploadJSONRequestBody defines body for CreateSourceUpload for application/json ContentType.
 type CreateSourceUploadJSONRequestBody = SourceUploadRequest

@@ -31,14 +31,6 @@ class RunnerError(BaseModel):
     traceback: str | None = None
 
 
-class Load(BaseModel):
-    type: Literal["load"]
-    protocol_version: Literal[1]
-    handler: Annotated[
-        str, Field(description="module:qualname importable from the working directory")
-    ]
-
-
 class Loaded(BaseModel):
     type: Literal["loaded"]
 
@@ -53,6 +45,17 @@ class Invoke(BaseModel):
     task_id: str
     attempt_id: str
     input_encoding: Encoding
+    root_task_id: Annotated[
+        str | None,
+        Field(description="The root of the call graph; the task itself when nothing spawned it."),
+    ] = None
+    parent_task_id: Annotated[
+        str | None, Field(description="The task that spawned this one, when one did.")
+    ] = None
+    attempt_number: Annotated[int, Field(ge=1)] = 1
+    max_attempts: Annotated[
+        int, Field(description="A failure of an attempt below this number is retried.", ge=1)
+    ] = 1
 
 
 class Succeeded(BaseModel):
@@ -65,3 +68,39 @@ class Failed(BaseModel):
     type: Literal["failed"]
     attempt_id: str
     error: RunnerError
+
+
+class Stream(str, Enum):
+    stdout = "stdout"
+    stderr = "stderr"
+
+
+class Output(BaseModel):
+    type: Literal["output"]
+    attempt_id: str
+    stream: Stream
+
+
+class LifecycleHooks(BaseModel):
+    on_start: list[str] | None = None
+    on_running: list[str] | None = None
+    on_success: list[str] | None = None
+    on_error: list[str] | None = None
+    on_retry: list[str] | None = None
+    on_failure: list[str] | None = None
+    on_finish: list[str] | None = None
+
+
+class Load(BaseModel):
+    type: Literal["load"]
+    protocol_version: Literal[1]
+    handler: Annotated[
+        str, Field(description="module:qualname importable from the working directory")
+    ]
+    concurrency: Annotated[
+        int,
+        Field(
+            description="Attempts the runner may run at once, each on its own thread.", ge=1, le=256
+        ),
+    ] = 1
+    hooks: LifecycleHooks | None = None

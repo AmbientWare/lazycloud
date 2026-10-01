@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -10,7 +9,6 @@ from lazycloud.abstractions.shell import ShellSession
 from lazycloud.cli.main import build_public_cli
 from lazycloud.cli.main import start as client_start
 from lazycloud.cli.volumes import parse_remote_path, parse_remote_path_if_schemed
-from shared.http.secrets import GetSecretResponse, SecretWireRecord
 from typer.testing import CliRunner
 
 client_cli = build_public_cli()
@@ -174,37 +172,6 @@ def test_run_json_preserves_values_and_reports_unsupported_results_without_stdou
     captured = capsys.readouterr()
     assert captured.out == ""
     assert json.loads(captured.err)["error"]["type"] == "result_not_json_serializable"
-
-
-def test_secret_show_masks_secret_value_by_default(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    secret = SecretWireRecord(
-        id="API_KEY",
-        name="API_KEY",
-        value="visible-fixture-value",
-        created_at=datetime(2026, 1, 1, tzinfo=UTC),
-        updated_at=datetime(2026, 1, 2, tzinfo=UTC),
-    )
-
-    class FakeSecretClient:
-        def get(self, name: str) -> GetSecretResponse:
-            assert name == "API_KEY"
-            return GetSecretResponse(secret=secret)
-
-    def fake_secret_client(**_: object) -> FakeSecretClient:
-        return FakeSecretClient()
-
-    monkeypatch.setattr("lazycloud.cli.secrets.secret_client", fake_secret_client)
-
-    masked = CliRunner().invoke(client_cli, ["secret", "show", "API_KEY"])
-    revealed = CliRunner().invoke(client_cli, ["secret", "show", "API_KEY", "--reveal"])
-
-    assert masked.exit_code == 0
-    assert "********" in masked.stdout
-    assert "visible-fixture-value" not in masked.stdout
-    assert revealed.exit_code == 0
-    assert "visible-fixture-value" in revealed.stdout
 
 
 def test_volume_remote_path_parser_supports_plain_and_scheme_syntax() -> None:

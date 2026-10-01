@@ -27,6 +27,9 @@ type Server struct {
 var _ StrictServerInterface = (*Server)(nil)
 
 func (s *Server) workspace(ctx context.Context, name string) (identity.Workspace, error) {
+	if c, ok := containerFrom(ctx); ok {
+		return c.AuthorizeWorkspace(name)
+	}
 	p, ok := principalFrom(ctx)
 	if !ok {
 		return identity.Workspace{}, identity.ErrUnauthenticated
@@ -64,7 +67,7 @@ func (s *Server) DeployApp(ctx context.Context, req DeployAppRequestObject) (Dep
 	if err != nil {
 		return nil, err
 	}
-	if err := s.checkImages(ctx, ws.ID, *req.Body); err != nil {
+	if err := s.checkImages(ctx, ws.ID, req.Body); err != nil {
 		return nil, err
 	}
 	deployment, err := s.owners.Control.Deploy(ctx, ws.ID, req.App, *req.Body)
@@ -84,6 +87,14 @@ func (s *Server) GetFunction(ctx context.Context, req GetFunctionRequestObject) 
 	if err != nil {
 		return nil, err
 	}
+	schedule, err := s.owners.Schedules.ForFunction(ctx, ws.ID, req.App, req.Function)
+	if err != nil {
+		return nil, err
+	}
+	if schedule != nil {
+		out := scheduleOut(*schedule)
+		fn.Schedule = &out
+	}
 	return GetFunction200JSONResponse(fn), nil
 }
 
@@ -101,9 +112,12 @@ func (s *Server) SubmitTasks(ctx context.Context, req SubmitTasksRequestObject) 
 		}
 		inputs[n] = payload
 	}
-	tasks, err := s.owners.Execution.Submit(ctx, execution.SubmitRequest{
-		Workspace: ws.ID, App: req.App, Function: req.Function, Inputs: inputs,
-	})
+	submit := execution.SubmitRequest{Workspace: ws.ID, App: req.App, Function: req.Function, Inputs: inputs}
+	// A task spawned from inside a running task records it as parent.
+	if c, ok := containerFrom(ctx); ok && c.Task != nil {
+		submit.Parent, submit.Root = (*execution.TaskID)(c.Task), (*execution.TaskID)(c.RootTask)
+	}
+	tasks, err := s.owners.Execution.Submit(ctx, submit)
 	if err != nil {
 		return nil, err
 	}
@@ -262,6 +276,11 @@ func taskOut(t execution.Task) apitypes.Task {
 		Id: uuid.UUID(t.ID), App: t.App, Function: t.Function, ReleaseId: t.Release,
 		Status: apitypes.TaskStatus(t.Status), Attempts: t.Attempts,
 		CreatedAt: t.CreatedAt, StartedAt: t.StartedAt, FinishedAt: t.FinishedAt,
+		RootTaskId: uuid.UUID(t.Root), ScheduledFor: t.ScheduledFor,
+	}
+	if t.Parent != nil {
+		parent := uuid.UUID(*t.Parent)
+		out.ParentTaskId = &parent
 	}
 	if f := t.Failure; f != nil {
 		out.Failure = &apitypes.TaskFailure{Kind: apitypes.FailureKind(f.Kind), Message: f.Message}
