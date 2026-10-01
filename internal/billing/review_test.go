@@ -1,6 +1,12 @@
 package billing
 
 import (
+	"encoding/json"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"sync"
 	"testing"
 	"time"
@@ -180,5 +186,117 @@ func TestAContainerReadLiveAndStoppedIsWrittenOnce(t *testing.T) {
 	f.exec("update containers set state = 'draining' where id = $1", c)
 	if result := f.meter(); result.Failed != 0 || len(f.ledger(c)) == 0 {
 		t.Fatalf("meter %+v, %d entries", result, len(f.ledger(c)))
+	}
+}
+
+// stripeStub stands in for Stripe's API where a test needs an object
+// stripe-mock's fixtures cannot hold, and records each request's form.
+type stripeStub struct {
+	mu       sync.Mutex
+	requests map[string][]url.Values
+}
+
+func (f *fixture) stubStripe(answer func(request string) any) *stripeStub {
+	f.t.Helper()
+	stub := &stripeStub{requests: map[string][]url.Values{}}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		request := r.Method + " " + r.URL.Path
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		form, err := url.ParseQuery(string(body))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		stub.mu.Lock()
+		stub.requests[request] = append(stub.requests[request], form)
+		stub.mu.Unlock()
+		object := answer(request)
+		if object == nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(object)
+	}))
+	f.t.Cleanup(server.Close)
+	f.billing = NewBilling(f.pool, Config{PublicURL: "https://lazycloud.test",
+		Stripe: StripeConfig{SecretKey: "sk_test_stub", WebhookSecret: "whsec_test", APIBase: server.URL}}, slog.New(slog.DiscardHandler))
+	return stub
+}
+
+func (s *stripeStub) sent(request string) []url.Values {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.requests[request]
+}
+
+func TestAPaidReloadWhoseResponseWasLostIsFoundByItsWebhook(t *testing.T) {
+	f := newFixture(t)
+	owner := f.reloadingAccount(0)
+	var id uuid.UUID
+	if err := f.pool.QueryRow(t.Context(), "insert into credit_purchases (user_id, kind, amount_nanos) values ($1, 'automatic', $2) returning id",
+		owner, 20*NanosPerUSD).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	f.stubStripe(func(request string) any {
+		if request != "GET /v1/payment_intents/pi_lost" {
+			return nil
+		}
+		return map[string]any{"id": "pi_lost", "object": "payment_intent", "status": "succeeded", "amount": 2000, "amount_received": 2000,
+			"customer": "cus_" + owner.String(), "metadata": map[string]string{"credit_purchase_id": id.String()}}
+	})
+	if err := f.billing.processEvent(t.Context(), "payment_intent.succeeded", "pi_lost", "cus_"+owner.String()); err != nil {
+		t.Fatal(err)
+	}
+	var status string
+	var funded int64
+	if err := f.pool.QueryRow(t.Context(), `select p.status, coalesce((select sum(l.amount_nanos) from credit_lots l where l.user_id = p.user_id and l.kind = 'purchased'), 0)::bigint
+		from credit_purchases p where p.id = $1`, id).Scan(&status, &funded); err != nil {
+		t.Fatal(err)
+	}
+	if status != paymentSucceeded || funded != 20*NanosPerUSD {
+		t.Fatalf("purchase %s funded %d", status, funded)
+	}
+}
+
+func TestThePortalOffersOnlyInvoicesAndCards(t *testing.T) {
+	f := newFixture(t)
+	stub := f.stubStripe(func(request string) any {
+		switch request {
+		case "GET /v1/billing_portal/configurations":
+			return map[string]any{"object": "list", "data": []any{}, "has_more": false, "url": "/v1/billing_portal/configurations"}
+		case "POST /v1/billing_portal/configurations":
+			return map[string]any{"id": "bpc_1", "object": "billing_portal.configuration"}
+		case "POST /v1/billing_portal/sessions":
+			return map[string]any{"id": "bps_1", "object": "billing_portal.session", "url": "https://billing.stripe.com/p/session"}
+		}
+		return nil
+	})
+	for range 2 {
+		if _, err := f.billing.stripe.portalSession(t.Context(), "cus_1", "https://lazycloud.test/billing"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	created := stub.sent("POST /v1/billing_portal/configurations")
+	if len(created) != 1 {
+		t.Fatalf("created %d portal configurations", len(created))
+	}
+	for feature, want := range map[string]string{"invoice_history": "true", "payment_method_update": "true", "subscription_update": "false", "subscription_cancel": "false"} {
+		if got := created[0].Get("features[" + feature + "][enabled]"); got != want {
+			t.Errorf("portal %s enabled %q, want %s", feature, got, want)
+		}
+	}
+	sessions := stub.sent("POST /v1/billing_portal/sessions")
+	for _, session := range sessions {
+		if session.Get("configuration") != "bpc_1" {
+			t.Fatalf("portal session opened with configuration %q", session.Get("configuration"))
+		}
+	}
+	if len(sessions) != 2 {
+		t.Fatalf("%d portal sessions", len(sessions))
 	}
 }

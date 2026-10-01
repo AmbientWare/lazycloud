@@ -70,7 +70,13 @@ Owner: `internal/billing` (billing and usage metering in one package).
 - [x] Dashboard API and error codes; Python bindings regenerated
 - [x] Unfunded retention with its email
 - [x] Admin API: account list (search, role, status) and complimentary
-- [ ] Storage metering (volumes, disks, artifacts) and egress — see gaps
+- [x] Storage metering (volumes, artifacts per app, disks held and
+  attached) and egress (closed quarter-hour totals), on the usage page
+- [x] Containers record `gpu_count`, `gpu_type`, `rate_class` and
+  `billing_owner`; planning fills count and rate class from the release spec
+- [x] PR #424 review fixes, each with a regression test
+- [x] stripe-mock in `compose.test.yaml` and CI; Stripe tests fail rather
+  than skip without it
 
 ## API (for the web packet)
 
@@ -135,6 +141,22 @@ Tests (real PostgreSQL; Stripe at the boundary through stripe-mock):
   `TestSubscriptionsSetTheAccountsPlan`,
   `TestIncludedCreditForNewUpgradedAndRenewedPeriods`,
   `TestUnfundedAccountsKeepTheirDataThirtyDaysAndAreWarned`.
+- Storage, egress and shapes: `TestStorageIsMeteredAndShownOnTheUsagePage`,
+  `TestEgressIsPricedOncePerClosedQuarter`,
+  `TestHeldDisksPayForTheirSizeAndRetainedDataIsFree`,
+  `TestContainersPriceTheirGPUPlacementAndMachine`,
+  `TestAdmitCountsGPUsInTheirOwnPool`; execution
+  `TestPlanningRecordsWhatBillingPrices`.
+- Review fixes: `TestReloadDecidesFromASettledBalanceOnce`,
+  `TestAutomaticPaymentIsNotRetriedOnceReloadIsOff`,
+  `TestAPaidReloadWhoseResponseWasLostIsFoundByItsWebhook`,
+  `TestMeteringMarksDueBehindAConcurrentRollup`,
+  `TestRetentionKeepsDataOfAnAccountFundedOnTheLastDay`,
+  `TestScheduledDowngradeHoldsAdditionsToTheCheaperPlan`,
+  `TestConcurrentWorkspaceCreationsCountEachOther`,
+  `TestAContainerReadLiveAndStoppedIsWrittenOnce`,
+  `TestThePortalOffersOnlyInvoicesAndCards`; execution
+  `TestStopUnfundedStopsEveryRunningContainerAndSkipsDraining`.
 - API: `TestBillingOperationsActForTheCallersOwnAccount`,
   `TestOnlyAdministratorsSeeAndWaiveAccounts`,
   `TestStripeDeliveriesNeedTheEndpointSecret`.
@@ -154,23 +176,24 @@ adds one live-container count and one account read to its transaction.
 
 ## Gaps
 
-- Storage and egress are not metered or billed yet: volumes, artifacts and
-  disks (storage packet now merged; same cursor pattern with byte-seconds) and
-  egress (endpoints packet). The usage page has no disk rows until then, and
-  the "free of storage charges" part of unfunded retention has nothing to
-  waive.
-- CPU and memory bill at the reservation only; "the greater of reservation
-  and measured use" needs container metrics (observability packet).
-- Containers carry no GPU, placement class or host ownership, so every
-  container prices as automatic CPU placement on the platform fleet; the GPU
-  pool, GPU model, region-selection and self-hosted pricing paths exist in the
-  rate card and catalog but have no source until execution and compute record
-  them. Grouping by task equals grouping by workload: no container runs one
-  task.
-- Custom domain and connected-cloud gates (`AdmitCustomDomain`,
-  `AdmitConnectedCloud`) are provided for the endpoints and compute packets;
-  their counts in `/v1/billing` usage are zero until those tables exist, and
-  plan-change fit does not check them yet.
+- Handoffs, since neither packet has merged:
+  - endpoints call `billing.AdmitCustomDomain` on custom-domain creation and
+    `billing.RecordEgress` with per-workspace byte totals;
+  - compute calls `billing.AdmitConnectedCloud` when a connection is added;
+  - compute or scheduling sets `containers.gpu_type` and `billing_owner` at
+    assignment from the host kind (platform → `platform_fleet`, connection →
+    `connected_cloud`, joined machine → `self_hosted`).
+
+  Until then every container prices on the platform fleet with the release's
+  GPU count and no model, egress has no source, and the domain and
+  connected-cloud counts in `/v1/billing` are zero. Plan-change fit does not
+  check those counts yet.
+- CPU and memory bill at the reservation only. "The greater of reservation
+  and measured use" can now read observability's container metrics, but
+  billing does not do that yet.
+- Grouping by task equals grouping by workload: no container runs one task.
+- The cost of storage scans at scale is not measured; only the container
+  pass is.
 - Stripe is verified against stripe-mock only (no STRIPE test keys here):
   request shapes are proven, end-to-end flows (Checkout completion, renewal
   invoices, proration amounts, schedules) are not exercised against real
