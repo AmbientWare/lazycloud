@@ -4157,9 +4157,7 @@ components:
           description: Absent when unlimited.
           type: integer
         max_members:
-          description: >-
-            Distinct people across the account's workspaces, the owner
-            included. Absent when unlimited.
+          description: People in the account's workspaces, owner included; absent if unlimited.
           type: integer
         connected_cloud: { type: boolean }
         custom_domains: { type: boolean }
@@ -4388,9 +4386,7 @@ components:
       required: [reload_enabled, reload_threshold_cents, reload_amount_cents]
       properties:
         monthly_usage_limit_nanos:
-          description: >-
-            Stops new work once the month's usage reaches it; resets on the
-            first of each month, UTC. Absent for no limit.
+          description: Stops new work once reached; resets monthly, UTC. Absent for none.
           type: integer
           format: int64
           minimum: 0

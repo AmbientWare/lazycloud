@@ -1299,7 +1299,7 @@ type BillingPlan struct {
 
 // BillingPreferences defines model for BillingPreferences.
 type BillingPreferences struct {
-	// MonthlyUsageLimitNanos Stops new work once the month's usage reaches it; resets on the first of each month, UTC. Absent for no limit.
+	// MonthlyUsageLimitNanos Stops new work once reached; resets monthly, UTC. Absent for none.
 	MonthlyUsageLimitNanos *int64 `json:"monthly_usage_limit_nanos,omitempty"`
 	ReloadAmountCents      int    `json:"reload_amount_cents"`
 	ReloadEnabled          bool   `json:"reload_enabled"`
@@ -2088,7 +2088,7 @@ type PlanEntitlements struct {
 	MaxConcurrentCpuContainers int      `json:"max_concurrent_cpu_containers"`
 	MaxConcurrentGpus          int      `json:"max_concurrent_gpus"`
 
-	// MaxMembers Distinct people across the account's workspaces, the owner included. Absent when unlimited.
+	// MaxMembers People in the account's workspaces, owner included; absent if unlimited.
 	MaxMembers *int `json:"max_members,omitempty"`
 
 	// MaxWorkspaceDiskGib Declared disk size one workspace may hold; 0 is no disks.
