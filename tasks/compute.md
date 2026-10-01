@@ -75,17 +75,17 @@ aws` and `cloud authorize` put the same fleet in a customer account.
   tried first for preemptible demand. Insufficient capacity or quota writes a
   cooldown row for the offer and fails the host, so the next pass picks
   another offer.
-- Retirement: a ready cloud host idle past its idle window drains when its
+- Retirement. A ready cloud host idle past its idle window drains when its
   market keeps more idle hosts than its headroom floor, then terminates once
-  empty. Reconciliation runs DescribeInstances by fleet tag: instances gone
-  or stopped fail their hosts (containers released through execution),
-  orphans are terminated, and hosts that never enrolled time out.
+  empty. Reconciliation runs DescribeInstances by fleet tag. Instances gone
+  or stopped fail their hosts and execution releases their containers;
+  reconciliation terminates orphans and times out hosts that never enrolled.
 - Cloud hosts enroll with an STS presigned GetCallerIdentity request signed
   by the instance profile. The signature covers `LazyCloud-Host-Id`; the
   server checks the account, the node role, the session name equal to the
   host's instance id, and that the host is still provisioning or booting.
-- Customer accounts: the connection role is assumed with the external ID and
-  the same launcher runs with those credentials. The CloudFormation stack
+- Customer accounts. The launcher assumes the connection role with its
+  external ID and runs with those credentials. The CloudFormation stack
   creates the connection role, the node role and instance profile, a VPC and
   public subnets.
 
@@ -114,7 +114,7 @@ aws` and `cloud authorize` put the same fleet in a customer account.
       cloud identity, install script, bundle
 - [x] Python SDK and CLI
 - [x] Integrated run on a private stack
-- [ ] Real EC2 launch check (blocked: see gaps)
+- [ ] Real EC2 launch check, blocked by the `default-test` role's permissions
 
 ## Delivered
 
@@ -145,7 +145,7 @@ release archive published with `server admin publish-agent-release`, on a
 | `lazycloud machine join --name m2 --workspaces dev --foreground` to `ready` | 1.73 s, 80 MB archive over loopback |
 | `@app.function(machine="m1")`, cold `.remote()` with the image cached | 1.57 s |
 | Same, warm | 12-23 ms |
-| Unpinned function in the same workspace | stays queued as `capacity_unavailable`: no platform host |
+| Unpinned function in the same workspace | stays queued as `capacity_unavailable` because no platform host exists |
 | `machine remove` with a running task | container stopped, attempt retried, agent exited 78 within 0.3 s |
 | Capacity pass, 2,000 pending containers in 20 workspaces, two regions | 288 hosts requested; p50 120 ms, p95 130 ms (`BenchmarkPlanCapacity`) |
 
