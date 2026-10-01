@@ -67,6 +67,9 @@ type Supervisor struct {
 	loadFailedSent bool
 	draining       bool
 
+	// workers are the HTTP workers of an HTTP workload.
+	workers httpWorkers
+
 	configured chan struct{}
 	drain      chan struct{}
 	// finishing is closed once nothing more will be pushed to out.
@@ -136,15 +139,34 @@ func (s *Supervisor) work(ctx context.Context) error {
 	s.mu.Lock()
 	cfg, slots, runs := s.configure, s.slots, s.runs
 	s.mu.Unlock()
-	s.log.Info("starting runners", "slots", len(slots), "handler", cfg.GetHandler())
+	s.log.Info("starting runners", "slots", len(slots), "handler", cfg.GetHandler(), "http", cfg.GetHttp() != nil)
+	var front *httpFront
+	if cfg.GetHttp() != nil {
+		var err error
+		if front, err = s.listenHTTP(ctx, cfg); err != nil {
+			s.loadFailed(&hostproto.RunnerError{Type: "SupervisorStartError", Message: err.Error()})
+			return ErrLoadFailed
+		}
+	}
+	var served sync.WaitGroup
+	var serveErr error
+	if front != nil {
+		served.Go(func() { serveErr = front.serve() })
+	}
 	g, gctx := errgroup.WithContext(ctx)
 	for _, sl := range slots {
 		g.Go(func() error { return sl.run(gctx, cfg, runs) })
 	}
-	if err := g.Wait(); err != nil {
+	err := g.Wait()
+	if front != nil {
+		// Every slot has finished its requests.
+		front.close()
+		served.Wait()
+	}
+	if err != nil {
 		return fmt.Errorf("run slots: %w", err)
 	}
-	return nil
+	return serveErr
 }
 
 // link keeps a ContainerLink stream open, reconnecting after the agent
@@ -249,6 +271,8 @@ func (s *Supervisor) handle(command *hostproto.SupervisorCommand) {
 		s.cancel(body.Cancel.GetAttemptId())
 	case *hostproto.SupervisorCommand_Drain:
 		s.onDrain()
+	case *hostproto.SupervisorCommand_Reload:
+		s.onReload()
 	default:
 		s.log.Warn("ignoring unknown supervisor command")
 	}
@@ -266,16 +290,33 @@ func (s *Supervisor) onConfigure(c *hostproto.Configure) {
 	s.configure = c
 	s.runs = make(chan *hostproto.RunAttempt, n)
 	for range n {
-		s.slots = append(s.slots, &slot{sup: s, buf: make([]byte, readChunk)})
+		sl := &slot{sup: s, buf: make([]byte, readChunk), reload: make(chan struct{}, 1)}
+		if c.GetHttp() != nil {
+			sl.http = s.workers.add()
+		}
+		s.slots = append(s.slots, sl)
 	}
 	close(s.configured)
+}
+
+// onReload restarts every runner once its current work finishes, so source
+// synced into the workspace takes effect.
+func (s *Supervisor) onReload() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, sl := range s.slots {
+		select {
+		case sl.reload <- struct{}{}:
+		default:
+		}
+	}
 }
 
 func (s *Supervisor) onRun(run *hostproto.RunAttempt) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	id := run.GetAttemptId()
-	if s.configure == nil || s.draining {
+	if s.configure == nil || s.draining || s.configure.GetHttp() != nil {
 		s.out.push(finishedMessage(crashed(id, "NotAccepting", "the supervisor is not accepting attempts")))
 		return
 	}

@@ -24,8 +24,12 @@ import (
 // SIGKILL.
 const killGrace = 2 * time.Second
 
-// runnerFD is the descriptor number of the runner's socket in the child.
-const runnerFD = 3
+// runnerFD is the descriptor number of the runner's socket in the child, and
+// httpFD that of an HTTP worker's listening socket.
+const (
+	runnerFD = 3
+	httpFD   = 4
+)
 
 // slot runs one runner process at a time and restarts it after a crash or a
 // cancelled attempt.
@@ -38,6 +42,11 @@ type slot struct {
 	proc      *runnerProcess
 	attempt   string
 	cancelled bool
+
+	// reload asks the slot to restart its runner once its work finishes.
+	reload chan struct{}
+	// http is set when the slot is an HTTP worker.
+	http *httpWorker
 }
 
 // runnerProcess is one runner process and the resources it owns.
@@ -56,6 +65,9 @@ type runnerProcess struct {
 
 	stopReaders context.CancelFunc
 	readers     sync.WaitGroup
+
+	// httpAddr is where an HTTP worker listens.
+	httpAddr string
 }
 
 func (sl *slot) run(ctx context.Context, cfg *hostproto.Configure, runs <-chan *hostproto.RunAttempt) error {
@@ -65,7 +77,12 @@ func (sl *slot) run(ctx context.Context, cfg *hostproto.Configure, runs <-chan *
 			sl.sup.loadFailed(&hostproto.RunnerError{Type: "RunnerStartError", Message: err.Error()})
 			return ErrLoadFailed
 		}
-		restart, err := sl.serve(ctx, p, cfg.GetHandler(), runs)
+		var restart bool
+		if cfg.GetHttp() != nil {
+			restart, err = sl.serveHTTP(ctx, p, cfg)
+		} else {
+			restart, err = sl.serve(ctx, p, cfg, runs)
+		}
 		sl.stop(p)
 		if !restart || sl.sup.isDraining() {
 			return err
@@ -76,10 +93,10 @@ func (sl *slot) run(ctx context.Context, cfg *hostproto.Configure, runs <-chan *
 
 // serve loads the handler and runs attempts until the runner must restart
 // (restart), the slot drained (nil) or the supervisor stops.
-func (sl *slot) serve(ctx context.Context, p *runnerProcess, handler string, runs <-chan *hostproto.RunAttempt) (bool, error) {
+func (sl *slot) serve(ctx context.Context, p *runnerProcess, cfg *hostproto.Configure, runs <-chan *hostproto.RunAttempt) (bool, error) {
 	stop := context.AfterFunc(ctx, p.terminate)
 	defer stop()
-	if loadErr := p.load(handler); loadErr != nil {
+	if loadErr := p.load(cfg); loadErr != nil {
 		if ctx.Err() != nil {
 			return false, fmt.Errorf("load handler: %w", ctx.Err())
 		}
@@ -98,6 +115,9 @@ func (sl *slot) serve(ctx context.Context, p *runnerProcess, handler string, run
 			if !sleepCtx(ctx, time.Second-time.Since(loaded)) {
 				return false, fmt.Errorf("restart runner: %w", ctx.Err())
 			}
+			return true, nil
+		case <-sl.reload:
+			// Between attempts, so nothing is interrupted.
 			return true, nil
 		case run, ok := <-runs:
 			if !ok {
@@ -189,6 +209,23 @@ func (sl *slot) start(ctx context.Context, cfg *hostproto.Configure) (_ *runnerP
 	closers = append(closers, conn.Close)
 
 	p := &runnerProcess{conn: conn, reader: bufio.NewReaderSize(conn, 64<<10), done: make(chan struct{})}
+	extra := []*os.File{child}
+	if cfg.GetHttp() != nil {
+		listener, addr, err := sl.sup.workers.listener()
+		if err != nil {
+			return nil, err
+		}
+		file, err := listener.File()
+		_ = listener.Close()
+		if err != nil {
+			return nil, fmt.Errorf("pass the worker socket: %w", err)
+		}
+		// The runner holds the socket; the supervisor's copy closes once it
+		// has started.
+		defer func() { _ = file.Close() }()
+		extra = append(extra, file)
+		p.httpAddr = addr
+	}
 	writers := make([]*os.File, 0, 2)
 	for _, stream := range []hostproto.LogStream{hostproto.LogStream_LOG_STREAM_STDOUT, hostproto.LogStream_LOG_STREAM_STDERR} {
 		r, w, err := os.Pipe()
@@ -208,9 +245,9 @@ func (sl *slot) start(ctx context.Context, cfg *hostproto.Configure) (_ *runnerP
 	// only the leader.
 	cmd := exec.Command(command[0], command[1:]...) //nolint:gosec,noctx // the agent chooses the runner command
 	cmd.Dir = cfg.GetWorkingDirectory()
-	cmd.Env = runnerEnvironment()
+	cmd.Env = runnerEnvironment(cfg.GetHttp() != nil)
 	cmd.Stdout, cmd.Stderr = writers[0], writers[1]
-	cmd.ExtraFiles = []*os.File{child}
+	cmd.ExtraFiles = extra
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := sl.sup.children.start(cmd); err != nil {
 		return nil, fmt.Errorf("start runner %q: %w", command[0], err)
@@ -311,9 +348,18 @@ func closedAsRunnerClosed(err error) error {
 	return err
 }
 
-// load sends the handler and waits for the runner to import it.
-func (p *runnerProcess) load(handler string) *hostproto.RunnerError {
-	err := p.send(runnerproto.Load{Type: runnerproto.LoadTypeLoad, ProtocolVersion: runnerproto.N1, Handler: handler}, nil)
+// load sends the handler and waits for the runner to import it, and for an
+// HTTP worker to accept connections.
+func (p *runnerProcess) load(cfg *hostproto.Configure) *hostproto.RunnerError {
+	load := runnerproto.Load{Type: runnerproto.LoadTypeLoad, ProtocolVersion: runnerproto.N1, Handler: cfg.GetHandler()}
+	if h := cfg.GetHttp(); h != nil {
+		kind, err := runnerHTTPKind(h.GetKind())
+		if err != nil {
+			return &hostproto.RunnerError{Type: "InvalidConfiguration", Message: err.Error()}
+		}
+		load.Http = &runnerproto.HttpServing{Kind: kind, Concurrency: max(1, int(h.GetConcurrency()))}
+	}
+	err := p.send(load, nil)
 	var frame runnerproto.Frame
 	if err == nil {
 		frame, err = p.read()
@@ -416,15 +462,32 @@ func hostEncoding(e runnerproto.Encoding) (hostproto.PayloadEncoding, error) {
 }
 
 // runnerEnvironment is the supervisor's environment without its link socket,
-// plus the runner's descriptor.
-func runnerEnvironment() []string {
-	env := make([]string, 0, len(os.Environ())+1)
+// plus the runner's descriptors.
+func runnerEnvironment(http bool) []string {
+	env := make([]string, 0, len(os.Environ())+2)
 	for _, kv := range os.Environ() {
 		if !strings.HasPrefix(kv, SocketEnv+"=") {
 			env = append(env, kv)
 		}
 	}
-	return append(env, fmt.Sprintf("LAZYCLOUD_RUNNER_FD=%d", runnerFD))
+	env = append(env, fmt.Sprintf("LAZYCLOUD_RUNNER_FD=%d", runnerFD))
+	if http {
+		env = append(env, fmt.Sprintf("LAZYCLOUD_HTTP_FD=%d", httpFD))
+	}
+	return env
+}
+
+func runnerHTTPKind(k hostproto.HttpKind) (runnerproto.HttpKind, error) {
+	switch k {
+	case hostproto.HttpKind_HTTP_KIND_ENDPOINT:
+		return runnerproto.Endpoint, nil
+	case hostproto.HttpKind_HTTP_KIND_ASGI:
+		return runnerproto.Asgi, nil
+	case hostproto.HttpKind_HTTP_KIND_REALTIME:
+		return runnerproto.Realtime, nil
+	case hostproto.HttpKind_HTTP_KIND_UNSPECIFIED:
+	}
+	return "", fmt.Errorf("unsupported http kind %s", k)
 }
 
 func describeExit(err error) string {
