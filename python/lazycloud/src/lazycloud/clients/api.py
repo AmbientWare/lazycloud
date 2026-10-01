@@ -2,17 +2,25 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TypeVar
+from typing import TypeVar, overload
 from urllib.parse import quote
 from uuid import UUID
 
 import httpx
 from pydantic import BaseModel, ValidationError
 from shared.api import (
+    App,
+    AppPage,
+    Container,
+    ContainerPage,
+    DeployedWorkload,
     Deployment,
+    DeploymentPage,
+    DeploymentPlan,
+    DeploymentPlanRequest,
     DeploymentRequest,
     DeviceLogin,
     DeviceLoginRequest,
@@ -21,20 +29,35 @@ from shared.api import (
     Error,
     ErrorCode,
     Function,
+    FunctionSpec,
     Image,
     ImageBuild,
     ImageBuildLogEntry,
     ImageDefinition,
     ImageResolution,
+    LiveAppState,
     LogEntry,
     Me,
     Payload,
+    Release,
+    SchedulePage,
+    Secret,
+    SecretCreate,
+    SecretPage,
+    SecretValue,
+    SecretValueUpdate,
     SourceUpload,
     SourceUploadRequest,
+    StartDeploymentRequest,
+    StopTasksRequest,
+    StopTasksResponse,
     SubmitTasksRequest,
     SubmitTasksResponse,
     Task,
+    TaskPage,
+    TaskStatus,
     UploadTarget,
+    VersionPage,
     Workspace,
     WorkspaceList,
     WorkspaceRequest,
@@ -44,6 +67,7 @@ from shared.client_version import (
     client_version,
     report_client_version,
 )
+from shared.task_context import current_task_id
 
 from lazycloud.exceptions import SdkError
 
@@ -57,6 +81,12 @@ _UPLOAD_CHUNK_BYTES = 1024 * 1024
 
 # Longer than the server's 15-second follow heartbeat.
 _LOG_HEARTBEAT_WINDOW_SECONDS = 45.0
+
+# Inside a container the API is a Unix socket; the host part is unused.
+_CONTAINER_BASE_URL = "http://container"
+# Names the task making a container API call, so a spawned task records it
+# as parent. The server checks that the task runs on the calling container.
+TASK_HEADER = "LazyCloud-Task"
 
 
 class ApiError(SdkError):
@@ -86,12 +116,16 @@ class ApiClient:
 
     Workspace, app and function names are validated by the server; they are
     only escaped here. Device login runs before any token exists, so its two
-    operations are the ones an empty token can call.
+    operations are the ones an empty token can call. With `container_api`
+    set the client talks to the container API socket the platform serves
+    inside every workload container; it carries no token, since the platform
+    knows the container.
     """
 
     endpoint: str
-    token: str = field(repr=False)
+    token: str | None = field(default=None, repr=False)
     timeout_seconds: float = 30.0
+    container_api: str | None = None
     _http: httpx.Client | None = field(default=None, init=False, repr=False)
 
     def close(self) -> None:
@@ -166,20 +200,30 @@ class ApiClient:
             body=request,
         )
 
-    def upload_source(self, target: UploadTarget, archive: Path | bytes) -> None:
+    def upload_source(
+        self,
+        target: UploadTarget,
+        archive: Path | bytes,
+        *,
+        progress: Callable[[int], None] | None = None,
+    ) -> None:
         """Send archive bytes to a presigned upload target.
 
         The target URL carries its own authorization, so the bearer token is
-        not sent with it.
+        not sent with it. `progress` receives the bytes read so far.
         """
 
         size = len(archive) if isinstance(archive, bytes) else archive.stat().st_size
         headers = {**target.headers, "Content-Length": str(size)}
 
         def chunks(path: Path) -> Iterator[bytes]:
+            sent = 0
             with path.open("rb") as source:
                 while chunk := source.read(_UPLOAD_CHUNK_BYTES):
                     yield chunk
+                    sent += len(chunk)
+                    if progress is not None:
+                        progress(sent)
 
         try:
             response = httpx.request(
@@ -270,23 +314,237 @@ class ApiClient:
             _path("v1", "workspaces", workspace, "tasks", str(task_id), "cancel"),
         )
 
+    def list_tasks(
+        self,
+        workspace: str,
+        *,
+        app: str | None = None,
+        function: str | None = None,
+        status: TaskStatus | None = None,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> TaskPage:
+        params = _query(
+            app=app,
+            function=function,
+            status=status.value if status is not None else None,
+            limit=limit,
+            cursor=cursor,
+        )
+        return self._send(
+            TaskPage, "GET", _path("v1", "workspaces", workspace, "tasks"), params=params
+        )
+
+    def stop_tasks(self, workspace: str, task_ids: Sequence[UUID]) -> StopTasksResponse:
+        return self._send(
+            StopTasksResponse,
+            "POST",
+            _path("v1", "workspaces", workspace, "tasks", "stop"),
+            body=StopTasksRequest(task_ids=list(task_ids)),
+        )
+
+    def rerun_task(self, workspace: str, task_id: UUID) -> Task:
+        return self._send(
+            Task, "POST", _path("v1", "workspaces", workspace, "tasks", str(task_id), "rerun")
+        )
+
+    def list_apps(
+        self,
+        workspace: str,
+        *,
+        state: LiveAppState | None = None,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> AppPage:
+        params = _query(
+            state=state.value if state is not None else None, limit=limit, cursor=cursor
+        )
+        return self._send(
+            AppPage, "GET", _path("v1", "workspaces", workspace, "apps"), params=params
+        )
+
+    def get_app(self, workspace: str, app: str) -> App:
+        """Read an app by name or id."""
+        return self._send(App, "GET", _path("v1", "workspaces", workspace, "apps", app))
+
+    def pause_app(self, workspace: str, app: str) -> App:
+        return self._send(App, "POST", _path("v1", "workspaces", workspace, "apps", app, "pause"))
+
+    def resume_app(self, workspace: str, app: str) -> App:
+        return self._send(App, "POST", _path("v1", "workspaces", workspace, "apps", app, "resume"))
+
+    def delete_app(self, workspace: str, app: str) -> App:
+        return self._send(App, "DELETE", _path("v1", "workspaces", workspace, "apps", app))
+
+    def plan_deployment(
+        self, workspace: str, app: str, request: DeploymentPlanRequest
+    ) -> DeploymentPlan:
+        return self._send(
+            DeploymentPlan,
+            "POST",
+            _path("v1", "workspaces", workspace, "apps", app, "deployment-plan"),
+            body=request,
+        )
+
+    def prepare_function_release(
+        self, workspace: str, app: str, function: str, spec: FunctionSpec
+    ) -> Release:
+        return self._send(
+            Release,
+            "POST",
+            _path("v1", "workspaces", workspace, "apps", app, "functions", function, "releases"),
+            body=spec,
+        )
+
+    def list_deployments(
+        self,
+        workspace: str,
+        *,
+        app: str | None = None,
+        name: str | None = None,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> DeploymentPage:
+        params = _query(app=app, name=name, limit=limit, cursor=cursor)
+        return self._send(
+            DeploymentPage,
+            "GET",
+            _path("v1", "workspaces", workspace, "deployments"),
+            params=params,
+        )
+
+    def get_deployment(self, workspace: str, deployment_id: UUID) -> DeployedWorkload:
+        return self._send(
+            DeployedWorkload,
+            "GET",
+            _path("v1", "workspaces", workspace, "deployments", str(deployment_id)),
+        )
+
+    def stop_deployment(self, workspace: str, deployment_id: UUID) -> DeployedWorkload:
+        return self._send(
+            DeployedWorkload,
+            "POST",
+            _path("v1", "workspaces", workspace, "deployments", str(deployment_id), "stop"),
+        )
+
+    def start_deployment(
+        self, workspace: str, deployment_id: UUID, *, version: int | None = None
+    ) -> DeployedWorkload:
+        return self._send(
+            DeployedWorkload,
+            "POST",
+            _path("v1", "workspaces", workspace, "deployments", str(deployment_id), "start"),
+            body=StartDeploymentRequest(version=version) if version is not None else None,
+        )
+
+    def delete_deployment(self, workspace: str, deployment_id: UUID) -> DeployedWorkload:
+        return self._send(
+            DeployedWorkload,
+            "DELETE",
+            _path("v1", "workspaces", workspace, "deployments", str(deployment_id)),
+        )
+
+    def list_deployment_versions(
+        self,
+        workspace: str,
+        deployment_id: UUID,
+        *,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> VersionPage:
+        return self._send(
+            VersionPage,
+            "GET",
+            _path("v1", "workspaces", workspace, "deployments", str(deployment_id), "versions"),
+            params=_query(limit=limit, cursor=cursor),
+        )
+
+    def list_containers(
+        self,
+        workspace: str,
+        *,
+        live: bool = False,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> ContainerPage:
+        params = _query(live="true" if live else None, limit=limit, cursor=cursor)
+        return self._send(
+            ContainerPage, "GET", _path("v1", "workspaces", workspace, "containers"), params=params
+        )
+
+    def get_container(self, workspace: str, container_id: UUID) -> Container:
+        return self._send(
+            Container,
+            "GET",
+            _path("v1", "workspaces", workspace, "containers", str(container_id)),
+        )
+
+    def stop_container(self, workspace: str, container_id: UUID) -> Container:
+        return self._send(
+            Container,
+            "POST",
+            _path("v1", "workspaces", workspace, "containers", str(container_id), "stop"),
+        )
+
     def stream_task_logs(
         self,
         workspace: str,
         task_id: UUID,
         *,
         after: int = 0,
+        tail: int | None = None,
         follow: bool = False,
     ) -> Iterator[LogEntry]:
-        """Yield log entries with ids above `after`.
+        """Yield the task's log entries with ids above `after`.
 
-        With `follow` the server holds the stream open until the task finishes
-        and writes a blank line at least every 15 seconds, so a read that waits
+        With `tail` the stream starts at the last `tail` stored entries. With
+        `follow` the server holds the stream open until the task finishes and
+        writes a blank line at least every 15 seconds, so a read that waits
         longer than the heartbeat window means the connection is gone.
         """
 
-        path = _path("v1", "workspaces", workspace, "tasks", str(task_id), "logs")
-        return self._stream_lines(LogEntry, path, after=after, follow=follow)
+        return self._stream_logs(
+            _path("v1", "workspaces", workspace, "tasks", str(task_id), "logs"),
+            after=after,
+            tail=tail,
+            follow=follow,
+        )
+
+    def stream_deployment_logs(
+        self,
+        workspace: str,
+        deployment_id: UUID,
+        *,
+        after: int = 0,
+        tail: int | None = None,
+        follow: bool = False,
+    ) -> Iterator[LogEntry]:
+        """Yield log entries of every task of a deployment; a followed stream never ends."""
+
+        return self._stream_logs(
+            _path("v1", "workspaces", workspace, "deployments", str(deployment_id), "logs"),
+            after=after,
+            tail=tail,
+            follow=follow,
+        )
+
+    def stream_container_logs(
+        self,
+        workspace: str,
+        container_id: UUID,
+        *,
+        after: int = 0,
+        tail: int | None = None,
+        follow: bool = False,
+    ) -> Iterator[LogEntry]:
+        """Yield log entries of the tasks a container ran; following ends when it stops."""
+
+        return self._stream_logs(
+            _path("v1", "workspaces", workspace, "containers", str(container_id), "logs"),
+            after=after,
+            tail=tail,
+            follow=follow,
+        )
 
     def resolve_image(self, workspace: str, definition: ImageDefinition) -> ImageResolution:
         """The image a definition names and any active build; never starts one."""
@@ -333,12 +591,19 @@ class ApiClient:
     ) -> Iterator[ImageBuildLogEntry]:
         """Yield build output with ids above `after`, as `stream_task_logs` does."""
         path = _path("v1", "workspaces", workspace, "image-builds", str(build_id), "logs")
-        return self._stream_lines(ImageBuildLogEntry, path, after=after, follow=follow)
+        return self._stream_lines(ImageBuildLogEntry, path, after=after, tail=None, follow=follow)
+
+    def _stream_logs(
+        self, path: str, *, after: int, tail: int | None, follow: bool
+    ) -> Iterator[LogEntry]:
+        return self._stream_lines(LogEntry, path, after=after, tail=tail, follow=follow)
 
     def _stream_lines(
-        self, model: type[ModelT], path: str, *, after: int, follow: bool
+        self, model: type[ModelT], path: str, *, after: int, tail: int | None, follow: bool
     ) -> Iterator[ModelT]:
         params: dict[str, str | int] = {"after": after}
+        if tail is not None:
+            params["tail"] = tail
         if follow:
             params["follow"] = "true"
         read = self.timeout_seconds
@@ -365,9 +630,77 @@ class ApiClient:
         except httpx.HTTPError as exc:
             raise ApiConnectionError("GET", path, str(exc) or type(exc).__name__) from exc
 
+    def list_secrets(
+        self, workspace: str, *, cursor: str | None = None, limit: int | None = None
+    ) -> SecretPage:
+        params: dict[str, str | int] = {}
+        if cursor:
+            params["cursor"] = cursor
+        if limit is not None:
+            params["limit"] = limit
+        return self._send(
+            SecretPage, "GET", _path("v1", "workspaces", workspace, "secrets"), params=params
+        )
+
+    def create_secret(self, workspace: str, name: str, value: str) -> Secret:
+        return self._send(
+            Secret,
+            "POST",
+            _path("v1", "workspaces", workspace, "secrets"),
+            body=SecretCreate(name=name, value=value),
+        )
+
+    def get_secret(self, workspace: str, name: str) -> Secret:
+        return self._send(Secret, "GET", _path("v1", "workspaces", workspace, "secrets", name))
+
+    def set_secret(self, workspace: str, name: str, value: str) -> Secret:
+        return self._send(
+            Secret,
+            "PUT",
+            _path("v1", "workspaces", workspace, "secrets", name),
+            body=SecretValueUpdate(value=value),
+        )
+
+    def update_secret(self, workspace: str, name: str, value: str) -> Secret:
+        return self._send(
+            Secret,
+            "PATCH",
+            _path("v1", "workspaces", workspace, "secrets", name),
+            body=SecretValueUpdate(value=value),
+        )
+
+    def delete_secret(self, workspace: str, name: str) -> None:
+        self._send(None, "DELETE", _path("v1", "workspaces", workspace, "secrets", name))
+
+    def get_secret_value(self, workspace: str, name: str) -> SecretValue:
+        return self._send(
+            SecretValue, "GET", _path("v1", "workspaces", workspace, "secrets", name, "value")
+        )
+
+    def list_schedules(
+        self, workspace: str, *, cursor: str | None = None, limit: int | None = None
+    ) -> SchedulePage:
+        params: dict[str, str | int] = {}
+        if cursor:
+            params["cursor"] = cursor
+        if limit is not None:
+            params["limit"] = limit
+        return self._send(
+            SchedulePage, "GET", _path("v1", "workspaces", workspace, "schedules"), params=params
+        )
+
     def _client(self) -> httpx.Client:
         if self._http is None:
             headers = {"User-Agent": f"lazycloud/{client_version()}"}
+            if self.container_api:
+                self._http = httpx.Client(
+                    base_url=_CONTAINER_BASE_URL,
+                    headers=headers,
+                    transport=httpx.HTTPTransport(uds=self.container_api),
+                    timeout=self.timeout_seconds,
+                    event_hooks={"request": [_name_calling_task]},
+                )
+                return self._http
             if self.token:
                 headers["Authorization"] = f"Bearer {self.token}"
             self._http = httpx.Client(
@@ -377,6 +710,7 @@ class ApiClient:
             )
         return self._http
 
+    @overload
     def _send(
         self,
         model: type[ModelT],
@@ -384,9 +718,32 @@ class ApiClient:
         path: str,
         *,
         body: BaseModel | None = None,
+        params: Mapping[str, str | int] | None = None,
+        read_timeout: float | None = None,
+    ) -> ModelT: ...
+
+    @overload
+    def _send(
+        self,
+        model: None,
+        method: str,
+        path: str,
+        *,
+        body: BaseModel | None = None,
         params: dict[str, str | int] | None = None,
         read_timeout: float | None = None,
-    ) -> ModelT:
+    ) -> None: ...
+
+    def _send(
+        self,
+        model: type[ModelT] | None,
+        method: str,
+        path: str,
+        *,
+        body: BaseModel | None = None,
+        params: dict[str, str | int] | None = None,
+        read_timeout: float | None = None,
+    ) -> ModelT | None:
         content = (
             body.model_dump_json(exclude_unset=True, by_alias=True).encode()
             if body is not None
@@ -411,6 +768,8 @@ class ApiClient:
         report_client_version(response.headers.get(RECOMMENDED_CLIENT_VERSION_HEADER))
         if response.status_code >= 300:
             raise _api_error(response)
+        if model is None:
+            return None
         try:
             return model.model_validate_json(response.content)
         except ValidationError as exc:
@@ -419,6 +778,14 @@ class ApiClient:
                 code=None,
                 message=f"{method} {path} returned an invalid {model.__name__}: {exc}",
             ) from exc
+
+
+def _name_calling_task(request: httpx.Request) -> None:
+    """Name the task this thread or coroutine runs for, if any."""
+
+    task_id = current_task_id()
+    if task_id:
+        request.headers[TASK_HEADER] = task_id
 
 
 def is_transient(error: Exception) -> bool:
@@ -436,6 +803,10 @@ def _api_error(response: httpx.Response) -> ApiError:
         text = response.text.strip()[:500] or response.reason_phrase
         return ApiError(status_code=response.status_code, code=None, message=text)
     return ApiError(status_code=response.status_code, code=error.code, message=error.message)
+
+
+def _query(**values: str | int | None) -> dict[str, str | int]:
+    return {name: value for name, value in values.items() if value is not None}
 
 
 def _path(*segments: str) -> str:

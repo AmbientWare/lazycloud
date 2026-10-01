@@ -46,12 +46,17 @@ type container struct {
 	dir     string
 	handler string
 	slots   int
+	// runtime is how the supervisor runs the slots: in one process, with
+	// which hooks, and which environment variables hold secrets.
+	runtime containerRuntime
 	logs    *logBatcher
 	// http is set for HTTP workloads, whose slots serve requests forwarded
 	// over the data connection instead of claiming tasks.
 	http *hostproto.HttpServing
 	// requests reaches the supervisor's HTTP socket.
 	requests *http.Transport
+	// apiCalls bounds container API calls in flight.
+	apiCalls chan struct{}
 
 	// work covers preparation, claims and log delivery; claims stop earlier
 	// when the container begins stopping.
@@ -98,6 +103,7 @@ func (a *Agent) newContainer(id, handler string, slots int, httpServing *hostpro
 		cancelled:  cancelledAttempts{at: make(map[string]time.Time)},
 		slotFree:   make(chan struct{}, 1),
 		gone:       make(chan struct{}),
+		apiCalls:   make(chan struct{}, maxContainerAPICalls),
 	}
 	if httpServing != nil {
 		socket := filepath.Join(c.linkDir(), httpSocketName)
@@ -132,6 +138,9 @@ func (c *container) configure() *hostproto.Configure {
 		Slots:            int32(c.slots), //nolint:gosec // slots come from an int32
 		RunnerCommand:    []string{"python3", "-m", "runner"},
 		WorkingDirectory: containerWorkspace,
+		InProcess:        c.runtime.InProcess,
+		Hooks:            c.runtime.Hooks,
+		SecretEnv:        c.runtime.SecretEnv,
 	}
 	if c.http != nil {
 		configure.Http = c.http
@@ -591,6 +600,11 @@ func (c *container) dispatch(task *hostproto.ClaimedTask) {
 		InputEncoding: task.GetInputEncoding(),
 		Input:         task.GetInput(),
 		Deadline:      task.GetDeadline(),
+		AttemptNumber: task.GetAttemptNumber(),
+		MaxAttempts:   task.GetMaxAttempts(),
+		RootTaskId:    task.GetRootTaskId(),
+		ParentTaskId:  task.GetParentTaskId(),
+		Dependencies:  task.GetDependencies(),
 	}}})
 }
 

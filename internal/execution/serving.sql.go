@@ -71,13 +71,13 @@ const endpointContainers = `-- name: EndpointContainers :many
 select r.id as release_id, r.version, c.id as container_id, c.host_id, c.state
 from releases r
 join containers c on c.release_id = r.id
-where r.workload_id = $1 and c.state = 'ready'
+where r.workload_id = $1 and c.state = 'ready' and r.version is not null
 order by r.version desc, c.ready_at, c.id
 `
 
 type EndpointContainersRow struct {
 	ReleaseID   uuid.UUID
-	Version     int32
+	Version     *int32
 	ContainerID uuid.UUID
 	HostID      *uuid.UUID
 	State       string
@@ -179,7 +179,7 @@ select r.id as release_id,
        w.id as workload_id,
        (r.version < 0)::bool as preview,
        (w.active_release_id is not distinct from r.id and w.desired_state = 'active' and a.state = 'active')::bool as active,
-       (w.desired_state = 'stopped' or a.state = 'paused')::bool as stopping,
+       (w.desired_state <> 'active' or a.state <> 'active' or ws.state <> 'active')::bool as stopping,
        coalesce((r.spec -> 'autoscaler' ->> 'min_containers')::int, 0)::int as min_containers,
        coalesce((r.spec -> 'autoscaler' ->> 'max_containers')::int, 1)::int as max_containers,
        coalesce((r.spec -> 'autoscaler' ->> 'tasks_per_container')::int, 1)::int as tasks_per_container,
@@ -202,6 +202,7 @@ from batch
 join releases r on r.id = batch.release_id
 join workloads w on w.id = r.workload_id
 join apps a on a.id = w.app_id
+join workspaces ws on ws.id = a.workspace_id
 left join previews p on p.release_id = r.id
 cross join lateral (
     select coalesce(sum(l.in_flight + l.waiting), 0) as current, coalesce(sum(l.window_peak), 0) as peak

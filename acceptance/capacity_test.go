@@ -82,7 +82,7 @@ func TestEndpointQueuesPastCapacityAndRejectsPastMaxPending(t *testing.T) {
 	source := p.upload(map[string]string{"app.py": capacityApp})
 	// One container of one worker and one slot; five may wait.
 	p.deploy("load", capacitySpec(source, 1, 1, 1, 5))
-	w := p.describe("load", control.KindEndpoint, "sleepy")
+	w := p.describe("load", apitypes.WorkloadKindEndpoint, "sleepy")
 	if status, _, _ := p.call(http.MethodGet, w.Url, ""); status != http.StatusOK {
 		t.Fatalf("warm-up: %d", status)
 	}
@@ -97,7 +97,7 @@ func TestEndpointServesAThousandConcurrentRequests(t *testing.T) {
 	source := p.upload(map[string]string{"app.py": capacityApp})
 	// Two containers of two workers of 16 requests: 64 at once.
 	p.deploy("load", capacitySpec(source, 2, 16, 2, 1000))
-	w := p.describe("load", control.KindEndpoint, "sleepy")
+	w := p.describe("load", apitypes.WorkloadKindEndpoint, "sleepy")
 	if status, _, _ := p.call(http.MethodGet, w.Url, ""); status != http.StatusOK {
 		t.Fatalf("warm-up: %d", status)
 	}
@@ -113,7 +113,7 @@ func TestRedeployKeepsServingUntilTheNewReleaseIsReadyThenDrains(t *testing.T) {
 	p := startPlatform(t)
 	source := p.upload(map[string]string{"app.py": capacityApp})
 	first := p.deploy("load", capacitySpec(source, 1, 4, 1, 100))
-	w := p.describe("load", control.KindEndpoint, "sleepy")
+	w := p.describe("load", apitypes.WorkloadKindEndpoint, "sleepy")
 	if status, _, body := p.call(http.MethodGet, w.Url, ""); status != http.StatusOK || !strings.Contains(body, "v1") {
 		t.Fatalf("v1: %d %s", status, body)
 	}
@@ -146,7 +146,7 @@ func TestEndpointThatFailsToLoadAnswersWithItsError(t *testing.T) {
 	p := startPlatform(t)
 	source := p.upload(map[string]string{"app.py": capacityApp + "\nraise RuntimeError('no database configured')\n"})
 	p.deploy("load", capacitySpec(source, 1, 1, 1, 100))
-	w := p.describe("load", control.KindEndpoint, "sleepy")
+	w := p.describe("load", apitypes.WorkloadKindEndpoint, "sleepy")
 	started := time.Now()
 	status, _, body := p.call(http.MethodGet, w.Url, "")
 	if status != http.StatusInternalServerError || !strings.Contains(body, "no database configured") {
@@ -168,7 +168,7 @@ def total(values: list[int], scale: float = 1.0) -> float:
     return sum(values) * scale
 `})
 	p.deploy("reports", spec("total", "app:total", source, nil))
-	url := fmt.Sprintf("http://%s.lazycloud.localhost:%s/?scale=2", control.Subdomain(uuid.UUID(p.workspace.ID), "reports", "total", control.KindFunction), p.port())
+	url := fmt.Sprintf("http://%s.lazycloud.localhost:%s/?scale=2", control.Subdomain(uuid.UUID(p.workspace.ID), "reports", "total", apitypes.WorkloadKindFunction), p.port())
 	status, _, body := p.call(http.MethodPost, url, `{"values": [1200, 3500, 800]}`)
 	var out apitypes.Invocation
 	if status != http.StatusOK || json.Unmarshal([]byte(body), &out) != nil || out.Task.Status != apitypes.TaskStatusSucceeded || out.Result == nil || string(*out.Result) != "11000.0" {
@@ -186,7 +186,7 @@ func TestWarmLatencyThroughTheEdgeAndDirect(t *testing.T) {
 	p := startPlatform(t)
 	source := p.upload(map[string]string{"app.py": capacityApp})
 	d := p.deploy("load", capacitySpec(source, 1, 1, 1, 100))
-	w := p.describe("load", control.KindEndpoint, "sleepy")
+	w := p.describe("load", apitypes.WorkloadKindEndpoint, "sleepy")
 	if status, _, _ := p.call(http.MethodGet, w.Url, ""); status != http.StatusOK {
 		t.Fatal("warm-up failed")
 	}

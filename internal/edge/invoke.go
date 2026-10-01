@@ -15,12 +15,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/execution"
-	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
 // InvokeWait is how long an invocation holds the request for its result.
@@ -105,20 +102,21 @@ func queryValue(value string) json.RawMessage {
 	return encoded
 }
 
-// Invoke admits one JSON task against a function release and waits up to
-// wait for it. A succeeded task carries its JSON result.
-func Invoke(ctx context.Context, exec *execution.Execution, listener *database.Listener, workspace identity.WorkspaceID, release uuid.UUID, arguments []byte, wait time.Duration) (apitypes.Invocation, error) {
-	tasks, err := exec.SubmitRelease(ctx, workspace, release, []execution.Payload{{Encoding: execution.EncodingJSON, Data: arguments}})
+// Invoke admits one JSON task against a function, on release when it is
+// set, and waits up to wait for it. A succeeded task carries its JSON result.
+func Invoke(ctx context.Context, exec *execution.Execution, listener *database.Listener, req execution.SubmitRequest, arguments []byte, wait time.Duration) (apitypes.Invocation, error) {
+	req.Inputs = []execution.TaskInput{{Payload: execution.Payload{Encoding: execution.EncodingJSON, Data: arguments}}}
+	tasks, err := exec.Submit(ctx, req)
 	if err != nil {
 		return apitypes.Invocation{}, err
 	}
-	task, err := exec.GetTask(ctx, listener, workspace, tasks[0].ID, wait)
+	task, err := exec.GetTask(ctx, listener, req.Workspace, tasks[0].ID, wait)
 	if err != nil {
 		return apitypes.Invocation{}, err
 	}
 	out := apitypes.Invocation{Task: execution.APITask(task)}
 	if task.Status == execution.TaskSucceeded {
-		result, err := exec.TaskResult(ctx, workspace, task.ID)
+		result, err := exec.TaskResult(ctx, req.Workspace, task.ID)
 		if err != nil {
 			return apitypes.Invocation{}, err
 		}
@@ -151,7 +149,9 @@ func (e *Edge) invoke(w http.ResponseWriter, r *http.Request, t target) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	out, err := Invoke(r.Context(), e.execution, e.listener, t.workload.workspace, t.release.id, arguments, InvokeWait)
+	out, err := Invoke(r.Context(), e.execution, e.listener, execution.SubmitRequest{
+		Workspace: t.workload.workspace, App: t.workload.app, Function: t.workload.name, Release: &t.release.id,
+	}, arguments, InvokeWait)
 	var tooMany *execution.TooManyPendingError
 	switch {
 	case errors.As(err, &tooMany):

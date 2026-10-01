@@ -86,10 +86,10 @@ func (e *Execution) EndpointContainers(ctx context.Context, workload uuid.UUID) 
 	}
 	out := make([]EndpointContainer, 0, len(rows))
 	for _, row := range rows {
-		if row.HostID == nil {
+		if row.HostID == nil || row.Version == nil {
 			continue
 		}
-		out = append(out, EndpointContainer{Release: row.ReleaseID, Version: int(row.Version), Container: ContainerID(row.ContainerID), Host: *row.HostID})
+		out = append(out, EndpointContainer{Release: row.ReleaseID, Version: int(*row.Version), Container: ContainerID(row.ContainerID), Host: *row.HostID})
 	}
 	return out, nil
 }

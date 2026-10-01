@@ -10,9 +10,10 @@ where id = @id;
 select id from attempts where container_id = @container_id and state = 'running' order by id;
 
 -- name: FailQueuedTasksOfRelease :many
+-- The caller holds the rows from LockQueuedWithDependents.
 update tasks
 set status = 'failed', failure = @failure, finished_at = now()
-where release_id = @release_id and status = 'queued'
+where id = any(@ids::uuid[]) and status = 'queued'
 returning id;
 
 -- name: RecordLoadError :exec

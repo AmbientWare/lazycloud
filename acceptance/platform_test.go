@@ -40,7 +40,9 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/hostsession"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/images"
+	"github.com/AmbientWare/lazycloud/internal/schedules"
 	"github.com/AmbientWare/lazycloud/internal/scheduling"
+	"github.com/AmbientWare/lazycloud/internal/secrets"
 	"github.com/AmbientWare/lazycloud/internal/storage"
 	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
@@ -147,25 +149,36 @@ func startPlatform(t *testing.T) *platform {
 		},
 		MaxIdleConnsPerHost: 1024,
 	}}
-	im := images.NewImages(pool, p.execution, images.Config{Registry: "registry.invalid", Repository: "lazycloud", ManagedBase: "docker.io/library/python:{version}-slim"}, nil)
+	im := images.NewImages(pool, p.execution, images.Config{Registry: "registry.invalid", Repository: "lazycloud", ManagedBase: "docker.io/library/python:{version}-slim"})
+	masterKey, err := secrets.NewFileKey(make([]byte, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	vault := secrets.NewSecrets(pool, masterKey)
+	owners := api.Owners{
+		Identity: ident, Control: p.control, Storage: p.storage, Execution: p.execution, Images: im,
+		Secrets: vault, Schedules: schedules.NewSchedules(pool, p.execution), Listener: listener, Edge: p.edge,
+	}
+	apiHandler, err := api.NewHandler(owners, api.Config{PublicURL: "http://127.0.0.1"}, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	containerAPI, err := api.NewContainerHandler(owners, api.Config{PublicURL: "http://127.0.0.1"}, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
 	hosts := hostsession.NewServer(compute.NewCompute(pool), p.execution, p.storage, im, listener, hostsession.Config{
 		ImageTemplate: "docker.io/library/python:{version}-slim", TouchInterval: 5 * time.Second,
+		Secrets: vault, ContainerAPI: containerAPI,
 	}, logger)
 	grpcServer := grpc.NewServer(hosts.ServerOptions()...)
 	hostproto.RegisterHostServiceServer(grpcServer, hosts)
-	hostproto.RegisterHostDataServer(grpcServer, p.edge.DataServer())
+	hostproto.RegisterHostDataServer(grpcServer, p.edge.DataServer(hostsession.HostFrom))
 	grpcListener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	edgeServer := &http.Server{Handler: p.edge, ReadHeaderTimeout: 10 * time.Second}
-	apiHandler, err := api.NewHandler(api.Owners{
-		Identity: ident, Control: p.control, Storage: p.storage, Execution: p.execution, Images: im,
-		Listener: listener, Edge: p.edge,
-	}, api.Config{PublicURL: "http://127.0.0.1"}, logger)
-	if err != nil {
-		t.Fatal(err)
-	}
 	apiListener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -324,7 +337,7 @@ func (p *platform) deploy(app string, specs ...apitypes.FunctionSpec) apitypes.D
 	return d
 }
 
-func (p *platform) describe(app string, kind control.WorkloadKind, name string) apitypes.HttpWorkload {
+func (p *platform) describe(app string, kind apitypes.WorkloadKind, name string) apitypes.HttpWorkload {
 	p.t.Helper()
 	w, err := p.edge.Describe(p.t.Context(), p.workspace.ID, app, kind, name, nil)
 	if err != nil {

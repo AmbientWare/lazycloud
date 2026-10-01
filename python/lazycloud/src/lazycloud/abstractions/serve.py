@@ -402,7 +402,9 @@ class ServePreviewSession:
                 ):
                     reported = False
                     after = entry.id
-                    self.terminal.write(entry.data + "\n")
+                    self.terminal.write(
+                        entry.data if entry.data.endswith("\n") else entry.data + "\n"
+                    )
                     if self.syncer is not None:
                         self.syncer.raise_if_failed()
             except (ApiConnectionError, httpx.HTTPError):

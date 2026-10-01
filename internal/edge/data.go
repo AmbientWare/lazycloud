@@ -12,8 +12,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
-	"github.com/AmbientWare/lazycloud/internal/hostsession"
 )
 
 // streamWait bounds how long a request waits for an agent to open a stream
@@ -66,14 +66,18 @@ func (h *hostStreams) poolLocked(host uuid.UUID) *hostPool {
 // server, whose interceptors authenticate the agent.
 type Server struct {
 	hostproto.UnimplementedHostDataServer
-	edge *Edge
+	edge   *Edge
+	hostOf func(context.Context) (compute.HostID, bool)
 }
 
-// DataServer returns the HostData service for agents.
-func (e *Edge) DataServer() *Server { return &Server{edge: e} }
+// DataServer returns the HostData service for agents. hostOf names the host
+// the connection's interceptors authenticated.
+func (e *Edge) DataServer(hostOf func(context.Context) (compute.HostID, bool)) *Server {
+	return &Server{edge: e, hostOf: hostOf}
+}
 
-func host(ctx context.Context) (uuid.UUID, error) {
-	h, ok := hostsession.HostFrom(ctx)
+func (s *Server) host(ctx context.Context) (uuid.UUID, error) {
+	h, ok := s.hostOf(ctx)
 	if !ok {
 		return uuid.Nil, status.Error(codes.Unauthenticated, "a host token is required")
 	}
@@ -82,7 +86,7 @@ func host(ctx context.Context) (uuid.UUID, error) {
 
 // Listen tells the agent when the edge needs more idle streams.
 func (s *Server) Listen(_ *hostproto.ListenRequest, stream grpc.ServerStreamingServer[hostproto.ListenEvent]) error {
-	id, err := host(stream.Context())
+	id, err := s.host(stream.Context())
 	if err != nil {
 		return err
 	}
@@ -114,7 +118,7 @@ func (s *Server) Listen(_ *hostproto.ListenRequest, stream grpc.ServerStreamingS
 // Forward parks the agent's stream until a request takes it, then ends the
 // RPC when the request is over.
 func (s *Server) Forward(stream grpc.BidiStreamingServer[hostproto.ForwardUp, hostproto.ForwardDown]) error {
-	id, err := host(stream.Context())
+	id, err := s.host(stream.Context())
 	if err != nil {
 		return err
 	}

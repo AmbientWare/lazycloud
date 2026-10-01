@@ -33,6 +33,8 @@ type outputPipe struct {
 	raw     syscall.RawConn
 	stream  hostproto.LogStream
 	pending []byte
+	// held is decoded output that may begin a secret value.
+	held string
 	// partial is the start of a line not yet ended.
 	partial string
 }
@@ -94,7 +96,9 @@ func (sl *slot) readOutput(ctx context.Context, pipe *outputPipe) {
 // drainLocked emits what the current runner's pipes hold now. flush also
 // emits an incomplete UTF-8 sequence, which happens when an attempt ends.
 func (sl *slot) drainLocked(flush bool) {
-	if sl.proc == nil {
+	// A shared runner's pipes carry no attempt's output; its own slot reads
+	// them.
+	if sl.proc == nil || sl.shared {
 		return
 	}
 	for _, pipe := range sl.proc.pipes {
@@ -117,7 +121,7 @@ func (sl *slot) drainLocked(flush bool) {
 // emitLocked sends each completed line of data without its newline, and
 // with flush the start of a line too, which happens when an attempt ends.
 func (sl *slot) emitLocked(pipe *outputPipe, data []byte, flush bool) {
-	text := pipe.partial + pipe.decode(data, flush)
+	text := pipe.partial + sl.sup.redact.stream(&pipe.held, pipe.decode(data, flush), flush)
 	pipe.partial = ""
 	for {
 		line, rest, found := strings.Cut(text, "\n")
@@ -141,12 +145,20 @@ func (sl *slot) emitPartialLocked(pipe *outputPipe) {
 }
 
 func (sl *slot) pushLineLocked(pipe *outputPipe, line string) {
-	sl.sup.out.push(&hostproto.SupervisorMessage{Body: &hostproto.SupervisorMessage_Output{Output: &hostproto.OutputChunk{
-		AttemptId: sl.attempt,
-		Stream:    pipe.stream,
-		Data:      line,
+	attempt := sl.attempt
+	if sl.soleAttempt != nil {
+		attempt = sl.soleAttempt()
+	}
+	sl.sup.out.push(outputMessage(attempt, pipe.stream, line))
+}
+
+func outputMessage(attempt string, stream hostproto.LogStream, text string) *hostproto.SupervisorMessage {
+	return &hostproto.SupervisorMessage{Body: &hostproto.SupervisorMessage_Output{Output: &hostproto.OutputChunk{
+		AttemptId: attempt,
+		Stream:    stream,
+		Data:      text,
 		Time:      timestamppb.Now(),
-	}}})
+	}}}
 }
 
 // decode returns data as valid UTF-8. It holds back an incomplete trailing

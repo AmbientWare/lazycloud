@@ -3,7 +3,7 @@
 -- served until a deploy. An existing workload keeps its state.
 insert into workloads (app_id, kind, name, desired_state)
 values (@app_id, @kind, @name, 'stopped')
-on conflict (app_id, kind, name) do update set name = excluded.name
+on conflict (app_id, kind, name) where desired_state <> 'deleted' do update set name = excluded.name
 returning id;
 
 -- name: InsertPreviewRelease :one

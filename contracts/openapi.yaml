@@ -521,10 +521,8 @@ paths:
         entries, so clients can apply a read timeout. Clients skip blank
         lines.
       parameters:
-        - name: after
-          in: query
-          description: Return entries with an id greater than this.
-          schema: { type: integer, format: int64, minimum: 0, default: 0 }
+        - $ref: "#/components/parameters/LogAfter"
+        - $ref: "#/components/parameters/LogTail"
         - name: follow
           in: query
           description: Keep the stream open until the task finishes.
@@ -550,6 +548,547 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Task" }
+        default: { $ref: "#/components/responses/Error" }
+
+  # Control packet: apps, deployments, task listing, containers and logs.
+
+  /v1/workspaces/{workspace}/apps:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+    get:
+      operationId: listApps
+      tags: [control]
+      summary: Apps with at least one deployed workload, by name
+      parameters:
+        - name: state
+          in: query
+          description: Only apps in this state. Omitted lists active and paused apps.
+          schema: { $ref: "#/components/schemas/LiveAppState" }
+        - $ref: "#/components/parameters/PageLimit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: One page of apps
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AppPage" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/apps/{app}:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/AppRefPath"
+    get:
+      operationId: getApp
+      tags: [control]
+      responses:
+        "200":
+          description: The app
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/App" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteApp
+      tags: [control]
+      summary: Delete the app and every workload in it
+      description: >-
+        Admission stops at once. Queued and running tasks are cancelled and
+        containers stop. Task history, volumes, secrets and stored data stay.
+        The name is free for a new app.
+      responses:
+        "200":
+          description: The deleted app
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/App" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/apps/{app}/pause:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/AppRefPath"
+    post:
+      operationId: pauseApp
+      tags: [control]
+      summary: Stop admission and drain every workload of the app
+      description: Queued tasks are cancelled; running tasks finish.
+      responses:
+        "200":
+          description: The paused app
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/App" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/apps/{app}/resume:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/AppRefPath"
+    post:
+      operationId: resumeApp
+      tags: [control]
+      responses:
+        "200":
+          description: The resumed app
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/App" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/apps/{app}/deployment-plan:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/AppPath"
+    post:
+      operationId: planDeployment
+      tags: [control]
+      summary: What a deploy of these workloads would do, without deploying
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DeploymentPlanRequest" }
+      responses:
+        "200":
+          description: One item per listed or deployed workload
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeploymentPlan" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/apps/{app}/functions/{function}/releases:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/AppPath"
+      - $ref: "#/components/parameters/FunctionPath"
+    post:
+      operationId: prepareFunctionRelease
+      tags: [control]
+      summary: A release that runs this definition, for calls from a working tree
+      description: >-
+        Returns the function's release with the same resolved definition when
+        one exists, including the active one, or creates an unversioned
+        release that is never active. Submits name it with `release_id`. The
+        app and function are created when missing but are not deployed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FunctionSpec" }
+      responses:
+        "200":
+          description: The release
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Release" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/deployments:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+    get:
+      operationId: listDeployments
+      tags: [control]
+      summary: Deployed workloads, by app and name
+      parameters:
+        - name: app
+          in: query
+          schema: { $ref: "#/components/schemas/AppName" }
+        - name: name
+          in: query
+          schema: { $ref: "#/components/schemas/WorkloadName" }
+        - $ref: "#/components/parameters/PageLimit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: One page of deployments
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeploymentPage" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/deployments/{deployment}:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/DeploymentPath"
+    get:
+      operationId: getDeployment
+      tags: [control]
+      responses:
+        "200":
+          description: The deployment
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeployedWorkload" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteDeployment
+      tags: [control]
+      summary: Delete the workload and every version of it
+      description: >-
+        Queued and running tasks are cancelled and its containers stop. The
+        name is free for a later deploy, which starts again at version 1.
+      responses:
+        "200":
+          description: The deleted deployment
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeployedWorkload" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/deployments/{deployment}/stop:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/DeploymentPath"
+    post:
+      operationId: stopDeployment
+      tags: [control]
+      summary: Stop admission and drain the workload, keeping its definition
+      description: Queued tasks are cancelled; running tasks finish.
+      responses:
+        "200":
+          description: The stopped deployment
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeployedWorkload" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/deployments/{deployment}/start:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/DeploymentPath"
+    post:
+      operationId: startDeployment
+      tags: [control]
+      summary: Start the workload again, optionally on an earlier version
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/StartDeploymentRequest" }
+      responses:
+        "200":
+          description: The started deployment
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeployedWorkload" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/deployments/{deployment}/versions:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/DeploymentPath"
+    get:
+      operationId: listDeploymentVersions
+      tags: [control]
+      summary: Deployed versions, newest first
+      parameters:
+        - $ref: "#/components/parameters/PageLimit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: One page of versions
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VersionPage" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/deployments/{deployment}/logs:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/DeploymentPath"
+    get:
+      operationId: streamDeploymentLogs
+      tags: [control]
+      summary: Log lines of every task of the workload, one JSON LogEntry per line
+      description: >-
+        A followed stream stays open until the client closes it and writes a
+        blank line after 15 seconds without entries.
+      parameters:
+        - $ref: "#/components/parameters/LogAfter"
+        - $ref: "#/components/parameters/LogTail"
+        - name: follow
+          in: query
+          schema: { type: boolean, default: false }
+      responses:
+        "200":
+          description: Newline-delimited LogEntry objects
+          content:
+            application/x-ndjson:
+              schema: { type: string, format: binary }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/tasks:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+    get:
+      operationId: listTasks
+      tags: [control]
+      summary: Tasks, newest first
+      parameters:
+        - name: app
+          in: query
+          schema: { $ref: "#/components/schemas/AppName" }
+        - name: function
+          in: query
+          description: Requires `app`.
+          schema: { $ref: "#/components/schemas/WorkloadName" }
+        - name: status
+          in: query
+          schema: { $ref: "#/components/schemas/TaskStatus" }
+        - $ref: "#/components/parameters/PageLimit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: One page of tasks
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TaskPage" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/tasks/stop:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+    post:
+      operationId: stopTasks
+      tags: [control]
+      summary: Cancel each listed task that is queued or running
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/StopTasksRequest" }
+      responses:
+        "200":
+          description: Which tasks stopped and which were already finished or unknown
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StopTasksResponse" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/tasks/{task}/rerun:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/TaskPath"
+    post:
+      operationId: rerunTask
+      tags: [control]
+      summary: Submit the task's input again to the release it ran on
+      responses:
+        "201":
+          description: The new task
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Task" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/containers:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+    get:
+      operationId: listContainers
+      tags: [control]
+      summary: Containers, newest first
+      parameters:
+        - name: live
+          in: query
+          description: Only containers that have not stopped.
+          schema: { type: boolean, default: false }
+        - $ref: "#/components/parameters/PageLimit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: One page of containers
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ContainerPage" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/containers/{container}:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/ContainerPath"
+    get:
+      operationId: getContainer
+      tags: [control]
+      responses:
+        "200":
+          description: The container
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Container" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/containers/{container}/stop:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/ContainerPath"
+    post:
+      operationId: stopContainer
+      tags: [control]
+      summary: Stop the container now
+      description: >-
+        Its running attempts end as lost and retry by their policy. An active
+        workload starts a replacement when it still has work.
+      responses:
+        "200":
+          description: The container after the request
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Container" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/containers/{container}/logs:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/ContainerPath"
+    get:
+      operationId: streamContainerLogs
+      tags: [control]
+      summary: Log lines of the tasks the container ran, one JSON LogEntry per line
+      description: >-
+        A followed stream ends once the container has stopped and its lines
+        are drained, and writes a blank line after 15 seconds without entries.
+      parameters:
+        - $ref: "#/components/parameters/LogAfter"
+        - $ref: "#/components/parameters/LogTail"
+        - name: follow
+          in: query
+          schema: { type: boolean, default: false }
+      responses:
+        "200":
+          description: Newline-delimited LogEntry objects
+          content:
+            application/x-ndjson:
+              schema: { type: string, format: binary }
+        default: { $ref: "#/components/responses/Error" }
+
+  # Workload runtime: secrets and schedules.
+
+  /v1/workspaces/{workspace}/secrets:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+    get:
+      operationId: listSecrets
+      tags: [secrets]
+      summary: Secret names and update times, without values
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: One page of secrets in name order
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SecretPage" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createSecret
+      tags: [secrets]
+      summary: Create a secret; an existing name is a conflict
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SecretCreate" }
+      responses:
+        "201":
+          description: The created secret
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Secret" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/secrets/{secret}:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/SecretPath"
+    get:
+      operationId: getSecret
+      tags: [secrets]
+      summary: A secret without its value
+      responses:
+        "200":
+          description: The secret
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Secret" }
+        default: { $ref: "#/components/responses/Error" }
+    put:
+      operationId: setSecret
+      tags: [secrets]
+      summary: Create the secret or replace its value
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SecretValueUpdate" }
+      responses:
+        "200":
+          description: The secret
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Secret" }
+        default: { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: updateSecret
+      tags: [secrets]
+      summary: Replace an existing secret's value
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SecretValueUpdate" }
+      responses:
+        "200":
+          description: The secret
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Secret" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteSecret
+      tags: [secrets]
+      responses:
+        "204":
+          description: Deleted
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/secrets/{secret}/value:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/SecretPath"
+    get:
+      operationId: getSecretValue
+      tags: [secrets]
+      summary: Reveal a secret's value
+      description: >-
+        The only operation that returns a value. Tokens limited to reading
+        cannot call it.
+      responses:
+        "200":
+          description: The secret and its value
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SecretValue" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/schedules:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+    get:
+      operationId: listSchedules
+      tags: [schedules]
+      summary: Scheduled functions with their next and last runs
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: One page of schedules ordered by app and function
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SchedulePage" }
         default: { $ref: "#/components/responses/Error" }
 
   # Images
@@ -920,26 +1459,6 @@ paths:
               schema: { type: string, format: binary }
         default: { $ref: "#/components/responses/Error" }
 
-  /v1/workspaces/{workspace}/previews/{preview}/tasks:
-    parameters:
-      - $ref: "#/components/parameters/WorkspacePath"
-      - $ref: "#/components/parameters/PreviewPath"
-    post:
-      operationId: submitPreviewTasks
-      summary: Admit one task per input against a function preview
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/SubmitTasksRequest" }
-      responses:
-        "201":
-          description: Admitted tasks, in input order
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/SubmitTasksResponse" }
-        default: { $ref: "#/components/responses/Error" }
-
 components:
   securitySchemes:
     bearer:
@@ -975,6 +1494,16 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+    SecretPath:
+      name: secret
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/SecretName" }
+    Cursor:
+      name: cursor
+      in: query
+      description: The next_cursor of the previous page.
+      schema: { type: string, maxLength: 512 }
     Limit:
       name: limit
       in: query
@@ -1006,6 +1535,38 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+    # Control packet parameters.
+    AppRefPath:
+      name: app
+      in: path
+      required: true
+      description: The app's name or id.
+      schema: { $ref: "#/components/schemas/AppRef" }
+    DeploymentPath:
+      name: deployment
+      in: path
+      required: true
+      description: The workload id.
+      schema: { type: string, format: uuid }
+    ContainerPath:
+      name: container
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    PageLimit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 1000, default: 100 }
+    LogAfter:
+      name: after
+      in: query
+      description: Return entries with an id greater than this.
+      schema: { type: integer, format: int64, minimum: 0, default: 0 }
+    LogTail:
+      name: tail
+      in: query
+      description: Start with only the last this many stored entries.
+      schema: { type: integer, minimum: 1, maximum: 1000 }
     EndpointPath:
       name: endpoint
       in: path
@@ -1398,36 +1959,41 @@ components:
       required: [functions]
       properties:
         functions:
+          description: At least one, unless prune deletes every deployed function.
           type: array
-          minItems: 1
           maxItems: 200
           items: { $ref: "#/components/schemas/FunctionSpec" }
         prune:
-          description: Stop every function of the app that is not listed.
+          description: Delete every function of the app that is not listed.
           type: boolean
           default: false
 
     Deployment:
       type: object
-      required: [app, releases, pruned]
+      required: [app, releases, pruned, removed_versions]
       properties:
         app: { $ref: "#/components/schemas/App" }
         releases:
           type: array
           items: { $ref: "#/components/schemas/Release" }
         pruned:
+          description: Functions the prune deleted.
           type: array
           items: { $ref: "#/components/schemas/WorkloadName" }
+        removed_versions:
+          description: Versions of the pruned functions.
+          type: integer
 
     App:
       type: object
-      required: [id, name, state, created_at]
+      required: [id, name, state, workloads, created_at]
       properties:
         id: { type: string, format: uuid }
         name: { $ref: "#/components/schemas/AppName" }
-        state:
-          type: string
-          enum: [active, paused]
+        state: { $ref: "#/components/schemas/AppState" }
+        workloads:
+          description: Deployed workloads that are not deleted.
+          type: integer
         created_at: { type: string, format: date-time }
 
     FunctionSpec:
@@ -1458,12 +2024,14 @@ components:
           minimum: 1
           maximum: 256
           default: 1
+        # Defaults: 10, 0 for a scheduled function, and -1 whenever
+        # autoscaler.min_containers is above zero. -1 leaves idle containers
+        # above the minimum to the planner, which stops them at once.
         keep_warm_seconds:
-          description: Idle time before a container above the minimum stops.
+          description: Idle seconds before a container above the minimum stops.
           type: integer
-          minimum: 0
+          minimum: -1
           maximum: 86400
-          default: 10
         autoscaler:
           $ref: "#/components/schemas/Autoscaler"
         max_pending_tasks:
@@ -1474,6 +2042,36 @@ components:
         environment:
           type: object
           additionalProperties: { type: string }
+        # Five cron fields, an alias such as @hourly, or `every N` minutes
+        # (m, at most 59), hours (h, at most 23) or days (d, at most 31).
+        # Deploy stores the normalized expression.
+        cron:
+          description: Run the function on this UTC schedule.
+          type: string
+          minLength: 1
+          maxLength: 160
+        secrets:
+          description: Secrets the container receives as environment variables of the same name.
+          type: array
+          maxItems: 100
+          uniqueItems: true
+          items: { $ref: "#/components/schemas/SecretName" }
+        # http or https, with a host and without credentials or a fragment.
+        callback_url:
+          description: Receives a signed POST when a task is retried or finishes.
+          type: string
+          maxLength: 2048
+        in_process:
+          description: Run the concurrency slots as threads of one runner process.
+          type: boolean
+          default: false
+        lifecycle_hooks:
+          $ref: "#/components/schemas/LifecycleHooks"
+        client_contract:
+          description: The signature `lazycloud app export` types clients from.
+          type: object
+          additionalProperties: true
+          x-go-type: json.RawMessage
         http:
           $ref: "#/components/schemas/HttpSpec"
 
@@ -1494,6 +2092,10 @@ components:
         # A ready image the workspace resolved, built for python_version.
         # Without one the function runs the platform's image for it.
         image_id: { $ref: "#/components/schemas/ImageId" }
+        reference:
+          description: The image by digest the release runs, set by the server.
+          type: string
+          readOnly: true
 
     Resources:
       description: >-
@@ -1566,11 +2168,13 @@ components:
 
     Release:
       type: object
-      required: [id, function, version, created_at, spec]
+      required: [id, function, created_at, spec]
       properties:
         id: { type: string, format: uuid }
         function: { $ref: "#/components/schemas/WorkloadName" }
-        version: { type: integer }
+        version:
+          description: The deployed version; absent for a release only working-tree calls use.
+          type: integer
         created_at: { type: string, format: date-time }
         spec: { $ref: "#/components/schemas/FunctionSpec" }
         url:
@@ -1587,6 +2191,7 @@ components:
           type: string
           enum: [active, stopped]
         active_release: { $ref: "#/components/schemas/Release" }
+        schedule: { $ref: "#/components/schemas/Schedule" }
 
     Payload:
       description: >-
@@ -1614,7 +2219,31 @@ components:
           type: array
           minItems: 1
           maxItems: 1000
-          items: { $ref: "#/components/schemas/Payload" }
+          items: { $ref: "#/components/schemas/TaskInput" }
+        release_id:
+          description: Run on this release, such as a prepared one, instead of the active one.
+          type: string
+          format: uuid
+        parent_task_id:
+          description: The task that submits these, which becomes their parent.
+          type: string
+          format: uuid
+
+    TaskInput:
+      description: >-
+        A task's arguments. A cloudpickle input refers to each pending
+        FunctionCall it contains by the persistent id `("function_call",
+        task_id)` and lists those ids in `depends_on`; the task waits until
+        they succeed and the runner resolves each id to that task's result.
+      allOf:
+        - $ref: "#/components/schemas/Payload"
+        - type: object
+          properties:
+            depends_on:
+              type: array
+              maxItems: 100
+              uniqueItems: true
+              items: { type: string, format: uuid }
 
     SubmitTasksResponse:
       type: object
@@ -1630,24 +2259,87 @@ components:
 
     Task:
       type: object
-      required: [id, app, function, release_id, status, attempts, created_at]
+      required: [id, app, function, release_id, status, attempts, max_attempts, created_at, root_task_id]
       properties:
         id: { type: string, format: uuid }
         app: { $ref: "#/components/schemas/AppName" }
         function: { $ref: "#/components/schemas/WorkloadName" }
         release_id: { type: string, format: uuid }
+        version:
+          description: The deployed version of the release; absent for a working-tree release.
+          type: integer
         status: { $ref: "#/components/schemas/TaskStatus" }
         attempts:
           description: Attempts started so far.
           type: integer
+        max_attempts: { type: integer }
+        parent_task_id:
+          description: The running task that spawned this one.
+          type: string
+          format: uuid
+        root_task_id:
+          description: The root of the call graph; the task itself when nothing spawned it.
+          type: string
+          format: uuid
+        scheduled_for:
+          description: The cron occurrence that admitted the task.
+          type: string
+          format: date-time
+        container_id:
+          description: The container of the latest attempt.
+          type: string
+          format: uuid
+        next_attempt_at:
+          description: When a queued task that already ran becomes due again.
+          type: string
+          format: date-time
+        pending: { $ref: "#/components/schemas/TaskPendingProgress" }
         created_at: { type: string, format: date-time }
         started_at: { type: string, format: date-time }
         finished_at: { type: string, format: date-time }
         failure: { $ref: "#/components/schemas/TaskFailure" }
 
+    TaskPendingProgress:
+      description: Why a queued task has not started, derived from current state on every read.
+      type: object
+      required: [reason, message, since, pending_since, observed_at]
+      properties:
+        reason: { $ref: "#/components/schemas/TaskPendingReason" }
+        message: { type: string }
+        since:
+          description: When the current reason began.
+          type: string
+          format: date-time
+        pending_since:
+          description: When the task last became due or was submitted.
+          type: string
+          format: date-time
+        observed_at: { type: string, format: date-time }
+
+    TaskPendingReason:
+      type: string
+      enum:
+        - queued
+        - dependencies
+        - retry
+        - capacity_busy
+        - capacity_unavailable
+        - capacity_limit
+        - provisioning_compute
+        - starting_container
+      x-enum-varnames:
+        - Queued
+        - Dependencies
+        - Retry
+        - CapacityBusy
+        - CapacityUnavailable
+        - CapacityLimit
+        - ProvisioningCompute
+        - StartingContainer
+
     FailureKind:
       type: string
-      enum: [user_error, load_error, timeout, lost, start_failed, system]
+      enum: [user_error, load_error, timeout, lost, start_failed, system, dependency_failed]
 
     TaskFailure:
       type: object
@@ -1666,9 +2358,10 @@ components:
 
     LogEntry:
       type: object
-      required: [id, attempt, stream, data, time]
+      required: [id, task_id, attempt, stream, data, time]
       properties:
         id: { type: integer, format: int64 }
+        task_id: { type: string, format: uuid }
         attempt: { type: integer }
         stream:
           type: string
@@ -1677,6 +2370,341 @@ components:
           description: One line of output without its trailing newline.
           type: string
         time: { type: string, format: date-time }
+
+    # Workload runtime
+
+    LifecycleHooks:
+      description: >-
+        Callables the runner invokes with a context object, each a
+        `module:qualname` reference into the source. on_start runs once per
+        runner process after the handler loads, and its failure is a load
+        error. The others run in the container around each attempt, in
+        order; their failures are logged and do not change the outcome.
+      type: object
+      properties:
+        on_start: { $ref: "#/components/schemas/HookReferences" }
+        on_running: { $ref: "#/components/schemas/HookReferences" }
+        on_success: { $ref: "#/components/schemas/HookReferences" }
+        on_error: { $ref: "#/components/schemas/HookReferences" }
+        on_retry: { $ref: "#/components/schemas/HookReferences" }
+        on_failure: { $ref: "#/components/schemas/HookReferences" }
+        on_finish: { $ref: "#/components/schemas/HookReferences" }
+
+    HookReferences:
+      type: array
+      maxItems: 16
+      items:
+        type: string
+        pattern: "^[A-Za-z_][A-Za-z0-9_.]*:[A-Za-z_][A-Za-z0-9_.]*$"
+
+    SecretName:
+      description: An environment variable name; the LAZYCLOUD_ prefix is reserved.
+      type: string
+      pattern: "^[A-Za-z_][A-Za-z0-9_]{0,239}$"
+
+    SecretText:
+      type: string
+      maxLength: 65536
+
+    SecretCreate:
+      type: object
+      required: [name, value]
+      properties:
+        name: { $ref: "#/components/schemas/SecretName" }
+        value: { $ref: "#/components/schemas/SecretText" }
+
+    SecretValueUpdate:
+      type: object
+      required: [value]
+      properties:
+        value: { $ref: "#/components/schemas/SecretText" }
+
+    Secret:
+      type: object
+      required: [name, created_at, updated_at]
+      properties:
+        name: { $ref: "#/components/schemas/SecretName" }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    SecretValue:
+      type: object
+      required: [name, value, created_at, updated_at]
+      properties:
+        name: { $ref: "#/components/schemas/SecretName" }
+        value: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    SecretPage:
+      type: object
+      required: [secrets]
+      properties:
+        secrets:
+          type: array
+          items: { $ref: "#/components/schemas/Secret" }
+        next_cursor:
+          description: Present when more secrets follow.
+          type: string
+
+    Schedule:
+      type: object
+      required: [cron, timezone, next_run_at]
+      properties:
+        cron:
+          description: The normalized expression.
+          type: string
+        timezone:
+          type: string
+          enum: [UTC]
+        next_run_at: { type: string, format: date-time }
+        last_run_at:
+          description: When the last handled occurrence was due.
+          type: string
+          format: date-time
+        last_task_id:
+          description: The task the last occurrence admitted.
+          type: string
+          format: uuid
+        last_error:
+          description: Why the last occurrence admitted no task.
+          type: string
+
+    ScheduledFunction:
+      type: object
+      required: [app, function, schedule]
+      properties:
+        app: { $ref: "#/components/schemas/AppName" }
+        function: { $ref: "#/components/schemas/WorkloadName" }
+        schedule: { $ref: "#/components/schemas/Schedule" }
+
+    SchedulePage:
+      type: object
+      required: [schedules]
+      properties:
+        schedules:
+          type: array
+          items: { $ref: "#/components/schemas/ScheduledFunction" }
+        next_cursor:
+          description: Present when more schedules follow.
+          type: string
+
+    # Control packet schemas.
+
+    AppRef:
+      description: An app name or id.
+      type: string
+      pattern: "^([a-z][a-z0-9_]{0,62}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$"
+
+    AppState:
+      type: string
+      enum: [active, paused, deleted]
+
+    LiveAppState:
+      type: string
+      enum: [active, paused]
+
+    WorkloadState:
+      description: Desired state. A paused app stops its active workloads too.
+      type: string
+      enum: [active, stopped, deleted]
+
+    DeploymentPlanAction:
+      description: >-
+        `add` deploys a new workload, `redeploy` deploys one that exists,
+        `retain` leaves an omitted one deployed and `remove` deletes an
+        omitted one with prune.
+      type: string
+      enum: [add, redeploy, retain, remove]
+
+    AppPage:
+      type: object
+      required: [apps]
+      properties:
+        apps:
+          type: array
+          items: { $ref: "#/components/schemas/App" }
+        next_cursor:
+          description: Present when another page follows.
+          type: string
+
+    WorkloadKind:
+      description: A function runs tasks; an endpoint or ASGI app serves HTTP. Realtime apps are ASGI apps.
+      type: string
+      enum: [function, endpoint, asgi]
+
+    DeploymentPlanRequest:
+      type: object
+      required: [workloads]
+      properties:
+        workloads:
+          type: array
+          maxItems: 200
+          items: { $ref: "#/components/schemas/WorkloadIdentity" }
+        prune:
+          type: boolean
+          default: false
+
+    WorkloadIdentity:
+      type: object
+      required: [kind, name]
+      properties:
+        kind: { $ref: "#/components/schemas/WorkloadKind" }
+        name: { $ref: "#/components/schemas/WorkloadName" }
+
+    DeploymentPlan:
+      type: object
+      required: [app, prune, items]
+      properties:
+        app: { $ref: "#/components/schemas/AppName" }
+        prune: { type: boolean }
+        items:
+          description: Listed workloads by kind and name, then omitted deployed ones.
+          type: array
+          items: { $ref: "#/components/schemas/DeploymentPlanItem" }
+
+    DeploymentPlanItem:
+      type: object
+      required: [kind, name, action, versions]
+      properties:
+        kind: { $ref: "#/components/schemas/WorkloadKind" }
+        name: { $ref: "#/components/schemas/WorkloadName" }
+        action: { $ref: "#/components/schemas/DeploymentPlanAction" }
+        versions:
+          description: Versions the workload has now.
+          type: integer
+
+    DeployedWorkload:
+      type: object
+      required: [id, app, name, kind, state, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        app: { $ref: "#/components/schemas/AppName" }
+        name: { $ref: "#/components/schemas/WorkloadName" }
+        kind: { $ref: "#/components/schemas/WorkloadKind" }
+        state: { $ref: "#/components/schemas/WorkloadState" }
+        app_state: { $ref: "#/components/schemas/AppState" }
+        version:
+          description: The active version.
+          type: integer
+        release_id:
+          description: The active release.
+          type: string
+          format: uuid
+        created_at: { type: string, format: date-time }
+        deployed_at:
+          description: When the active version was deployed.
+          type: string
+          format: date-time
+
+    DeploymentPage:
+      type: object
+      required: [deployments]
+      properties:
+        deployments:
+          type: array
+          items: { $ref: "#/components/schemas/DeployedWorkload" }
+        next_cursor: { type: string }
+
+    StartDeploymentRequest:
+      type: object
+      properties:
+        version:
+          description: Make this deployed version active before starting.
+          type: integer
+          minimum: 1
+
+    Version:
+      type: object
+      required: [release_id, version, active, created_at]
+      properties:
+        release_id: { type: string, format: uuid }
+        version: { type: integer }
+        active: { type: boolean }
+        created_at: { type: string, format: date-time }
+
+    VersionPage:
+      type: object
+      required: [versions]
+      properties:
+        versions:
+          type: array
+          items: { $ref: "#/components/schemas/Version" }
+        next_cursor: { type: string }
+
+    TaskPage:
+      type: object
+      required: [tasks]
+      properties:
+        tasks:
+          type: array
+          items: { $ref: "#/components/schemas/Task" }
+        next_cursor: { type: string }
+
+    StopTasksRequest:
+      type: object
+      required: [task_ids]
+      properties:
+        task_ids:
+          type: array
+          minItems: 1
+          maxItems: 1000
+          uniqueItems: true
+          items: { type: string, format: uuid }
+
+    StopTasksResponse:
+      type: object
+      required: [stopped, skipped]
+      properties:
+        stopped:
+          description: Tasks this request cancelled.
+          type: array
+          items: { type: string, format: uuid }
+        skipped:
+          description: Tasks that were already finished or are not in the workspace.
+          type: array
+          items: { type: string, format: uuid }
+
+    ContainerState:
+      type: string
+      enum: [pending, starting, ready, draining, stopped]
+
+    StopReason:
+      type: string
+      enum: [stopped, load_error, start_failed, crashed, out_of_memory, host_lost]
+
+    Container:
+      type: object
+      required: [id, app, function, release_id, state, slots, running_tasks, cpu_millis, memory_mib, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        app: { $ref: "#/components/schemas/AppName" }
+        function: { $ref: "#/components/schemas/WorkloadName" }
+        release_id: { type: string, format: uuid }
+        version:
+          description: The deployed version of the release; absent for a working-tree release.
+          type: integer
+        state: { $ref: "#/components/schemas/ContainerState" }
+        stop_reason: { $ref: "#/components/schemas/StopReason" }
+        exit_message: { type: string }
+        slots: { type: integer }
+        running_tasks:
+          description: Attempts running now.
+          type: integer
+        cpu_millis: { type: integer, format: int64 }
+        memory_mib: { type: integer, format: int64 }
+        created_at: { type: string, format: date-time }
+        ready_at: { type: string, format: date-time }
+        stopped_at: { type: string, format: date-time }
+
+    ContainerPage:
+      type: object
+      required: [containers]
+      properties:
+        containers:
+          type: array
+          items: { $ref: "#/components/schemas/Container" }
+        next_cursor: { type: string }
 
     # Images
 

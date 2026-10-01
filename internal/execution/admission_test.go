@@ -50,9 +50,9 @@ func TestSubmitBatchIsOneTransactionInInputOrder(t *testing.T) {
 	e := NewExecution(pool)
 	f := deployedFunction(t, pool, `{"max_pending_tasks": 1000, "retry_policy": {"max_attempts": 3}}`)
 
-	inputs := make([]Payload, 1000)
+	inputs := make([]TaskInput, 1000)
 	for i := range inputs {
-		inputs[i] = Payload{Encoding: EncodingJSON, Data: []byte(`{"args": [` + string(rune('0'+i%10)) + `], "kwargs": {}}`)}
+		inputs[i] = TaskInput{Payload: Payload{Encoding: EncodingJSON, Data: []byte(`{"args": [` + string(rune('0'+i%10)) + `], "kwargs": {}}`)}}
 	}
 	tasks, err := e.Submit(t.Context(), SubmitRequest{Workspace: f.workspace, App: "reports", Function: "summarize", Inputs: inputs})
 	if err != nil {

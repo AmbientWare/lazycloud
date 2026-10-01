@@ -12,7 +12,6 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
-	"github.com/AmbientWare/lazycloud/internal/control"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
@@ -22,7 +21,7 @@ type workload struct {
 	workspace     identity.WorkspaceID
 	workspaceName string
 	app, name     string
-	kind          control.WorkloadKind
+	kind          apitypes.WorkloadKind
 	// accepting is false while the workload is stopped or its app paused.
 	accepting bool
 	subdomain string
@@ -36,8 +35,11 @@ type workload struct {
 type release struct {
 	id       uuid.UUID
 	workload uuid.UUID
-	version  int
-	spec     apitypes.FunctionSpec
+	// preview is set for a release `lazycloud serve` runs, and workingTree
+	// for one a local process prepared; neither is a deployed version.
+	preview     bool
+	workingTree bool
+	spec        apitypes.FunctionSpec
 	// capacity is the requests one container admits: workers times
 	// concurrency.
 	capacity   int
@@ -50,13 +52,13 @@ type release struct {
 	attempts   int
 }
 
-func newRelease(id, workload uuid.UUID, version int32, rawSpec []byte) (*release, error) {
+func newRelease(id, workload uuid.UUID, version *int32, rawSpec []byte) (*release, error) {
 	var spec apitypes.FunctionSpec
 	if err := json.Unmarshal(rawSpec, &spec); err != nil {
 		return nil, fmt.Errorf("decode release spec: %w", err)
 	}
 	r := &release{
-		id: id, workload: workload, version: int(version), spec: spec,
+		id: id, workload: workload, preview: version != nil && *version < 0, workingTree: version == nil, spec: spec,
 		capacity: 1, authorized: true, timeout: time.Hour, maxPending: 100, attempts: 1,
 	}
 	concurrency := 1
@@ -120,7 +122,7 @@ func (e *Edge) loadRoutes(ctx context.Context) (*routeTable, error) {
 	for _, row := range rows {
 		w := &workload{
 			id: row.WorkloadID, workspace: identity.WorkspaceID(row.WorkspaceID), workspaceName: row.WorkspaceName,
-			app: row.AppName, name: row.Name, kind: control.WorkloadKind(row.Kind),
+			app: row.AppName, name: row.Name, kind: apitypes.WorkloadKind(row.Kind),
 			accepting: row.DesiredState == "active" && row.AppState == "active",
 			subdomain: row.Subdomain,
 		}
@@ -129,7 +131,7 @@ func (e *Edge) loadRoutes(ctx context.Context) (*routeTable, error) {
 			t.byHostname[w.hostname] = w
 		}
 		if row.ReleaseID != nil {
-			w.active, err = newRelease(*row.ReleaseID, w.id, *row.Version, row.Spec)
+			w.active, err = newRelease(*row.ReleaseID, w.id, row.Version, row.Spec)
 			if err != nil {
 				return nil, err
 			}
@@ -200,7 +202,7 @@ func (e *Edge) resolve(ctx context.Context, host string) (target, error) {
 	id, known := e.versions[key]
 	e.mu.Unlock()
 	if !known {
-		id, err := e.queries.ReleaseOfVersion(ctx, ReleaseOfVersionParams{WorkloadID: w.id, Version: int32(version)}) //nolint:gosec // parsed from a label
+		id, err := e.queries.ReleaseOfVersion(ctx, ReleaseOfVersionParams{WorkloadID: w.id, Version: new(int32(version))}) //nolint:gosec // parsed from a label
 		if errors.Is(err, pgx.ErrNoRows) {
 			return target{}, errNoRoute
 		}
@@ -255,12 +257,15 @@ func (e *Edge) resolveID(ctx context.Context, id uuid.UUID) (target, error) {
 	}
 	w := &workload{
 		id: row.WorkloadID, workspace: identity.WorkspaceID(row.WorkspaceID), workspaceName: row.WorkspaceName,
-		app: row.AppName, name: row.Name, kind: control.WorkloadKind(row.Kind),
+		app: row.AppName, name: row.Name, kind: apitypes.WorkloadKind(row.Kind),
 		accepting: row.DesiredState == "active" && row.AppState == "active",
 	}
-	if r.version < 0 {
+	switch {
+	case r.preview:
 		// A preview runs while its lease lives, whatever its workload's state.
 		w.accepting = row.PreviewLive
+	case r.workingTree:
+		w.accepting = row.AppState == "active"
 	}
 	return target{workload: w, release: r, container: container}, nil
 }

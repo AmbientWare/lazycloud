@@ -25,9 +25,11 @@ const (
 	FrameLoad       FrameType = "load"
 	FrameLoaded     FrameType = "loaded"
 	FrameLoadFailed FrameType = "load_failed"
+	FrameDependency FrameType = "dependency"
 	FrameInvoke     FrameType = "invoke"
 	FrameSucceeded  FrameType = "succeeded"
 	FrameFailed     FrameType = "failed"
+	FrameOutput     FrameType = "output"
 )
 
 // Frame is one decoded frame: its JSON header and raw payload.

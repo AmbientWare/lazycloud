@@ -29,6 +29,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/identity/identitytest"
+	"github.com/AmbientWare/lazycloud/internal/images"
 	"github.com/AmbientWare/lazycloud/internal/notifications"
 	"github.com/AmbientWare/lazycloud/internal/storage"
 	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
@@ -56,7 +57,7 @@ func newEnv(t *testing.T) *env {
 	t.Helper()
 	ctx := t.Context()
 	pool := dbtest.New(t)
-	listener := database.NewListener(pool, slog.New(slog.DiscardHandler), database.ChannelTask, database.ChannelClaim)
+	listener := database.NewListener(pool, slog.New(slog.DiscardHandler), database.ChannelTask, database.ChannelClaim, database.ChannelLogs)
 	runCtx, stop := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	wg.Go(func() { _ = listener.Run(runCtx) })
@@ -71,6 +72,7 @@ func newEnv(t *testing.T) *env {
 	handler, err := api.NewHandler(api.Owners{
 		Identity: id, Control: control.NewControl(pool), Storage: storage.NewStorage(pool, storagetest.Config()),
 		Execution: e, Notifications: notifications.NewNotifications(pool, nil, logger), Listener: listener,
+		Images: images.NewImages(pool, e, images.Config{Registry: "registry.example.com", Repository: "lazycloud"}),
 	}, api.Config{PublicURL: dashboardURL, ResendWebhookSecret: webhookSecret, ClientReleaseVersion: "9.9.9"}, logger)
 	if err != nil {
 		t.Fatal(err)
@@ -265,7 +267,7 @@ func TestSubmitWaitFollowLogsAndResult(t *testing.T) {
 	raw := json.RawMessage(`{"args": [[1200, 3500, 800], 9007199254740993], "kwargs": {}}`)
 	var submitted apitypes.SubmitTasksResponse
 	if status := e.do("POST", fnPath+"/tasks", e.owner, apitypes.SubmitTasksRequest{
-		Inputs: []apitypes.Payload{{Encoding: apitypes.Json, Value: &raw}},
+		Inputs: []apitypes.TaskInput{{Encoding: apitypes.TaskInputEncodingJson, Value: &raw}},
 	}, &submitted); status != 201 || len(submitted.Tasks) != 1 || submitted.Tasks[0].Status != apitypes.TaskStatusQueued {
 		t.Fatalf("submit: %d %+v", status, submitted)
 	}

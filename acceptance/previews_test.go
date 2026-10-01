@@ -149,11 +149,14 @@ func TestFunctionPreviewTakesTasksAndLapsesWithoutAFollower(t *testing.T) {
 	if status := p.apiCall(http.MethodPost, "/v1/workspaces/ws/apps/demo/previews", apitypes.PreviewRequest{Spec: spec("add", "app:add", source, nil)}, &preview); status != http.StatusCreated {
 		t.Fatalf("create preview: %d", status)
 	}
-	input := apitypes.Payload{Encoding: apitypes.Json}
+	input := apitypes.TaskInput{Encoding: apitypes.TaskInputEncodingJson}
 	value := []byte(`{"args": [2, 3], "kwargs": {}}`)
 	input.Value = (*json.RawMessage)(&value)
+	// A preview is a release of its function, so the function's submit
+	// targets it by id.
 	var submitted apitypes.SubmitTasksResponse
-	if status := p.apiCall(http.MethodPost, "/v1/workspaces/ws/previews/"+preview.Id.String()+"/tasks", apitypes.SubmitTasksRequest{Inputs: []apitypes.Payload{input}}, &submitted); status != http.StatusCreated {
+	request := apitypes.SubmitTasksRequest{Inputs: []apitypes.TaskInput{input}, ReleaseId: &preview.Id}
+	if status := p.apiCall(http.MethodPost, "/v1/workspaces/ws/apps/demo/functions/add/tasks", request, &submitted); status != http.StatusCreated {
 		t.Fatalf("submit to the preview: %d", status)
 	}
 	var task apitypes.Task

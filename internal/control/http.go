@@ -15,27 +15,18 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 )
 
-// WorkloadKind is a workload's kind. Realtime handlers are ASGI workloads.
-type WorkloadKind string
-
-const (
-	KindFunction WorkloadKind = "function"
-	KindEndpoint WorkloadKind = "endpoint"
-	KindASGI     WorkloadKind = "asgi"
-)
-
 // KindOf is the workload kind a definition deploys as.
-func KindOf(spec apitypes.FunctionSpec) WorkloadKind {
+func KindOf(spec apitypes.FunctionSpec) apitypes.WorkloadKind {
 	if spec.Http == nil {
-		return KindFunction
+		return apitypes.WorkloadKindFunction
 	}
 	switch spec.Http.Kind {
 	case apitypes.HttpKindEndpoint:
-		return KindEndpoint
+		return apitypes.WorkloadKindEndpoint
 	case apitypes.HttpKindAsgi, apitypes.HttpKindRealtime:
-		return KindASGI
+		return apitypes.WorkloadKindAsgi
 	}
-	return KindFunction
+	return apitypes.WorkloadKindFunction
 }
 
 // RouteConflictError means another workload already answers on the
@@ -71,7 +62,15 @@ func resolveHTTP(spec apitypes.FunctionSpec, out *apitypes.FunctionSpec) error {
 	if spec.TimeoutSeconds == nil {
 		out.TimeoutSeconds = new(httpTimeoutSeconds)
 	}
-	if spec.KeepWarmSeconds == nil {
+	switch {
+	case spec.Cron != nil:
+		return &InvalidSpecError{Function: spec.Name, Reason: "schedules apply to functions, not HTTP workloads"}
+	case spec.InProcess != nil && *spec.InProcess:
+		return &InvalidSpecError{Function: spec.Name, Reason: "in_process applies to functions; HTTP workers admit concurrent requests themselves"}
+	}
+	// A warm floor keeps the planner's keep-warm.
+	warmFloor := out.Autoscaler != nil && out.Autoscaler.MinContainers != nil && *out.Autoscaler.MinContainers > 0
+	if spec.KeepWarmSeconds == nil && !warmFloor {
 		out.KeepWarmSeconds = new(httpKeepWarmSeconds)
 	}
 	h.Authorized = orDefault(h.Authorized, true)
@@ -112,7 +111,7 @@ const (
 // digest of the workspace, app, name and kind, so it survives redeploys and
 // an app recreated under the same name keeps its URL. The digest is hex, so
 // it is never mistaken for the "-vN" that may follow it.
-func Subdomain(workspace uuid.UUID, app, name string, kind WorkloadKind) string {
+func Subdomain(workspace uuid.UUID, app, name string, kind apitypes.WorkloadKind) string {
 	var stem strings.Builder
 	dash := false
 	for _, r := range strings.ToLower(strings.TrimSpace(name)) {
@@ -158,11 +157,11 @@ func claimWorkloadRoute(ctx context.Context, q *Queries, workspace, workload uui
 		}
 		hostname = spec.Http.Domain
 	}
-	err := q.ClaimRoute(ctx, ClaimRouteParams{
-		WorkloadID: workload,
-		Subdomain:  Subdomain(workspace, app, spec.Name, KindOf(spec)),
-		Hostname:   hostname,
-	})
+	subdomain := Subdomain(workspace, app, spec.Name, KindOf(spec))
+	if err := q.FreeDeletedRoutes(ctx, FreeDeletedRoutesParams{Subdomain: subdomain, Hostname: hostname}); err != nil {
+		return fmt.Errorf("free deleted routes: %w", err)
+	}
+	err := q.ClaimRoute(ctx, ClaimRouteParams{WorkloadID: workload, Subdomain: subdomain, Hostname: hostname})
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 		reason := "its subdomain collides with another deployment; rename it"

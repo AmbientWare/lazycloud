@@ -14,7 +14,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/AmbientWare/lazycloud/internal/control"
+	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/identity"
@@ -58,9 +58,9 @@ func (e *Edge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	switch t.workload.kind {
-	case control.KindFunction:
+	case apitypes.WorkloadKindFunction:
 		e.invoke(w, r, t)
-	case control.KindEndpoint:
+	case apitypes.WorkloadKindEndpoint:
 		if r.URL.Path != t.release.route {
 			writeError(w, http.StatusNotFound, "endpoint route not found")
 			return
@@ -71,7 +71,7 @@ func (e *Edge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		e.proxy(w, r, t, authorized)
-	case control.KindASGI:
+	case apitypes.WorkloadKindAsgi:
 		e.proxy(w, r, t, authorized)
 	default:
 		writeError(w, http.StatusNotFound, "no workload answers on this host")
@@ -159,7 +159,7 @@ func readBody(r *http.Request, endpoint bool) (*requestBody, error) {
 func (e *Edge) proxy(w http.ResponseWriter, r *http.Request, t target, authorized bool) {
 	ctx := r.Context()
 	upgrade := r.Header.Get("Upgrade") != ""
-	body, err := readBody(r, t.workload.kind == control.KindEndpoint)
+	body, err := readBody(r, t.workload.kind == apitypes.WorkloadKindEndpoint)
 	if err != nil {
 		e.fail(w, r, err)
 		return
@@ -168,7 +168,7 @@ func (e *Edge) proxy(w http.ResponseWriter, r *http.Request, t target, authorize
 	head := e.requestHead(r, authorized, upgrade, body)
 	deadline := time.Now().Add(t.release.timeout)
 	attempts := 1
-	if t.workload.kind == control.KindEndpoint {
+	if t.workload.kind == apitypes.WorkloadKindEndpoint {
 		attempts = t.release.attempts
 	}
 	policy := execution.RetryPolicyOf(t.release.spec)

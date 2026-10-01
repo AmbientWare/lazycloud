@@ -32,6 +32,10 @@ const (
 	// httpSocketName is where an HTTP workload's supervisor serves requests,
 	// in the same directory as the link socket.
 	httpSocketName = "http.sock"
+	// containerAPIDir is a tmpfs in which the supervisor creates the
+	// container API socket.
+	containerAPIDir    = "/run/lazycloud-api"
+	containerAPISocket = containerAPIDir + "/api.sock"
 )
 
 // maxIdleRequestConns bounds kept-alive connections to one container's

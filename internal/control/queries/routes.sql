@@ -1,3 +1,12 @@
+-- name: FreeDeletedRoutes :exec
+-- A deleted workload or app gives up its subdomain and hostname, so a
+-- workload deployed again under the same identity can claim them.
+delete from http_routes r
+using workloads w, apps a
+where w.id = r.workload_id and a.id = w.app_id
+  and (w.desired_state = 'deleted' or a.state = 'deleted')
+  and (r.subdomain = @subdomain or r.hostname = sqlc.narg(hostname));
+
 -- name: ClaimRoute :exec
 -- The unique subdomain and hostname columns reject a claim another workload
 -- already holds; the caller maps the violation to a conflict.

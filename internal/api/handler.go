@@ -20,6 +20,8 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/images"
 	"github.com/AmbientWare/lazycloud/internal/notifications"
+	"github.com/AmbientWare/lazycloud/internal/schedules"
+	"github.com/AmbientWare/lazycloud/internal/secrets"
 	"github.com/AmbientWare/lazycloud/internal/storage"
 )
 
@@ -35,6 +37,8 @@ type Owners struct {
 	Execution     *execution.Execution
 	Images        *images.Images
 	Notifications *notifications.Notifications
+	Secrets       *secrets.Secrets
+	Schedules     *schedules.Schedules
 	// Listener wakes waits on task and image build changes. It must listen
 	// on database.ChannelTask, ChannelImageBuild and ChannelImageBuildLog.
 	Listener *database.Listener
@@ -63,9 +67,35 @@ const RecommendedClientHeader = "X-Lazycloud-Recommended-Client-Version"
 // document and dispatches to the operation. Browser sign-in and provider
 // webhooks are served beside it.
 func NewHandler(owners Owners, cfg Config, logger *slog.Logger) (http.Handler, error) {
+	s, ops, err := newServer(owners, cfg, logger, requireScheme)
+	if err != nil {
+		return nil, err
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET "+signInStartPath, s.startSignIn)
+	mux.HandleFunc("GET "+identity.GitHubCallbackPath, s.completeSignIn)
+	mux.HandleFunc("POST /webhooks/resend", s.receiveResendWebhook)
+	mux.Handle("/", s.authenticate(ops))
+	return s.recommendClient(s.limitBody(mux)), nil
+}
+
+// NewContainerHandler serves the same operations to container API requests.
+// Their context carries the container principal from WithContainer; they
+// have no bearer token or session.
+func NewContainerHandler(owners Owners, cfg Config, logger *slog.Logger) (http.Handler, error) {
+	s, ops, err := newServer(owners, cfg, logger, requireContainerScheme)
+	if err != nil {
+		return nil, err
+	}
+	return s.limitBody(s.requireContainer(ops)), nil
+}
+
+// newServer returns the server and the validated operation handler, whose
+// security requirements authenticated applies.
+func newServer(owners Owners, cfg Config, logger *slog.Logger, authenticated openapi3filter.AuthenticationFunc) (*Server, http.Handler, error) {
 	spec, err := GetSwagger()
 	if err != nil {
-		return nil, fmt.Errorf("load openapi document: %w", err)
+		return nil, nil, fmt.Errorf("load openapi document: %w", err)
 	}
 	cfg.PublicURL = strings.TrimRight(cfg.PublicURL, "/")
 	s := &Server{owners: owners, cfg: cfg, logger: logger}
@@ -80,7 +110,7 @@ func NewHandler(owners Owners, cfg Config, logger *slog.Logger) (http.Handler, e
 			// authenticate resolves credentials first; this applies each
 			// operation's security requirement, so an operation is
 			// authenticated unless the document says otherwise.
-			AuthenticationFunc: requireScheme,
+			AuthenticationFunc: authenticated,
 		},
 		SilenceServersWarning: true,
 		ErrorHandlerWithOpts: func(_ context.Context, err error, w http.ResponseWriter, r *http.Request, opts middleware.ErrorHandlerOpts) {
@@ -106,12 +136,7 @@ func NewHandler(owners Owners, cfg Config, logger *slog.Logger) (http.Handler, e
 			s.writeError(w, r, fmt.Errorf("%w: %w", errInvalidRequest, err))
 		},
 	})
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET "+signInStartPath, s.startSignIn)
-	mux.HandleFunc("GET "+identity.GitHubCallbackPath, s.completeSignIn)
-	mux.HandleFunc("POST /webhooks/resend", s.receiveResendWebhook)
-	mux.Handle("/", s.authenticate(validate(handler)))
-	return s.recommendClient(s.limitBody(mux)), nil
+	return s, validate(handler), nil
 }
 
 type principalKey struct{}
@@ -119,6 +144,38 @@ type principalKey struct{}
 func principalFrom(ctx context.Context) (identity.Principal, bool) {
 	p, ok := ctx.Value(principalKey{}).(identity.Principal)
 	return p, ok
+}
+
+type containerKey struct{}
+
+// WithContainer marks ctx as a container API request from p.
+func WithContainer(ctx context.Context, p identity.ContainerPrincipal) context.Context {
+	return context.WithValue(ctx, containerKey{}, p)
+}
+
+func containerFrom(ctx context.Context) (identity.ContainerPrincipal, bool) {
+	p, ok := ctx.Value(containerKey{}).(identity.ContainerPrincipal)
+	return p, ok
+}
+
+// requireContainerScheme lets a container principal through operations a
+// bearer token may call; it holds no browser session.
+func requireContainerScheme(ctx context.Context, input *openapi3filter.AuthenticationInput) error {
+	if _, ok := containerFrom(ctx); ok && input.SecuritySchemeName == "bearer" {
+		return nil
+	}
+	return identity.ErrUnauthenticated
+}
+
+// requireContainer admits only requests carrying a container principal.
+func (s *Server) requireContainer(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := containerFrom(r.Context()); !ok {
+			s.writeError(w, r, identity.ErrUnauthenticated)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // requireScheme accepts a security scheme when authenticate resolved a
@@ -207,16 +264,20 @@ var errInvalidRequest = errors.New("invalid request")
 // logged and reported without detail.
 func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 	var (
-		tooMany       *execution.TooManyPendingError
-		invalidSpec   *control.InvalidSpecError
-		sourceMissing *control.SourceMissingError
-		routeConflict *control.RouteConflictError
-		tooLarge      *http.MaxBytesError
-		invalidImage  *images.InvalidError
-		conflict      *identity.ConflictError
-		invalid       *identity.InvalidError
-		roleErr       *identity.RoleError
-		accountErr    *identity.AccountError
+		tooMany        *execution.TooManyPendingError
+		unknownTask    *execution.UnknownTaskError
+		invalidSpec    *control.InvalidSpecError
+		sourceMissing  *control.SourceMissingError
+		routeConflict  *control.RouteConflictError
+		tooLarge       *http.MaxBytesError
+		invalidImage   *images.InvalidError
+		conflict       *identity.ConflictError
+		invalid        *identity.InvalidError
+		roleErr        *identity.RoleError
+		accountErr     *identity.AccountError
+		secretMissing  *secrets.NotFoundError
+		secretExists   *secrets.ExistsError
+		secretReserved *secrets.ReservedNameError
 	)
 	switch {
 	case errors.Is(err, identity.ErrUnauthenticated):
@@ -240,13 +301,21 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		writeJSONError(w, http.StatusNotFound, apitypes.NotFound, "not found")
 	case errors.Is(err, execution.ErrNoResult):
 		writeJSONError(w, http.StatusNotFound, apitypes.NotFound, "the task finished without a result")
+	case errors.Is(err, control.ErrVersionNotFound):
+		writeJSONError(w, http.StatusNotFound, apitypes.NotFound, "the deployment has no such version")
+	case errors.As(err, &unknownTask):
+		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, unknownTask.Error())
+	case errors.Is(err, control.ErrInvalidCursor), errors.Is(err, execution.ErrInvalidCursor):
+		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, "the cursor is not from this listing")
+	case errors.Is(err, execution.ErrInvalidFilter), errors.Is(err, execution.ErrInvalidSubmit):
+		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, err.Error())
 	case errors.As(err, &invalidSpec):
 		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, invalidSpec.Error())
 	case errors.As(err, &sourceMissing):
 		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, sourceMissing.Error())
 	case errors.As(err, &routeConflict):
 		writeJSONError(w, http.StatusConflict, apitypes.Conflict, routeConflict.Error())
-	case errors.Is(err, storage.ErrInvalidDigest), errors.Is(err, errInvalidRequest):
+	case errors.Is(err, storage.ErrInvalidDigest), errors.Is(err, errInvalidRequest), errors.Is(err, control.ErrNothingToDeploy):
 		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, err.Error())
 	case errors.As(err, &invalidImage):
 		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, err.Error())
@@ -264,6 +333,14 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		writeJSONError(w, http.StatusConflict, apitypes.Conflict, "the function is stopped or its app is paused")
 	case errors.Is(err, execution.ErrTaskNotFinished):
 		writeJSONError(w, http.StatusConflict, apitypes.TaskNotFinished, "the task has not finished")
+	case errors.As(err, &secretMissing):
+		writeJSONError(w, http.StatusNotFound, apitypes.NotFound, secretMissing.Error())
+	case errors.As(err, &secretExists):
+		writeJSONError(w, http.StatusConflict, apitypes.Conflict, secretExists.Error())
+	case errors.As(err, &secretReserved):
+		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, secretReserved.Error())
+	case errors.Is(err, secrets.ErrInvalidCursor), errors.Is(err, schedules.ErrInvalidCursor):
+		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, "the cursor is not from a previous page")
 	case endpointError(w, err):
 	default:
 		s.logger.ErrorContext(r.Context(), "request failed", "method", r.Method, "path", r.URL.Path, "error", err)

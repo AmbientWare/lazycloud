@@ -1,139 +1,122 @@
+"""Secret and `lazycloud secret` on the public API's secret operations."""
+
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import json
 
 import pytest
 from lazycloud.abstractions.secret import Secret, SecretOperationError
-from lazycloud.clients.secret.control import SecretControlClient
-from pydantic import JsonValue
-from shared.http.errors import HttpApiError
-from shared.http.secrets import (
-    CreateSecretResponse,
-    DeleteSecretResponse,
-    GetSecretResponse,
-    SecretMaskedSetResponse,
-    SecretWireRecord,
-    UpdateSecretResponse,
-)
-from shared.timestamps import utc_now
+from lazycloud.cli.main import build_public_cli
+from typer.testing import CliRunner
+
+from tests.api_server import ApiRequest, FakeApi, Reply, error_reply, json_reply
+
+SECRETS = "/v1/workspaces/team/secrets"
+NOW = "2026-09-30T12:00:00Z"
 
 
-@dataclass
-class FakeSecretClient:
-    values: dict[str, str] = field(default_factory=dict)
-    fail_reads: bool = False
-
-    def create(self, name: str, value: str) -> CreateSecretResponse:
-        if name in self.values:
-            raise HttpApiError("Secret already exists", status_code=409)
-        self.values[name] = value
-        return CreateSecretResponse(id=name, name=name)
-
-    def get(self, name: str) -> GetSecretResponse:
-        if self.fail_reads or name not in self.values:
-            raise HttpApiError("Secret not found", status_code=404)
-        timestamp = utc_now()
-        return GetSecretResponse(
-            secret=SecretWireRecord(
-                id=name,
-                name=name,
-                value=self.values[name],
-                created_at=timestamp,
-                updated_at=timestamp,
-            ),
-        )
-
-    def update(self, name: str, value: str) -> UpdateSecretResponse:
-        if name not in self.values:
-            raise HttpApiError("Secret not found", status_code=404)
-        self.values[name] = value
-        return UpdateSecretResponse()
-
-    def set(self, name: str, value: str) -> SecretMaskedSetResponse:
-        self.values[name] = value
-        return SecretMaskedSetResponse(name=name, value="********")
-
-    def delete(self, name: str) -> DeleteSecretResponse:
-        if name not in self.values:
-            raise HttpApiError("Secret not found", status_code=404)
-        del self.values[name]
-        return DeleteSecretResponse()
+def _secret(name: str) -> dict[str, str]:
+    return {"name": name, "created_at": NOW, "updated_at": NOW}
 
 
-@dataclass
-class RecordingSecretChannel:
-    calls: list[tuple[str, str]] = field(default_factory=list)
+@pytest.fixture
+def secrets_api(fake_api: FakeApi) -> FakeApi:
+    values: dict[str, str] = {}
 
-    def get(self, path: str) -> JsonValue:
-        self.calls.append(("GET", path))
-        if "/full?" in path:
-            return {"secrets": []}
-        return {"secret": None}
+    @fake_api.route("POST", SECRETS)
+    def create(request: ApiRequest) -> Reply:
+        body = request.json()
+        if body["name"] in values:
+            return error_reply("conflict", f"secret already exists: {body['name']}", 409)
+        values[body["name"]] = body["value"]
+        return json_reply(_secret(body["name"]), 201)
 
-    def post(self, path: str, payload: dict[str, JsonValue] | None = None) -> JsonValue:
-        self.calls.append(("POST", path))
-        if "/API%2FTOKEN?" in path:
-            return {"name": "API/TOKEN", "value": "********"}
-        return {"id": "API/TOKEN", "name": "API/TOKEN"}
+    @fake_api.route("GET", SECRETS)
+    def listing(request: ApiRequest) -> Reply:
+        names = sorted(values)
+        cursor = request.query.get("cursor", [""])[0]
+        page = [n for n in names if n > cursor][:2]
+        more = page and page[-1] != names[-1]
+        payload: dict[str, object] = {"secrets": [_secret(n) for n in page]}
+        if more:
+            payload["next_cursor"] = page[-1]
+        return json_reply(payload)
 
-    def patch(self, path: str, payload: dict[str, JsonValue] | None = None) -> JsonValue:
-        self.calls.append(("PATCH", path))
-        return {}
+    @fake_api.route("GET", SECRETS + r"/(?P<name>\w+)")
+    def get(request: ApiRequest) -> Reply:
+        name = request.path.rsplit("/", 1)[1]
+        if name not in values:
+            return error_reply("not_found", f"secret not found: {name}", 404)
+        return json_reply(_secret(name))
 
-    def delete(self, path: str) -> JsonValue:
-        self.calls.append(("DELETE", path))
-        return {}
+    @fake_api.route("GET", SECRETS + r"/\w+/value")
+    def reveal(request: ApiRequest) -> Reply:
+        name = request.path.split("/")[-2]
+        if name not in values:
+            return error_reply("not_found", f"secret not found: {name}", 404)
+        return json_reply({**_secret(name), "value": values[name]})
+
+    @fake_api.route("PUT", SECRETS + r"/\w+")
+    def put(request: ApiRequest) -> Reply:
+        values[request.path.rsplit("/", 1)[1]] = request.json()["value"]
+        return json_reply(_secret(request.path.rsplit("/", 1)[1]))
+
+    @fake_api.route("PATCH", SECRETS + r"/\w+")
+    def patch(request: ApiRequest) -> Reply:
+        name = request.path.rsplit("/", 1)[1]
+        if name not in values:
+            return error_reply("not_found", f"secret not found: {name}", 404)
+        values[name] = request.json()["value"]
+        return json_reply(_secret(name))
+
+    @fake_api.route("DELETE", SECRETS + r"/\w+")
+    def delete(request: ApiRequest) -> Reply:
+        name = request.path.rsplit("/", 1)[1]
+        if values.pop(name, None) is None:
+            return error_reply("not_found", f"secret not found: {name}", 404)
+        return 204, {}, b""
+
+    return fake_api
 
 
-def test_secret_set_creates_then_updates_and_returns_records() -> None:
-    client = FakeSecretClient()
-    secret = Secret("API_TOKEN")._bind_control(client)
-
-    created = secret.set("first")
-    updated = secret.set("second")
-
-    assert created.name == "API_TOKEN"
-    assert created.masked() == "********"
-    assert updated.value == "second"
-    assert secret.get() == "second"
-    assert secret.record().value == "second"
-
-
-def test_secret_create_update_delete_errors_are_typed() -> None:
-    client = FakeSecretClient()
-    secret = Secret("API_TOKEN")._bind_control(client)
-
-    with pytest.raises(SecretOperationError, match="not found"):
-        secret.update("missing")
-    with pytest.raises(SecretOperationError, match="not found"):
-        secret.record()
+def test_secret_lifecycle_and_errors(secrets_api: FakeApi) -> None:
+    secret = Secret("API_TOKEN")
 
     assert secret.create("first").value == "first"
-    with pytest.raises(SecretOperationError, match="already exists"):
-        secret.create("first")
-
+    with pytest.raises(SecretOperationError, match="secret already exists: API_TOKEN"):
+        secret.create("again")
+    assert secret.update("second").value == "second"
+    assert secret.set("third").value == "third"
+    assert secret.get() == "third"
     assert secret.delete() is True
-    with pytest.raises(SecretOperationError, match="not found"):
-        secret.delete()
+    with pytest.raises(SecretOperationError, match="secret not found: API_TOKEN"):
+        secret.get()
+    with pytest.raises(SecretOperationError, match="secret not found: MISSING"):
+        Secret("MISSING").update("x")
 
 
-def test_secret_control_client_scopes_every_request_to_selected_workspace() -> None:
-    channel = RecordingSecretChannel()
-    client = SecretControlClient(channel=channel, workspace="team/blue")
+def test_cli_masks_values_unless_revealed_and_lists_every_page(secrets_api: FakeApi) -> None:
+    cli = build_public_cli()
+    runner = CliRunner()
+    for name in ("A_KEY", "B_KEY", "C_KEY"):
+        assert runner.invoke(cli, ["secret", "create", name, f"value-of-{name}"]).exit_code == 0
 
-    client.create("API/TOKEN", "created")
-    client.set("API/TOKEN", "set")
-    client.list()
-    client.get("API/TOKEN")
-    client.update("API/TOKEN", "updated")
-    client.delete("API/TOKEN")
+    masked = runner.invoke(cli, ["secret", "show", "A_KEY"])
+    assert masked.exit_code == 0
+    assert "********" in masked.stdout
+    assert "value-of-A_KEY" not in masked.stdout
+    # A masked show never fetches the value.
+    assert not secrets_api.calls("GET", SECRETS + "/A_KEY/value")
 
-    workspace_query = "workspace=team%2Fblue"
-    assert channel.calls == [
-        ("POST", f"/api/v1/secrets?{workspace_query}"),
-        ("POST", f"/api/v1/secrets/API%2FTOKEN?{workspace_query}"),
-        ("GET", f"/api/v1/secrets/full?{workspace_query}"),
-        ("GET", f"/api/v1/secrets/API%2FTOKEN?{workspace_query}"),
-        ("PATCH", f"/api/v1/secrets/API%2FTOKEN?{workspace_query}"),
-        ("DELETE", f"/api/v1/secrets/API%2FTOKEN?{workspace_query}"),
-    ]
+    revealed = runner.invoke(cli, ["--json", "secret", "show", "A_KEY", "--reveal"])
+    assert json.loads(revealed.stdout)["value"] == "value-of-A_KEY"
+
+    listed = runner.invoke(cli, ["--json", "secret", "list"])
+    rows = json.loads(listed.stdout)
+    assert [row["name"] for row in rows] == ["A_KEY", "B_KEY", "C_KEY"]
+    assert {row["value"] for row in rows} == {"********"}
+
+    modified = runner.invoke(cli, ["--json", "secret", "modify", "B_KEY", "new"])
+    assert json.loads(modified.stdout) == {"name": "B_KEY", "updated": True}
+    deleted = runner.invoke(cli, ["--json", "secret", "delete", "C_KEY"])
+    assert json.loads(deleted.stdout) == {"name": "C_KEY", "deleted": True}

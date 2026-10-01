@@ -23,13 +23,32 @@ func (q *Queries) CountQueuedTasks(ctx context.Context, workloadID uuid.UUID) (i
 	return count, err
 }
 
+const insertDependencies = `-- name: InsertDependencies :exec
+insert into task_dependencies (task_id, depends_on)
+select unnest($1::uuid[]), unnest($2::uuid[])
+`
+
+type InsertDependenciesParams struct {
+	TaskIds   []uuid.UUID
+	DependsOn []uuid.UUID
+}
+
+func (q *Queries) InsertDependencies(ctx context.Context, arg InsertDependenciesParams) error {
+	_, err := q.db.Exec(ctx, insertDependencies, arg.TaskIds, arg.DependsOn)
+	return err
+}
+
 const insertTasks = `-- name: InsertTasks :many
 with input as materialized (
-    select uuidv7() as id, i as ord, ($1::text[])[i] as encoding, ($2::bytea[])[i] as data
+    select uuidv7() as id, i as ord, ($1::text[])[i] as encoding, ($2::bytea[])[i] as data,
+           ($3::int[])[i] as unmet
     from generate_subscripts($1::text[], 1) as i
 ), task as (
-    insert into tasks (id, workspace_id, workload_id, release_id, status, max_attempts)
-    select input.id, $3, $4, $5, 'queued', $6
+    insert into tasks (id, workspace_id, workload_id, release_id, status, max_attempts,
+                       parent_task_id, root_task_id, unmet_dependencies, scheduled_for)
+    select input.id, $4, $5, $6, 'queued', $7,
+           $8::uuid, $9::uuid, input.unmet,
+           $10::timestamptz
     from input
     order by input.ord
     returning tasks.id, tasks.created_at
@@ -44,12 +63,16 @@ order by input.ord
 `
 
 type InsertTasksParams struct {
-	Encodings   []string
-	Data        [][]byte
-	WorkspaceID uuid.UUID
-	WorkloadID  uuid.UUID
-	ReleaseID   uuid.UUID
-	MaxAttempts int32
+	Encodings    []string
+	Data         [][]byte
+	Unmet        []int32
+	WorkspaceID  uuid.UUID
+	WorkloadID   uuid.UUID
+	ReleaseID    uuid.UUID
+	MaxAttempts  int32
+	ParentTaskID *uuid.UUID
+	RootTaskID   *uuid.UUID
+	ScheduledFor *time.Time
 }
 
 type InsertTasksRow struct {
@@ -62,10 +85,14 @@ func (q *Queries) InsertTasks(ctx context.Context, arg InsertTasksParams) ([]Ins
 	rows, err := q.db.Query(ctx, insertTasks,
 		arg.Encodings,
 		arg.Data,
+		arg.Unmet,
 		arg.WorkspaceID,
 		arg.WorkloadID,
 		arg.ReleaseID,
 		arg.MaxAttempts,
+		arg.ParentTaskID,
+		arg.RootTaskID,
+		arg.ScheduledFor,
 	)
 	if err != nil {
 		return nil, err
@@ -87,15 +114,17 @@ func (q *Queries) InsertTasks(ctx context.Context, arg InsertTasksParams) ([]Ins
 
 const lockFunctionForSubmit = `-- name: LockFunctionForSubmit :one
 select w.id, w.name, w.desired_state, a.name as app_name, a.state as app_state,
-       r.id as release_id, r.spec
+       r.id as release_id, r.version, r.spec
 from workloads w
 join apps a on a.id = w.app_id
-join releases r on r.id = w.active_release_id
-where a.workspace_id = $1 and a.name = $2 and w.kind = 'function' and w.name = $3
+join releases r on r.id = coalesce($1::uuid, w.active_release_id) and r.workload_id = w.id
+where a.workspace_id = $2 and a.name = $3 and a.state <> 'deleted'
+  and w.kind = 'function' and w.name = $4 and w.desired_state <> 'deleted'
 for update of w
 `
 
 type LockFunctionForSubmitParams struct {
+	ReleaseID   *uuid.UUID
 	WorkspaceID uuid.UUID
 	AppName     string
 	Name        string
@@ -108,12 +137,19 @@ type LockFunctionForSubmitRow struct {
 	AppName      string
 	AppState     string
 	ReleaseID    uuid.UUID
+	Version      *int32
 	Spec         []byte
 }
 
 // The workload lock makes the max_pending_tasks count exact for this submit.
+// Without a release id the task runs on the active release.
 func (q *Queries) LockFunctionForSubmit(ctx context.Context, arg LockFunctionForSubmitParams) (LockFunctionForSubmitRow, error) {
-	row := q.db.QueryRow(ctx, lockFunctionForSubmit, arg.WorkspaceID, arg.AppName, arg.Name)
+	row := q.db.QueryRow(ctx, lockFunctionForSubmit,
+		arg.ReleaseID,
+		arg.WorkspaceID,
+		arg.AppName,
+		arg.Name,
+	)
 	var i LockFunctionForSubmitRow
 	err := row.Scan(
 		&i.ID,
@@ -122,7 +158,73 @@ func (q *Queries) LockFunctionForSubmit(ctx context.Context, arg LockFunctionFor
 		&i.AppName,
 		&i.AppState,
 		&i.ReleaseID,
+		&i.Version,
 		&i.Spec,
 	)
+	return i, err
+}
+
+const lockUpstreamTasks = `-- name: LockUpstreamTasks :many
+select t.id, t.status, coalesce(octet_length(r.data), 0)::bigint as result_bytes
+from tasks t
+left join task_results r on r.task_id = t.id
+where t.id = any($1::uuid[]) and t.workspace_id = $2
+order by t.id
+for share of t
+`
+
+type LockUpstreamTasksParams struct {
+	Ids         []uuid.UUID
+	WorkspaceID uuid.UUID
+}
+
+type LockUpstreamTasksRow struct {
+	ID          uuid.UUID
+	Status      string
+	ResultBytes int64
+}
+
+// FOR SHARE holds each upstream's status until the submit commits, so an
+// upstream either finished before and is read here, or finishes after and
+// sees the new dependency rows.
+// A succeeded upstream reports the size of the result it hands on.
+func (q *Queries) LockUpstreamTasks(ctx context.Context, arg LockUpstreamTasksParams) ([]LockUpstreamTasksRow, error) {
+	rows, err := q.db.Query(ctx, lockUpstreamTasks, arg.Ids, arg.WorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []LockUpstreamTasksRow
+	for rows.Next() {
+		var i LockUpstreamTasksRow
+		if err := rows.Scan(&i.ID, &i.Status, &i.ResultBytes); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const parentTask = `-- name: ParentTask :one
+select id, root_task_id from tasks where id = $1 and workspace_id = $2
+`
+
+type ParentTaskParams struct {
+	ID          uuid.UUID
+	WorkspaceID uuid.UUID
+}
+
+type ParentTaskRow struct {
+	ID         uuid.UUID
+	RootTaskID *uuid.UUID
+}
+
+func (q *Queries) ParentTask(ctx context.Context, arg ParentTaskParams) (ParentTaskRow, error) {
+	row := q.db.QueryRow(ctx, parentTask, arg.ID, arg.WorkspaceID)
+	var i ParentTaskRow
+	err := row.Scan(&i.ID, &i.RootTaskID)
 	return i, err
 }

@@ -15,7 +15,7 @@ import (
 const ensurePreviewWorkload = `-- name: EnsurePreviewWorkload :one
 insert into workloads (app_id, kind, name, desired_state)
 values ($1, $2, $3, 'stopped')
-on conflict (app_id, kind, name) do update set name = excluded.name
+on conflict (app_id, kind, name) where desired_state <> 'deleted' do update set name = excluded.name
 returning id
 `
 
@@ -85,7 +85,7 @@ type InsertPreviewReleaseParams struct {
 
 type InsertPreviewReleaseRow struct {
 	ID        uuid.UUID
-	Version   int32
+	Version   *int32
 	CreatedAt time.Time
 }
 

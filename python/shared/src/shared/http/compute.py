@@ -335,16 +335,6 @@ class ContainerDetailResponse(ContainerResponse):
     )
 
 
-class ContainerWithAppResponse(HttpModel):
-    container: ContainerResponse
-    app_id: str = ""
-
-
-class ContainerWithAppPageResponse(HttpModel):
-    data: list[ContainerWithAppResponse] = Field(default_factory=list)
-    next: str = ""
-
-
 class ContainerStopAllResponse(HttpModel):
     message: str
     containers: list[ContainerResponse] = Field(default_factory=list)
@@ -356,8 +346,6 @@ __all__ = [
     "ContainerResponse",
     "ContainerRunRequest",
     "ContainerStopAllResponse",
-    "ContainerWithAppPageResponse",
-    "ContainerWithAppResponse",
     "MachineJoinCommandRequest",
     "MachineJoinCommandResponse",
     "MachineJoinTokenResponse",

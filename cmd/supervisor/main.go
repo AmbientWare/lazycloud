@@ -34,7 +34,9 @@ func run() int {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
-	err := supervisor.Run(ctx, supervisor.Config{Socket: socket, Reap: os.Getpid() == 1, Logger: logger})
+	err := supervisor.Run(ctx, supervisor.Config{
+		Socket: socket, APISocket: os.Getenv(supervisor.APISocketEnv), Reap: os.Getpid() == 1, Logger: logger,
+	})
 	switch {
 	case err == nil:
 		return 0

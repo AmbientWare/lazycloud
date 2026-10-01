@@ -74,10 +74,10 @@ func listen(t *testing.T, pool *pgxpool.Pool) *database.Listener {
 	return l
 }
 
-func jsonInputs(n int) []Payload {
-	inputs := make([]Payload, n)
+func jsonInputs(n int) []TaskInput {
+	inputs := make([]TaskInput, n)
 	for i := range inputs {
-		inputs[i] = Payload{Encoding: EncodingJSON, Data: []byte(`{"args": [1], "kwargs": {}}`)}
+		inputs[i] = TaskInput{Payload: Payload{Encoding: EncodingJSON, Data: []byte(`{"args": [1], "kwargs": {}}`)}}
 	}
 	return inputs
 }

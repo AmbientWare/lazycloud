@@ -30,6 +30,26 @@ func (q *Queries) ClaimRoute(ctx context.Context, arg ClaimRouteParams) error {
 	return err
 }
 
+const freeDeletedRoutes = `-- name: FreeDeletedRoutes :exec
+delete from http_routes r
+using workloads w, apps a
+where w.id = r.workload_id and a.id = w.app_id
+  and (w.desired_state = 'deleted' or a.state = 'deleted')
+  and (r.subdomain = $1 or r.hostname = $2)
+`
+
+type FreeDeletedRoutesParams struct {
+	Subdomain string
+	Hostname  *string
+}
+
+// A deleted workload or app gives up its subdomain and hostname, so a
+// workload deployed again under the same identity can claim them.
+func (q *Queries) FreeDeletedRoutes(ctx context.Context, arg FreeDeletedRoutesParams) error {
+	_, err := q.db.Exec(ctx, freeDeletedRoutes, arg.Subdomain, arg.Hostname)
+	return err
+}
+
 const ownerRegisteredDomain = `-- name: OwnerRegisteredDomain :one
 select exists (
     select 1

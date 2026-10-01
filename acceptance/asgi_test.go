@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
-	"github.com/AmbientWare/lazycloud/internal/control"
 )
 
 const asgiApp = `
@@ -96,7 +95,7 @@ func TestASGIStreamsUploadsUpgradesAndStripsTheToken(t *testing.T) {
 		asgiSpec(source, "service", "app:service", apitypes.HttpKindAsgi, 8),
 		asgiSpec(source, "talk", "app:talk", apitypes.HttpKindRealtime, 4),
 	)
-	service := p.describe("web", control.KindASGI, "service")
+	service := p.describe("web", apitypes.WorkloadKindAsgi, "service")
 
 	// Headers: the platform token is gone, X-Forwarded-* describe the client.
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, service.Url+"/headers", nil)
@@ -170,7 +169,7 @@ func TestASGIStreamsUploadsUpgradesAndStripsTheToken(t *testing.T) {
 	ws.close()
 
 	// A realtime handler answers each message; an iterable sends several.
-	talk := p.describe("web", control.KindASGI, "talk")
+	talk := p.describe("web", apitypes.WorkloadKindAsgi, "talk")
 	if talk.Kind != apitypes.HttpKindRealtime {
 		t.Fatalf("talk kind %s", talk.Kind)
 	}

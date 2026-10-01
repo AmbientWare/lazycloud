@@ -165,31 +165,6 @@ func (s *Server) SyncPreviewFiles(ctx context.Context, req SyncPreviewFilesReque
 	return SyncPreviewFiles200JSONResponse{Written: written, Removed: removed}, nil
 }
 
-// SubmitPreviewTasks admits tasks against a function preview.
-func (s *Server) SubmitPreviewTasks(ctx context.Context, req SubmitPreviewTasksRequestObject) (SubmitPreviewTasksResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
-	if err != nil {
-		return nil, err
-	}
-	inputs := make([]execution.Payload, len(req.Body.Inputs))
-	for n, input := range req.Body.Inputs {
-		payload, err := payloadFrom(input)
-		if err != nil {
-			return nil, fmt.Errorf("input %d: %w", n, err)
-		}
-		inputs[n] = payload
-	}
-	tasks, err := s.owners.Execution.SubmitRelease(ctx, ws.ID, req.Preview, inputs)
-	if err != nil {
-		return nil, err
-	}
-	out := SubmitPreviewTasks201JSONResponse{Tasks: make([]apitypes.Task, len(tasks))}
-	for n, task := range tasks {
-		out.Tasks[n] = taskOut(task)
-	}
-	return out, nil
-}
-
 // StreamPreviewOutput writes the preview container's output as NDJSON. A
 // follower keeps the preview alive; the stream ends when it stops.
 func (s *Server) StreamPreviewOutput(ctx context.Context, req StreamPreviewOutputRequestObject) (StreamPreviewOutputResponseObject, error) {

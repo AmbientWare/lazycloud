@@ -2,6 +2,7 @@ package hostsession_test
 
 import (
 	"context"
+	"crypto/rand"
 	"log/slog"
 	"net"
 	"strings"
@@ -18,7 +19,9 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/AmbientWare/lazycloud/internal/api"
 	"github.com/AmbientWare/lazycloud/internal/compute"
+	"github.com/AmbientWare/lazycloud/internal/control"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
 	"github.com/AmbientWare/lazycloud/internal/execution"
@@ -26,6 +29,8 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/hostsession"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/images"
+	"github.com/AmbientWare/lazycloud/internal/schedules"
+	"github.com/AmbientWare/lazycloud/internal/secrets"
 	"github.com/AmbientWare/lazycloud/internal/storage"
 	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
@@ -36,6 +41,7 @@ type harness struct {
 	client    hostproto.HostServiceClient
 	compute   *compute.Compute
 	execution *execution.Execution
+	secrets   *secrets.Secrets
 }
 
 // start serves the host service on a random local port against real
@@ -47,10 +53,29 @@ func start(t *testing.T) *harness {
 	listener := database.NewListener(pool, logger, database.ChannelHost, database.ChannelClaim)
 	c := compute.NewCompute(pool)
 	e := execution.NewExecution(pool)
-	im := images.NewImages(pool, e, images.Config{Registry: "127.0.0.1:1", Repository: "lazycloud"}, nil)
-	srv := hostsession.NewServer(c, e, storage.NewStorage(pool, storagetest.Config()), im, listener, hostsession.Config{
+	store := storage.NewStorage(pool, storagetest.Config())
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		t.Fatal(err)
+	}
+	key, err := secrets.NewFileKey(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vault := secrets.NewSecrets(pool, key)
+	containerAPI, err := api.NewContainerHandler(api.Owners{
+		Identity: identity.NewIdentity(pool, identity.Config{}), Control: control.NewControl(pool), Storage: store, Execution: e,
+		Secrets: vault, Schedules: schedules.NewSchedules(pool, e), Listener: listener,
+	}, api.Config{}, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	im := images.NewImages(pool, e, images.Config{Registry: "127.0.0.1:1", Repository: "lazycloud"})
+	srv := hostsession.NewServer(c, e, store, im, listener, hostsession.Config{
 		ImageTemplate: "docker.io/library/python:{version}-slim",
 		TouchInterval: 100 * time.Millisecond,
+		Secrets:       vault,
+		ContainerAPI:  containerAPI,
 	}, logger)
 	g := grpc.NewServer(srv.ServerOptions()...)
 	hostproto.RegisterHostServiceServer(g, srv)
@@ -74,7 +99,7 @@ func start(t *testing.T) *harness {
 		stop()
 		wg.Wait()
 	})
-	return &harness{t: t, pool: pool, client: hostproto.NewHostServiceClient(conn), compute: c, execution: e}
+	return &harness{t: t, pool: pool, client: hostproto.NewHostServiceClient(conn), compute: c, execution: e, secrets: vault}
 }
 
 func (h *harness) enroll() (compute.HostID, context.Context) {
@@ -97,6 +122,13 @@ func (h *harness) enroll() (compute.HostID, context.Context) {
 // assigned to host in the starting state.
 func (h *harness) startingContainer(host compute.HostID) (identity.WorkspaceID, execution.ContainerID) {
 	h.t.Helper()
+	return h.startingContainerWith(host, `{"handler": "reports:summarize", "image": {"python_version": "3.12"}, "environment": {"MODE": "test"},
+		  "concurrency": 2, "timeout_seconds": 60, "max_pending_tasks": 10}`)
+}
+
+// startingContainerWith does the same with the release spec JSON.
+func (h *harness) startingContainerWith(host compute.HostID, spec string) (identity.WorkspaceID, execution.ContainerID) {
+	h.t.Helper()
 	ctx := h.t.Context()
 	var ws, release, container uuid.UUID
 	err := h.pool.QueryRow(ctx, `
@@ -105,9 +137,7 @@ with ws as (insert into workspaces (name) values ('ws') returning id),
      wl as (insert into workloads (app_id, kind, name, desired_state) select id, 'function', 'summarize', 'active' from app returning id),
      rel as (insert into releases (workload_id, version, spec, spec_digest, source_sha256)
              select id, 1, $1::jsonb, sha256('spec'), sha256('src') from wl returning id)
-select ws.id, rel.id from ws, rel`,
-		`{"handler": "reports:summarize", "image": {"python_version": "3.12"}, "environment": {"MODE": "test"},
-		  "concurrency": 2, "timeout_seconds": 60, "max_pending_tasks": 10}`).Scan(&ws, &release)
+select ws.id, rel.id from ws, rel`, spec).Scan(&ws, &release)
 	if err != nil {
 		h.t.Fatal(err)
 	}
@@ -220,9 +250,9 @@ func TestReadyContainerClaimsCompletesAndReceivesCancels(t *testing.T) {
 
 	tasks, err := h.execution.Submit(t.Context(), execution.SubmitRequest{
 		Workspace: ws, App: "reports", Function: "summarize",
-		Inputs: []execution.Payload{
-			{Encoding: execution.EncodingJSON, Data: []byte(`{"args": [1], "kwargs": {}}`)},
-			{Encoding: execution.EncodingJSON, Data: []byte(`{"args": [2], "kwargs": {}}`)},
+		Inputs: []execution.TaskInput{
+			{Payload: execution.Payload{Encoding: execution.EncodingJSON, Data: []byte(`{"args": [1], "kwargs": {}}`)}},
+			{Payload: execution.Payload{Encoding: execution.EncodingJSON, Data: []byte(`{"args": [2], "kwargs": {}}`)}},
 		},
 	})
 	if err != nil {

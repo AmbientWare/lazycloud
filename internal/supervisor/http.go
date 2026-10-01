@@ -34,7 +34,7 @@ const (
 func (sl *slot) serveHTTP(ctx context.Context, p *runnerProcess, cfg *hostproto.Configure) (bool, error) {
 	stop := context.AfterFunc(ctx, p.terminate)
 	defer stop()
-	if loadErr := p.load(cfg); loadErr != nil {
+	if loadErr := p.load(cfg, 1); loadErr != nil {
 		if ctx.Err() != nil {
 			return false, fmt.Errorf("load handler: %w", ctx.Err())
 		}

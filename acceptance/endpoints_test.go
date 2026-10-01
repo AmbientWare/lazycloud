@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
-	"github.com/AmbientWare/lazycloud/internal/control"
 )
 
 const endpointApp = `
@@ -58,7 +57,7 @@ func TestEndpointColdWarmAndScaleToZero(t *testing.T) {
 	source := p.upload(map[string]string{"app.py": endpointApp})
 	d := p.deploy("api_demo", endpointSpec(source, "count_words", "app:count_words", "/word-count", apitypes.HttpMethodPOST))
 	release := d.Releases[0].Id
-	w := p.describe("api_demo", control.KindEndpoint, "count_words")
+	w := p.describe("api_demo", apitypes.WorkloadKindEndpoint, "count_words")
 	if !strings.HasPrefix(w.Url, "http://count-words-") || !strings.HasSuffix(w.Url, "/word-count") {
 		t.Fatalf("deployment URL %s", w.Url)
 	}

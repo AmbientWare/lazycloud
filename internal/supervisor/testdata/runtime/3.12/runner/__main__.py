@@ -8,9 +8,11 @@ runner. Inputs are {"args": [...], "kwargs": {...}}.
 import importlib
 import json
 import os
+import pickle
 import socket
 import struct
 import sys
+import threading
 import traceback
 
 
@@ -33,13 +35,17 @@ def read_frame(sock):
     return header, payload
 
 
+write_lock = threading.Lock()
+
+
 def write_frame(sock, header, payload=b""):
     sys.stdout.flush()
     sys.stderr.flush()
     encoded = json.dumps(header).encode()
-    sock.sendall(
-        struct.pack(">I", len(encoded)) + encoded + struct.pack(">I", len(payload)) + payload
-    )
+    with write_lock:
+        sock.sendall(
+            struct.pack(">I", len(encoded)) + encoded + struct.pack(">I", len(payload)) + payload
+        )
 
 
 def error(exc):
@@ -59,23 +65,56 @@ def main():
         write_frame(sock, {"type": "load_failed", "error": error(exc)})
         return 1
     write_frame(sock, {"type": "loaded"})
+    threaded = load.get("concurrency", 1) > 1
     while True:
         invoke, payload = read_frame(sock)
         if invoke is None:
             return 0
-        call = json.loads(payload)
-        try:
-            result = handler(*call.get("args", []), **call.get("kwargs", {}))
-        except Exception as exc:
-            write_frame(
-                sock, {"type": "failed", "attempt_id": invoke["attempt_id"], "error": error(exc)}
-            )
+        if threaded:
+            # Attempts share the process; each reports its own output as a frame.
+            threading.Thread(target=run, args=(sock, handler, invoke, payload, True), daemon=True).start()
         else:
+            run(sock, handler, invoke, payload, False)
+
+
+def run(sock, handler, invoke, payload, threaded):
+    call = json.loads(payload)
+    if threaded:
+        line = f"thread runs {invoke['attempt_id']}\n"
+        if call.get("args", [None])[0] == "big":
+            line = "x" * (2 << 20) + "\n"
+        if call.get("args", [None])[0] == "split":
+            # A value split across two frames.
+            value = call["args"][1]
+            for part in (value[:5], value[5:] + "\n"):
+                write_frame(
+                    sock,
+                    {"type": "output", "attempt_id": invoke["attempt_id"], "stream": "stdout"},
+                    part.encode(),
+                )
+            line = ""
+        # Output travels as the payload, at most 256 KiB per frame.
+        data = line.encode()
+        for start in range(0, len(data), 256 << 10):
             write_frame(
                 sock,
-                {"type": "succeeded", "attempt_id": invoke["attempt_id"], "result_encoding": "json"},
-                json.dumps(result).encode(),
+                {"type": "output", "attempt_id": invoke["attempt_id"], "stream": "stdout"},
+                data[start:start + (256 << 10)],
             )
+    try:
+        result = handler(*call.get("args", []), **call.get("kwargs", {}))
+    except Exception as exc:
+        write_frame(
+            sock,
+            {"type": "failed", "attempt_id": invoke["attempt_id"], "error": error(exc)},
+            pickle.dumps(exc),
+        )
+    else:
+        write_frame(
+            sock,
+            {"type": "succeeded", "attempt_id": invoke["attempt_id"], "result_encoding": "json"},
+            json.dumps(result).encode(),
+        )
 
 
 sys.exit(main())

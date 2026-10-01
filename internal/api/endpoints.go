@@ -10,8 +10,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
-	"github.com/AmbientWare/lazycloud/internal/control"
 	"github.com/AmbientWare/lazycloud/internal/edge"
+	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
@@ -38,7 +38,7 @@ func invocationQuery(ctx context.Context) url.Values {
 	return out
 }
 
-func (s *Server) describe(ctx context.Context, workspace, app string, kind control.WorkloadKind, name string, version *int) (apitypes.HttpWorkload, error) {
+func (s *Server) describe(ctx context.Context, workspace, app string, kind apitypes.WorkloadKind, name string, version *int) (apitypes.HttpWorkload, error) {
 	ws, err := s.workspace(ctx, workspace)
 	if err != nil {
 		return apitypes.HttpWorkload{}, err
@@ -48,7 +48,7 @@ func (s *Server) describe(ctx context.Context, workspace, app string, kind contr
 
 // GetEndpoint returns an endpoint and its URLs.
 func (s *Server) GetEndpoint(ctx context.Context, req GetEndpointRequestObject) (GetEndpointResponseObject, error) {
-	out, err := s.describe(ctx, req.Workspace, req.App, control.KindEndpoint, req.Endpoint, req.Params.Version)
+	out, err := s.describe(ctx, req.Workspace, req.App, apitypes.WorkloadKindEndpoint, req.Endpoint, req.Params.Version)
 	if err != nil {
 		return nil, err
 	}
@@ -57,7 +57,7 @@ func (s *Server) GetEndpoint(ctx context.Context, req GetEndpointRequestObject) 
 
 // GetAsgi returns an ASGI or realtime app and its URLs.
 func (s *Server) GetAsgi(ctx context.Context, req GetAsgiRequestObject) (GetAsgiResponseObject, error) {
-	out, err := s.describe(ctx, req.Workspace, req.App, control.KindASGI, req.Endpoint, req.Params.Version)
+	out, err := s.describe(ctx, req.Workspace, req.App, apitypes.WorkloadKindAsgi, req.Endpoint, req.Params.Version)
 	if err != nil {
 		return nil, err
 	}
@@ -71,7 +71,8 @@ func invokeWait(wait *int) time.Duration {
 	return time.Duration(*wait) * time.Second
 }
 
-func (s *Server) invoke(ctx context.Context, ws identity.Workspace, release uuid.UUID, body *apitypes.InvocationBody, wait *int) (apitypes.Invocation, error) {
+// invoke runs the function's release, or its active one without a release.
+func (s *Server) invoke(ctx context.Context, ws identity.Workspace, app, function string, release *uuid.UUID, body *apitypes.InvocationBody, wait *int) (apitypes.Invocation, error) {
 	var raw []byte
 	if body != nil {
 		raw = *body
@@ -80,7 +81,8 @@ func (s *Server) invoke(ctx context.Context, ws identity.Workspace, release uuid
 	if err != nil {
 		return apitypes.Invocation{}, errors.Join(errInvalidRequest, err)
 	}
-	return edge.Invoke(ctx, s.owners.Execution, s.owners.Listener, ws.ID, release, arguments, invokeWait(wait))
+	req := execution.SubmitRequest{Workspace: ws.ID, App: app, Function: function, Release: release}
+	return edge.Invoke(ctx, s.owners.Execution, s.owners.Listener, req, arguments, invokeWait(wait))
 }
 
 // InvokeFunction runs the function's active release with JSON arguments.
@@ -89,11 +91,7 @@ func (s *Server) InvokeFunction(ctx context.Context, req InvokeFunctionRequestOb
 	if err != nil {
 		return nil, err
 	}
-	fn, err := s.owners.Control.GetFunction(ctx, ws.ID, req.App, req.Function)
-	if err != nil {
-		return nil, err
-	}
-	out, err := s.invoke(ctx, ws, fn.ActiveRelease.Id, req.Body, req.Params.WaitSeconds)
+	out, err := s.invoke(ctx, ws, req.App, req.Function, nil, req.Body, req.Params.WaitSeconds)
 	if err != nil {
 		return nil, err
 	}
@@ -110,7 +108,7 @@ func (s *Server) InvokeFunctionVersion(ctx context.Context, req InvokeFunctionVe
 	if err != nil {
 		return nil, err
 	}
-	out, err := s.invoke(ctx, ws, release, req.Body, req.Params.WaitSeconds)
+	out, err := s.invoke(ctx, ws, req.App, req.Function, &release, req.Body, req.Params.WaitSeconds)
 	if err != nil {
 		return nil, err
 	}

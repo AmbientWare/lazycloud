@@ -19,13 +19,14 @@ const cancelResendWindow = 10 * time.Minute
 
 // StartCommand asks a host to start a container it was assigned.
 type StartCommand struct {
-	Container   ContainerID
-	Workspace   identity.WorkspaceID
-	Source      storage.Digest
-	Spec        apitypes.FunctionSpec
-	Slots       int
-	CPUMillis   int64
-	MemoryBytes int64
+	Container     ContainerID
+	Workspace     identity.WorkspaceID
+	WorkspaceName string
+	Source        storage.Digest
+	Spec          apitypes.FunctionSpec
+	Slots         int
+	CPUMillis     int64
+	MemoryBytes   int64
 	// CPULimitMillis and MemoryLimitBytes are the ceilings above the
 	// reservations.
 	CPULimitMillis   int64
@@ -75,7 +76,7 @@ func (e *Execution) HostCommands(ctx context.Context, host compute.HostID) (Host
 		var source storage.Digest
 		copy(source[:], row.SourceSha256)
 		out.Start = append(out.Start, StartCommand{
-			Container: ContainerID(row.ID), Workspace: identity.WorkspaceID(row.WorkspaceID),
+			Container: ContainerID(row.ID), Workspace: identity.WorkspaceID(row.WorkspaceID), WorkspaceName: row.WorkspaceName,
 			Source: source, Spec: spec, Slots: int(row.Slots),
 			CPUMillis: row.CpuMillis, MemoryBytes: row.MemoryBytes,
 			CPULimitMillis:   cpuLimitMillis(spec.Resources),

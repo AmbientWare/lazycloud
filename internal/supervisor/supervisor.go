@@ -44,6 +44,8 @@ var ErrLoadFailed = errors.New("a runner failed to load the handler")
 type Config struct {
 	// Socket is the agent's ContainerLink socket.
 	Socket string
+	// APISocket is where the container API is served; empty serves none.
+	APISocket string
 	// Reap waits for orphaned processes, which PID 1 must do.
 	Reap   bool
 	Logger *slog.Logger
@@ -58,9 +60,11 @@ type Supervisor struct {
 
 	mu        sync.Mutex
 	configure *hostproto.Configure
-	slots     []*slot
-	loaded    map[*slot]bool
-	runs      chan *hostproto.RunAttempt
+	// redact is set by Configure, before any slot runs.
+	redact *redactor
+	slots  []*slot
+	loaded map[*slot]bool
+	runs   chan *hostproto.RunAttempt
 	// queued maps attempts waiting for a slot to whether they were cancelled.
 	queued         map[string]bool
 	ready          bool
@@ -107,6 +111,14 @@ func Run(ctx context.Context, cfg Config) error {
 	if cfg.Reap {
 		wg.Go(func() { s.children.reapOrphans(runCtx) })
 	}
+	client := hostproto.NewContainerLinkClient(conn)
+	if cfg.APISocket != "" {
+		wg.Go(func() {
+			if err := s.serveAPI(runCtx, cfg.APISocket, client); err != nil {
+				s.log.Error("container API stopped", "error", err)
+			}
+		})
+	}
 	var result error
 	wg.Go(func() {
 		result = s.work(runCtx)
@@ -118,7 +130,7 @@ func Run(ctx context.Context, cfg Config) error {
 		case <-runCtx.Done():
 		}
 	})
-	linkErr := s.link(runCtx, hostproto.NewContainerLinkClient(conn))
+	linkErr := s.link(runCtx, client)
 	cancel()
 	wg.Wait()
 	if result == nil && linkErr != nil && ctx.Err() == nil && !s.flushed.Load() {
@@ -154,8 +166,13 @@ func (s *Supervisor) work(ctx context.Context) error {
 		served.Go(func() { serveErr = front.serve() })
 	}
 	g, gctx := errgroup.WithContext(ctx)
-	for _, sl := range slots {
-		g.Go(func() error { return sl.run(gctx, cfg, runs) })
+	// HTTP workers admit concurrent requests themselves.
+	if cfg.GetInProcess() && len(slots) > 1 && front == nil {
+		g.Go(func() error { return s.runShared(gctx, cfg, slots, runs) })
+	} else {
+		for _, sl := range slots {
+			g.Go(func() error { return sl.run(gctx, cfg, runs) })
+		}
 	}
 	err := g.Wait()
 	if front != nil {
@@ -288,6 +305,7 @@ func (s *Supervisor) onConfigure(c *hostproto.Configure) {
 	}
 	n := max(1, int(c.GetSlots()))
 	s.configure = c
+	s.redact = newRedactor(c.GetSecretEnv())
 	s.runs = make(chan *hostproto.RunAttempt, n)
 	for range n {
 		sl := &slot{sup: s, buf: make([]byte, readChunk), reload: make(chan struct{}, 1)}
@@ -443,6 +461,7 @@ func (s *Supervisor) loadFailed(e *hostproto.RunnerError) {
 		return
 	}
 	s.loadFailedSent = true
+	e.Message, e.Traceback = s.redact.all(e.GetMessage()), s.redact.all(e.GetTraceback())
 	s.log.Error("handler failed to load", "type", e.GetType(), "message", e.GetMessage())
 	s.out.push(&hostproto.SupervisorMessage{Body: &hostproto.SupervisorMessage_LoadFailed{
 		LoadFailed: &hostproto.LoadFailed{Error: e},

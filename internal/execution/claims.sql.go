@@ -33,15 +33,22 @@ with candidate as (
     select t.id, t.attempt_count, t.available_at
     from tasks t
     where t.release_id = $1 and t.status = 'queued' and t.available_at <= now()
+      and t.unmet_dependencies = 0
     order by t.available_at, t.id
     limit $2
     for update skip locked
 ), sized as (
     select c.id, c.attempt_count,
            row_number() over w as turn,
-           sum(octet_length(i.data)) over w as total_bytes
+           sum(octet_length(i.data) + coalesce(dep.bytes, 0)) over w as total_bytes
     from candidate c
     join task_inputs i on i.task_id = c.id
+    cross join lateral (
+        select sum(octet_length(r.data)) as bytes
+        from task_dependencies d
+        join task_results r on r.task_id = d.depends_on
+        where d.task_id = c.id
+    ) dep
     window w as (order by c.available_at, c.id)
 ), picked as (
     select id, attempt_count from sized
@@ -62,9 +69,11 @@ with candidate as (
     where tasks.id = attempt.task_id
 )
 select attempt.task_id, attempt.id as attempt_id, attempt.number, attempt.deadline_at,
-       i.encoding, i.data
+       i.encoding, i.data, t.max_attempts, t.parent_task_id,
+       coalesce(t.root_task_id, t.id)::uuid as root_task_id
 from attempt
 join task_inputs i on i.task_id = attempt.task_id
+join tasks t on t.id = attempt.task_id
 order by attempt.id
 `
 
@@ -77,12 +86,15 @@ type ClaimQueuedTasksParams struct {
 }
 
 type ClaimQueuedTasksRow struct {
-	TaskID     uuid.UUID
-	AttemptID  uuid.UUID
-	Number     int32
-	DeadlineAt time.Time
-	Encoding   string
-	Data       []byte
+	TaskID       uuid.UUID
+	AttemptID    uuid.UUID
+	Number       int32
+	DeadlineAt   time.Time
+	Encoding     string
+	Data         []byte
+	MaxAttempts  int32
+	ParentTaskID *uuid.UUID
+	RootTaskID   uuid.UUID
 }
 
 // Due queued tasks of the release become running attempts on the container.
@@ -111,6 +123,9 @@ func (q *Queries) ClaimQueuedTasks(ctx context.Context, arg ClaimQueuedTasksPara
 			&i.DeadlineAt,
 			&i.Encoding,
 			&i.Data,
+			&i.MaxAttempts,
+			&i.ParentTaskID,
+			&i.RootTaskID,
 		); err != nil {
 			return nil, err
 		}
@@ -166,7 +181,7 @@ func (q *Queries) LockContainerForClaim(ctx context.Context, id uuid.UUID) (Lock
 
 const nextQueuedAt = `-- name: NextQueuedAt :one
 select available_at from tasks
-where release_id = $1 and status = 'queued'
+where release_id = $1 and status = 'queued' and unmet_dependencies = 0
 order by available_at
 limit 1
 `

@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+from lazycloud.clients.api import ApiClient
 from lazycloud.clients.compute.control import ComputeClient
 from lazycloud.clients.disk.control import DiskControlClient
 from lazycloud.clients.gateway.control import GatewayControlClient
 from lazycloud.clients.resource.control import ResourceControlClient
-from lazycloud.clients.secret.control import SecretControlClient
 from lazycloud.clients.ssh.control import SshControlClient
 from lazycloud.clients.volume.control import VolumeControlClient
-from lazycloud.control import ControlClientConfig, resolve_control_client_config
+from lazycloud.control import (
+    ControlClientConfig,
+    api_client,
+    require_workspace,
+    resolve_control_client_config,
+)
 from lazycloud.control_clients import (
     gateway_control_client,
     resource_control_client,
@@ -20,6 +25,16 @@ def control_config(
     timeout_seconds: float = 10.0,
 ) -> ControlClientConfig:
     return resolve_control_client_config(workspace=workspace, timeout_seconds=timeout_seconds)
+
+
+def api_session(
+    *,
+    workspace: str | None = None,
+    timeout_seconds: float = 10.0,
+) -> tuple[ApiClient, str]:
+    """The public API client and the workspace a command acts in."""
+    config = control_config(workspace=workspace, timeout_seconds=timeout_seconds)
+    return api_client(config), require_workspace(config)
 
 
 def ssh_client(*, workspace: str | None = None) -> SshControlClient:
@@ -66,20 +81,6 @@ def compute_client(
     )
 
 
-def secret_client(
-    *,
-    workspace: str | None = None,
-    timeout_seconds: float = 10.0,
-) -> SecretControlClient:
-    config = control_config(workspace=workspace, timeout_seconds=timeout_seconds)
-    return SecretControlClient.from_endpoint(
-        config.endpoint,
-        token=config.token,
-        timeout_seconds=config.timeout_seconds,
-        workspace=config.workspace,
-    )
-
-
 def disk_client(
     *,
     workspace: str | None = None,
@@ -109,10 +110,10 @@ def volume_client(
 
 
 __all__ = [
+    "api_session",
     "compute_client",
     "control_config",
     "gateway_client",
-    "secret_client",
     "ssh_client",
     "volume_client",
 ]

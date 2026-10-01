@@ -15,14 +15,14 @@ func TestSubdomainMatchesReference(t *testing.T) {
 	ws := uuid.MustParse("0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b")
 	cases := []struct {
 		app, name string
-		kind      WorkloadKind
+		kind      apitypes.WorkloadKind
 		want      string
 	}{
-		{"api_demo", "count_words", KindEndpoint, "count-words-ab830fac"},
-		{"web_app", "service", KindASGI, "service-a1890712"},
-		{"reports", "summarize", KindFunction, "summarize-b75627f9"},
-		{"x", "__", KindFunction, "fde6fa56"},
-		{"x", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", KindEndpoint, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-cbd797ef"},
+		{"api_demo", "count_words", apitypes.WorkloadKindEndpoint, "count-words-ab830fac"},
+		{"web_app", "service", apitypes.WorkloadKindAsgi, "service-a1890712"},
+		{"reports", "summarize", apitypes.WorkloadKindFunction, "summarize-b75627f9"},
+		{"x", "__", apitypes.WorkloadKindFunction, "fde6fa56"},
+		{"x", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", apitypes.WorkloadKindEndpoint, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-cbd797ef"},
 	}
 	for _, c := range cases {
 		if got := Subdomain(ws, c.app, c.name, c.kind); got != c.want {
@@ -67,7 +67,7 @@ func TestDeployEndpointResolvesHTTPDefaultsAndClaimsItsSubdomain(t *testing.T) {
 	if rows.Err() != nil {
 		t.Fatal(rows.Err())
 	}
-	want := []string{Subdomain(uuid.UUID(ws), "reports", "count", KindEndpoint), Subdomain(uuid.UUID(ws), "reports", "count", KindFunction)}
+	want := []string{Subdomain(uuid.UUID(ws), "reports", "count", apitypes.WorkloadKindEndpoint), Subdomain(uuid.UUID(ws), "reports", "count", apitypes.WorkloadKindFunction)}
 	if len(kinds) != 2 || kinds[0] != "endpoint" || kinds[1] != "function" || subdomains[0] != want[0] || subdomains[1] != want[1] {
 		t.Fatalf("routes %v %v; want endpoint and function with %v", kinds, subdomains, want)
 	}
@@ -77,9 +77,18 @@ func TestDeployEndpointResolvesHTTPDefaultsAndClaimsItsSubdomain(t *testing.T) {
 	if len(pruned.Pruned) != 1 || pruned.Pruned[0] != "count" {
 		t.Fatalf("pruned %v; want the function count", pruned.Pruned)
 	}
-	var stopped string
-	if err := pool.QueryRow(t.Context(), `select kind from workloads where desired_state = 'stopped'`).Scan(&stopped); err != nil || stopped != "function" {
-		t.Fatalf("stopped workload kind %q (%v); want function", stopped, err)
+	var deleted string
+	if err := pool.QueryRow(t.Context(), `select kind from workloads where desired_state = 'deleted'`).Scan(&deleted); err != nil || deleted != "function" {
+		t.Fatalf("deleted workload kind %q (%v); want function", deleted, err)
+	}
+
+	// The deleted function gave up its subdomain, so deploying it again
+	// claims the same one.
+	deploy(t, c, ws, false, function("count"))
+	var claimed string
+	if err := pool.QueryRow(t.Context(), `select r.subdomain from http_routes r join workloads w on w.id = r.workload_id
+		where w.kind = 'function' and w.desired_state = 'active'`).Scan(&claimed); err != nil || claimed != want[1] {
+		t.Fatalf("redeployed function subdomain %q (%v); want %s", claimed, err, want[1])
 	}
 }
 

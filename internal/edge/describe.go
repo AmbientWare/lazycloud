@@ -40,7 +40,7 @@ func (e *Edge) PreviewURL(release uuid.UUID, spec apitypes.FunctionSpec) string 
 
 // Describe returns a deployed HTTP workload of kind with the URLs it answers
 // on, for its active release or version.
-func (e *Edge) Describe(ctx context.Context, workspace identity.WorkspaceID, app string, kind control.WorkloadKind, name string, version *int) (apitypes.HttpWorkload, error) {
+func (e *Edge) Describe(ctx context.Context, workspace identity.WorkspaceID, app string, kind apitypes.WorkloadKind, name string, version *int) (apitypes.HttpWorkload, error) {
 	params := DescribeWorkloadParams{WorkspaceID: uuid.UUID(workspace), AppName: app, Kind: string(kind), Name: name}
 	if version != nil {
 		v := int32(*version) //nolint:gosec // the API bounds versions
@@ -57,17 +57,20 @@ func (e *Edge) Describe(ctx context.Context, workspace identity.WorkspaceID, app
 	if err := json.Unmarshal(row.Spec, &spec); err != nil {
 		return apitypes.HttpWorkload{}, fmt.Errorf("decode release spec: %w", err)
 	}
-	if spec.Http == nil {
+	// Every deployed release has a version; working-tree releases are
+	// functions.
+	if spec.Http == nil || row.Version == nil {
 		return apitypes.HttpWorkload{}, ErrWorkloadNotFound
 	}
+	n := int(*row.Version)
 	path := route(spec)
 	out := apitypes.HttpWorkload{
 		Name: row.Name, App: row.AppName, Kind: spec.Http.Kind, State: apitypes.HttpWorkloadState(row.DesiredState),
 		Release: apitypes.Release{
-			Id: row.ReleaseID, Function: row.Name, Version: int(row.Version), CreatedAt: row.CreatedAt, Spec: spec,
+			Id: row.ReleaseID, Function: row.Name, Version: &n, CreatedAt: row.CreatedAt, Spec: spec,
 		},
 		Url:        e.urls.Deployment(row.Subdomain, path),
-		VersionUrl: e.urls.Version(row.Subdomain, int(row.Version), path),
+		VersionUrl: e.urls.Version(row.Subdomain, n, path),
 		ReleaseUrl: e.urls.Release(row.ReleaseID, path),
 	}
 	url := out.Url

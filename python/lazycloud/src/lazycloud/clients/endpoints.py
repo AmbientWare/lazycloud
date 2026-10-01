@@ -15,8 +15,6 @@ from shared.api import (
     Preview,
     PreviewRequest,
     PreviewSync,
-    SubmitTasksRequest,
-    SubmitTasksResponse,
 )
 
 from lazycloud.clients.api import ApiClient, ApiConnectionError, _api_error, _path
@@ -101,17 +99,6 @@ def stream_preview_output(
     return client._stream_lines(ContainerLogEntry, path, after=after, follow=follow)
 
 
-def submit_preview_tasks(
-    client: ApiClient, workspace: str, preview: UUID, request: SubmitTasksRequest
-) -> SubmitTasksResponse:
-    return client._send(
-        SubmitTasksResponse,
-        "POST",
-        _path("v1", "workspaces", workspace, "previews", str(preview), "tasks"),
-        body=request,
-    )
-
-
 def register_domain(client: ApiClient, hostname: str) -> Domain:
     return client._send(Domain, "POST", "/v1/domains", body=DomainRequest(hostname=hostname))
 
@@ -155,6 +142,5 @@ __all__ = [
     "remove_domain",
     "stop_preview",
     "stream_preview_output",
-    "submit_preview_tasks",
     "sync_preview_files",
 ]

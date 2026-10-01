@@ -32,7 +32,7 @@ select id, version, spec_digest, created_at from releases where id = $1
 
 type ActiveReleaseRow struct {
 	ID         uuid.UUID
-	Version    int32
+	Version    *int32
 	SpecDigest []byte
 	CreatedAt  time.Time
 }
@@ -49,13 +49,26 @@ func (q *Queries) ActiveRelease(ctx context.Context, id uuid.UUID) (ActiveReleas
 	return i, err
 }
 
+const countDeployedWorkloads = `-- name: CountDeployedWorkloads :one
+select count(*)::int from workloads
+where app_id = $1 and desired_state <> 'deleted' and active_release_id is not null
+`
+
+func (q *Queries) CountDeployedWorkloads(ctx context.Context, appID uuid.UUID) (int32, error) {
+	row := q.db.QueryRow(ctx, countDeployedWorkloads, appID)
+	var column_1 int32
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const functionRelease = `-- name: FunctionRelease :one
 select w.name, w.desired_state, a.name as app_name,
        r.id, r.version, r.spec, r.created_at
 from workloads w
 join apps a on a.id = w.app_id
 join releases r on r.id = w.active_release_id
-where a.workspace_id = $1 and a.name = $2 and w.kind = 'function' and w.name = $3
+where a.workspace_id = $1 and a.name = $2 and a.state <> 'deleted'
+  and w.kind = 'function' and w.name = $3 and w.desired_state <> 'deleted'
 `
 
 type FunctionReleaseParams struct {
@@ -69,7 +82,7 @@ type FunctionReleaseRow struct {
 	DesiredState string
 	AppName      string
 	ID           uuid.UUID
-	Version      int32
+	Version      *int32
 	Spec         []byte
 	CreatedAt    time.Time
 }
@@ -97,7 +110,7 @@ returning id, version, created_at
 
 type InsertReleaseParams struct {
 	WorkloadID   uuid.UUID
-	Version      int32
+	Version      *int32
 	Spec         []byte
 	SpecDigest   []byte
 	SourceSha256 []byte
@@ -105,7 +118,7 @@ type InsertReleaseParams struct {
 
 type InsertReleaseRow struct {
 	ID        uuid.UUID
-	Version   int32
+	Version   *int32
 	CreatedAt time.Time
 }
 
@@ -123,10 +136,13 @@ func (q *Queries) InsertRelease(ctx context.Context, arg InsertReleaseParams) (I
 }
 
 const pruneFunctions = `-- name: PruneFunctions :many
-update workloads
-set desired_state = 'stopped'
-where app_id = $1 and desired_state = 'active' and not (kind || ':' || name = any($2::text[]))
-returning name, active_release_id
+update workloads w
+set desired_state = 'deleted', deleted_at = now()
+where w.app_id = $1 and w.desired_state <> 'deleted'
+  and w.active_release_id is not null
+  and not (w.kind || ':' || w.name = any($2::text[]))
+returning w.name,
+          (select count(*) from releases r where r.workload_id = w.id and r.version > 0)::int as versions
 `
 
 type PruneFunctionsParams struct {
@@ -135,10 +151,11 @@ type PruneFunctionsParams struct {
 }
 
 type PruneFunctionsRow struct {
-	Name            string
-	ActiveReleaseID *uuid.UUID
+	Name     string
+	Versions int32
 }
 
+// Deletes the app's deployed functions that the deploy does not list.
 func (q *Queries) PruneFunctions(ctx context.Context, arg PruneFunctionsParams) ([]PruneFunctionsRow, error) {
 	rows, err := q.db.Query(ctx, pruneFunctions, arg.AppID, arg.Keep)
 	if err != nil {
@@ -148,7 +165,7 @@ func (q *Queries) PruneFunctions(ctx context.Context, arg PruneFunctionsParams) 
 	var items []PruneFunctionsRow
 	for rows.Next() {
 		var i PruneFunctionsRow
-		if err := rows.Scan(&i.Name, &i.ActiveReleaseID); err != nil {
+		if err := rows.Scan(&i.Name, &i.Versions); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -192,7 +209,7 @@ func (q *Queries) RegisteredSources(ctx context.Context, arg RegisteredSourcesPa
 const upsertApp = `-- name: UpsertApp :one
 insert into apps (workspace_id, name, state)
 values ($1, $2, 'active')
-on conflict (workspace_id, name) do update set name = excluded.name
+on conflict (workspace_id, name) where state <> 'deleted' do update set name = excluded.name
 returning id, name, state, created_at
 `
 
@@ -208,7 +225,7 @@ type UpsertAppRow struct {
 	CreatedAt time.Time
 }
 
-// The update locks the app row, so deploys of one app run one at a time.
+// The update locks the live app row, so deploys of one app run one at a time.
 func (q *Queries) UpsertApp(ctx context.Context, arg UpsertAppParams) (UpsertAppRow, error) {
 	row := q.db.QueryRow(ctx, upsertApp, arg.WorkspaceID, arg.Name)
 	var i UpsertAppRow
@@ -224,7 +241,7 @@ func (q *Queries) UpsertApp(ctx context.Context, arg UpsertAppParams) (UpsertApp
 const upsertWorkload = `-- name: UpsertWorkload :one
 insert into workloads (app_id, kind, name, desired_state)
 values ($1, $2, $3, 'active')
-on conflict (app_id, kind, name) do update set desired_state = 'active'
+on conflict (app_id, kind, name) where desired_state <> 'deleted' do update set desired_state = 'active'
 returning id, active_release_id, next_version
 `
 
@@ -240,7 +257,7 @@ type UpsertWorkloadRow struct {
 	NextVersion     int32
 }
 
-// Locks the workload row for the release switch.
+// Locks the live workload row for the release switch.
 func (q *Queries) UpsertWorkload(ctx context.Context, arg UpsertWorkloadParams) (UpsertWorkloadRow, error) {
 	row := q.db.QueryRow(ctx, upsertWorkload, arg.AppID, arg.Kind, arg.Name)
 	var i UpsertWorkloadRow

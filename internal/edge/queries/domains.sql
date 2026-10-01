@@ -35,7 +35,7 @@ from http_routes r
 join workloads w on w.id = r.workload_id
 join apps a on a.id = w.app_id
 join workspace_members m on m.workspace_id = a.workspace_id and m.user_id = @user_id and m.role = 'owner'
-where r.hostname = @hostname
+where r.hostname = @hostname and w.desired_state <> 'deleted' and a.state <> 'deleted'
 order by a.name, w.name;
 
 -- name: UnsettledDomains :many

@@ -56,7 +56,7 @@ from http_routes r
 join workloads w on w.id = r.workload_id
 join apps a on a.id = w.app_id
 join workspace_members m on m.workspace_id = a.workspace_id and m.user_id = $1 and m.role = 'owner'
-where r.hostname = $2
+where r.hostname = $2 and w.desired_state <> 'deleted' and a.state <> 'deleted'
 order by a.name, w.name
 `
 

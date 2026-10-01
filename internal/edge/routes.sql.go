@@ -35,6 +35,7 @@ join releases rel on rel.id = coalesce(
     case when $1::int is null then w.active_release_id end)
 left join custom_domains d on d.hostname = r.hostname
 where a.workspace_id = $2 and a.name = $3 and w.kind = $4 and w.name = $5
+  and a.state <> 'deleted' and w.desired_state <> 'deleted'
 `
 
 type DescribeWorkloadParams struct {
@@ -54,7 +55,7 @@ type DescribeWorkloadRow struct {
 	Hostname      *string
 	HostnameReady bool
 	ReleaseID     uuid.UUID
-	Version       int32
+	Version       *int32
 	Spec          []byte
 	CreatedAt     time.Time
 }
@@ -91,7 +92,7 @@ select id from releases where workload_id = $1 and version = $2
 
 type ReleaseOfVersionParams struct {
 	WorkloadID uuid.UUID
-	Version    int32
+	Version    *int32
 }
 
 func (q *Queries) ReleaseOfVersion(ctx context.Context, arg ReleaseOfVersionParams) (uuid.UUID, error) {
@@ -116,7 +117,7 @@ where rel.id = $1
 
 type ReleaseRouteRow struct {
 	ReleaseID     uuid.UUID
-	Version       int32
+	Version       *int32
 	Spec          []byte
 	WorkloadID    uuid.UUID
 	Kind          string
@@ -165,6 +166,7 @@ join apps a on a.id = w.app_id
 join workspaces ws on ws.id = a.workspace_id
 left join releases rel on rel.id = w.active_release_id
 left join custom_domains d on d.hostname = r.hostname
+where w.desired_state <> 'deleted' and a.state <> 'deleted'
 order by r.workload_id
 `
 

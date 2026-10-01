@@ -16,7 +16,10 @@ values (@workspace_id, @image_digest)
 on conflict do nothing;
 
 -- name: WorkspaceImage :one
-select i.digest, i.id, i.python_version, i.architecture, i.reference, i.created_at, i.ready_at
+-- The workspace's view of an image: its own rebuild, else the global one.
+select i.digest, i.id, i.python_version, i.architecture,
+       coalesce(w.reference, i.reference) as reference, i.reference as global_reference,
+       i.created_at, coalesce(w.ready_at, i.ready_at) as ready_at
 from images i
 join workspace_images w on w.image_digest = i.digest
 where w.workspace_id = @workspace_id and i.id = @id;
@@ -26,8 +29,12 @@ select digest, id, python_version, architecture, reference, created_at, ready_at
 from images where digest = @digest for update;
 
 -- name: ActiveBuild :one
+-- The build a request joins: the global one, or the workspace's own forced
+-- rebuild.
 select id, image_digest, state, failure, created_at, finished_at
-from image_builds where image_digest = @image_digest and state = 'building';
+from image_builds
+where image_digest = @image_digest and state = 'building'
+  and forced = @forced and (not @forced or workspace_id = @workspace_id);
 
 -- name: LatestBuild :one
 select id, image_digest, state, failure, created_at, finished_at
@@ -35,8 +42,8 @@ from image_builds where image_digest = @image_digest
 order by created_at desc, id desc limit 1;
 
 -- name: InsertBuild :one
-insert into image_builds (image_digest, state, workspace_id, context_sha256, registry_auth, deadline_at)
-values (@image_digest, 'building', @workspace_id, sqlc.narg(context_sha256), sqlc.narg(registry_auth),
+insert into image_builds (image_digest, state, workspace_id, forced, context_sha256, registry_auth, deadline_at)
+values (@image_digest, 'building', @workspace_id, @forced, sqlc.narg(context_sha256), sqlc.narg(registry_auth),
         now() + make_interval(secs => @timeout_seconds::float8))
 returning id, image_digest, state, failure, created_at, finished_at;
 
@@ -61,7 +68,7 @@ join images i on i.digest = b.image_digest
 where b.id = @id;
 
 -- name: LockBuild :one
-select id, image_digest, state, workspace_id, deadline_at
+select id, image_digest, state, workspace_id, forced, deadline_at, log_bytes, log_lines
 from image_builds where id = @id for update;
 
 -- name: SucceedBuild :exec
@@ -73,6 +80,16 @@ where id = @id;
 update image_builds
 set state = 'failed', failure = @failure::text, registry_auth = null, finished_at = now()
 where id = @id;
+
+-- name: PublishWorkspaceImage :exec
+update workspace_images set reference = @reference::text, ready_at = now()
+where workspace_id = @workspace_id and image_digest = @image_digest;
+
+-- name: CountBuildLogs :exec
+update image_builds set log_bytes = log_bytes + @bytes, log_lines = log_lines + @lines where id = @id;
+
+-- name: ResetBuildLogCount :exec
+update image_builds set log_bytes = 0, log_lines = 0 where id = @id;
 
 -- name: PublishImage :exec
 update images set reference = @reference, ready_at = now() where digest = @digest;
@@ -107,5 +124,5 @@ select image_digest from image_builds where id = @id;
 -- name: SourceRegistered :one
 select exists (select 1 from source_objects where workspace_id = @workspace_id and sha256 = @sha256)::bool;
 
--- name: ImageToPull :one
-select reference::text as reference, architecture from images where id = @id and reference is not null;
+-- name: ImageArchitecture :one
+select architecture from images where id = @id;

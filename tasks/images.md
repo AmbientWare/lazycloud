@@ -109,12 +109,37 @@ The reference was not measured under the same conditions.
   generic pairs to every registry the build touched.
 - `GITHUB_TOKEN` alone logs in to GHCR with a placeholder user name; the
   reference sent it as an identity token, which GHCR does not accept.
-- A multi-line shell step becomes a Dockerfile heredoc and stays one step.
-- `verify(force_rebuild=True)` and `build_image?force=true` replace the
-  image's reference after the rebuild; releases name the image id, so new
-  containers of existing releases get the rebuilt image.
+- Every shell step is a Dockerfile heredoc, so the parser never reads the
+  command and a multi-line command stays one step.
+- `force_rebuild=True` rebuilds a published image for the requesting
+  workspace only; other workspaces keep the published image.
+- A release pins the image reference by digest when it is created
+  (`ImageSpec.reference`, read-only). A rebuild reaches a function only
+  when it is deployed again.
+- User Dockerfiles may not use parser directives (`# syntax=` would run a
+  frontend image), variables in image names, or `COPY --from` and
+  `RUN --mount from=` naming an image. Naming the image in
+  `FROM ... AS stage` does the same and is access-checked.
+- Base images must come from public registries, and images in the platform
+  registry are used by id through `Image.from_id`.
 - `ImageSpec.base` is empty for the platform image instead of the Debian
   digest.
+
+## Review fixes
+
+| Finding | Fix | Regression test |
+| --- | --- | --- |
+| Images named outside FROM, directives, injected instructions | BuildKit's parser reads the final Dockerfile; every FROM is pinned and access-checked, other image references are refused, values with line breaks are refused, shell steps are heredocs with a command-derived delimiter | `TestDockerfilesCannotNameUncheckedImages`, `TestDefinitionValuesCannotInjectInstructions` |
+| Platform registry images as a base | User references to the platform registry are refused | `TestBaseImagesMustBePublicRegistries` |
+| Shared cache and global force | Caches are scoped per workspace; forced rebuilds publish to `workspace_images.reference`; releases pin `ImageSpec.reference` | `TestForcedRebuildsAndCachesStayInTheirWorkspace`, `TestDeployPinsTheImageReference` |
+| SSRF through base images and token realms | Private, loopback and link-local registry hosts are refused by name; every dial except the platform registry passes a Control hook that refuses non-public addresses; no proxy | `TestBaseImagesMustBePublicRegistries`, `TestRegistryLookupsNeverDialPrivateAddresses` |
+| Unbounded build output | An attempt stores at most 8 MiB and 100,000 lines, counted under the build row lock, with one truncation marker | `TestBuildOutputIsCappedPerAttempt` |
+
+`migrations/0005_images.sql` changed in place (forced builds, workspace
+references, log counters). Local databases that applied the earlier 0005
+need a reset. A compromised builder still holds the push login for the
+whole repository; per-build scoped push credentials need the production
+registry integration.
 
 ## Gaps
 

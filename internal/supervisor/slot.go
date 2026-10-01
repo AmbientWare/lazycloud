@@ -47,6 +47,12 @@ type slot struct {
 	reload chan struct{}
 	// http is set when the slot is an HTTP worker.
 	http *httpWorker
+	// shared is set for a slot that runs attempts on a thread of a runner
+	// process the slots share; its output arrives as frames.
+	shared bool
+	// soleAttempt, set for a shared runner's process slot, names the
+	// attempt its pipe output belongs to.
+	soleAttempt func() string
 }
 
 // runnerProcess is one runner process and the resources it owns.
@@ -96,7 +102,7 @@ func (sl *slot) run(ctx context.Context, cfg *hostproto.Configure, runs <-chan *
 func (sl *slot) serve(ctx context.Context, p *runnerProcess, cfg *hostproto.Configure, runs <-chan *hostproto.RunAttempt) (bool, error) {
 	stop := context.AfterFunc(ctx, p.terminate)
 	defer stop()
-	if loadErr := p.load(cfg); loadErr != nil {
+	if loadErr := p.load(cfg, 1); loadErr != nil {
 		if ctx.Err() != nil {
 			return false, fmt.Errorf("load handler: %w", ctx.Err())
 		}
@@ -135,16 +141,14 @@ func (sl *slot) serve(ctx context.Context, p *runnerProcess, cfg *hostproto.Conf
 
 // invoke runs one attempt and reports whether the runner can take another.
 func (sl *slot) invoke(p *runnerProcess, run *hostproto.RunAttempt) bool {
-	encoding, err := runnerEncoding(run.GetInputEncoding())
+	invoke, err := invokeFrame(run)
 	if err != nil {
 		return sl.finish(crashed(run.GetAttemptId(), "InvalidInput", err.Error()))
 	}
-	err = p.send(runnerproto.Invoke{
-		Type:          runnerproto.InvokeTypeInvoke,
-		TaskId:        run.GetTaskId(),
-		AttemptId:     run.GetAttemptId(),
-		InputEncoding: encoding,
-	}, run.GetInput())
+	err = p.sendDependencies(run.GetDependencies())
+	if err == nil {
+		err = p.send(invoke, run.GetInput())
+	}
 	var frame runnerproto.Frame
 	if err == nil {
 		frame, err = p.read()
@@ -175,10 +179,45 @@ func (sl *slot) finish(finished *hostproto.AttemptFinished) bool {
 	cancelled := sl.cancelled
 	sl.attempt, sl.cancelled = "", false
 	if !cancelled {
+		if f := finished.GetFailure(); f != nil {
+			if e := f.GetError(); e != nil {
+				e.Message, e.Traceback = sl.sup.redact.all(e.GetMessage()), sl.sup.redact.all(e.GetTraceback())
+			}
+			// A pickled exception holding a secret cannot be redacted
+			// safely; the caller gets the redacted message without it.
+			if sl.sup.redact.containedIn(f.GetException()) {
+				f.Exception = nil
+			}
+		}
 		sl.sup.out.push(finishedMessage(finished))
 	}
 	return !cancelled
 }
+
+// invokeFrame is the runner's invoke header for run.
+func invokeFrame(run *hostproto.RunAttempt) (runnerproto.Invoke, error) {
+	encoding, err := runnerEncoding(run.GetInputEncoding())
+	if err != nil {
+		return runnerproto.Invoke{}, err
+	}
+	invoke := runnerproto.Invoke{
+		Type:          runnerproto.InvokeTypeInvoke,
+		TaskId:        run.GetTaskId(),
+		AttemptId:     run.GetAttemptId(),
+		InputEncoding: encoding,
+		AttemptNumber: ptr(max(int(run.GetAttemptNumber()), 1)),
+		MaxAttempts:   ptr(max(int(run.GetMaxAttempts()), 1)),
+	}
+	if root := run.GetRootTaskId(); root != "" {
+		invoke.RootTaskId = &root
+	}
+	if parent := run.GetParentTaskId(); parent != "" {
+		invoke.ParentTaskId = &parent
+	}
+	return invoke, nil
+}
+
+func ptr[T any](v T) *T { return &v }
 
 // start launches a runner in its own process group with a socket as fd 3.
 func (sl *slot) start(ctx context.Context, cfg *hostproto.Configure) (_ *runnerProcess, err error) {
@@ -335,6 +374,22 @@ func (p *runnerProcess) send(header any, payload []byte) error {
 	return closedAsRunnerClosed(runnerproto.WriteFrame(p.conn, header, payload))
 }
 
+// sendDependencies sends one dependency frame per upstream result ahead of
+// the invoke that refers to them.
+func (p *runnerProcess) sendDependencies(deps []*hostproto.DependencyResult) error {
+	for _, dep := range deps {
+		encoding, err := runnerEncoding(dep.GetEncoding())
+		if err != nil {
+			return fmt.Errorf("dependency %s: %w", dep.GetTaskId(), err)
+		}
+		header := runnerproto.Dependency{Type: runnerproto.DependencyTypeDependency, TaskId: dep.GetTaskId(), Encoding: encoding}
+		if err := p.send(header, dep.GetData()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (p *runnerProcess) read() (runnerproto.Frame, error) {
 	frame, err := runnerproto.ReadFrame(p.reader)
 	return frame, closedAsRunnerClosed(err)
@@ -348,10 +403,14 @@ func closedAsRunnerClosed(err error) error {
 	return err
 }
 
-// load sends the handler and waits for the runner to import it, and for an
-// HTTP worker to accept connections.
-func (p *runnerProcess) load(cfg *hostproto.Configure) *hostproto.RunnerError {
-	load := runnerproto.Load{Type: runnerproto.LoadTypeLoad, ProtocolVersion: runnerproto.N1, Handler: cfg.GetHandler()}
+// load sends the handler and waits for the runner to import it and run its
+// on_start hooks, and for an HTTP worker to accept connections. concurrency
+// above 1 makes it run attempts on threads.
+func (p *runnerProcess) load(cfg *hostproto.Configure, concurrency int) *hostproto.RunnerError {
+	load := runnerproto.Load{
+		Type: runnerproto.LoadTypeLoad, ProtocolVersion: runnerproto.N1, Handler: cfg.GetHandler(),
+		Concurrency: &concurrency, Hooks: hooksFrame(cfg.GetHooks()),
+	}
 	if h := cfg.GetHttp(); h != nil {
 		kind, err := runnerHTTPKind(h.GetKind())
 		if err != nil {
@@ -373,7 +432,7 @@ func (p *runnerProcess) load(cfg *hostproto.Configure) *hostproto.RunnerError {
 			if err = frame.Decode(&failed); err == nil {
 				return runnerError(failed.Error)
 			}
-		case runnerproto.FrameLoad, runnerproto.FrameInvoke, runnerproto.FrameSucceeded, runnerproto.FrameFailed:
+		case runnerproto.FrameLoad, runnerproto.FrameDependency, runnerproto.FrameInvoke, runnerproto.FrameSucceeded, runnerproto.FrameFailed, runnerproto.FrameOutput:
 			err = fmt.Errorf("unexpected %q frame while loading", frame.Type)
 		default:
 			err = fmt.Errorf("unknown %q frame while loading", frame.Type)
@@ -420,7 +479,7 @@ func attemptOutcome(attempt string, frame runnerproto.Frame) (*hostproto.Attempt
 				Exception: frame.Payload,
 			},
 		}}, nil
-	case runnerproto.FrameLoad, runnerproto.FrameLoaded, runnerproto.FrameLoadFailed, runnerproto.FrameInvoke:
+	case runnerproto.FrameLoad, runnerproto.FrameLoaded, runnerproto.FrameLoadFailed, runnerproto.FrameDependency, runnerproto.FrameInvoke, runnerproto.FrameOutput:
 		return nil, fmt.Errorf("unexpected %q frame during an attempt", frame.Type)
 	}
 	return nil, fmt.Errorf("unknown %q frame during an attempt", frame.Type)
@@ -430,6 +489,19 @@ func crashed(attempt, errorType, message string) *hostproto.AttemptFinished {
 	return &hostproto.AttemptFinished{AttemptId: attempt, Outcome: &hostproto.AttemptFinished_Failure{
 		Failure: &hostproto.TaskFailure{Kind: hostproto.AttemptFailureKind_ATTEMPT_FAILURE_KIND_CRASHED, Error: &hostproto.RunnerError{Type: errorType, Message: message}},
 	}}
+}
+
+func hooksFrame(h *hostproto.LifecycleHooks) *runnerproto.LifecycleHooks {
+	refs := func(r []string) *runnerproto.HookReferences {
+		if len(r) == 0 {
+			return nil
+		}
+		return &r
+	}
+	return &runnerproto.LifecycleHooks{
+		OnStart: refs(h.GetOnStart()), OnRunning: refs(h.GetOnRunning()), OnSuccess: refs(h.GetOnSuccess()),
+		OnError: refs(h.GetOnError()), OnRetry: refs(h.GetOnRetry()), OnFailure: refs(h.GetOnFailure()), OnFinish: refs(h.GetOnFinish()),
+	}
 }
 
 func runnerError(e runnerproto.RunnerError) *hostproto.RunnerError {
