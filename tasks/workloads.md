@@ -73,8 +73,7 @@ container.
   it later. The filter reads the frame's own EtherType and destination and
   drops all but ARP and allowed ranges, so a raw socket's protocol label
   cannot slip past it. A policy refuses `docker_enabled` (nested containers
-  bypass it) and snapshot restores (restored processes resume before the
-  filter); an automatic snapshot then starts cold.
+  bypass it).
 - Isolation. The agent connects only to a socket inode inside the link
   directory, never through a link the workload left there, which resolves
   on the host. The directory is sticky and world-writable so any container
@@ -89,7 +88,19 @@ container.
   starts from the checkpoint. `checkpoint` releases get an automatic
   snapshot of their first ready container (after the pod's readiness probe)
   and restore later cold starts, falling back to a cold start that marks the
-  snapshot failed.
+  snapshot failed. Before a checkpoint the supervisor closes its host
+  sockets (`Detach`) and reopens them once the link is back.
+- Network holders. Pods, sandboxes, devboxes and functions with
+  `checkpoint` start `checkpointable`: the agent starts a holder container
+  (`lazycloud-<id>-net`, busybox `sleep`, no capabilities) while the image
+  and source are prepared, applies the start policy in its namespace, and
+  runs the container with `--network container:<holder>`. Docker cannot
+  restore into a container with a network of its own (moby#50750), and
+  runsc refuses a restore whose sysctls differ; a joined namespace avoids
+  both, and a restored copy is filtered before it runs. The holder is
+  removed with its container, adopted by label, and removed when its
+  container is gone. Only checkpointable containers can be snapshotted.
+  Plain functions keep their own network.
 - Filesystem images. `PublishFilesystem` streams the supervisor's tar of `/`
   without mounts into `docker import`, pushes it to
   `<registry>/<repo>/filesystems/<workspace>` and reports
@@ -180,9 +191,11 @@ supervisor Docker tests under it; all pass but the GPU test.
 | `docker_enabled` | runs with every capability instead of privileged, which gVisor cannot start; `docker info` 29.8.2 in a sandbox, a nested `docker run` printed its output; refused under runc without `-allow-privileged-docker` |
 | Filesystem images | include gVisor's tmpfs `/tmp`; a sandbox from the image read both files |
 | Memory snapshots | the checkpoint is taken after the supervisor detaches (0.18 s), and the pod serves again 0.5 s later (`TestSnapshotUnderRunscDetachesAndKeepsServing`); reading it needs a root agent, so an unprivileged one reports `unsupported`. With a root agent `snapshot_memory()` uploads in 0.2 s and the sandbox keeps answering |
-| Restore from a snapshot (root agent) | fails in Docker, not here: `docker start --checkpoint` of a runsc container answers `bind-mount /proc/0/ns/net ... no such file or directory`, with or without a network, and plain `docker checkpoint create` then `docker start --checkpoint` on one container fails with `content ... already exists`. Both reproduce with the docker CLI alone. A requested restore fails the start with that message; an automatic one starts cold |
+| Restore from a snapshot | through Docker with a network holder (above): with the docker CLI a counting process resumed where it stopped 0.15 s after `docker start --checkpoint`, with a new environment value, a new mount source and working egress. Without one Docker fails with `bind-mount /proc/0/ns/net` (moby#50750). `TestSnapshotUnderRunscRestoresARunningPod` checks it end to end with a root agent |
 | Devbox on an NBD root disk (root agent) | live `test_ssh_config_makes_plain_ssh_reach_a_devbox`: deploy, seed the root disk (137 MB stored, generation 1), plain `ssh -F`, `lazycloud devbox <name> ssh -- echo devbox-ok`, `devbox status`, delete |
 | Everything above again with the root agent | `runsc_live.py` and the live suite pass |
+| With network holders and a root agent (snapshot-restore) | `runsc_live.py` (functions, endpoints, sandbox ports, block, allow list, filesystem image, snapshot upload, docker) and the live suite with the devbox pass; the first restore on the snapshot's host hit moby#42900, fixed with the restore marker |
+| Restore with holders and a root agent | `root_live.py`: snapshot in 0.74 s; restore to ready in 0.51 s with a counting process resuming (13 at restore, 18 a second later) rather than restarting; the same snapshot restores again on the host that took it; the restored sandbox reaches the network and a block applied after restore holds; a `block_network` sandbox stays blocked across its own snapshot and restore |
 
 ## Intentional differences from the reference
 
@@ -213,9 +226,14 @@ supervisor Docker tests under it; all pass but the GPU test.
 
 ## Gaps
 
-- Restoring runsc checkpoints through Docker 29 fails inside Docker (see
-  "Under gVisor"); it needs a Docker fix or runsc restore without Docker.
-  CRIU is not installed, so runc checkpoints only reach `unsupported`.
+- Snapshot upload and restore need a root agent, as in production; CRIU is
+  not installed here, so runc checkpoints only reach `unsupported`.
+- Docker uploads a checkpoint to containerd before restoring it and fails
+  with `content ... already exists` when containerd holds that content
+  (moby#42900), as on the host that took the snapshot and on any second
+  restore there. The agent adds a `lazycloud-restore` file naming the
+  restoring container, so each restore's content is new; runsc reads only
+  its image files.
 - Disks need a plan with a disk allowance; the private stack's account was
   made complimentary (`server admin set-complimentary`) to get one.
 - GPUs under runsc need `--nvproxy` in the runtime's arguments; this host's

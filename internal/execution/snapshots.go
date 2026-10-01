@@ -68,6 +68,13 @@ func (e *Execution) CreateSnapshot(ctx context.Context, workspace identity.Works
 		if ContainerState(row.State) != ContainerReady || row.HostID == nil {
 			return &ConflictError{Reason: "only a running container can be snapshotted"}
 		}
+		var spec apitypes.FunctionSpec
+		if err := json.Unmarshal(row.Spec, &spec); err != nil {
+			return fmt.Errorf("decode release spec: %w", err)
+		}
+		if !Checkpointable(apitypes.WorkloadKind(row.Kind), ContainerPurpose(row.Purpose), spec) {
+			return &InvalidError{Reason: "only pods, sandboxes, devboxes and functions with checkpoint_enabled can be snapshotted"}
+		}
 		inserted, err := q.InsertSnapshot(ctx, InsertSnapshotParams{
 			ID: id, WorkspaceID: uuid.UUID(workspace), ReleaseID: row.ReleaseID, ContainerID: &row.ID,
 		})
@@ -120,6 +127,16 @@ func (e *Execution) WaitSnapshot(ctx context.Context, listener *database.Listene
 		case <-poll.C:
 		}
 	}
+}
+
+// Checkpointable says whether a container may be snapshotted, and so
+// whether its host prepares it to be: pods, sandboxes and devboxes, and
+// functions with checkpoints. A shell container never is.
+func Checkpointable(kind apitypes.WorkloadKind, purpose ContainerPurpose, spec apitypes.FunctionSpec) bool {
+	if purpose == PurposeShell {
+		return false
+	}
+	return kind == apitypes.WorkloadKindPod || kind == apitypes.WorkloadKindSandbox || spec.Checkpoint != nil
 }
 
 // SnapshotOutcome is a host's report on a snapshot.

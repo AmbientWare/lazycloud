@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -67,7 +68,26 @@ func (a *Agent) restoreInto(ctx context.Context, id string, point *restorePoint)
 	if err := moveDir(point.dir, target); err != nil {
 		return err
 	}
+	if err := markRestore(target, id); err != nil {
+		return err
+	}
 	return a.startDocker(ctx, id, client.ContainerStartOptions{CheckpointID: point.snapshot})
+}
+
+// restoreMarker is a file the agent adds to a checkpoint before restoring
+// it. Docker uploads the checkpoint directory to containerd as one blob
+// first and fails when that blob is already stored (moby#42900), as it is on
+// the host that took the snapshot and on every later restore there; the
+// marker names the restoring container, so each restore's blob is new.
+// runsc reads only its own image files.
+const restoreMarker = "lazycloud-restore"
+
+func markRestore(dir, container string) error {
+	mark := container + " " + strconv.FormatInt(time.Now().UnixNano(), 10) + "\n"
+	if err := os.WriteFile(filepath.Join(dir, restoreMarker), []byte(mark), 0o600); err != nil {
+		return fmt.Errorf("mark checkpoint: %w", err)
+	}
+	return nil
 }
 
 // moveDir renames src to dst, copying when they are on different
@@ -97,22 +117,17 @@ func (c *container) coldStart(snapshot string, err error) {
 	c.mu.Unlock()
 }
 
-// errRestoreWithPolicy refuses a restore under a network policy: restored
-// processes resume at once, before the filter is in place.
-var errRestoreWithPolicy = errors.New("a container with a network policy cannot resume from a snapshot before its filter applies")
-
 // prepareRestore downloads and unpacks the snapshot to start from. An
 // automatic snapshot that cannot be had starts the container cold; any
 // other failure fails the start.
-func (c *container) prepareRestore(ctx context.Context, restore *hostproto.SnapshotRestore, policed bool) (*restorePoint, error) {
+func (c *container) prepareRestore(ctx context.Context, restore *hostproto.SnapshotRestore) (*restorePoint, error) {
 	if restore == nil {
 		return nil, nil
 	}
-	var point *restorePoint
-	err := errRestoreWithPolicy
-	if !policed {
-		point, err = c.downloadRestore(ctx, restore)
+	if !c.checkpointable {
+		return nil, errors.New("only a checkpointable container restores a snapshot")
 	}
+	point, err := c.downloadRestore(ctx, restore)
 	if err == nil {
 		return point, nil
 	}

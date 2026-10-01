@@ -64,6 +64,8 @@ type container struct {
 	// slots; docker runs a Docker daemon in the container.
 	pod    *hostproto.PodProcess
 	docker bool
+	// checkpointable containers run in their network holder's namespace.
+	checkpointable bool
 	// control reaches the supervisor's control API, and ports the
 	// container's ports through it.
 	control *http.Transport
@@ -281,6 +283,18 @@ func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer)
 	if spec.GetDocker() && restricts(pod.GetNetwork()) {
 		return fmt.Errorf("a container with docker_enabled cannot limit its network: nested containers would bypass the policy")
 	}
+	// The holder starts while the image and source are prepared; prepare
+	// does not return before it settled.
+	var holder chan error
+	if c.checkpointable {
+		holder = make(chan error, 1)
+		go func() { holder <- c.a.startHolder(ctx, c) }()
+		defer func() {
+			if holder != nil {
+				<-holder
+			}
+		}()
+	}
 	// Functions run the managed Python runner; a pod mounts the runtime
 	// only when the start names one.
 	var runtime string
@@ -355,17 +369,31 @@ func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer)
 			workspaces = append(workspaces, ws)
 		}
 	}
-	restore, err := c.prepareRestore(ctx, spec.GetRestore(), restricts(pod.GetNetwork()))
+	restore, err := c.prepareRestore(ctx, spec.GetRestore())
 	if err != nil {
 		return err
+	}
+	if holder != nil {
+		err := <-holder
+		holder = nil
+		if err != nil {
+			return err
+		}
+		// The policy is in the holder's namespace before anything of the
+		// container, restored processes included, runs.
+		if err := c.applyStartNetwork(ctx, pod.GetNetwork()); err != nil {
+			return err
+		}
 	}
 	if err := c.a.createAndStart(ctx, c, spec, runtime, binds, workspaces, gpus, restore); err != nil {
 		return err
 	}
 	// The supervisor waits for Configure, which the link serves only after
 	// this, so the command never runs before its filter is in place.
-	if err := c.applyStartNetwork(ctx, pod.GetNetwork()); err != nil {
-		return err
+	if !c.checkpointable {
+		if err := c.applyStartNetwork(ctx, pod.GetNetwork()); err != nil {
+			return err
+		}
 	}
 	created := time.Now()
 	c.mu.Lock()
@@ -528,6 +556,11 @@ func (c *container) cleanup(ctx context.Context) {
 	c.a.volumes.releaseBuckets(ctx, c.id)
 	if err := c.a.removeContainer(ctx, c.dockerName()); err != nil {
 		c.log.Warn("removing docker container failed", "error", err)
+	}
+	if c.checkpointable {
+		if err := c.a.removeContainer(ctx, c.holderName()); err != nil {
+			c.log.Warn("removing the network holder failed", "error", err)
+		}
 	}
 	// Disk leases live outside the container directory, for the release
 	// loop to retry until the server accepts.
