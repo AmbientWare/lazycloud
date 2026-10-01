@@ -136,7 +136,7 @@ func (l buildLogStream) VisitStreamImageBuildLogsResponse(w http.ResponseWriter)
 
 // checkImages rejects a deployment naming an image the workspace cannot run
 // and pins each named image's reference into the request, so the release
-// runs exactly that image. A reference the caller sent is replaced.
+// runs exactly that image.
 func (s *Server) checkImages(ctx context.Context, workspace identity.WorkspaceID, req *apitypes.DeploymentRequest) error {
 	for n := range req.Functions {
 		if err := s.pinImage(ctx, workspace, &req.Functions[n]); err != nil {

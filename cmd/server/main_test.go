@@ -41,7 +41,8 @@ func TestServeDrainsOnShutdown(t *testing.T) {
 	}
 	cfg := serveConfig{objectStore: storagetest.Config(), secretsKey: key, drainDelay: time.Second}
 	cfg.images.Registry = "127.0.0.1:1"
-	ls := listeners{http: listen(t), grpc: listen(t), health: listen(t)}
+	ls := listeners{http: listen(t), grpc: listen(t), health: listen(t), edge: listen(t), relay: listen(t)}
+	cfg.edgeURL, cfg.relayURL = "http://lazycloud.localhost:8082", ls.relay.Addr().String()
 	api := "http://" + ls.http.Addr().String()
 	probes := "http://" + ls.health.Addr().String()
 

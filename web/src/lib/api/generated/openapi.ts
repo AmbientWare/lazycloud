@@ -1729,6 +1729,282 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/workspaces/{workspace}/apps/{app}/endpoints/{endpoint}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                app: components["parameters"]["AppPath"];
+                endpoint: components["parameters"]["EndpointPath"];
+            };
+            cookie?: never;
+        };
+        /** An endpoint, its active release and the URLs it answers on */
+        get: operations["getEndpoint"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/apps/{app}/asgi/{endpoint}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                app: components["parameters"]["AppPath"];
+                endpoint: components["parameters"]["EndpointPath"];
+            };
+            cookie?: never;
+        };
+        /** An ASGI or realtime app, its active release and the URLs it answers on */
+        get: operations["getAsgi"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/apps/{app}/functions/{function}/invoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                app: components["parameters"]["AppPath"];
+                function: components["parameters"]["FunctionPath"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run the function's active release with JSON arguments
+         * @description The body's `args` and `kwargs`, or else the whole body, become the arguments, and query parameters are added as keyword arguments.
+         */
+        post: operations["invokeFunction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/apps/{app}/functions/{function}/versions/{version}/invoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                app: components["parameters"]["AppPath"];
+                function: components["parameters"]["FunctionPath"];
+                version: number;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Run one version of the function with JSON arguments */
+        post: operations["invokeFunctionVersion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/domains": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Domains the caller registered, by hostname */
+        get: operations["listDomains"];
+        put?: never;
+        /** Register a hostname the caller's workspaces may serve from */
+        post: operations["registerDomain"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/domains/{hostname}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                hostname: string;
+            };
+            cookie?: never;
+        };
+        /** One registration, re-read from the provider while it is unsettled */
+        get: operations["getDomain"];
+        put?: never;
+        post?: never;
+        /** Retire a registration no deployment serves from */
+        delete: operations["removeDomain"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/apps/{app}/previews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                app: components["parameters"]["AppPath"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start a preview container for one workload definition */
+        post: operations["createPreview"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/previews/{preview}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                preview: components["parameters"]["PreviewPath"];
+            };
+            cookie?: never;
+        };
+        /** Read a preview, optionally waiting until its container is ready */
+        get: operations["getPreview"];
+        put?: never;
+        post?: never;
+        /** Stop the preview and its container */
+        delete: operations["stopPreview"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/previews/{preview}/files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                preview: components["parameters"]["PreviewPath"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Write and remove files in the preview container's workspace
+         * @description The body is a tar archive of the files to write, paths relative to the workspace, at most 64 MiB. A path to remove is a regular entry of size zero carrying the PAX record `LAZYCLOUD.removed=1`. The container's runners restart once their current work finishes.
+         */
+        post: operations["syncPreviewFiles"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/previews/{preview}/output": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                preview: components["parameters"]["PreviewPath"];
+            };
+            cookie?: never;
+        };
+        /**
+         * The preview container's output after a cursor, one JSON ContainerLogEntry per line
+         * @description A followed stream keeps the preview alive, writes a blank line after 15 seconds without entries and ends when the preview stops. Without a follower the preview stops a minute later.
+         */
+        get: operations["streamPreviewOutput"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/apps/{app}/requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                app: components["parameters"]["AppPath"];
+            };
+            cookie?: never;
+        };
+        /**
+         * The app's endpoint and ASGI requests, newest first
+         * @description One record per request the edge served, written about a second after it ends and kept for seven days. Function invocations over HTTP are tasks instead.
+         */
+        get: operations["listHttpRequests"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/requests/{http_request}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                http_request: components["parameters"]["RequestPath"];
+            };
+            cookie?: never;
+        };
+        /** One request by its X-Request-Id */
+        get: operations["getHttpRequest"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/requests/{http_request}/logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                http_request: components["parameters"]["RequestPath"];
+            };
+            cookie?: never;
+        };
+        /** What the workload wrote while serving the request */
+        get: operations["listHttpRequestLogs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/workspaces/{workspace}/changes/stream": {
         parameters: {
             query?: never;
@@ -2795,6 +3071,9 @@ export interface components {
             client_contract?: {
                 [key: string]: unknown;
             };
+            http?: components["schemas"]["HttpSpec"];
+            /** @description Whether requests to the workload's URLs need a token. */
+            authorized?: boolean;
         };
         SourceRef: {
             sha256: components["schemas"]["Sha256"];
@@ -2851,6 +3130,8 @@ export interface components {
             /** Format: date-time */
             created_at: string;
             spec: components["schemas"]["FunctionSpec"];
+            /** @description Where an HTTP workload answers, following the active release. */
+            url?: string;
         };
         Function: {
             name: components["schemas"]["WorkloadName"];
@@ -3409,8 +3690,11 @@ export interface components {
             /** @description Present when another page follows. */
             next_cursor?: string;
         };
-        /** @enum {string} */
-        WorkloadKind: "function";
+        /**
+         * @description A function runs tasks; an endpoint or ASGI app serves HTTP. Realtime apps are ASGI apps.
+         * @enum {string}
+         */
+        WorkloadKind: "function" | "endpoint" | "asgi";
         DeploymentPlanRequest: {
             workloads: components["schemas"]["WorkloadIdentity"][];
             /** @default false */
@@ -3610,6 +3894,169 @@ export interface components {
             id: number;
             attempt: number;
             /** @description One line of build output without its trailing newline. */
+            data: string;
+            /** Format: date-time */
+            time: string;
+        };
+        /** @description Makes the workload answer HTTP. Its slots are `workers` processes, each handling `concurrency` requests at once. */
+        HttpSpec: {
+            kind: components["schemas"]["HttpKind"];
+            /**
+             * @description The path an endpoint answers on.
+             * @default /
+             */
+            route?: string;
+            /**
+             * @default [
+             *       "GET",
+             *       "POST"
+             *     ]
+             */
+            methods?: components["schemas"]["HttpMethod"][];
+            domain?: components["schemas"]["Hostname"];
+            /** @default 1 */
+            workers?: number;
+        };
+        /** @enum {string} */
+        HttpKind: "endpoint" | "asgi" | "realtime";
+        /** @enum {string} */
+        HttpMethod: "DELETE" | "GET" | "HEAD" | "OPTIONS" | "PATCH" | "POST" | "PUT" | "TRACE";
+        Hostname: string;
+        HttpWorkload: {
+            name: components["schemas"]["WorkloadName"];
+            app: components["schemas"]["AppName"];
+            kind: components["schemas"]["HttpKind"];
+            /** @enum {string} */
+            state: "active" | "stopped";
+            release: components["schemas"]["Release"];
+            /** @description Follows the active release across deploys. */
+            url: string;
+            /** @description Pinned to the release's version. */
+            version_url: string;
+            /** @description Addresses the release by id. */
+            release_url: string;
+            /** @description The custom hostname, once its registration is ready. */
+            domain_url?: string;
+        };
+        InvocationBody: {
+            [key: string]: unknown;
+        };
+        Invocation: {
+            task: components["schemas"]["Task"];
+            /** @description The JSON value the function returned, once it succeeded. */
+            result?: unknown;
+        };
+        DomainRequest: {
+            hostname: string;
+        };
+        /** @enum {string} */
+        DomainPhase: "awaiting_verification" | "validating" | "ready" | "action_required";
+        /** @enum {string} */
+        DomainErrorCode: "verification_timed_out" | "certificate_failed" | "hostname_rejected" | "upstream_unavailable";
+        DnsRecord: {
+            type: string;
+            name: string;
+            value: string;
+        };
+        Domain: {
+            /** Format: uuid */
+            id: string;
+            hostname: components["schemas"]["Hostname"];
+            phase: components["schemas"]["DomainPhase"];
+            /** @description The hostname the domain's CNAME points at. */
+            cname_target: string;
+            /** @description Records the provider still waits for beyond the CNAME. */
+            required_records: components["schemas"]["DnsRecord"][];
+            error_code?: components["schemas"]["DomainErrorCode"];
+            error_message?: string;
+            /** Format: date-time */
+            verified_at?: string;
+            /** Format: date-time */
+            last_checked_at?: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        DomainList: {
+            data: components["schemas"]["Domain"][];
+            /** @description Pass as `after` for the next page; absent on the last. */
+            next?: string;
+        };
+        PreviewRequest: {
+            spec: components["schemas"]["FunctionSpec"];
+            /**
+             * @description Stop after this long; 0 runs until stopped.
+             * @default 0
+             */
+            timeout_seconds?: number;
+        };
+        /** @enum {string} */
+        PreviewState: "starting" | "ready" | "stopped";
+        /** @enum {string} */
+        PreviewKind: "function" | "endpoint" | "asgi" | "realtime";
+        Preview: {
+            /** Format: uuid */
+            id: string;
+            app: components["schemas"]["AppName"];
+            name: components["schemas"]["WorkloadName"];
+            kind: components["schemas"]["PreviewKind"];
+            state: components["schemas"]["PreviewState"];
+            /** Format: uuid */
+            container_id?: string;
+            /** @description Where the preview answers; a function preview takes tasks through the API. */
+            url: string;
+            /** Format: date-time */
+            expires_at?: string;
+            /** Format: date-time */
+            created_at: string;
+        };
+        PreviewSync: {
+            written: number;
+            removed: number;
+        };
+        /** @description One request to an endpoint or ASGI app. `status` is what the caller received, 101 for a WebSocket whose `duration_ms` is the session. */
+        HttpRequest: {
+            /** Format: uuid */
+            id: string;
+            app: components["schemas"]["AppName"];
+            name: components["schemas"]["WorkloadName"];
+            kind: components["schemas"]["WorkloadKind"];
+            /** Format: uuid */
+            release_id: string;
+            /** @description The deployed version; negative for a preview. */
+            version?: number;
+            /** Format: uuid */
+            container_id?: string;
+            method: string;
+            path: string;
+            status: number;
+            /** Format: date-time */
+            started_at: string;
+            /** Format: int64 */
+            duration_ms: number;
+            /** Format: int64 */
+            request_bytes: number;
+            /** Format: int64 */
+            response_bytes: number;
+        };
+        HttpRequestList: {
+            data: components["schemas"]["HttpRequest"][];
+            /**
+             * Format: uuid
+             * @description Pass as `before` for the next page; absent on the last.
+             */
+            next?: string;
+        };
+        ContainerLogList: {
+            data: components["schemas"]["ContainerLogEntry"][];
+        };
+        ContainerLogEntry: {
+            /** Format: int64 */
+            id: number;
+            /** @enum {string} */
+            stream: "stdout" | "stderr" | "system";
+            /** @description One line of output without its trailing newline. */
             data: string;
             /** Format: date-time */
             time: string;
@@ -4756,6 +5203,7 @@ export interface components {
     parameters: {
         WorkspacePath: components["schemas"]["Name"];
         AppPath: components["schemas"]["AppName"];
+        RequestPath: string;
         FunctionPath: components["schemas"]["WorkloadName"];
         TaskPath: string;
         SecretPath: components["schemas"]["SecretName"];
@@ -4780,6 +5228,12 @@ export interface components {
         LogAfter: number;
         /** @description Start with only the last this many stored entries. */
         LogTail: number;
+        EndpointPath: components["schemas"]["WorkloadName"];
+        PreviewPath: string;
+        /** @description Describe this version instead of the active one. */
+        VersionQuery: number;
+        /** @description Hold the request until the task finishes or this many seconds pass. */
+        InvokeWait: number;
         /** @description The start of the range, inclusive. */
         RangeStart: string;
         /** @description The end of the range, exclusive; defaults to now. */
@@ -7543,6 +7997,436 @@ export interface operations {
                 };
                 content: {
                     "application/x-ndjson": string;
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getEndpoint: {
+        parameters: {
+            query?: {
+                /** @description Describe this version instead of the active one. */
+                version?: components["parameters"]["VersionQuery"];
+            };
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                app: components["parameters"]["AppPath"];
+                endpoint: components["parameters"]["EndpointPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The endpoint */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpWorkload"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getAsgi: {
+        parameters: {
+            query?: {
+                /** @description Describe this version instead of the active one. */
+                version?: components["parameters"]["VersionQuery"];
+            };
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                app: components["parameters"]["AppPath"];
+                endpoint: components["parameters"]["EndpointPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The ASGI app */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpWorkload"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    invokeFunction: {
+        parameters: {
+            query?: {
+                /** @description Hold the request until the task finishes or this many seconds pass. */
+                wait_seconds?: components["parameters"]["InvokeWait"];
+            };
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                app: components["parameters"]["AppPath"];
+                function: components["parameters"]["FunctionPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["InvocationBody"];
+            };
+        };
+        responses: {
+            /** @description The task, with its result when it succeeded within the wait */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Invocation"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    invokeFunctionVersion: {
+        parameters: {
+            query?: {
+                /** @description Hold the request until the task finishes or this many seconds pass. */
+                wait_seconds?: components["parameters"]["InvokeWait"];
+            };
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                app: components["parameters"]["AppPath"];
+                function: components["parameters"]["FunctionPath"];
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["InvocationBody"];
+            };
+        };
+        responses: {
+            /** @description The task, with its result when it succeeded within the wait */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Invocation"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listDomains: {
+        parameters: {
+            query?: {
+                /** @description Return domains whose hostname sorts after this. */
+                after?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Registered domains */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DomainList"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    registerDomain: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DomainRequest"];
+            };
+        };
+        responses: {
+            /** @description The registration and the DNS records it waits for */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Domain"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getDomain: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                hostname: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The registration */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Domain"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    removeDomain: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                hostname: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createPreview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                app: components["parameters"]["AppPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description The preview; its container starts asynchronously */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Preview"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getPreview: {
+        parameters: {
+            query?: {
+                /** @description Hold the request until the container is ready or the preview stops, or this many seconds pass. */
+                wait_seconds?: number;
+            };
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                preview: components["parameters"]["PreviewPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The preview */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Preview"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    stopPreview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                preview: components["parameters"]["PreviewPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The stopped preview */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Preview"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    syncPreviewFiles: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                preview: components["parameters"]["PreviewPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": string;
+            };
+        };
+        responses: {
+            /** @description What was applied */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreviewSync"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    streamPreviewOutput: {
+        parameters: {
+            query?: {
+                after?: number;
+                follow?: boolean;
+            };
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                preview: components["parameters"]["PreviewPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Newline-delimited ContainerLogEntry objects */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/x-ndjson": string;
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listHttpRequests: {
+        parameters: {
+            query?: {
+                /** @description Only the requests of this endpoint or ASGI app. */
+                name?: components["schemas"]["WorkloadName"];
+                /** @description Return requests older than this request id. */
+                before?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                app: components["parameters"]["AppPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Requests, newest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpRequestList"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getHttpRequest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                http_request: components["parameters"]["RequestPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The request */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HttpRequest"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listHttpRequestLogs: {
+        parameters: {
+            query?: {
+                after?: number;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                http_request: components["parameters"]["RequestPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Output lines in order */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContainerLogList"];
                 };
             };
             default: components["responses"]["Error"];

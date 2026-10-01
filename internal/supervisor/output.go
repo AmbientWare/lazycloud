@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"syscall"
+	"time"
 	"unicode/utf8"
 
 	"golang.org/x/sys/unix"
@@ -34,7 +35,13 @@ type outputPipe struct {
 	pending []byte
 	// held is decoded output that may begin a secret value.
 	held string
+	// partial is the start of a line not yet ended.
+	partial string
 }
+
+// partialWait is how long the start of a line waits for its end before it
+// is emitted alone, so a prompt or progress output still arrives.
+const partialWait = 50 * time.Millisecond
 
 func newOutputPipe(file *os.File, stream hostproto.LogStream) (*outputPipe, error) {
 	raw, err := file.SyscallConn()
@@ -49,6 +56,14 @@ func newOutputPipe(file *os.File, stream hostproto.LogStream) (*outputPipe, erro
 func (sl *slot) readOutput(ctx context.Context, pipe *outputPipe) {
 	for {
 		var done bool
+		sl.outMu.Lock()
+		waiting := pipe.partial != ""
+		sl.outMu.Unlock()
+		deadline := time.Time{}
+		if waiting {
+			deadline = time.Now().Add(partialWait)
+		}
+		_ = pipe.file.SetReadDeadline(deadline)
 		err := pipe.raw.Read(func(fd uintptr) bool {
 			sl.outMu.Lock()
 			defer sl.outMu.Unlock()
@@ -63,6 +78,12 @@ func (sl *slot) readOutput(ctx context.Context, pipe *outputPipe) {
 			}
 			return true
 		})
+		if errors.Is(err, os.ErrDeadlineExceeded) {
+			sl.outMu.Lock()
+			sl.emitPartialLocked(pipe)
+			sl.outMu.Unlock()
+			continue
+		}
 		if err != nil || done {
 			return
 		}
@@ -97,16 +118,38 @@ func (sl *slot) drainLocked(flush bool) {
 	}
 }
 
+// emitLocked sends each completed line of data without its newline, and
+// with flush the start of a line too, which happens when an attempt ends.
 func (sl *slot) emitLocked(pipe *outputPipe, data []byte, flush bool) {
-	text := sl.sup.redact.stream(&pipe.held, pipe.decode(data, flush), flush)
-	if text == "" {
-		return
+	text := pipe.partial + sl.sup.redact.stream(&pipe.held, pipe.decode(data, flush), flush)
+	pipe.partial = ""
+	for {
+		line, rest, found := strings.Cut(text, "\n")
+		if !found {
+			pipe.partial = text
+			break
+		}
+		sl.pushLineLocked(pipe, line)
+		text = rest
 	}
+	if flush {
+		sl.emitPartialLocked(pipe)
+	}
+}
+
+func (sl *slot) emitPartialLocked(pipe *outputPipe) {
+	if pipe.partial != "" {
+		sl.pushLineLocked(pipe, pipe.partial)
+		pipe.partial = ""
+	}
+}
+
+func (sl *slot) pushLineLocked(pipe *outputPipe, line string) {
 	attempt := sl.attempt
 	if sl.soleAttempt != nil {
 		attempt = sl.soleAttempt()
 	}
-	sl.sup.out.push(outputMessage(attempt, pipe.stream, text))
+	sl.sup.out.push(outputMessage(attempt, pipe.stream, line))
 }
 
 func outputMessage(attempt string, stream hostproto.LogStream, text string) *hostproto.SupervisorMessage {

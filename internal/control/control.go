@@ -112,7 +112,7 @@ func Resolve(spec apitypes.FunctionSpec) (apitypes.FunctionSpec, error) {
 	if err := resolveRuntime(spec, &out); err != nil {
 		return out, err
 	}
-	return out, nil
+	return out, resolveHTTP(spec, &out)
 }
 
 func orDefault[T any](v *T, def T) *T {
@@ -192,10 +192,11 @@ func (c *Control) Deploy(ctx context.Context, workspace identity.WorkspaceID, ap
 	functions := make([]resolvedFunction, len(req.Functions))
 	seen := map[string]bool{}
 	for n, spec := range req.Functions {
-		if seen[spec.Name] {
+		key := string(KindOf(spec)) + ":" + spec.Name
+		if seen[key] {
 			return apitypes.Deployment{}, &InvalidSpecError{Function: spec.Name, Reason: "listed more than once"}
 		}
-		seen[spec.Name] = true
+		seen[key] = true
 		f, err := resolveFunction(spec)
 		if err != nil {
 			return apitypes.Deployment{}, err
@@ -223,7 +224,7 @@ func (c *Control) Deploy(ctx context.Context, workspace identity.WorkspaceID, ap
 
 		releases := make([]apitypes.Release, len(functions))
 		for _, n := range order {
-			release, err := c.deployFunction(ctx, tx, q, appRow.ID, functions[n])
+			release, err := c.deployFunction(ctx, tx, q, uuid.UUID(workspace), appRow.ID, appRow.Name, functions[n])
 			if err != nil {
 				return err
 			}
@@ -235,7 +236,7 @@ func (c *Control) Deploy(ctx context.Context, workspace identity.WorkspaceID, ap
 		if req.Prune != nil && *req.Prune {
 			keep := make([]string, len(functions))
 			for n, f := range functions {
-				keep[n] = f.spec.Name
+				keep[n] = string(KindOf(f.spec)) + ":" + f.spec.Name
 			}
 			rows, err := q.PruneFunctions(ctx, PruneFunctionsParams{AppID: appRow.ID, Keep: keep})
 			if err != nil {
@@ -274,10 +275,13 @@ func (c *Control) Deploy(ctx context.Context, workspace identity.WorkspaceID, ap
 // deployFunction upserts and locks the workload, then keeps or replaces its
 // active release. Execution is woken for the new release and for the one it
 // replaces, which drains once its work finishes.
-func (c *Control) deployFunction(ctx context.Context, tx pgx.Tx, q *Queries, app uuid.UUID, f resolvedFunction) (apitypes.Release, error) {
-	workload, err := q.UpsertWorkload(ctx, UpsertWorkloadParams{AppID: app, Name: f.spec.Name})
+func (c *Control) deployFunction(ctx context.Context, tx pgx.Tx, q *Queries, workspace, app uuid.UUID, appName string, f resolvedFunction) (apitypes.Release, error) {
+	workload, err := q.UpsertWorkload(ctx, UpsertWorkloadParams{AppID: app, Kind: string(KindOf(f.spec)), Name: f.spec.Name})
 	if err != nil {
 		return apitypes.Release{}, fmt.Errorf("upsert workload %s: %w", f.spec.Name, err)
+	}
+	if err := claimWorkloadRoute(ctx, tx, q, workspace, workload.ID, appName, f.spec); err != nil {
+		return apitypes.Release{}, err
 	}
 	if err := schedules.Apply(ctx, tx, workload.ID, f.spec.Cron); err != nil {
 		return apitypes.Release{}, fmt.Errorf("schedule %s: %w", f.spec.Name, err)

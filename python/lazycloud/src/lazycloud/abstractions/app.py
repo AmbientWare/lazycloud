@@ -1004,6 +1004,7 @@ class App:
 
         Raises for resources the platform cannot deploy yet, naming each.
         """
+        from lazycloud.abstractions.endpoint import ASGI, Endpoint
         from lazycloud.abstractions.function import Function
         from lazycloud.session.deployment import AppFunctions
 
@@ -1015,7 +1016,7 @@ class App:
         functions: list[Function[..., Any]] = []
         unsupported: list[str] = []
         for item in selected:
-            if isinstance(item, Function):
+            if isinstance(item, Function | Endpoint | ASGI):
                 functions.append(cast("Function[..., Any]", item))
             else:
                 unsupported.append(_resource_selector(item))

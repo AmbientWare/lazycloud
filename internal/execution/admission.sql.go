@@ -128,10 +128,13 @@ func (q *Queries) InsertTasks(ctx context.Context, arg InsertTasksParams) ([]Ins
 
 const lockFunctionForSubmit = `-- name: LockFunctionForSubmit :one
 select w.id, w.name, w.desired_state, a.name as app_name, a.state as app_state,
-       r.id as release_id, r.version, r.spec
+       r.id as release_id, r.version, r.spec,
+       coalesce(p.stopped_at is null and p.lease_expires_at > now()
+                and (p.deadline_at is null or p.deadline_at > now()), false)::bool as preview_live
 from workloads w
 join apps a on a.id = w.app_id
 join releases r on r.id = coalesce($1::uuid, w.active_release_id) and r.workload_id = w.id
+left join previews p on p.release_id = r.id
 where a.workspace_id = $2 and a.name = $3 and a.state <> 'deleted'
   and w.kind = 'function' and w.name = $4 and w.desired_state <> 'deleted'
 for update of w
@@ -153,6 +156,7 @@ type LockFunctionForSubmitRow struct {
 	ReleaseID    uuid.UUID
 	Version      *int32
 	Spec         []byte
+	PreviewLive  bool
 }
 
 // The workload lock makes the max_pending_tasks count exact for this submit.
@@ -174,6 +178,7 @@ func (q *Queries) LockFunctionForSubmit(ctx context.Context, arg LockFunctionFor
 		&i.ReleaseID,
 		&i.Version,
 		&i.Spec,
+		&i.PreviewLive,
 	)
 	return i, err
 }

@@ -68,7 +68,7 @@ func (a *Agent) startBuild(spec *hostproto.StartContainer) {
 	a.mu.Lock()
 	c, known := a.containers[id]
 	if !known {
-		c = a.newContainer(id, "", 1, hostproto.ContainerPhase_CONTAINER_PHASE_PREPARING)
+		c = a.newContainer(id, "", 1, nil, hostproto.ContainerPhase_CONTAINER_PHASE_PREPARING)
 		c.isBuild = true
 		a.containers[id] = c
 	}

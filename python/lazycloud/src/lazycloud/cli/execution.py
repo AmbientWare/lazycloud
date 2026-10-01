@@ -11,12 +11,14 @@ from shared.api import (
     DeploymentPlan,
     DeploymentPlanRequest,
     WorkloadIdentity,
+    WorkloadKind,
 )
 
 from lazycloud._invocation import prepare_arguments
 from lazycloud._terminal.cards import notice_card, result_card
 from lazycloud._terminal.streams import console
 from lazycloud.abstractions.app import App
+from lazycloud.abstractions.endpoint import ASGI, Endpoint
 from lazycloud.abstractions.function import Function
 from lazycloud.abstractions.shell import Shell, ShellSession
 from lazycloud.cli.apps import app_name
@@ -112,13 +114,13 @@ def deploy(
         target = loaded[0]
         attach_terminal(target)
         if diff:
-            if not isinstance(target, Function):
+            if not isinstance(target, Function | Endpoint | ASGI):
                 raise typer.BadParameter("--diff requires an app or a decorated workload")
-            function = cast("Function[..., Any]", target)
-            plan = _plan(client, selected_workspace, AppFunctions(function._app_slug, (function,)))
+            workload = cast("Function[..., Any]", target)
+            plan = _plan(client, selected_workspace, AppFunctions(workload._app_slug, (workload,)))
             _emit_deployment_plans(ctx, [plan])
             return
-        if not isinstance(target, Function):
+        if not isinstance(target, Function | Endpoint | ASGI):
             invoke_handler_method(
                 target,
                 "deploy",
@@ -130,6 +132,8 @@ def deploy(
     release = next(item for item in deployment.releases if item.function == target.resource_name)
     if release.version is not None:
         summary["version"] = release.version
+    if release.url:
+        summary["url"] = release.url
     emit(
         ctx,
         payload=deployment.model_dump(mode="json"),
@@ -140,12 +144,20 @@ def deploy(
 def _plan(client: ApiClient, workspace: str, target: AppFunctions) -> DeploymentPlan:
     request = DeploymentPlanRequest(
         workloads=[
-            WorkloadIdentity(kind="function", name=function.resource_name)
+            WorkloadIdentity(kind=_workload_kind(function), name=function.resource_name)
             for function in target.functions
         ],
         prune=target.prune,
     )
     return client.plan_deployment(workspace, target.app, request)
+
+
+def _workload_kind(workload: object) -> WorkloadKind:
+    if isinstance(workload, Endpoint):
+        return WorkloadKind.endpoint
+    if isinstance(workload, ASGI):
+        return WorkloadKind.asgi
+    return WorkloadKind.function
 
 
 def _emit_deployment_plans(ctx: typer.Context, plans: list[DeploymentPlan]) -> None:
@@ -178,6 +190,9 @@ def _emit_app_deployments(
             "app": deployment.app.name,
             "workloads": len(deployment.releases),
         }
+        urls: list[JsonValue] = [release.url for release in deployment.releases if release.url]
+        if urls:
+            summary["urls"] = urls
         if target.prune:
             summary["removed_versions"] = deployment.removed_versions
         summaries.append(summary)

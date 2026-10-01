@@ -1912,6 +1912,323 @@ paths:
               schema: { type: string, format: binary }
         default: { $ref: "#/components/responses/Error" }
 
+  # Endpoints packet: HTTP workloads, custom domains and previews.
+
+  /v1/workspaces/{workspace}/apps/{app}/endpoints/{endpoint}:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/AppPath"
+      - $ref: "#/components/parameters/EndpointPath"
+    get:
+      operationId: getEndpoint
+      summary: An endpoint, its active release and the URLs it answers on
+      parameters:
+        - $ref: "#/components/parameters/VersionQuery"
+      responses:
+        "200":
+          description: The endpoint
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HttpWorkload" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/apps/{app}/asgi/{endpoint}:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/AppPath"
+      - $ref: "#/components/parameters/EndpointPath"
+    get:
+      operationId: getAsgi
+      summary: An ASGI or realtime app, its active release and the URLs it answers on
+      parameters:
+        - $ref: "#/components/parameters/VersionQuery"
+      responses:
+        "200":
+          description: The ASGI app
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HttpWorkload" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/apps/{app}/functions/{function}/invoke:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/AppPath"
+      - $ref: "#/components/parameters/FunctionPath"
+    post:
+      operationId: invokeFunction
+      summary: Run the function's active release with JSON arguments
+      description: >-
+        The body's `args` and `kwargs`, or else the whole body, become the
+        arguments, and query parameters are added as keyword arguments.
+      parameters:
+        - $ref: "#/components/parameters/InvokeWait"
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/InvocationBody" }
+      responses:
+        "200":
+          description: The task, with its result when it succeeded within the wait
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Invocation" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/apps/{app}/functions/{function}/versions/{version}/invoke:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/AppPath"
+      - $ref: "#/components/parameters/FunctionPath"
+      - name: version
+        in: path
+        required: true
+        schema: { type: integer, minimum: 1 }
+    post:
+      operationId: invokeFunctionVersion
+      summary: Run one version of the function with JSON arguments
+      parameters:
+        - $ref: "#/components/parameters/InvokeWait"
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/InvocationBody" }
+      responses:
+        "200":
+          description: The task, with its result when it succeeded within the wait
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Invocation" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/domains:
+    get:
+      operationId: listDomains
+      summary: Domains the caller registered, by hostname
+      parameters:
+        - name: after
+          in: query
+          description: Return domains whose hostname sorts after this.
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 100 }
+      responses:
+        "200":
+          description: Registered domains
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DomainList" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: registerDomain
+      summary: Register a hostname the caller's workspaces may serve from
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DomainRequest" }
+      responses:
+        "201":
+          description: The registration and the DNS records it waits for
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Domain" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/domains/{hostname}:
+    parameters:
+      - name: hostname
+        in: path
+        required: true
+        schema: { type: string, maxLength: 253 }
+    get:
+      operationId: getDomain
+      summary: One registration, re-read from the provider while it is unsettled
+      responses:
+        "200":
+          description: The registration
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Domain" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: removeDomain
+      summary: Retire a registration no deployment serves from
+      responses:
+        "204":
+          description: Removed
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/apps/{app}/previews:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/AppPath"
+    post:
+      operationId: createPreview
+      summary: Start a preview container for one workload definition
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PreviewRequest" }
+      responses:
+        "201":
+          description: The preview; its container starts asynchronously
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Preview" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/previews/{preview}:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/PreviewPath"
+    get:
+      operationId: getPreview
+      summary: Read a preview, optionally waiting until its container is ready
+      parameters:
+        - name: wait_seconds
+          in: query
+          description: Hold the request until the container is ready or the preview stops, or this many seconds pass.
+          schema: { type: integer, minimum: 0, maximum: 60, default: 0 }
+      responses:
+        "200":
+          description: The preview
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Preview" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: stopPreview
+      summary: Stop the preview and its container
+      responses:
+        "200":
+          description: The stopped preview
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Preview" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/previews/{preview}/files:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/PreviewPath"
+    post:
+      operationId: syncPreviewFiles
+      summary: Write and remove files in the preview container's workspace
+      description: >-
+        The body is a tar archive of the files to write, paths relative to
+        the workspace, at most 64 MiB. A path to remove is a regular entry of size zero carrying
+        the PAX record `LAZYCLOUD.removed=1`. The container's runners restart
+        once their current work finishes.
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary }
+      responses:
+        "200":
+          description: What was applied
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PreviewSync" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/previews/{preview}/output:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/PreviewPath"
+    get:
+      operationId: streamPreviewOutput
+      summary: The preview container's output after a cursor, one JSON ContainerLogEntry per line
+      description: >-
+        A followed stream keeps the preview alive, writes a blank line after
+        15 seconds without entries and ends when the preview stops. Without a
+        follower the preview stops a minute later.
+      parameters:
+        - name: after
+          in: query
+          schema: { type: integer, format: int64, minimum: 0, default: 0 }
+        - name: follow
+          in: query
+          schema: { type: boolean, default: false }
+      responses:
+        "200":
+          description: Newline-delimited ContainerLogEntry objects
+          content:
+            application/x-ndjson:
+              schema: { type: string, format: binary }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/apps/{app}/requests:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/AppPath"
+    get:
+      operationId: listHttpRequests
+      summary: The app's endpoint and ASGI requests, newest first
+      description: >-
+        One record per request the edge served, written about a second after
+        it ends and kept for seven days. Function invocations over HTTP are
+        tasks instead.
+      parameters:
+        - name: name
+          in: query
+          description: Only the requests of this endpoint or ASGI app.
+          schema: { $ref: "#/components/schemas/WorkloadName" }
+        - name: before
+          in: query
+          description: Return requests older than this request id.
+          schema: { type: string, format: uuid }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+      responses:
+        "200":
+          description: Requests, newest first
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HttpRequestList" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/requests/{http_request}:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/RequestPath"
+    get:
+      operationId: getHttpRequest
+      summary: One request by its X-Request-Id
+      responses:
+        "200":
+          description: The request
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HttpRequest" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/requests/{http_request}/logs:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/RequestPath"
+    get:
+      operationId: listHttpRequestLogs
+      summary: What the workload wrote while serving the request
+      parameters:
+        - name: after
+          in: query
+          schema: { type: integer, format: int64, minimum: 0, default: 0 }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 1000 }
+      responses:
+        "200":
+          description: Output lines in order
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ContainerLogList" }
+        default: { $ref: "#/components/responses/Error" }
+
   # Observability: the change stream, container metrics and lifecycle, task
   # timelines and call graphs, workload performance and account metrics.
 
@@ -2757,6 +3074,11 @@ components:
       in: path
       required: true
       schema: { $ref: "#/components/schemas/AppName" }
+    RequestPath:
+      name: http_request
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
     FunctionPath:
       name: function
       in: path
@@ -2845,6 +3167,26 @@ components:
       in: query
       description: Start with only the last this many stored entries.
       schema: { type: integer, minimum: 1, maximum: 1000 }
+    EndpointPath:
+      name: endpoint
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/WorkloadName" }
+    PreviewPath:
+      name: preview
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    VersionQuery:
+      name: version
+      in: query
+      description: Describe this version instead of the active one.
+      schema: { type: integer, minimum: 1 }
+    InvokeWait:
+      name: wait_seconds
+      in: query
+      description: Hold the request until the task finishes or this many seconds pass.
+      schema: { type: integer, minimum: 0, maximum: 60, default: 60 }
 
     # Observability parameters.
     RangeStart:
@@ -3437,6 +3779,11 @@ components:
           type: object
           additionalProperties: true
           x-go-type: json.RawMessage
+        http:
+          $ref: "#/components/schemas/HttpSpec"
+        authorized:
+          description: Whether requests to the workload's URLs need a token.
+          type: boolean
 
     SourceRef:
       type: object
@@ -3557,6 +3904,9 @@ components:
           type: integer
         created_at: { type: string, format: date-time }
         spec: { $ref: "#/components/schemas/FunctionSpec" }
+        url:
+          description: Where an HTTP workload answers, following the active release.
+          type: string
 
     Function:
       type: object
@@ -4464,8 +4814,9 @@ components:
           type: string
 
     WorkloadKind:
+      description: A function runs tasks; an endpoint or ASGI app serves HTTP. Realtime apps are ASGI apps.
       type: string
-      enum: [function]
+      enum: [function, endpoint, asgi]
 
     DeploymentPlanRequest:
       type: object
@@ -4795,6 +5146,245 @@ components:
         attempt: { type: integer }
         data:
           description: One line of build output without its trailing newline.
+          type: string
+        time: { type: string, format: date-time }
+
+    # Endpoints packet schemas.
+
+    HttpSpec:
+      description: >-
+        Makes the workload answer HTTP. Its slots are `workers` processes,
+        each handling `concurrency` requests at once.
+      type: object
+      required: [kind]
+      properties:
+        kind: { $ref: "#/components/schemas/HttpKind" }
+        route:
+          description: The path an endpoint answers on.
+          type: string
+          pattern: "^/[^\\s?#]*$"
+          maxLength: 512
+          default: /
+        methods:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/HttpMethod" }
+          default: [GET, POST]
+        domain:
+          $ref: "#/components/schemas/Hostname"
+        workers:
+          type: integer
+          minimum: 1
+          maximum: 64
+          default: 1
+
+    HttpKind:
+      type: string
+      enum: [endpoint, asgi, realtime]
+
+    HttpMethod:
+      type: string
+      enum: [DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT, TRACE]
+
+    Hostname:
+      type: string
+      maxLength: 253
+      pattern: "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$"
+
+    HttpWorkload:
+      type: object
+      required: [name, app, kind, state, release, url, version_url, release_url]
+      properties:
+        name: { $ref: "#/components/schemas/WorkloadName" }
+        app: { $ref: "#/components/schemas/AppName" }
+        kind: { $ref: "#/components/schemas/HttpKind" }
+        state:
+          type: string
+          enum: [active, stopped]
+        release:
+          $ref: "#/components/schemas/Release"
+        url:
+          description: Follows the active release across deploys.
+          type: string
+        version_url:
+          description: Pinned to the release's version.
+          type: string
+        release_url:
+          description: Addresses the release by id.
+          type: string
+        domain_url:
+          description: The custom hostname, once its registration is ready.
+          type: string
+
+    InvocationBody:
+      type: object
+      additionalProperties: true
+      # Kept as raw JSON so arguments pass through unchanged, including
+      # integers beyond float64 precision.
+      x-go-type: json.RawMessage
+
+    Invocation:
+      type: object
+      required: [task]
+      properties:
+        task: { $ref: "#/components/schemas/Task" }
+        result:
+          description: The JSON value the function returned, once it succeeded.
+          x-go-type: json.RawMessage
+
+    DomainRequest:
+      type: object
+      required: [hostname]
+      properties:
+        hostname:
+          type: string
+          maxLength: 253
+
+    DomainPhase:
+      type: string
+      enum: [awaiting_verification, validating, ready, action_required]
+
+    DomainErrorCode:
+      type: string
+      enum: [verification_timed_out, certificate_failed, hostname_rejected, upstream_unavailable]
+
+    DnsRecord:
+      type: object
+      required: [type, name, value]
+      properties:
+        type: { type: string }
+        name: { type: string }
+        value: { type: string }
+
+    Domain:
+      type: object
+      required: [id, hostname, phase, cname_target, required_records, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        hostname: { $ref: "#/components/schemas/Hostname" }
+        phase: { $ref: "#/components/schemas/DomainPhase" }
+        cname_target:
+          description: The hostname the domain's CNAME points at.
+          type: string
+        required_records:
+          description: Records the provider still waits for beyond the CNAME.
+          type: array
+          items: { $ref: "#/components/schemas/DnsRecord" }
+        error_code: { $ref: "#/components/schemas/DomainErrorCode" }
+        error_message: { type: string }
+        verified_at: { type: string, format: date-time }
+        last_checked_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    DomainList:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/Domain" }
+        next:
+          description: Pass as `after` for the next page; absent on the last.
+          type: string
+
+    PreviewRequest:
+      type: object
+      required: [spec]
+      properties:
+        spec: { $ref: "#/components/schemas/FunctionSpec" }
+        timeout_seconds:
+          description: Stop after this long; 0 runs until stopped.
+          type: integer
+          minimum: 0
+          maximum: 86400
+          default: 0
+
+    PreviewState:
+      type: string
+      enum: [starting, ready, stopped]
+
+    PreviewKind:
+      type: string
+      enum: [function, endpoint, asgi, realtime]
+
+    Preview:
+      type: object
+      required: [id, app, name, kind, state, url, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        app: { $ref: "#/components/schemas/AppName" }
+        name: { $ref: "#/components/schemas/WorkloadName" }
+        kind: { $ref: "#/components/schemas/PreviewKind" }
+        state: { $ref: "#/components/schemas/PreviewState" }
+        container_id: { type: string, format: uuid }
+        url:
+          description: Where the preview answers; a function preview takes tasks through the API.
+          type: string
+        expires_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+
+    PreviewSync:
+      type: object
+      required: [written, removed]
+      properties:
+        written: { type: integer }
+        removed: { type: integer }
+
+    HttpRequest:
+      description: >-
+        One request to an endpoint or ASGI app. `status` is what the caller
+        received, 101 for a WebSocket whose `duration_ms` is the session.
+      type: object
+      required: [id, app, name, kind, release_id, method, path, status, started_at, duration_ms, request_bytes, response_bytes]
+      properties:
+        id: { type: string, format: uuid }
+        app: { $ref: "#/components/schemas/AppName" }
+        name: { $ref: "#/components/schemas/WorkloadName" }
+        kind: { $ref: "#/components/schemas/WorkloadKind" }
+        release_id: { type: string, format: uuid }
+        version:
+          description: The deployed version; negative for a preview.
+          type: integer
+        container_id: { type: string, format: uuid }
+        method: { type: string }
+        path: { type: string }
+        status: { type: integer }
+        started_at: { type: string, format: date-time }
+        duration_ms: { type: integer, format: int64 }
+        request_bytes: { type: integer, format: int64 }
+        response_bytes: { type: integer, format: int64 }
+
+    HttpRequestList:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/HttpRequest" }
+        next:
+          description: Pass as `before` for the next page; absent on the last.
+          type: string
+          format: uuid
+
+    ContainerLogList:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/ContainerLogEntry" }
+
+    ContainerLogEntry:
+      type: object
+      required: [id, stream, data, time]
+      properties:
+        id: { type: integer, format: int64 }
+        stream:
+          type: string
+          enum: [stdout, stderr, system]
+        data:
+          description: One line of output without its trailing newline.
           type: string
         time: { type: string, format: date-time }
 

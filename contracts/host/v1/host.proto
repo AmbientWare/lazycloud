@@ -298,6 +298,9 @@ message StartContainer {
   ImageBuild build = 21;
   // The OCI platform image is pulled for, such as linux/amd64.
   string image_platform = 22;
+  // Set for endpoint, ASGI and realtime workloads: the slots are workers that
+  // serve HTTP instead of claiming tasks.
+  HttpServing http = 30;
   repeated VolumeMount volumes = 40;
   repeated DiskAttachment disks = 41;
 }
@@ -335,6 +338,24 @@ message CloudBucket {
 message DiskAttachment {
   string name = 1;
   string mount_path = 2;
+}
+
+enum HttpKind {
+  HTTP_KIND_UNSPECIFIED = 0;
+  // A function whose JSON body and query become its arguments.
+  HTTP_KIND_ENDPOINT = 1;
+  // An ASGI application.
+  HTTP_KIND_ASGI = 2;
+  // A WebSocket handler called once per message.
+  HTTP_KIND_REALTIME = 3;
+}
+
+// HttpServing configures a container's workers to serve HTTP. Each of the
+// FunctionWorkload slots is one worker process admitting up to concurrency
+// requests at once.
+message HttpServing {
+  HttpKind kind = 1;
+  int32 concurrency = 2;
 }
 
 // RegistryAuth authenticates to one registry.
@@ -515,6 +536,8 @@ message LogLine {
   LogStream stream = 2;
   string data = 3;
   google.protobuf.Timestamp time = 4;
+  // Set for output an HTTP worker wrote while serving this request.
+  string request_id = 30;
 }
 
 message AppendLogsResponse {}

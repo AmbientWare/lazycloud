@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -34,6 +35,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/control"
 	"github.com/AmbientWare/lazycloud/internal/database"
+	"github.com/AmbientWare/lazycloud/internal/edge"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/hostsession"
@@ -135,6 +137,11 @@ type serveConfig struct {
 	// drainDelay is how long the server keeps serving after shutdown
 	// starts while /readyz reports draining.
 	drainDelay time.Duration
+	edgeAddr   string
+	edgeURL    string
+	relayAddr  string
+	relayURL   string
+	cloudflare struct{ zone, token string }
 }
 
 func serve(ctx context.Context, args []string) error {
@@ -160,6 +167,13 @@ func serve(ctx context.Context, args []string) error {
 	fs.StringVar(&cfg.images.Registry, "image-registry", env("LAZYCLOUD_IMAGE_REGISTRY", ""), "registry host[:port] that builds publish to (LAZYCLOUD_IMAGE_REGISTRY)")
 	fs.StringVar(&cfg.images.Repository, "image-repository", env("LAZYCLOUD_IMAGE_REPOSITORY", "lazycloud"), "path under the registry for images and build cache (LAZYCLOUD_IMAGE_REPOSITORY)")
 	fs.BoolVar(&cfg.images.Insecure, "image-registry-insecure", env("LAZYCLOUD_IMAGE_REGISTRY_INSECURE", "") == "true", "the image registry speaks plain HTTP (LAZYCLOUD_IMAGE_REGISTRY_INSECURE)")
+	fs.StringVar(&cfg.edgeAddr, "edge-addr", env("LAZYCLOUD_EDGE_ADDR", "127.0.0.1:8082"), "workload traffic address (LAZYCLOUD_EDGE_ADDR)")
+	fs.StringVar(&cfg.edgeURL, "edge-url", env("LAZYCLOUD_EDGE_URL", "http://lazycloud.localhost:8082"), "public base URL workloads answer under (LAZYCLOUD_EDGE_URL)")
+	fs.StringVar(&cfg.relayAddr, "edge-relay-addr", env("LAZYCLOUD_EDGE_RELAY_ADDR", "127.0.0.1:8083"),
+		"address other servers' edges relay requests to, inside the cluster (LAZYCLOUD_EDGE_RELAY_ADDR)")
+	fs.StringVar(&cfg.relayURL, "edge-relay-advertise", env("LAZYCLOUD_EDGE_RELAY_ADVERTISE", ""),
+		"host:port other servers reach the relay address at, such as the pod IP; defaults to -edge-relay-addr (LAZYCLOUD_EDGE_RELAY_ADVERTISE)")
+	fs.StringVar(&cfg.cloudflare.zone, "cloudflare-zone-id", env("LAZYCLOUD_CLOUDFLARE_ZONE_ID", ""), "Cloudflare for SaaS zone for custom domains (LAZYCLOUD_CLOUDFLARE_ZONE_ID)")
 	fs.StringVar(&cfg.compute.ServerAddress, "agent-server-addr", env("LAZYCLOUD_AGENT_SERVER_ADDR", ""), "host:port agents dial; defaults to -grpc-addr (LAZYCLOUD_AGENT_SERVER_ADDR)")
 	fs.StringVar(&cfg.grpcCert, "grpc-tls-cert", env("LAZYCLOUD_GRPC_TLS_CERT", ""), "PEM certificate chain the host connection serves; empty serves plaintext for loopback or a TLS-terminating ingress (LAZYCLOUD_GRPC_TLS_CERT)")
 	fs.StringVar(&cfg.grpcKey, "grpc-tls-key", env("LAZYCLOUD_GRPC_TLS_KEY", ""), "PEM private key for -grpc-tls-cert (LAZYCLOUD_GRPC_TLS_KEY)")
@@ -202,6 +216,7 @@ func serve(ctx context.Context, args []string) error {
 	cfg.billing = billingConfig(cfg.identity.PublicURL)
 	cfg.objectStore.SecretAccessKey = os.Getenv("LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY")
 	cfg.objectStore.Workspaces.GarageAdminToken = os.Getenv("LAZYCLOUD_GARAGE_ADMIN_TOKEN")
+	cfg.cloudflare.token = os.Getenv("LAZYCLOUD_CLOUDFLARE_API_TOKEN")
 	if err := cfg.objectStore.Validate(); err != nil {
 		return fmt.Errorf("object store: %w", err)
 	}
@@ -234,7 +249,7 @@ func serve(ctx context.Context, args []string) error {
 		for _, l := range []struct {
 			addr string
 			into *net.Listener
-		}{{cfg.httpAddr, &ls.http}, {cfg.grpcAddr, &ls.grpc}, {cfg.healthAddr, &ls.health}} {
+		}{{cfg.httpAddr, &ls.http}, {cfg.grpcAddr, &ls.grpc}, {cfg.healthAddr, &ls.health}, {cfg.edgeAddr, &ls.edge}, {cfg.relayAddr, &ls.relay}} {
 			if l.addr == "" {
 				continue
 			}
@@ -249,11 +264,11 @@ func serve(ctx context.Context, args []string) error {
 // listeners are the server's sockets; health is nil without a health
 // address.
 type listeners struct {
-	http, grpc, health net.Listener
+	http, grpc, health, edge, relay net.Listener
 }
 
 func (ls listeners) close() {
-	for _, l := range []net.Listener{ls.http, ls.grpc, ls.health} {
+	for _, l := range []net.Listener{ls.http, ls.grpc, ls.health, ls.edge, ls.relay} {
 		if l != nil {
 			_ = l.Close()
 		}
@@ -268,7 +283,8 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, tel *te
 	obs := observability.NewObservability(pool, observability.Config{Registerer: tel.Registry}, logger)
 	changes := observability.NewChanges(pool, observability.DefaultChangesConfig(), tel.Registry, logger)
 	listener := database.NewListener(pool, logger, database.ChannelHost, database.ChannelTask, database.ChannelClaim,
-		database.ChannelLogs, database.ChannelImageBuild, database.ChannelImageBuildLog, storage.ChannelQueue)
+		database.ChannelLogs, database.ChannelImageBuild, database.ChannelImageBuildLog, storage.ChannelQueue,
+		execution.ChannelContainerLog)
 	cfg.objectStore.BrowserOrigin = cfg.identity.PublicURL
 	store := storage.NewStorage(pool, cfg.objectStore)
 	// The dashboard reads and writes artifacts with presigned URLs. A store
@@ -292,11 +308,23 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, tel *te
 	if cfg.billing.Stripe.SecretKey == "" {
 		logger.WarnContext(ctx, "payments are unavailable: set LAZYCLOUD_STRIPE_API_KEY and LAZYCLOUD_STRIPE_WEBHOOK_SECRET")
 	}
+	relayURL := cfg.relayURL
+	if relayURL == "" {
+		relayURL = cfg.relayAddr
+	}
+	edgeConfig := edge.Config{URL: cfg.edgeURL, RelayAddress: relayURL}
+	if cfg.cloudflare.zone != "" && cfg.cloudflare.token != "" {
+		edgeConfig.Domains = edge.NewCloudflare(edge.CloudflareAPI, cfg.cloudflare.zone, cfg.cloudflare.token)
+	}
+	edges, err := edge.NewEdge(pool, ident, exec, listener, edgeConfig, logger)
+	if err != nil {
+		return err
+	}
 	owners := api.Owners{
 		Identity: ident, Control: control.NewControl(pool), Storage: store,
 		Execution: exec, Images: im, Notifications: notifications.NewNotifications(pool, nil, logger),
 		Secrets: vault, Schedules: schedules.NewSchedules(pool, exec), Billing: bill, Listener: listener, Compute: comp,
-		Observability: obs, Changes: changes,
+		Observability: obs, Changes: changes, Edge: edges,
 	}
 	handler, err := api.NewHandler(owners, cfg.api, logger)
 	if err != nil {
@@ -320,9 +348,14 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, tel *te
 	}
 	grpcServer := grpc.NewServer(grpcOptions...)
 	hostproto.RegisterHostServiceServer(grpcServer, hosts)
+	hostproto.RegisterHostDataServer(grpcServer, edges.DataServer(hostsession.HostFrom))
+	edgeServer := &http.Server{Handler: edges, ReadHeaderTimeout: 10 * time.Second}
+	relayServer := grpc.NewServer()
+	hostproto.RegisterEdgeRelayServer(relayServer, edges.RelayServer())
 	probes := &health{}
 	httpServer := &http.Server{Handler: tel.HTTPHandler(handler, tel.NewHTTPMetrics()), ReadHeaderTimeout: 10 * time.Second}
-	logger.InfoContext(ctx, "serving", "version", version, "http", ls.http.Addr().String(), "grpc", ls.grpc.Addr().String())
+	logger.InfoContext(ctx, "serving", "version", version, "http", ls.http.Addr().String(), "grpc", ls.grpc.Addr().String(),
+		"edge", ls.edge.Addr().String(), "edge_url", cfg.edgeURL, "edge_relay", ls.relay.Addr().String())
 
 	g, gctx := errgroup.WithContext(ctx)
 	// Requests and RPCs still open during the drain wait on NOTIFY wake-ups,
@@ -336,6 +369,22 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, tel *te
 	g.Go(func() error { return obs.RunStartedPublisher(background) })
 	g.Go(func() error { return tel.ServeMetrics(background, logger) })
 	g.Go(func() error { return ident.RunTokenUse(background, logger) })
+	// The edge's route table, demand and request records keep running until
+	// its requests are done; then it forgets its registration and writes the
+	// records it still holds.
+	g.Go(func() error { return edges.Run(background) })
+	g.Go(func() error {
+		if err := edgeServer.Serve(ls.edge); !errors.Is(err, http.ErrServerClosed) {
+			return fmt.Errorf("serve edge: %w", err)
+		}
+		return nil
+	})
+	g.Go(func() error {
+		if err := relayServer.Serve(ls.relay); err != nil {
+			return fmt.Errorf("serve edge relay: %w", err)
+		}
+		return nil
+	})
 	g.Go(func() error {
 		if err := httpServer.Serve(ls.http); !errors.Is(err, http.ErrServerClosed) {
 			return fmt.Errorf("serve http: %w", err)
@@ -371,23 +420,28 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, tel *te
 			<-delay.C
 		}
 		logger.Info("shutting down")
-		// Sessions and claim long polls end at once; agents reconnect.
-		hosts.Shutdown()
-		stopped := make(chan struct{})
-		go func() { grpcServer.GracefulStop(); close(stopped) }()
 		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(gctx), shutdownGrace)
 		defer cancel()
-		// Waits and log follows keep a request open; Close ends them after
-		// the grace period.
-		if err := httpServer.Shutdown(shutdownCtx); err != nil {
-			_ = httpServer.Close()
+		// Sessions and claim long polls end at once; agents reconnect.
+		hosts.Shutdown()
+		// The API and edge stop accepting and finish their requests, and
+		// relays other edges sent here finish too, under one grace period;
+		// waits and log follows keep a request open until Close ends them.
+		// Edge requests still need the agents' data streams, which stay
+		// open until then.
+		var servers sync.WaitGroup
+		for _, server := range []*http.Server{httpServer, edgeServer} {
+			servers.Go(func() {
+				if err := server.Shutdown(shutdownCtx); err != nil {
+					_ = server.Close()
+				}
+			})
 		}
-		select {
-		case <-stopped:
-		case <-shutdownCtx.Done():
-			grpcServer.Stop()
-			<-stopped
-		}
+		servers.Go(func() { gracefulStop(shutdownCtx, relayServer) })
+		servers.Wait()
+		// Idle data streams and Listen calls end now.
+		edges.Shutdown()
+		gracefulStop(shutdownCtx, grpcServer)
 		return nil
 	})
 	err = g.Wait()
@@ -396,4 +450,17 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, tel *te
 		return fmt.Errorf("serve: %w", err)
 	}
 	return nil
+}
+
+// gracefulStop stops server once its calls finish, or at once when ctx
+// ends first.
+func gracefulStop(ctx context.Context, server *grpc.Server) {
+	stopped := make(chan struct{})
+	go func() { server.GracefulStop(); close(stopped) }()
+	select {
+	case <-stopped:
+	case <-ctx.Done():
+		server.Stop()
+		<-stopped
+	}
 }

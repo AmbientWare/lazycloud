@@ -35,19 +35,28 @@ def invoke_handler(
     arguments are already Python objects and pass through.
     """
 
-    payload_encoding = FunctionPayloadEncoding(encoding.value)
-    if isinstance(handler, InvocationHandler):
-        result = handler.invoke_arguments(args, kwargs, encoding=payload_encoding)
-    else:
-        args, kwargs = prepare_callable_arguments(handler, args, kwargs, encoding=payload_encoding)
-        result = handler(*args, **kwargs)
+    result = call_handler(handler, args, kwargs, FunctionPayloadEncoding(encoding.value))
     if inspect.isawaitable(result):
         return asyncio.run(_await(result))
     return result
+
+
+def call_handler(
+    handler: Callable[..., Any],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    encoding: FunctionPayloadEncoding,
+) -> Any:
+    """Call the handler and return what it returned, awaitable or not."""
+
+    if isinstance(handler, InvocationHandler):
+        return handler.invoke_arguments(args, kwargs, encoding=encoding)
+    args, kwargs = prepare_callable_arguments(handler, args, kwargs, encoding=encoding)
+    return handler(*args, **kwargs)
 
 
 async def _await(value: Any) -> Any:
     return await value
 
 
-__all__ = ["cloudpickle_bytes", "invoke_handler"]
+__all__ = ["call_handler", "cloudpickle_bytes", "invoke_handler"]

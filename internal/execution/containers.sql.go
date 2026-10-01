@@ -80,6 +80,20 @@ func (q *Queries) LockContainer(ctx context.Context, id uuid.UUID) (LockContaine
 	return i, err
 }
 
+const recordLoadError = `-- name: RecordLoadError :exec
+update releases set load_error = $1 where id = $2
+`
+
+type RecordLoadErrorParams struct {
+	LoadError *string
+	ID        uuid.UUID
+}
+
+func (q *Queries) RecordLoadError(ctx context.Context, arg RecordLoadErrorParams) error {
+	_, err := q.db.Exec(ctx, recordLoadError, arg.LoadError, arg.ID)
+	return err
+}
+
 const runningAttemptsOnContainer = `-- name: RunningAttemptsOnContainer :many
 select id from attempts where container_id = $1 and state = 'running' order by id
 `

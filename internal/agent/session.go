@@ -236,7 +236,7 @@ func (a *Agent) start(spec *hostproto.StartContainer) {
 	a.mu.Lock()
 	c, known := a.containers[id]
 	if !known {
-		c = a.newContainer(id, spec.GetFunction().GetHandler(), int(spec.GetFunction().GetSlots()), hostproto.ContainerPhase_CONTAINER_PHASE_PREPARING)
+		c = a.newContainer(id, spec.GetFunction().GetHandler(), int(spec.GetFunction().GetSlots()), spec.GetHttp(), hostproto.ContainerPhase_CONTAINER_PHASE_PREPARING)
 		c.runtime = runtimeOf(spec)
 		a.containers[id] = c
 	}
@@ -258,7 +258,7 @@ func (a *Agent) stop(stop *hostproto.StopContainer) {
 	a.mu.Lock()
 	c, known := a.containers[id]
 	if !known {
-		c = a.newContainer(id, "", 0, hostproto.ContainerPhase_CONTAINER_PHASE_EXITED)
+		c = a.newContainer(id, "", 0, nil, hostproto.ContainerPhase_CONTAINER_PHASE_EXITED)
 		c.exit = &hostproto.ContainerExit{Reason: hostproto.ExitReason_EXIT_REASON_STOPPED, Message: "not running on this host"}
 		c.exitedAt = time.Now()
 		a.containers[id] = c

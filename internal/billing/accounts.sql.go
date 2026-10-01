@@ -105,6 +105,17 @@ func (q *Queries) AccountView(ctx context.Context, userID uuid.UUID) (AccountVie
 	return i, err
 }
 
+const customDomainCount = `-- name: CustomDomainCount :one
+select count(*)::int from custom_domains where user_id = $1
+`
+
+func (q *Queries) CustomDomainCount(ctx context.Context, userID uuid.UUID) (int32, error) {
+	row := q.db.QueryRow(ctx, customDomainCount, userID)
+	var column_1 int32
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const lockAccount = `-- name: LockAccount :one
 select terms_version, status, stripe_customer_id, stripe_subscription_id, payment_method_attached_at,
        complimentary_since, scheduled_terms_version, reload_paused_purchase_id

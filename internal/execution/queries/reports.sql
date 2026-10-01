@@ -2,7 +2,8 @@
 update containers set state = 'ready', ready_at = now() where id = @id and state = 'starting';
 
 -- name: ResetStartFailures :exec
-update releases set start_failures = 0 where id = @id and start_failures <> 0;
+update releases set start_failures = 0, load_error = null
+where id = @id and (start_failures <> 0 or load_error is not null);
 
 -- name: LiveContainersOnHost :many
 select id, state from containers where host_id = @host_id and state <> 'stopped' order by id;

@@ -18,6 +18,10 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/storage"
 )
 
+// errImageUnpinned means a release names an image without the reference
+// it pinned at deploy.
+var errImageUnpinned = errors.New("the image has no pinned reference")
+
 // maxBuildLogLine bounds one stored line of build output.
 const maxBuildLogLine = 16 << 10
 
@@ -28,7 +32,7 @@ func (s *Server) imagePull(ctx context.Context, spec apitypes.ImageSpec) (images
 		return images.Pull{Reference: strings.ReplaceAll(s.config.ImageTemplate, "{version}", string(spec.PythonVersion))}, nil
 	}
 	if spec.Reference == nil {
-		return images.Pull{}, fmt.Errorf("release names image %s without its reference", *spec.ImageId)
+		return images.Pull{}, fmt.Errorf("release names image %s: %w", *spec.ImageId, errImageUnpinned)
 	}
 	return s.images.PullOf(ctx, *spec.ImageId, *spec.Reference)
 }

@@ -37,8 +37,20 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args: ["serve"]
           env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef: { fieldPath: status.podIP }
             - name: LAZYCLOUD_HTTP_ADDR
               value: "0.0.0.0:8080"
+            - name: LAZYCLOUD_EDGE_ADDR
+              value: "0.0.0.0:8082"
+            # Other server pods relay workload requests for hosts whose data
+            # connection this pod holds; bound to the pod IP, advertised as
+            # it, and reached by no Service. IPv4 pod addresses.
+            - name: LAZYCLOUD_EDGE_RELAY_ADDR
+              value: "$(POD_IP):8083"
+            - name: LAZYCLOUD_EDGE_RELAY_ADVERTISE
+              value: "$(POD_IP):8083"
             - name: LAZYCLOUD_GRPC_ADDR
               value: "0.0.0.0:8081"
             - name: LAZYCLOUD_HEALTH_ADDR
@@ -55,6 +67,11 @@ spec:
               containerPort: 8080
             - name: hosts
               containerPort: 8081
+            - name: edge
+              containerPort: 8082
+            # Other server pods only; no Service exposes it.
+            - name: relay
+              containerPort: 8083
             # Probes and scraping only; no Service exposes them.
             - name: health
               containerPort: 8090
@@ -118,6 +135,27 @@ spec:
     - name: hosts
       port: 8081
       targetPort: hosts
+---
+# Workload traffic: endpoint, ASGI and function hosts under LAZYCLOUD_EDGE_URL
+# and verified custom domains.
+apiVersion: v1
+kind: Service
+metadata:
+  name: server-edge
+  labels:
+    {{- include "lazycloud.labels" (list . "server") | nindent 4 }}
+  {{- with .Values.server.edgeService.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.server.edgeService.type }}
+  selector:
+    app.kubernetes.io/name: server
+  ports:
+    - name: edge
+      port: 80
+      targetPort: edge
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget

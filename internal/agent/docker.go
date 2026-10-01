@@ -29,10 +29,37 @@ const (
 	labelHost      = "lazycloud.host-id"
 	labelHandler   = "lazycloud.handler"
 	labelSlots     = "lazycloud.slots"
+	// An HTTP workload's kind and per-worker concurrency, so an adopted
+	// container is configured the same way again.
+	labelHTTPKind        = "lazycloud.http-kind"
+	labelHTTPConcurrency = "lazycloud.http-concurrency"
 	// labelRuntime holds the containerRuntime as JSON, so an agent that
 	// adopts a container can configure a supervisor that has not connected.
 	labelRuntime = "lazycloud.runtime"
 )
+
+// httpLabels records an HTTP workload's serving configuration.
+func httpLabels(labels map[string]string, h *hostproto.HttpServing) {
+	if h == nil {
+		return
+	}
+	labels[labelHTTPKind] = h.GetKind().String()
+	labels[labelHTTPConcurrency] = strconv.Itoa(int(h.GetConcurrency()))
+}
+
+// httpFromLabels restores what httpLabels recorded, or nil for a task
+// workload.
+func httpFromLabels(labels map[string]string) *hostproto.HttpServing {
+	kind, ok := hostproto.HttpKind_value[labels[labelHTTPKind]]
+	if !ok {
+		return nil
+	}
+	concurrency, _ := strconv.Atoi(labels[labelHTTPConcurrency])
+	return &hostproto.HttpServing{
+		Kind:        hostproto.HttpKind(kind),
+		Concurrency: int32(max(1, concurrency)), //nolint:gosec // the server caps concurrency at 256
+	}
+}
 
 // pidsLimit bounds processes per container.
 const pidsLimit = 4096
@@ -67,6 +94,7 @@ func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostprot
 	labels[labelHost] = a.identity.HostID
 	labels[labelHandler] = c.handler
 	labels[labelSlots] = strconv.Itoa(c.slots)
+	httpLabels(labels, c.http)
 	if len(workspaces) > 0 {
 		labels[labelWorkspaces] = strings.Join(workspaces, ",")
 	}
@@ -182,7 +210,7 @@ func (a *Agent) adopt(ctx context.Context) error {
 		}
 		slots, _ := strconv.Atoi(summary.Labels[labelSlots])
 		if summary.State == containertypes.StateRunning {
-			c := a.newContainer(id, summary.Labels[labelHandler], slots, hostproto.ContainerPhase_CONTAINER_PHASE_STARTING)
+			c := a.newContainer(id, summary.Labels[labelHandler], slots, httpFromLabels(summary.Labels), hostproto.ContainerPhase_CONTAINER_PHASE_STARTING)
 			if err := json.Unmarshal([]byte(summary.Labels[labelRuntime]), &c.runtime); err != nil {
 				c.log.Warn("container has no readable runtime label", "error", err)
 			}
@@ -206,7 +234,7 @@ func (a *Agent) adopt(ctx context.Context) error {
 			a.goOwned(c.watch)
 			continue
 		}
-		c := a.newContainer(id, summary.Labels[labelHandler], slots, hostproto.ContainerPhase_CONTAINER_PHASE_EXITED)
+		c := a.newContainer(id, summary.Labels[labelHandler], slots, httpFromLabels(summary.Labels), hostproto.ContainerPhase_CONTAINER_PHASE_EXITED)
 		c.exitedAt = time.Now()
 		c.exit = &hostproto.ContainerExit{Reason: hostproto.ExitReason_EXIT_REASON_CRASHED, Message: "exited while the agent was away"}
 		if summary.State == containertypes.StateCreated {

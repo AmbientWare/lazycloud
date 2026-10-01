@@ -6,7 +6,9 @@ import types
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from functools import update_wrapper
+from pathlib import Path
 from typing import (
+    TYPE_CHECKING,
     Any,
     Generic,
     NoReturn,
@@ -19,6 +21,7 @@ from typing import (
     runtime_checkable,
 )
 
+from pydantic import JsonValue
 from shared.autoscaling import Autoscaler
 from shared.deployment_records import (
     DEFAULT_DISK,
@@ -35,10 +38,20 @@ from shared.deployments import DEFAULT_ENDPOINT_METHODS, DeploymentKind
 from shared.function_payloads import FunctionPayloadEncoding
 from shared.gpu import GpuInput, gpu_preference
 from shared.placement import ProductRegion
+from shared.serialization import to_json_value
 from shared.tasks import RetryPolicy, TaskPolicy
 
-from lazycloud._invocation import prepare_arguments, serialize_result
+from lazycloud._invocation import encode_arguments, prepare_arguments, serialize_result
 from lazycloud.abstractions.function import FunctionOperationError
+from lazycloud.abstractions.http_calls import (
+    EndpointResponse,
+    InvocationOptions,
+    InvocationTargetName,
+    http_function_spec,
+    resolve_url,
+    send_request,
+    unsupported_http_options,
+)
 from lazycloud.abstractions.image import Image
 from lazycloud.abstractions.metadata import (
     LifecycleHookInput,
@@ -60,6 +73,12 @@ from lazycloud.env import is_local
 from lazycloud.exceptions import UnsupportedFeatureError
 from lazycloud.references import dotted_reference
 from lazycloud.terminal import Terminal
+
+if TYPE_CHECKING:
+    from shared.api import Deployment, Preview
+    from shared.api import FunctionSpec as ApiFunctionSpec
+
+    from lazycloud.abstractions.image import ImageBuildResult
 
 P = ParamSpec("P")
 R = TypeVar("R")
@@ -294,23 +313,139 @@ class Endpoint(Generic[P, R]):
         )
         return spec
 
-    def deploy(self, **_: object) -> NoReturn:
-        raise _endpoints_unsupported(self.resource_name)
+    def effective_timeout_seconds(self) -> int | None:
+        return _effective_timeout_seconds(self.task_policy, self.timeout_seconds)
 
-    def serve(self, *_: object, **__: object) -> NoReturn:
-        raise _endpoints_unsupported(self.resource_name)
+    def unsupported_options(self) -> list[str]:
+        """Declared options the platform cannot run yet, by name."""
+        found = unsupported_http_options(self)
+        if self.inputs is not None or self.outputs is not None:
+            found.append("inputs/outputs schemas")
+        return found
 
-    def request(self, *_: object, **__: object) -> NoReturn:
-        raise _endpoints_unsupported(self.resource_name)
+    def require_supported(self) -> None:
+        unsupported = self.unsupported_options()
+        if unsupported:
+            raise UnsupportedFeatureError(f"endpoint {self.resource_name}", unsupported)
+
+    def handler_reference(self) -> str:
+        """The `module:qualname` the runner imports."""
+        return self._handler_reference()
+
+    def function_spec(
+        self, *, handler: str, source_sha256: str, image: ImageBuildResult
+    ) -> ApiFunctionSpec:
+        """The API definition of this endpoint for an uploaded source and a ready image."""
+        self.require_supported()
+        policy = retry_policy_config(
+            self.retry_policy, retries=self.retries, retry_delay_seconds=self.retry_delay_seconds
+        )
+        return http_function_spec(
+            self,
+            kind="endpoint",
+            handler=handler,
+            source_sha256=source_sha256,
+            image=image,
+            concurrency=self.concurrency,
+            keep_warm=self.keep_warm,
+            max_pending_tasks=self.max_pending_tasks,
+            retry_policy=policy or RetryPolicy(max_attempts=1),
+            route=self.route,
+            methods=list(self.methods),
+        )
+
+    def deploy(
+        self, *, workspace: str | None = None, source_root: str | Path | None = None
+    ) -> Deployment:
+        """Deploy this endpoint into its app without touching the app's other workloads."""
+        return _deploy_http(self, workspace=workspace, source_root=source_root)
+
+    def serve(self, timeout: int = 0, *, sync_dir: str | None = None) -> Preview:
+        """Run a preview container that follows the working tree until Ctrl+C."""
+        from lazycloud.abstractions.serve import serve_workload
+
+        return serve_workload(
+            self,
+            kind="endpoint",
+            authorized=self.authorized is not False,
+            timeout=timeout,
+            sync_dir=sync_dir or ".",
+        )
+
+    def request(self, *args: P.args, **kwargs: P.kwargs) -> EndpointResponse:
+        """Call the running preview or the deployment with these arguments as JSON."""
+        return self.target().request(*args, **kwargs)
+
+    def target(
+        self,
+        target: InvocationTargetName = "auto",
+        *,
+        deployment_name: str | None = None,
+        deployment_version: int | None = None,
+    ) -> EndpointInvocation[P, R]:
+        """Choose where `request` goes: a preview, the deployment, or a version."""
+        return EndpointInvocation(
+            owner=self,
+            options=InvocationOptions(
+                target=target,
+                deployment_name=deployment_name,
+                deployment_version=deployment_version,
+            ),
+        )
 
     def shell(self, **_: object) -> NoReturn:
-        raise _endpoints_unsupported(self.resource_name)
+        raise UnsupportedFeatureError(f"endpoint {self.resource_name}", ["shell"])
 
     def set_handler(self, handler: str) -> None:
         self._handler_reference_override = handler
 
     def _handler_reference(self) -> str:
         return self._handler_reference_override or dotted_reference(self.func)
+
+
+@dataclass(frozen=True)
+class EndpointInvocation(Generic[P, R]):
+    owner: Endpoint[P, R]
+    options: InvocationOptions
+
+    def request(self, *args: P.args, **kwargs: P.kwargs) -> EndpointResponse:
+        owner = self.owner
+        url, token, timeout = resolve_url(owner, kind="endpoint", options=self.options)
+        encoded_args, encoded_kwargs = encode_arguments(owner.func, args, kwargs, owner.inputs)
+        payload: dict[str, JsonValue] = {
+            "args": [to_json_value(arg) for arg in encoded_args],
+            "kwargs": {key: to_json_value(value) for key, value in encoded_kwargs.items()},
+        }
+        return send_request(
+            url,
+            method=_request_method(owner.methods),
+            json_body=payload,
+            token=token,
+            timeout_seconds=timeout,
+        )
+
+
+def _request_method(methods: list[str]) -> str:
+    selected = [method.strip().upper() for method in methods if method.strip()]
+    if "POST" in selected:
+        return "POST"
+    return selected[0] if selected else "POST"
+
+
+def _deploy_http(
+    owner: Endpoint[..., Any] | ASGI, *, workspace: str | None, source_root: str | Path | None
+) -> Deployment:
+    from lazycloud.control import api_client, require_workspace, resolve_control_client_config
+    from lazycloud.session.deployment import AppFunctions, deploy_functions
+
+    config = resolve_control_client_config(workspace=workspace, timeout_seconds=60)
+    return deploy_functions(
+        [AppFunctions(app=owner._app_slug, functions=(owner,))],  # type: ignore[arg-type]
+        client=api_client(config),
+        workspace=require_workspace(config),
+        source_root=source_root,
+        terminal=owner.terminal,
+    )[0]
 
 
 @overload
@@ -577,17 +712,99 @@ class ASGI:
             client_contract=asgi_client_contract(),
         )
 
-    def deploy(self, **_: object) -> NoReturn:
-        raise _endpoints_unsupported(self.name)
+    @property
+    def resource_name(self) -> str:
+        return self.name
 
-    def serve(self, *_: object, **__: object) -> NoReturn:
-        raise _endpoints_unsupported(self.name)
+    _http_kind = "asgi"
 
-    def request(self, *_: object, **__: object) -> NoReturn:
-        raise _endpoints_unsupported(self.name)
+    def effective_timeout_seconds(self) -> int | None:
+        return _effective_timeout_seconds(self.task_policy, self.timeout_seconds)
+
+    def unsupported_options(self) -> list[str]:
+        """Declared options the platform cannot run yet, by name."""
+        return unsupported_http_options(self)
+
+    def require_supported(self) -> None:
+        unsupported = self.unsupported_options()
+        if unsupported:
+            raise UnsupportedFeatureError(f"{self._http_kind} {self.name}", unsupported)
+
+    def handler_reference(self) -> str:
+        """The `module:qualname` the runner imports."""
+        return self._handler_reference()
+
+    def function_spec(
+        self, *, handler: str, source_sha256: str, image: ImageBuildResult
+    ) -> ApiFunctionSpec:
+        """The API definition of this app for an uploaded source and a ready image."""
+        self.require_supported()
+        return http_function_spec(
+            self,
+            kind=self._http_kind,
+            handler=handler,
+            source_sha256=source_sha256,
+            image=image,
+            concurrency=self.concurrent_requests,
+            keep_warm=self.keep_warm_seconds,
+            max_pending_tasks=self.max_pending_tasks,
+        )
+
+    def deploy(
+        self, *, workspace: str | None = None, source_root: str | Path | None = None
+    ) -> Deployment:
+        """Deploy this app into its LazyCloud app without touching other workloads."""
+        return _deploy_http(self, workspace=workspace, source_root=source_root)
+
+    def serve(self, timeout: int = 0, *, sync_dir: str | None = None) -> Preview:
+        """Run a preview container that follows the working tree until Ctrl+C."""
+        from lazycloud.abstractions.serve import serve_workload
+
+        return serve_workload(
+            self,
+            kind=self._http_kind,
+            authorized=self.authorized is not False,
+            timeout=timeout,
+            sync_dir=sync_dir or ".",
+        )
+
+    def request(
+        self,
+        *,
+        method: str = "POST",
+        path: str = "",
+        json: object | None = None,
+        data: bytes | str | None = None,
+        headers: Mapping[str, str] | None = None,
+        params: Mapping[str, object] | Iterable[tuple[str, object]] | None = None,
+        target: InvocationTargetName = "auto",
+        deployment_name: str | None = None,
+        deployment_version: int | None = None,
+    ) -> EndpointResponse:
+        """Send one request to a route of the running preview or the deployment."""
+        url, token, timeout = resolve_url(
+            self,
+            kind=self._http_kind,
+            options=InvocationOptions(
+                target=target,
+                deployment_name=deployment_name,
+                deployment_version=deployment_version,
+            ),
+        )
+        return send_request(
+            url,
+            method=method,
+            path=path,
+            json_body=json,
+            data=data,
+            headers=headers,
+            params=params,
+            token=token,
+            timeout_seconds=timeout,
+        )
 
     def shell(self, **_: object) -> NoReturn:
-        raise _endpoints_unsupported(self.name)
+        raise UnsupportedFeatureError(f"{self._http_kind} {self.name}", ["shell"])
 
     def set_handler(self, handler: str) -> None:
         self._handler_reference_override = handler
@@ -606,6 +823,8 @@ class RealtimeASGI(ASGI):
         self._handler_reference_target = source_handler
         self.app = _RealtimeWebSocketApp(source_handler)
         update_wrapper(self, source_handler)
+
+    _http_kind = "realtime"
 
     def spec(self) -> DeploymentSpec:
         spec = super().spec()
@@ -825,10 +1044,6 @@ def _callable_accepts_args(value: Callable[..., Any], count: int) -> bool:
     return positional >= count
 
 
-def _endpoints_unsupported(name: str) -> UnsupportedFeatureError:
-    return UnsupportedFeatureError(f"endpoint {name}", ["endpoints"])
-
-
 def _effective_timeout_seconds(
     task_policy: TaskPolicy | Mapping[str, Any] | None,
     timeout_seconds: int | None,
@@ -846,8 +1061,10 @@ __all__ = [
     "ASGI",
     "ASGIOptions",
     "Endpoint",
+    "EndpointInvocation",
     "EndpointOperationError",
     "EndpointOptions",
+    "EndpointResponse",
     "RealtimeASGI",
     "_asgi",
     "_endpoint",

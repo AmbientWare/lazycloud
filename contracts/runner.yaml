@@ -31,6 +31,13 @@ info:
     The runner exits 0 after the socket closes, 1 after `load_failed` and 2 on
     a protocol error such as a malformed frame or an unsupported
     `protocol_version`.
+
+    HTTP workloads send `load` with `http`. The runner also inherits a
+    listening stream socket as the file descriptor named by LAZYCLOUD_HTTP_FD.
+    It loads the handler, serves HTTP/1.1 on that socket, including WebSocket
+    upgrades, and replies `loaded` once it accepts connections. It receives no
+    `invoke`; the supervisor admits at most `concurrency` requests at once and
+    closing the frame socket asks the runner to stop serving and exit.
 paths: {}
 components:
   schemas:
@@ -80,6 +87,8 @@ components:
           maximum: 256
           default: 1
         hooks: { $ref: "#/components/schemas/LifecycleHooks" }
+        http:
+          $ref: "#/components/schemas/HttpServing"
 
     LifecycleHooks:
       description: >-
@@ -103,6 +112,24 @@ components:
     HookReferences:
       type: array
       items: { type: string }
+
+    HttpKind:
+      description: >-
+        `endpoint` maps a JSON body and the query to the function's arguments
+        and maps its return value to a response. `asgi` and `realtime` serve
+        the loaded ASGI application.
+      type: string
+      enum: [endpoint, asgi, realtime]
+
+    HttpServing:
+      type: object
+      required: [kind, concurrency]
+      properties:
+        kind: { $ref: "#/components/schemas/HttpKind" }
+        concurrency:
+          description: Requests the supervisor sends this runner at once.
+          type: integer
+          minimum: 1
 
     Loaded:
       type: object
@@ -173,11 +200,17 @@ components:
     Output:
       description: >-
         Output an attempt wrote while the runner runs several attempts at
-        once, as the UTF-8 payload of at most 256 KiB. Sent only for a
-        `concurrency` above 1.
+        once, or an HTTP worker wrote while serving a request, as the UTF-8
+        payload of at most 256 KiB. Sent only for a `concurrency` above 1 or
+        an HTTP worker.
       type: object
       required: [type, attempt_id, stream]
       properties:
         type: { type: string, enum: [output] }
-        attempt_id: { type: string }
+        attempt_id:
+          description: Empty for an HTTP worker's output.
+          type: string
+        request_id:
+          description: The X-Request-Id of the request an HTTP worker served.
+          type: string
         stream: { type: string, enum: [stdout, stderr] }

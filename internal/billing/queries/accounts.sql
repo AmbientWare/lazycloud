@@ -45,3 +45,6 @@ update billing_balances b set due = true where b.user_id in (select account.user
 
 -- name: AccountUser :one
 select id, email from users where id = @id;
+
+-- name: CustomDomainCount :one
+select count(*)::int from custom_domains where user_id = @user_id;

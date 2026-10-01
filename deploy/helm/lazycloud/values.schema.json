@@ -61,10 +61,11 @@
     "config": { "$ref": "#/definitions/settings" },
     "networkPolicy": {
       "type": "object",
-      "required": ["enabled", "ingressFrom", "hostCIDRs", "nodeCIDRs", "metricsFrom"],
+      "required": ["enabled", "ingressFrom", "edgeFrom", "hostCIDRs", "nodeCIDRs", "metricsFrom"],
       "properties": {
         "enabled": { "type": "boolean" },
         "ingressFrom": { "type": "array", "items": { "type": "object" } },
+        "edgeFrom": { "type": "array", "items": { "type": "object" } },
         "hostCIDRs": { "type": "array", "items": { "type": "string" } },
         "nodeCIDRs": { "type": "array", "items": { "type": "string" } },
         "metricsFrom": { "type": "array", "items": { "type": "object" } }
@@ -74,9 +75,15 @@
       "allOf": [
         { "$ref": "#/definitions/component" },
         {
-          "required": ["drainDelaySeconds", "hostService"],
+          "required": ["drainDelaySeconds", "hostService", "edgeService"],
           "properties": {
             "drainDelaySeconds": { "type": "integer", "minimum": 0 },
+            "edgeService": {
+              "type": "object",
+              "properties": {
+                "type": { "enum": ["ClusterIP", "LoadBalancer"] }
+              }
+            },
             "hostService": {
               "type": "object",
               "properties": {

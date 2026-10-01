@@ -230,7 +230,7 @@ func (s *hostServer) output(attempt string) string {
 	var b strings.Builder
 	for _, line := range s.logs {
 		if line.GetAttemptId() == attempt {
-			b.WriteString(line.GetData())
+			b.WriteString(line.GetData() + "\n")
 		}
 	}
 	return b.String()

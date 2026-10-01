@@ -38,11 +38,18 @@ const (
 	containerWorkspace  = "/workspace"
 	containerLinkDir    = "/run/lazycloud"
 	linkSocketName      = "agent.sock"
+	// httpSocketName is where an HTTP workload's supervisor serves requests,
+	// in the same directory as the link socket.
+	httpSocketName = "http.sock"
 	// containerAPIDir is a tmpfs in which the supervisor creates the
 	// container API socket.
 	containerAPIDir    = "/run/lazycloud-api"
 	containerAPISocket = containerAPIDir + "/api.sock"
 )
+
+// maxIdleRequestConns bounds kept-alive connections to one container's
+// supervisor.
+const maxIdleRequestConns = 64
 
 // maxSocketPath is the longest Unix socket path Linux accepts.
 const maxSocketPath = 107
@@ -227,6 +234,13 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	defer func() { _ = payload.Close() }()
+	// Workload traffic has its own connection, so it shares flow control
+	// with neither commands nor task payloads.
+	traffic, err := dialServer(cfg, id.HostToken)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = traffic.Close() }()
 
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
@@ -290,6 +304,8 @@ func Run(ctx context.Context, cfg Config) error {
 		a.goOwned(a.watchInterruptions)
 	}
 	a.goOwned(a.pruneExited)
+	data := &dataLink{a: a, client: hostproto.NewHostDataClient(traffic)}
+	a.goOwned(data.run)
 	a.goOwned(a.sampleUsage)
 	a.goOwned(a.releaseLoop)
 	err = a.sessions(ctx)

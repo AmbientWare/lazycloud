@@ -1,9 +1,9 @@
 {{- if .Values.networkPolicy.enabled }}
 {{/*
 Ingress is denied to every pod of the release except what is listed: the
-ingress connector to the API port, agent hosts to the host port, the
-kubelet's node addresses to the probe ports and scrapers to the metrics
-ports. An empty list admits nobody;
+ingress connector to the API and edge ports, agent hosts to the host port,
+other server pods to the relay port, the kubelet's node addresses to the
+probe ports and scrapers to the metrics ports. An empty list admits nobody;
 a rule with no peers would admit everyone, so none is rendered.
 */}}
 {{- $np := .Values.networkPolicy }}
@@ -40,6 +40,12 @@ spec:
       ports:
         - port: http
     {{- end }}
+    {{- with $np.edgeFrom }}
+    - from:
+        {{- toYaml . | nindent 8 }}
+      ports:
+        - port: edge
+    {{- end }}
     {{- with $np.hostCIDRs }}
     - from:
         {{- range . }}
@@ -48,6 +54,13 @@ spec:
       ports:
         - port: hosts
     {{- end }}
+    # Edges relay to the server pod that holds a host's data connection.
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: server
+      ports:
+        - port: relay
     {{- with $np.nodeCIDRs }}
     - from:
         {{- range . }}

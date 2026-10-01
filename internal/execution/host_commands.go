@@ -36,6 +36,9 @@ type StartCommand struct {
 // StopCommand asks a host to stop a container.
 type StopCommand struct {
 	Container ContainerID
+	// Grace is how long the container may take to finish its work; zero
+	// leaves the host's default.
+	Grace time.Duration
 }
 
 // CancelCommand asks a host to kill the slot running an attempt that
@@ -84,8 +87,8 @@ func (e *Execution) HostCommands(ctx context.Context, host compute.HostID) (Host
 	if err != nil {
 		return out, fmt.Errorf("list idle draining containers: %w", err)
 	}
-	for _, id := range idle {
-		out.Stop = append(out.Stop, StopCommand{Container: ContainerID(id)})
+	for _, row := range idle {
+		out.Stop = append(out.Stop, StopCommand{Container: ContainerID(row.ID), Grace: time.Duration(row.GraceSeconds) * time.Second})
 	}
 	ended, err := e.queries.EndedAttemptsOnHost(ctx, EndedAttemptsOnHostParams{
 		HostID: hostUUID(host), WithinSeconds: cancelResendWindow.Seconds(),
