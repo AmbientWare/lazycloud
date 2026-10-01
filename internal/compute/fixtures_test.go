@@ -71,13 +71,19 @@ func newWorkspace(t *testing.T, pool *pgxpool.Pool, name string, owner identity.
 // has spec, and returns the release.
 func newRelease(t *testing.T, pool *pgxpool.Pool, workspace uuid.UUID, spec string) uuid.UUID {
 	t.Helper()
+	return deploy(t, pool, workspace, "app_"+uuid.NewString()[:8], spec)
+}
+
+// deploy inserts the active function app.f in workspace whose active
+// release has spec, and returns the release.
+func deploy(t *testing.T, pool *pgxpool.Pool, workspace uuid.UUID, app, spec string) uuid.UUID {
+	t.Helper()
 	release := scan[uuid.UUID](t, pool, `
-with app as (insert into apps (workspace_id, name, state)
-             values ($1, 'app_' || substr(md5(random()::text), 1, 8), 'active') returning id),
+with app as (insert into apps (workspace_id, name, state) values ($1, $2, 'active') returning id),
      wl as (insert into workloads (app_id, kind, name, desired_state) select id, 'function', 'f', 'active' from app returning id),
      rel as (insert into releases (workload_id, version, spec, spec_digest, source_sha256)
-             select id, 1, $2::jsonb, sha256('spec'), sha256('src') from wl returning id, workload_id)
-select id from rel`, workspace, spec)
+             select id, 1, $3::jsonb, sha256('spec'), sha256('src') from wl returning id, workload_id)
+select id from rel`, workspace, app, spec)
 	run(t, pool, "update workloads set active_release_id = $1, next_version = 2 where id = (select workload_id from releases where id = $1)", release)
 	return release
 }
