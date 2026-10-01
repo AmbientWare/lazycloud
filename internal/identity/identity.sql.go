@@ -59,9 +59,9 @@ func (q *Queries) InsertMember(ctx context.Context, arg InsertMemberParams) erro
 }
 
 const insertToken = `-- name: InsertToken :one
-insert into api_tokens (user_id, workspace_id, name, token_hash, expires_at, device)
-values ($1, $2, $3, $4, $5, $6)
-returning id, name, workspace_id, device, created_at, expires_at, last_used_at
+insert into api_tokens (user_id, workspace_id, name, token_hash, prefix, expires_at, device)
+values ($1, $2, $3, $4, $5, $6, $7)
+returning id, name, workspace_id, prefix, device, created_at, expires_at, last_used_at
 `
 
 type InsertTokenParams struct {
@@ -69,6 +69,7 @@ type InsertTokenParams struct {
 	WorkspaceID *uuid.UUID
 	Name        string
 	TokenHash   []byte
+	Prefix      string
 	ExpiresAt   *time.Time
 	Device      bool
 }
@@ -77,6 +78,7 @@ type InsertTokenRow struct {
 	ID          uuid.UUID
 	Name        string
 	WorkspaceID *uuid.UUID
+	Prefix      string
 	Device      bool
 	CreatedAt   time.Time
 	ExpiresAt   *time.Time
@@ -89,6 +91,7 @@ func (q *Queries) InsertToken(ctx context.Context, arg InsertTokenParams) (Inser
 		arg.WorkspaceID,
 		arg.Name,
 		arg.TokenHash,
+		arg.Prefix,
 		arg.ExpiresAt,
 		arg.Device,
 	)
@@ -97,6 +100,7 @@ func (q *Queries) InsertToken(ctx context.Context, arg InsertTokenParams) (Inser
 		&i.ID,
 		&i.Name,
 		&i.WorkspaceID,
+		&i.Prefix,
 		&i.Device,
 		&i.CreatedAt,
 		&i.ExpiresAt,

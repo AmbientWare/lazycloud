@@ -4491,9 +4491,12 @@ type Token struct {
 	Id        openapi_types.UUID `json:"id"`
 
 	// LastUsedAt Recorded within 30 seconds of use; absent if never used.
-	LastUsedAt *time.Time  `json:"last_used_at,omitempty"`
-	Name       string      `json:"name"`
-	Status     TokenStatus `json:"status"`
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+	Name       string     `json:"name"`
+
+	// Prefix The token's first characters; empty for older tokens.
+	Prefix string      `json:"prefix"`
+	Status TokenStatus `json:"status"`
 
 	// WorkspaceId Set when the token reaches only this workspace.
 	WorkspaceId *openapi_types.UUID `json:"workspace_id,omitempty"`

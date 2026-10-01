@@ -80,6 +80,9 @@ class TokenStatus(str, Enum):
 class Token(BaseModel):
     id: UUID
     name: str
+    prefix: Annotated[
+        str, Field(description="The token's first characters; empty for older tokens.")
+    ]
     device: Annotated[bool, Field(description="Minted by `lazycloud login`.")]
     workspace_id: Annotated[
         UUID | None, Field(description="Set when the token reaches only this workspace.")

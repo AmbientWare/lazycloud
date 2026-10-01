@@ -3406,10 +3406,13 @@ components:
 
     Token:
       type: object
-      required: [id, name, device, status, created_at]
+      required: [id, name, prefix, device, status, created_at]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
+        prefix:
+          description: The token's first characters; empty for older tokens.
+          type: string
         device:
           description: Minted by `lazycloud login`.
           type: boolean
