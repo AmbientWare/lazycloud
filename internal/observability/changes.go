@@ -55,11 +55,11 @@ type ChangeEvent struct {
 	Frame []byte
 }
 
-// changePayload is the notification body the triggers send.
+// changePayload holds the fields of a notification the hub routes by; the
+// body goes to subscribers as it arrived.
 type changePayload struct {
-	Seq       int64           `json:"seq"`
-	Workspace uuid.UUID       `json:"workspace_id"`
-	Changes   json.RawMessage `json:"changes"`
+	Seq       int64     `json:"seq"`
+	Workspace uuid.UUID `json:"workspace_id"`
 }
 
 // Changes fans committed changes out to workspace subscribers. It listens on
@@ -187,7 +187,7 @@ func (c *Changes) listen(ctx context.Context) error {
 		}
 		c.Publish(ChangeEvent{
 			Seq: payload.Seq, Workspace: identity.WorkspaceID(payload.Workspace),
-			Frame: frame(strconv.FormatInt(payload.Seq, 10), "change", payload.Changes),
+			Frame: frame(strconv.FormatInt(payload.Seq, 10), "change", []byte(n.Payload)),
 		})
 	}
 }
