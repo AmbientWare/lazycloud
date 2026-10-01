@@ -1,9 +1,11 @@
 -- name: LockQueuedDependents :many
 -- Queued tasks that depend directly on any upstream, locked in id order so
--- concurrent upstream outcomes never deadlock on shared dependents.
+-- concurrent upstream outcomes never deadlock on shared dependents. The
+-- array is evaluated first, so tasks are read by key and the cost follows
+-- the dependents, never the queued backlog.
 select t.id from tasks t
-where t.status = 'queued'
-  and t.id in (select d.task_id from task_dependencies d where d.depends_on = any(@upstream::uuid[]))
+where t.id = any(array(select d.task_id from task_dependencies d where d.depends_on = any(@upstream::uuid[])))
+  and t.status = 'queued'
 order by t.id
 for update;
 
@@ -34,7 +36,7 @@ with recursive closure (id) as (
     select d.task_id from task_dependencies d join closure c on d.depends_on = c.id
 )
 select t.id, t.release_id from tasks t
-where t.id in (select id from closure) and t.status = 'queued'
+where t.id = any(array(select id from closure)) and t.status = 'queued'
 order by t.id
 for update;
 
@@ -55,19 +57,19 @@ order by d.task_id, d.depends_on;
 -- Up to batch_size queued tasks of the release, and every queued task that
 -- depends on them directly or transitively, locked together in id order, so
 -- failing or cancelling the batch and then its dependents never takes a
--- second round of locks.
+-- second round of locks. Callers repeat until no batch is left, so the batch
+-- is any queued tasks the tasks_queued index yields, not the lowest ids.
 with recursive base as (
     select q.id from tasks q
     where q.release_id = @release_id::uuid and q.status = 'queued'
-    order by q.id
     limit @batch_size
 ), closure (id) as (
     select id from base
     union
     select d.task_id from task_dependencies d join closure c on d.depends_on = c.id
 )
-select t.id, (t.id in (select id from base))::bool as in_release
+select t.id, (t.id = any(array(select id from base)))::bool as in_release
 from tasks t
-where t.id in (select id from closure) and t.status = 'queued'
+where t.id = any(array(select id from closure)) and t.status = 'queued'
 order by t.id
 for update of t;

@@ -75,7 +75,7 @@ with recursive closure (id) as (
     select d.task_id from task_dependencies d join closure c on d.depends_on = c.id
 )
 select t.id, t.release_id from tasks t
-where t.id in (select id from closure) and t.status = 'queued'
+where t.id = any(array(select id from closure)) and t.status = 'queued'
 order by t.id
 for update
 `
@@ -109,14 +109,16 @@ func (q *Queries) LockDependentClosure(ctx context.Context, upstream []uuid.UUID
 
 const lockQueuedDependents = `-- name: LockQueuedDependents :many
 select t.id from tasks t
-where t.status = 'queued'
-  and t.id in (select d.task_id from task_dependencies d where d.depends_on = any($1::uuid[]))
+where t.id = any(array(select d.task_id from task_dependencies d where d.depends_on = any($1::uuid[])))
+  and t.status = 'queued'
 order by t.id
 for update
 `
 
 // Queued tasks that depend directly on any upstream, locked in id order so
-// concurrent upstream outcomes never deadlock on shared dependents.
+// concurrent upstream outcomes never deadlock on shared dependents. The
+// array is evaluated first, so tasks are read by key and the cost follows
+// the dependents, never the queued backlog.
 func (q *Queries) LockQueuedDependents(ctx context.Context, upstream []uuid.UUID) ([]uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, lockQueuedDependents, upstream)
 	if err != nil {
@@ -141,16 +143,15 @@ const lockQueuedWithDependents = `-- name: LockQueuedWithDependents :many
 with recursive base as (
     select q.id from tasks q
     where q.release_id = $1::uuid and q.status = 'queued'
-    order by q.id
     limit $2
 ), closure (id) as (
     select id from base
     union
     select d.task_id from task_dependencies d join closure c on d.depends_on = c.id
 )
-select t.id, (t.id in (select id from base))::bool as in_release
+select t.id, (t.id = any(array(select id from base)))::bool as in_release
 from tasks t
-where t.id in (select id from closure) and t.status = 'queued'
+where t.id = any(array(select id from closure)) and t.status = 'queued'
 order by t.id
 for update of t
 `
@@ -168,7 +169,8 @@ type LockQueuedWithDependentsRow struct {
 // Up to batch_size queued tasks of the release, and every queued task that
 // depends on them directly or transitively, locked together in id order, so
 // failing or cancelling the batch and then its dependents never takes a
-// second round of locks.
+// second round of locks. Callers repeat until no batch is left, so the batch
+// is any queued tasks the tasks_queued index yields, not the lowest ids.
 func (q *Queries) LockQueuedWithDependents(ctx context.Context, arg LockQueuedWithDependentsParams) ([]LockQueuedWithDependentsRow, error) {
 	rows, err := q.db.Query(ctx, lockQueuedWithDependents, arg.ReleaseID, arg.BatchSize)
 	if err != nil {
