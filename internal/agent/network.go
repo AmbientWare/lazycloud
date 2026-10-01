@@ -247,7 +247,7 @@ func (a *Agent) runNetfilter(ctx context.Context, c *container, policy *hostprot
 			User:       "0",
 		},
 		HostConfig: &containertypes.HostConfig{
-			NetworkMode: containertypes.NetworkMode("container:" + c.dockerName()),
+			NetworkMode: containertypes.NetworkMode("container:" + c.networkTarget()),
 			CapDrop:     []string{"ALL"},
 			CapAdd:      []string{"NET_ADMIN"},
 			SecurityOpt: []string{"no-new-privileges"},

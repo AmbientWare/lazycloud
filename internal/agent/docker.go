@@ -162,6 +162,7 @@ func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostprot
 			User:       user,
 		},
 		HostConfig: &containertypes.HostConfig{
+			NetworkMode: networkMode(c),
 			Runtime:     a.cfg.OCIRuntime,
 			Privileged:  privileged,
 			CapAdd:      capAdd,
@@ -273,9 +274,13 @@ func (a *Agent) adopt(ctx context.Context) error {
 		return fmt.Errorf("list containers: %w", err)
 	}
 	a.volumes.adopt(list.Items)
+	var holders []containertypes.Summary
 	for _, summary := range list.Items {
 		switch summary.Labels[labelKind] {
 		case kindMount, kindBucket:
+			continue
+		case kindHolder:
+			holders = append(holders, summary)
 			continue
 		case kindNetfilter:
 			// A policy helper the previous agent left; the container's
@@ -320,6 +325,7 @@ func (a *Agent) adopt(ctx context.Context) error {
 			continue
 		}
 		c := a.newContainer(id, summary.Labels[labelHandler], slots, httpFromLabels(summary.Labels), hostproto.ContainerPhase_CONTAINER_PHASE_EXITED)
+		c.checkpointable = summary.Labels[labelCheckpointable] == "true"
 		c.exitedAt = time.Now()
 		c.exit = &hostproto.ContainerExit{Reason: hostproto.ExitReason_EXIT_REASON_CRASHED, Message: "exited while the agent was away"}
 		if summary.State == containertypes.StateCreated {
@@ -332,6 +338,15 @@ func (a *Agent) adopt(ctx context.Context) error {
 		}
 		a.track(c)
 	}
+	// A holder goes with its container; one whose container is gone was
+	// left by a start or cleanup cut short.
+	for _, h := range holders {
+		if a.lookup(h.Labels[labelContainer]) == nil {
+			if err := a.removeContainer(ctx, h.ID); err != nil {
+				return err
+			}
+		}
+	}
 	entries, err := os.ReadDir(filepath.Join(a.cfg.StateDir, "containers"))
 	if err != nil {
 		return fmt.Errorf("list container directories: %w", err)
@@ -342,6 +357,15 @@ func (a *Agent) adopt(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// networkMode joins a checkpointable container to its holder's namespace;
+// any other gets Docker's default network.
+func networkMode(c *container) containertypes.NetworkMode {
+	if c.checkpointable {
+		return containertypes.NetworkMode("container:" + c.holderName())
+	}
+	return ""
 }
 
 // containerUser runs workloads as the agent's own user when the agent is not

@@ -97,22 +97,17 @@ func (c *container) coldStart(snapshot string, err error) {
 	c.mu.Unlock()
 }
 
-// errRestoreWithPolicy refuses a restore under a network policy: restored
-// processes resume at once, before the filter is in place.
-var errRestoreWithPolicy = errors.New("a container with a network policy cannot resume from a snapshot before its filter applies")
-
 // prepareRestore downloads and unpacks the snapshot to start from. An
 // automatic snapshot that cannot be had starts the container cold; any
 // other failure fails the start.
-func (c *container) prepareRestore(ctx context.Context, restore *hostproto.SnapshotRestore, policed bool) (*restorePoint, error) {
+func (c *container) prepareRestore(ctx context.Context, restore *hostproto.SnapshotRestore) (*restorePoint, error) {
 	if restore == nil {
 		return nil, nil
 	}
-	var point *restorePoint
-	err := errRestoreWithPolicy
-	if !policed {
-		point, err = c.downloadRestore(ctx, restore)
+	if !c.checkpointable {
+		return nil, errors.New("only a checkpointable container restores a snapshot")
 	}
+	point, err := c.downloadRestore(ctx, restore)
 	if err == nil {
 		return point, nil
 	}
