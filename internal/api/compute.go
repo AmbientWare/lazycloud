@@ -121,7 +121,7 @@ func (s *Server) ListComputeWorkloads(ctx context.Context, req ListComputeWorklo
 func machineOut(m compute.Machine) apitypes.Machine {
 	out := apitypes.Machine{
 		Id: uuid.UUID(m.ID), Name: m.Name, Workspaces: m.Workspaces, Placement: "machine:" + m.ID.String(),
-		Provider: apitypes.Agent, Lifecycle: apitypes.MachineLifecycle(m.Phase),
+		Provider: apitypes.MachineAgent, Lifecycle: apitypes.MachineLifecycle(m.Phase),
 		LifecycleMessage: m.PhaseMessage, LifecycleAt: m.PhaseAt, Cpu: m.CPUMillis, Memory: m.MemoryBytes >> 20,
 		Gpu: m.GPUType, GpuCount: m.GPUCount, Connected: m.Connected, Schedulable: m.Schedulable(),
 		CapacityState: apitypes.CapacityState(m.CapacityState), CapacityReason: m.CapacityReason,
@@ -301,7 +301,7 @@ func (s *Server) ListComputeInstances(ctx context.Context, req ListComputeInstan
 	}
 	for _, i := range rows {
 		item := apitypes.ComputeInstance{
-			Id: uuid.UUID(i.ID), Placement: "connection:" + i.Connection.String(), Provider: apitypes.ComputeInstanceProviderAws,
+			Id: uuid.UUID(i.ID), Placement: "connection:" + i.Connection.String(), Provider: apitypes.InstanceAws,
 			Region: i.Region, AvailabilityZone: i.Zone, InstanceId: i.InstanceID, InstanceType: i.InstanceType,
 			Lifecycle: apitypes.MachineLifecycle(i.Phase), LifecycleMessage: i.PhaseMessage, LifecycleAt: i.PhaseAt,
 			Connected: i.Connected, CapacityState: apitypes.CapacityState(i.CapacityState), CapacityReason: i.CapacityReason,

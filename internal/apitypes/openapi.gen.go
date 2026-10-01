@@ -129,28 +129,28 @@ func (e AwsAuthorizationPhase) Valid() bool {
 
 // Defines values for AwsConnectionAction.
 const (
-	AwsConnectionActionAuthorize       AwsConnectionAction = "authorize"
-	AwsConnectionActionCancelReconnect AwsConnectionAction = "cancel_reconnect"
-	AwsConnectionActionReconnect       AwsConnectionAction = "reconnect"
-	AwsConnectionActionRemove          AwsConnectionAction = "remove"
-	AwsConnectionActionRetry           AwsConnectionAction = "retry"
-	AwsConnectionActionValidate        AwsConnectionAction = "validate"
+	AwsAuthorize       AwsConnectionAction = "authorize"
+	AwsCancelReconnect AwsConnectionAction = "cancel_reconnect"
+	AwsReconnect       AwsConnectionAction = "reconnect"
+	AwsRemove          AwsConnectionAction = "remove"
+	AwsRetry           AwsConnectionAction = "retry"
+	AwsValidate        AwsConnectionAction = "validate"
 )
 
 // Valid indicates whether the value is a known member of the AwsConnectionAction enum.
 func (e AwsConnectionAction) Valid() bool {
 	switch e {
-	case AwsConnectionActionAuthorize:
+	case AwsAuthorize:
 		return true
-	case AwsConnectionActionCancelReconnect:
+	case AwsCancelReconnect:
 		return true
-	case AwsConnectionActionReconnect:
+	case AwsReconnect:
 		return true
-	case AwsConnectionActionRemove:
+	case AwsRemove:
 		return true
-	case AwsConnectionActionRetry:
+	case AwsRetry:
 		return true
-	case AwsConnectionActionValidate:
+	case AwsValidate:
 		return true
 	default:
 		return false
@@ -273,13 +273,13 @@ func (e ComputeInstanceMarket) Valid() bool {
 
 // Defines values for ComputeInstanceProvider.
 const (
-	ComputeInstanceProviderAws ComputeInstanceProvider = "aws"
+	InstanceAws ComputeInstanceProvider = "aws"
 )
 
 // Valid indicates whether the value is a known member of the ComputeInstanceProvider enum.
 func (e ComputeInstanceProvider) Valid() bool {
 	switch e {
-	case ComputeInstanceProviderAws:
+	case InstanceAws:
 		return true
 	default:
 		return false
@@ -378,22 +378,22 @@ func (e DeliveryState) Valid() bool {
 
 // Defines values for DeploymentPlanAction.
 const (
-	DeploymentPlanActionAdd      DeploymentPlanAction = "add"
-	DeploymentPlanActionRedeploy DeploymentPlanAction = "redeploy"
-	DeploymentPlanActionRemove   DeploymentPlanAction = "remove"
-	DeploymentPlanActionRetain   DeploymentPlanAction = "retain"
+	Add      DeploymentPlanAction = "add"
+	Redeploy DeploymentPlanAction = "redeploy"
+	Remove   DeploymentPlanAction = "remove"
+	Retain   DeploymentPlanAction = "retain"
 )
 
 // Valid indicates whether the value is a known member of the DeploymentPlanAction enum.
 func (e DeploymentPlanAction) Valid() bool {
 	switch e {
-	case DeploymentPlanActionAdd:
+	case Add:
 		return true
-	case DeploymentPlanActionRedeploy:
+	case Redeploy:
 		return true
-	case DeploymentPlanActionRemove:
+	case Remove:
 		return true
-	case DeploymentPlanActionRetain:
+	case Retain:
 		return true
 	default:
 		return false
@@ -544,6 +544,69 @@ func (e FailureKind) Valid() bool {
 	case FailureKindTimeout:
 		return true
 	case FailureKindUserError:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for FleetNodeProvider.
+const (
+	FleetNodeAgent FleetNodeProvider = "agent"
+	FleetNodeAws   FleetNodeProvider = "aws"
+)
+
+// Valid indicates whether the value is a known member of the FleetNodeProvider enum.
+func (e FleetNodeProvider) Valid() bool {
+	switch e {
+	case FleetNodeAgent:
+		return true
+	case FleetNodeAws:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for FleetState.
+const (
+	FleetDraining            FleetState = "draining"
+	FleetFailed              FleetState = "failed"
+	FleetHibernateUnverified FleetState = "hibernate_unverified"
+	FleetImageSaved          FleetState = "image_saved"
+	FleetPreparing           FleetState = "preparing"
+	FleetServing             FleetState = "serving"
+	FleetStarting            FleetState = "starting"
+	FleetStopped             FleetState = "stopped"
+	FleetStopping            FleetState = "stopping"
+	FleetTerminating         FleetState = "terminating"
+	FleetUnavailable         FleetState = "unavailable"
+)
+
+// Valid indicates whether the value is a known member of the FleetState enum.
+func (e FleetState) Valid() bool {
+	switch e {
+	case FleetDraining:
+		return true
+	case FleetFailed:
+		return true
+	case FleetHibernateUnverified:
+		return true
+	case FleetImageSaved:
+		return true
+	case FleetPreparing:
+		return true
+	case FleetServing:
+		return true
+	case FleetStarting:
+		return true
+	case FleetStopped:
+		return true
+	case FleetStopping:
+		return true
+	case FleetTerminating:
+		return true
+	case FleetUnavailable:
 		return true
 	default:
 		return false
@@ -807,13 +870,13 @@ func (e LogEntryStream) Valid() bool {
 
 // Defines values for MachineProvider.
 const (
-	Agent MachineProvider = "agent"
+	MachineAgent MachineProvider = "agent"
 )
 
 // Valid indicates whether the value is a known member of the MachineProvider enum.
 func (e MachineProvider) Valid() bool {
 	switch e {
-	case Agent:
+	case MachineAgent:
 		return true
 	default:
 		return false
@@ -1245,13 +1308,13 @@ func (e WorkloadState) Valid() bool {
 
 // Defines values for WorkspaceRequestCloud.
 const (
-	WorkspaceRequestCloudAws WorkspaceRequestCloud = "aws"
+	Aws WorkspaceRequestCloud = "aws"
 )
 
 // Valid indicates whether the value is a known member of the WorkspaceRequestCloud enum.
 func (e WorkspaceRequestCloud) Valid() bool {
 	switch e {
-	case WorkspaceRequestCloudAws:
+	case Aws:
 		return true
 	default:
 		return false
@@ -1907,6 +1970,105 @@ type ErrorCode string
 
 // FailureKind defines model for FailureKind.
 type FailureKind string
+
+// FleetCapacity defines model for FleetCapacity.
+type FleetCapacity struct {
+	CpuMillicores int64 `json:"cpu_millicores"`
+	GpuCount      int   `json:"gpu_count"`
+	MemoryMib     int64 `json:"memory_mib"`
+}
+
+// FleetMarket defines model for FleetMarket.
+type FleetMarket struct {
+	// Allocated Reservations of live containers on the market's hosts.
+	Allocated FleetCapacity `json:"allocated"`
+
+	// GpuType Empty for CPU hosts.
+	GpuType     string `json:"gpu_type"`
+	Preemptible bool   `json:"preemptible"`
+
+	// Reason Why the market cannot grow, when it cannot.
+	Reason string `json:"reason"`
+
+	// ReserveReady Always zero; the fleet keeps no stopped reserves.
+	ReserveReady FleetCapacity `json:"reserve_ready"`
+
+	// ReserveTarget Always zero; the fleet keeps no stopped reserves.
+	ReserveTarget FleetCapacity        `json:"reserve_target"`
+	States        []FleetStateCapacity `json:"states"`
+
+	// WarmFree Unreserved capacity on serving hosts.
+	WarmFree FleetCapacity `json:"warm_free"`
+
+	// WarmTarget The idle capacity the headroom floor keeps.
+	WarmTarget FleetCapacity `json:"warm_target"`
+}
+
+// FleetNode defines model for FleetNode.
+type FleetNode struct {
+	Allocated    FleetCapacity      `json:"allocated"`
+	Capacity     FleetCapacity      `json:"capacity"`
+	Containers   int                `json:"containers"`
+	GpuType      string             `json:"gpu_type"`
+	Id           openapi_types.UUID `json:"id"`
+	InstanceId   *string            `json:"instance_id,omitempty"`
+	InstanceType string             `json:"instance_type"`
+
+	// MachineId Set once the host enrolled.
+	MachineId   *string           `json:"machine_id,omitempty"`
+	Preemptible bool              `json:"preemptible"`
+	Provider    FleetNodeProvider `json:"provider"`
+
+	// Ready Serving and on the target agent release.
+	Ready  bool   `json:"ready"`
+	Region string `json:"region"`
+
+	// State A host's place in the fleet. stopped, hibernate_unverified, image_saved, preparing and stopping belong to stopped reserves, which this fleet does not keep.
+	State FleetState `json:"state"`
+}
+
+// FleetNodeProvider defines model for FleetNode.Provider.
+type FleetNodeProvider string
+
+// FleetNodePage defines model for FleetNodePage.
+type FleetNodePage struct {
+	NextCursor *string     `json:"next_cursor,omitempty"`
+	Nodes      []FleetNode `json:"nodes"`
+	ObservedAt time.Time   `json:"observed_at"`
+}
+
+// FleetState A host's place in the fleet. stopped, hibernate_unverified, image_saved, preparing and stopping belong to stopped reserves, which this fleet does not keep.
+type FleetState string
+
+// FleetStateCapacity defines model for FleetStateCapacity.
+type FleetStateCapacity struct {
+	Allocated FleetCapacity `json:"allocated"`
+	Capacity  FleetCapacity `json:"capacity"`
+	Machines  int           `json:"machines"`
+
+	// State A host's place in the fleet. stopped, hibernate_unverified, image_saved, preparing and stopping belong to stopped reserves, which this fleet does not keep.
+	State FleetState `json:"state"`
+}
+
+// FleetSummary defines model for FleetSummary.
+type FleetSummary struct {
+	ObservedAt time.Time `json:"observed_at"`
+	Plan       *struct {
+		ExpiresAt   time.Time     `json:"expires_at"`
+		GeneratedAt time.Time     `json:"generated_at"`
+		Markets     []FleetMarket `json:"markets"`
+	} `json:"plan,omitempty"`
+
+	// Release The agent release platform hosts move to.
+	Release *struct {
+		// Complete Every connected platform host runs the release.
+		Complete              bool           `json:"complete"`
+		Generation            int            `json:"generation"`
+		PendingCapacityOwners int            `json:"pending_capacity_owners"`
+		Phases                map[string]int `json:"phases"`
+		Version               string         `json:"version"`
+	} `json:"release,omitempty"`
+}
 
 // Function defines model for Function.
 type Function struct {
@@ -3013,6 +3175,13 @@ type WorkspacePath = Name
 
 // ListComputeInstancesParams defines parameters for ListComputeInstances.
 type ListComputeInstancesParams struct {
+	// Cursor The next_cursor of the previous page.
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+	Limit  *Limit  `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// ListFleetNodesParams defines parameters for ListFleetNodes.
+type ListFleetNodesParams struct {
 	// Cursor The next_cursor of the previous page.
 	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
 	Limit  *Limit  `form:"limit,omitempty" json:"limit,omitempty"`

@@ -2009,6 +2009,37 @@ paths:
               schema: { $ref: "#/components/schemas/AwsConnection" }
         default: { $ref: "#/components/responses/Error" }
 
+  /v1/fleet:
+    get:
+      operationId: getFleet
+      tags: [compute]
+      summary: The platform fleet's capacity by market and the agent release rollout
+      description: Platform administrators only.
+      responses:
+        "200":
+          description: The fleet summary
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FleetSummary" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/fleet/nodes:
+    get:
+      operationId: listFleetNodes
+      tags: [compute]
+      summary: The platform's hosts with their state, capacity and load
+      description: Platform administrators only.
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: One page of hosts ordered by id
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FleetNodePage" }
+        default: { $ref: "#/components/responses/Error" }
+
   /v1/machines:
     get:
       operationId: listMachines
@@ -4161,7 +4192,10 @@ components:
         placement:
           description: machine:<id>
           type: string
-        provider: { type: string, enum: [agent] }
+        provider:
+          type: string
+          enum: [agent]
+          x-enum-varnames: [MachineAgent]
         lifecycle: { $ref: "#/components/schemas/MachineLifecycle" }
         lifecycle_message: { type: string }
         lifecycle_failure: { $ref: "#/components/schemas/MachineFailure" }
@@ -4258,7 +4292,10 @@ components:
         placement:
           description: connection:<id>
           type: string
-        provider: { type: string, enum: [aws] }
+        provider:
+          type: string
+          enum: [aws]
+          x-enum-varnames: [InstanceAws]
         region: { type: string }
         availability_zone: { type: string }
         instance_id: { type: string }
@@ -4360,6 +4397,7 @@ components:
     AwsConnectionAction:
       type: string
       enum: [authorize, validate, reconnect, cancel_reconnect, remove, retry]
+      x-enum-varnames: [AwsAuthorize, AwsValidate, AwsReconnect, AwsCancelReconnect, AwsRemove, AwsRetry]
 
     AwsAuthorizationPhase:
       type: string
@@ -4516,3 +4554,126 @@ components:
           properties:
             stack: { $ref: "#/components/schemas/AwsStackAction" }
             external_id: { type: string }
+
+    FleetCapacity:
+      type: object
+      required: [cpu_millicores, memory_mib, gpu_count]
+      properties:
+        cpu_millicores: { type: integer, format: int64 }
+        memory_mib: { type: integer, format: int64 }
+        gpu_count: { type: integer }
+
+    FleetState:
+      description: >-
+        A host's place in the fleet. stopped, hibernate_unverified,
+        image_saved, preparing and stopping belong to stopped reserves, which
+        this fleet does not keep.
+      type: string
+      enum: [serving, starting, draining, preparing, stopping, unavailable, failed, terminating, stopped,
+             hibernate_unverified, image_saved]
+      x-enum-varnames: [FleetServing, FleetStarting, FleetDraining, FleetPreparing, FleetStopping, FleetUnavailable,
+                        FleetFailed, FleetTerminating, FleetStopped, FleetHibernateUnverified, FleetImageSaved]
+
+    FleetStateCapacity:
+      type: object
+      required: [state, machines, capacity, allocated]
+      properties:
+        state: { $ref: "#/components/schemas/FleetState" }
+        machines: { type: integer }
+        capacity: { $ref: "#/components/schemas/FleetCapacity" }
+        allocated: { $ref: "#/components/schemas/FleetCapacity" }
+
+    FleetMarket:
+      type: object
+      required: [preemptible, gpu_type, warm_free, warm_target, reserve_ready, reserve_target, allocated, states, reason]
+      properties:
+        preemptible: { type: boolean }
+        gpu_type:
+          description: Empty for CPU hosts.
+          type: string
+        warm_free:
+          description: Unreserved capacity on serving hosts.
+          allOf: [{ $ref: "#/components/schemas/FleetCapacity" }]
+        warm_target:
+          description: The idle capacity the headroom floor keeps.
+          allOf: [{ $ref: "#/components/schemas/FleetCapacity" }]
+        reserve_ready:
+          description: Always zero; the fleet keeps no stopped reserves.
+          allOf: [{ $ref: "#/components/schemas/FleetCapacity" }]
+        reserve_target:
+          description: Always zero; the fleet keeps no stopped reserves.
+          allOf: [{ $ref: "#/components/schemas/FleetCapacity" }]
+        allocated:
+          description: Reservations of live containers on the market's hosts.
+          allOf: [{ $ref: "#/components/schemas/FleetCapacity" }]
+        states:
+          type: array
+          items: { $ref: "#/components/schemas/FleetStateCapacity" }
+        reason:
+          description: Why the market cannot grow, when it cannot.
+          type: string
+
+    FleetSummary:
+      type: object
+      required: [observed_at]
+      properties:
+        observed_at: { type: string, format: date-time }
+        plan:
+          type: object
+          required: [generated_at, expires_at, markets]
+          properties:
+            generated_at: { type: string, format: date-time }
+            expires_at: { type: string, format: date-time }
+            markets:
+              type: array
+              items: { $ref: "#/components/schemas/FleetMarket" }
+        release:
+          description: The agent release platform hosts move to.
+          type: object
+          required: [version, generation, complete, phases, pending_capacity_owners]
+          properties:
+            version: { type: string }
+            generation: { type: integer }
+            complete:
+              description: Every connected platform host runs the release.
+              type: boolean
+            phases:
+              type: object
+              additionalProperties: { type: integer }
+            pending_capacity_owners: { type: integer }
+
+    FleetNode:
+      type: object
+      required: [id, provider, region, instance_type, preemptible, gpu_type, state, capacity, allocated,
+                 containers, ready]
+      properties:
+        id: { type: string, format: uuid }
+        machine_id:
+          description: Set once the host enrolled.
+          type: string
+        instance_id: { type: string }
+        provider:
+          type: string
+          enum: [agent, aws]
+          x-enum-varnames: [FleetNodeAgent, FleetNodeAws]
+        region: { type: string }
+        instance_type: { type: string }
+        preemptible: { type: boolean }
+        gpu_type: { type: string }
+        state: { $ref: "#/components/schemas/FleetState" }
+        capacity: { $ref: "#/components/schemas/FleetCapacity" }
+        allocated: { $ref: "#/components/schemas/FleetCapacity" }
+        containers: { type: integer }
+        ready:
+          description: Serving and on the target agent release.
+          type: boolean
+
+    FleetNodePage:
+      type: object
+      required: [nodes, observed_at]
+      properties:
+        nodes:
+          type: array
+          items: { $ref: "#/components/schemas/FleetNode" }
+        next_cursor: { type: string }
+        observed_at: { type: string, format: date-time }

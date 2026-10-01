@@ -275,9 +275,9 @@ func (c *Control) PlanDeployment(ctx context.Context, workspace identity.Workspa
 	items := make([]apitypes.DeploymentPlanItem, 0, len(req.Workloads)+len(deployed))
 	for _, w := range req.Workloads {
 		versions, ok := current[key{string(w.Kind), w.Name}]
-		action := apitypes.DeploymentPlanActionAdd
+		action := apitypes.Add
 		if ok {
-			action = apitypes.DeploymentPlanActionRedeploy
+			action = apitypes.Redeploy
 		}
 		items = append(items, apitypes.DeploymentPlanItem{Kind: w.Kind, Name: w.Name, Action: action, Versions: versions})
 	}
@@ -291,9 +291,9 @@ func (c *Control) PlanDeployment(ctx context.Context, workspace identity.Workspa
 		if listed[key{row.Kind, row.Name}] {
 			continue
 		}
-		action := apitypes.DeploymentPlanActionRetain
+		action := apitypes.Retain
 		if prune {
-			action = apitypes.DeploymentPlanActionRemove
+			action = apitypes.Remove
 		}
 		items = append(items, apitypes.DeploymentPlanItem{
 			Kind: apitypes.WorkloadKind(row.Kind), Name: row.Name, Action: action, Versions: int(row.Versions),

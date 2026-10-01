@@ -136,9 +136,9 @@ func TestPlanDeploymentActions(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []apitypes.DeploymentPlanItem{
-		{Kind: "function", Name: "keep", Action: apitypes.DeploymentPlanActionRedeploy, Versions: 2},
-		{Kind: "function", Name: "new", Action: apitypes.DeploymentPlanActionAdd},
-		{Kind: "function", Name: "drop", Action: apitypes.DeploymentPlanActionRetain, Versions: 1},
+		{Kind: "function", Name: "keep", Action: apitypes.Redeploy, Versions: 2},
+		{Kind: "function", Name: "new", Action: apitypes.Add},
+		{Kind: "function", Name: "drop", Action: apitypes.Retain, Versions: 1},
 	}
 	if len(plan.Items) != len(want) {
 		t.Fatalf("plan %+v", plan.Items)
@@ -150,10 +150,10 @@ func TestPlanDeploymentActions(t *testing.T) {
 	}
 	prune := true
 	req.Prune = &prune
-	if plan, err := c.PlanDeployment(t.Context(), ws, "reports", req); err != nil || plan.Items[2].Action != apitypes.DeploymentPlanActionRemove {
+	if plan, err := c.PlanDeployment(t.Context(), ws, "reports", req); err != nil || plan.Items[2].Action != apitypes.Remove {
 		t.Fatalf("pruning plan %+v %v", plan, err)
 	}
-	if plan, err := c.PlanDeployment(t.Context(), ws, "fresh", req); err != nil || len(plan.Items) != 2 || plan.Items[0].Action != apitypes.DeploymentPlanActionAdd {
+	if plan, err := c.PlanDeployment(t.Context(), ws, "fresh", req); err != nil || len(plan.Items) != 2 || plan.Items[0].Action != apitypes.Add {
 		t.Fatalf("plan for a new app %+v %v", plan, err)
 	}
 }

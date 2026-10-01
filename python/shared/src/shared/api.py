@@ -1316,12 +1316,12 @@ class AwsConnectionPhase(str, Enum):
 
 
 class AwsConnectionAction(str, Enum):
-    authorize = "authorize"
-    validate = "validate"
-    reconnect = "reconnect"
-    cancel_reconnect = "cancel_reconnect"
-    remove = "remove"
-    retry = "retry"
+    AwsAuthorize = "authorize"
+    AwsValidate = "validate"
+    AwsReconnect = "reconnect"
+    AwsCancelReconnect = "cancel_reconnect"
+    AwsRemove = "remove"
+    AwsRetry = "retry"
 
 
 class AwsAuthorizationPhase(str, Enum):
@@ -1478,6 +1478,102 @@ class Authorization(BaseModel):
 class AwsConnectionAuthorization(BaseModel):
     connection: AwsConnection
     authorization: Authorization
+
+
+class FleetCapacity(BaseModel):
+    cpu_millicores: int
+    memory_mib: int
+    gpu_count: int
+
+
+class FleetState(str, Enum):
+    FleetServing = "serving"
+    FleetStarting = "starting"
+    FleetDraining = "draining"
+    FleetPreparing = "preparing"
+    FleetStopping = "stopping"
+    FleetUnavailable = "unavailable"
+    FleetFailed = "failed"
+    FleetTerminating = "terminating"
+    FleetStopped = "stopped"
+    FleetHibernateUnverified = "hibernate_unverified"
+    FleetImageSaved = "image_saved"
+
+
+class FleetStateCapacity(BaseModel):
+    state: FleetState
+    machines: int
+    capacity: FleetCapacity
+    allocated: FleetCapacity
+
+
+class FleetMarket(BaseModel):
+    preemptible: bool
+    gpu_type: Annotated[str, Field(description="Empty for CPU hosts.")]
+    warm_free: Annotated[FleetCapacity, Field(description="Unreserved capacity on serving hosts.")]
+    warm_target: Annotated[
+        FleetCapacity, Field(description="The idle capacity the headroom floor keeps.")
+    ]
+    reserve_ready: Annotated[
+        FleetCapacity, Field(description="Always zero; the fleet keeps no stopped reserves.")
+    ]
+    reserve_target: Annotated[
+        FleetCapacity, Field(description="Always zero; the fleet keeps no stopped reserves.")
+    ]
+    allocated: Annotated[
+        FleetCapacity, Field(description="Reservations of live containers on the market's hosts.")
+    ]
+    states: list[FleetStateCapacity]
+    reason: Annotated[str, Field(description="Why the market cannot grow, when it cannot.")]
+
+
+class Plan(BaseModel):
+    generated_at: AwareDatetime
+    expires_at: AwareDatetime
+    markets: list[FleetMarket]
+
+
+class Release1(BaseModel):
+    version: str
+    generation: int
+    complete: Annotated[bool, Field(description="Every connected platform host runs the release.")]
+    phases: dict[str, int]
+    pending_capacity_owners: int
+
+
+class FleetSummary(BaseModel):
+    observed_at: AwareDatetime
+    plan: Plan | None = None
+    release: Annotated[
+        Release1 | None, Field(description="The agent release platform hosts move to.")
+    ] = None
+
+
+class Provider(str, Enum):
+    FleetNodeAgent = "agent"
+    FleetNodeAws = "aws"
+
+
+class FleetNode(BaseModel):
+    id: UUID
+    machine_id: Annotated[str | None, Field(description="Set once the host enrolled.")] = None
+    instance_id: str | None = None
+    provider: Provider
+    region: str
+    instance_type: str
+    preemptible: bool
+    gpu_type: str
+    state: FleetState
+    capacity: FleetCapacity
+    allocated: FleetCapacity
+    containers: int
+    ready: Annotated[bool, Field(description="Serving and on the target agent release.")]
+
+
+class FleetNodePage(BaseModel):
+    nodes: list[FleetNode]
+    next_cursor: str | None = None
+    observed_at: AwareDatetime
 
 
 class Error(BaseModel):
