@@ -109,17 +109,29 @@ func (s *Server) SubmitTasks(ctx context.Context, req SubmitTasksRequestObject) 
 	if err != nil {
 		return nil, err
 	}
-	inputs := make([]execution.Payload, len(req.Body.Inputs))
+	inputs := make([]execution.TaskInput, len(req.Body.Inputs))
 	for n, input := range req.Body.Inputs {
-		payload, err := payloadFrom(input)
+		payload, err := payloadFrom(apitypes.Payload{
+			Encoding: apitypes.PayloadEncoding(input.Encoding), Value: input.Value, Data: input.Data,
+		})
 		if err != nil {
 			return nil, fmt.Errorf("input %d: %w", n, err)
 		}
-		inputs[n] = payload
+		inputs[n] = execution.TaskInput{Payload: payload}
+		if input.DependsOn != nil {
+			for _, dep := range *input.DependsOn {
+				inputs[n].DependsOn = append(inputs[n].DependsOn, execution.TaskID(dep))
+			}
+		}
 	}
-	tasks, err := s.owners.Execution.Submit(ctx, execution.SubmitRequest{
-		Workspace: ws.ID, App: req.App, Function: req.Function, Inputs: inputs,
-	})
+	submit := execution.SubmitRequest{
+		Workspace: ws.ID, App: req.App, Function: req.Function, Inputs: inputs, Release: req.Body.ReleaseId,
+	}
+	if req.Body.ParentTaskId != nil {
+		parent := execution.TaskID(*req.Body.ParentTaskId)
+		submit.Parent = &parent
+	}
+	tasks, err := s.owners.Execution.Submit(ctx, submit)
 	if err != nil {
 		return nil, err
 	}
@@ -177,39 +189,60 @@ func (s *Server) CancelTask(ctx context.Context, req CancelTaskRequestObject) (C
 // blank line then, so clients can apply a read timeout.
 const logHeartbeat = 15 * time.Second
 
-// StreamTaskLogs writes log entries as NDJSON, flushing each batch. A
-// followed stream writes a blank line after logHeartbeat without entries.
+// StreamTaskLogs writes the task's log entries as NDJSON.
 func (s *Server) StreamTaskLogs(ctx context.Context, req StreamTaskLogsRequestObject) (StreamTaskLogsResponseObject, error) {
-	ws, err := s.workspace(ctx, req.Workspace)
+	return s.logStream(ctx, req.Workspace, execution.LogSource{Kind: execution.LogsOfTask, ID: req.Task},
+		req.Params.After, req.Params.Tail, req.Params.Follow)
+}
+
+// logStream checks the source before the response starts, so an unknown one
+// is an error response rather than an empty stream.
+func (s *Server) logStream(ctx context.Context, workspace string, source execution.LogSource, after *int64, tail *int, follow *bool) (logStream, error) {
+	ws, err := s.workspace(ctx, workspace)
 	if err != nil {
-		return nil, err
+		return logStream{}, err
 	}
-	task := execution.TaskID(req.Task)
-	// Report an unknown task as an error before the stream starts.
-	if _, err := s.owners.Execution.GetTask(ctx, s.owners.Listener, ws.ID, task, 0); err != nil {
-		return nil, err
+	if err := s.owners.Execution.CheckLogSource(ctx, ws.ID, source); err != nil {
+		return logStream{}, err
 	}
-	stream := logStream{ctx: ctx, server: s, workspace: ws.ID, task: task}
-	if req.Params.After != nil {
-		stream.after = *req.Params.After
+	stream := logStream{
+		ctx: ctx, server: s, workspace: ws.ID, source: source,
+		query: execution.LogQuery{Heartbeat: logHeartbeat},
 	}
-	if req.Params.Follow != nil {
-		stream.follow = *req.Params.Follow
+	if after != nil {
+		stream.query.After = *after
+	}
+	if tail != nil {
+		stream.query.Tail = *tail
+	}
+	if follow != nil {
+		stream.query.Follow = *follow
 	}
 	return stream, nil
 }
 
+// logStream writes log entries as NDJSON, flushing each batch, and a blank
+// line for each heartbeat of a followed stream.
 type logStream struct {
 	// ctx is the request's context; the generated visitor does not pass one.
 	ctx       context.Context //nolint:containedctx // Lives for one response.
 	server    *Server
 	workspace identity.WorkspaceID
-	task      execution.TaskID
-	after     int64
-	follow    bool
+	source    execution.LogSource
+	query     execution.LogQuery
 }
 
-func (l logStream) VisitStreamTaskLogsResponse(w http.ResponseWriter) error {
+func (l logStream) VisitStreamTaskLogsResponse(w http.ResponseWriter) error { return l.visit(w) }
+
+func (l logStream) VisitStreamDeploymentLogsResponse(w http.ResponseWriter) error {
+	return l.visit(w)
+}
+
+func (l logStream) VisitStreamContainerLogsResponse(w http.ResponseWriter) error {
+	return l.visit(w)
+}
+
+func (l logStream) visit(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	w.WriteHeader(http.StatusOK)
 	flush := http.NewResponseController(w)
@@ -218,7 +251,7 @@ func (l logStream) VisitStreamTaskLogsResponse(w http.ResponseWriter) error {
 		return nil //nolint:nilerr // The client is gone.
 	}
 	enc := json.NewEncoder(w)
-	err := l.server.owners.Execution.StreamLogs(l.ctx, l.server.owners.Listener, l.workspace, l.task, l.after, l.follow, logHeartbeat,
+	err := l.server.owners.Execution.StreamLogs(l.ctx, l.server.owners.Listener, l.workspace, l.source, l.query,
 		func(batch []execution.LogEntry) error {
 			if len(batch) == 0 {
 				if _, err := w.Write([]byte("\n")); err != nil {
@@ -227,8 +260,8 @@ func (l logStream) VisitStreamTaskLogsResponse(w http.ResponseWriter) error {
 			}
 			for _, entry := range batch {
 				if err := enc.Encode(apitypes.LogEntry{
-					Id: entry.ID, Attempt: entry.Attempt, Stream: apitypes.LogEntryStream(entry.Stream),
-					Data: entry.Data, Time: entry.Time,
+					Id: entry.ID, TaskId: uuid.UUID(entry.Task), Attempt: entry.Attempt,
+					Stream: apitypes.LogEntryStream(entry.Stream), Data: entry.Data, Time: entry.Time,
 				}); err != nil {
 					return fmt.Errorf("write log entry: %w", err)
 				}
@@ -240,19 +273,19 @@ func (l logStream) VisitStreamTaskLogsResponse(w http.ResponseWriter) error {
 		})
 	// The status is sent, so a failure can only end the stream early.
 	if err != nil && l.ctx.Err() == nil {
-		l.server.logger.WarnContext(l.ctx, "log stream ended early", "task", l.task.String(), "error", err)
+		l.server.logger.WarnContext(l.ctx, "log stream ended early", "source", l.source.Kind, "id", l.source.ID, "error", err)
 	}
 	return nil
 }
 
 func payloadFrom(p apitypes.Payload) (execution.Payload, error) {
 	switch p.Encoding {
-	case apitypes.Json:
+	case apitypes.PayloadEncodingJson:
 		if p.Value == nil {
 			return execution.Payload{}, fmt.Errorf("%w: a json payload needs value", errInvalidRequest)
 		}
 		return execution.Payload{Encoding: execution.EncodingJSON, Data: *p.Value}, nil
-	case apitypes.Cloudpickle:
+	case apitypes.PayloadEncodingCloudpickle:
 		if p.Data == nil {
 			return execution.Payload{}, fmt.Errorf("%w: a cloudpickle payload needs data", errInvalidRequest)
 		}
@@ -265,19 +298,30 @@ func payloadOut(p execution.Payload) apitypes.Payload {
 	switch p.Encoding {
 	case execution.EncodingJSON:
 		value := json.RawMessage(p.Data)
-		return apitypes.Payload{Encoding: apitypes.Json, Value: &value}
+		return apitypes.Payload{Encoding: apitypes.PayloadEncodingJson, Value: &value}
 	case execution.EncodingCloudpickle:
 		data := p.Data
-		return apitypes.Payload{Encoding: apitypes.Cloudpickle, Data: &data}
+		return apitypes.Payload{Encoding: apitypes.PayloadEncodingCloudpickle, Data: &data}
 	}
 	return apitypes.Payload{Encoding: apitypes.PayloadEncoding(p.Encoding)}
 }
 
 func taskOut(t execution.Task) apitypes.Task {
 	out := apitypes.Task{
-		Id: uuid.UUID(t.ID), App: t.App, Function: t.Function, ReleaseId: t.Release,
-		Status: apitypes.TaskStatus(t.Status), Attempts: t.Attempts,
-		CreatedAt: t.CreatedAt, StartedAt: t.StartedAt, FinishedAt: t.FinishedAt,
+		Id: uuid.UUID(t.ID), App: t.App, Function: t.Function, ReleaseId: t.Release, Version: t.Version,
+		Status: apitypes.TaskStatus(t.Status), Attempts: t.Attempts, MaxAttempts: t.MaxAttempts,
+		ParentTaskId: (*uuid.UUID)(t.Parent), RootTaskId: (*uuid.UUID)(t.Root), ContainerId: (*uuid.UUID)(t.Container),
+		NextAttemptAt: t.NextAttemptAt,
+		CreatedAt:     t.CreatedAt, StartedAt: t.StartedAt, FinishedAt: t.FinishedAt,
+	}
+	if out.RootTaskId == nil {
+		out.RootTaskId = &out.Id
+	}
+	if p := t.Pending; p != nil {
+		out.Pending = &apitypes.TaskPendingProgress{
+			Reason: apitypes.TaskPendingReason(p.Reason), Message: p.Reason.Message(),
+			Since: p.Since, PendingSince: p.PendingSince, ObservedAt: p.ObservedAt,
+		}
 	}
 	if f := t.Failure; f != nil {
 		out.Failure = &apitypes.TaskFailure{Kind: apitypes.FailureKind(f.Kind), Message: f.Message}

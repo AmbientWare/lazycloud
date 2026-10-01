@@ -25,7 +25,13 @@ func (q *Queries) CountStartFailure(ctx context.Context, id uuid.UUID) (int32, e
 const failQueuedTasksOfRelease = `-- name: FailQueuedTasksOfRelease :many
 update tasks
 set status = 'failed', failure = $1, finished_at = now()
-where release_id = $2 and status = 'queued'
+where id in (
+    select q.id from tasks q
+    where q.release_id = $2 and q.status = 'queued'
+    order by q.id
+    for update
+)
+  and status = 'queued'
 returning id
 `
 
@@ -34,6 +40,7 @@ type FailQueuedTasksOfReleaseParams struct {
 	ReleaseID uuid.UUID
 }
 
+// Locks in id order, as dependency resolution does.
 func (q *Queries) FailQueuedTasksOfRelease(ctx context.Context, arg FailQueuedTasksOfReleaseParams) ([]uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, failQueuedTasksOfRelease, arg.Failure, arg.ReleaseID)
 	if err != nil {

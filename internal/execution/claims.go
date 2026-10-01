@@ -25,11 +25,23 @@ var ErrNotAssigned = errors.New("container is not assigned to this host")
 
 // ClaimedTask is a task a container's slot runs as attempt Attempt.
 type ClaimedTask struct {
-	Task     TaskID
+	Task TaskID
+	// Root is the first task of the task's call graph, Task itself when
+	// nothing spawned it.
+	Root     TaskID
 	Attempt  AttemptID
 	Number   int
 	Input    Payload
 	Deadline time.Time
+	// Dependencies are the results of the upstream tasks the input refers
+	// to.
+	Dependencies []DependencyResult
+}
+
+// DependencyResult is an upstream task's result.
+type DependencyResult struct {
+	Task   TaskID
+	Result Payload
 }
 
 // ClaimTasks starts up to max attempts on container, bounded by its free
@@ -131,11 +143,25 @@ func (e *Execution) claimOnce(ctx context.Context, host compute.HostID, containe
 			return nil
 		}
 		claimed = make([]ClaimedTask, len(rows))
+		ids := make([]uuid.UUID, len(rows))
+		index := make(map[uuid.UUID]int, len(rows))
 		for n, row := range rows {
 			claimed[n] = ClaimedTask{
-				Task: TaskID(row.TaskID), Attempt: AttemptID(row.AttemptID), Number: int(row.Number),
+				Task: TaskID(row.TaskID), Root: TaskID(row.RootTaskID), Attempt: AttemptID(row.AttemptID), Number: int(row.Number),
 				Input: Payload{Encoding: Encoding(row.Encoding), Data: row.Data}, Deadline: row.DeadlineAt,
 			}
+			ids[n] = row.TaskID
+			index[row.TaskID] = n
+		}
+		deps, err := q.DependencyResults(ctx, ids)
+		if err != nil {
+			return fmt.Errorf("read dependency results: %w", err)
+		}
+		for _, dep := range deps {
+			task := &claimed[index[dep.TaskID]]
+			task.Dependencies = append(task.Dependencies, DependencyResult{
+				Task: TaskID(dep.DependsOn), Result: Payload{Encoding: Encoding(dep.Encoding), Data: dep.Data},
+			})
 		}
 		return nil
 	})

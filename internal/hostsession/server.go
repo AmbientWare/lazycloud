@@ -218,6 +218,12 @@ func (s *Server) ClaimTasks(ctx context.Context, req *hostproto.ClaimTasksReques
 			InputEncoding: encodingOut(c.Input.Encoding),
 			Input:         c.Input.Data,
 			Deadline:      timestamppb.New(c.Deadline),
+			RootTaskId:    c.Root.String(),
+		}
+		for _, dep := range c.Dependencies {
+			out.Tasks[n].Dependencies = append(out.Tasks[n].Dependencies, &hostproto.DependencyResult{
+				TaskId: dep.Task.String(), Encoding: encodingOut(dep.Result.Encoding), Data: dep.Result.Data,
+			})
 		}
 	}
 	return out, nil

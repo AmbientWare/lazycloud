@@ -242,7 +242,9 @@ func (e *Execution) drainIdle(ctx context.Context, tx pgx.Tx, plan *releasePlan,
 
 // stopRelease winds down a release whose workload is stopped or whose app is
 // paused: pending containers stop, the rest drain, and queued tasks are
-// cancelled. Running tasks finish on their draining containers.
+// cancelled. Running tasks finish on their draining containers, unless the
+// app or workload is deleted, which cancels them too. Tasks waiting on a
+// cancelled task fail.
 func (e *Execution) stopRelease(ctx context.Context, tx pgx.Tx, plan *releasePlan) error {
 	q := e.queries.WithTx(tx)
 	release := plan.release.ReleaseID
@@ -266,11 +268,28 @@ func (e *Execution) stopRelease(ctx context.Context, tx pgx.Tx, plan *releasePla
 		return fmt.Errorf("cancel queued tasks: %w", err)
 	}
 	plan.cancelled = len(cancelled)
-	tasks := make([]string, len(cancelled))
-	for i, task := range cancelled {
-		tasks[i] = task.String()
+	if err := notifyAll(ctx, tx, database.ChannelTask, uuidStrings(cancelled)); err != nil {
+		return err
 	}
-	return notifyAll(ctx, tx, database.ChannelTask, tasks)
+	if err := e.resolveDependents(ctx, tx, cancelled, upstreamUnsuccessful); err != nil {
+		return err
+	}
+	if !plan.release.Retiring {
+		return nil
+	}
+	// A deleted app or workload also cancels its running tasks, which kills
+	// their slots so the draining containers stop.
+	running, err := q.RunningTasksOfRelease(ctx, RunningTasksOfReleaseParams{ReleaseID: release, BatchSize: cancelBatch})
+	if err != nil {
+		return fmt.Errorf("list running tasks: %w", err)
+	}
+	for _, task := range running {
+		if _, err := e.cancelTask(ctx, tx, nil, TaskID(task)); err != nil {
+			return fmt.Errorf("cancel running task %s: %w", task, err)
+		}
+	}
+	plan.cancelled += len(running)
+	return nil
 }
 
 func notifyHosts(ctx context.Context, tx pgx.Tx, drained []drainedContainer) error {

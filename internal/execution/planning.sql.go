@@ -235,7 +235,13 @@ batch as (
 select r.id as release_id,
        a.workspace_id,
        (w.active_release_id is not distinct from r.id and w.desired_state = 'active' and a.state = 'active')::bool as active,
-       (w.desired_state = 'stopped' or a.state = 'paused')::bool as stopping,
+       -- A paused or deleted app, a deleted workload, or a stopped workload's
+       -- deployed versions wind down; working-tree releases of a stopped
+       -- workload keep running.
+       (a.state <> 'active' or w.desired_state = 'deleted'
+        or (w.desired_state = 'stopped' and r.version is not null))::bool as stopping,
+       -- Deletion also cancels running tasks.
+       (a.state = 'deleted' or w.desired_state = 'deleted')::bool as retiring,
        coalesce((r.spec -> 'autoscaler' ->> 'min_containers')::int, 0)::int as min_containers,
        coalesce((r.spec -> 'autoscaler' ->> 'max_containers')::int, 1)::int as max_containers,
        coalesce((r.spec -> 'autoscaler' ->> 'tasks_per_container')::int, 1)::int as tasks_per_container,
@@ -254,7 +260,7 @@ join releases r on r.id = batch.release_id
 join workloads w on w.id = r.workload_id
 join apps a on a.id = w.app_id
 cross join lateral (
-    select count(*) filter (where t.available_at <= now()) as available
+    select count(*) filter (where t.available_at <= now() and t.unmet_dependencies = 0) as available
     from tasks t where t.release_id = r.id and t.status = 'queued'
 ) q
 cross join lateral (
@@ -280,6 +286,7 @@ type PlanningReleasesRow struct {
 	WorkspaceID       uuid.UUID
 	Active            bool
 	Stopping          bool
+	Retiring          bool
 	MinContainers     int32
 	MaxContainers     int32
 	TasksPerContainer int32
@@ -312,6 +319,7 @@ func (q *Queries) PlanningReleases(ctx context.Context, arg PlanningReleasesPara
 			&i.WorkspaceID,
 			&i.Active,
 			&i.Stopping,
+			&i.Retiring,
 			&i.MinContainers,
 			&i.MaxContainers,
 			&i.TasksPerContainer,
@@ -329,6 +337,38 @@ func (q *Queries) PlanningReleases(ctx context.Context, arg PlanningReleasesPara
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const runningTasksOfRelease = `-- name: RunningTasksOfRelease :many
+select id from tasks
+where release_id = $1 and status = 'running'
+order by id
+limit $2
+`
+
+type RunningTasksOfReleaseParams struct {
+	ReleaseID uuid.UUID
+	BatchSize int32
+}
+
+func (q *Queries) RunningTasksOfRelease(ctx context.Context, arg RunningTasksOfReleaseParams) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, runningTasksOfRelease, arg.ReleaseID, arg.BatchSize)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

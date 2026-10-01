@@ -119,12 +119,20 @@ func (sl *slot) invoke(p *runnerProcess, run *hostproto.RunAttempt) bool {
 	if err != nil {
 		return sl.finish(crashed(run.GetAttemptId(), "InvalidInput", err.Error()))
 	}
-	err = p.send(runnerproto.Invoke{
-		Type:          runnerproto.InvokeTypeInvoke,
-		TaskId:        run.GetTaskId(),
-		AttemptId:     run.GetAttemptId(),
-		InputEncoding: encoding,
-	}, run.GetInput())
+	err = p.sendDependencies(run.GetDependencies())
+	if err == nil {
+		root := run.GetRootTaskId()
+		if root == "" {
+			root = run.GetTaskId()
+		}
+		err = p.send(runnerproto.Invoke{
+			Type:          runnerproto.InvokeTypeInvoke,
+			TaskId:        run.GetTaskId(),
+			RootTaskId:    root,
+			AttemptId:     run.GetAttemptId(),
+			InputEncoding: encoding,
+		}, run.GetInput())
+	}
 	var frame runnerproto.Frame
 	if err == nil {
 		frame, err = p.read()
@@ -296,6 +304,22 @@ var errRunnerClosed = errors.New("runner closed its socket")
 
 func (p *runnerProcess) send(header any, payload []byte) error {
 	return closedAsRunnerClosed(runnerproto.WriteFrame(p.conn, header, payload))
+}
+
+// sendDependencies sends one dependency frame per upstream result ahead of
+// the invoke that refers to them.
+func (p *runnerProcess) sendDependencies(deps []*hostproto.DependencyResult) error {
+	for _, dep := range deps {
+		encoding, err := runnerEncoding(dep.GetEncoding())
+		if err != nil {
+			return fmt.Errorf("dependency %s: %w", dep.GetTaskId(), err)
+		}
+		header := runnerproto.Dependency{Type: runnerproto.DependencyTypeDependency, TaskId: dep.GetTaskId(), Encoding: encoding}
+		if err := p.send(header, dep.GetData()); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (p *runnerProcess) read() (runnerproto.Frame, error) {

@@ -24,7 +24,13 @@ batch as (
 select r.id as release_id,
        a.workspace_id,
        (w.active_release_id is not distinct from r.id and w.desired_state = 'active' and a.state = 'active')::bool as active,
-       (w.desired_state = 'stopped' or a.state = 'paused')::bool as stopping,
+       -- A paused or deleted app, a deleted workload, or a stopped workload's
+       -- deployed versions wind down; working-tree releases of a stopped
+       -- workload keep running.
+       (a.state <> 'active' or w.desired_state = 'deleted'
+        or (w.desired_state = 'stopped' and r.version is not null))::bool as stopping,
+       -- Deletion also cancels running tasks.
+       (a.state = 'deleted' or w.desired_state = 'deleted')::bool as retiring,
        coalesce((r.spec -> 'autoscaler' ->> 'min_containers')::int, 0)::int as min_containers,
        coalesce((r.spec -> 'autoscaler' ->> 'max_containers')::int, 1)::int as max_containers,
        coalesce((r.spec -> 'autoscaler' ->> 'tasks_per_container')::int, 1)::int as tasks_per_container,
@@ -43,7 +49,7 @@ join releases r on r.id = batch.release_id
 join workloads w on w.id = r.workload_id
 join apps a on a.id = w.app_id
 cross join lateral (
-    select count(*) filter (where t.available_at <= now()) as available
+    select count(*) filter (where t.available_at <= now() and t.unmet_dependencies = 0) as available
     from tasks t where t.release_id = r.id and t.status = 'queued'
 ) q
 cross join lateral (
@@ -132,6 +138,12 @@ where id in (
 )
   and status = 'queued'
 returning id;
+
+-- name: RunningTasksOfRelease :many
+select id from tasks
+where release_id = @release_id and status = 'running'
+order by id
+limit @batch_size;
 
 -- name: TryPlanningLock :one
 -- Serializes planners for the rest of the transaction, so container creation

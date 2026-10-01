@@ -539,6 +539,8 @@ func (c *container) dispatch(task *hostproto.ClaimedTask) {
 		InputEncoding: task.GetInputEncoding(),
 		Input:         task.GetInput(),
 		Deadline:      task.GetDeadline(),
+		Dependencies:  task.GetDependencies(),
+		RootTaskId:    task.GetRootTaskId(),
 	}}})
 }
 

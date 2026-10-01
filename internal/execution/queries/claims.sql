@@ -22,15 +22,22 @@ with candidate as (
     select t.id, t.attempt_count, t.available_at
     from tasks t
     where t.release_id = @release_id and t.status = 'queued' and t.available_at <= now()
+      and t.unmet_dependencies = 0
     order by t.available_at, t.id
     limit @max_tasks
     for update skip locked
 ), sized as (
     select c.id, c.attempt_count,
            row_number() over w as turn,
-           sum(octet_length(i.data)) over w as total_bytes
+           sum(octet_length(i.data) + coalesce(dep.bytes, 0)) over w as total_bytes
     from candidate c
     join task_inputs i on i.task_id = c.id
+    cross join lateral (
+        select sum(octet_length(r.data)) as bytes
+        from task_dependencies d
+        join task_results r on r.task_id = d.depends_on
+        where d.task_id = c.id
+    ) dep
     window w as (order by c.available_at, c.id)
 ), picked as (
     select id, attempt_count from sized
@@ -51,14 +58,16 @@ with candidate as (
     where tasks.id = attempt.task_id
 )
 select attempt.task_id, attempt.id as attempt_id, attempt.number, attempt.deadline_at,
-       i.encoding, i.data
+       i.encoding, i.data,
+       coalesce(t.root_task_id, t.id)::uuid as root_task_id
 from attempt
 join task_inputs i on i.task_id = attempt.task_id
+join tasks t on t.id = attempt.task_id
 order by attempt.id;
 
 -- name: NextQueuedAt :one
 -- When the release's next queued task becomes due, if any.
 select available_at from tasks
-where release_id = @release_id and status = 'queued'
+where release_id = @release_id and status = 'queued' and unmet_dependencies = 0
 order by available_at
 limit 1;

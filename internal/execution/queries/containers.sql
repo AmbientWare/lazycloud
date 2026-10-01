@@ -10,9 +10,16 @@ where id = @id;
 select id from attempts where container_id = @container_id and state = 'running' order by id;
 
 -- name: FailQueuedTasksOfRelease :many
+-- Locks in id order, as dependency resolution does.
 update tasks
 set status = 'failed', failure = @failure, finished_at = now()
-where release_id = @release_id and status = 'queued'
+where id in (
+    select q.id from tasks q
+    where q.release_id = @release_id and q.status = 'queued'
+    order by q.id
+    for update
+)
+  and status = 'queued'
 returning id;
 
 -- name: CountStartFailure :one

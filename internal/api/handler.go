@@ -119,6 +119,7 @@ var errInvalidRequest = errors.New("invalid request")
 func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 	var (
 		tooMany       *execution.TooManyPendingError
+		unknownTask   *execution.UnknownTaskError
 		invalidSpec   *control.InvalidSpecError
 		sourceMissing *control.SourceMissingError
 		tooLarge      *http.MaxBytesError
@@ -132,6 +133,14 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		writeJSONError(w, http.StatusNotFound, apitypes.NotFound, "not found")
 	case errors.Is(err, execution.ErrNoResult):
 		writeJSONError(w, http.StatusNotFound, apitypes.NotFound, "the task finished without a result")
+	case errors.Is(err, control.ErrVersionNotFound):
+		writeJSONError(w, http.StatusNotFound, apitypes.NotFound, "the deployment has no such version")
+	case errors.As(err, &unknownTask):
+		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, unknownTask.Error())
+	case errors.Is(err, control.ErrInvalidCursor), errors.Is(err, execution.ErrInvalidCursor):
+		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, "the cursor is not from this listing")
+	case errors.Is(err, execution.ErrInvalidFilter), errors.Is(err, execution.ErrInvalidSubmit):
+		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, err.Error())
 	case errors.As(err, &invalidSpec):
 		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, invalidSpec.Error())
 	case errors.As(err, &sourceMissing):
