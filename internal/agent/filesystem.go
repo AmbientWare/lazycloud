@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/moby/moby/api/types/jsonstream"
 	"github.com/moby/moby/client"
@@ -42,8 +43,6 @@ func (a *Agent) publishFilesystem(request *hostproto.PublishFilesystem) {
 		if err != nil {
 			result = &hostproto.CompleteFilesystemImageRequest{ContainerId: request.GetContainerId(), RequestId: request.GetRequestId(), Failure: err.Error()}
 			a.log.Warn("filesystem publish failed", "container_id", request.GetContainerId(), "request_id", request.GetRequestId(), "error", err)
-		} else {
-			a.log.Info("filesystem image pushed", "container_id", request.GetContainerId(), "reference", reference)
 		}
 		a.deliver(ctx, deadline, "filesystem image", func(ctx context.Context) error {
 			_, err := a.host.CompleteFilesystemImage(ctx, result)
@@ -97,7 +96,9 @@ func (a *Agent) pushFilesystem(ctx context.Context, request *hostproto.PublishFi
 	}
 
 	tag := request.GetRepository() + ":fs-" + request.GetRequestId()
-	imported, err := a.docker.ImageImport(ctx, client.ImageImportSource{Source: response.Body, SourceName: "-"}, tag, client.ImageImportOptions{
+	began := time.Now()
+	archive := &countingReader{r: response.Body}
+	imported, err := a.docker.ImageImport(ctx, client.ImageImportSource{Source: archive, SourceName: "-"}, tag, client.ImageImportOptions{
 		Changes:  changes,
 		Message:  "lazycloud filesystem of container " + c.id,
 		Platform: ocispec.Platform{OS: source.Os, Architecture: source.Architecture, Variant: source.Variant},
@@ -120,6 +121,7 @@ func (a *Agent) pushFilesystem(ctx context.Context, request *hostproto.PublishFi
 	if err != nil {
 		return "", "", err
 	}
+	importedAt := time.Now()
 	pushed, err := a.docker.ImagePush(ctx, tag, client.ImagePushOptions{RegistryAuth: options.RegistryAuth})
 	if err != nil {
 		return "", "", fmt.Errorf("push %s: %w", tag, err)
@@ -145,7 +147,21 @@ func (a *Agent) pushFilesystem(ctx context.Context, request *hostproto.PublishFi
 	if !strings.HasPrefix(digest, "sha256:") {
 		return "", "", fmt.Errorf("push %s: the registry reported no digest", tag)
 	}
+	a.log.Info("filesystem image published", "container_id", c.id, "archive_bytes", archive.n,
+		"import_ms", importedAt.Sub(began).Milliseconds(), "push_ms", time.Since(importedAt).Milliseconds())
 	return request.GetRepository() + "@" + digest, source.Architecture, nil
+}
+
+// countingReader counts the bytes read through it.
+type countingReader struct {
+	r io.Reader
+	n int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	return n, err //nolint:wrapcheck // readers compare io.EOF
 }
 
 // imageChanges restates the source image's environment, working directory,

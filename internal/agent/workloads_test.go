@@ -66,14 +66,13 @@ type forwarded struct {
 // forward sends one request on an idle stream and reads the answer.
 func (d *dataServer) forward(t *testing.T, head *hostproto.RequestHead, body string) forwarded {
 	t.Helper()
-	call := d.call(t)
+	call := d.assign(t, head)
 	defer close(call.done)
 	send := func(m *hostproto.ForwardDown) {
 		if err := call.stream.Send(m); err != nil {
 			t.Fatal(err)
 		}
 	}
-	send(&hostproto.ForwardDown{Body: &hostproto.ForwardDown_Head{Head: head}})
 	if body != "" {
 		send(&hostproto.ForwardDown{Body: &hostproto.ForwardDown_Data{Data: []byte(body)}})
 	}
@@ -100,14 +99,22 @@ func (d *dataServer) forward(t *testing.T, head *hostproto.RequestHead, body str
 	}
 }
 
-func (d *dataServer) call(t *testing.T) *forwardCall {
+// assign sends head on an idle stream of a live agent; streams of a
+// stopped agent may still wait in calls.
+func (d *dataServer) assign(t *testing.T, head *hostproto.RequestHead) *forwardCall {
 	t.Helper()
-	select {
-	case call := <-d.calls:
-		return call
-	case <-time.After(30 * time.Second):
-		t.Fatal("the agent opened no data stream")
-		return nil
+	deadline := time.After(30 * time.Second)
+	for {
+		select {
+		case call := <-d.calls:
+			if call.stream.Context().Err() == nil && call.stream.Send(&hostproto.ForwardDown{Body: &hostproto.ForwardDown_Head{Head: head}}) == nil {
+				return call
+			}
+			close(call.done)
+		case <-deadline:
+			t.Fatal("the agent opened no data stream")
+			return nil
+		}
 	}
 }
 
@@ -115,11 +122,8 @@ func (d *dataServer) call(t *testing.T) *forwardCall {
 // answered 101, to exchange raw bytes over.
 func (d *dataServer) tunnel(t *testing.T, head *hostproto.RequestHead) *forwardCall {
 	t.Helper()
-	call := d.call(t)
+	call := d.assign(t, head)
 	t.Cleanup(func() { close(call.done) })
-	if err := call.stream.Send(&hostproto.ForwardDown{Body: &hostproto.ForwardDown_Head{Head: head}}); err != nil {
-		t.Fatal(err)
-	}
 	m, err := call.stream.Recv()
 	if err != nil {
 		t.Fatal(err)
@@ -134,9 +138,9 @@ func controlHead(container, method, uri string) *hostproto.RequestHead {
 	return &hostproto.RequestHead{ContainerId: container, Kind: &hostproto.RequestHead_Control{Control: &hostproto.HttpRequest{Method: method, Uri: uri, Host: "container"}}}
 }
 
-func portHead(container string, port int32, method, uri string, headers ...*hostproto.Header) *hostproto.RequestHead {
+func portHead(container string, port int32, uri string, headers ...*hostproto.Header) *hostproto.RequestHead {
 	return &hostproto.RequestHead{ContainerId: container, Kind: &hostproto.RequestHead_Port{Port: &hostproto.PortRequest{
-		Port: port, Http: &hostproto.HttpRequest{Method: method, Uri: uri, Host: "pod.example", Headers: headers},
+		Port: port, Http: &hostproto.HttpRequest{Method: http.MethodGet, Uri: uri, Host: "pod.example", Headers: headers},
 	}}}
 }
 
@@ -195,9 +199,9 @@ func serveControl(t *testing.T, c *container, handler http.Handler) {
 
 // tunnelTo answers a lazycloud-tunnel upgrade by joining the connection to
 // address, as the supervisor's port tunnels do.
-func tunnelTo(t *testing.T, w http.ResponseWriter, address string) {
+func tunnelTo(t *testing.T, w http.ResponseWriter, r *http.Request, address string) {
 	t.Helper()
-	upstream, err := net.Dial("tcp", address)
+	upstream, err := (&net.Dialer{}).DialContext(r.Context(), "tcp", address)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
@@ -244,7 +248,7 @@ func TestControlAndPortRequestsReachTheSupervisorSocket(t *testing.T) {
 		switch {
 		case r.URL.Path == "/ports/"+appPort && r.Header.Get("Upgrade") == tunnelProtocol:
 			tunnels.Add(1)
-			tunnelTo(t, w, app.Listener.Addr().String())
+			tunnelTo(t, w, r, app.Listener.Addr().String())
 		case strings.HasPrefix(r.URL.Path, "/ports/"):
 			http.Error(w, `{"code":"unavailable","message":"connection refused"}`, http.StatusBadGateway)
 		default:
@@ -259,7 +263,7 @@ func TestControlAndPortRequestsReachTheSupervisorSocket(t *testing.T) {
 	}
 	port, _ := strconvAtoi32(appPort)
 	for range 3 {
-		got = data.forward(t, portHead(c.id, port, http.MethodGet, "/index.html?q=1"), "")
+		got = data.forward(t, portHead(c.id, port, "/index.html?q=1"), "")
 		if got.status != http.StatusOK || got.body != "port saw GET /index.html?q=1 for pod.example" {
 			t.Fatalf("port request: %+v", got)
 		}
@@ -268,7 +272,7 @@ func TestControlAndPortRequestsReachTheSupervisorSocket(t *testing.T) {
 		t.Fatalf("three requests opened %d tunnels", n)
 	}
 
-	call := data.tunnel(t, portHead(c.id, port, http.MethodGet, "/ws",
+	call := data.tunnel(t, portHead(c.id, port, "/ws",
 		&hostproto.Header{Name: "Connection", Value: "Upgrade"}, &hostproto.Header{Name: "Upgrade", Value: "echo"}))
 	if err := call.stream.Send(&hostproto.ForwardDown{Body: &hostproto.ForwardDown_Data{Data: []byte("hello\n")}}); err != nil {
 		t.Fatal(err)
@@ -285,7 +289,7 @@ func TestControlAndPortRequestsReachTheSupervisorSocket(t *testing.T) {
 		t.Fatalf("tunnel echoed %q", echoed.String())
 	}
 
-	refused := data.forward(t, portHead(c.id, 1, http.MethodGet, "/", nil...), "")
+	refused := data.forward(t, portHead(c.id, 1, "/", nil...), "")
 	if refused.err.GetKind() != hostproto.ForwardErrorKind_FORWARD_ERROR_KIND_NOT_RUNNING || !strings.Contains(refused.err.GetMessage(), "connection refused") {
 		t.Fatalf("refused port: %+v", refused)
 	}
@@ -296,7 +300,7 @@ func TestControlAndPortRequestsReachTheSupervisorSocket(t *testing.T) {
 	c.mu.Lock()
 	c.started = false
 	c.mu.Unlock()
-	unstarted := data.forward(t, portHead(c.id, port, http.MethodGet, "/"), "")
+	unstarted := data.forward(t, portHead(c.id, port, "/"), "")
 	if unstarted.err.GetKind() != hostproto.ForwardErrorKind_FORWARD_ERROR_KIND_NOT_RUNNING {
 		t.Fatalf("unstarted container: %+v", unstarted)
 	}
@@ -349,10 +353,16 @@ func TestPodServesItsPortAndControlAPI(t *testing.T) {
 	id := start.GetStart().GetContainerId()
 	began := time.Now()
 	session.send(t, start)
+	// Each stage is reported as it ends, while the container prepares.
+	session.until(t, time.Minute, func(m *hostproto.HostMessage) bool {
+		r := m.GetContainer()
+		return r.GetContainerId() == id && r.GetPhase() == hostproto.ContainerPhase_CONTAINER_PHASE_PREPARING &&
+			len(r.GetStartup()) == 1 && r.GetStartup()[0].GetKind() == hostproto.StartupStageKind_STARTUP_STAGE_KIND_IMAGE
+	})
 	ready := session.phase(t, id, hostproto.ContainerPhase_CONTAINER_PHASE_READY)
 	t.Logf("pod ready after %s; stages %v", time.Since(began), ready.GetStartup())
 
-	listing := e.server.data.forward(t, portHead(id, 8000, http.MethodGet, "/"), "")
+	listing := e.server.data.forward(t, portHead(id, 8000, "/"), "")
 	if listing.status != http.StatusOK || !strings.Contains(listing.body, "app.py") {
 		t.Fatalf("port 8000: %+v", listing)
 	}
@@ -364,7 +374,7 @@ func TestPodServesItsPortAndControlAPI(t *testing.T) {
 	if processes.status != http.StatusOK {
 		t.Fatalf("control processes: %+v", processes)
 	}
-	refused := e.server.data.forward(t, portHead(id, 8001, http.MethodGet, "/"), "")
+	refused := e.server.data.forward(t, portHead(id, 8001, "/"), "")
 	if refused.err.GetKind() != hostproto.ForwardErrorKind_FORWARD_ERROR_KIND_NOT_RUNNING {
 		t.Fatalf("closed port: %+v", refused)
 	}
@@ -442,6 +452,90 @@ while True:
 	}}})
 }
 
+// A pod adopted by a restarted agent is configured as it started: its
+// command keeps serving and its SSH server keeps its identity, whose host
+// key the agent kept out of the container's labels.
+func TestAdoptedPodKeepsItsConfiguration(t *testing.T) {
+	e := newEnv(t)
+	first := e.startAgent()
+	session := e.session()
+	start := e.podCommand(&hostproto.PodWorkload{
+		Command: []string{"python3", "-m", "http.server", "8000"}, Ports: []int32{8000},
+		Ssh: &hostproto.SshServer{HostKey: sshKey(t, "host"), UserAuthority: string(sshPublicKey(t, "authority"))},
+	})
+	id := start.GetStart().GetContainerId()
+	session.send(t, start)
+	session.phase(t, id, hostproto.ContainerPhase_CONTAINER_PHASE_READY)
+	labels, err := exec.CommandContext(t.Context(), "docker", "inspect", "-f", "{{json .Config.Labels}}", "lazycloud-"+id).Output()
+	if err != nil || strings.Contains(string(labels), "PRIVATE KEY") || !strings.Contains(string(labels), labelPod) {
+		t.Fatalf("pod labels %s: %v", labels, err)
+	}
+	first.stop()
+
+	e.startAgent()
+	session = e.session()
+	session.phase(t, id, hostproto.ContainerPhase_CONTAINER_PHASE_READY)
+	if listing := e.server.data.forward(t, portHead(id, 8000, "/"), ""); listing.status != http.StatusOK || !strings.Contains(listing.body, "app.py") {
+		t.Fatalf("port 8000 after adoption: %+v", listing)
+	}
+	head := controlHead(id, http.MethodGet, "/ssh")
+	head.GetControl().Headers = []*hostproto.Header{{Name: "Connection", Value: "Upgrade"}, {Name: "Upgrade", Value: tunnelProtocol}}
+	call := e.server.data.tunnel(t, head)
+	m, err := call.stream.Recv()
+	if err != nil || !strings.HasPrefix(string(m.GetData()), "SSH-2.0-") {
+		t.Fatalf("SSH tunnel after adoption: %v %v", m, err)
+	}
+}
+
+// sshKey is a new ed25519 private key in OpenSSH PEM form.
+func sshKey(t *testing.T, name string) []byte {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), name)
+	if out, err := exec.CommandContext(t.Context(), "ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", path).CombinedOutput(); err != nil {
+		t.Fatalf("ssh-keygen: %v: %s", err, out)
+	}
+	key, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return key
+}
+
+// sshPublicKey is a new ed25519 public key as an authorized_keys line.
+func sshPublicKey(t *testing.T, name string) []byte {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), name)
+	if out, err := exec.CommandContext(t.Context(), "ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", path).CombinedOutput(); err != nil {
+		t.Fatalf("ssh-keygen: %v: %s", err, out)
+	}
+	key, err := os.ReadFile(path + ".pub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return key
+}
+
+// testDockerImage has dockerd and the docker CLI.
+const testDockerImage = "docker.io/library/docker:28.5.1-dind@sha256:ea9d20492ca1caaaba78e68453433895d256173c79281756e88b745647fcbcfd"
+
+// A pod with docker runs its command against a Docker daemon of its own.
+func TestDockerPodRunsADaemon(t *testing.T) {
+	e := newEnv(t)
+	e.startAgent()
+	session := e.session()
+	start := e.podCommand(&hostproto.PodWorkload{Command: []string{"docker", "info", "--format", "daemon {{.ServerVersion}}"}})
+	start.GetStart().Image = testDockerImage
+	start.GetStart().Docker = true
+	start.GetStart().Source = nil
+	id := start.GetStart().GetContainerId()
+	session.send(t, start)
+	exit := session.phase(t, id, hostproto.ContainerPhase_CONTAINER_PHASE_EXITED).GetExit()
+	if exit.GetReason() != hostproto.ExitReason_EXIT_REASON_EXITED || exit.GetExitCode() != 0 {
+		t.Fatalf("docker pod exit %v; log %q", exit, e.server.containerLog(id))
+	}
+	waitLog(t, e.server, id, "daemon 28.5.1")
+}
+
 // startTargetServer runs a web server container on the default bridge and
 // returns its address.
 func startTargetServer(t *testing.T, label string) string {
@@ -453,7 +547,7 @@ func startTargetServer(t *testing.T, label string) string {
 	}
 	id := strings.TrimSpace(string(out))
 	t.Cleanup(func() { _ = exec.CommandContext(context.Background(), "docker", "rm", "-f", id).Run() })
-	ip, err := exec.CommandContext(t.Context(), "docker", "inspect", "-f", "{{.NetworkSettings.IPAddress}}", id).Output()
+	ip, err := exec.CommandContext(t.Context(), "docker", "inspect", "-f", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", id).Output()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -471,42 +565,58 @@ func waitLog(t *testing.T, s *hostServer, container, text string) {
 	}
 }
 
-// runc without CRIU cannot checkpoint: a snapshot reports unsupported with
-// the runtime's reason and the container keeps running.
+// A snapshot waits for its readiness probe through the port tunnel, then
+// reports unsupported with the runtime's reason on runc without CRIU, and
+// the container keeps running. A probe that never answers fails the
+// snapshot instead.
 func TestSnapshotOnRuncWithoutCRIUIsUnsupported(t *testing.T) {
 	e := newEnv(t)
 	e.startAgent()
 	session := e.session()
-	start := e.startCommand("app:handle", 1)
+	start := e.podCommand(&hostproto.PodWorkload{Command: []string{"sh", "-c", "sleep 1; exec python3 -m http.server 8000"}})
 	id := start.GetStart().GetContainerId()
 	session.send(t, start)
 	session.phase(t, id, hostproto.ContainerPhase_CONTAINER_PHASE_READY)
-	uploads := make(chan struct{}, 1)
+	uploads := make(chan struct{}, 2)
 	store := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { uploads <- struct{}{} }))
 	t.Cleanup(store.Close)
-	snapshotID := uuid.NewString()
-	session.send(t, &hostproto.ServerMessage{CommandId: uuid.NewString(), Body: &hostproto.ServerMessage_Snapshot{Snapshot: &hostproto.SnapshotContainer{
-		ContainerId: id, SnapshotId: snapshotID, UploadUrl: store.URL + "/snapshot", Deadline: timestamppb.New(time.Now().Add(time.Minute)),
-	}}})
-	select {
-	case r := <-e.server.snapshots:
-		if r.GetSnapshotId() != snapshotID || !r.GetUnsupported() || !strings.Contains(strings.ToLower(r.GetFailure()), "criu") {
-			t.Fatalf("snapshot outcome %v", r)
+	snapshot := func(probe *hostproto.ReadinessProbe) *hostproto.CompleteSnapshotRequest {
+		t.Helper()
+		snapshotID := uuid.NewString()
+		session.send(t, &hostproto.ServerMessage{CommandId: uuid.NewString(), Body: &hostproto.ServerMessage_Snapshot{Snapshot: &hostproto.SnapshotContainer{
+			ContainerId: id, SnapshotId: snapshotID, UploadUrl: store.URL + "/snapshot", Deadline: timestamppb.New(time.Now().Add(time.Minute)), Ready: probe,
+		}}})
+		select {
+		case r := <-e.server.snapshots:
+			if r.GetSnapshotId() != snapshotID {
+				t.Fatalf("snapshot outcome %v", r)
+			}
+			if _, err := os.Stat(filepath.Join(e.stateDir, "snapshots", snapshotID)); !os.IsNotExist(err) {
+				t.Fatalf("the snapshot directory remains: %v", err)
+			}
+			return r
+		case <-time.After(60 * time.Second):
+			t.Fatal("no snapshot outcome")
+			return nil
 		}
-	case <-time.After(60 * time.Second):
-		t.Fatal("no snapshot outcome")
+	}
+	began := time.Now()
+	r := snapshot(&hostproto.ReadinessProbe{Path: "/", Port: 8000, TimeoutSeconds: 30, IntervalSeconds: 0.2})
+	if !r.GetUnsupported() || !strings.Contains(strings.ToLower(r.GetFailure()), "criu") {
+		t.Fatalf("snapshot outcome %v", r)
+	}
+	t.Logf("probe and checkpoint attempt took %s", time.Since(began))
+	r = snapshot(&hostproto.ReadinessProbe{Path: "/", Port: 8001, TimeoutSeconds: 1, IntervalSeconds: 0.2})
+	if r.GetUnsupported() || !strings.Contains(r.GetFailure(), "not ready") {
+		t.Fatalf("snapshot of an unready container %v", r)
 	}
 	select {
 	case <-uploads:
-		t.Fatal("an unsupported snapshot uploaded something")
+		t.Fatal("a failed snapshot uploaded something")
 	default:
 	}
-	attempt := e.task(id, `{"args": ["sleep", 0]}`)
-	if r := e.completion(attempt); r.GetSuccess() == nil {
-		t.Fatalf("the container stopped serving after the snapshot: %v", r)
-	}
-	if _, err := os.Stat(filepath.Join(e.stateDir, "snapshots", snapshotID)); !os.IsNotExist(err) {
-		t.Fatalf("the snapshot directory remains: %v", err)
+	if listing := e.server.data.forward(t, portHead(id, 8000, "/"), ""); listing.status != http.StatusOK {
+		t.Fatalf("the pod stopped serving after the snapshot: %+v", listing)
 	}
 }
 
@@ -561,7 +671,8 @@ func TestPublishFilesystemPushesAnImage(t *testing.T) {
 	e := newEnv(t)
 	e.startAgent()
 	session := e.session()
-	start := e.podCommand(&hostproto.PodWorkload{Command: []string{"sh", "-c", "echo published > /proof && exec sleep 600"}})
+	start := e.podCommand(&hostproto.PodWorkload{Command: []string{"sh", "-c", "echo published > /tmp/proof && exec sleep 600"}})
+	start.GetStart().Image = readableImage(t, e.id)
 	id := start.GetStart().GetContainerId()
 	session.send(t, start)
 	session.phase(t, id, hostproto.ContainerPhase_CONTAINER_PHASE_READY)
@@ -587,14 +698,29 @@ func TestPublishFilesystemPushesAnImage(t *testing.T) {
 	t.Cleanup(func() {
 		_ = exec.CommandContext(context.Background(), "docker", "rmi", "-f", result.GetReference()).Run()
 	})
-	out, err := exec.CommandContext(t.Context(), "docker", "run", "--rm", "--label", "lazycloud.agent="+e.id, result.GetReference(), "cat", "/proof").CombinedOutput()
+	out, err := exec.CommandContext(t.Context(), "docker", "run", "--rm", "--label", "lazycloud.agent="+e.id, result.GetReference(), "cat", "/tmp/proof").Output()
 	if err != nil || strings.TrimSpace(string(out)) != "published" {
 		t.Fatalf("run the published image: %v: %s", err, out)
 	}
 	config, err := exec.CommandContext(t.Context(), "docker", "image", "inspect", "-f", "{{json .Config.Cmd}} {{.Config.WorkingDir}}", result.GetReference()).Output()
-	if err != nil || !strings.Contains(string(config), `["python3"]`) {
+	if err != nil || !strings.Contains(string(config), `["sh"] /srv`) {
 		t.Fatalf("published image config %s: %v", config, err)
 	}
+}
+
+// readableImage builds a busybox image whose whole filesystem the test's
+// unprivileged pod user can read, as an archive of / needs, with its own
+// working directory to carry over.
+func readableImage(t *testing.T, label string) string {
+	t.Helper()
+	tag := "lazycloud-agent-test-fs:" + uuid.NewString()[:8]
+	build := exec.CommandContext(t.Context(), "docker", "build", "-q", "--label", "lazycloud.agent="+label, "-t", tag, "-")
+	build.Stdin = strings.NewReader("FROM " + testBuildBase + "\nRUN chmod a+r /etc/shadow && chmod a+rx /root && mkdir -p /srv\nWORKDIR /srv\n")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build test image: %v: %s", err, out)
+	}
+	t.Cleanup(func() { _ = exec.CommandContext(context.Background(), "docker", "rmi", "-f", tag).Run() })
+	return tag
 }
 
 func tarOf(t *testing.T, files map[string]string) []byte {
