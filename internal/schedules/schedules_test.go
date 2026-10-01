@@ -92,9 +92,12 @@ func ptr(s string) *string { return &s }
 func TestDeployNormalizesAndReplacesTheSchedule(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
+	deployed := time.Now()
 	f.deploy(t, ptr("Every 5m"), 10)
 	first := f.schedule(t)
-	if first == nil || first.Expression != "*/5 * * * *" || !first.NextRunAt.After(time.Now()) {
+	// The next occurrence follows the deploy; comparing with a later clock
+	// reading fails when the deploy lands just before a boundary.
+	if first == nil || first.Expression != "*/5 * * * *" || !first.NextRunAt.After(deployed) {
 		t.Fatalf("schedule after deploy: %+v", first)
 	}
 	fn, err := f.control.GetFunction(t.Context(), f.workspace, "reports", "nightly")
@@ -132,6 +135,7 @@ func TestMissedOccurrencesCollapseIntoOneTask(t *testing.T) {
 	f.deploy(t, ptr("every 1m"), 10)
 	missed := f.due(t, 10*time.Minute)
 
+	fired := time.Now()
 	result, err := f.schedules.Fire(t.Context(), slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
@@ -140,7 +144,7 @@ func TestMissedOccurrencesCollapseIntoOneTask(t *testing.T) {
 		t.Fatalf("fire admitted %d, %d scheduled tasks", result.Admitted, f.scheduledTasks(t))
 	}
 	s := f.schedule(t)
-	if !s.LastRunAt.Equal(missed) || s.LastTask == nil || !s.NextRunAt.After(time.Now()) {
+	if !s.LastRunAt.Equal(missed) || s.LastTask == nil || !s.NextRunAt.After(fired) {
 		t.Fatalf("schedule after firing: %+v", s)
 	}
 	var scheduledFor time.Time
@@ -192,12 +196,13 @@ func TestRejectedOccurrencesAdvanceWithTheirReason(t *testing.T) {
 		t.Fatalf("first occurrence: %+v, %v", result, err)
 	}
 	f.due(t, time.Minute)
+	fired := time.Now()
 	result, err := f.schedules.Fire(t.Context(), slog.New(slog.DiscardHandler))
 	if err != nil || result.Skipped != 1 {
 		t.Fatalf("second occurrence: %+v, %v", result, err)
 	}
 	s := f.schedule(t)
-	if s.LastError == nil || !strings.Contains(*s.LastError, "max_pending_tasks") || !s.NextRunAt.After(time.Now()) {
+	if s.LastError == nil || !strings.Contains(*s.LastError, "max_pending_tasks") || !s.NextRunAt.After(fired) {
 		t.Fatalf("rejected occurrence: %+v", s)
 	}
 
