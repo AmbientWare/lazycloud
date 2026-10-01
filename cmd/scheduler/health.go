@@ -10,43 +10,68 @@ import (
 	"time"
 )
 
-// stallAllowance is how much longer than its interval a loop may go without
-// finishing a pass before /healthz reports it stalled.
-const stallAllowance = 2 * time.Minute
+const (
+	// stallAllowance is how much longer than its interval a loop may go
+	// without a heartbeat before /healthz reports it stalled.
+	stallAllowance = 2 * time.Minute
+	// passTimeout bounds one pass, well inside stallAllowance, so slow work
+	// ends the pass and resumes next time rather than restarting the pod.
+	passTimeout = time.Minute
+)
 
-// heartbeats records when each scheduler loop last finished a pass. The
-// health endpoints read it: /readyz once every loop has finished a pass,
-// /healthz while none has stalled. A loop wedged on a hung connection or
-// lock then restarts the process instead of silently stopping its work.
+// heartbeats records when each scheduler loop last finished a pass or
+// reported progress within one. The health endpoints read it: /readyz once
+// every loop has finished a pass, /healthz while none has stalled. A loop
+// wedged on a call that ignores its deadline then restarts the process
+// instead of silently stopping its work.
 type heartbeats struct {
+	passTimeout time.Duration
+
 	mu    sync.Mutex
 	loops map[string]*heartbeat
 }
 
 type heartbeat struct {
 	limit time.Duration
-	// since is when the loop was registered or last finished a pass.
+	// since is when the loop was registered or last beat.
 	since    time.Time
 	finished bool
 }
 
 func newHeartbeats() *heartbeats {
-	return &heartbeats{loops: map[string]*heartbeat{}}
+	return &heartbeats{passTimeout: passTimeout, loops: map[string]*heartbeat{}}
 }
 
+type progressKey struct{}
+
 // track registers the loop name, run every interval, and returns pass
-// wrapped to record each finished pass.
+// wrapped to run under the pass deadline and record each finished pass.
+// Within the pass, progressed records partial progress.
 func (h *heartbeats) track(name string, interval time.Duration, pass func(context.Context) bool) func(context.Context) bool {
 	h.mu.Lock()
 	h.loops[name] = &heartbeat{limit: interval + stallAllowance, since: time.Now()}
 	h.mu.Unlock()
 	return func(ctx context.Context) bool {
-		skipped := pass(ctx)
-		h.mu.Lock()
-		beat := h.loops[name]
-		beat.since, beat.finished = time.Now(), true
-		h.mu.Unlock()
+		ctx, cancel := context.WithTimeout(ctx, h.passTimeout)
+		defer cancel()
+		skipped := pass(context.WithValue(ctx, progressKey{}, func() { h.beat(name, false) }))
+		h.beat(name, true)
 		return skipped
+	}
+}
+
+func (h *heartbeats) beat(name string, finished bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	beat := h.loops[name]
+	beat.since = time.Now()
+	beat.finished = beat.finished || finished
+}
+
+// progressed records that the pass running under ctx advanced.
+func progressed(ctx context.Context) {
+	if beat, ok := ctx.Value(progressKey{}).(func()); ok {
+		beat()
 	}
 }
 

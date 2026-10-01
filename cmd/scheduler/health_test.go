@@ -88,6 +88,35 @@ func TestHeartbeatsReportStalledLoops(t *testing.T) {
 	}
 }
 
+// A pass that runs long is cut off by its deadline and counts as finished,
+// and progress within a pass is a heartbeat, so slow work never stalls a
+// loop into a restart.
+func TestPassesEndAtTheirDeadlineAndProgressBeats(t *testing.T) {
+	beats := newHeartbeats()
+	beats.passTimeout = 50 * time.Millisecond
+	var beatDuringPass time.Time
+	pass := beats.track("workspace deletion", time.Second, func(ctx context.Context) bool {
+		mark := time.Now()
+		progressed(ctx)
+		beats.mu.Lock()
+		beatDuringPass = beats.loops["workspace deletion"].since
+		beats.mu.Unlock()
+		if beatDuringPass.Before(mark) {
+			t.Error("progress did not beat")
+		}
+		<-ctx.Done()
+		return false
+	})
+	start := time.Now()
+	pass(t.Context())
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("pass ran %s past its 50ms deadline", elapsed)
+	}
+	if starting, stalled := beats.check(time.Now()); len(starting)+len(stalled) != 0 {
+		t.Fatalf("starting %v stalled %v after a cut-off pass", starting, stalled)
+	}
+}
+
 func freeAddr(t *testing.T) string {
 	t.Helper()
 	var lc net.ListenConfig
