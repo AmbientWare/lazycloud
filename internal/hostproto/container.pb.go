@@ -586,6 +586,8 @@ type RunAttempt struct {
 	InputEncoding PayloadEncoding        `protobuf:"varint,3,opt,name=input_encoding,json=inputEncoding,proto3,enum=lazycloud.host.v1.PayloadEncoding" json:"input_encoding,omitempty"`
 	Input         []byte                 `protobuf:"bytes,4,opt,name=input,proto3" json:"input,omitempty"`
 	Deadline      *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=deadline,proto3" json:"deadline,omitempty"`
+	Dependencies  []*DependencyResult    `protobuf:"bytes,60,rep,name=dependencies,proto3" json:"dependencies,omitempty"`
+	RootTaskId    string                 `protobuf:"bytes,61,opt,name=root_task_id,json=rootTaskId,proto3" json:"root_task_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -653,6 +655,20 @@ func (x *RunAttempt) GetDeadline() *timestamppb.Timestamp {
 		return x.Deadline
 	}
 	return nil
+}
+
+func (x *RunAttempt) GetDependencies() []*DependencyResult {
+	if x != nil {
+		return x.Dependencies
+	}
+	return nil
+}
+
+func (x *RunAttempt) GetRootTaskId() string {
+	if x != nil {
+		return x.RootTaskId
+	}
+	return ""
 }
 
 // CancelSlot kills the process running the attempt and starts a replacement.
@@ -778,7 +794,7 @@ const file_host_v1_container_proto_rawDesc = "" +
 	"\ahandler\x18\x01 \x01(\tR\ahandler\x12\x14\n" +
 	"\x05slots\x18\x02 \x01(\x05R\x05slots\x12%\n" +
 	"\x0erunner_command\x18\x03 \x03(\tR\rrunnerCommand\x12+\n" +
-	"\x11working_directory\x18\x04 \x01(\tR\x10workingDirectory\"\xdd\x01\n" +
+	"\x11working_directory\x18\x04 \x01(\tR\x10workingDirectory\"\xc8\x02\n" +
 	"\n" +
 	"RunAttempt\x12\x17\n" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12\x1d\n" +
@@ -786,7 +802,10 @@ const file_host_v1_container_proto_rawDesc = "" +
 	"attempt_id\x18\x02 \x01(\tR\tattemptId\x12I\n" +
 	"\x0einput_encoding\x18\x03 \x01(\x0e2\".lazycloud.host.v1.PayloadEncodingR\rinputEncoding\x12\x14\n" +
 	"\x05input\x18\x04 \x01(\fR\x05input\x126\n" +
-	"\bdeadline\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\bdeadline\"+\n" +
+	"\bdeadline\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\bdeadline\x12G\n" +
+	"\fdependencies\x18< \x03(\v2#.lazycloud.host.v1.DependencyResultR\fdependencies\x12 \n" +
+	"\froot_task_id\x18= \x01(\tR\n" +
+	"rootTaskId\"+\n" +
 	"\n" +
 	"CancelSlot\x12\x1d\n" +
 	"\n" +
@@ -825,6 +844,7 @@ var file_host_v1_container_proto_goTypes = []any{
 	(LogStream)(0),                // 13: lazycloud.host.v1.LogStream
 	(*timestamppb.Timestamp)(nil), // 14: google.protobuf.Timestamp
 	(PayloadEncoding)(0),          // 15: lazycloud.host.v1.PayloadEncoding
+	(*DependencyResult)(nil),      // 16: lazycloud.host.v1.DependencyResult
 }
 var file_host_v1_container_proto_depIdxs = []int32{
 	1,  // 0: lazycloud.host.v1.SupervisorMessage.ready:type_name -> lazycloud.host.v1.SlotsReady
@@ -842,13 +862,14 @@ var file_host_v1_container_proto_depIdxs = []int32{
 	9,  // 12: lazycloud.host.v1.SupervisorCommand.drain:type_name -> lazycloud.host.v1.Drain
 	15, // 13: lazycloud.host.v1.RunAttempt.input_encoding:type_name -> lazycloud.host.v1.PayloadEncoding
 	14, // 14: lazycloud.host.v1.RunAttempt.deadline:type_name -> google.protobuf.Timestamp
-	0,  // 15: lazycloud.host.v1.ContainerLink.Connect:input_type -> lazycloud.host.v1.SupervisorMessage
-	5,  // 16: lazycloud.host.v1.ContainerLink.Connect:output_type -> lazycloud.host.v1.SupervisorCommand
-	16, // [16:17] is the sub-list for method output_type
-	15, // [15:16] is the sub-list for method input_type
-	15, // [15:15] is the sub-list for extension type_name
-	15, // [15:15] is the sub-list for extension extendee
-	0,  // [0:15] is the sub-list for field type_name
+	16, // 15: lazycloud.host.v1.RunAttempt.dependencies:type_name -> lazycloud.host.v1.DependencyResult
+	0,  // 16: lazycloud.host.v1.ContainerLink.Connect:input_type -> lazycloud.host.v1.SupervisorMessage
+	5,  // 17: lazycloud.host.v1.ContainerLink.Connect:output_type -> lazycloud.host.v1.SupervisorCommand
+	17, // [17:18] is the sub-list for method output_type
+	16, // [16:17] is the sub-list for method input_type
+	16, // [16:16] is the sub-list for extension type_name
+	16, // [16:16] is the sub-list for extension extendee
+	0,  // [0:16] is the sub-list for field type_name
 }
 
 func init() { file_host_v1_container_proto_init() }

@@ -32,7 +32,7 @@ select id, version, spec_digest, created_at from releases where id = $1
 
 type ActiveReleaseRow struct {
 	ID         uuid.UUID
-	Version    int32
+	Version    *int32
 	SpecDigest []byte
 	CreatedAt  time.Time
 }
@@ -69,7 +69,7 @@ type FunctionReleaseRow struct {
 	DesiredState string
 	AppName      string
 	ID           uuid.UUID
-	Version      int32
+	Version      *int32
 	Spec         []byte
 	CreatedAt    time.Time
 }
@@ -97,7 +97,7 @@ returning id, version, created_at
 
 type InsertReleaseParams struct {
 	WorkloadID   uuid.UUID
-	Version      int32
+	Version      *int32
 	Spec         []byte
 	SpecDigest   []byte
 	SourceSha256 []byte
@@ -105,7 +105,7 @@ type InsertReleaseParams struct {
 
 type InsertReleaseRow struct {
 	ID        uuid.UUID
-	Version   int32
+	Version   *int32
 	CreatedAt time.Time
 }
 

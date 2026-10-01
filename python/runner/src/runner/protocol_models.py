@@ -48,9 +48,21 @@ class LoadFailed(BaseModel):
     error: RunnerError
 
 
+class Dependency(BaseModel):
+    type: Literal["dependency"]
+    task_id: str
+    encoding: Encoding
+
+
 class Invoke(BaseModel):
     type: Literal["invoke"]
     task_id: str
+    root_task_id: Annotated[
+        str,
+        Field(
+            description="The first task of the call graph, the task itself when nothing spawned it."
+        ),
+    ]
     attempt_id: str
     input_encoding: Encoding
 

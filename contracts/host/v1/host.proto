@@ -198,6 +198,18 @@ message ClaimedTask {
   PayloadEncoding input_encoding = 4;
   bytes input = 5;
   google.protobuf.Timestamp deadline = 6;
+  // The results of the upstream tasks the input refers to.
+  repeated DependencyResult dependencies = 60;
+  // The first task of the call graph; task_id when nothing spawned it.
+  string root_task_id = 61;
+}
+
+// DependencyResult is an upstream task's result that a dependent's input
+// refers to by task id.
+message DependencyResult {
+  string task_id = 1;
+  PayloadEncoding encoding = 2;
+  bytes data = 3;
 }
 
 message CompleteTaskRequest {

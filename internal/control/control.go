@@ -250,12 +250,12 @@ func (c *Control) deployFunction(ctx context.Context, tx pgx.Tx, q *Queries, app
 		}
 		if bytes.Equal(active.SpecDigest, f.digest) {
 			return apitypes.Release{
-				Id: active.ID, Function: f.spec.Name, Version: int(active.Version), CreatedAt: active.CreatedAt, Spec: f.spec,
+				Id: active.ID, Function: f.spec.Name, Version: versionOf(active.Version), CreatedAt: active.CreatedAt, Spec: f.spec,
 			}, nil
 		}
 	}
 	inserted, err := q.InsertRelease(ctx, InsertReleaseParams{
-		WorkloadID: workload.ID, Version: workload.NextVersion,
+		WorkloadID: workload.ID, Version: &workload.NextVersion,
 		Spec: f.encoded, SpecDigest: f.digest, SourceSha256: f.source[:],
 	})
 	if err != nil {
@@ -268,8 +268,17 @@ func (c *Control) deployFunction(ctx context.Context, tx pgx.Tx, q *Queries, app
 		return apitypes.Release{}, err
 	}
 	return apitypes.Release{
-		Id: inserted.ID, Function: f.spec.Name, Version: int(inserted.Version), CreatedAt: inserted.CreatedAt, Spec: f.spec,
+		Id: inserted.ID, Function: f.spec.Name, Version: versionOf(inserted.Version), CreatedAt: inserted.CreatedAt, Spec: f.spec,
 	}, nil
+}
+
+// versionOf is a release's deployed version; working-tree releases have none.
+func versionOf(v *int32) *int {
+	if v == nil {
+		return nil
+	}
+	n := int(*v)
+	return &n
 }
 
 // GetFunction returns a function and its active release.
@@ -290,7 +299,7 @@ func (c *Control) GetFunction(ctx context.Context, workspace identity.WorkspaceI
 		App:   row.AppName,
 		State: apitypes.FunctionState(row.DesiredState),
 		ActiveRelease: apitypes.Release{
-			Id: row.ID, Function: row.Name, Version: int(row.Version), CreatedAt: row.CreatedAt, Spec: spec,
+			Id: row.ID, Function: row.Name, Version: versionOf(row.Version), CreatedAt: row.CreatedAt, Spec: spec,
 		},
 	}, nil
 }

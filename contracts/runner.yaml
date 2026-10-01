@@ -15,7 +15,8 @@ info:
 
     1. The supervisor sends `load`. The runner imports the handler and replies
        `loaded`, or `load_failed` and exits.
-    2. The supervisor sends `invoke` with the input as payload. The runner
+    2. The supervisor sends one `dependency` frame per upstream result the
+       input refers to, then `invoke` with the input as payload. The runner
        replies `succeeded` with the result as payload, or `failed` with an
        optional serialized exception as payload. One attempt runs at a time.
     3. Closing the socket asks the runner to exit. The supervisor kills the
@@ -80,13 +81,29 @@ components:
         type: { type: string, enum: [load_failed] }
         error: { $ref: "#/components/schemas/RunnerError" }
 
+    Dependency:
+      description: >-
+        The payload is the encoded result of an upstream task. A cloudpickle
+        input refers to it by the persistent id `("function_call", task_id)`,
+        which the runner resolves to the decoded value. Dependency frames
+        apply to the next `invoke` only.
+      type: object
+      required: [type, task_id, encoding]
+      properties:
+        type: { type: string, enum: [dependency] }
+        task_id: { type: string }
+        encoding: { $ref: "#/components/schemas/Encoding" }
+
     Invoke:
       description: The payload is the encoded Arguments.
       type: object
-      required: [type, task_id, attempt_id, input_encoding]
+      required: [type, task_id, root_task_id, attempt_id, input_encoding]
       properties:
         type: { type: string, enum: [invoke] }
         task_id: { type: string }
+        root_task_id:
+          description: The first task of the call graph, the task itself when nothing spawned it.
+          type: string
         attempt_id: { type: string }
         input_encoding: { $ref: "#/components/schemas/Encoding" }
 

@@ -49,18 +49,6 @@ class UploadTarget(BaseModel):
     expires_at: AwareDatetime
 
 
-class State(str, Enum):
-    active = "active"
-    paused = "paused"
-
-
-class App(BaseModel):
-    id: UUID
-    name: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
-    state: State
-    created_at: AwareDatetime
-
-
 class SourceRef(BaseModel):
     sha256: Annotated[
         str, Field(description="Lowercase hex SHA-256 digest", pattern="^[0-9a-f]{64}$")
@@ -104,7 +92,7 @@ class Autoscaler(BaseModel):
     tasks_per_container: Annotated[int, Field(ge=1, le=10000)] = 1
 
 
-class State1(str, Enum):
+class State(str, Enum):
     active = "active"
     stopped = "stopped"
 
@@ -120,8 +108,8 @@ class Payload(BaseModel):
     data: Base64Bytes | None = None
 
 
-class SubmitTasksRequest(BaseModel):
-    inputs: Annotated[list[Payload], Field(max_length=1000, min_length=1)]
+class TaskInput(Payload):
+    depends_on: Annotated[list[UUID] | None, Field(max_length=100)] = None
 
 
 class TaskStatus(str, Enum):
@@ -132,6 +120,17 @@ class TaskStatus(str, Enum):
     cancelled = "cancelled"
 
 
+class TaskPendingReason(str, Enum):
+    Queued = "queued"
+    Dependencies = "dependencies"
+    Retry = "retry"
+    CapacityBusy = "capacity_busy"
+    CapacityUnavailable = "capacity_unavailable"
+    CapacityLimit = "capacity_limit"
+    ProvisioningCompute = "provisioning_compute"
+    StartingContainer = "starting_container"
+
+
 class FailureKind(str, Enum):
     user_error = "user_error"
     load_error = "load_error"
@@ -139,6 +138,7 @@ class FailureKind(str, Enum):
     lost = "lost"
     start_failed = "start_failed"
     system = "system"
+    dependency_failed = "dependency_failed"
 
 
 class TaskFailure(BaseModel):
@@ -160,10 +160,152 @@ class Stream(str, Enum):
 
 class LogEntry(BaseModel):
     id: int
+    task_id: UUID
     attempt: int
     stream: Stream
     data: Annotated[str, Field(description="One line of output without its trailing newline.")]
     time: AwareDatetime
+
+
+class AppRef(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="An app name or id.",
+            pattern="^([a-z][a-z0-9_]{0,62}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$",
+        ),
+    ]
+
+
+class AppState(str, Enum):
+    active = "active"
+    paused = "paused"
+    deleted = "deleted"
+
+
+class LiveAppState(str, Enum):
+    active = "active"
+    paused = "paused"
+
+
+class WorkloadState(str, Enum):
+    active = "active"
+    stopped = "stopped"
+    deleted = "deleted"
+
+
+class DeploymentPlanAction(str, Enum):
+    add = "add"
+    redeploy = "redeploy"
+    retain = "retain"
+    remove = "remove"
+
+
+class WorkloadIdentity(BaseModel):
+    kind: Literal["function"]
+    name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
+
+
+class DeploymentPlanItem(BaseModel):
+    kind: Literal["function"]
+    name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
+    action: DeploymentPlanAction
+    versions: Annotated[int, Field(description="Versions the workload has now.")]
+
+
+class DeployedWorkload(BaseModel):
+    id: UUID
+    app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
+    name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
+    kind: Literal["function"]
+    state: WorkloadState
+    app_state: AppState | None = None
+    version: Annotated[int | None, Field(description="The active version.")] = None
+    release_id: Annotated[UUID | None, Field(description="The active release.")] = None
+    created_at: AwareDatetime
+    deployed_at: Annotated[
+        AwareDatetime | None, Field(description="When the active version was deployed.")
+    ] = None
+
+
+class DeploymentPage(BaseModel):
+    deployments: list[DeployedWorkload]
+    next_cursor: str | None = None
+
+
+class StartDeploymentRequest(BaseModel):
+    version: Annotated[
+        int | None, Field(description="Make this deployed version active before starting.", ge=1)
+    ] = None
+
+
+class Version(BaseModel):
+    release_id: UUID
+    version: int
+    active: bool
+    created_at: AwareDatetime
+
+
+class VersionPage(BaseModel):
+    versions: list[Version]
+    next_cursor: str | None = None
+
+
+class StopTasksRequest(BaseModel):
+    task_ids: Annotated[list[UUID], Field(max_length=1000, min_length=1)]
+
+
+class StopTasksResponse(BaseModel):
+    stopped: Annotated[list[UUID], Field(description="Tasks this request cancelled.")]
+    skipped: Annotated[
+        list[UUID],
+        Field(description="Tasks that were already finished or are not in the workspace."),
+    ]
+
+
+class ContainerState(str, Enum):
+    pending = "pending"
+    starting = "starting"
+    ready = "ready"
+    draining = "draining"
+    stopped = "stopped"
+
+
+class StopReason(str, Enum):
+    stopped = "stopped"
+    load_error = "load_error"
+    start_failed = "start_failed"
+    crashed = "crashed"
+    out_of_memory = "out_of_memory"
+    host_lost = "host_lost"
+
+
+class Container(BaseModel):
+    id: UUID
+    app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
+    function: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
+    release_id: UUID
+    version: Annotated[
+        int | None,
+        Field(
+            description="The deployed version of the release; absent for a working-tree release."
+        ),
+    ] = None
+    state: ContainerState
+    stop_reason: StopReason | None = None
+    exit_message: str | None = None
+    slots: int
+    running_tasks: Annotated[int, Field(description="Attempts running now.")]
+    cpu_millis: int
+    memory_mib: int
+    created_at: AwareDatetime
+    ready_at: AwareDatetime | None = None
+    stopped_at: AwareDatetime | None = None
+
+
+class ContainerPage(BaseModel):
+    containers: list[Container]
+    next_cursor: str | None = None
 
 
 class Error(BaseModel):
@@ -182,6 +324,14 @@ class SourceUpload(BaseModel):
     ]
     present: Annotated[bool, Field(description="The archive is stored and can be deployed.")]
     upload: UploadTarget | None = None
+
+
+class App(BaseModel):
+    id: UUID
+    name: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
+    state: AppState
+    workloads: Annotated[int, Field(description="Deployed workloads that are not deleted.")]
+    created_at: AwareDatetime
 
 
 class FunctionSpec(BaseModel):
@@ -209,12 +359,23 @@ class FunctionSpec(BaseModel):
     autoscaler: Autoscaler | None = None
     max_pending_tasks: Annotated[int, Field(ge=1, le=1000000)] = 100
     environment: dict[str, str] | None = None
+    client_contract: Annotated[
+        dict[str, Any] | None,
+        Field(
+            description="The handler's call signature as the SDK describes it, for typed clients that `lazycloud app export` generates. Opaque to the platform."
+        ),
+    ] = None
 
 
 class Release(BaseModel):
     id: UUID
     function: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
-    version: int
+    version: Annotated[
+        int | None,
+        Field(
+            description="The deployed version; absent for a release only working-tree calls use."
+        ),
+    ] = None
     created_at: AwareDatetime
     spec: FunctionSpec
 
@@ -222,8 +383,68 @@ class Release(BaseModel):
 class Function(BaseModel):
     name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
     app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
-    state: State1
+    state: State
     active_release: Release
+
+
+class SubmitTasksRequest(BaseModel):
+    inputs: Annotated[list[TaskInput], Field(max_length=1000, min_length=1)]
+    release_id: Annotated[
+        UUID | None,
+        Field(
+            description="Run on this release of the function instead of the active one, such as one from prepareFunctionRelease."
+        ),
+    ] = None
+    parent_task_id: Annotated[
+        UUID | None, Field(description="The task that submits these, which becomes their parent.")
+    ] = None
+
+
+class TaskPendingProgress(BaseModel):
+    reason: TaskPendingReason
+    message: str
+    since: Annotated[AwareDatetime, Field(description="When the current reason began.")]
+    pending_since: Annotated[
+        AwareDatetime, Field(description="When the task last became due or was submitted.")
+    ]
+    observed_at: AwareDatetime
+
+
+class AppPage(BaseModel):
+    apps: list[App]
+    next_cursor: Annotated[str | None, Field(description="Present when another page follows.")] = (
+        None
+    )
+
+
+class DeploymentPlanRequest(BaseModel):
+    workloads: Annotated[list[WorkloadIdentity], Field(max_length=200)]
+    prune: bool = False
+
+
+class DeploymentPlan(BaseModel):
+    app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
+    prune: bool
+    items: Annotated[
+        list[DeploymentPlanItem],
+        Field(
+            description="Listed workloads by kind and name, then deployed workloads the request omits."
+        ),
+    ]
+
+
+class DeploymentRequest(BaseModel):
+    functions: Annotated[list[FunctionSpec], Field(max_length=200, min_length=1)]
+    prune: Annotated[
+        bool, Field(description="Delete every function of the app that is not listed.")
+    ] = False
+
+
+class Deployment(BaseModel):
+    app: App
+    releases: list[Release]
+    pruned: Annotated[list[WorkloadName], Field(description="Functions the prune deleted.")]
+    removed_versions: Annotated[int, Field(description="Versions of the pruned functions.")]
 
 
 class Task(BaseModel):
@@ -231,25 +452,39 @@ class Task(BaseModel):
     app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
     function: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
     release_id: UUID
+    version: Annotated[
+        int | None,
+        Field(
+            description="The deployed version of the release; absent for a working-tree release."
+        ),
+    ] = None
     status: TaskStatus
     attempts: Annotated[int, Field(description="Attempts started so far.")]
+    max_attempts: int
+    parent_task_id: UUID | None = None
+    root_task_id: Annotated[
+        UUID | None,
+        Field(
+            description="The first task of the call graph; the task itself when it has no parent."
+        ),
+    ] = None
+    container_id: Annotated[
+        UUID | None, Field(description="The container of the latest attempt.")
+    ] = None
+    next_attempt_at: Annotated[
+        AwareDatetime | None,
+        Field(description="When a queued task that already ran becomes due again."),
+    ] = None
+    pending: TaskPendingProgress | None = None
     created_at: AwareDatetime
     started_at: AwareDatetime | None = None
     finished_at: AwareDatetime | None = None
     failure: TaskFailure | None = None
 
 
-class DeploymentRequest(BaseModel):
-    functions: Annotated[list[FunctionSpec], Field(max_length=200, min_length=1)]
-    prune: Annotated[
-        bool, Field(description="Stop every function of the app that is not listed.")
-    ] = False
-
-
-class Deployment(BaseModel):
-    app: App
-    releases: list[Release]
-    pruned: list[WorkloadName]
+class TaskPage(BaseModel):
+    tasks: list[Task]
+    next_cursor: str | None = None
 
 
 class SubmitTasksResponse(BaseModel):

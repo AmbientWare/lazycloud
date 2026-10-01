@@ -76,6 +76,8 @@ message RunAttempt {
   PayloadEncoding input_encoding = 3;
   bytes input = 4;
   google.protobuf.Timestamp deadline = 5;
+  repeated DependencyResult dependencies = 60;
+  string root_task_id = 61;
 }
 
 // CancelSlot kills the process running the attempt and starts a replacement.
