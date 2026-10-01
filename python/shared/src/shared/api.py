@@ -27,18 +27,22 @@ class WorkloadName(RootModel[str]):
     root: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
 
 
-class User(BaseModel):
-    id: UUID
-    email: Annotated[
-        str, Field(description="Empty when GitHub reported no verified primary address.")
-    ]
-    display_name: str
-    avatar_url: str
-    github_login: Annotated[
-        str, Field(description="Empty for accounts that have not signed in with GitHub.")
-    ]
-    is_admin: Annotated[bool, Field(description="Platform administrators reach every workspace.")]
-    created_at: AwareDatetime
+class UserStatus(str, Enum):
+    active = "active"
+    disabled = "disabled"
+
+
+class PlatformRole(str, Enum):
+    administrator = "administrator"
+    member = "member"
+
+
+class UserRoleRequest(BaseModel):
+    role: PlatformRole
+
+
+class UserStatusRequest(BaseModel):
+    status: UserStatus
 
 
 class WorkspaceState(str, Enum):
@@ -1071,6 +1075,28 @@ class ImageBuildLogEntry(BaseModel):
 class Error(BaseModel):
     code: ErrorCode
     message: str
+
+
+class User(BaseModel):
+    id: UUID
+    email: Annotated[
+        str, Field(description="Empty when GitHub reported no verified primary address.")
+    ]
+    display_name: str
+    avatar_url: str
+    github_login: Annotated[
+        str, Field(description="Empty for accounts that have not signed in with GitHub.")
+    ]
+    is_admin: Annotated[bool, Field(description="Platform administrators reach every workspace.")]
+    status: UserStatus
+    created_at: AwareDatetime
+
+
+class UserList(BaseModel):
+    users: list[User]
+    next_cursor: Annotated[
+        UUID | None, Field(description="Pass as `cursor` for the next page; absent after the last.")
+    ] = None
 
 
 class Workspace(BaseModel):

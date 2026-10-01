@@ -517,6 +517,24 @@ func (e PayloadEncoding) Valid() bool {
 	}
 }
 
+// Defines values for PlatformRole.
+const (
+	PlatformRoleAdministrator PlatformRole = "administrator"
+	PlatformRoleMember        PlatformRole = "member"
+)
+
+// Valid indicates whether the value is a known member of the PlatformRole enum.
+func (e PlatformRole) Valid() bool {
+	switch e {
+	case PlatformRoleAdministrator:
+		return true
+	case PlatformRoleMember:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for PresignVolumeFileRequestMethod.
 const (
 	PresignVolumeFileRequestMethodGet        PresignVolumeFileRequestMethod = "get"
@@ -712,6 +730,24 @@ const (
 func (e UploadTargetMethod) Valid() bool {
 	switch e {
 	case PUT:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UserStatus.
+const (
+	UserStatusActive   UserStatus = "active"
+	UserStatusDisabled UserStatus = "disabled"
+)
+
+// Valid indicates whether the value is a known member of the UserStatus enum.
+func (e UserStatus) Valid() bool {
+	switch e {
+	case UserStatusActive:
+		return true
+	case UserStatusDisabled:
 		return true
 	default:
 		return false
@@ -1539,6 +1575,9 @@ type Payload struct {
 // PayloadEncoding defines model for Payload.Encoding.
 type PayloadEncoding string
 
+// PlatformRole An account's standing on the platform; administrators reach every workspace.
+type PlatformRole string
+
 // PresignArtifactRequest defines model for PresignArtifactRequest.
 type PresignArtifactRequest struct {
 	// Download Ask browsers to save the file rather than show it.
@@ -1966,6 +2005,31 @@ type User struct {
 
 	// IsAdmin Platform administrators reach every workspace.
 	IsAdmin bool `json:"is_admin"`
+
+	// Status A disabled account cannot sign in or authenticate.
+	Status UserStatus `json:"status"`
+}
+
+// UserList defines model for UserList.
+type UserList struct {
+	// NextCursor Pass as `cursor` for the next page; absent after the last.
+	NextCursor *openapi_types.UUID `json:"next_cursor,omitempty"`
+	Users      []User              `json:"users"`
+}
+
+// UserRoleRequest defines model for UserRoleRequest.
+type UserRoleRequest struct {
+	// Role An account's standing on the platform; administrators reach every workspace.
+	Role PlatformRole `json:"role"`
+}
+
+// UserStatus A disabled account cannot sign in or authenticate.
+type UserStatus string
+
+// UserStatusRequest defines model for UserStatusRequest.
+type UserStatusRequest struct {
+	// Status A disabled account cannot sign in or authenticate.
+	Status UserStatus `json:"status"`
 }
 
 // Version defines model for Version.
@@ -2159,6 +2223,9 @@ type TaskPath = openapi_types.UUID
 // UserCodePath defines model for UserCodePath.
 type UserCodePath = string
 
+// UserPath defines model for UserPath.
+type UserPath = openapi_types.UUID
+
 // VolumePath defines model for VolumePath.
 type VolumePath = VolumeName
 
@@ -2170,6 +2237,18 @@ type ListTokensParams struct {
 	// IncludeDevice Include tokens minted by `lazycloud login`.
 	IncludeDevice *bool  `form:"include_device,omitempty" json:"include_device,omitempty"`
 	Limit         *Limit `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Cursor The `next_cursor` of the previous page.
+	Cursor *openapi_types.UUID `form:"cursor,omitempty" json:"cursor,omitempty"`
+}
+
+// ListUsersParams defines parameters for ListUsers.
+type ListUsersParams struct {
+	// Search Matches the display name, email or GitHub login, ignoring case.
+	Search *string       `form:"search,omitempty" json:"search,omitempty"`
+	Role   *PlatformRole `form:"role,omitempty" json:"role,omitempty"`
+	Status *UserStatus   `form:"status,omitempty" json:"status,omitempty"`
+	Limit  *int          `form:"limit,omitempty" json:"limit,omitempty"`
 
 	// Cursor The `next_cursor` of the previous page.
 	Cursor *openapi_types.UUID `form:"cursor,omitempty" json:"cursor,omitempty"`
@@ -2405,6 +2484,12 @@ type PollDeviceLoginJSONRequestBody = DeviceTokenRequest
 
 // CreateTokenJSONRequestBody defines body for CreateToken for application/json ContentType.
 type CreateTokenJSONRequestBody = TokenCreateRequest
+
+// SetUserRoleJSONRequestBody defines body for SetUserRole for application/json ContentType.
+type SetUserRoleJSONRequestBody = UserRoleRequest
+
+// SetUserStatusJSONRequestBody defines body for SetUserStatus for application/json ContentType.
+type SetUserStatusJSONRequestBody = UserStatusRequest
 
 // CreateWorkspaceJSONRequestBody defines body for CreateWorkspace for application/json ContentType.
 type CreateWorkspaceJSONRequestBody = WorkspaceRequest

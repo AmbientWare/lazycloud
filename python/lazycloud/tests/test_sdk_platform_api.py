@@ -882,6 +882,7 @@ def _me(*workspaces: str, owned: str = "") -> Reply:
                 "avatar_url": "",
                 "github_login": "dev",
                 "is_admin": False,
+                "status": "active",
                 "created_at": NOW,
             },
             "workspaces": [

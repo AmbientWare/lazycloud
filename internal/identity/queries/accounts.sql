@@ -43,7 +43,7 @@ limit 1;
 select name from workspaces where name = any(@names::text[]);
 
 -- name: UserProfile :one
-select id, email, display_name, avatar_url, github_login, is_admin, created_at
+select id, email, display_name, avatar_url, github_login, is_admin, status, created_at
 from users where id = @id;
 
 -- name: InsertSession :one
