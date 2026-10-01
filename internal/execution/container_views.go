@@ -37,10 +37,12 @@ type Container struct {
 	StoppedAt *time.Time
 }
 
-// ContainerFilter narrows a container listing. App is an app name.
+// ContainerFilter narrows a container listing by app and function name.
+// Function requires App.
 type ContainerFilter struct {
-	Live bool
-	App  *string
+	Live     bool
+	App      *string
+	Function *string
 }
 
 // ContainerPage is one page of containers, newest first.
@@ -60,10 +62,13 @@ func (e *Execution) ListContainers(ctx context.Context, workspace identity.Works
 		}
 		before = id
 	}
+	if filter.Function != nil && filter.App == nil {
+		return ContainerPage{}, fmt.Errorf("%w: function needs app", ErrInvalidFilter)
+	}
 	size := pageSize(limit)
 	var rows []ContainerViewRow
 	if filter.Live {
-		r, err := e.queries.ListLiveContainers(ctx, ListLiveContainersParams{WorkspaceID: uuid.UUID(workspace), App: filter.App, Before: before, MaxRows: size + 1})
+		r, err := e.queries.ListLiveContainers(ctx, ListLiveContainersParams{WorkspaceID: uuid.UUID(workspace), App: filter.App, Function: filter.Function, Before: before, MaxRows: size + 1})
 		if err != nil {
 			return ContainerPage{}, fmt.Errorf("list live containers: %w", err)
 		}
@@ -71,7 +76,7 @@ func (e *Execution) ListContainers(ctx context.Context, workspace identity.Works
 			rows = append(rows, ContainerViewRow(row))
 		}
 	} else {
-		r, err := e.queries.ListContainers(ctx, ListContainersParams{WorkspaceID: uuid.UUID(workspace), App: filter.App, Before: before, MaxRows: size + 1})
+		r, err := e.queries.ListContainers(ctx, ListContainersParams{WorkspaceID: uuid.UUID(workspace), App: filter.App, Function: filter.Function, Before: before, MaxRows: size + 1})
 		if err != nil {
 			return ContainerPage{}, fmt.Errorf("list containers: %w", err)
 		}

@@ -645,6 +645,10 @@ paths:
           in: query
           description: Only apps in this state. Omitted lists active and paused apps.
           schema: { $ref: "#/components/schemas/LiveAppState" }
+        - name: search
+          in: query
+          description: Part of the app name.
+          schema: { type: string, minLength: 1, maxLength: 100 }
         - $ref: "#/components/parameters/PageLimit"
         - $ref: "#/components/parameters/Cursor"
       responses:
@@ -779,6 +783,10 @@ paths:
         - name: name
           in: query
           schema: { $ref: "#/components/schemas/WorkloadName" }
+        - name: search
+          in: query
+          description: Part of the app or workload name.
+          schema: { type: string, minLength: 1, maxLength: 100 }
         - $ref: "#/components/parameters/PageLimit"
         - $ref: "#/components/parameters/Cursor"
       responses:
@@ -917,6 +925,10 @@ paths:
         - name: status
           in: query
           schema: { $ref: "#/components/schemas/TaskStatus" }
+        - name: version
+          in: query
+          description: A deployed version of `function`; requires it.
+          schema: { type: integer, minimum: 1 }
         - name: root_only
           in: query
           description: Only tasks no other task spawned.
@@ -987,6 +999,10 @@ paths:
           in: query
           description: Only the containers of this app's workloads.
           schema: { $ref: "#/components/schemas/AppName" }
+        - name: function
+          in: query
+          description: Only the containers of this workload of `app`; requires it.
+          schema: { $ref: "#/components/schemas/WorkloadName" }
         - $ref: "#/components/parameters/PageLimit"
         - $ref: "#/components/parameters/Cursor"
       responses:
@@ -4254,11 +4270,15 @@ components:
 
     Secret:
       type: object
-      required: [name, created_at, updated_at]
+      required: [name, created_at, updated_at, used_by]
       properties:
         name: { $ref: "#/components/schemas/SecretName" }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+        used_by:
+          description: Workloads whose active release receives the secret.
+          type: array
+          items: { $ref: "#/components/schemas/WorkloadRef" }
 
     SecretValue:
       type: object
@@ -4642,6 +4662,9 @@ components:
           description: The container holding the disk while attached or saving.
           type: string
           format: uuid
+        holder:
+          description: The workload whose container holds the disk.
+          allOf: [{ $ref: "#/components/schemas/WorkloadRef" }]
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
 

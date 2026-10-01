@@ -44,7 +44,8 @@ func (s *Server) ListApps(ctx context.Context, req ListAppsRequestObject) (ListA
 		st := control.AppState(*req.Params.State)
 		state = &st
 	}
-	page, err := s.owners.Control.ListApps(ctx, ws.ID, state, limitOf(req.Params.Limit), cursorOf(req.Params.Cursor))
+	page, err := s.owners.Control.ListApps(ctx, ws.ID, control.AppFilter{State: state, Search: req.Params.Search},
+		limitOf(req.Params.Limit), cursorOf(req.Params.Cursor))
 	if err != nil {
 		return nil, err
 	}
@@ -140,7 +141,7 @@ func (s *Server) ListDeployments(ctx context.Context, req ListDeploymentsRequest
 	if err != nil {
 		return nil, err
 	}
-	page, err := s.owners.Control.ListDeployments(ctx, ws.ID, control.DeploymentFilter{App: req.Params.App, Name: req.Params.Name},
+	page, err := s.owners.Control.ListDeployments(ctx, ws.ID, control.DeploymentFilter{App: req.Params.App, Name: req.Params.Name, Search: req.Params.Search},
 		limitOf(req.Params.Limit), cursorOf(req.Params.Cursor))
 	if err != nil {
 		return nil, err
@@ -231,7 +232,7 @@ func (s *Server) ListTasks(ctx context.Context, req ListTasksRequestObject) (Lis
 		return nil, err
 	}
 	filter := execution.TaskFilter{
-		App: req.Params.App, Function: req.Params.Function, Search: req.Params.Search,
+		App: req.Params.App, Function: req.Params.Function, Search: req.Params.Search, Version: req.Params.Version,
 		RootOnly: req.Params.RootOnly != nil && *req.Params.RootOnly,
 	}
 	if req.Params.Status != nil {
@@ -293,7 +294,7 @@ func (s *Server) ListContainers(ctx context.Context, req ListContainersRequestOb
 	if err != nil {
 		return nil, err
 	}
-	filter := execution.ContainerFilter{Live: req.Params.Live != nil && *req.Params.Live, App: req.Params.App}
+	filter := execution.ContainerFilter{Live: req.Params.Live != nil && *req.Params.Live, App: req.Params.App, Function: req.Params.Function}
 	page, err := s.owners.Execution.ListContainers(ctx, ws.ID, filter, limitOf(req.Params.Limit), cursorOf(req.Params.Cursor))
 	if err != nil {
 		return nil, err

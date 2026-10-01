@@ -87,6 +87,47 @@ func TestSecretLifecycle(t *testing.T) {
 	}
 }
 
+// A secret lists the workloads whose active release receives it.
+func TestSecretsShowTheWorkloadsThatReceiveThem(t *testing.T) {
+	t.Parallel()
+	pool := dbtest.New(t)
+	ctx := t.Context()
+	s := NewSecrets(pool, newKey(t))
+	ws := newWorkspace(t, pool, "acme")
+	digest := make([]byte, 32)
+	var app, fn, release uuid.UUID
+	scan := func(into *uuid.UUID, sql string, args ...any) {
+		t.Helper()
+		if err := pool.QueryRow(ctx, sql, args...).Scan(into); err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+	}
+	scan(&app, `insert into apps (workspace_id, name, state) values ($1, 'shop', 'active') returning id`, uuid.UUID(ws))
+	scan(&fn, `insert into workloads (app_id, kind, name, desired_state) values ($1, 'function', 'checkout', 'active') returning id`, app)
+	scan(&release, `insert into releases (workload_id, version, spec, spec_digest, source_sha256)
+		values ($1, 1, '{"secrets": ["API_TOKEN"]}', $2, $2) returning id`, fn, digest)
+	scan(&fn, `update workloads set active_release_id = $1 where id = $2 returning id`, release, fn)
+
+	created, err := s.Create(ctx, ws, "API_TOKEN", "value")
+	if err != nil || len(created.UsedBy) != 1 || created.UsedBy[0] != (Use{App: "shop", Kind: "function", Workload: "checkout"}) {
+		t.Fatalf("created %+v %v", created, err)
+	}
+	if _, err := s.Create(ctx, ws, "UNUSED", "value"); err != nil {
+		t.Fatal(err)
+	}
+	listed, _, err := s.List(ctx, ws, "", 10)
+	if err != nil || len(listed) != 2 || len(listed[0].UsedBy) != 1 || listed[1].UsedBy == nil || len(listed[1].UsedBy) != 0 {
+		t.Fatalf("listed %+v %v", listed, err)
+	}
+	// A stopped workload no longer receives it.
+	if _, err := pool.Exec(ctx, `update workloads set desired_state = 'stopped'`); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.Get(ctx, ws, "API_TOKEN"); err != nil || len(got.UsedBy) != 0 {
+		t.Fatalf("after stop %+v %v", got, err)
+	}
+}
+
 func TestValuesAreSealedAndBoundToTheirName(t *testing.T) {
 	t.Parallel()
 	pool := dbtest.New(t)

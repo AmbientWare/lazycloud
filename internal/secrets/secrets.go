@@ -66,6 +66,46 @@ type Secret struct {
 	Name      string
 	CreatedAt time.Time
 	UpdatedAt time.Time
+	// UsedBy are the workloads whose active release receives the secret.
+	UsedBy []Use
+}
+
+// Use is a workload that receives a secret.
+type Use struct {
+	App      string
+	Kind     string
+	Workload string
+}
+
+// withUsers fills in the workloads that receive each secret.
+func (s *Secrets) withUsers(ctx context.Context, workspace identity.WorkspaceID, secrets []Secret) ([]Secret, error) {
+	if len(secrets) == 0 {
+		return secrets, nil
+	}
+	names := make([]string, len(secrets))
+	index := make(map[string]int, len(secrets))
+	for n, secret := range secrets {
+		names[n] = secret.Name
+		index[secret.Name] = n
+		secrets[n].UsedBy = []Use{}
+	}
+	users, err := s.queries.SecretUsers(ctx, SecretUsersParams{WorkspaceID: uuid.UUID(workspace), Names: names})
+	if err != nil {
+		return nil, fmt.Errorf("read secret users: %w", err)
+	}
+	for _, u := range users {
+		secret := &secrets[index[u.Secret]]
+		secret.UsedBy = append(secret.UsedBy, Use{App: u.App, Kind: u.Kind, Workload: u.Workload})
+	}
+	return secrets, nil
+}
+
+func (s *Secrets) oneWithUsers(ctx context.Context, workspace identity.WorkspaceID, secret Secret) (Secret, error) {
+	out, err := s.withUsers(ctx, workspace, []Secret{secret})
+	if err != nil {
+		return Secret{}, err
+	}
+	return out[0], nil
 }
 
 // Secrets is the secrets owner.
@@ -162,7 +202,7 @@ func (s *Secrets) Create(ctx context.Context, workspace identity.WorkspaceID, na
 	if err != nil {
 		return Secret{}, fmt.Errorf("insert secret: %w", err)
 	}
-	return secretOf(row.Name, row.CreatedAt, row.UpdatedAt), nil
+	return s.oneWithUsers(ctx, workspace, secretOf(row.Name, row.CreatedAt, row.UpdatedAt))
 }
 
 // Set creates the secret or replaces its value.
@@ -181,7 +221,7 @@ func (s *Secrets) Set(ctx context.Context, workspace identity.WorkspaceID, name,
 	if err != nil {
 		return Secret{}, fmt.Errorf("upsert secret: %w", err)
 	}
-	return secretOf(row.Name, row.CreatedAt, row.UpdatedAt), nil
+	return s.oneWithUsers(ctx, workspace, secretOf(row.Name, row.CreatedAt, row.UpdatedAt))
 }
 
 // Update replaces an existing secret's value. A missing name returns
@@ -201,7 +241,7 @@ func (s *Secrets) Update(ctx context.Context, workspace identity.WorkspaceID, na
 	if err != nil {
 		return Secret{}, fmt.Errorf("update secret: %w", err)
 	}
-	return secretOf(row.Name, row.CreatedAt, row.UpdatedAt), nil
+	return s.oneWithUsers(ctx, workspace, secretOf(row.Name, row.CreatedAt, row.UpdatedAt))
 }
 
 // Get returns a secret's metadata.
@@ -213,7 +253,7 @@ func (s *Secrets) Get(ctx context.Context, workspace identity.WorkspaceID, name 
 	if err != nil {
 		return Secret{}, fmt.Errorf("read secret: %w", err)
 	}
-	return secretOf(row.Name, row.CreatedAt, row.UpdatedAt), nil
+	return s.oneWithUsers(ctx, workspace, secretOf(row.Name, row.CreatedAt, row.UpdatedAt))
 }
 
 // Reveal returns a secret and its value. Callers authorize it separately
@@ -270,6 +310,10 @@ func (s *Secrets) List(ctx context.Context, workspace identity.WorkspaceID, curs
 	out := make([]Secret, len(rows))
 	for n, row := range rows {
 		out[n] = secretOf(row.Name, row.CreatedAt, row.UpdatedAt)
+	}
+	out, err = s.withUsers(ctx, workspace, out)
+	if err != nil {
+		return nil, "", err
 	}
 	return out, next, nil
 }

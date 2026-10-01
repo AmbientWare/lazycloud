@@ -176,6 +176,55 @@ func (q *Queries) SecretMetadata(ctx context.Context, arg SecretMetadataParams) 
 	return i, err
 }
 
+const secretUsers = `-- name: SecretUsers :many
+select s.name::text as secret, a.name as app, w.kind, w.name as workload
+from apps a
+join workloads w on w.app_id = a.id
+join releases r on r.id = w.active_release_id
+cross join lateral jsonb_array_elements_text(coalesce(r.spec -> 'secrets', '[]'::jsonb)) as s(name)
+where a.workspace_id = $1 and w.desired_state = 'active'
+  and s.name = any($2::text[])
+order by a.name, w.kind, w.name
+`
+
+type SecretUsersParams struct {
+	WorkspaceID uuid.UUID
+	Names       []string
+}
+
+type SecretUsersRow struct {
+	Secret   string
+	App      string
+	Kind     string
+	Workload string
+}
+
+// Workloads whose active release receives one of the named secrets.
+func (q *Queries) SecretUsers(ctx context.Context, arg SecretUsersParams) ([]SecretUsersRow, error) {
+	rows, err := q.db.Query(ctx, secretUsers, arg.WorkspaceID, arg.Names)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SecretUsersRow
+	for rows.Next() {
+		var i SecretUsersRow
+		if err := rows.Scan(
+			&i.Secret,
+			&i.App,
+			&i.Kind,
+			&i.Workload,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const updateSecret = `-- name: UpdateSecret :one
 update secrets
 set key_id = $1, wrapped_key = $2, nonce = $3, ciphertext = $4, updated_at = now()
