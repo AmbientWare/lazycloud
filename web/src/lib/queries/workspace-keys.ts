@@ -241,7 +241,7 @@ export const accountQueryKeys = {
   billing: () => [...accountRoot, "billing"] as const,
   metrics: {
     root: () => [...accountRoot, "metrics"] as const,
-    containerCounts: () => [...accountRoot, "metrics", "container-counts"] as const,
+    summary: () => [...accountRoot, "metrics", "summary"] as const,
     activity: (scope: AccountActivityKeyParts) =>
       [...accountRoot, "metrics", "activity", scope] as const,
   },
