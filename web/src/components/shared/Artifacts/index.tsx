@@ -27,32 +27,32 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { formatCostNanos } from "@/lib/money";
 import { countLabel, formatBytes } from "@/lib/format";
 import { useWorkspace } from "@/lib/workspace-context";
-import type { ArtifactSummary } from "@/lib/api/schemas/artifacts";
+import type { Schemas } from "@/lib/api/client";
 import {
   artifactsQuery,
   artifactStorageQuery,
-  deleteArtifact,
+  deleteArtifacts,
   type ArtifactFilters,
 } from "@/lib/queries/artifacts";
 import { appSummariesQueryOptions } from "@/lib/queries/apps";
 import { workspaceQueryKeys, accountQueryKeys } from "@/lib/queries/workspace-keys";
 import { ArtifactRow } from "./ArtifactRow";
 
-export function Artifacts({ workspaceId, taskId }: { workspaceId: string; taskId?: string }) {
-  const { workspace } = useWorkspace();
+export function Artifacts({ taskId }: { taskId?: string }) {
+  const workspace = useWorkspace().workspace.name;
   const client = useQueryClient();
   const [filters, setFilters] = useState<ArtifactFilters>({});
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [deleting, setDeleting] = useState<ArtifactSummary[] | null>(null);
+  const [deleting, setDeleting] = useState<Schemas["Artifact"][] | null>(null);
   const [showFilters, setShowFilters] = useState(false);
   const query = useInfiniteQuery(
-    artifactsQuery(workspaceId, { ...filters, ...(taskId ? { task_id: taskId } : {}) }),
+    artifactsQuery(workspace, { ...filters, ...(taskId ? { task_id: taskId } : {}) }),
   );
-  const summary = useQuery({ ...artifactStorageQuery(workspaceId), enabled: !taskId });
-  const apps = useQuery({ ...appSummariesQueryOptions(workspaceId), enabled: !taskId });
-  const rows = query.data?.pages.flatMap((page) => page.data) ?? [];
+  const summary = useQuery({ ...artifactStorageQuery(workspace), enabled: !taskId });
+  const apps = useQuery({ ...appSummariesQueryOptions(workspace), enabled: !taskId });
+  const rows = query.data?.pages.flatMap((page) => page.artifacts) ?? [];
   const selected = rows.filter((row) => selectedIds.includes(row.id));
-  const selectable = rows.filter((row) => !row.deleting).slice(0, 100);
+  const selectable = rows.slice(0, 100);
   const allSelected =
     selectable.length > 0 && selectable.every((row) => selectedIds.includes(row.id));
   const hasFilters = Object.values(filters).some(Boolean);
@@ -67,16 +67,15 @@ export function Artifacts({ workspaceId, taskId }: { workspaceId: string; taskId
   };
   const invalidate = async () => {
     await Promise.all([
-      client.invalidateQueries({ queryKey: workspaceQueryKeys.storage.artifacts(workspaceId) }),
+      client.invalidateQueries({ queryKey: workspaceQueryKeys.storage.artifacts(workspace) }),
       client.invalidateQueries({ queryKey: accountQueryKeys.usage.root() }),
     ]);
   };
-  const fileRow = (artifact: ArtifactSummary, compact = false) => (
+  const fileRow = (artifact: Schemas["Artifact"], compact = false) => (
     <ArtifactRow
       key={artifact.id}
       artifact={artifact}
-      workspaceId={workspaceId}
-      workspaceName={workspace.name}
+      workspace={workspace}
       compact={compact}
       showSource={!taskId}
       onDelete={() => setDeleting([artifact])}
@@ -86,9 +85,7 @@ export function Artifacts({ workspaceId, taskId }: { workspaceId: string; taskId
             className="size-3.5"
             aria-label={`Select ${artifact.filename}`}
             checked={selectedIds.includes(artifact.id)}
-            disabled={
-              artifact.deleting || (selected.length >= 100 && !selectedIds.includes(artifact.id))
-            }
+            disabled={selected.length >= 100 && !selectedIds.includes(artifact.id)}
             onCheckedChange={(checked) =>
               setSelectedIds(
                 checked === true
@@ -120,8 +117,8 @@ export function Artifacts({ workspaceId, taskId }: { workspaceId: string; taskId
         {!taskId && (
           <>
             <Select
-              value={filters.app_id || "all"}
-              onValueChange={(value) => updateFilter("app_id", value === "all" ? "" : value)}
+              value={filters.app || "all"}
+              onValueChange={(value) => updateFilter("app", value === "all" ? "" : value)}
             >
               <SelectTrigger size="sm" className="max-w-44 text-xs" aria-label="Filter by app">
                 <SelectValue placeholder="All apps" />
@@ -129,7 +126,7 @@ export function Artifacts({ workspaceId, taskId }: { workspaceId: string; taskId
               <SelectContent>
                 <SelectItem value="all">All apps</SelectItem>
                 {apps.data?.items.map(({ app }) => (
-                  <SelectItem key={app.id} value={app.id}>
+                  <SelectItem key={app.name} value={app.name}>
                     {app.name}
                   </SelectItem>
                 ))}
@@ -231,7 +228,7 @@ export function Artifacts({ workspaceId, taskId }: { workspaceId: string; taskId
           <span className="mr-auto">
             {selected.length} selected{" "}
             <span className="ml-2 text-muted-foreground">
-              {formatBytes(selected.reduce((sum, row) => sum + row.size, 0))}
+              {formatBytes(selected.reduce((sum, row) => sum + row.size_bytes, 0))}
             </span>
           </span>
           <Button
@@ -324,7 +321,7 @@ export function Artifacts({ workspaceId, taskId }: { workspaceId: string; taskId
         )}
         <InfiniteScrollBoundary
           key={JSON.stringify(filters)}
-          nextCursor={query.data?.pages.at(-1)?.next}
+          nextCursor={query.data?.pages.at(-1)?.next_cursor}
           loading={query.isFetchingNextPage}
           error={query.isFetchNextPageError}
           onLoadMore={() => void query.fetchNextPage()}
@@ -342,9 +339,7 @@ export function Artifacts({ workspaceId, taskId }: { workspaceId: string; taskId
               <span
                 title={`Billed as volume storage. ${formatCostNanos(summary.data.accrued_nanos)} accrued since ${new Date(summary.data.accrued_since).toLocaleDateString()}.`}
               >
-                {summary.data.estimated_monthly_nanos === null
-                  ? "Storage rate unavailable"
-                  : `Volume storage: ${formatCostNanos(summary.data.estimated_monthly_nanos)} / month`}
+                Volume storage: {formatCostNanos(summary.data.estimated_monthly_nanos)} / month
               </span>
               <span>
                 New uploads expire after {countLabel(summary.data.retention_seconds / 86400, "day")}
@@ -358,7 +353,7 @@ export function Artifacts({ workspaceId, taskId }: { workspaceId: string; taskId
       {deleting && (
         <ArtifactDeleteDialog
           artifacts={deleting}
-          workspaceId={workspaceId}
+          workspace={workspace}
           onClose={() => setDeleting(null)}
           onComplete={() => {
             setSelectedIds([]);
@@ -373,21 +368,23 @@ export function Artifacts({ workspaceId, taskId }: { workspaceId: string; taskId
 
 function ArtifactDeleteDialog({
   artifacts,
-  workspaceId,
+  workspace,
   onClose,
   onComplete,
   invalidate,
 }: {
-  artifacts: ArtifactSummary[];
-  workspaceId: string;
+  artifacts: Schemas["Artifact"][];
+  workspace: string;
   onClose: () => void;
   onComplete: () => void;
   invalidate: () => Promise<void>;
 }) {
   const mutation = useMutation({
-    mutationFn: async () => {
-      for (const artifact of artifacts) await deleteArtifact(workspaceId, artifact.id);
-    },
+    mutationFn: () =>
+      deleteArtifacts(
+        workspace,
+        artifacts.map((artifact) => artifact.id),
+      ),
     onSuccess: () => {
       toast.success("Deletion requested");
       onComplete();
@@ -414,7 +411,7 @@ function ArtifactDeleteDialog({
               <File className="size-4 shrink-0 text-muted-foreground" />
               <span className="min-w-0 flex-1 truncate">{item.filename}</span>
               <span className="shrink-0 text-xs text-muted-foreground">
-                {formatBytes(item.size)}
+                {formatBytes(item.size_bytes)}
               </span>
             </div>
           ))}

@@ -6,29 +6,40 @@ import { PanelError } from "@/components/shared/PanelError";
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { ContentTransition } from "@/components/shared/ContentTransition";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { ResourceConfig, ResourceRow } from "@/lib/api/resources";
 import { displayValue } from "@/lib/format";
-import { resourceQueryOptions } from "@/lib/queries/resources";
+import {
+  mapsQueryOptions,
+  queuesQueryOptions,
+  type CollectionKind,
+} from "@/lib/queries/collections";
 import { cn } from "@/lib/utils";
 
 import { MapInspector, QueueInspector } from "./CollectionInspectors";
 import { CollectionValueForm } from "./CollectionValueForm";
 
+type CollectionRowData = { name: string; amount: number };
+
 export function CollectionAccordion({
-  config,
-  workspaceId,
+  kind,
+  workspace,
   creating,
   onCreatingChange,
 }: {
-  config: ResourceConfig;
-  workspaceId: string;
+  kind: CollectionKind;
+  workspace: string;
   creating: boolean;
   onCreatingChange: (open: boolean) => void;
 }) {
-  const query = useQuery(resourceQueryOptions(config, workspaceId));
-  const rows = query.data ?? [];
+  const queues = useQuery({ ...queuesQueryOptions(workspace), enabled: kind === "queues" });
+  const maps = useQuery({ ...mapsQueryOptions(workspace), enabled: kind === "maps" });
+  const query = kind === "queues" ? queues : maps;
+  const rows: CollectionRowData[] =
+    kind === "queues"
+      ? (queues.data ?? []).map((queue) => ({ name: queue.name, amount: queue.size }))
+      : (maps.data ?? []).map((map) => ({ name: map.name, amount: map.count }));
   const [openId, setOpenId] = useState<string | null>(null);
-  const singular = config.key === "queues" ? "queue" : "map";
+  const title = kind === "queues" ? "Queues" : "Maps";
+  const singular = kind === "queues" ? "queue" : "map";
 
   return (
     <ContentTransition
@@ -36,19 +47,19 @@ export function CollectionAccordion({
       className="flex min-h-full flex-col lg:h-full lg:min-h-0"
     >
       <section
-        aria-label={`${config.title} collection`}
+        aria-label={`${title} collection`}
         data-collection-scroll=""
         className="min-h-[24rem] flex-1 overflow-visible lg:min-h-0 lg:overflow-y-auto"
       >
         <div className="flex min-h-11 items-center gap-2 border-b border-border px-3 py-2">
-          <h2 className="text-sm font-medium">{config.title}</h2>
+          <h2 className="text-sm font-medium">{title}</h2>
           <span className="mono text-xs text-muted-foreground">{rows.length}</span>
         </div>
         {creating ? (
           <div className="p-4">
             <CollectionValueForm
-              workspaceId={workspaceId}
-              kind={config.key === "queues" ? "queues" : "maps"}
+              workspace={workspace}
+              kind={kind}
               onCancel={() => onCreatingChange(false)}
               onDone={(name) => {
                 setOpenId(name);
@@ -62,20 +73,20 @@ export function CollectionAccordion({
         ) : query.isError && !query.data ? (
           <PanelError message={query.error.message} />
         ) : rows.length === 0 ? (
-          <PanelEmpty message={`No ${config.title.toLowerCase()}`} className="p-8" />
+          <PanelEmpty message={`No ${kind}`} className="p-8" />
         ) : (
           <div className="divide-y divide-border/70">
             {rows.map((row) => {
-              const open = openId === row.id;
-              const name = String(row.name ?? row.id);
+              const open = openId === row.name;
+              const name = row.name;
               return (
-                <div key={row.id}>
+                <div key={row.name}>
                   <CollectionRow
-                    config={config}
+                    kind={kind}
                     row={row}
                     open={open}
                     onToggle={(element) => {
-                      setOpenId(open ? null : row.id);
+                      setOpenId(open ? null : row.name);
                       if (!open) {
                         requestAnimationFrame(() => {
                           requestAnimationFrame(() => element.scrollIntoView({ block: "nearest" }));
@@ -89,20 +100,10 @@ export function CollectionAccordion({
                       aria-label={`${name} ${singular} inspector`}
                       className="border-t border-border bg-background/35"
                     >
-                      {config.key === "queues" ? (
-                        <QueueInspector
-                          workspaceId={workspaceId}
-                          name={name}
-                          oldestMessageAgeSeconds={numberValue(row.oldest_message_age_seconds)}
-                        />
+                      {kind === "queues" ? (
+                        <QueueInspector workspace={workspace} name={name} />
                       ) : (
-                        <MapInspector
-                          workspaceId={workspaceId}
-                          name={name}
-                          sizeBytes={numberValue(row.size_bytes) ?? 0}
-                          expiringKeys={numberValue(row.expiring_keys) ?? 0}
-                          nearestExpirySeconds={numberValue(row.nearest_expiry_seconds)}
-                        />
+                        <MapInspector workspace={workspace} name={name} />
                       )}
                     </div>
                   ) : null}
@@ -117,19 +118,19 @@ export function CollectionAccordion({
 }
 
 function CollectionRow({
-  config,
+  kind,
   row,
   open,
   onToggle,
 }: {
-  config: ResourceConfig;
-  row: ResourceRow;
+  kind: CollectionKind;
+  row: CollectionRowData;
   open: boolean;
   onToggle: (element: HTMLElement) => void;
 }) {
-  const name = String(row.name ?? row.id);
-  const amount = config.key === "queues" ? row.size : row.keys;
-  const unit = collectionUnit(config.key, amount);
+  const { name, amount } = row;
+  const singularUnit = kind === "queues" ? "message" : "key";
+  const unit = amount === 1 ? singularUnit : `${singularUnit}s`;
 
   return (
     <button
@@ -154,15 +155,6 @@ function CollectionRow({
       </span>
     </button>
   );
-}
-
-function collectionUnit(configKey: string, amount: ResourceRow[string]): string {
-  const singular = configKey === "queues" ? "message" : "key";
-  return Number(amount) === 1 ? singular : `${singular}s`;
-}
-
-function numberValue(value: ResourceRow[string]): number | null {
-  return typeof value === "number" ? value : null;
 }
 
 function CollectionSkeleton() {

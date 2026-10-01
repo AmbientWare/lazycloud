@@ -163,36 +163,35 @@ export const workspaceQueryKeys = {
       [...workspaceRoot(workspaceId), "compute", "summary"] as const,
   },
   storage: {
-    root: (workspaceId: string) => [...workspaceRoot(workspaceId), "storage"] as const,
-    artifacts: (workspaceId: string) =>
-      [...workspaceRoot(workspaceId), "storage", "artifacts"] as const,
-    secrets: (workspaceId: string) =>
-      [...workspaceRoot(workspaceId), "storage", "secrets"] as const,
-    volumes: (workspaceId: string) =>
-      [...workspaceRoot(workspaceId), "storage", "volumes"] as const,
-    disks: (workspaceId: string) => [...workspaceRoot(workspaceId), "storage", "disks"] as const,
-    volumePath: (workspaceId: string, volumeName: string, path?: string) =>
+    root: (workspace: string) => [...workspaceRoot(workspace), "storage"] as const,
+    artifacts: (workspace: string) => [...workspaceRoot(workspace), "storage", "artifacts"] as const,
+    secrets: (workspace: string) => [...workspaceRoot(workspace), "storage", "secrets"] as const,
+    volumes: (workspace: string) => [...workspaceRoot(workspace), "storage", "volumes"] as const,
+    disks: (workspace: string) => [...workspaceRoot(workspace), "storage", "disks"] as const,
+    volumePath: (workspace: string, volume: string, path?: string) =>
       [
-        ...workspaceRoot(workspaceId),
+        ...workspaceRoot(workspace),
         "storage",
         "volume-path",
-        volumeName,
+        volume,
         ...(path ? [path] : []),
       ] as const,
   },
   collections: {
-    resource: (workspaceId: string, kind: "map" | "queue", name: string) =>
-      [...workspaceRoot(workspaceId), "collections", kind, name] as const,
-    queueSize: (workspaceId: string, name: string) =>
-      [...workspaceRoot(workspaceId), "collections", "queue", name, "size"] as const,
-    queuePeek: (workspaceId: string, name: string) =>
-      [...workspaceRoot(workspaceId), "collections", "queue", name, "peek"] as const,
-    mapCount: (workspaceId: string, name: string) =>
-      [...workspaceRoot(workspaceId), "collections", "map", name, "count"] as const,
-    mapKeys: (workspaceId: string, name: string) =>
-      [...workspaceRoot(workspaceId), "collections", "map", name, "keys"] as const,
-    mapValue: (workspaceId: string, name: string, key: string | null) =>
-      [...workspaceRoot(workspaceId), "collections", "map", name, "value", key] as const,
+    list: (workspace: string, kind: "maps" | "queues") =>
+      [...workspaceRoot(workspace), "collections", kind] as const,
+    resource: (workspace: string, kind: "map" | "queue", name: string) =>
+      [...workspaceRoot(workspace), "collections", kind, name] as const,
+    queue: (workspace: string, name: string) =>
+      [...workspaceRoot(workspace), "collections", "queue", name, "info"] as const,
+    queueHead: (workspace: string, name: string) =>
+      [...workspaceRoot(workspace), "collections", "queue", name, "head"] as const,
+    map: (workspace: string, name: string) =>
+      [...workspaceRoot(workspace), "collections", "map", name, "info"] as const,
+    mapKeys: (workspace: string, name: string) =>
+      [...workspaceRoot(workspace), "collections", "map", name, "keys"] as const,
+    mapValue: (workspace: string, name: string, key: string | null) =>
+      [...workspaceRoot(workspace), "collections", "map", name, "value", key] as const,
   },
   logs: {
     history: (
@@ -204,10 +203,6 @@ export const workspaceQueryKeys = {
         containerId: string | null;
       },
     ) => [...workspaceRoot(workspaceId), "logs", "history", scope] as const,
-  },
-  resources: {
-    list: (workspaceId: string, configKey: string) =>
-      [...workspaceRoot(workspaceId), "resources", configKey] as const,
   },
 } as const;
 

@@ -14,7 +14,6 @@ import { SecretsTab } from "./-components/SecretsTab";
 import { VolumesTab } from "./-components/VolumesTab";
 import { Artifacts } from "@/components/shared/Artifacts";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
-import { collectionResources } from "@/lib/api/resources";
 import { countLabel } from "@/lib/format";
 import { secretsQueryOptions, volumesQueryOptions } from "@/lib/queries/storage";
 import { useWorkspace } from "@/lib/workspace-context";
@@ -28,6 +27,7 @@ const STORAGE_TABS = [
   { key: "maps", title: "Maps" },
 ] as const;
 type StorageTab = (typeof STORAGE_TABS)[number]["key"];
+const COLLECTION_KINDS = ["queues", "maps"] as const;
 
 type StorageSearch = {
   view: StorageTab;
@@ -46,8 +46,8 @@ export const Route = createFileRoute("/w/$workspace/storage/")({
 
 function StoragePage() {
   const { workspace } = useWorkspace();
-  const volumes = useQuery(volumesQueryOptions(workspace.id));
-  const secrets = useQuery(secretsQueryOptions(workspace.id));
+  const volumes = useQuery(volumesQueryOptions(workspace.name));
+  const secrets = useQuery(secretsQueryOptions(workspace.name));
   const search = Route.useSearch();
   const navigate = Route.useNavigate();
   const [creating, setCreating] = useState<Exclude<StorageTab, "artifacts" | "disks"> | null>(null);
@@ -68,8 +68,8 @@ function StoragePage() {
         volumes.data || secrets.data ? (
           <PageFacts
             items={[
-              volumes.data ? countLabel(volumes.data.volumes.length, "volume") : null,
-              secrets.data ? countLabel(secrets.data.secrets.length, "secret") : null,
+              volumes.data ? countLabel(volumes.data.length, "volume") : null,
+              secrets.data ? countLabel(secrets.data.length, "secret") : null,
             ]}
           />
         ) : null
@@ -119,49 +119,41 @@ function StoragePage() {
             className="min-h-0 flex-1 overflow-y-auto lg:overflow-hidden"
           >
             <VolumesTab
-              workspaceId={workspace.id}
-              workspaceName={workspace.name}
+              workspace={workspace.name}
               creating={creating === "volumes"}
               onCreatingChange={(open) => setCreating(open ? "volumes" : null)}
             />
           </TabsContent>
           <TabsContent value="disks" className="min-h-0 flex-1 overflow-hidden">
-            <DisksTab
-              key={workspace.id}
-              workspaceId={workspace.id}
-              workspaceName={workspace.name}
-            />
+            <DisksTab key={workspace.name} workspace={workspace.name} />
           </TabsContent>
           <TabsContent
             value="secrets"
             className="min-h-0 flex-1 overflow-y-auto lg:overflow-hidden"
           >
             <SecretsTab
-              workspaceId={workspace.id}
-              workspaceName={workspace.name}
+              workspace={workspace.name}
               creating={creating === "secrets"}
               onCreatingChange={(open) => setCreating(open ? "secrets" : null)}
             />
           </TabsContent>
-          {collectionResources.map((config) => (
+          {COLLECTION_KINDS.map((kind) => (
             <TabsContent
-              key={config.key}
-              value={config.key}
+              key={kind}
+              value={kind}
               className="min-h-0 flex-1 overflow-y-auto lg:overflow-hidden"
             >
               <CollectionAccordion
-                key={`${workspace.id}:${config.key}`}
-                config={config}
-                workspaceId={workspace.id}
-                creating={creating === config.key}
-                onCreatingChange={(open) =>
-                  setCreating(open ? (config.key === "queues" ? "queues" : "maps") : null)
-                }
+                key={`${workspace.name}:${kind}`}
+                kind={kind}
+                workspace={workspace.name}
+                creating={creating === kind}
+                onCreatingChange={(open) => setCreating(open ? kind : null)}
               />
             </TabsContent>
           ))}
           <TabsContent value="artifacts" className="min-h-0 flex-1 overflow-hidden">
-            <Artifacts key={workspace.id} workspaceId={workspace.id} />
+            <Artifacts key={workspace.name} />
           </TabsContent>
         </Tabs>
       </section>

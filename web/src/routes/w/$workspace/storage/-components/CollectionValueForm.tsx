@@ -4,8 +4,7 @@ import { Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ApiError } from "@/lib/api/client";
-import type { MapEntry } from "@/lib/api/schemas";
+import { ApiError, type Schemas } from "@/lib/api/client";
 import { base64ToBytes } from "@/lib/files";
 import {
   mapValueQueryOptions,
@@ -13,15 +12,12 @@ import {
   putQueueMessage,
   refreshCollection,
   setMapValue,
+  type CollectionKind,
 } from "@/lib/queries/collections";
 
-export type MapEdit = { key: string; value: MapEntry };
-
-export function editableJson(value: MapEntry): string | null {
+export function editableJson(entry: Schemas["MapEntry"]): string | null {
   try {
-    const text = new TextDecoder("utf-8", { fatal: true }).decode(
-      base64ToBytes(value.value_base64),
-    );
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(base64ToBytes(entry.value));
     return JSON.stringify(JSON.parse(parseCollectionJson(text)), null, 2);
   } catch {
     return null;
@@ -29,7 +25,7 @@ export function editableJson(value: MapEntry): string | null {
 }
 
 export function CollectionValueForm({
-  workspaceId,
+  workspace,
   kind,
   name: fixedName,
   entry,
@@ -37,46 +33,46 @@ export function CollectionValueForm({
   onCancel,
   onReload,
 }: {
-  workspaceId: string;
-  kind: "maps" | "queues";
+  workspace: string;
+  kind: CollectionKind;
   name?: string;
-  entry?: MapEdit;
+  entry?: Schemas["MapEntry"];
   onDone: (name: string, key: string) => void;
   onCancel: () => void;
-  onReload?: (entry: MapEdit) => void;
+  onReload?: (entry: Schemas["MapEntry"]) => void;
 }) {
   const client = useQueryClient();
   const [name, setName] = useState(fixedName ?? "");
   const [key, setKey] = useState(entry?.key ?? "");
-  const [json, setJson] = useState(entry ? (editableJson(entry.value) ?? "") : "");
+  const [json, setJson] = useState(entry ? (editableJson(entry) ?? "") : "");
   const [expiry, setExpiry] = useState(entry ? "keep" : "custom");
   const [seconds, setSeconds] = useState("604800");
   const [validation, setValidation] = useState<string | null>(null);
   const save = useMutation({
     mutationFn: async () => {
-      if (kind === "queues") await putQueueMessage(workspaceId, name.trim(), json);
+      if (kind === "queues") await putQueueMessage(workspace, name.trim(), json);
       else
         await setMapValue(
-          workspaceId,
+          workspace,
           name.trim(),
           key,
           json,
           expiry === "keep" ? null : expiry === "never" ? 0 : Number(seconds),
-          entry?.value.revision,
+          entry?.revision,
         );
     },
     onSuccess: async () => {
-      await refreshCollection(client, workspaceId, kind, name.trim());
+      await refreshCollection(client, workspace, kind, name.trim());
       onDone(name.trim(), key);
     },
   });
   const reload = useMutation({
     mutationFn: async () => {
       const value = await client.fetchQuery({
-        ...mapValueQueryOptions(workspaceId, name, key),
+        ...mapValueQueryOptions(workspace, name, key),
         staleTime: 0,
       });
-      onReload?.({ key, value });
+      onReload?.(value);
     },
   });
   const busy = save.isPending || reload.isPending;
@@ -113,6 +109,7 @@ export function CollectionValueForm({
           <label className="grid gap-1.5 text-xs">
             Key
             <Input
+              required
               value={key}
               disabled={entry !== undefined}
               onChange={(event) => setKey(event.target.value)}
@@ -166,13 +163,17 @@ export function CollectionValueForm({
         {entry ? (
           <p className="text-xs text-muted-foreground">
             Current expiry:{" "}
-            {entry.value.expires_at
-              ? new Date(entry.value.expires_at).toLocaleString()
+            {entry.expires_at
+              ? new Date(entry.expires_at).toLocaleString()
               : "No expiry"}
           </p>
         ) : null}
         <div className="flex flex-wrap items-center gap-2">
-          <Button type="submit" size="sm" disabled={!name.trim() || !json.trim()}>
+          <Button
+            type="submit"
+            size="sm"
+            disabled={!name.trim() || !json.trim() || (kind === "maps" && !key)}
+          >
             {save.isPending ? <Loader2 className="size-3.5 animate-spin" /> : null}
             {entry ? "Save value" : kind === "maps" ? "Add key" : "Add message"}
           </Button>

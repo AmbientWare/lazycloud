@@ -5,22 +5,20 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { TableRow, TableCell } from "@/components/ui/table";
+import type { Schemas } from "@/lib/api/client";
 import { exactTime, formatBytes } from "@/lib/format";
-import { downloadBlob } from "@/lib/files";
 import { LiveRelativeTime } from "@/components/shared/LiveTime";
 import { useLiveNow } from "@/hooks/use-live-now";
 import { FilePreviewDialog } from "@/components/shared/FilePreview";
-import { fetchArtifactBlob } from "@/lib/queries/artifacts";
+import { artifactUrl } from "@/lib/queries/artifacts";
+import { saveUrl } from "@/lib/queries/storage";
 import { ArtifactPreview, type PreviewKind } from "./ArtifactPreview";
-import type { ArtifactSummary } from "@/lib/api/schemas";
 
-export function ArtifactDeletionTime({ artifact }: { artifact: ArtifactSummary }) {
+function ArtifactDeletionTime({ expiresAt }: { expiresAt: string }) {
   const now = useLiveNow(true);
-  if (artifact.deletion_failed) return <span className="text-destructive">Deletion failed</span>;
-  if (artifact.deleting) return <span>Deleting…</span>;
-  const date = new Date(artifact.expires_at);
+  const date = new Date(expiresAt);
   return (
-    <time dateTime={artifact.expires_at} title={exactTime(artifact.expires_at)}>
+    <time dateTime={expiresAt} title={exactTime(expiresAt)}>
       {date.getTime() <= now
         ? "Scheduled for deletion"
         : `Deletes ${date.toLocaleDateString(undefined, { month: "short", day: "numeric", ...(date.getFullYear() !== new Date(now).getFullYear() ? { year: "numeric" } : {}) })}`}
@@ -56,16 +54,14 @@ function previewKind(contentType: string): PreviewKind | "none" {
 
 export function ArtifactRow({
   artifact,
-  workspaceId,
-  workspaceName,
+  workspace,
   compact = false,
   showSource = true,
   selection,
   onDelete,
 }: {
-  artifact: ArtifactSummary;
-  workspaceId: string;
-  workspaceName: string;
+  artifact: Schemas["Artifact"];
+  workspace: string;
   compact?: boolean;
   showSource?: boolean;
   selection?: ReactNode;
@@ -76,13 +72,13 @@ export function ArtifactRow({
   const [downloading, setDownloading] = useState(false);
   const now = useLiveNow(true);
   const kind = previewKind(artifact.content_type);
-  const unavailable = artifact.deleting || new Date(artifact.expires_at).getTime() <= now;
+  const unavailable = artifact.expires_at !== undefined && Date.parse(artifact.expires_at) <= now;
   const FileIcon = kind === "image" ? FileImage : kind === "text" ? FileText : File;
 
   async function download(): Promise<void> {
     setDownloading(true);
     try {
-      downloadBlob(artifact.filename, await fetchArtifactBlob(workspaceId, artifact));
+      saveUrl(await artifactUrl(workspace, artifact.id, true), artifact.filename);
     } catch (error) {
       toast.error("Download failed", {
         description: error instanceof Error ? error.message : "unknown error",
@@ -94,22 +90,22 @@ export function ArtifactRow({
 
   const source = (
     <>
-      {artifact.app_id ? (
+      {artifact.app ? (
         <Link
           className="interactive-link max-w-full truncate"
           to="/w/$workspace/apps/$appId"
-          params={{ workspace: workspaceName, appId: artifact.app_id }}
+          params={{ workspace, appId: artifact.app }}
         >
-          {artifact.app_name || "App"}
+          {artifact.app}
         </Link>
       ) : (
-        <span className="truncate">{artifact.app_name || "Unknown app"}</span>
+        <span className="truncate">Unknown app</span>
       )}
       {artifact.task_id && (
         <Link
           className="interactive-link shrink-0"
           to="/w/$workspace/tasks/$taskId"
-          params={{ workspace: workspaceName, taskId: artifact.task_id }}
+          params={{ workspace, taskId: artifact.task_id }}
           aria-label={`View task for ${artifact.filename}`}
         >
           View task
@@ -155,9 +151,8 @@ export function ArtifactRow({
         size="icon"
         className="size-7 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
         aria-label={`Delete ${artifact.filename}`}
-        title={artifact.deletion_failed ? "Retry deletion" : "Delete"}
+        title="Delete"
         onClick={onDelete}
-        disabled={artifact.deleting && !artifact.deletion_failed}
       >
         <Trash2 className="size-3.5" />
       </Button>
@@ -171,8 +166,8 @@ export function ArtifactRow({
           <div className="min-w-0 flex-1">
             {filename}
             <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 pl-6.5 text-xs text-muted-foreground">
-              <span>{formatBytes(artifact.size)}</span>
-              <ArtifactDeletionTime artifact={artifact} />
+              <span>{formatBytes(artifact.size_bytes)}</span>
+              {artifact.expires_at && <ArtifactDeletionTime expiresAt={artifact.expires_at} />}
               {showSource && source}
             </div>
           </div>
@@ -196,13 +191,13 @@ export function ArtifactRow({
             className="hidden whitespace-nowrap text-right text-xs text-muted-foreground @xl:table-cell"
             title={artifact.content_type}
           >
-            {formatBytes(artifact.size)}
+            {formatBytes(artifact.size_bytes)}
           </TableCell>
           <TableCell className="hidden whitespace-nowrap text-xs text-muted-foreground @4xl:table-cell">
-            {artifact.created_at ? <LiveRelativeTime value={artifact.created_at} /> : "Unknown"}
+            <LiveRelativeTime value={artifact.stored_at ?? artifact.created_at} />
           </TableCell>
           <TableCell className="hidden whitespace-nowrap text-xs text-muted-foreground @lg:table-cell">
-            <ArtifactDeletionTime artifact={artifact} />
+            {artifact.expires_at && <ArtifactDeletionTime expiresAt={artifact.expires_at} />}
           </TableCell>
           <TableCell className="w-20 pl-0">{actions}</TableCell>
         </TableRow>
@@ -211,14 +206,14 @@ export function ArtifactRow({
         open={open}
         onOpenChange={setOpen}
         title={artifact.filename}
-        description={`${artifact.content_type} · ${formatBytes(artifact.size)}`}
+        description={`${artifact.content_type} · ${formatBytes(artifact.size_bytes)}`}
         returnFocus={previewButton}
       >
         {kind !== "none" && (
           <ArtifactPreview
             key={artifact.id}
             artifact={artifact}
-            workspaceId={workspaceId}
+            workspace={workspace}
             kind={kind}
           />
         )}

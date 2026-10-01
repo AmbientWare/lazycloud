@@ -17,7 +17,7 @@ import {
   updateSecretValue,
 } from "@/lib/queries/storage";
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
-import type { SecretMasked } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 import { ResourceWorkloadLinks } from "./ResourceWorkloadLinks";
 
 /**
@@ -25,17 +25,15 @@ import { ResourceWorkloadLinks } from "./ResourceWorkloadLinks";
  * reveal action and lives in this row's local state until it is hidden again.
  */
 export function SecretsTab({
-  workspaceId,
-  workspaceName,
+  workspace,
   creating,
   onCreatingChange,
 }: {
-  workspaceId: string;
-  workspaceName: string;
+  workspace: string;
   creating: boolean;
   onCreatingChange: (open: boolean) => void;
 }) {
-  const query = useQuery(secretsQueryOptions(workspaceId));
+  const query = useQuery(secretsQueryOptions(workspace));
   const [editing, setEditing] = useState<string | null>(null);
 
   return (
@@ -55,7 +53,7 @@ export function SecretsTab({
         </div>
         {creating ? (
           <SecretForm
-            workspaceId={workspaceId}
+            workspace={workspace}
             mode="create"
             onDone={() => onCreatingChange(false)}
             onCancel={() => onCreatingChange(false)}
@@ -65,14 +63,14 @@ export function SecretsTab({
           <SecretsSkeleton />
         ) : query.isError ? (
           <PanelError message={query.error.message} />
-        ) : query.data.secrets.length === 0 && !creating ? (
+        ) : query.data.length === 0 && !creating ? (
           <PanelEmpty message="No secrets. Create one to inject into a workload." className="p-6" />
         ) : (
-          query.data.secrets.map((secret) =>
+          query.data.map((secret) =>
             editing === secret.name ? (
               <SecretForm
                 key={secret.name}
-                workspaceId={workspaceId}
+                workspace={workspace}
                 mode="update"
                 name={secret.name}
                 onDone={() => setEditing(null)}
@@ -80,14 +78,8 @@ export function SecretsTab({
               />
             ) : (
               <SecretRow
-                key={JSON.stringify([
-                  workspaceId,
-                  secret.name,
-                  secret.created_at,
-                  secret.updated_at,
-                ])}
-                workspaceId={workspaceId}
-                workspaceName={workspaceName}
+                key={JSON.stringify([workspace, secret.name, secret.created_at, secret.updated_at])}
+                workspace={workspace}
                 secret={secret}
                 onEdit={() => setEditing(secret.name)}
               />
@@ -120,14 +112,12 @@ function SecretsSkeleton() {
 }
 
 function SecretRow({
-  workspaceId,
-  workspaceName,
+  workspace,
   secret,
   onEdit,
 }: {
-  workspaceId: string;
-  workspaceName: string;
-  secret: SecretMasked;
+  workspace: string;
+  secret: Schemas["Secret"];
   onEdit: () => void;
 }) {
   const queryClient = useQueryClient();
@@ -143,11 +133,9 @@ function SecretRow({
     [],
   );
   const remove = useMutation({
-    mutationFn: () => deleteSecret(workspaceId, secret.name),
+    mutationFn: () => deleteSecret(workspace, secret.name),
     onSuccess: () =>
-      queryClient.invalidateQueries({
-        queryKey: workspaceQueryKeys.storage.secrets(workspaceId),
-      }),
+      queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.storage.secrets(workspace) }),
   });
 
   const toggleReveal = async () => {
@@ -160,7 +148,7 @@ function SecretRow({
     setRevealing(true);
     setRevealError(null);
     try {
-      const value = await revealSecretValue(workspaceId, secret.name);
+      const value = await revealSecretValue(workspace, secret.name);
       if (request === revealRequest.current) setRevealedValue(value);
     } catch (error) {
       if (request === revealRequest.current) {
@@ -192,10 +180,10 @@ function SecretRow({
           </span>
         </div>
         <p className="mt-1 pl-5.5 text-[11px] text-muted-foreground">
-          Rotated <LiveRelativeTime value={secret.updated_at ?? secret.created_at ?? undefined} />
+          Rotated <LiveRelativeTime value={secret.updated_at} />
         </p>
         <div className="mt-1 pl-5.5">
-          <ResourceWorkloadLinks workspaceName={workspaceName} workloads={secret.workloads} />
+          <ResourceWorkloadLinks workspace={workspace} workloads={[]} />
         </div>
       </div>
 
@@ -289,13 +277,13 @@ function SecretRow({
 }
 
 function SecretForm({
-  workspaceId,
+  workspace,
   mode,
   name: fixedName,
   onDone,
   onCancel,
 }: {
-  workspaceId: string;
+  workspace: string;
   mode: "create" | "update";
   name?: string;
   onDone: () => void;
@@ -307,15 +295,13 @@ function SecretForm({
   const mutation = useMutation({
     mutationFn: async () => {
       if (mode === "create") {
-        await createSecret(workspaceId, name.trim(), value);
+        await createSecret(workspace, name.trim(), value);
       } else {
-        await updateSecretValue(workspaceId, fixedName ?? name, value);
+        await updateSecretValue(workspace, fixedName ?? name, value);
       }
     },
     onSuccess: () => {
-      void queryClient.invalidateQueries({
-        queryKey: workspaceQueryKeys.storage.secrets(workspaceId),
-      });
+      void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.storage.secrets(workspace) });
       onDone();
     },
   });
