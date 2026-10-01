@@ -20,6 +20,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/identity"
+	"github.com/AmbientWare/lazycloud/internal/secrets"
 )
 
 const (
@@ -229,19 +230,20 @@ func (sess *session) sync(ctx context.Context) error {
 			continue
 		}
 		msg, err := sess.server.startMessage(ctx, id, start)
-		if err != nil {
-			if ctx.Err() != nil {
-				return sess.server.grpcError(ctx, err)
-			}
-			// A container whose start cannot be built, for a missing secret,
-			// image or source, fails like a failed preparation and stops
-			// being derived; the host's other containers are unaffected.
+		if reason, permanent := permanentStartFailure(err); permanent {
+			// A container whose start can never be built fails like a failed
+			// preparation and stops being derived; the host's other
+			// containers are unaffected.
 			sess.server.logger.WarnContext(ctx, "container cannot start", "host", sess.host.String(),
 				"container", start.Container.String(), "error", err)
-			if err := sess.server.execution.StartFailed(ctx, sess.host, start.Container, err.Error()); err != nil {
+			if err := sess.server.execution.StartFailed(ctx, sess.host, start.Container, reason); err != nil {
 				return sess.server.grpcError(ctx, err)
 			}
 			continue
+		}
+		if err != nil {
+			// Transient: the session ends and the start is built again.
+			return sess.server.grpcError(ctx, err)
 		}
 		if usesWorkspaceBucket(msg.GetStart()) {
 			if err := sess.ensureGrant(ctx, start.Workspace); err != nil {
@@ -526,4 +528,22 @@ func (sess *session) sendUpdate(ctx context.Context, update *compute.AgentUpdate
 		return sess.server.grpcError(ctx, err)
 	}
 	return sess.send(updateMessage(update))
+}
+
+// permanentStartFailure says whether err means the start can never be
+// built, and the reason the container's owner is shown.
+func permanentStartFailure(err error) (string, bool) {
+	var missing *secrets.NotFoundError
+	var unreadable *secrets.UnreadableError
+	switch {
+	case err == nil:
+		return "", false
+	case errors.As(err, &missing):
+		return "the release names secret " + missing.Name + ", which the workspace does not have", true
+	case errors.As(err, &unreadable):
+		return "secret " + unreadable.Name + " cannot be read", true
+	case errors.Is(err, errImageUnpinned):
+		return "the release's image has no pinned reference; deploy it again", true
+	}
+	return "", false
 }

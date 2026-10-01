@@ -343,11 +343,12 @@ select $1, rel.id, 'starting', $2, 1, 1000, 1 << 28, now() from rel returning id
 	if got := receive(t, stream).GetStart().GetContainerId(); got != good.String() {
 		t.Fatalf("first start %s; want the buildable container %s", got, good)
 	}
-	var state, reason string
-	if err := h.pool.QueryRow(t.Context(), `select state, coalesce(stop_reason, '') from containers where id = $1`, uuid.UUID(bad)).Scan(&state, &reason); err != nil {
+	var state, reason, message string
+	if err := h.pool.QueryRow(t.Context(), `select state, coalesce(stop_reason, ''), coalesce(exit_message, '') from containers where id = $1`,
+		uuid.UUID(bad)).Scan(&state, &reason, &message); err != nil {
 		t.Fatal(err)
 	}
-	if state != "stopped" || reason != "start_failed" {
-		t.Fatalf("unbuildable container %s/%s; want stopped/start_failed", state, reason)
+	if state != "stopped" || reason != "start_failed" || message != "the release's image has no pinned reference; deploy it again" {
+		t.Fatalf("unbuildable container %s/%s %q; want stopped/start_failed with the owner's reason", state, reason, message)
 	}
 }
