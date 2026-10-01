@@ -19,8 +19,8 @@ export function deployedStubsQueryOptions(workspaceId: string, appId?: string) {
       const workspace = workspaceName(workspaceId);
       if (!appId) {
         const [workloads, apps] = await Promise.all([
-          workloadDirectory(client, workspaceId),
-          appDirectory(client, workspaceId),
+          workloadDirectory(client, workspaceId, { fresh: true }),
+          appDirectory(client, workspaceId, { fresh: true }),
         ]);
         return {
           stubs: [...workloads.byId.values()].map((workload) =>

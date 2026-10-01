@@ -4,50 +4,96 @@ Parity sections from tasks/parity.md: "Dashboard", plus every dashboard item
 in the other sections. The dashboard in `web/` runs against the public API in
 `contracts/openapi.yaml`.
 
+## Constraint
+
+The dashboard's styling, layout, components, routes and copy are finished
+work. Every file under `web/src` outside the data layer matches
+origin/go-rewrite. The one component edit is TaskDrawer's cancel button,
+which now calls `cancelTask` from the query layer. Data shapes change only in
+`web/src/lib/api` and `web/src/lib/queries`.
+
 ## Decisions
 
-- Types come from `contracts/openapi.yaml` through openapi-typescript
-  (`bun run apigen`, output in `web/src/lib/api/generated`, checked in and
-  verified by CI). Requests go through openapi-fetch, typed by path and
-  method; `ok()` returns the success body or throws an `ApiError` carrying
-  the status and the typed error code. The server validates every request
-  and response against the same document, so the hand-written Zod schemas
-  of an area are deleted when it moves to the public API.
-- The browser session is the HttpOnly `__Host-lazycloud_session` cookie from
-  `/auth/github/start`. Requests are same-origin; the browser's own Origin
-  header passes the server's check on cookie-authenticated mutations. The
-  page holds no credential. `GET /v1/me` answers who is signed in; a 401 from
-  any query re-reads it so the auth gate shows the sign-in screen.
-- Query keys are scoped by workspace name, the identifier every path uses.
-  A rename moves the dashboard to the new name's keys.
-- Collections page with `limit`, `cursor` and `next_cursor` through one
-  helper (`selectPages`, `nextPageCursor`).
-
-## Plan
-
-1. Foundation: generated types, client, cookie session, sign-in, sign-out,
-   `/activate`, invitations, tokens, workspaces, members.
-2. Apps, workloads, versions, schedules, tasks, task drawer, logs and
-   containers on the control and workload-runtime APIs.
-3. Storage tabs: secrets now; volumes, disks, artifacts, queues and maps as
-   the storage packet merges.
-4. Areas whose packets are still running (endpoints, compute, billing,
-   observability, workloads): wire them as they merge, otherwise list the
-   exact gap.
-5. Playwright journeys against a private local stack.
+- openapi-typescript generates types from `contracts/openapi.yaml`
+  (`bun run apigen`). The output in `web/src/lib/api/generated` is checked in,
+  and CI fails if it drifts. Requests go through openapi-fetch. `ok()` returns
+  the success body or throws `ApiError`.
+- Components keep the reference view types (the zod-inferred types in
+  `lib/api/schemas`). The query layer maps API resources into them in
+  `lib/api/views.ts` and parses nothing at runtime. A field the API lacks
+  gets the empty value the component already renders for absence.
+- The session is the HttpOnly `__Host-lazycloud_session` cookie. The sign-in
+  link returns to `/callback#code=<destination>`. The callback page reads
+  `GET /v1/me` and stores a marker in localStorage so the reference AuthGate
+  works unchanged. A 401 clears the marker. A browser that already holds a
+  session and starts sign-in goes straight to `return_to`.
+- Query keys stay keyed by workspace ID, and `workspaceName(id)` resolves the
+  path name from the session read. Routes keep app IDs. `lib/queries/directory.ts`
+  maps app and workload IDs to names with one cached read each.
+- A stub is `app:function:release`, and a deployment row is
+  `workload:version`. Task statuses map to the reference set: queued becomes
+  pending, or retry once an attempt has failed; succeeded becomes complete;
+  a timeout failure becomes timeout.
+- Log views read the NDJSON log streams. `lib/api/sse.ts` translates the
+  reference log and change stream URLs, so `useEventStream` and
+  WorkspaceLiveUpdates are unchanged.
 
 ## Progress
 
-- [x] Foundation
-- [ ] Apps, workloads, tasks, logs, containers
-- [ ] Storage
-- [ ] Other areas as they merge
-- [ ] Local stack journeys
+- [x] Foundation: sign-in, sign-out, `/activate`, invitations, tokens,
+  workspaces, members
+- [x] Apps, workloads, versions, schedules, tasks, task drawer, logs,
+  containers
+- [x] Storage: secrets, volumes, disks, artifacts, queues, maps
+- [x] Observability: activity, task metrics, latency, container metrics,
+  call graph, lifecycle, account metrics, live changes
+- [x] Admin users (operations), compute, machines, AWS connection, fleet
+- [ ] Billing, usage, pricing, complimentary grants: ready on web-billing and
+  web-admin-users, waiting for #424
+- [ ] Invoke URLs, endpoint kinds, domains: ready on web-endpoints, waiting
+  for the endpoints packet
+- [x] Stack journeys in `web/tests/e2e/stack.spec.ts` against a private stack
 
 ## Intentional differences from the reference
 
-- `/callback` is gone: the server's GitHub callback sets the session cookie
-  and redirects (see tasks/identity.md).
-- Token rows no longer show a token prefix; the API stores only digests and
-  returns none. The freshly issued value is masked from its own first
-  characters.
+- `/callback` receives no code. The server's GitHub callback sets the
+  cookie, and the page confirms it with `/v1/me`.
+- Listed tokens show no prefix. The API stores only digests.
+- Log history has no backward paging.
+- Deleting a workload version deletes the workload, so only a workload's
+  active row or its last version offers Delete.
+- Map keys need at least one character.
+
+## Gaps
+
+Data the API does not provide yet. Components show their empty state or the
+server's error.
+
+- Pods, devboxes, sandboxes and shells have no API. Their panels show the
+  server's "no such operation".
+- Billing, usage and pricing until #424. The Compute "Add cloud" button and
+  its upgrade gate read the billing summary. Admin users show "No plan" and
+  $0.00 usage.
+- Invoke URLs and the HTTP invoke until the endpoints packet. The function
+  playground submits a task instead.
+- Containers have no image, command, ports or exit code. Tasks carry no
+  handler, args or kwargs. Results have no rich display.
+- The artifact summary has no cost fields. Its tooltip reads "$0.00 accrued",
+  which is not true. Fixing that needs the cost data or a component change.
+- Volumes have no update time, queues have no write rate, and disks have no
+  workload reference.
+- `contracts/http_contract_cases.json` stays because a Python test reads it.
+- The reference marketing page fails its axe check on `.run-test-checks`.
+
+## Evidence
+
+- `bun run typecheck`, `lint`, `format:check`, `build` and vitest
+  (125 tests) pass.
+- The stack journeys pass on chromium and mobile against server, scheduler
+  and agent on private ports. They cover sign-in, workspace create, rename,
+  invite and delete, deploy with the SDK, playground invoke, task drawer
+  logs and container, tokens, `/activate`, secrets, volume upload and
+  download, queues, maps, task artifacts, and accepting an invitation.
+- Before and after screenshots of Apps, the app, the workload, Tasks, the
+  task drawer, Secrets, Tokens and sign-in match in layout and copy. Only
+  the data differs.

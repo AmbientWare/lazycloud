@@ -43,17 +43,9 @@ export function appSummariesQueryOptions(workspaceId: string) {
     queryKey: workspaceQueryKeys.apps.summaries(workspaceId),
     queryFn: async ({ client }) => {
       const workspace = workspaceName(workspaceId);
-      await client.invalidateQueries({
-        queryKey: [...workspaceQueryKeys.apps.root(workspaceId), "directory"],
-        refetchType: "none",
-      });
-      await client.invalidateQueries({
-        queryKey: [...workspaceQueryKeys.deployments.root(workspaceId), "directory"],
-        refetchType: "none",
-      });
       const [apps, workloads, containers, activity] = await Promise.all([
-        appDirectory(client, workspaceId),
-        workloadDirectory(client, workspaceId),
+        appDirectory(client, workspaceId, { fresh: true }),
+        workloadDirectory(client, workspaceId, { fresh: true }),
         ok(
           api.GET("/v1/workspaces/{workspace}/containers", {
             params: { path: { workspace }, query: { live: true, limit: 1000 } },
