@@ -292,6 +292,11 @@ func taskOut(t execution.Task) apitypes.Task {
 		Id: uuid.UUID(t.ID), App: t.App, Function: t.Function, ReleaseId: t.Release,
 		Status: apitypes.TaskStatus(t.Status), Attempts: t.Attempts,
 		CreatedAt: t.CreatedAt, StartedAt: t.StartedAt, FinishedAt: t.FinishedAt,
+		RootTaskId: uuid.UUID(t.Root), ScheduledFor: t.ScheduledFor,
+	}
+	if t.Parent != nil {
+		parent := uuid.UUID(*t.Parent)
+		out.ParentTaskId = &parent
 	}
 	if f := t.Failure; f != nil {
 		out.Failure = &apitypes.TaskFailure{Kind: apitypes.FailureKind(f.Kind), Message: f.Message}

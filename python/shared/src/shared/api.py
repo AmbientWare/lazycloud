@@ -274,6 +274,16 @@ class SourceUpload(BaseModel):
 
 
 class Task(BaseModel):
+    parent_task_id: Annotated[
+        UUID | None, Field(description="The running task that spawned this one.")
+    ] = None
+    root_task_id: Annotated[
+        UUID,
+        Field(description="The root of the call graph; the task itself when nothing spawned it."),
+    ]
+    scheduled_for: Annotated[
+        AwareDatetime | None, Field(description="The cron occurrence that admitted the task.")
+    ] = None
     id: UUID
     app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
     function: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]

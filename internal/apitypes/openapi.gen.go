@@ -570,9 +570,18 @@ type Task struct {
 	FinishedAt *time.Time         `json:"finished_at,omitempty"`
 	Function   WorkloadName       `json:"function"`
 	Id         openapi_types.UUID `json:"id"`
-	ReleaseId  openapi_types.UUID `json:"release_id"`
-	StartedAt  *time.Time         `json:"started_at,omitempty"`
-	Status     TaskStatus         `json:"status"`
+
+	// ParentTaskId The running task that spawned this one.
+	ParentTaskId *openapi_types.UUID `json:"parent_task_id,omitempty"`
+	ReleaseId    openapi_types.UUID  `json:"release_id"`
+
+	// RootTaskId The root of the call graph; the task itself when nothing spawned it.
+	RootTaskId openapi_types.UUID `json:"root_task_id"`
+
+	// ScheduledFor The cron occurrence that admitted the task.
+	ScheduledFor *time.Time `json:"scheduled_for,omitempty"`
+	StartedAt    *time.Time `json:"started_at,omitempty"`
+	Status       TaskStatus `json:"status"`
 }
 
 // TaskFailure defines model for TaskFailure.

@@ -12,6 +12,10 @@ export LAZYCLOUD_OBJECT_STORE_REGION=garage
 export LAZYCLOUD_OBJECT_STORE_BUCKET=lazycloud
 export LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID=GK1a2b3c4d5e6f708192a3b4c5
 export LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY=6c6f63616c2d6c617a79636c6f75642d6465762d7365637265742d6b65792d31
+# The master key that wraps secret data keys; generated once per state dir.
+export LAZYCLOUD_SECRETS_KEY_FILE="$PWD/$state/secrets.key"
+# Local callbacks may target this machine.
+export LAZYCLOUD_CALLBACK_ALLOW_PRIVATE=1
 
 stop() {
   for name in agent scheduler server; do
@@ -24,6 +28,9 @@ stop() {
 
 start() {
   mkdir -p "$state/logs" bin
+  if [ ! -f "$LAZYCLOUD_SECRETS_KEY_FILE" ]; then
+    (umask 077 && head -c 32 /dev/urandom >"$LAZYCLOUD_SECRETS_KEY_FILE")
+  fi
   docker compose up -d --wait postgres object-store >/dev/null
   docker compose run --rm object-store-bootstrap >/dev/null
   CGO_ENABLED=0 go build -o bin/supervisor ./cmd/supervisor

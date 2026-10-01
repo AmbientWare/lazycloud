@@ -81,6 +81,7 @@ def _task(task_id: str, status: str = "queued", **extra: object) -> dict[str, ob
         "app": "reports",
         "function": "summarize_sales",
         "release_id": RELEASE_ID,
+        "root_task_id": task_id,
         "status": status,
         "attempts": 1 if status != "queued" else 0,
         "created_at": NOW,

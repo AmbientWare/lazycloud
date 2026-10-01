@@ -132,6 +132,10 @@ func (e *Execution) SubmitInTx(ctx context.Context, tx pgx.Tx, req SubmitRequest
 		tasks[n] = Task{
 			ID: TaskID(row.ID), App: fn.AppName, Function: fn.Name, Release: fn.ReleaseID,
 			Status: TaskQueued, CreatedAt: row.CreatedAt,
+			Parent: req.Parent, Root: TaskID(row.ID), ScheduledFor: req.ScheduledFor,
+		}
+		if req.Root != nil {
+			tasks[n].Root = *req.Root
 		}
 	}
 	if err := database.Notify(ctx, tx, database.ChannelExecution, fn.ReleaseID.String()); err != nil {

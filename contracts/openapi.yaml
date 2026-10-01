@@ -705,8 +705,20 @@ components:
 
     Task:
       type: object
-      required: [id, app, function, release_id, status, attempts, created_at]
+      required: [id, app, function, release_id, status, attempts, created_at, root_task_id]
       properties:
+        parent_task_id:
+          description: The running task that spawned this one.
+          type: string
+          format: uuid
+        root_task_id:
+          description: The root of the call graph; the task itself when nothing spawned it.
+          type: string
+          format: uuid
+        scheduled_for:
+          description: The cron occurrence that admitted the task.
+          type: string
+          format: date-time
         id: { type: string, format: uuid }
         app: { $ref: "#/components/schemas/AppName" }
         function: { $ref: "#/components/schemas/WorkloadName" }
