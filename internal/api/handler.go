@@ -17,6 +17,8 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/identity"
+	"github.com/AmbientWare/lazycloud/internal/schedules"
+	"github.com/AmbientWare/lazycloud/internal/secrets"
 	"github.com/AmbientWare/lazycloud/internal/storage"
 )
 
@@ -30,6 +32,8 @@ type Owners struct {
 	Control   *control.Control
 	Storage   *storage.Storage
 	Execution *execution.Execution
+	Secrets   *secrets.Secrets
+	Schedules *schedules.Schedules
 	// Listener wakes waits on task changes. It must listen on
 	// database.ChannelTask.
 	Listener *database.Listener
@@ -39,6 +43,17 @@ type Owners struct {
 // bearer token, validates the request against the OpenAPI document and
 // dispatches to the operation.
 func NewHandler(owners Owners, logger *slog.Logger) (http.Handler, error) {
+	return newHandler(owners, logger, (*Server).authenticate)
+}
+
+// NewContainerHandler serves the same operations to container API requests.
+// Their context carries the container principal from WithContainer; they
+// have no bearer token.
+func NewContainerHandler(owners Owners, logger *slog.Logger) (http.Handler, error) {
+	return newHandler(owners, logger, (*Server).requireContainer)
+}
+
+func newHandler(owners Owners, logger *slog.Logger, authenticate func(*Server, http.Handler) http.Handler) (http.Handler, error) {
 	spec, err := GetSwagger()
 	if err != nil {
 		return nil, fmt.Errorf("load openapi document: %w", err)
@@ -77,7 +92,7 @@ func NewHandler(owners Owners, logger *slog.Logger) (http.Handler, error) {
 			s.writeError(w, r, fmt.Errorf("%w: %w", errInvalidRequest, err))
 		},
 	})
-	return s.limitBody(s.authenticate(validate(handler))), nil
+	return s.limitBody(authenticate(s, validate(handler))), nil
 }
 
 type principalKey struct{}
@@ -85,6 +100,29 @@ type principalKey struct{}
 func principalFrom(ctx context.Context) (identity.Principal, bool) {
 	p, ok := ctx.Value(principalKey{}).(identity.Principal)
 	return p, ok
+}
+
+type containerKey struct{}
+
+// WithContainer marks ctx as a container API request from p.
+func WithContainer(ctx context.Context, p identity.ContainerPrincipal) context.Context {
+	return context.WithValue(ctx, containerKey{}, p)
+}
+
+func containerFrom(ctx context.Context) (identity.ContainerPrincipal, bool) {
+	p, ok := ctx.Value(containerKey{}).(identity.ContainerPrincipal)
+	return p, ok
+}
+
+// requireContainer admits only requests carrying a container principal.
+func (s *Server) requireContainer(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := containerFrom(r.Context()); !ok {
+			s.writeError(w, r, identity.ErrUnauthenticated)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) limitBody(next http.Handler) http.Handler {
@@ -118,10 +156,13 @@ var errInvalidRequest = errors.New("invalid request")
 // logged and reported without detail.
 func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 	var (
-		tooMany       *execution.TooManyPendingError
-		invalidSpec   *control.InvalidSpecError
-		sourceMissing *control.SourceMissingError
-		tooLarge      *http.MaxBytesError
+		tooMany        *execution.TooManyPendingError
+		invalidSpec    *control.InvalidSpecError
+		sourceMissing  *control.SourceMissingError
+		tooLarge       *http.MaxBytesError
+		secretMissing  *secrets.NotFoundError
+		secretExists   *secrets.ExistsError
+		secretReserved *secrets.ReservedNameError
 	)
 	switch {
 	case errors.Is(err, identity.ErrUnauthenticated):
@@ -146,6 +187,14 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		writeJSONError(w, http.StatusConflict, apitypes.Conflict, "the function is stopped or its app is paused")
 	case errors.Is(err, execution.ErrTaskNotFinished):
 		writeJSONError(w, http.StatusConflict, apitypes.TaskNotFinished, "the task has not finished")
+	case errors.As(err, &secretMissing):
+		writeJSONError(w, http.StatusNotFound, apitypes.NotFound, secretMissing.Error())
+	case errors.As(err, &secretExists):
+		writeJSONError(w, http.StatusConflict, apitypes.Conflict, secretExists.Error())
+	case errors.As(err, &secretReserved):
+		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, secretReserved.Error())
+	case errors.Is(err, secrets.ErrInvalidCursor), errors.Is(err, schedules.ErrInvalidCursor):
+		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, "the cursor is not from a previous page")
 	default:
 		s.logger.ErrorContext(r.Context(), "request failed", "method", r.Method, "path", r.URL.Path, "error", err)
 		writeJSONError(w, http.StatusInternalServerError, apitypes.Internal, "internal error")

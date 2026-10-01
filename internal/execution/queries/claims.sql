@@ -51,9 +51,11 @@ with candidate as (
     where tasks.id = attempt.task_id
 )
 select attempt.task_id, attempt.id as attempt_id, attempt.number, attempt.deadline_at,
-       i.encoding, i.data
+       i.encoding, i.data, t.max_attempts, t.parent_task_id,
+       coalesce(t.root_task_id, t.id)::uuid as root_task_id
 from attempt
 join task_inputs i on i.task_id = attempt.task_id
+join tasks t on t.id = attempt.task_id
 order by attempt.id;
 
 -- name: NextQueuedAt :one

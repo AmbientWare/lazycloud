@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -44,6 +45,13 @@ type SubmitRequest struct {
 	App       string
 	Function  string
 	Inputs    []Payload
+	// Parent is the running task that spawned these, and Root the root of
+	// its call graph.
+	Parent *TaskID
+	Root   *TaskID
+	// ScheduledFor is the cron occurrence admitting the task. One task
+	// exists per occurrence.
+	ScheduledFor *time.Time
 }
 
 // Submit admits every input or none. The workload lock serializes submits of
@@ -51,6 +59,21 @@ type SubmitRequest struct {
 // inputs insert in one statement, pinned to the active release. Planning and
 // waiting claims wake when the transaction commits.
 func (e *Execution) Submit(ctx context.Context, req SubmitRequest) ([]Task, error) {
+	var tasks []Task
+	err := pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
+		var err error
+		tasks, err = e.SubmitInTx(ctx, tx, req)
+		return err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("submit: %w", err)
+	}
+	return tasks, nil
+}
+
+// SubmitInTx admits req inside tx, so a caller can commit the admission with
+// its own facts, such as a schedule's next occurrence.
+func (e *Execution) SubmitInTx(ctx context.Context, tx pgx.Tx, req SubmitRequest) ([]Task, error) {
 	encodings := make([]string, len(req.Inputs))
 	data := make([][]byte, len(req.Inputs))
 	for n, input := range req.Inputs {
@@ -61,62 +84,61 @@ func (e *Execution) Submit(ctx context.Context, req SubmitRequest) ([]Task, erro
 		data[n] = input.Data
 	}
 
-	var tasks []Task
-	err := pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
-		q := e.queries.WithTx(tx)
-		fn, err := q.LockFunctionForSubmit(ctx, LockFunctionForSubmitParams{
-			WorkspaceID: uuid.UUID(req.Workspace), AppName: req.App, Name: req.Function,
-		})
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrNotFound
-		}
-		if err != nil {
-			return fmt.Errorf("lock function: %w", err)
-		}
-		if fn.DesiredState != "active" || apitypes.AppState(fn.AppState) != apitypes.AppStateActive {
-			return ErrNotAccepting
-		}
-		var spec apitypes.FunctionSpec
-		if err := json.Unmarshal(fn.Spec, &spec); err != nil {
-			return fmt.Errorf("decode release spec: %w", err)
-		}
-		limit := 0
-		if spec.MaxPendingTasks != nil {
-			limit = *spec.MaxPendingTasks
-		}
-		queued, err := q.CountQueuedTasks(ctx, fn.ID)
-		if err != nil {
-			return fmt.Errorf("count queued tasks: %w", err)
-		}
-		if int(queued)+len(req.Inputs) > limit {
-			return &TooManyPendingError{Limit: limit, Queued: int(queued), Submitted: len(req.Inputs)}
-		}
+	q := e.queries.WithTx(tx)
+	fn, err := q.LockFunctionForSubmit(ctx, LockFunctionForSubmitParams{
+		WorkspaceID: uuid.UUID(req.Workspace), AppName: req.App, Name: req.Function,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("lock function: %w", err)
+	}
+	if fn.DesiredState != "active" || apitypes.AppState(fn.AppState) != apitypes.AppStateActive {
+		return nil, ErrNotAccepting
+	}
+	var spec apitypes.FunctionSpec
+	if err := json.Unmarshal(fn.Spec, &spec); err != nil {
+		return nil, fmt.Errorf("decode release spec: %w", err)
+	}
+	limit := 0
+	if spec.MaxPendingTasks != nil {
+		limit = *spec.MaxPendingTasks
+	}
+	queued, err := q.CountQueuedTasks(ctx, fn.ID)
+	if err != nil {
+		return nil, fmt.Errorf("count queued tasks: %w", err)
+	}
+	if int(queued)+len(req.Inputs) > limit {
+		return nil, &TooManyPendingError{Limit: limit, Queued: int(queued), Submitted: len(req.Inputs)}
+	}
 
-		rows, err := q.InsertTasks(ctx, InsertTasksParams{
-			Encodings:   encodings,
-			Data:        data,
-			WorkspaceID: uuid.UUID(req.Workspace),
-			WorkloadID:  fn.ID,
-			ReleaseID:   fn.ReleaseID,
-			MaxAttempts: int32(RetryPolicyOf(spec).MaxAttempts), //nolint:gosec // The schema caps max_attempts at 100.
-		})
-		if err != nil {
-			return fmt.Errorf("insert tasks: %w", err)
-		}
-		tasks = make([]Task, len(rows))
-		for n, row := range rows {
-			tasks[n] = Task{
-				ID: TaskID(row.ID), App: fn.AppName, Function: fn.Name, Release: fn.ReleaseID,
-				Status: TaskQueued, CreatedAt: row.CreatedAt,
-			}
-		}
-		if err := database.Notify(ctx, tx, database.ChannelExecution, fn.ReleaseID.String()); err != nil {
-			return err
-		}
-		return database.Notify(ctx, tx, database.ChannelClaim, fn.ReleaseID.String())
+	rows, err := q.InsertTasks(ctx, InsertTasksParams{
+		Encodings:    encodings,
+		Data:         data,
+		WorkspaceID:  uuid.UUID(req.Workspace),
+		WorkloadID:   fn.ID,
+		ReleaseID:    fn.ReleaseID,
+		MaxAttempts:  int32(RetryPolicyOf(spec).MaxAttempts), //nolint:gosec // The schema caps max_attempts at 100.
+		ParentTaskID: (*uuid.UUID)(req.Parent),
+		RootTaskID:   (*uuid.UUID)(req.Root),
+		ScheduledFor: req.ScheduledFor,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("submit: %w", err)
+		return nil, fmt.Errorf("insert tasks: %w", err)
+	}
+	tasks := make([]Task, len(rows))
+	for n, row := range rows {
+		tasks[n] = Task{
+			ID: TaskID(row.ID), App: fn.AppName, Function: fn.Name, Release: fn.ReleaseID,
+			Status: TaskQueued, CreatedAt: row.CreatedAt,
+		}
+	}
+	if err := database.Notify(ctx, tx, database.ChannelExecution, fn.ReleaseID.String()); err != nil {
+		return nil, err
+	}
+	if err := database.Notify(ctx, tx, database.ChannelClaim, fn.ReleaseID.String()); err != nil {
+		return nil, err
 	}
 	return tasks, nil
 }

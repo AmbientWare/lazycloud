@@ -19,6 +19,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/identity"
+	"github.com/AmbientWare/lazycloud/internal/schedules"
 	"github.com/AmbientWare/lazycloud/internal/storage"
 )
 
@@ -63,7 +64,6 @@ func Resolve(spec apitypes.FunctionSpec) (apitypes.FunctionSpec, error) {
 	out := spec
 	out.TimeoutSeconds = orDefault(spec.TimeoutSeconds, 3600)
 	out.Concurrency = orDefault(spec.Concurrency, 1)
-	out.KeepWarmSeconds = orDefault(spec.KeepWarmSeconds, 10)
 	out.MaxPendingTasks = orDefault(spec.MaxPendingTasks, 100)
 
 	if r := spec.Resources; r.CpuLimitMillis != nil && *r.CpuLimitMillis < r.CpuMillis {
@@ -100,6 +100,9 @@ func Resolve(spec apitypes.FunctionSpec) (apitypes.FunctionSpec, error) {
 		}
 	}
 	out.Environment = &env
+	if err := resolveRuntime(spec, &out); err != nil {
+		return out, err
+	}
 	return out, nil
 }
 
@@ -238,6 +241,9 @@ func (c *Control) deployFunction(ctx context.Context, tx pgx.Tx, q *Queries, app
 	workload, err := q.UpsertWorkload(ctx, UpsertWorkloadParams{AppID: app, Name: f.spec.Name})
 	if err != nil {
 		return apitypes.Release{}, fmt.Errorf("upsert workload %s: %w", f.spec.Name, err)
+	}
+	if err := schedules.Apply(ctx, tx, workload.ID, f.spec.Cron); err != nil {
+		return apitypes.Release{}, fmt.Errorf("schedule %s: %w", f.spec.Name, err)
 	}
 	if workload.ActiveReleaseID != nil {
 		active, err := q.ActiveRelease(ctx, *workload.ActiveReleaseID)

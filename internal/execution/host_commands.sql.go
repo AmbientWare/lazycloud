@@ -82,21 +82,24 @@ func (q *Queries) IdleDrainingContainersOnHost(ctx context.Context, hostID *uuid
 }
 
 const startingContainersOnHost = `-- name: StartingContainersOnHost :many
-select c.id, c.workspace_id, c.slots, c.cpu_millis, c.memory_bytes, r.spec, r.source_sha256
+select c.id, c.workspace_id, w.name as workspace_name, c.slots, c.cpu_millis, c.memory_bytes,
+       r.spec, r.source_sha256
 from containers c
 join releases r on r.id = c.release_id
+join workspaces w on w.id = c.workspace_id
 where c.host_id = $1 and c.state = 'starting'
 order by c.id
 `
 
 type StartingContainersOnHostRow struct {
-	ID           uuid.UUID
-	WorkspaceID  uuid.UUID
-	Slots        int32
-	CpuMillis    int64
-	MemoryBytes  int64
-	Spec         []byte
-	SourceSha256 []byte
+	ID            uuid.UUID
+	WorkspaceID   uuid.UUID
+	WorkspaceName string
+	Slots         int32
+	CpuMillis     int64
+	MemoryBytes   int64
+	Spec          []byte
+	SourceSha256  []byte
 }
 
 func (q *Queries) StartingContainersOnHost(ctx context.Context, hostID *uuid.UUID) ([]StartingContainersOnHostRow, error) {
@@ -111,6 +114,7 @@ func (q *Queries) StartingContainersOnHost(ctx context.Context, hostID *uuid.UUI
 		if err := rows.Scan(
 			&i.ID,
 			&i.WorkspaceID,
+			&i.WorkspaceName,
 			&i.Slots,
 			&i.CpuMillis,
 			&i.MemoryBytes,

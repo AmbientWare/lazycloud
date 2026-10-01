@@ -266,6 +266,9 @@ func (e *Execution) stopRelease(ctx context.Context, tx pgx.Tx, plan *releasePla
 		return fmt.Errorf("cancel queued tasks: %w", err)
 	}
 	plan.cancelled = len(cancelled)
+	if err := recordCallbacks(ctx, q, CallbackCancelled, cancelled, nil); err != nil {
+		return err
+	}
 	tasks := make([]string, len(cancelled))
 	for i, task := range cancelled {
 		tasks[i] = task.String()

@@ -32,6 +32,8 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/hostsession"
 	"github.com/AmbientWare/lazycloud/internal/identity"
+	"github.com/AmbientWare/lazycloud/internal/schedules"
+	"github.com/AmbientWare/lazycloud/internal/secrets"
 	"github.com/AmbientWare/lazycloud/internal/storage"
 )
 
@@ -97,6 +99,7 @@ type serveConfig struct {
 	grpcAddr      string
 	objectStore   storage.Config
 	imageTemplate string
+	secretsKey    string
 }
 
 func serve(ctx context.Context, args []string) error {
@@ -110,6 +113,7 @@ func serve(ctx context.Context, args []string) error {
 	fs.StringVar(&cfg.objectStore.Bucket, "object-store-bucket", env("LAZYCLOUD_OBJECT_STORE_BUCKET", ""), "bucket for source archives (LAZYCLOUD_OBJECT_STORE_BUCKET)")
 	fs.StringVar(&cfg.objectStore.AccessKeyID, "object-store-access-key-id", env("LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID", ""), "object store access key id (LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID)")
 	fs.StringVar(&cfg.imageTemplate, "image-template", env("LAZYCLOUD_IMAGE_TEMPLATE", "docker.io/library/python:{version}-slim"), "container image per Python version (LAZYCLOUD_IMAGE_TEMPLATE)")
+	fs.StringVar(&cfg.secretsKey, "secrets-key-file", env("LAZYCLOUD_SECRETS_KEY_FILE", ""), "32-byte master key file that wraps secret data keys (LAZYCLOUD_SECRETS_KEY_FILE)")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
 	}
@@ -118,6 +122,9 @@ func serve(ctx context.Context, args []string) error {
 	if cfg.objectStore.Endpoint == "" || cfg.objectStore.Region == "" || cfg.objectStore.Bucket == "" ||
 		cfg.objectStore.AccessKeyID == "" || cfg.objectStore.SecretAccessKey == "" {
 		return errors.New("the object store endpoint, region, bucket, access key id and LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY are required")
+	}
+	if cfg.secretsKey == "" {
+		return errors.New("the secrets key file is required: set LAZYCLOUD_SECRETS_KEY_FILE or -secrets-key-file")
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	return withPool(ctx, cfg.databaseURL, func(pool *pgxpool.Pool) error {
@@ -132,15 +139,26 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, logger 
 	listener := database.NewListener(pool, logger, database.ChannelHost, database.ChannelTask, database.ChannelClaim)
 	store := storage.NewStorage(pool, cfg.objectStore)
 	exec := execution.NewExecution(pool)
-	handler, err := api.NewHandler(api.Owners{
+	masterKey, err := secrets.LoadFileKey(cfg.secretsKey)
+	if err != nil {
+		return err
+	}
+	vault := secrets.NewSecrets(pool, masterKey)
+	owners := api.Owners{
 		Identity: identity.NewIdentity(pool), Control: control.NewControl(pool), Storage: store,
-		Execution: exec, Listener: listener,
-	}, logger)
+		Execution: exec, Secrets: vault, Schedules: schedules.NewSchedules(pool, exec), Listener: listener,
+	}
+	handler, err := api.NewHandler(owners, logger)
+	if err != nil {
+		return err
+	}
+	containerAPI, err := api.NewContainerHandler(owners, logger)
 	if err != nil {
 		return err
 	}
 	hosts := hostsession.NewServer(compute.NewCompute(pool), exec, store, listener, hostsession.Config{
 		ImageTemplate: cfg.imageTemplate, TouchInterval: 10 * time.Second,
+		Secrets: vault, ContainerAPI: containerAPI,
 	}, logger)
 	grpcServer := grpc.NewServer(hosts.ServerOptions()...)
 	hostproto.RegisterHostServiceServer(grpcServer, hosts)

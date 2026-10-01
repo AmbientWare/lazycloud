@@ -62,9 +62,11 @@ with candidate as (
     where tasks.id = attempt.task_id
 )
 select attempt.task_id, attempt.id as attempt_id, attempt.number, attempt.deadline_at,
-       i.encoding, i.data
+       i.encoding, i.data, t.max_attempts, t.parent_task_id,
+       coalesce(t.root_task_id, t.id)::uuid as root_task_id
 from attempt
 join task_inputs i on i.task_id = attempt.task_id
+join tasks t on t.id = attempt.task_id
 order by attempt.id
 `
 
@@ -77,12 +79,15 @@ type ClaimQueuedTasksParams struct {
 }
 
 type ClaimQueuedTasksRow struct {
-	TaskID     uuid.UUID
-	AttemptID  uuid.UUID
-	Number     int32
-	DeadlineAt time.Time
-	Encoding   string
-	Data       []byte
+	TaskID       uuid.UUID
+	AttemptID    uuid.UUID
+	Number       int32
+	DeadlineAt   time.Time
+	Encoding     string
+	Data         []byte
+	MaxAttempts  int32
+	ParentTaskID *uuid.UUID
+	RootTaskID   uuid.UUID
 }
 
 // Due queued tasks of the release become running attempts on the container.
@@ -111,6 +116,9 @@ func (q *Queries) ClaimQueuedTasks(ctx context.Context, arg ClaimQueuedTasksPara
 			&i.DeadlineAt,
 			&i.Encoding,
 			&i.Data,
+			&i.MaxAttempts,
+			&i.ParentTaskID,
+			&i.RootTaskID,
 		); err != nil {
 			return nil, err
 		}

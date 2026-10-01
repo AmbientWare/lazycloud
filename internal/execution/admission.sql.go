@@ -28,8 +28,10 @@ with input as materialized (
     select uuidv7() as id, i as ord, ($1::text[])[i] as encoding, ($2::bytea[])[i] as data
     from generate_subscripts($1::text[], 1) as i
 ), task as (
-    insert into tasks (id, workspace_id, workload_id, release_id, status, max_attempts)
-    select input.id, $3, $4, $5, 'queued', $6
+    insert into tasks (id, workspace_id, workload_id, release_id, status, max_attempts,
+                       parent_task_id, root_task_id, scheduled_for)
+    select input.id, $3, $4, $5, 'queued', $6,
+           $7::uuid, $8::uuid, $9::timestamptz
     from input
     order by input.ord
     returning tasks.id, tasks.created_at
@@ -44,12 +46,15 @@ order by input.ord
 `
 
 type InsertTasksParams struct {
-	Encodings   []string
-	Data        [][]byte
-	WorkspaceID uuid.UUID
-	WorkloadID  uuid.UUID
-	ReleaseID   uuid.UUID
-	MaxAttempts int32
+	Encodings    []string
+	Data         [][]byte
+	WorkspaceID  uuid.UUID
+	WorkloadID   uuid.UUID
+	ReleaseID    uuid.UUID
+	MaxAttempts  int32
+	ParentTaskID *uuid.UUID
+	RootTaskID   *uuid.UUID
+	ScheduledFor *time.Time
 }
 
 type InsertTasksRow struct {
@@ -66,6 +71,9 @@ func (q *Queries) InsertTasks(ctx context.Context, arg InsertTasksParams) ([]Ins
 		arg.WorkloadID,
 		arg.ReleaseID,
 		arg.MaxAttempts,
+		arg.ParentTaskID,
+		arg.RootTaskID,
+		arg.ScheduledFor,
 	)
 	if err != nil {
 		return nil, err
