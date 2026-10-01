@@ -96,7 +96,7 @@ def stream_preview_output(
     """Yield the preview container's output; following keeps the preview alive."""
 
     path = _path("v1", "workspaces", workspace, "previews", str(preview), "output")
-    return client._stream_lines(ContainerLogEntry, path, after=after, follow=follow)
+    return client._stream_lines(ContainerLogEntry, path, after=after, tail=None, follow=follow)
 
 
 def register_domain(client: ApiClient, hostname: str) -> Domain:

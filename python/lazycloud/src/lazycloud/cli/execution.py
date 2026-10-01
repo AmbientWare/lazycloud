@@ -190,7 +190,7 @@ def _emit_app_deployments(
             "app": deployment.app.name,
             "workloads": len(deployment.releases),
         }
-        urls = [release.url for release in deployment.releases if release.url]
+        urls: list[JsonValue] = [release.url for release in deployment.releases if release.url]
         if urls:
             summary["urls"] = urls
         if target.prune:
