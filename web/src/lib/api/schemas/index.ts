@@ -6,6 +6,7 @@ export * from "./compute";
 export * from "./custom_domains";
 export * from "./deployment_plans";
 export * from "./errors";
+export * from "./fleet";
 export * from "./json";
 export * from "./observability";
 export * from "./pods";

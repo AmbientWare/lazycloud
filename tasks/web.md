@@ -51,5 +51,3 @@ in the other sections. The dashboard in `web/` runs against the public API in
 - Token rows no longer show a token prefix; the API stores only digests and
   returns none. The freshly issued value is masked from its own first
   characters.
-- Settings has no Admin tab (`?settings=admin`, Users and Fleet). The owner
-  dropped it from the rewrite because it was unused.

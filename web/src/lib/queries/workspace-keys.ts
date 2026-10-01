@@ -210,6 +210,15 @@ export const workspaceQueryKeys = {
   },
 } as const;
 
+export type AdminAccountsKeyParts = {
+  search: string;
+  role: string | null;
+  status: string | null;
+};
+
+/** The unnarrowed list, and the key every mutation patches. */
+export const EVERY_ACCOUNT: AdminAccountsKeyParts = { search: "", role: null, status: null };
+
 const accountRoot = ["account"] as const;
 
 /**
@@ -251,4 +260,24 @@ export const accountQueryKeys = {
   tokens: () => [...accountRoot, "tokens"] as const,
   /** Keyed on the link's own secret, so two open invitations never share a cache entry. */
   invitation: (token: string) => [...accountRoot, "invitation", token] as const,
+  /**
+   * What an administrator sees of every account on the platform. Under the
+   * account root because who may read it is decided by the signed-in person,
+   * not by the workspace in the address bar, and a switch cannot change it.
+   */
+  admin: {
+    root: () => [...accountRoot, "admin"] as const,
+    fleet: {
+      root: () => [...accountRoot, "admin", "fleet"] as const,
+      summary: () => [...accountRoot, "admin", "fleet", "summary"] as const,
+      nodes: () => [...accountRoot, "admin", "fleet", "nodes"] as const,
+    },
+    // Keyed on the narrowing, so each search and filter caches its own pages
+    // and changing one starts a fresh walk rather than appending to the last.
+    accounts: Object.assign(
+      (scope: AdminAccountsKeyParts = EVERY_ACCOUNT) =>
+        [...accountRoot, "admin", "accounts", scope] as const,
+      { root: () => [...accountRoot, "admin", "accounts"] as const },
+    ),
+  },
 } as const;
