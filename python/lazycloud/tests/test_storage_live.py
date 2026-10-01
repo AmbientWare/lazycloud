@@ -377,3 +377,41 @@ def record(text: str) -> str:
         assert volume.read_text("from-task.txt") == "written inside"
     finally:
         _until_free(volume.delete)
+
+
+def test_tasks_use_queues_maps_and_artifacts_through_the_container_api(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    queue, mapping = _unique("inside-q"), _unique("inside-m")
+    source = f"""\
+from pathlib import Path
+
+import lazycloud
+
+app = lazycloud.App("storageinside")
+
+
+@app.function(keep_warm=0)
+def work(n: int) -> str:
+    import os
+
+    assert "LAZYCLOUD_TOKEN" not in os.environ
+    lazycloud.Queue("{queue}").put({{"n": n}})
+    lazycloud.Map("{mapping}")["seen"] = n
+    report = Path("/tmp/report.txt")
+    report.write_text(f"task saw {{n}}")
+    saved = lazycloud.Artifact.file(report).save()
+    return saved.artifact_id
+"""
+    module = _deploy(tmp_path / "inside", monkeypatch, source)
+    try:
+        artifact_id = module.work.remote(7)
+        assert Queue(queue).pop() == {"n": 7}
+        assert Map(mapping)["seen"] == 7
+        listing = _json("artifact", "list")["artifacts"]
+        (saved,) = [item for item in listing if item["id"] == artifact_id]
+        assert saved["filename"] == "report.txt" and saved["app"] == "storageinside"
+        assert saved["task_id"] is not None
+    finally:
+        Queue(queue).delete()
+        Map(mapping).delete()
