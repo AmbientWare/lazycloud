@@ -315,3 +315,33 @@ func TestReadyContainerClaimsCompletesAndReceivesCancels(t *testing.T) {
 		t.Fatalf("claim without a token: got %v, want Unauthenticated", err)
 	}
 }
+
+// A container whose start cannot be built fails alone: the host's session
+// stays open and its other containers still start.
+func TestUnbuildableStartFailsOnlyItsContainer(t *testing.T) {
+	h := start(t)
+	host, ctx := h.enroll()
+	// An image id without its pinned reference cannot be pulled.
+	ws, bad := h.startingContainerWith(host, `{"handler": "reports:summarize", "image": {"python_version": "3.12", "image_id": "img_0123456789abcdef01234567"}}`)
+	var good uuid.UUID
+	err := h.pool.QueryRow(t.Context(), `
+with rel as (insert into releases (workload_id, version, spec, spec_digest, source_sha256)
+             select workload_id, 2, '{"handler": "reports:summarize", "image": {"python_version": "3.12"}}'::jsonb, sha256('spec2'), sha256('src')
+             from releases limit 1 returning id)
+insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at)
+select $1, rel.id, 'starting', $2, 1, 1000, 1 << 28, now() from rel returning id`, uuid.UUID(ws), uuid.UUID(host)).Scan(&good)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream := open(t, ctx, h.client)
+	if got := receive(t, stream).GetStart().GetContainerId(); got != good.String() {
+		t.Fatalf("first start %s; want the buildable container %s", got, good)
+	}
+	var state, reason string
+	if err := h.pool.QueryRow(t.Context(), `select state, coalesce(stop_reason, '') from containers where id = $1`, uuid.UUID(bad)).Scan(&state, &reason); err != nil {
+		t.Fatal(err)
+	}
+	if state != "stopped" || reason != "start_failed" {
+		t.Fatalf("unbuildable container %s/%s; want stopped/start_failed", state, reason)
+	}
+}

@@ -19,7 +19,6 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/identity"
-	"github.com/AmbientWare/lazycloud/internal/secrets"
 )
 
 const (
@@ -178,19 +177,19 @@ func (sess *session) sync(ctx context.Context) error {
 			continue
 		}
 		msg, err := sess.server.startMessage(ctx, id, start)
-		var missing *secrets.NotFoundError
-		var unreadable *secrets.UnreadableError
-		if errors.As(err, &missing) || errors.As(err, &unreadable) {
-			// The container cannot start without the secret; it fails like
-			// a failed preparation and stops being derived, and the host's
-			// other containers are unaffected.
+		if err != nil {
+			if ctx.Err() != nil {
+				return sess.server.grpcError(ctx, err)
+			}
+			// A container whose start cannot be built, for a missing secret,
+			// image or source, fails like a failed preparation and stops
+			// being derived; the host's other containers are unaffected.
+			sess.server.logger.WarnContext(ctx, "container cannot start", "host", sess.host.String(),
+				"container", start.Container.String(), "error", err)
 			if err := sess.server.execution.StartFailed(ctx, sess.host, start.Container, err.Error()); err != nil {
 				return sess.server.grpcError(ctx, err)
 			}
 			continue
-		}
-		if err != nil {
-			return sess.server.grpcError(ctx, err)
 		}
 		if usesWorkspaceBucket(msg.GetStart()) {
 			if err := sess.ensureGrant(ctx, start.Workspace); err != nil {
