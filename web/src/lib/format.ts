@@ -1,7 +1,9 @@
 import { formatDistanceStrict, parseISO } from "date-fns";
 
 import type { Schemas } from "@/lib/api/client";
-import type { RowValue } from "@/lib/api/resources";
+
+/** A scalar read off an API record for display. */
+export type RowValue = string | number | boolean | null | undefined;
 
 const TERMINAL_TASK_STATUSES: ReadonlySet<string> = new Set<Schemas["TaskStatus"]>([
   "succeeded",

@@ -6,18 +6,15 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { TableRow, TableCell } from "@/components/ui/table";
 import { exactTime, formatBytes } from "@/lib/format";
-import { downloadBlob } from "@/lib/files";
 import { LiveRelativeTime } from "@/components/shared/LiveTime";
 import { useLiveNow } from "@/hooks/use-live-now";
 import { FilePreviewDialog } from "@/components/shared/FilePreview";
-import { fetchArtifactBlob } from "@/lib/queries/artifacts";
-import { ArtifactPreview, type PreviewKind } from "./ArtifactPreview";
-import type { ArtifactSummary } from "@/lib/api/schemas";
+import { downloadArtifact, type Artifact, type PreviewKind } from "@/lib/queries/artifacts";
+import { ArtifactPreview } from "./ArtifactPreview";
 
-export function ArtifactDeletionTime({ artifact }: { artifact: ArtifactSummary }) {
+export function ArtifactDeletionTime({ artifact }: { artifact: Artifact }) {
   const now = useLiveNow(true);
-  if (artifact.deletion_failed) return <span className="text-destructive">Deletion failed</span>;
-  if (artifact.deleting) return <span>Deleting…</span>;
+  if (!artifact.expires_at) return null;
   const date = new Date(artifact.expires_at);
   return (
     <time dateTime={artifact.expires_at} title={exactTime(artifact.expires_at)}>
@@ -63,7 +60,7 @@ export function ArtifactRow({
   selection,
   onDelete,
 }: {
-  artifact: ArtifactSummary;
+  artifact: Artifact;
   workspaceId: string;
   workspaceName: string;
   compact?: boolean;
@@ -76,13 +73,14 @@ export function ArtifactRow({
   const [downloading, setDownloading] = useState(false);
   const now = useLiveNow(true);
   const kind = previewKind(artifact.content_type);
-  const unavailable = artifact.deleting || new Date(artifact.expires_at).getTime() <= now;
+  const unavailable =
+    artifact.expires_at !== undefined && new Date(artifact.expires_at).getTime() <= now;
   const FileIcon = kind === "image" ? FileImage : kind === "text" ? FileText : File;
 
   async function download(): Promise<void> {
     setDownloading(true);
     try {
-      downloadBlob(artifact.filename, await fetchArtifactBlob(workspaceId, artifact));
+      await downloadArtifact(workspaceId, artifact.id);
     } catch (error) {
       toast.error("Download failed", {
         description: error instanceof Error ? error.message : "unknown error",
@@ -94,16 +92,16 @@ export function ArtifactRow({
 
   const source = (
     <>
-      {artifact.app_name ? (
+      {artifact.app ? (
         <Link
           className="interactive-link max-w-full truncate"
           to="/w/$workspace/apps/$app"
-          params={{ workspace: workspaceName, app: artifact.app_name }}
+          params={{ workspace: workspaceName, app: artifact.app }}
         >
-          {artifact.app_name || "App"}
+          {artifact.app}
         </Link>
       ) : (
-        <span className="truncate">{artifact.app_name || "Unknown app"}</span>
+        <span className="truncate">Unknown app</span>
       )}
       {artifact.task_id && (
         <Link
@@ -155,9 +153,8 @@ export function ArtifactRow({
         size="icon"
         className="size-7 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
         aria-label={`Delete ${artifact.filename}`}
-        title={artifact.deletion_failed ? "Retry deletion" : "Delete"}
+        title="Delete"
         onClick={onDelete}
-        disabled={artifact.deleting && !artifact.deletion_failed}
       >
         <Trash2 className="size-3.5" />
       </Button>
@@ -171,7 +168,7 @@ export function ArtifactRow({
           <div className="min-w-0 flex-1">
             {filename}
             <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 pl-6.5 text-xs text-muted-foreground">
-              <span>{formatBytes(artifact.size)}</span>
+              <span>{formatBytes(artifact.size_bytes)}</span>
               <ArtifactDeletionTime artifact={artifact} />
               {showSource && source}
             </div>
@@ -196,10 +193,10 @@ export function ArtifactRow({
             className="hidden whitespace-nowrap text-right text-xs text-muted-foreground @xl:table-cell"
             title={artifact.content_type}
           >
-            {formatBytes(artifact.size)}
+            {formatBytes(artifact.size_bytes)}
           </TableCell>
           <TableCell className="hidden whitespace-nowrap text-xs text-muted-foreground @4xl:table-cell">
-            {artifact.created_at ? <LiveRelativeTime value={artifact.created_at} /> : "Unknown"}
+            <LiveRelativeTime value={artifact.stored_at ?? artifact.created_at} />
           </TableCell>
           <TableCell className="hidden whitespace-nowrap text-xs text-muted-foreground @lg:table-cell">
             <ArtifactDeletionTime artifact={artifact} />
@@ -211,7 +208,7 @@ export function ArtifactRow({
         open={open}
         onOpenChange={setOpen}
         title={artifact.filename}
-        description={`${artifact.content_type} · ${formatBytes(artifact.size)}`}
+        description={`${artifact.content_type} · ${formatBytes(artifact.size_bytes)}`}
         returnFocus={previewButton}
       >
         {kind !== "none" && (

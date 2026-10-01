@@ -1,6 +1,5 @@
 import { Badge } from "@/components/ui/badge";
-import type { RowValue } from "@/lib/api/resources";
-import { displayValue, statusTone } from "@/lib/format";
+import { displayValue, statusTone, type RowValue } from "@/lib/format";
 
 /** The only filled chip in the app; strictly for status values. */
 export function StatusChip({ status, live = false }: { status: RowValue; live?: boolean }) {

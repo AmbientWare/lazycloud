@@ -1,24 +1,7 @@
-import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
-import { z } from "zod";
+import { infiniteQueryOptions } from "@tanstack/react-query";
 
 import { api, ok, type Schemas } from "@/lib/api/client";
-import { apiRequest, postJson, withWorkspace } from "@/lib/api/unserved";
-import { fileBase64 } from "@/lib/files";
-import {
-  diskListSchema,
-  volumePathListSchema,
-  volumeListSchema,
-  volumeSchema,
-  type Disk,
-  type Volume,
-} from "@/lib/api/schemas";
-import {
-  nextListCursor,
-  nextPageCursor,
-  selectInfiniteList,
-  selectPages,
-  type InfiniteListQueryData,
-} from "@/lib/queries/infinite-list";
+import { nextPageCursor, selectPages } from "@/lib/queries/infinite-list";
 
 import { workspaceQueryKeys } from "./workspace-keys";
 
@@ -96,141 +79,228 @@ export function deleteSecret(workspace: string, secret: string): Promise<void> {
 
 // --- Disks (created by the workloads that declare them) ---
 
-const DISK_PAGE_SIZE = 50;
+export type Disk = Schemas["Disk"];
 
-export function disksQueryOptions(workspaceId: string) {
+export function disksQueryOptions(workspace: string) {
   return infiniteQueryOptions({
-    queryKey: workspaceQueryKeys.storage.disks(workspaceId),
+    queryKey: workspaceQueryKeys.storage.disks(workspace),
     initialPageParam: "",
-    queryFn: ({ pageParam }) => {
-      const params = new URLSearchParams({ limit: String(DISK_PAGE_SIZE) });
-      if (pageParam) params.set("cursor", pageParam);
-      return apiRequest(
-        withWorkspace(`/api/v1/disks?${params.toString()}`, workspaceId),
-        diskListSchema,
-      );
-    },
-    getNextPageParam: nextListCursor,
+    queryFn: ({ pageParam }) =>
+      ok(
+        api.GET("/v1/workspaces/{workspace}/disks", {
+          params: { path: { workspace }, query: { limit: 50, cursor: pageParam || undefined } },
+        }),
+      ),
+    getNextPageParam: nextPageCursor,
   });
 }
 
-export function selectDiskList(
-  data: InfiniteListQueryData<Disk> | undefined,
+export function selectDisks(
+  data: { pages: readonly Schemas["DiskPage"][] } | undefined,
   hasNextPage: boolean | undefined,
 ) {
-  return selectInfiniteList(data, hasNextPage, (disk) => disk.id);
+  return selectPages(
+    data,
+    (page) => page.disks,
+    hasNextPage,
+    (disk) => disk.id,
+  );
 }
 
-export function deleteDisk(workspaceId: string, name: string): Promise<null> {
-  return apiRequest(
-    withWorkspace(`/api/v1/disks/${encodeURIComponent(name)}`, workspaceId),
-    z.null(),
-    { method: "DELETE" },
+/** Refused with a conflict while a container holds the disk. */
+export function deleteDisk(workspace: string, disk: string): Promise<void> {
+  return ok(
+    api.DELETE("/v1/workspaces/{workspace}/disks/{disk}", {
+      params: { path: { workspace, disk } },
+    }),
   );
 }
 
 // --- Volumes ---
 
-export function volumesQueryOptions(workspaceId: string) {
-  return queryOptions({
-    queryKey: workspaceQueryKeys.storage.volumes(workspaceId),
-    queryFn: () => apiRequest(withWorkspace("/api/v1/volumes", workspaceId), volumeListSchema),
+export type Volume = Schemas["Volume"];
+export type VolumeFile = Schemas["VolumeFile"];
+
+export function volumesQueryOptions(workspace: string) {
+  return infiniteQueryOptions({
+    queryKey: workspaceQueryKeys.storage.volumes(workspace),
+    initialPageParam: "",
+    queryFn: ({ pageParam }) =>
+      ok(
+        api.GET("/v1/workspaces/{workspace}/volumes", {
+          params: { path: { workspace }, query: { limit: 100, cursor: pageParam || undefined } },
+        }),
+      ),
+    getNextPageParam: nextPageCursor,
   });
 }
 
-const getOrCreateVolumeResponseSchema = z.object({
-  volume: volumeSchema.nullish(),
-});
-
-export function createVolume(workspaceId: string, name: string): Promise<Volume | null> {
-  return postJson(withWorkspace("/api/v1/volumes", workspaceId), getOrCreateVolumeResponseSchema, {
-    name,
-  }).then((response) => response.volume ?? null);
-}
-
-const deleteVolumeResponseSchema = z.object({ deleted: z.boolean() });
-
-export function deleteVolume(
-  workspaceId: string,
-  name: string,
-): Promise<z.infer<typeof deleteVolumeResponseSchema>> {
-  return postJson(
-    withWorkspace(`/api/v1/volumes/${encodeURIComponent(name)}/delete`, workspaceId),
-    deleteVolumeResponseSchema,
-    { name },
+export function selectVolumes(
+  data: { pages: readonly Schemas["VolumePage"][] } | undefined,
+  hasNextPage: boolean | undefined,
+) {
+  return selectPages(
+    data,
+    (page) => page.volumes,
+    hasNextPage,
+    (volume) => volume.id,
   );
 }
 
-export function volumePathQueryOptions(workspaceId: string, volumeName: string, path: string) {
-  const target = joinVolumePath(volumeName, path);
-  return queryOptions({
-    queryKey: workspaceQueryKeys.storage.volumePath(workspaceId, volumeName, path),
-    queryFn: () =>
-      apiRequest(
-        withWorkspace(`/api/v1/volumes/${encodePath(target)}`, workspaceId),
-        volumePathListSchema,
+/** Creates the volume, or returns the existing one of that name. */
+export function createVolume(workspace: string, name: string): Promise<Volume> {
+  return ok(
+    api.POST("/v1/workspaces/{workspace}/volumes", {
+      params: { path: { workspace } },
+      body: { name },
+    }),
+  );
+}
+
+/** Refused with a conflict while a container that mounts the volume has not stopped. */
+export function deleteVolume(workspace: string, volume: string): Promise<void> {
+  return ok(
+    api.DELETE("/v1/workspaces/{workspace}/volumes/{volume}", {
+      params: { path: { workspace, volume } },
+    }),
+  );
+}
+
+/** One directory's entries; `path` is relative to the volume root, empty for the root. */
+export function volumeFilesQueryOptions(workspace: string, volume: string, path: string) {
+  return infiniteQueryOptions({
+    queryKey: workspaceQueryKeys.storage.volumeFiles(workspace, volume, path),
+    initialPageParam: "",
+    queryFn: ({ pageParam }) =>
+      ok(
+        api.GET("/v1/workspaces/{workspace}/volumes/{volume}/files", {
+          params: {
+            path: { workspace, volume },
+            query: { path, limit: 1000, cursor: pageParam || undefined },
+          },
+        }),
       ),
-    enabled: Boolean(volumeName),
+    getNextPageParam: nextPageCursor,
     refetchInterval: 30_000,
   });
 }
 
-const copyPathResponseSchema = z.object({ object_id: z.string().default("") });
-
-export async function uploadVolumeFile(
-  workspaceId: string,
-  volumeName: string,
-  path: string,
-  file: File,
-): Promise<void> {
-  const destination = joinVolumePath(volumeName, joinRelativePath(path, file.name));
-  await postJson(withWorkspace("/api/v1/volumes/copy-path", workspaceId), copyPathResponseSchema, {
-    path: destination,
-    value_base64: await fileBase64(file),
-  });
-}
-
-const deletePathResponseSchema = z.object({
-  deleted: z.array(z.string()).default([]),
-});
-
-export function deleteVolumePath(
-  workspaceId: string,
-  volumeName: string,
-  path: string,
-): Promise<{ deleted: string[] }> {
-  const target = joinVolumePath(volumeName, path);
-  return postJson(
-    withWorkspace(`/api/v1/volumes/${encodePath(target)}/delete`, workspaceId),
-    deletePathResponseSchema,
+export function selectVolumeFiles(
+  data: { pages: readonly Schemas["VolumeFilePage"][] } | undefined,
+  hasNextPage: boolean | undefined,
+) {
+  return selectPages(
+    data,
+    (page) => page.files,
+    hasNextPage,
+    (file) => file.path,
   );
 }
 
-const presignedUrlSchema = z.object({ url: z.string().url() });
-
-export function volumeDownloadUrl(
-  workspaceId: string,
-  volumeName: string,
+/** Removes a file, or a directory and everything under it. */
+export function deleteVolumePath(
+  workspace: string,
+  volume: string,
   path: string,
-): Promise<string> {
-  return postJson(withWorkspace("/api/v1/volumes/presigned-url", workspaceId), presignedUrlSchema, {
-    volume_name: volumeName,
-    volume_path: path,
-    expires: 300,
-    method: "get-object",
-  }).then((response) => response.url);
+): Promise<Schemas["RemovedVolumeFiles"]> {
+  return ok(
+    api.DELETE("/v1/workspaces/{workspace}/volumes/{volume}/files", {
+      params: { path: { workspace, volume }, query: { path } },
+    }),
+  );
 }
 
-function joinVolumePath(volumeName: string, path: string): string {
-  const relative = path.replace(/^\/+|\/+$/g, "");
-  return relative ? `${volumeName}/${relative}` : volumeName;
+/** A short-lived presigned GET; the URL carries no session credential. */
+export async function volumeDownloadUrl(
+  workspace: string,
+  volume: string,
+  path: string,
+): Promise<string> {
+  const presigned = await ok(
+    api.POST("/v1/workspaces/{workspace}/volumes/{volume}/files/url", {
+      params: { path: { workspace, volume } },
+      body: { path, method: "get", expires_seconds: 300 },
+    }),
+  );
+  return presigned.url;
+}
+
+/** Files up to this size go up in one presigned PUT, larger ones as a multipart upload. */
+const SINGLE_PUT_BYTES = 64 * 1024 * 1024;
+const MIN_PART_BYTES = 16 * 1024 * 1024;
+const MAX_PARTS = 10_000;
+const PART_CONCURRENCY = 4;
+
+/**
+ * Upload a file into `directory`, straight to the object store through
+ * presigned URLs. The store has to let this origin PUT and read `ETag`.
+ */
+export async function uploadVolumeFile(
+  workspace: string,
+  volume: string,
+  directory: string,
+  file: File,
+): Promise<void> {
+  const path = joinRelativePath(directory, file.name);
+  if (file.size <= SINGLE_PUT_BYTES) {
+    const presigned = await ok(
+      api.POST("/v1/workspaces/{workspace}/volumes/{volume}/files/url", {
+        params: { path: { workspace, volume } },
+        body: { path, method: "put", expires_seconds: 3600 },
+      }),
+    );
+    await putBytes(presigned.url, file);
+    return;
+  }
+
+  const mib = 1024 * 1024;
+  const partSize = Math.max(MIN_PART_BYTES, Math.ceil(file.size / MAX_PARTS / mib) * mib);
+  const upload = await ok(
+    api.POST("/v1/workspaces/{workspace}/volumes/{volume}/uploads", {
+      params: { path: { workspace, volume } },
+      body: { path, size_bytes: file.size, part_size_bytes: partSize },
+    }),
+  );
+  try {
+    const parts: Schemas["CompletedPart"][] = [];
+    const pending = [...upload.parts];
+    const worker = async () => {
+      for (let part = pending.shift(); part; part = pending.shift()) {
+        const etag = await putBytes(
+          part.url,
+          file.slice(part.offset, part.offset + part.size_bytes),
+        );
+        if (!etag) throw new Error("The object store did not return the part's ETag.");
+        parts.push({ number: part.number, etag });
+      }
+    };
+    await Promise.all(Array.from({ length: PART_CONCURRENCY }, worker));
+    parts.sort((left, right) => left.number - right.number);
+    await ok(
+      api.POST("/v1/workspaces/{workspace}/volumes/{volume}/uploads/complete", {
+        params: { path: { workspace, volume } },
+        body: { path: upload.path, upload_id: upload.upload_id, parts },
+      }),
+    );
+  } catch (error) {
+    // Aborting makes the store drop the parts already sent.
+    await ok(
+      api.POST("/v1/workspaces/{workspace}/volumes/{volume}/uploads/abort", {
+        params: { path: { workspace, volume } },
+        body: { path: upload.path, upload_id: upload.upload_id },
+      }),
+    ).catch(() => undefined);
+    throw error;
+  }
+}
+
+async function putBytes(url: string, body: Blob): Promise<string | null> {
+  const response = await fetch(url, { method: "PUT", body });
+  if (!response.ok) throw new Error(`Upload failed (${response.status} ${response.statusText})`);
+  return response.headers.get("ETag");
 }
 
 function joinRelativePath(path: string, name: string): string {
   const relative = path.replace(/^\/+|\/+$/g, "");
   return relative ? `${relative}/${name}` : name;
-}
-
-function encodePath(path: string): string {
-  return path.split("/").map(encodeURIComponent).join("/");
 }

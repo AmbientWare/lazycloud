@@ -4,21 +4,18 @@ import {
   skipToken,
   type QueryClient,
 } from "@tanstack/react-query";
-import { z } from "zod";
 
-import { apiRequest, postJson, withWorkspace } from "@/lib/api/unserved";
-import {
-  encodedValueSchema,
-  mapCountSchema,
-  mapKeyPageSchema,
-  mapEntrySchema,
-  collectionWriteSchema,
-  jsonValueSchema,
-  queueSizeSchema,
-} from "@/lib/api/schemas";
+import { api, ok, type Schemas } from "@/lib/api/client";
+import { jsonValueSchema } from "@/lib/api/schemas";
+import { fileBase64 } from "@/lib/files";
+import { nextPageCursor, selectPages } from "@/lib/queries/infinite-list";
 
 import { workspaceQueryKeys } from "./workspace-keys";
-import { fileBase64 } from "@/lib/files";
+
+export type CollectionKind = "queues" | "maps";
+export type QueueInfo = Schemas["QueueInfo"];
+export type MapInfo = Schemas["MapInfo"];
+export type MapEntry = Schemas["MapEntry"];
 
 /**
  * Queues and maps are written by running user code, which the change stream
@@ -27,76 +24,145 @@ import { fileBase64 } from "@/lib/files";
  * asks, and stops asking with the tab.
  */
 const LIVE_INTERVAL_MS = 2_000;
+const LIST_INTERVAL_MS = 30_000;
 
-export function queueSizeQueryOptions(workspaceId: string, name: string) {
-  return queryOptions({
-    queryKey: workspaceQueryKeys.collections.queueSize(workspaceId, name),
-    queryFn: () =>
-      apiRequest(
-        withWorkspace(`/api/v1/simplequeues/${encodePath(name)}/size`, workspaceId),
-        queueSizeSchema,
-      ),
-    refetchInterval: LIVE_INTERVAL_MS,
-  });
-}
-
-export function mapCountQueryOptions(workspaceId: string, name: string) {
-  return queryOptions({
-    queryKey: workspaceQueryKeys.collections.mapCount(workspaceId, name),
-    queryFn: () =>
-      apiRequest(
-        withWorkspace(`/api/v1/maps/${encodePath(name)}/count`, workspaceId),
-        mapCountSchema,
-      ),
-    refetchInterval: LIVE_INTERVAL_MS,
-  });
-}
-
-export function queuePeekQueryOptions(workspaceId: string, name: string) {
-  return queryOptions({
-    queryKey: workspaceQueryKeys.collections.queuePeek(workspaceId, name),
-    queryFn: () =>
-      apiRequest(
-        withWorkspace(`/api/v1/simplequeues/${encodePath(name)}/peek`, workspaceId),
-        encodedValueSchema,
-      ),
-    refetchInterval: LIVE_INTERVAL_MS,
-  });
-}
-
-export function mapKeysQueryOptions(workspaceId: string, name: string, prefix = "") {
+export function queuesQueryOptions(workspace: string) {
   return infiniteQueryOptions({
-    queryKey: [...workspaceQueryKeys.collections.mapKeys(workspaceId, name), prefix],
+    queryKey: workspaceQueryKeys.collections.list(workspace, "queues"),
     initialPageParam: "",
     queryFn: ({ pageParam }) =>
-      apiRequest(
-        withWorkspace(
-          `/api/v1/maps/${encodePath(name)}/entries?${new URLSearchParams({
-            prefix,
-            ...(pageParam ? { cursor: pageParam } : {}),
-          })}`,
-          workspaceId,
-        ),
-        mapKeyPageSchema,
+      ok(
+        api.GET("/v1/workspaces/{workspace}/queues", {
+          params: { path: { workspace }, query: { limit: 100, cursor: pageParam || undefined } },
+        }),
       ),
-    getNextPageParam: (page) => page.next ?? undefined,
+    getNextPageParam: nextPageCursor,
+    refetchInterval: LIST_INTERVAL_MS,
+  });
+}
+
+export function selectQueues(
+  data: { pages: readonly Schemas["QueuePage"][] } | undefined,
+  hasNextPage: boolean | undefined,
+) {
+  return selectPages(
+    data,
+    (page) => page.queues,
+    hasNextPage,
+    (queue) => queue.name,
+  );
+}
+
+export function mapsQueryOptions(workspace: string) {
+  return infiniteQueryOptions({
+    queryKey: workspaceQueryKeys.collections.list(workspace, "maps"),
+    initialPageParam: "",
+    queryFn: ({ pageParam }) =>
+      ok(
+        api.GET("/v1/workspaces/{workspace}/maps", {
+          params: { path: { workspace }, query: { limit: 100, cursor: pageParam || undefined } },
+        }),
+      ),
+    getNextPageParam: nextPageCursor,
+    refetchInterval: LIST_INTERVAL_MS,
+  });
+}
+
+export function selectMaps(
+  data: { pages: readonly Schemas["MapPage"][] } | undefined,
+  hasNextPage: boolean | undefined,
+) {
+  return selectPages(
+    data,
+    (page) => page.maps,
+    hasNextPage,
+    (map) => map.name,
+  );
+}
+
+/** The exact size and oldest message; a queue never written has size 0. */
+export function queueQueryOptions(workspace: string, queue: string) {
+  return queryOptions({
+    queryKey: workspaceQueryKeys.collections.item(workspace, "queues", queue),
+    queryFn: () =>
+      ok(
+        api.GET("/v1/workspaces/{workspace}/queues/{queue}", {
+          params: { path: { workspace, queue } },
+        }),
+      ),
+    refetchInterval: LIVE_INTERVAL_MS,
+  });
+}
+
+/** The oldest message without removing it; `message` is absent when the queue is empty. */
+export function queueHeadQueryOptions(workspace: string, queue: string) {
+  return queryOptions({
+    queryKey: workspaceQueryKeys.collections.queueHead(workspace, queue),
+    queryFn: () =>
+      ok(
+        api.GET("/v1/workspaces/{workspace}/queues/{queue}/head", {
+          params: { path: { workspace, queue } },
+        }),
+      ),
+    refetchInterval: LIVE_INTERVAL_MS,
+  });
+}
+
+/** Exact key count and expiry statistics; a map never written is empty. */
+export function mapQueryOptions(workspace: string, map: string) {
+  return queryOptions({
+    queryKey: workspaceQueryKeys.collections.item(workspace, "maps", map),
+    queryFn: () =>
+      ok(
+        api.GET("/v1/workspaces/{workspace}/maps/{map}", {
+          params: { path: { workspace, map } },
+        }),
+      ),
+    refetchInterval: LIVE_INTERVAL_MS,
+  });
+}
+
+export function mapKeysQueryOptions(workspace: string, map: string, prefix: string) {
+  return infiniteQueryOptions({
+    queryKey: workspaceQueryKeys.collections.mapKeys(workspace, map, prefix),
+    initialPageParam: "",
+    queryFn: ({ pageParam }) =>
+      ok(
+        api.GET("/v1/workspaces/{workspace}/maps/{map}/keys", {
+          params: {
+            path: { workspace, map },
+            query: { prefix: prefix || undefined, limit: 200, cursor: pageParam || undefined },
+          },
+        }),
+      ),
+    getNextPageParam: nextPageCursor,
     refetchInterval: 15_000,
   });
 }
 
-export function mapValueQueryOptions(workspaceId: string, name: string, key: string | null) {
+export function selectMapKeys(
+  data: { pages: readonly Schemas["MapKeyPage"][] } | undefined,
+  hasNextPage: boolean | undefined,
+) {
+  return selectPages(
+    data,
+    (page) => page.keys,
+    hasNextPage,
+    (key) => key,
+  );
+}
+
+export function mapEntryQueryOptions(workspace: string, map: string, key: string | null) {
   return queryOptions({
-    queryKey: workspaceQueryKeys.collections.mapValue(workspaceId, name, key),
+    queryKey: workspaceQueryKeys.collections.mapEntry(workspace, map, key),
     queryFn:
       key === null
         ? skipToken
         : () =>
-            apiRequest(
-              withWorkspace(
-                `/api/v1/maps/${encodePath(name)}/entry?${new URLSearchParams({ key })}`,
-                workspaceId,
-              ),
-              mapEntrySchema,
+            ok(
+              api.GET("/v1/workspaces/{workspace}/maps/{map}/entries/{key}", {
+                params: { path: { workspace, map, key } },
+              }),
             ),
     refetchInterval: LIVE_INTERVAL_MS,
   });
@@ -112,79 +178,94 @@ export function parseCollectionJson(text: string): string {
   return serialized;
 }
 
+function encodeJson(json: string): Promise<string> {
+  return fileBase64(new Blob([parseCollectionJson(json)]));
+}
+
+/**
+ * Write a key. With `revision` the write applies only while the key still
+ * holds it; without one only while the key is missing. Either failed
+ * condition is a conflict. A null `ttlSeconds` keeps the current expiry, 0
+ * removes it.
+ */
 export async function setMapValue(
-  workspaceId: string,
-  name: string,
+  workspace: string,
+  map: string,
   key: string,
   json: string,
   ttlSeconds: number | null,
   revision?: string,
-) {
-  return postJson(
-    withWorkspace(`/api/v1/maps/${encodePath(name)}/set`, workspaceId),
-    collectionWriteSchema,
-    {
-      key,
-      value_base64: await fileBase64(new Blob([parseCollectionJson(json)])),
-      ttl_seconds: ttlSeconds,
-      ...(revision === undefined ? { if_absent: true } : { if_revision: revision }),
-    },
-  );
-}
-
-export function deleteMapKey(workspaceId: string, name: string, key: string, revision: string) {
-  return postJson(
-    withWorkspace(`/api/v1/maps/${encodePath(name)}/delete`, workspaceId),
-    collectionWriteSchema,
-    { key, if_revision: revision },
-  );
-}
-
-export async function putQueueMessage(workspaceId: string, name: string, json: string) {
-  return postJson(
-    withWorkspace(`/api/v1/simplequeues/${encodePath(name)}/put`, workspaceId),
-    collectionWriteSchema,
-    { value_base64: await fileBase64(new Blob([parseCollectionJson(json)])) },
-  );
-}
-
-export function popQueueMessage(workspaceId: string, name: string) {
-  return postJson(
-    withWorkspace(`/api/v1/simplequeues/${encodePath(name)}/pop`, workspaceId),
-    encodedValueSchema,
-  );
-}
-
-export function deleteCollection(workspaceId: string, kind: "maps" | "queues", name: string) {
-  return apiRequest(
-    withWorkspace(
-      `/api/v1/${kind === "maps" ? "maps" : "simplequeues"}/${encodePath(name)}`,
-      workspaceId,
-    ),
-    z.null(),
-    { method: "DELETE" },
-  );
-}
-
-export async function refreshCollection(
-  client: QueryClient,
-  workspaceId: string,
-  kind: "maps" | "queues",
-  name: string,
-) {
-  await Promise.all([
-    client.invalidateQueries({ queryKey: workspaceQueryKeys.resources.list(workspaceId, kind) }),
-    client.invalidateQueries({
-      queryKey: workspaceQueryKeys.collections.resource(
-        workspaceId,
-        kind === "maps" ? "map" : "queue",
-        name,
-      ),
+): Promise<Schemas["MapEntryWrite"]> {
+  return ok(
+    api.PUT("/v1/workspaces/{workspace}/maps/{map}/entries/{key}", {
+      params: { path: { workspace, map, key } },
+      body: {
+        value: await encodeJson(json),
+        ...(ttlSeconds === null ? {} : { ttl_seconds: ttlSeconds }),
+        ...(revision === undefined
+          ? { if_absent: true }
+          : { if_absent: false, if_revision: revision }),
+      },
     }),
-  ]);
+  );
 }
 
-/** Collection names may contain slashes; keep them path-safe segment by segment. */
-function encodePath(name: string): string {
-  return name.split("/").map(encodeURIComponent).join("/");
+/** Deletes the key only while it still holds `revision`. */
+export function deleteMapKey(
+  workspace: string,
+  map: string,
+  key: string,
+  revision: string,
+): Promise<void> {
+  return ok(
+    api.DELETE("/v1/workspaces/{workspace}/maps/{map}/entries/{key}", {
+      params: { path: { workspace, map, key }, query: { if_revision: revision } },
+    }),
+  );
+}
+
+export async function putQueueMessage(workspace: string, queue: string, json: string) {
+  return ok(
+    api.POST("/v1/workspaces/{workspace}/queues/{queue}/messages", {
+      params: { path: { workspace, queue } },
+      body: { messages: [await encodeJson(json)] },
+    }),
+  );
+}
+
+/** Removes and returns the oldest message; `message` is absent when the queue was empty. */
+export function popQueueMessage(
+  workspace: string,
+  queue: string,
+): Promise<Schemas["QueueMessageResult"]> {
+  return ok(
+    api.POST("/v1/workspaces/{workspace}/queues/{queue}/pop", {
+      params: { path: { workspace, queue } },
+    }),
+  );
+}
+
+export function deleteCollection(
+  workspace: string,
+  kind: CollectionKind,
+  name: string,
+): Promise<void> {
+  return kind === "maps"
+    ? ok(
+        api.DELETE("/v1/workspaces/{workspace}/maps/{map}", {
+          params: { path: { workspace, map: name } },
+        }),
+      )
+    : ok(
+        api.DELETE("/v1/workspaces/{workspace}/queues/{queue}", {
+          params: { path: { workspace, queue: name } },
+        }),
+      );
+}
+
+/** Refetch the kind's list and every open inspector of it, which share its key prefix. */
+export function refreshCollection(client: QueryClient, workspace: string, kind: CollectionKind) {
+  return client.invalidateQueries({
+    queryKey: workspaceQueryKeys.collections.list(workspace, kind),
+  });
 }
