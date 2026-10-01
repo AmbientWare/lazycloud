@@ -383,10 +383,8 @@ def _report_failure(message: str) -> None:
 
 
 def current_cli_command() -> tuple[str, ...]:
-    """How ssh should invoke this CLI, independent of the PATH it runs with."""
-    executable = shutil.which("lazycloud")
-    if executable is not None:
-        return (str(Path(executable).resolve()),)
+    """How ssh should invoke this CLI: the installation running now, not
+    whichever `lazycloud` its PATH finds first, which may be another version."""
     return (sys.executable, "-m", "lazycloud.cli.main")
 
 

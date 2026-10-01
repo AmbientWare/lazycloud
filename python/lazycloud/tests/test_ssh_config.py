@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+import os
+import subprocess
 from pathlib import Path
 
 import pytest
 from lazycloud.clients.api import ApiClient
 from lazycloud.clients.workloads import WorkloadsClient
-from lazycloud.session.ssh import SshAccess, SshPaths, SshPodHost, SshSetupError
+from lazycloud.session.ssh import (
+    SshAccess,
+    SshPaths,
+    SshPodHost,
+    SshSetupError,
+    current_cli_command,
+)
 from shared.ssh import ssh_host_alias
 
 _KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl"
@@ -61,3 +69,19 @@ def test_a_full_sync_removes_only_this_workspaces_stale_hosts(tmp_path: Path) ->
     ]
     assert "lazycloud-acme-dev-gone" not in paths.known_hosts.read_text()
     assert f"lazycloud-other-dev-box {_KEY}" in paths.known_hosts.read_text().splitlines()
+
+
+def test_ssh_runs_the_hidden_commands_of_the_running_cli(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # An older `lazycloud` first on PATH must not answer for this one.
+    stale = tmp_path / "lazycloud"
+    stale.write_text("#!/bin/sh\necho \"No such command '$1'\" >&2\nexit 2\n")
+    stale.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+
+    for command in ("ssh-proxy", "ssh-cert"):
+        done = subprocess.run(
+            [*current_cli_command(), command, "--help"], capture_output=True, text=True, check=False
+        )
+        assert done.returncode == 0, done.stderr
