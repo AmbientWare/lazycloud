@@ -15,7 +15,6 @@ class ImageBuildStepKind(StringEnum):
     Pyproject = "pyproject"
     MicromambaEnvironment = "micromamba-environment"
     Micromamba = "micromamba"
-    Apt = "apt"
 
 
 class PythonVersion(StringEnum):

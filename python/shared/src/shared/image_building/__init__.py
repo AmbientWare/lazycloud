@@ -3,7 +3,6 @@ from __future__ import annotations
 from shared.image_building.constants import (
     DEFAULT_CONTEXT_IGNORES,
     DEFAULT_IMAGE_BASE,
-    DOCKER_HUB_REGISTRY,
 )
 from shared.image_building.context import fingerprint_build_context, fingerprint_files
 from shared.image_building.requirements import (
@@ -14,7 +13,6 @@ from shared.image_building.requirements import (
 __all__ = [
     "DEFAULT_CONTEXT_IGNORES",
     "DEFAULT_IMAGE_BASE",
-    "DOCKER_HUB_REGISTRY",
     "fingerprint_build_context",
     "fingerprint_files",
     "load_requirements_file",

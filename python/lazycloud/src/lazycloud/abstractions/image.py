@@ -5,16 +5,25 @@ import hashlib
 import io
 import json
 import re
-import shlex
+import time
 import zipfile
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import TracebackType
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, TypeVar
+from uuid import UUID
 
-from pydantic import JsonValue, TypeAdapter
-from shared.app_identity import IMAGE_BUILD_CONTEXT_BUCKET
+from pydantic import JsonValue, TypeAdapter, ValidationError
+from shared.api import (
+    ErrorCode,
+    ImageBuild,
+    ImageBuildLogEntry,
+    ImageBuildPhase,
+    ImageBuildStatus,
+    ImageDefinition,
+    ImageStepKind,
+)
 from shared.image_building import (
     DEFAULT_IMAGE_BASE,
     fingerprint_build_context,
@@ -39,19 +48,40 @@ from shared.image_building.credentials import (
 from shared.image_building.python import normalize_python_version
 from typing_extensions import Self
 
-from lazycloud.terminal import ProgressCallback, Terminal, TerminalStep
+from lazycloud.clients.api import ApiClient, ApiError, is_transient
+from lazycloud.control import api_client, require_workspace, resolve_control_client_config
+from lazycloud.exceptions import UnsupportedFeatureError
+from lazycloud.session.task import retry_backoff, retry_budget_spent
+from lazycloud.terminal import Terminal, TerminalStep
 
 if TYPE_CHECKING:
-    from shared.http.images import (
-        BuildImageRequest,
-        BuildImageResponse,
-        BuildStep,
-        VerifyImageBuildRequest,
-        VerifyImageBuildResponse,
-    )
-
     from lazycloud.abstractions.image_project import ImageProject
 
+T = TypeVar("T")
+
+# Most a build read holds before answering; the API allows 60.
+_BUILD_WAIT_SECONDS = 30
+_MAX_BUILD_ATTEMPTS = 2
+# Rejections of the definition itself, reported as an invalid image.
+_DEFINITION_ERRORS = frozenset({ErrorCode.invalid_request, ErrorCode.unsupported})
+_STEP_KINDS = {
+    ImageBuildStepKind.Shell: ImageStepKind.shell,
+    ImageBuildStepKind.Pip: ImageStepKind.pip,
+    ImageBuildStepKind.Micromamba: ImageStepKind.micromamba,
+    ImageBuildStepKind.UvProject: ImageStepKind.uv_project,
+    ImageBuildStepKind.PoetryProject: ImageStepKind.poetry_project,
+    ImageBuildStepKind.Pyproject: ImageStepKind.pyproject,
+    ImageBuildStepKind.MicromambaEnvironment: ImageStepKind.micromamba_environment,
+}
+_PHASE_SUMMARIES = {
+    ImageBuildPhase.queued: "queued",
+    ImageBuildPhase.starting: "starting build container",
+    ImageBuildPhase.building: "building",
+    ImageBuildPhase.finished: "finishing",
+}
+_WAITING_SUMMARIES = frozenset(
+    {_PHASE_SUMMARIES[ImageBuildPhase.queued], _PHASE_SUMMARIES[ImageBuildPhase.starting]}
+)
 
 _DOCKER_APT_DISTRIBUTION = (
     "set -eu; . /etc/os-release; "
@@ -102,7 +132,18 @@ class ImageBuildResult:
     python_version: str = ""
     build_id: str = ""
     error: str = ""
-    responses: tuple[BuildImageResponse, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class ImageVerification:
+    """Whether the platform accepts an image definition and has its image ready."""
+
+    image_id: str
+    valid: bool
+    exists: bool
+    build_id: str = ""
+    reason: str = ""
+    python_version: str = ""
 
 
 @dataclass(frozen=True)
@@ -113,38 +154,10 @@ class ImageBuildContext:
     files: tuple[str, ...] = field(default_factory=tuple)
 
 
-class ImageVerifyClient(Protocol):
-    def verify_image_build(self, request: VerifyImageBuildRequest) -> VerifyImageBuildResponse: ...
-
-
-class ImageBuildClient(ImageVerifyClient, Protocol):
-    def build_image(self, request: BuildImageRequest) -> Iterator[BuildImageResponse]: ...
-
-
-@runtime_checkable
-class ImageContextUploadResult(Protocol):
-    @property
-    def object_id(self) -> str: ...
-
-
-class ImageContextUploadClient(Protocol):
-    def upload_bytes(
-        self,
-        data: bytes,
-        *,
-        name: str,
-        bucket: str = "default",
-        overwrite: bool = False,
-        content_type: str = "application/octet-stream",
-        metadata: dict[str, str] | None = None,
-        progress: ProgressCallback | None = None,
-    ) -> ImageContextUploadResult | Mapping[str, JsonValue]: ...
-
-
 @dataclass(init=False)
 class Image:
     architecture: LinuxArchitecture = LinuxArchitecture.Amd64
-    base: str = DEFAULT_IMAGE_BASE
+    base: str | None = None
     python_version: str = "3.12"
     packages: tuple[str, ...] = field(default_factory=tuple)
     commands: tuple[str, ...] = field(default_factory=tuple)
@@ -161,7 +174,6 @@ class Image:
     explicit_image_id: str | None = None
     ignore_python: bool = False
     include_files_patterns: tuple[str, ...] = field(default_factory=tuple)
-    context_object_id: str | None = None
 
     def __init__(
         self,
@@ -176,7 +188,7 @@ class Image:
     ) -> None:
         self.architecture = LinuxArchitecture(architecture)
         self.python_version = normalize_python_version(str(python_version))
-        self.base = base_image or DEFAULT_IMAGE_BASE
+        self.base = base_image or None
         self.packages = tuple(_constructor_python_packages(python_packages))
         self.commands = tuple(str(command) for command in commands)
         self.build_steps = ()
@@ -192,7 +204,6 @@ class Image:
         self.explicit_image_id = image_id
         self.ignore_python = False
         self.include_files_patterns = ()
-        self.context_object_id = None
         if env_vars is not None:
             self.with_envs(env_vars)
 
@@ -395,7 +406,7 @@ class Image:
         return self
 
     def _with_dockerfile(self, path: str | Path, *, context_dir: str | Path | None = None) -> Self:
-        if self.base != DEFAULT_IMAGE_BASE:
+        if self.base is not None:
             msg = "dockerfile builds cannot also set a custom base image"
             raise ValueError(msg)
         dockerfile_path = Path(path)
@@ -432,107 +443,101 @@ class Image:
             resolved.update(resolve_registry_credentials(unresolved_keys, env=env))
         return _registry_credentials_for_transport(resolved)
 
-    def _build_request(
-        self, *, env: Mapping[str, str] | None = None, machine: str = ""
-    ) -> BuildImageRequest:
-        from shared.http.images import BuildImageRequest
-
-        spec = self.spec()
-        return BuildImageRequest(
-            architecture=spec.architecture,
-            python_version=spec.python_version,
-            python_packages=list(spec.packages),
-            commands=list(spec.commands),
-            existing_image_uri=spec.base,
-            existing_image_creds=self.get_credentials_from_env(env),
-            build_steps=[_http_build_step(step) for step in spec.build_steps],
-            env_vars=[f"{key}={value}" for key, value in spec.env.items()],
-            dockerfile=spec.dockerfile or "",
-            build_ctx_object=self._build_context_object(),
-            build_ctx_digest=spec.context_digest or "",
-            secrets=list(spec.secrets),
-            gpu=spec.gpu or "",
-            ignore_python=spec.ignore_python,
-            machine=machine,
-        )
-
-    def _verify_request(
+    def definition(
         self,
-        *,
-        force_rebuild: bool = False,
         env: Mapping[str, str] | None = None,
-    ) -> VerifyImageBuildRequest:
-        from shared.http.images import VerifyImageBuildRequest
+        context_sha256: str | None = None,
+    ) -> ImageDefinition:
+        """The API definition of this image.
 
-        spec = self.spec()
-        return VerifyImageBuildRequest(
-            architecture=spec.architecture,
-            python_version=spec.python_version,
-            python_packages=list(spec.packages),
-            commands=list(spec.commands),
-            force_rebuild=force_rebuild,
-            existing_image_uri=spec.base,
-            existing_image_creds=self.get_credentials_from_env(env),
-            build_steps=[_http_build_step(step) for step in spec.build_steps],
-            env_vars=[f"{key}={value}" for key, value in spec.env.items()],
-            dockerfile=spec.dockerfile or "",
-            build_ctx_object=self._build_context_object(),
-            build_ctx_digest=spec.context_digest or "",
-            secrets=list(spec.secrets),
-            gpu=spec.gpu or "",
-            ignore_python=spec.ignore_python,
-            image_id=spec.image_id,
-        )
+        Credentials named in `base_image_creds` come from `env`, or from the
+        process environment when it is None. Without `context_sha256`, an image
+        with a build context uses the digest of its local archive.
+        """
+        release = normalize_python_version(self.python_version)
+        fields: dict[str, Any] = {
+            "python_version": release.removeprefix("micromamba"),
+            "architecture": self.architecture.value,
+        }
+        if release.startswith("micromamba"):
+            fields["micromamba"] = True
+        if self.base is not None:
+            fields["base_image"] = self.base
+        credentials = self.get_credentials_from_env(env)
+        if credentials:
+            fields["base_image_credentials"] = credentials
+        if self.packages:
+            fields["python_packages"] = list(self.packages)
+        if self.build_steps:
+            fields["steps"] = [_definition_step(step) for step in self.build_steps]
+        if self.commands:
+            fields["commands"] = list(self.commands)
+        if self.env_vars:
+            fields["env"] = dict(self.env_vars)
+        if self.dockerfile_content is not None:
+            fields["dockerfile"] = self.dockerfile_content
+        if self._has_context():
+            fields["context"] = {"sha256": context_sha256 or self._context_archive().digest}
+        secrets = dedupe_names(self.secrets)
+        if secrets:
+            fields["secrets"] = secrets
+        if self.gpu_hint:
+            fields["gpu"] = self.gpu_hint
+        try:
+            return ImageDefinition.model_validate(fields)
+        except ValidationError as exc:
+            # Inputs stay out of the message because they can hold credentials.
+            problems = "; ".join(
+                f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}"
+                for error in exc.errors(include_input=False)
+            )
+            raise ValueError(f"invalid image definition: {problems}") from exc
 
     def verify(
         self,
-        client: ImageVerifyClient,
+        client: ApiClient | None = None,
         *,
         force_rebuild: bool = False,
         env: Mapping[str, str] | None = None,
-    ) -> VerifyImageBuildResponse:
-        return client.verify_image_build(self._verify_request(force_rebuild=force_rebuild, env=env))
+        workspace: str | None = None,
+    ) -> ImageVerification:
+        """Resolve the image without building it.
+
+        A definition the platform rejects returns `valid=False` with the reason.
+        `force_rebuild` reports a ready image as missing.
+        """
+        api, selected = _session(client, workspace)
+        if self.explicit_image_id:
+            return _verify_id(api, selected, self.explicit_image_id)
+        definition = self._prepared_definition(api, selected, env)
+        return _verify_definition(api, selected, definition, force_rebuild=force_rebuild)
 
     def exists(
         self,
-        client: ImageVerifyClient,
+        client: ApiClient | None = None,
         *,
         force_rebuild: bool = False,
         env: Mapping[str, str] | None = None,
+        workspace: str | None = None,
     ) -> tuple[bool, ImageBuildResult]:
-        response = self.verify(client, force_rebuild=force_rebuild, env=env)
-        return (
-            response.exists,
-            ImageBuildResult(
-                success=response.exists,
-                image_id=response.image_id,
-                python_version=self.spec().python_version,
-                build_id=response.build_id,
-                error=response.reason
-                if not response.valid or (self.explicit_image_id and not response.exists)
-                else "",
-            ),
+        verification = self.verify(
+            client, force_rebuild=force_rebuild, env=env, workspace=workspace
         )
-
-    def _build_stream(
-        self,
-        client: ImageBuildClient,
-        *,
-        env: Mapping[str, str] | None = None,
-        machine: str = "",
-    ) -> Iterator[BuildImageResponse]:
-        yield from client.build_image(self._build_request(env=env, machine=machine))
+        return verification.exists, _verification_result(self, verification)
 
     def build(
         self,
-        client: ImageBuildClient,
+        client: ApiClient | None = None,
         *,
         terminal: Terminal | None = None,
         env: Mapping[str, str] | None = None,
         machine: str = "",
+        workspace: str | None = None,
     ) -> ImageBuildResult:
+        """Make the image ready, building it unless it already is."""
+        api, selected = _session(client, workspace)
         with ImageBuildOperation(
-            self, client, terminal=terminal, env=env, machine=machine
+            self, api, selected, terminal=terminal, env=env, machine=machine
         ) as operation:
             operation.verify()
             return operation.finish()
@@ -540,7 +545,7 @@ class Image:
     def spec(self) -> ImageSpec:
         return ImageSpec(
             architecture=self.architecture,
-            base=self.base,
+            base=self.base or DEFAULT_IMAGE_BASE,
             python_version=normalize_python_version(self.python_version),
             packages=list(self.packages),
             commands=list(self.commands),
@@ -550,7 +555,6 @@ class Image:
             dockerfile=self.dockerfile_content,
             context_path=self.context_path,
             context_digest=self.context_digest,
-            context_object_id=self.context_object_id,
             include_files_patterns=list(self.include_files_patterns),
             credential_keys=dedupe_names(self.credential_keys),
             secrets=dedupe_names(self.secrets),
@@ -558,6 +562,9 @@ class Image:
             image_id=self.explicit_image_id,
             ignore_python=self.ignore_python,
         )
+
+    def _has_context(self) -> bool:
+        return self.context_path is not None or self.dockerfile_content is not None
 
     def _context_archive(self) -> ImageBuildContext:
         from lazycloud.abstractions.image_project import project_context_files
@@ -586,55 +593,37 @@ class Image:
             files=tuple(str(path).replace("\\", "/") for path in files),
         )
 
-    def _sync_context(
-        self,
-        client: ImageContextUploadClient,
-        *,
-        bucket: str = IMAGE_BUILD_CONTEXT_BUCKET,
-        name: str | None = None,
-        overwrite: bool = False,
-    ) -> Self:
+    def _prepared_definition(
+        self, client: ApiClient, workspace: str, env: Mapping[str, str] | None
+    ) -> ImageDefinition:
+        """The definition, after storing its build context in the workspace."""
+        if not self._has_context():
+            return self.definition(env)
         context = self._context_archive()
-        if not context.files and self.dockerfile_content is None:
-            return self
-        object_name = name or f"image-context-{context.digest}.zip"
-        uploaded = client.upload_bytes(
-            context.data,
-            name=object_name,
-            bucket=bucket,
-            overwrite=overwrite,
-            content_type="application/zip",
-            metadata={"digest": context.digest, "path": context.path},
-        )
-        object_id = uploaded.object_id if isinstance(uploaded, ImageContextUploadResult) else ""
-        if not object_id and isinstance(uploaded, Mapping):
-            object_id = str(uploaded.get("object_id", ""))
-        if not object_id:
-            msg = "context upload did not return an object_id"
-            raise ValueError(msg)
-        self.context_digest = context.digest
-        self.context_object_id = object_id
-        return self
-
-    def _build_context_object(self) -> str:
-        return self.context_object_id or ""
+        client.store_source(workspace, context.digest, context.data)
+        return self.definition(env, context_sha256=context.digest)
 
 
 @dataclass(slots=True)
 class ImageBuildOperation:
+    """One image's preparation, shown as the terminal step Image."""
+
     image: Image
-    client: ImageBuildClient
+    client: ApiClient
+    workspace: str
     terminal: Terminal | None = None
     env: Mapping[str, str] | None = field(default=None, repr=False)
     machine: str = ""
     _step: TerminalStep | None = field(default=None, init=False, repr=False)
-    _verified: bool = field(default=False, init=False)
+    _definition: ImageDefinition | None = field(default=None, init=False, repr=False)
     _result: ImageBuildResult | None = field(default=None, init=False)
+    _stage: str = field(default="", init=False)
+    _attempt: int = field(default=1, init=False)
 
     def __enter__(self) -> Self:
-        if self.terminal is not None:
-            self._step = self.terminal.step("Image", "preparing")
-            self._step.__enter__()
+        terminal = self.terminal or Terminal(quiet=True)
+        self._step = terminal.step("Image", "preparing")
+        self._step.__enter__()
         return self
 
     def __exit__(
@@ -646,50 +635,219 @@ class ImageBuildOperation:
         if self._step is not None:
             self._step.__exit__(exc_type, exc, traceback)
 
+    @property
+    def step(self) -> TerminalStep:
+        if self._step is None:
+            raise RuntimeError("an image build operation runs inside a with block")
+        return self._step
+
     def verify(self) -> None:
-        exists, result = self.image.exists(self.client, env=self.env)
-        if exists or result.error or self.image.explicit_image_id:
-            self._result = result
-            if self._step is not None:
-                if exists:
-                    self._step.done(f"python {result.python_version} · cached")
-                else:
-                    self._step.fail(result.error)
-        self._verified = True
+        """Finish at once when the image is ready, rejected or an unknown id."""
+        if self.machine:
+            raise UnsupportedFeatureError("image build", ["machine"])
+        image = self.image
+        if image.explicit_image_id:
+            verification = _verify_id(self.client, self.workspace, image.explicit_image_id)
+        else:
+            self._definition = image._prepared_definition(self.client, self.workspace, self.env)
+            verification = _verify_definition(self.client, self.workspace, self._definition)
+        if verification.exists:
+            self._result = _verification_result(image, verification)
+            self.step.done(f"python {verification.python_version} · cached")
+        elif not verification.valid or image.explicit_image_id:
+            self._result = _verification_result(image, verification)
+            self.step.fail(self._result.error)
 
     def finish(self) -> ImageBuildResult:
-        if not self._verified:
-            raise RuntimeError("image build requires completed verification")
         if self._result is not None:
             return self._result
-        responses: list[BuildImageResponse] = []
-        last_response: BuildImageResponse | None = None
-        for response in self.image._build_stream(self.client, env=self.env, machine=self.machine):
-            responses.append(response)
-            if self._step is not None:
-                _write_build_response(self._step, response)
-            if response.done:
-                last_response = response
-                break
+        if self._definition is None:
+            raise RuntimeError("image build requires completed verification")
+        try:
+            resolution = self.client.build_image(self.workspace, self._definition)
+        except ApiError as exc:
+            if exc.code not in _DEFINITION_ERRORS:
+                raise
+            return self._failed(exc.message)
+        image = resolution.image
+        if resolution.build is None:
+            if not image.ready:
+                return self._failed(f"the API started no build for image {image.id}")
+            self.step.done(f"python {image.python_version} · cached")
+            return ImageBuildResult(
+                success=True, image_id=image.id, python_version=image.python_version
+            )
+        build = self._follow(resolution.build)
+        if build.status is ImageBuildStatus.succeeded:
+            self.step.done(f"python {image.python_version} · built")
+            return ImageBuildResult(
+                success=True,
+                image_id=image.id,
+                python_version=image.python_version,
+                build_id=str(build.id),
+            )
+        return self._failed(
+            build.failure or "image build failed",
+            image_id=image.id,
+            python_version=image.python_version,
+            build_id=str(build.id),
+        )
 
-        if last_response is None:
-            if self._step is not None:
-                self._step.fail("the build stream ended before the build finished")
-            self._result = ImageBuildResult(
-                success=False,
-                error="image build produced no terminal response",
-                responses=tuple(responses),
+    def _failed(
+        self, error: str, *, image_id: str = "", python_version: str = "", build_id: str = ""
+    ) -> ImageBuildResult:
+        self.step.fail(error)
+        return ImageBuildResult(
+            success=False,
+            image_id=image_id,
+            python_version=python_version,
+            build_id=build_id,
+            error=error,
+        )
+
+    def _follow(self, build: ImageBuild) -> ImageBuild:
+        """Show the build's output until it finishes, resuming dropped streams."""
+        self._show_build(build)
+        build_id = build.id
+        cursor = 0
+        while True:
+            cursor = self._follow_logs(build_id, cursor)
+            build = _retry_transient(
+                lambda: self.client.get_image_build(
+                    self.workspace, build_id, wait_seconds=_BUILD_WAIT_SECONDS
+                )
             )
-        else:
-            self._result = ImageBuildResult(
-                success=last_response.success,
-                image_id=last_response.image_id,
-                python_version=last_response.python_version,
-                build_id=last_response.build_id,
-                error=_response_error(last_response),
-                responses=tuple(responses),
-            )
-        return self._result
+            if build.status is not ImageBuildStatus.building:
+                return build
+            self._show_build(build)
+
+    def _follow_logs(self, build_id: UUID, cursor: int) -> int:
+        failures = 0
+        failing_since = 0.0
+        while True:
+            try:
+                for entry in self.client.stream_image_build_logs(
+                    self.workspace, build_id, after=cursor, follow=True
+                ):
+                    cursor = entry.id
+                    failures = 0
+                    self._show_log(entry)
+                return cursor
+            except Exception as exc:
+                failures += 1
+                if failures == 1:
+                    failing_since = time.monotonic()
+                if not is_transient(exc) or retry_budget_spent(failing_since):
+                    raise
+                retry_backoff(failures)
+
+    def _show_build(self, build: ImageBuild) -> None:
+        # A running build keeps the step it last showed.
+        if (
+            not self._stage
+            or build.attempt != self._attempt
+            or build.phase is not ImageBuildPhase.building
+        ):
+            self._stage = _PHASE_SUMMARIES[build.phase]
+        self._attempt = build.attempt
+        self.step.update(_attempt_summary(self._stage, self._attempt))
+
+    def _show_log(self, entry: ImageBuildLogEntry) -> None:
+        self.step.log(entry.data)
+        # Output only comes from a running build container.
+        if entry.attempt != self._attempt or self._stage in _WAITING_SUMMARIES:
+            self._attempt = entry.attempt
+            self._stage = _PHASE_SUMMARIES[ImageBuildPhase.building]
+        self._stage = _build_summary(entry.data, self._stage)
+        self.step.update(_attempt_summary(self._stage, self._attempt))
+
+
+def _session(client: ApiClient | None, workspace: str | None) -> tuple[ApiClient, str]:
+    config = resolve_control_client_config(workspace=workspace)
+    return client or api_client(config), require_workspace(config)
+
+
+def _verify_id(client: ApiClient, workspace: str, image_id: str) -> ImageVerification:
+    try:
+        image = client.get_image(workspace, image_id)
+    except ApiError as exc:
+        if exc.code is not ErrorCode.not_found and exc.code not in _DEFINITION_ERRORS:
+            raise
+        return ImageVerification(image_id=image_id, valid=False, exists=False, reason=exc.message)
+    return ImageVerification(
+        image_id=image.id,
+        valid=True,
+        exists=image.ready,
+        reason="" if image.ready else f"image {image.id} is not ready",
+        python_version=image.python_version,
+    )
+
+
+def _verify_definition(
+    client: ApiClient,
+    workspace: str,
+    definition: ImageDefinition,
+    *,
+    force_rebuild: bool = False,
+) -> ImageVerification:
+    try:
+        resolution = client.resolve_image(workspace, definition)
+    except ApiError as exc:
+        if exc.code not in _DEFINITION_ERRORS:
+            raise
+        return ImageVerification(image_id="", valid=False, exists=False, reason=exc.message)
+    return ImageVerification(
+        image_id=resolution.image.id,
+        valid=True,
+        exists=resolution.image.ready and not force_rebuild,
+        build_id=str(resolution.build.id) if resolution.build is not None else "",
+        python_version=resolution.image.python_version,
+    )
+
+
+def _verification_result(image: Image, verification: ImageVerification) -> ImageBuildResult:
+    failed = not verification.valid or (
+        image.explicit_image_id is not None and not verification.exists
+    )
+    return ImageBuildResult(
+        success=verification.exists,
+        image_id=verification.image_id,
+        python_version=verification.python_version,
+        build_id=verification.build_id,
+        error=verification.reason if failed else "",
+    )
+
+
+def _retry_transient(call: Callable[[], T]) -> T:
+    failures = 0
+    failing_since = 0.0
+    while True:
+        try:
+            return call()
+        except Exception as exc:
+            failures += 1
+            if failures == 1:
+                failing_since = time.monotonic()
+            if not is_transient(exc) or retry_budget_spent(failing_since):
+                raise
+            retry_backoff(failures)
+
+
+def _attempt_summary(summary: str, attempt: int) -> str:
+    if attempt > 1:
+        return f"retry {attempt}/{_MAX_BUILD_ATTEMPTS} · {summary}"
+    return summary
+
+
+def _definition_step(step: ImageBuildStep) -> dict[str, Any]:
+    payload: dict[str, Any] = {"kind": _STEP_KINDS[step.kind].value}
+    if step.command is not None:
+        payload["command"] = step.command
+    if step.args:
+        payload["args"] = list(step.args)
+    if step.groups:
+        payload["groups"] = list(step.groups)
+    return payload
 
 
 def _credential_values(
@@ -786,13 +944,6 @@ def _env_items(
     return result
 
 
-def _http_build_step(step: ImageBuildStep) -> BuildStep:
-    from shared.http.images import BuildStep
-
-    command = step.command or shlex.join(step.args)
-    return BuildStep(type=step.kind.value, command=command, groups=step.groups)
-
-
 def _context_files(context: Path, patterns: tuple[str, ...]) -> list[Path]:
     if not context.exists():
         msg = f"build context does not exist: {context}"
@@ -844,74 +995,15 @@ def _ignored_context_path(path: Path) -> bool:
     return bool(parts.intersection(ignored))
 
 
-def _response_error(response: BuildImageResponse) -> str:
-    if response.success:
-        return ""
-    return response.error or response.msg.strip()
-
-
-def _write_build_response(step: TerminalStep, response: BuildImageResponse) -> None:
-    if not response.done and not response.msg:
-        summaries = {
-            "queued": "queued",
-            "retry": "retrying after interruption",
-            "capacity_busy": "waiting for compute",
-            "capacity_unavailable": "waiting for compute availability",
-            "capacity_limit": "waiting for room within the compute limit",
-            "provisioning_compute": "starting compute",
-            "starting_container": "starting build container",
-            "dependencies": "waiting for build inputs",
-        }
-        summary = (
-            summaries[response.pending_reason.value]
-            if response.pending_reason is not None
-            else "building"
-            if response.status.value == "running"
-            else "queued"
-        )
-        if response.attempt_number > 1:
-            summary = f"retry {response.attempt_number}/2 · {summary}"
-        step.update(summary)
-        return
-    if response.warning and response.msg:
-        step.log(f"warning: {response.msg.rstrip()}")
-        return
-    if response.msg and not response.done:
-        for line in response.msg.replace("\r", "\n").splitlines():
-            if line.strip():
-                step.log(line)
-                step.update(_build_summary(line, step.summary))
-        return
-    if response.done and response.success:
-        step.done(f"python {response.python_version} · built".strip())
-        return
-    if response.done and not response.success:
-        step.fail(_response_error(response))
-
-
-_BUILD_STEP = re.compile(r"^STEP (\d+)/(\d+): (.*)$")
-_BUILD_STAGES = (
-    ("submitting build container request", "submitting"),
-    ("container request queued", "queued"),
-    ("build container execution started", "starting builder"),
-    ("image build worker request accepted", "building"),
-    ("image archive ready", "archived"),
-)
+# BuildKit's plain progress names each Dockerfile step, as in
+# `#7 [2/4] RUN pip install numpy` or `#5 [builder 1/3] FROM docker.io/...`.
+_BUILDKIT_STEP = re.compile(r"^#\d+ \[(?:\S+ )?(\d+)/(\d+)\] (.*)$")
 
 
 def _build_summary(line: str, current: str) -> str:
     """The one-line build summary a log line implies, or the current one."""
-    text = line.strip()
-    matched = _BUILD_STEP.match(text)
-    if matched is not None:
-        instruction = matched.group(3).split("@", 1)[0]
-        return f"step {matched.group(1)}/{matched.group(2)} · {instruction[:48]}"
-    lower = text.lower()
-    if lower.startswith("archive progress:"):
-        return f"archiving {text.split(':', 1)[1].strip()}"
-    if lower.startswith("cache key:"):
-        return "planning"
-    for prefix, summary in _BUILD_STAGES:
-        if lower.startswith(prefix):
-            return summary
-    return current
+    matched = _BUILDKIT_STEP.match(line.strip())
+    if matched is None:
+        return current
+    instruction = matched.group(3).split("@", 1)[0]
+    return f"step {matched.group(1)}/{matched.group(2)} · {instruction[:48]}"
