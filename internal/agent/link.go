@@ -32,11 +32,13 @@ type link struct {
 	listener net.Listener
 	server   *grpc.Server
 
-	mu     sync.Mutex
-	queue  []*hostproto.SupervisorCommand
-	active context.CancelFunc
+	mu    sync.Mutex
+	queue []*hostproto.SupervisorCommand
+	// stream is the connection that alone sends the queue; a new connection
+	// supersedes it.
+	stream *linkStream
+	served bool
 	closed bool
-	wake   chan struct{}
 
 	goroutines sync.WaitGroup
 }
@@ -71,13 +73,24 @@ func listenLink(ctx context.Context, c *container, dir string) (*link, error) {
 			grpc.MaxRecvMsgSize(supervisor.MaxMessageBytes),
 			grpc.MaxSendMsgSize(supervisor.MaxMessageBytes),
 		),
-		wake: make(chan struct{}, 1),
 	}
 	hostproto.RegisterContainerLinkServer(l.server, l)
 	return l, nil
 }
 
+// linkStream is one supervisor connection's claim on the queue.
+type linkStream struct {
+	cancel context.CancelFunc
+	wake   chan struct{}
+}
+
 func (l *link) serve() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.closed {
+		return
+	}
+	l.served = true
 	l.goroutines.Go(func() { _ = l.server.Serve(l.listener) })
 }
 
@@ -90,7 +103,12 @@ func (l *link) close(timeout time.Duration) {
 		return
 	}
 	l.closed = true
+	served := l.served
 	l.mu.Unlock()
+	if !served {
+		// The server only owns the listener once it serves it.
+		_ = l.listener.Close()
+	}
 	stopped := make(chan struct{})
 	l.goroutines.Go(func() {
 		l.server.GracefulStop()
@@ -110,16 +128,19 @@ func (l *link) close(timeout time.Duration) {
 func (l *link) enqueue(command *hostproto.SupervisorCommand) {
 	l.mu.Lock()
 	if l.closed || len(l.queue) >= maxLinkQueue {
+		closed := l.closed
 		l.mu.Unlock()
-		l.c.log.Warn("dropping supervisor command", "closed", l.closed)
+		l.c.log.Warn("dropping supervisor command", "closed", closed)
 		return
 	}
 	l.queue = append(l.queue, command)
-	l.mu.Unlock()
-	select {
-	case l.wake <- struct{}{}:
-	default:
+	if l.stream != nil {
+		select {
+		case l.stream.wake <- struct{}{}:
+		default:
+		}
 	}
+	l.mu.Unlock()
 }
 
 // queuedAttempts lists attempts sent to no supervisor yet.
@@ -135,20 +156,32 @@ func (l *link) queuedAttempts() []string {
 	return attempts
 }
 
-func (l *link) front() *hostproto.SupervisorCommand {
+// next returns the queue's front for s, or false once s is superseded.
+func (l *link) next(s *linkStream) (*hostproto.SupervisorCommand, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if len(l.queue) == 0 {
-		return nil
+	if l.stream != s {
+		return nil, false
 	}
-	return l.queue[0]
+	if len(l.queue) == 0 {
+		return nil, true
+	}
+	return l.queue[0], true
 }
 
-func (l *link) pop() {
+// sent pops the front after s delivered it. Only the current stream pops,
+// so the front is what s sent. A superseded stream leaves it for its
+// successor, which may send it again; the supervisor ignores a repeated
+// RunAttempt.
+func (l *link) sent(s *linkStream) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if l.stream != s {
+		return false
+	}
 	l.queue[0] = nil
 	l.queue = l.queue[1:]
+	return true
 }
 
 // Connect configures the supervisor, then relays queued commands while a
@@ -156,12 +189,20 @@ func (l *link) pop() {
 func (l *link) Connect(stream hostproto.ContainerLink_ConnectServer) error {
 	ctx, cancel := context.WithCancel(stream.Context())
 	defer cancel()
+	s := &linkStream{cancel: cancel, wake: make(chan struct{}, 1)}
 	l.mu.Lock()
-	if l.active != nil {
-		l.active()
+	if l.stream != nil {
+		l.stream.cancel()
 	}
-	l.active = cancel
+	l.stream = s
 	l.mu.Unlock()
+	defer func() {
+		l.mu.Lock()
+		if l.stream == s {
+			l.stream = nil
+		}
+		l.mu.Unlock()
+	}()
 
 	if err := stream.Send(&hostproto.SupervisorCommand{Body: &hostproto.SupervisorCommand_Configure{Configure: l.c.configure()}}); err != nil {
 		return fmt.Errorf("send configure: %w", err)
@@ -177,18 +218,23 @@ func (l *link) Connect(stream hostproto.ContainerLink_ConnectServer) error {
 		}
 	})
 	for {
-		command := l.front()
+		command, current := l.next(s)
+		if !current {
+			return nil
+		}
 		if command == nil {
 			select {
 			case <-ctx.Done():
 				return nil
-			case <-l.wake:
+			case <-s.wake:
 			}
 			continue
 		}
 		if err := stream.Send(command); err != nil {
 			return fmt.Errorf("send supervisor command: %w", err)
 		}
-		l.pop()
+		if !l.sent(s) {
+			return nil
+		}
 	}
 }

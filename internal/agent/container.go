@@ -19,9 +19,14 @@ import (
 
 const (
 	claimWaitSeconds = 20
-	// completeTimeout bounds delivery of one attempt's outcome, including
-	// during agent shutdown.
-	completeTimeout = 15 * time.Second
+	// completeCallTimeout bounds one CompleteTask call. The call in flight
+	// when the agent stops still finishes.
+	completeCallTimeout = 15 * time.Second
+	maxCompleteBackoff  = 5 * time.Second
+	// cancelledRetention and maxCancelled bound the cancels remembered for
+	// attempts that may still arrive in a claim response.
+	cancelledRetention = 10 * time.Minute
+	maxCancelled       = 4096
 	// exitSettle bounds how long an exit waits for the link, completions and
 	// logs before it is reported.
 	exitSettle = 10 * time.Second
@@ -52,32 +57,37 @@ type container struct {
 	gone        chan struct{}
 	completions sync.WaitGroup
 
-	mu        sync.Mutex
-	phase     hostproto.ContainerPhase
-	exit      *hostproto.ContainerExit
-	exitedAt  time.Time
-	cleaned   bool
-	started   bool
-	running   map[string]struct{}
-	stopping  bool
-	grace     time.Duration
-	loadError *hostproto.RunnerError
-	link      *link
-	claiming  bool
+	mu       sync.Mutex
+	phase    hostproto.ContainerPhase
+	exit     *hostproto.ContainerExit
+	exitedAt time.Time
+	cleaned  bool
+	started  bool
+	running  map[string]struct{}
+	// completing holds running attempts whose outcome is being delivered.
+	completing map[string]struct{}
+	cancelled  cancelledAttempts
+	stopping   bool
+	grace      time.Duration
+	loadError  *hostproto.RunnerError
+	link       *link
+	claiming   bool
 }
 
 func (a *Agent) newContainer(id, handler string, slots int, phase hostproto.ContainerPhase) *container {
 	c := &container{
-		a:        a,
-		log:      a.log.With("container_id", id),
-		id:       id,
-		dir:      filepath.Join(a.cfg.StateDir, "containers", id),
-		handler:  handler,
-		slots:    max(1, slots),
-		phase:    phase,
-		running:  make(map[string]struct{}),
-		slotFree: make(chan struct{}, 1),
-		gone:     make(chan struct{}),
+		a:          a,
+		log:        a.log.With("container_id", id),
+		id:         id,
+		dir:        filepath.Join(a.cfg.StateDir, "containers", id),
+		handler:    handler,
+		slots:      max(1, slots),
+		phase:      phase,
+		running:    make(map[string]struct{}),
+		completing: make(map[string]struct{}),
+		cancelled:  cancelledAttempts{at: make(map[string]time.Time)},
+		slotFree:   make(chan struct{}, 1),
+		gone:       make(chan struct{}),
 	}
 	c.work, c.cancelWork = context.WithCancel(a.ctx)
 	c.claims, c.cancelClaims = context.WithCancel(c.work)
@@ -410,7 +420,8 @@ func (c *container) onSupervisorMessage(ctx context.Context, m *hostproto.Superv
 }
 
 // onReady marks the container ready. After an agent restart the supervisor
-// restates its running attempts, which then occupy slots.
+// restates its running attempts, including finished ones it has not yet
+// reported, which then occupy slots.
 func (c *container) onReady(ready *hostproto.SlotsReady) {
 	c.mu.Lock()
 	if c.phase == hostproto.ContainerPhase_CONTAINER_PHASE_EXITED {
@@ -418,10 +429,18 @@ func (c *container) onReady(ready *hostproto.SlotsReady) {
 		return
 	}
 	running := map[string]struct{}{}
+	now := time.Now()
 	for _, attempt := range ready.GetRunningAttempts() {
-		running[attempt] = struct{}{}
+		// A cancel queued behind this report kills the attempt silently.
+		if !c.cancelled.has(attempt, now) {
+			running[attempt] = struct{}{}
+		}
 	}
 	for _, attempt := range c.link.queuedAttempts() {
+		running[attempt] = struct{}{}
+	}
+	// The server counts an attempt until its completion commits.
+	for attempt := range c.completing {
 		running[attempt] = struct{}{}
 	}
 	c.running = running
@@ -497,28 +516,38 @@ func (c *container) claimLoop(ctx context.Context) {
 	}
 }
 
+// dispatch hands a claimed attempt to the supervisor unless its cancel
+// arrived on the session before the claim response.
 func (c *container) dispatch(task *hostproto.ClaimedTask) {
+	attempt := task.GetAttemptId()
 	c.mu.Lock()
 	if c.phase == hostproto.ContainerPhase_CONTAINER_PHASE_EXITED {
 		c.mu.Unlock()
 		return
 	}
-	c.running[task.GetAttemptId()] = struct{}{}
+	if c.cancelled.has(attempt, time.Now()) {
+		c.mu.Unlock()
+		c.log.Info("dropping claimed attempt that was already cancelled", "attempt_id", attempt)
+		return
+	}
+	c.running[attempt] = struct{}{}
 	l := c.link
 	c.mu.Unlock()
 	l.enqueue(&hostproto.SupervisorCommand{Body: &hostproto.SupervisorCommand_Run{Run: &hostproto.RunAttempt{
 		TaskId:        task.GetTaskId(),
-		AttemptId:     task.GetAttemptId(),
+		AttemptId:     attempt,
 		InputEncoding: task.GetInputEncoding(),
 		Input:         task.GetInput(),
 		Deadline:      task.GetDeadline(),
 	}}})
 }
 
-// cancelAttempt kills the slot running attempt. The slot is free for claims
-// at once; the supervisor queues the next attempt until it has restarted.
+// cancelAttempt kills the slot running attempt, or remembers the cancel for
+// a claim response still in flight. The slot is free for claims at once; the
+// supervisor queues the next attempt until it has restarted.
 func (c *container) cancelAttempt(attempt string) {
 	c.mu.Lock()
+	c.cancelled.add(attempt, time.Now())
 	delete(c.running, attempt)
 	l := c.link
 	c.mu.Unlock()
@@ -531,22 +560,37 @@ func (c *container) cancelAttempt(attempt string) {
 // onFinished completes the attempt after its output, then frees the slot.
 // The server counts the attempt against the container's slots until the
 // completion commits, so claiming earlier would find no free slot and wait.
+// The container is untrusted: only one outcome per running attempt counts.
 func (c *container) onFinished(finished *hostproto.AttemptFinished) {
+	attempt := finished.GetAttemptId()
+	c.mu.Lock()
+	_, running := c.running[attempt]
+	_, completing := c.completing[attempt]
+	if !running || completing {
+		c.mu.Unlock()
+		c.log.Debug("ignoring outcome for an attempt that awaits none", "attempt_id", attempt, "completing", completing)
+		return
+	}
+	c.completing[attempt] = struct{}{}
+	c.mu.Unlock()
 	seq := c.logs.mark()
 	c.completions.Add(1)
-	c.a.goOwned(func(ctx context.Context) {
+	c.a.goOwned(func(context.Context) {
 		defer c.completions.Done()
-		c.complete(ctx, seq, finished)
+		c.complete(c.work, seq, finished) //nolint:contextcheck // delivery lasts as long as the container's work
 		c.mu.Lock()
-		delete(c.running, finished.GetAttemptId())
+		delete(c.running, attempt)
+		delete(c.completing, attempt)
 		c.mu.Unlock()
 		c.signalSlotFree()
 	})
 }
 
+// complete delivers an outcome after its output, retrying transient failures
+// until ctx ends with the reported exit or the agent's stop. The call in
+// flight then still finishes; an outcome never delivered is left to the
+// server's reconciliation.
 func (c *container) complete(ctx context.Context, seq uint64, finished *hostproto.AttemptFinished) {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), completeTimeout)
-	defer cancel()
 	c.logs.waitFlushed(ctx, seq)
 	request := &hostproto.CompleteTaskRequest{ContainerId: c.id, AttemptId: finished.GetAttemptId()}
 	switch outcome := finished.GetOutcome().(type) {
@@ -560,17 +604,45 @@ func (c *container) complete(ctx context.Context, seq uint64, finished *hostprot
 	}
 	delay := 100 * time.Millisecond
 	for {
-		_, err := c.a.host.CompleteTask(ctx, request)
+		callCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), completeCallTimeout)
+		_, err := c.a.host.CompleteTask(callCtx, request)
+		cancel()
 		switch {
 		case err == nil:
 			return
 		case status.Code(err) == codes.FailedPrecondition:
 			c.log.Info("discarding stale attempt outcome", "attempt_id", finished.GetAttemptId())
 			return
-		case !retryable(err) || !sleep(ctx, delay):
+		case !retryable(err) || ctx.Err() != nil:
 			c.log.Error("completing attempt failed", "attempt_id", finished.GetAttemptId(), "error", err)
 			return
 		}
-		delay = min(2*delay, 2*time.Second)
+		c.log.Warn("completing attempt failed; retrying", "attempt_id", finished.GetAttemptId(), "error", err, "retry_in", delay)
+		// A stop during the wait leaves one last call.
+		sleep(ctx, delay)
+		delay = min(2*delay, maxCompleteBackoff)
 	}
+}
+
+// cancelledAttempts remembers recent cancels, oldest first.
+type cancelledAttempts struct {
+	at    map[string]time.Time
+	order []string
+}
+
+func (s *cancelledAttempts) add(attempt string, now time.Time) {
+	if _, known := s.at[attempt]; known {
+		return
+	}
+	for len(s.order) > 0 && (len(s.order) >= maxCancelled || now.Sub(s.at[s.order[0]]) >= cancelledRetention) {
+		delete(s.at, s.order[0])
+		s.order = s.order[1:]
+	}
+	s.at[attempt] = now
+	s.order = append(s.order, attempt)
+}
+
+func (s *cancelledAttempts) has(attempt string, now time.Time) bool {
+	at, known := s.at[attempt]
+	return known && now.Sub(at) < cancelledRetention
 }

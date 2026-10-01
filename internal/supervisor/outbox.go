@@ -62,6 +62,19 @@ func (o *outbox) pop() {
 	}
 }
 
+// unreportedAttempts lists attempts whose outcome is still queued.
+func (o *outbox) unreportedAttempts() []string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	var attempts []string
+	for _, m := range o.items {
+		if finished := m.GetFinished(); finished != nil {
+			attempts = append(attempts, finished.GetAttemptId())
+		}
+	}
+	return attempts
+}
+
 func (o *outbox) empty() bool {
 	o.mu.Lock()
 	defer o.mu.Unlock()

@@ -67,6 +67,8 @@ type hostServer struct {
 	logs    []*hostproto.LogLine
 	// appendDelay makes AppendLogs a slow consumer.
 	appendDelay time.Duration
+	// completeOutage fails CompleteTask as unavailable until it passes.
+	completeOutage time.Time
 }
 
 type serverSession struct {
@@ -178,6 +180,12 @@ func (s *hostServer) ClaimTasks(ctx context.Context, r *hostproto.ClaimTasksRequ
 }
 
 func (s *hostServer) CompleteTask(_ context.Context, r *hostproto.CompleteTaskRequest) (*hostproto.CompleteTaskResponse, error) {
+	s.mu.Lock()
+	outage := time.Now().Before(s.completeOutage)
+	s.mu.Unlock()
+	if outage {
+		return nil, status.Error(codes.Unavailable, "server is restarting")
+	}
 	s.completions <- r
 	return &hostproto.CompleteTaskResponse{}, nil
 }

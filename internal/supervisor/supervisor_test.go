@@ -53,7 +53,9 @@ func (l *linkServer) Connect(stream hostproto.ContainerLink_ConnectServer) error
 
 type harness struct {
 	t      *testing.T
+	socket string
 	server *linkServer
+	grpc   *grpc.Server
 	result chan error
 	cancel context.CancelFunc
 }
@@ -73,20 +75,14 @@ func startSupervisor(t *testing.T) *harness {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	socket := filepath.Join(dir, "agent.sock")
-	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "unix", socket)
-	if err != nil {
-		t.Fatal(err)
-	}
-	server := grpc.NewServer()
-	link := &linkServer{conns: make(chan *linkConn, 4)}
-	hostproto.RegisterContainerLinkServer(server, link)
-	go func() { _ = server.Serve(listener) }()
-
 	ctx, cancel := context.WithCancel(context.Background())
-	h := &harness{t: t, server: link, result: make(chan error, 1), cancel: cancel}
+	h := &harness{
+		t: t, socket: filepath.Join(dir, "agent.sock"), server: &linkServer{conns: make(chan *linkConn, 4)},
+		result: make(chan error, 1), cancel: cancel,
+	}
+	h.listen()
 	go func() {
-		h.result <- Run(ctx, Config{Socket: socket, Logger: slog.New(slog.NewTextHandler(os.Stderr, nil))})
+		h.result <- Run(ctx, Config{Socket: h.socket, Logger: slog.New(slog.NewTextHandler(os.Stderr, nil))})
 	}()
 	t.Cleanup(func() {
 		cancel()
@@ -95,9 +91,21 @@ func startSupervisor(t *testing.T) *harness {
 		case <-time.After(10 * time.Second):
 			t.Error("supervisor did not stop")
 		}
-		server.Stop()
+		h.grpc.Stop()
 	})
 	return h
+}
+
+// listen serves the link socket, as an agent does when it starts.
+func (h *harness) listen() {
+	h.t.Helper()
+	listener, err := (&net.ListenConfig{}).Listen(h.t.Context(), "unix", h.socket)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	h.grpc = grpc.NewServer()
+	hostproto.RegisterContainerLinkServer(h.grpc, h.server)
+	go func() { _ = h.grpc.Serve(listener) }()
 }
 
 func (h *harness) accept() *linkConn {
@@ -294,5 +302,30 @@ func TestSupervisorReconnectRestatesRunningAttempts(t *testing.T) {
 	m, _ = c.until(t, finished("long"))
 	if m.GetFinished().GetSuccess() == nil {
 		t.Fatalf("attempt after reconnect: %v", m)
+	}
+}
+
+// An attempt that finishes while no agent listens is still restated as
+// running, so the next agent accepts its queued outcome.
+func TestSupervisorRestatesAttemptsFinishedWhileDisconnected(t *testing.T) {
+	h := startSupervisor(t)
+	c := h.accept()
+	c.configure(t, "app:handle", 1)
+	c.until(t, isReady)
+	c.run(t, "short", `{"args": ["sleep", 0.5]}`)
+	time.Sleep(100 * time.Millisecond)
+	h.grpc.Stop()
+	time.Sleep(time.Second)
+
+	h.listen()
+	c = h.accept()
+	c.configure(t, "app:handle", 1)
+	m, _ := c.until(t, isReady)
+	if running := m.GetReady().GetRunningAttempts(); len(running) != 1 || running[0] != "short" {
+		t.Fatalf("restated running attempts %v", running)
+	}
+	m, _ = c.until(t, finished("short"))
+	if m.GetFinished().GetSuccess() == nil {
+		t.Fatalf("attempt finished while disconnected: %v", m)
 	}
 }

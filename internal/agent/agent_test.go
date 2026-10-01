@@ -11,6 +11,7 @@ import (
 	"time"
 
 	cerrdefs "github.com/containerd/errdefs"
+	"github.com/google/uuid"
 	"github.com/moby/moby/client"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
@@ -128,6 +129,28 @@ func TestAgentCancelsAndRecoversSlots(t *testing.T) {
 	}
 	if got := result(t, e.completion(e.task(id, `{"args": ["total", [5]]}`))); got != "5" {
 		t.Fatalf("after crash %q", got)
+	}
+}
+
+// A cancel can reach the agent before the claim response that holds its
+// attempt; the attempt then never runs.
+func TestAgentDropsAttemptsCancelledBeforeTheirClaim(t *testing.T) {
+	e := newEnv(t)
+	e.startAgent()
+	s := e.session()
+	id := e.startReady(s, 1)
+
+	cancelled := uuid.NewString()
+	cancel := cancelCommand(id, cancelled)
+	s.send(t, cancel)
+	s.until(t, 10*time.Second, acked(cancel.GetCommandId()))
+	e.server.enqueue(id, &hostproto.ClaimedTask{
+		TaskId: uuid.NewString(), AttemptId: cancelled, AttemptNumber: 1,
+		InputEncoding: hostproto.PayloadEncoding_PAYLOAD_ENCODING_JSON, Input: []byte(`{"args": ["total", [1]]}`),
+	})
+	// completion fails the test on the cancelled attempt's outcome.
+	if got := result(t, e.completion(e.task(id, `{"args": ["total", [2]]}`))); got != "2" {
+		t.Fatalf("after the cancelled attempt %q", got)
 	}
 }
 

@@ -385,6 +385,10 @@ func (s *Supervisor) readyMessage() *hostproto.SupervisorMessage {
 		}
 		sl.outMu.Unlock()
 	}
+	// A slot pushes its outcome as it clears its attempt, so reading slots
+	// first finds every attempt in one place or the other. The agent accepts
+	// outcomes only for attempts it counts as running.
+	running = append(running, s.out.unreportedAttempts()...)
 	return &hostproto.SupervisorMessage{Body: &hostproto.SupervisorMessage_Ready{Ready: &hostproto.SlotsReady{
 		Slots:           int32(len(s.slots)), //nolint:gosec // slots come from an int32
 		RunningAttempts: running,
