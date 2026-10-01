@@ -15,9 +15,10 @@ on conflict (workspace_id, name) where state = 'active' do nothing;
 -- The disk with its holder's state: the holder keeps the disk until it is
 -- released or its container stopped with its host lost.
 select d.id, d.size_bytes, d.generation, d.holder_container_id, d.lease_token,
-       c.state as holder_state, c.stop_reason as holder_stop_reason, d.released_at
+       c.state as holder_state, c.stop_reason as holder_stop_reason, h.state as holder_host_state, d.released_at
 from disks d
 left join containers c on c.id = d.holder_container_id
+left join hosts h on h.id = c.host_id
 where d.workspace_id = @workspace_id and d.name = @name and d.state = 'active'
 for update of d;
 
@@ -47,8 +48,9 @@ order by g.generation;
 select d.id, d.generation
 from disks d
 join containers c on c.id = d.holder_container_id
+join hosts h on h.id = c.host_id
 where d.id = @id and d.holder_container_id = @container_id and d.lease_token = @lease_token
-  and d.state = 'active' and c.host_id = @host_id
+  and d.state = 'active' and c.host_id = @host_id and h.state not in ('lost', 'retired')
   and (c.state <> 'stopped' or (d.released_at is null and c.stop_reason is distinct from 'host_lost'))
 for update of d;
 
@@ -77,20 +79,22 @@ delete from disk_generations where disk_id = @disk_id and generation < @generati
 
 -- name: ListDisks :many
 select d.id, d.name, d.size_bytes, d.stored_bytes, d.generation, d.holder_container_id,
-       c.state as holder_state, c.stop_reason as holder_stop_reason, d.released_at,
+       c.state as holder_state, c.stop_reason as holder_stop_reason, h.state as holder_host_state, d.released_at,
        d.created_at, d.updated_at
 from disks d
 left join containers c on c.id = d.holder_container_id
+left join hosts h on h.id = c.host_id
 where d.workspace_id = @workspace_id and d.state = 'active' and d.name > @after::text
 order by d.name
 limit @max_rows;
 
 -- name: ActiveDisk :one
 select d.id, d.name, d.size_bytes, d.stored_bytes, d.generation, d.holder_container_id,
-       c.state as holder_state, c.stop_reason as holder_stop_reason, d.released_at,
+       c.state as holder_state, c.stop_reason as holder_stop_reason, h.state as holder_host_state, d.released_at,
        d.created_at, d.updated_at
 from disks d
 left join containers c on c.id = d.holder_container_id
+left join hosts h on h.id = c.host_id
 where d.workspace_id = @workspace_id and d.state = 'active' and d.name = @name;
 
 -- name: MarkDiskDeleting :exec

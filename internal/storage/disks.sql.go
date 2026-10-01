@@ -14,10 +14,11 @@ import (
 
 const activeDisk = `-- name: ActiveDisk :one
 select d.id, d.name, d.size_bytes, d.stored_bytes, d.generation, d.holder_container_id,
-       c.state as holder_state, c.stop_reason as holder_stop_reason, d.released_at,
+       c.state as holder_state, c.stop_reason as holder_stop_reason, h.state as holder_host_state, d.released_at,
        d.created_at, d.updated_at
 from disks d
 left join containers c on c.id = d.holder_container_id
+left join hosts h on h.id = c.host_id
 where d.workspace_id = $1 and d.state = 'active' and d.name = $2
 `
 
@@ -35,6 +36,7 @@ type ActiveDiskRow struct {
 	HolderContainerID *uuid.UUID
 	HolderState       *string
 	HolderStopReason  *string
+	HolderHostState   *string
 	ReleasedAt        *time.Time
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
@@ -52,6 +54,7 @@ func (q *Queries) ActiveDisk(ctx context.Context, arg ActiveDiskParams) (ActiveD
 		&i.HolderContainerID,
 		&i.HolderState,
 		&i.HolderStopReason,
+		&i.HolderHostState,
 		&i.ReleasedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -274,10 +277,11 @@ func (q *Queries) InsertDiskGeneration(ctx context.Context, arg InsertDiskGenera
 
 const listDisks = `-- name: ListDisks :many
 select d.id, d.name, d.size_bytes, d.stored_bytes, d.generation, d.holder_container_id,
-       c.state as holder_state, c.stop_reason as holder_stop_reason, d.released_at,
+       c.state as holder_state, c.stop_reason as holder_stop_reason, h.state as holder_host_state, d.released_at,
        d.created_at, d.updated_at
 from disks d
 left join containers c on c.id = d.holder_container_id
+left join hosts h on h.id = c.host_id
 where d.workspace_id = $1 and d.state = 'active' and d.name > $2::text
 order by d.name
 limit $3
@@ -298,6 +302,7 @@ type ListDisksRow struct {
 	HolderContainerID *uuid.UUID
 	HolderState       *string
 	HolderStopReason  *string
+	HolderHostState   *string
 	ReleasedAt        *time.Time
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
@@ -321,6 +326,7 @@ func (q *Queries) ListDisks(ctx context.Context, arg ListDisksParams) ([]ListDis
 			&i.HolderContainerID,
 			&i.HolderState,
 			&i.HolderStopReason,
+			&i.HolderHostState,
 			&i.ReleasedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
@@ -337,9 +343,10 @@ func (q *Queries) ListDisks(ctx context.Context, arg ListDisksParams) ([]ListDis
 
 const lockActiveDisk = `-- name: LockActiveDisk :one
 select d.id, d.size_bytes, d.generation, d.holder_container_id, d.lease_token,
-       c.state as holder_state, c.stop_reason as holder_stop_reason, d.released_at
+       c.state as holder_state, c.stop_reason as holder_stop_reason, h.state as holder_host_state, d.released_at
 from disks d
 left join containers c on c.id = d.holder_container_id
+left join hosts h on h.id = c.host_id
 where d.workspace_id = $1 and d.name = $2 and d.state = 'active'
 for update of d
 `
@@ -357,6 +364,7 @@ type LockActiveDiskRow struct {
 	LeaseToken        []byte
 	HolderState       *string
 	HolderStopReason  *string
+	HolderHostState   *string
 	ReleasedAt        *time.Time
 }
 
@@ -373,6 +381,7 @@ func (q *Queries) LockActiveDisk(ctx context.Context, arg LockActiveDiskParams) 
 		&i.LeaseToken,
 		&i.HolderState,
 		&i.HolderStopReason,
+		&i.HolderHostState,
 		&i.ReleasedAt,
 	)
 	return i, err
@@ -382,8 +391,9 @@ const lockLeasedDisk = `-- name: LockLeasedDisk :one
 select d.id, d.generation
 from disks d
 join containers c on c.id = d.holder_container_id
+join hosts h on h.id = c.host_id
 where d.id = $1 and d.holder_container_id = $2 and d.lease_token = $3
-  and d.state = 'active' and c.host_id = $4
+  and d.state = 'active' and c.host_id = $4 and h.state not in ('lost', 'retired')
   and (c.state <> 'stopped' or (d.released_at is null and c.stop_reason is distinct from 'host_lost'))
 for update of d
 `

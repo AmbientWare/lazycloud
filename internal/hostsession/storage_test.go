@@ -100,7 +100,8 @@ func TestDiskLeaseOverTheHostConnection(t *testing.T) {
 	}
 	record := &hostproto.RecordDiskGenerationRequest{
 		ContainerId: container.String(), DiskId: lease.GetDiskId(), LeaseToken: lease.GetLeaseToken(),
-		Generation: 1, ManifestKey: "disks/" + lease.GetDiskId() + "/manifests/000000000001.json", ManifestSha256: strings.Repeat("a", 64),
+		Generation: 1, ManifestKey: "disks/" + lease.GetDiskId() + "/manifests/000000000001-" + strings.Repeat("a", 64) + ".json",
+		ManifestSha256: strings.Repeat("a", 64),
 	}
 	if _, err := h.client.RecordDiskGeneration(ctx, record); err != nil {
 		t.Fatal(err)

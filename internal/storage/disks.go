@@ -26,26 +26,41 @@ const (
 // holds the disk, or whose container has stopped.
 var ErrStaleLease = errors.New("the container does not hold the disk")
 
-// diskHeld reports whether the holder still keeps the disk: its container
-// has not stopped, or it stopped without releasing and its host was not lost.
-func diskHeld(holder *uuid.UUID, state, stopReason *string, released bool) bool {
-	if holder == nil || state == nil {
-		return false
-	}
-	if *state != "stopped" {
-		return true
-	}
-	return !released && (stopReason == nil || *stopReason != "host_lost")
+// holder is the container holding a disk and what became of it.
+type holder struct {
+	container                    *uuid.UUID
+	state, stopReason, hostState *string
+	released                     bool
 }
 
-func diskStatus(holder *uuid.UUID, state, stopReason *string, released bool) apitypes.DiskStatus {
+// held reports whether the holder still keeps the disk: its container has
+// not stopped, or it stopped without releasing and its host can still
+// release it. A host that was lost or retired never will.
+func (h holder) held() bool {
+	if h.container == nil || h.state == nil {
+		return false
+	}
+	if *h.state != "stopped" {
+		return true
+	}
+	if h.released || (h.stopReason != nil && *h.stopReason == "host_lost") {
+		return false
+	}
+	return h.hostState == nil || (*h.hostState != "lost" && *h.hostState != "retired")
+}
+
+func (h holder) status() apitypes.DiskStatus {
 	switch {
-	case !diskHeld(holder, state, stopReason, released):
+	case !h.held():
 		return apitypes.Detached
-	case *state == "stopped":
+	case *h.state == "stopped":
 		return apitypes.Saving
 	}
 	return apitypes.Attached
+}
+
+func lockedHolder(d LockActiveDiskRow) holder {
+	return holder{d.HolderContainerID, d.HolderState, d.HolderStopReason, d.HolderHostState, d.ReleasedAt != nil}
 }
 
 // DiskGeneration is one published generation of a disk chain.
@@ -101,7 +116,7 @@ func (s *Storage) AcquireDisk(ctx context.Context, host compute.HostID, containe
 		token := disk.LeaseToken
 		mine := disk.HolderContainerID != nil && *disk.HolderContainerID == container
 		if !mine {
-			if diskHeld(disk.HolderContainerID, disk.HolderState, disk.HolderStopReason, disk.ReleasedAt != nil) {
+			if lockedHolder(disk).held() {
 				return conflict("disk %s is held by container %s", name, *disk.HolderContainerID)
 			}
 			token = make([]byte, 32)
@@ -172,7 +187,9 @@ func (s *Storage) RecordDiskGeneration(ctx context.Context, host compute.HostID,
 		if g.Generation != row.Generation+1 || (g.ParentGeneration != 0 && g.ParentGeneration != row.Generation) {
 			return conflict("generation %d with parent %d does not follow %d", g.Generation, g.ParentGeneration, row.Generation)
 		}
-		want := fmt.Sprintf("disks/%s/manifests/%012d.json", disk, g.Generation)
+		// The key carries the manifest digest, so no upload can replace a
+		// recorded manifest.
+		want := fmt.Sprintf("disks/%s/manifests/%012d-%s.json", disk, g.Generation, g.ManifestSHA256)
 		if g.ManifestKey != want {
 			return invalid("manifest key %q, want %q", g.ManifestKey, want)
 		}
@@ -219,7 +236,7 @@ func (s *Storage) ReleaseDisk(ctx context.Context, container, disk uuid.UUID, to
 }
 
 func diskOut(row ListDisksRow) apitypes.Disk {
-	status := diskStatus(row.HolderContainerID, row.HolderState, row.HolderStopReason, row.ReleasedAt != nil)
+	status := holder{row.HolderContainerID, row.HolderState, row.HolderStopReason, row.HolderHostState, row.ReleasedAt != nil}.status()
 	out := apitypes.Disk{
 		Id: row.ID, Name: row.Name, SizeBytes: row.SizeBytes, StoredBytes: row.StoredBytes, Generation: row.Generation,
 		Status: status, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
@@ -270,7 +287,7 @@ func (s *Storage) DeleteDisk(ctx context.Context, workspace identity.WorkspaceID
 		if err != nil {
 			return fmt.Errorf("lock disk: %w", err)
 		}
-		if diskHeld(disk.HolderContainerID, disk.HolderState, disk.HolderStopReason, disk.ReleasedAt != nil) {
+		if lockedHolder(disk).held() {
 			return conflict("stop container %s before deleting disk %s", *disk.HolderContainerID, name)
 		}
 		return q.MarkDiskDeleting(ctx, disk.ID)

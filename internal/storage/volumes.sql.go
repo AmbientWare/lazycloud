@@ -127,14 +127,21 @@ func (q *Queries) ExpiredStorageGrants(ctx context.Context, maxRows int32) ([]st
 }
 
 const hostMountWorkspaces = `-- name: HostMountWorkspaces :many
-select distinct c.workspace_id
+select c.workspace_id
 from containers c
 where c.host_id = $1 and c.state <> 'stopped'
-  and (exists (select 1 from volume_mounts vm where vm.container_id = c.id)
-       or exists (select 1 from disks d where d.holder_container_id = c.id))
+  and exists (select 1 from volume_mounts vm where vm.container_id = c.id)
+union
+select c.workspace_id
+from disks d
+join containers c on c.id = d.holder_container_id
+where c.host_id = $1 and d.released_at is null and d.state = 'active'
+  and (c.state <> 'stopped' or c.stop_reason is distinct from 'host_lost')
 `
 
-// Workspaces whose volumes or disks a host's live containers use.
+// Workspaces whose volumes the host's live containers mount, or whose disks
+// its containers hold and have not released, which includes a stopped
+// holder still publishing its final generation.
 func (q *Queries) HostMountWorkspaces(ctx context.Context, hostID *uuid.UUID) ([]uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, hostMountWorkspaces, hostID)
 	if err != nil {

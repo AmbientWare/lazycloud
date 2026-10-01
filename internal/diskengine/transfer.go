@@ -187,7 +187,7 @@ func uploadLayer(ctx context.Context, store *objectStore, manifest layerManifest
 	if err != nil {
 		return publishResult{}, err
 	}
-	key := store.manifestKey(manifest.DiskID, manifest.Generation)
+	key := store.manifestKey(manifest.DiskID, manifest.Generation, digest)
 	if err := store.put(ctx, key, data, "application/json"); err != nil {
 		return publishResult{}, err
 	}

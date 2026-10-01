@@ -84,12 +84,19 @@ for update of v skip locked;
 update volumes set size_bytes = @size_bytes, size_measured_at = now() where id = @id;
 
 -- name: HostMountWorkspaces :many
--- Workspaces whose volumes or disks a host's live containers use.
-select distinct c.workspace_id
+-- Workspaces whose volumes the host's live containers mount, or whose disks
+-- its containers hold and have not released, which includes a stopped
+-- holder still publishing its final generation.
+select c.workspace_id
 from containers c
 where c.host_id = @host_id and c.state <> 'stopped'
-  and (exists (select 1 from volume_mounts vm where vm.container_id = c.id)
-       or exists (select 1 from disks d where d.holder_container_id = c.id));
+  and exists (select 1 from volume_mounts vm where vm.container_id = c.id)
+union
+select c.workspace_id
+from disks d
+join containers c on c.id = d.holder_container_id
+where c.host_id = @host_id and d.released_at is null and d.state = 'active'
+  and (c.state <> 'stopped' or c.stop_reason is distinct from 'host_lost');
 
 -- name: InsertStorageGrant :exec
 insert into storage_grants (access_key_id, workspace_id, host_id, expires_at)

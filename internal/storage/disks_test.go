@@ -15,7 +15,7 @@ const diskSpec = `{"name":"fn","disks":[{"name":"root","size_bytes":2147483648,"
 
 func generation(disk uuid.UUID, n, parent int64) PublishedGeneration {
 	return PublishedGeneration{
-		Generation: n, ParentGeneration: parent, ManifestKey: fmt.Sprintf("disks/%s/manifests/%012d.json", disk, n),
+		Generation: n, ParentGeneration: parent, ManifestKey: fmt.Sprintf("disks/%s/manifests/%012d-%064d.json", disk, n, n),
 		ManifestSHA256: fmt.Sprintf("%064d", n), AddedBytes: 100,
 	}
 }

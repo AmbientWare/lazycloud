@@ -83,8 +83,9 @@ func (e *Engine) Collect(ctx context.Context, diskID string, store Store, chain 
 		if !ok {
 			return
 		}
-		older, err := strconv.ParseInt(name, 10, 64)
-		if err == nil && older < floor && object.Key == objects.manifestKey(p.id, older) {
+		number, digest, _ := strings.Cut(name, "-")
+		older, err := strconv.ParseInt(number, 10, 64)
+		if err == nil && older < floor && object.Key == objects.manifestKey(p.id, older, digest) {
 			stale = append(stale, object.Key)
 		}
 	})

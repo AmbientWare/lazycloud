@@ -109,8 +109,11 @@ func (s *objectStore) chunkKey(diskID, sum string) string {
 	return s.diskPrefix(diskID) + "chunks/" + sum[:2] + "/" + sum
 }
 
-func (s *objectStore) manifestKey(diskID string, generation int64) string {
-	return fmt.Sprintf("%smanifests/%012d.json", s.diskPrefix(diskID), generation)
+// manifestKey names a manifest by generation and content digest, so an
+// upload never replaces a different manifest of the same generation, such
+// as one a stale holder wrote after the disk changed hands.
+func (s *objectStore) manifestKey(diskID string, generation int64, digest string) string {
+	return fmt.Sprintf("%smanifests/%012d-%s.json", s.diskPrefix(diskID), generation, digest)
 }
 
 func notFound(err error) bool {

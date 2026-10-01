@@ -63,6 +63,8 @@ create table disks (
     state text not null default 'active' check (state in ('active', 'deleting')),
     generation bigint not null default 0,
     stored_bytes bigint not null default 0 check (stored_bytes >= 0),
+    -- Deleting the holder's container ends the lease. A lease_token left
+    -- without a holder fences nothing: every check matches both.
     holder_container_id uuid references containers (id) on delete set null,
     lease_token bytea,
     released_at timestamptz,
@@ -70,7 +72,7 @@ create table disks (
     updated_at timestamptz not null default now(),
     deleted_at timestamptz,
     check ((state = 'deleting') = (deleted_at is not null)),
-    check ((holder_container_id is null) = (lease_token is null))
+    check (holder_container_id is null or lease_token is not null)
 );
 
 create unique index disks_active_name on disks (workspace_id, name) where state = 'active';
