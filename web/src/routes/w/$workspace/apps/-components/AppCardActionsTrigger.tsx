@@ -2,13 +2,19 @@ import { lazy, Suspense, useState } from "react";
 import { MoreHorizontal } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import type { App } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 
 const AppCardActions = lazy(() =>
   import("./AppCardActions").then((module) => ({ default: module.AppCardActions })),
 );
 
-export function AppCardActionsTrigger({ app, workspaceId }: { app: App; workspaceId: string }) {
+export function AppCardActionsTrigger({
+  app,
+  workspace,
+}: {
+  app: Schemas["App"];
+  workspace: string;
+}) {
   const [loaded, setLoaded] = useState(false);
   const trigger = (
     <Button
@@ -29,12 +35,7 @@ export function AppCardActionsTrigger({ app, workspaceId }: { app: App; workspac
 
   return (
     <Suspense fallback={trigger}>
-      <AppCardActions
-        app={app}
-        workspaceId={workspaceId}
-        actionIcon={<MoreHorizontal />}
-        defaultOpen
-      />
+      <AppCardActions app={app} workspace={workspace} actionIcon={<MoreHorizontal />} defaultOpen />
     </Suspense>
   );
 }

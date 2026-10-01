@@ -16,13 +16,14 @@ import {
 } from "@/components/ui/select";
 import { countLabel } from "@/lib/format";
 import { taskStatuses, workloadKinds } from "@/lib/api/schemas";
-import { appSummariesQueryOptions } from "@/lib/queries/apps";
+import { appsQueryOptions } from "@/lib/queries/apps";
 import {
   selectTaskList,
   taskMetricsQueryOptions,
   tasksInfiniteQueryOptions,
 } from "@/lib/queries/tasks";
-import { deployedStubsQueryOptions } from "@/lib/queries/stubs";
+import { deploymentsQueryOptions } from "@/lib/queries/deployments";
+import { stubId } from "@/lib/api/views";
 import { useWorkspace } from "@/lib/workspace-context";
 
 type TasksSearch = {
@@ -68,8 +69,8 @@ function TasksPage() {
       kind: search.kind,
     }),
   );
-  const apps = useQuery(appSummariesQueryOptions(workspace.id));
-  const workloads = useQuery(deployedStubsQueryOptions(workspace.id, search.app));
+  const apps = useQuery(appsQueryOptions(workspace.name));
+  const workloads = useQuery(deploymentsQueryOptions(workspace.name, search.app));
   const metrics = useQuery(taskMetricsQueryOptions(workspace.id));
   const taskList = selectTaskList(tasks.data, tasks.hasNextPage);
   const selectedDeployment = taskList.items.find((task) => task.deployment_id === search.deployment)
@@ -121,19 +122,21 @@ function TasksPage() {
               <FilterSelect
                 label="App"
                 value={search.app}
-                options={(apps.data?.items ?? []).map((item) => item.app.id)}
-                optionLabel={(appId) =>
-                  apps.data?.items.find((item) => item.app.id === appId)?.app.name ?? appId
-                }
+                options={(apps.data ?? []).map((app) => app.name)}
                 allLabel="All apps"
                 onChange={(app) => setSearch({ app, workload: undefined })}
               />
               <FilterSelect
                 label="Workload"
                 value={search.workload}
-                options={(workloads.data?.stubs ?? []).map((workload) => workload.id)}
-                optionLabel={(stubId) =>
-                  workloads.data?.stubs.find((workload) => workload.id === stubId)?.name ?? stubId
+                options={(workloads.data ?? []).map((workload) =>
+                  stubId(workload.app, workload.name, workload.release_id ?? ""),
+                )}
+                optionLabel={(id) =>
+                  workloads.data?.find(
+                    (workload) =>
+                      stubId(workload.app, workload.name, workload.release_id ?? "") === id,
+                  )?.name ?? id
                 }
                 allLabel="All workloads"
                 onChange={(workload) => setSearch({ workload })}

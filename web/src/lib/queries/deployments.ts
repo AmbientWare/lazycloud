@@ -102,7 +102,12 @@ export function workloadQueryOptions(workspace: string, app: string, kind: strin
               params: { path: { ...path, function: name } },
             }),
           );
-          return { deployment, release: fn.active_release, http: null, schedule: fn.schedule ?? null };
+          return {
+            deployment,
+            release: fn.active_release,
+            http: null,
+            schedule: fn.schedule ?? null,
+          };
         }
         case "endpoint": {
           const http = await ok(
@@ -125,6 +130,16 @@ export function workloadQueryOptions(workspace: string, app: string, kind: strin
     retry: (failures, error) => !(error instanceof WorkloadNotFoundError) && failures < 2,
     meta: workspaceLiveQueryMeta(true),
   });
+}
+
+/**
+ * Where the workload answers callers: an endpoint or ASGI app on its own
+ * host, a function on this origin's invoke operation.
+ */
+export function invokeUrl(workspace: string, { deployment, http }: Workload): string {
+  if (http) return http.url;
+  const path = [workspace, deployment.app, deployment.name].map(encodeURIComponent);
+  return `${window.location.origin}/v1/workspaces/${path[0]}/apps/${path[1]}/functions/${path[2]}/invoke`;
 }
 
 /** The workload's deployed versions, newest first. */
@@ -156,7 +171,11 @@ export function selectVersionList(
 }
 
 /** Run time percentiles, outcomes and cold starts per hour over the last day. */
-export function performanceQueryOptions(workspace: string, deployment: string, windowSeconds = 3600) {
+export function performanceQueryOptions(
+  workspace: string,
+  deployment: string,
+  windowSeconds = 3600,
+) {
   return queryOptions({
     queryKey: workspaceQueryKeys.deployments.performance(workspace, deployment, windowSeconds),
     queryFn: () =>

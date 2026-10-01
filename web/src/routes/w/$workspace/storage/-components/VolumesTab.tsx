@@ -142,11 +142,7 @@ function VolumeRow({
             {volume.name}
           </span>
           <span className="mt-0.5 block text-[11px] text-muted-foreground">
-            {volume.deletion_requested_at ? (
-              "Deleting · billing stopped"
-            ) : (
-              formatBytes(volume.size)
-            )}
+            {volume.deletion_requested_at ? "Deleting · billing stopped" : formatBytes(volume.size)}
           </span>
         </button>
         {!confirming ? (

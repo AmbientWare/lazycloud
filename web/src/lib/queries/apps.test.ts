@@ -1,44 +1,79 @@
 import { testQueryClient } from "@/test/query-client";
-import { QueryObserver } from "@tanstack/react-query";
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 
 import type { Schemas } from "@/lib/api/client";
-import { rememberWorkspaces } from "@/lib/api/workspaces";
 
 import { appSummariesQueryOptions } from "./apps";
-import { appById } from "./directory";
 
-beforeEach(() => rememberWorkspaces([{ id: "workspace-1", name: "workspace" }]));
+afterEach(() => vi.unstubAllGlobals());
 
-function app(id: string, name: string): Schemas["App"] {
-  return { id, name, state: "active", workloads: 0, created_at: "2026-07-10T12:00:00Z" };
+function app(name: string, running = 0): Schemas["App"] {
+  return {
+    id: `${name}-id`,
+    name,
+    state: "active",
+    workloads: 1,
+    running_containers: running,
+    created_at: "2026-07-10T12:00:00Z",
+  };
 }
 
-it("lists an app deployed after the first read once the summaries refetch", async () => {
-  let apps = [app("app-1", "shop")];
-  const fetchMock = vi.fn<typeof fetch>(async (input) => {
-    const path = new URL((input as Request).url).pathname;
-    if (path.endsWith("/apps")) return Response.json({ apps });
-    if (path.endsWith("/deployments")) return Response.json({ deployments: [] });
-    if (path.endsWith("/containers")) return Response.json({ containers: [] });
-    return Response.json({ series: [] });
-  });
-  vi.stubGlobal("fetch", fetchMock);
-  const client = testQueryClient({ defaultOptions: { queries: { retry: false } } });
-  const observer = new QueryObserver(client, appSummariesQueryOptions("workspace-1"));
-  const unsubscribe = observer.subscribe(() => {});
-  try {
-    await vi.waitFor(() => expect(observer.getCurrentResult().data?.items).toHaveLength(1));
+function workload(appName: string, name: string, deployedAt: string): Schemas["DeployedWorkload"] {
+  return {
+    id: `${appName}-${name}`,
+    app: appName,
+    name,
+    kind: "function",
+    state: "active",
+    version: 1,
+    running_containers: 0,
+    created_at: deployedAt,
+    deployed_at: deployedAt,
+  };
+}
 
-    apps = [...apps, app("app-2", "blog")];
-    const refetched = await observer.refetch();
+it("builds every app's card from complete lists and never reads containers", async () => {
+  const requests: URL[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn<typeof fetch>(async (input) => {
+      const url = new URL((input as Request).url);
+      requests.push(url);
+      const cursor = url.searchParams.get("cursor");
+      if (url.pathname.endsWith("/apps")) {
+        // Two pages: an app past the first page still gets a card.
+        return Response.json(
+          cursor ? { apps: [app("shop", 2)] } : { apps: [app("blog", 3)], next_cursor: "blog" },
+        );
+      }
+      if (url.pathname.endsWith("/deployments")) {
+        return Response.json(
+          cursor
+            ? { deployments: [workload("shop", "checkout", "2026-07-10T12:00:00Z")] }
+            : {
+                deployments: [
+                  workload("blog", "render", "2026-07-09T12:00:00Z"),
+                  workload("blog", "publish", "2026-07-10T09:00:00Z"),
+                ],
+                next_cursor: "blog/render",
+              },
+        );
+      }
+      return Response.json({
+        window_seconds: 3600,
+        start: "2026-07-09T13:00:00Z",
+        end: "2026-07-10T13:00:00Z",
+        series: [{ app: "shop", total: 4, buckets: [] }],
+      });
+    }),
+  );
 
-    expect(refetched.data?.items.map((item) => item.app.name)).toEqual(["blog", "shop"]);
-    // Lookups read the directory the refetch left behind, without another request.
-    const requests = fetchMock.mock.calls.length;
-    expect((await appById(client, "workspace-1", "app-2")).name).toBe("blog");
-    expect(fetchMock.mock.calls.length).toBe(requests);
-  } finally {
-    unsubscribe();
-  }
+  const summaries = await testQueryClient().fetchQuery(appSummariesQueryOptions("dev"));
+
+  expect(summaries.map((item) => item.app.name)).toEqual(["blog", "shop"]);
+  expect(summaries.map((item) => item.app.running_containers)).toEqual([3, 2]);
+  expect(summaries[0]?.workloads.map((item) => item.name)).toEqual(["publish", "render"]);
+  expect(summaries[1]?.workloads.map((item) => item.name)).toEqual(["checkout"]);
+  expect(summaries[1]?.activity?.total).toBe(4);
+  expect(requests.some((url) => url.pathname.includes("/containers"))).toBe(false);
 });

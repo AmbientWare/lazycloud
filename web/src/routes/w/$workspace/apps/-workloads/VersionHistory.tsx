@@ -1,62 +1,65 @@
 import { useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { Loader2, Pause, Play, Trash2 } from "lucide-react";
 
 import { InfiniteScrollBoundary } from "@/components/shared/InfiniteScrollBoundary";
 import { LiveRelativeTime } from "@/components/shared/LiveTime";
+import { PanelError } from "@/components/shared/PanelError";
+import { RowsSkeleton } from "@/components/shared/RowsSkeleton";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { Button } from "@/components/ui/button";
-import type { Deployment } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
+import { deploymentId } from "@/lib/api/views";
+import { invalidateAppLists } from "@/lib/queries/apps";
 import {
   deleteDeploymentMutationOptions,
+  selectVersionList,
   startDeploymentMutationOptions,
   stopDeploymentMutationOptions,
-} from "@/lib/queries/apps";
-import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
+  versionsInfiniteQueryOptions,
+  workloadRunning,
+} from "@/lib/queries/deployments";
 
-import type { WorkloadGroup } from "./grouping";
-
+/** The workload's deployed versions, newest first, with the actions each offers. */
 export function VersionHistory({
-  group,
-  app,
-  workspaceId,
-  workspaceName,
-  nextCursor,
-  loadingMore,
-  loadMoreError,
-  onLoadMore,
+  workspace,
+  workload,
 }: {
-  group: WorkloadGroup;
-  app: string;
-  workspaceId: string;
-  workspaceName: string;
-  nextCursor: string | undefined;
-  loadingMore: boolean;
-  loadMoreError: boolean;
-  onLoadMore: () => void;
+  workspace: string;
+  workload: Schemas["DeployedWorkload"];
 }) {
+  const versions = useInfiniteQuery(versionsInfiniteQueryOptions(workspace, workload.id));
+  const list = selectVersionList(versions.data, versions.hasNextPage);
+  if (versions.isPending) return <RowsSkeleton rows={3} height="h-12" />;
+  if (versions.isError && !versions.isFetchNextPageError) {
+    return <PanelError message={versions.error.message} />;
+  }
+  const newest = list.items[0]?.version;
+  // Deleting removes the workload with every version, so only its one
+  // remaining version offers it.
+  const onlyVersion = list.items.length === 1 && !list.nextCursor;
+
   return (
     <div className="@container min-w-0">
       <VersionListHeader />
       <div className="divide-y divide-border/70">
-        {group.deployments.map((deployment) => (
+        {list.items.map((version) => (
           <VersionRow
-            key={deployment.id}
-            deployment={deployment}
-            latest={deployment.id === group.latest.id}
-            lastDeployment={group.deployments.length === 1}
-            app={app}
-            workspaceId={workspaceId}
-            workspaceName={workspaceName}
+            key={version.version}
+            version={version}
+            workload={workload}
+            latest={version.version === newest}
+            deletable={onlyVersion}
+            workspace={workspace}
           />
         ))}
       </div>
       <InfiniteScrollBoundary
-        nextCursor={nextCursor}
-        loading={loadingMore}
-        error={loadMoreError}
-        onLoadMore={onLoadMore}
+        nextCursor={list.nextCursor}
+        loading={versions.isFetchingNextPage}
+        error={versions.isFetchNextPageError}
+        onLoadMore={() => void versions.fetchNextPage()}
         resourceLabel="deployment versions"
       />
     </div>
@@ -80,153 +83,135 @@ function VersionListHeader() {
 }
 
 function VersionRow({
-  deployment,
+  version,
+  workload,
   latest,
-  lastDeployment,
-  app,
-  workspaceId,
-  workspaceName,
+  deletable,
+  workspace,
 }: {
-  deployment: Deployment;
+  version: Schemas["Version"];
+  workload: Schemas["DeployedWorkload"];
   latest: boolean;
-  lastDeployment: boolean;
-  app: string;
-  workspaceId: string;
-  workspaceName: string;
+  deletable: boolean;
+  workspace: string;
 }) {
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  const refresh = async () => {
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.deployments.root(workspaceId) }),
-      queryClient.invalidateQueries({
-        queryKey: workspaceQueryKeys.apps.detail(workspaceId, app),
-      }),
-      queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.apps.summaries(workspaceId) }),
-      queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.containers.root(workspaceId) }),
-    ]);
-  };
+  const refresh = () => invalidateAppLists(queryClient, workspace);
   const start = useMutation({
-    ...startDeploymentMutationOptions(workspaceId, deployment.id),
+    ...startDeploymentMutationOptions(workspace, workload.id, version.version),
     onSuccess: refresh,
   });
   const stop = useMutation({
-    ...stopDeploymentMutationOptions(workspaceId, deployment.id),
+    ...stopDeploymentMutationOptions(workspace, workload.id),
     onSuccess: refresh,
   });
   const remove = useMutation({
-    ...deleteDeploymentMutationOptions(workspaceId, deployment.id),
+    ...deleteDeploymentMutationOptions(workspace, workload.id),
     onSuccess: async () => {
       await refresh();
-      if (lastDeployment) {
-        await navigate({
-          to: "/w/$workspace/apps/$app",
-          params: { workspace: workspaceName, app },
-        });
-      }
+      await navigate({
+        to: "/w/$workspace/apps/$app",
+        params: { workspace, app: workload.app },
+      });
     },
   });
+  const running = version.active && workloadRunning(workload);
+  const canDelete = deletable && workload.state !== "deleted";
   const pending = start.isPending || stop.isPending || remove.isPending;
   const error = start.error ?? stop.error ?? remove.error;
-  const hasActions =
-    deployment.actions.can_start || deployment.actions.can_stop || deployment.actions.can_delete;
 
   return (
     <div
       className={`grid min-h-12 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 px-3 py-3 text-sm ${VERSION_COLUMNS}`}
     >
       <span className="flex min-w-0 items-center gap-2">
-        <span className="mono font-medium">v{deployment.version}</span>
+        <span className="mono font-medium">v{version.version}</span>
         {latest ? <span className="micro-label text-muted-foreground">Latest</span> : null}
       </span>
       <span className="flex min-w-0 justify-end @2xl:justify-start">
-        <StatusChip status={deployment.active ? "active" : "stopped"} />
+        <StatusChip status={running ? "active" : "stopped"} />
       </span>
       <span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
         <span className="whitespace-nowrap">
-          <LiveRelativeTime value={deployment.created_at} />
+          <LiveRelativeTime value={version.created_at} />
         </span>
         <Link
           to="/w/$workspace/tasks"
-          params={{ workspace: workspaceName }}
-          search={{ app: app, deployment: deployment.id }}
+          params={{ workspace }}
+          search={{ app: workload.app, deployment: deploymentId(workload.id, version.version) }}
           className="interactive-link text-brand"
         >
           Tasks
         </Link>
       </span>
-      {hasActions ? (
-        <span className="flex min-w-0 flex-wrap items-center justify-end gap-1">
-          {confirmingDelete ? (
-            <>
-              <Button
-                type="button"
-                variant="destructive"
-                size="sm"
-                disabled={pending}
-                onClick={() => remove.mutate()}
-              >
-                {remove.isPending ? <Loader2 className="animate-spin" /> : <Trash2 />}
-                Delete v{deployment.version}
-              </Button>
+      <span className="flex min-w-0 flex-wrap items-center justify-end gap-1">
+        {confirmingDelete ? (
+          <>
+            <Button
+              type="button"
+              variant="destructive"
+              size="sm"
+              disabled={pending}
+              onClick={() => remove.mutate()}
+            >
+              {remove.isPending ? <Loader2 className="animate-spin" /> : <Trash2 />}
+              Delete v{version.version}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={pending}
+              onClick={() => setConfirmingDelete(false)}
+            >
+              Keep
+            </Button>
+          </>
+        ) : (
+          <>
+            {running ? (
               <Button
                 type="button"
                 variant="ghost"
-                size="sm"
+                size="icon"
+                aria-label={`Pause deployment v${version.version}`}
+                title="Pause deployment"
                 disabled={pending}
-                onClick={() => setConfirmingDelete(false)}
+                onClick={() => stop.mutate()}
               >
-                Keep
+                {stop.isPending ? <Loader2 className="animate-spin" /> : <Pause />}
               </Button>
-            </>
-          ) : (
-            <>
-              {deployment.actions.can_start ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  aria-label={`Resume deployment v${deployment.version}`}
-                  title="Resume deployment"
-                  disabled={pending}
-                  onClick={() => start.mutate()}
-                >
-                  {start.isPending ? <Loader2 className="animate-spin" /> : <Play />}
-                </Button>
-              ) : null}
-              {deployment.actions.can_stop ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  aria-label={`Pause deployment v${deployment.version}`}
-                  title="Pause deployment"
-                  disabled={pending}
-                  onClick={() => stop.mutate()}
-                >
-                  {stop.isPending ? <Loader2 className="animate-spin" /> : <Pause />}
-                </Button>
-              ) : null}
-              {deployment.actions.can_delete ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  aria-label={`Delete deployment v${deployment.version}`}
-                  title="Delete deployment"
-                  disabled={pending}
-                  onClick={() => setConfirmingDelete(true)}
-                >
-                  <Trash2 className="text-destructive" />
-                </Button>
-              ) : null}
-            </>
-          )}
-        </span>
-      ) : (
-        <span />
-      )}
+            ) : (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-label={`Resume deployment v${version.version}`}
+                title="Resume deployment"
+                disabled={pending}
+                onClick={() => start.mutate()}
+              >
+                {start.isPending ? <Loader2 className="animate-spin" /> : <Play />}
+              </Button>
+            )}
+            {canDelete ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-label={`Delete deployment v${version.version}`}
+                title="Delete deployment"
+                disabled={pending}
+                onClick={() => setConfirmingDelete(true)}
+              >
+                <Trash2 className="text-destructive" />
+              </Button>
+            ) : null}
+          </>
+        )}
+      </span>
       {error ? (
         <span className="col-span-full text-xs text-destructive @2xl:text-right" role="alert">
           {error.message}

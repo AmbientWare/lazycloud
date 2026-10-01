@@ -34,7 +34,7 @@ import {
   deleteArtifact,
   type ArtifactFilters,
 } from "@/lib/queries/artifacts";
-import { appSummariesQueryOptions } from "@/lib/queries/apps";
+import { appsQueryOptions } from "@/lib/queries/apps";
 import { workspaceQueryKeys, accountQueryKeys } from "@/lib/queries/workspace-keys";
 import { ArtifactRow } from "./ArtifactRow";
 
@@ -49,7 +49,7 @@ export function Artifacts({ workspaceId, taskId }: { workspaceId: string; taskId
     artifactsQuery(workspaceId, { ...filters, ...(taskId ? { task_id: taskId } : {}) }),
   );
   const summary = useQuery({ ...artifactStorageQuery(workspaceId), enabled: !taskId });
-  const apps = useQuery({ ...appSummariesQueryOptions(workspaceId), enabled: !taskId });
+  const apps = useQuery({ ...appsQueryOptions(workspace.name), enabled: !taskId });
   const rows = query.data?.pages.flatMap((page) => page.data) ?? [];
   const selected = rows.filter((row) => selectedIds.includes(row.id));
   const selectable = rows.filter((row) => !row.deleting).slice(0, 100);
@@ -128,7 +128,7 @@ export function Artifacts({ workspaceId, taskId }: { workspaceId: string; taskId
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All apps</SelectItem>
-                {apps.data?.items.map(({ app }) => (
+                {apps.data?.map((app) => (
                   <SelectItem key={app.id} value={app.id}>
                     {app.name}
                   </SelectItem>

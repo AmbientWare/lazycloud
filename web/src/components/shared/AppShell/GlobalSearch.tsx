@@ -22,9 +22,9 @@ import {
 } from "@/components/ui/command";
 import { ContentTransition } from "@/components/shared/ContentTransition";
 import { formatKind } from "@/lib/format";
-import { appSummariesQueryOptions } from "@/lib/queries/apps";
+import { appsQueryOptions } from "@/lib/queries/apps";
 import { sandboxesQueryOptions } from "@/lib/queries/sandboxes";
-import { deployedStubsQueryOptions } from "@/lib/queries/stubs";
+import { deploymentsQueryOptions } from "@/lib/queries/deployments";
 import { tasksQueryOptions } from "@/lib/queries/tasks";
 import { useWorkspace } from "@/lib/workspace-context";
 
@@ -50,8 +50,8 @@ export function GlobalSearch({
   const deferredQuery = useDeferredValue(query.trim());
   const normalizedQuery = deferredQuery.toLowerCase();
 
-  const apps = useQuery({ ...appSummariesQueryOptions(workspace.id), enabled: open });
-  const workloads = useQuery({ ...deployedStubsQueryOptions(workspace.id), enabled: open });
+  const apps = useQuery({ ...appsQueryOptions(workspace.name), enabled: open });
+  const workloads = useQuery({ ...deploymentsQueryOptions(workspace.name), enabled: open });
   const tasks = useQuery({
     ...tasksQueryOptions(workspace.id, { limit: 10, search: deferredQuery }),
     enabled: open && deferredQuery.length >= 2,
@@ -108,30 +108,26 @@ export function GlobalSearch({
     ];
     next.push(...destinations.filter((item) => matches(`${item.label} ${item.detail}`)));
 
-    for (const item of apps.data?.items ?? []) {
-      if (!matches(`${item.app.name} ${item.app.id}`)) continue;
+    for (const app of apps.data ?? []) {
+      if (!matches(`${app.name} ${app.id}`)) continue;
       next.push({
-        key: `app-${item.app.id}`,
+        key: `app-${app.id}`,
         group: "Apps",
-        label: item.app.name,
-        detail: `${item.workload_count} ${item.workload_count === 1 ? "workload" : "workloads"}`,
-        href: `${base}/apps/${encodeURIComponent(item.app.id)}`,
+        label: app.name,
+        detail: `${app.workloads} ${app.workloads === 1 ? "workload" : "workloads"}`,
+        href: `${base}/apps/${encodeURIComponent(app.name)}`,
         icon: AppWindow,
       });
     }
 
-    for (const workload of workloads.data?.stubs ?? []) {
-      if (
-        !workload.app_id ||
-        !matches(`${workload.name} ${workload.handler ?? ""} ${workload.id} ${workload.kind}`)
-      )
-        continue;
+    for (const workload of workloads.data ?? []) {
+      if (!matches(`${workload.name} ${workload.app} ${workload.id} ${workload.kind}`)) continue;
       next.push({
         key: `workload-${workload.id}`,
         group: "Workloads",
         label: workload.name,
         detail: formatKind(workload.kind),
-        href: `${base}/apps/${encodeURIComponent(workload.app_id)}/workloads/${encodeURIComponent(workload.kind)}/${encodeURIComponent(workload.name)}`,
+        href: `${base}/apps/${encodeURIComponent(workload.app)}/workloads/${encodeURIComponent(workload.kind)}/${encodeURIComponent(workload.name)}`,
         icon: Boxes,
       });
     }

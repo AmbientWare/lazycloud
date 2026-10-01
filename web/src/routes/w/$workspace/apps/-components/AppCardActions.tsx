@@ -18,31 +18,27 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import type { App } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 import { deleteAppMutationOptions, invalidateAppLists } from "@/lib/queries/apps";
-import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 
 export function AppCardActions({
   app,
-  workspaceId,
+  workspace,
   actionIcon,
   defaultOpen = false,
 }: {
-  app: App;
-  workspaceId: string;
+  app: Schemas["App"];
+  workspace: string;
   actionIcon: ReactNode;
   defaultOpen?: boolean;
 }) {
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const queryClient = useQueryClient();
   const remove = useMutation({
-    ...deleteAppMutationOptions(workspaceId, app.id),
+    ...deleteAppMutationOptions(workspace, app.name),
     onSuccess: async () => {
       setConfirmingDelete(false);
-      queryClient.removeQueries({
-        queryKey: workspaceQueryKeys.apps.detail(workspaceId, app.id),
-      });
-      await invalidateAppLists(queryClient, workspaceId);
+      await invalidateAppLists(queryClient, workspace);
     },
   });
 
@@ -62,7 +58,7 @@ export function AppCardActions({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-44">
-          {app.actions.can_delete ? (
+          {app.state !== "deleted" ? (
             <DropdownMenuItem variant="destructive" onSelect={() => setConfirmingDelete(true)}>
               <Trash2 />
               Delete app

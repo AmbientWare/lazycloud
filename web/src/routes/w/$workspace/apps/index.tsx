@@ -1,5 +1,4 @@
 import { useQuery } from "@tanstack/react-query";
-import { SquareTerminal } from "lucide-react";
 import { createFileRoute, Link } from "@tanstack/react-router";
 
 import { RouteErrorFallback } from "@/components/shared/ErrorBoundary";
@@ -9,15 +8,15 @@ import { StubKindIcon } from "@/components/shared/StubKindIcon";
 import { WorkspacePage } from "@/components/shared/WorkspacePage";
 import { PageFacts } from "@/components/shared/WorkspacePage/PageFacts";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { AppSummary } from "@/lib/api/schemas";
 import { countLabel, formatKind } from "@/lib/format";
-import { appSummariesQueryOptions } from "@/lib/queries/apps";
+import { appSummariesQueryOptions, type AppSummary } from "@/lib/queries/apps";
+import { deployedAt } from "@/lib/queries/deployments";
 import { cn } from "@/lib/utils";
 import { useWorkspace } from "@/lib/workspace-context";
 
 import { AppCardActionsTrigger } from "./-components/AppCardActionsTrigger";
 import { AppActivityChart } from "./-components/AppActivityChart";
-import { appRunActivityFromSeries } from "./-components/app-activity-buckets";
+import { appRunActivity } from "./-components/app-activity-buckets";
 import { QuickstartEmptyState } from "./-components/QuickstartEmptyState";
 
 export const Route = createFileRoute("/w/$workspace/apps/")({
@@ -27,8 +26,8 @@ export const Route = createFileRoute("/w/$workspace/apps/")({
 
 function AppsPage() {
   const { workspace } = useWorkspace();
-  const apps = useQuery(appSummariesQueryOptions(workspace.id));
-  const items = apps.data?.items ?? [];
+  const apps = useQuery(appSummariesQueryOptions(workspace.name));
+  const items = apps.data ?? [];
 
   return (
     <WorkspacePage
@@ -42,11 +41,11 @@ function AppsPage() {
             items={[
               countLabel(items.length, "app"),
               countLabel(
-                items.reduce((total, item) => total + item.workload_count, 0),
+                items.reduce((total, item) => total + item.app.workloads, 0),
                 "workload",
               ),
               countLabel(
-                items.reduce((total, item) => total + item.running_containers, 0),
+                items.reduce((total, item) => total + item.app.running_containers, 0),
                 "running container",
               ),
             ]}
@@ -62,71 +61,55 @@ function AppsPage() {
       ) : items.length === 0 ? (
         <QuickstartEmptyState />
       ) : (
-        <AppsGrid items={items} workspaceId={workspace.id} workspaceName={workspace.name} />
+        <AppsGrid items={items} workspace={workspace.name} />
       )}
     </WorkspacePage>
   );
 }
 
-function AppsGrid({
-  items,
-  workspaceId,
-  workspaceName,
-}: {
-  items: AppSummary[];
-  workspaceId: string;
-  workspaceName: string;
-}) {
+function AppsGrid({ items, workspace }: { items: AppSummary[]; workspace: string }) {
   return (
     <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-3" aria-label="Workspace apps">
       {items.map((item) => (
-        <AppCard
-          key={item.app.id}
-          item={item}
-          workspaceId={workspaceId}
-          workspaceName={workspaceName}
-        />
+        <AppCard key={item.app.id} item={item} workspace={workspace} />
       ))}
     </section>
   );
 }
 
-function AppCard({
-  item,
-  workspaceId,
-  workspaceName,
-}: {
-  item: AppSummary;
-  workspaceId: string;
-  workspaceName: string;
-}) {
-  const latest = item.latest_workload;
-  const lastDeployedAt = item.last_deployed_at ?? item.app.updated_at;
-  const workloadKinds = Object.entries(item.workload_kinds).sort(([left], [right]) =>
-    left.localeCompare(right),
-  );
+function AppCard({ item, workspace }: { item: AppSummary; workspace: string }) {
+  const { app, workloads } = item;
+  const latest = workloads[0];
+  const lastDeployedAt = latest ? deployedAt(latest) : app.created_at;
+  const active = app.state === "active";
+  const kindCounts = new Map<string, number>();
+  for (const workload of workloads) {
+    kindCounts.set(workload.kind, (kindCounts.get(workload.kind) ?? 0) + 1);
+  }
+  const workloadKinds = [...kindCounts].sort(([left], [right]) => left.localeCompare(right));
+  const activity = appRunActivity(item.activity ? [item.activity] : undefined);
 
   return (
     <article className="interactive-panel panel group relative min-w-0 rounded-md">
       <Link
         to="/w/$workspace/apps/$app"
-        params={{ workspace: workspaceName, app: item.app.name }}
-        aria-label={item.app.name}
+        params={{ workspace, app: app.name }}
+        aria-label={app.name}
         className="flex h-full min-h-[17.5rem] flex-col rounded-md p-4 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
       >
         <header className="flex min-w-0 items-start gap-4 pr-8">
           <div className="min-w-0 flex-1">
             <div className="flex min-w-0 items-center gap-2">
-              <h3 className="truncate text-base font-semibold text-foreground">{item.app.name}</h3>
+              <h3 className="truncate text-base font-semibold text-foreground">{app.name}</h3>
               <span className="flex shrink-0 items-center gap-1.5 text-[11px] text-muted-foreground">
                 <span
                   className={cn(
                     "size-1.5 rounded-full",
-                    item.app.active ? "bg-positive" : "bg-muted-foreground",
+                    active ? "bg-positive" : "bg-muted-foreground",
                   )}
                   aria-hidden="true"
                 />
-                {item.app.active ? "Active" : "Inactive"}
+                {active ? "Active" : "Inactive"}
               </span>
             </div>
             <div className="mt-1.5 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
@@ -148,32 +131,27 @@ function AppCard({
           <div className="micro-label">Tasks · 24 hours</div>
           <div className="mt-1 flex items-baseline gap-2">
             <span className="readout text-xl leading-none text-foreground">
-              {item.runs_24h.toLocaleString()}
+              {activity.total.toLocaleString()}
             </span>
             <span
               className={cn(
                 "text-xs",
-                item.failed_runs_24h > 0 ? "text-destructive" : "text-muted-foreground",
+                activity.totals.failed > 0 ? "text-destructive" : "text-muted-foreground",
               )}
             >
-              {countLabel(item.failed_runs_24h, "failed", "failed")}
+              {countLabel(activity.totals.failed, "failed", "failed")}
             </span>
           </div>
           <AppActivityChart
-            activity={appRunActivityFromSeries({
-              activity: item.activity_24h,
-              failures: item.failures_24h,
-              pending: item.pending_24h,
-              succeeded: item.succeeded_24h,
-            })}
-            label={`${item.app.name} task volume by outcome over the last 24 hours`}
+            activity={activity}
+            label={`${app.name} task volume by outcome over the last 24 hours`}
             className="mt-3"
             chartClassName="h-14 min-w-0"
           />
         </section>
 
         <div className="mt-5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-          <span>{countLabel(item.running_containers, "running container")}</span>
+          <span>{countLabel(app.running_containers, "running container")}</span>
           <span aria-hidden="true">·</span>
           <span className="shrink-0">
             Deployed <LiveRelativeTime value={lastDeployedAt} />
@@ -188,20 +166,13 @@ function AppCard({
               <span className="mono tabular-nums text-foreground">{count}</span>
             </span>
           ))}
-          {item.devbox_count > 0 ? (
-            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <SquareTerminal className="size-3.5 shrink-0" aria-hidden="true" />
-              <span>{item.devbox_count === 1 ? "Devbox" : "Devboxes"}</span>
-              <span className="mono tabular-nums text-foreground">{item.devbox_count}</span>
-            </span>
-          ) : null}
-          {workloadKinds.length === 0 && item.devbox_count === 0 ? (
+          {workloadKinds.length === 0 ? (
             <span className="text-xs text-muted-foreground">None</span>
           ) : null}
         </div>
       </Link>
       <div className="absolute right-3 top-3 z-10">
-        <AppCardActionsTrigger app={item.app} workspaceId={workspaceId} />
+        <AppCardActionsTrigger app={app} workspace={workspace} />
       </div>
     </article>
   );
