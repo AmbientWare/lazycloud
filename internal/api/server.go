@@ -38,6 +38,10 @@ func (s *Server) workspace(ctx context.Context, name string) (identity.Workspace
 
 // GetMe returns the caller and the workspaces its token reaches.
 func (s *Server) GetMe(ctx context.Context, _ GetMeRequestObject) (GetMeResponseObject, error) {
+	// A container acts for its workspace, not for a user.
+	if _, ok := containerFrom(ctx); ok {
+		return nil, identity.ErrForbidden
+	}
 	p, ok := principalFrom(ctx)
 	if !ok {
 		return nil, identity.ErrUnauthenticated
