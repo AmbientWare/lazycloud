@@ -48,7 +48,14 @@ def _cli(*args: str) -> Result:
 
 
 def _app(state: str = "active") -> dict[str, object]:
-    return {"id": APP_ID, "name": "reports", "state": state, "workloads": 2, "created_at": NOW}
+    return {
+        "id": APP_ID,
+        "name": "reports",
+        "state": state,
+        "workloads": 2,
+        "running_containers": 0,
+        "created_at": NOW,
+    }
 
 
 def _deployment(name: str = "summarize_sales", **extra: object) -> dict[str, object]:
@@ -58,6 +65,7 @@ def _deployment(name: str = "summarize_sales", **extra: object) -> dict[str, obj
         "name": name,
         "kind": "function",
         "state": "active",
+        "running_containers": 0,
         "version": 3,
         "release_id": RELEASE_ID,
         "created_at": NOW,

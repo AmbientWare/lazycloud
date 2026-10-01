@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -53,7 +52,7 @@ func (c *Control) ListApps(ctx context.Context, workspace identity.WorkspaceID, 
 	}
 	page.Apps = make([]apitypes.App, len(rows))
 	for n, row := range rows {
-		page.Apps[n] = appOut(row.ID, row.Name, row.State, row.Workloads, row.CreatedAt)
+		page.Apps[n] = appOut(AppViewRow(row))
 	}
 	return page, nil
 }
@@ -146,12 +145,13 @@ func (c *Control) appView(ctx context.Context, q *Queries, workspace identity.Wo
 	if err != nil {
 		return apitypes.App{}, fmt.Errorf("read app: %w", err)
 	}
-	return appOut(row.ID, row.Name, row.State, row.Workloads, row.CreatedAt), nil
+	return appOut(row), nil
 }
 
-func appOut(id uuid.UUID, name, state string, workloads int32, created time.Time) apitypes.App {
+func appOut(row AppViewRow) apitypes.App {
 	return apitypes.App{
-		Id: id, Name: name, State: apitypes.AppState(state), Workloads: int(workloads), CreatedAt: created,
+		Id: row.ID, Name: row.Name, State: apitypes.AppState(row.State), Workloads: int(row.Workloads),
+		RunningContainers: int(row.RunningContainers), CreatedAt: row.CreatedAt,
 	}
 }
 

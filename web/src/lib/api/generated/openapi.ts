@@ -3027,6 +3027,8 @@ export interface components {
             state: components["schemas"]["AppState"];
             /** @description Deployed workloads that are not deleted. */
             workloads: number;
+            /** @description Containers of the app that are ready or draining. */
+            running_containers: number;
             /** Format: date-time */
             created_at: string;
         };
@@ -3725,6 +3727,8 @@ export interface components {
             kind: components["schemas"]["WorkloadKind"];
             state: components["schemas"]["WorkloadState"];
             app_state?: components["schemas"]["AppState"];
+            /** @description Containers of the workload's releases that are ready or draining. */
+            running_containers: number;
             /** @description The active version. */
             version?: number;
             /**

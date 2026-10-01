@@ -891,6 +891,12 @@ class DeployedWorkload(BaseModel):
     kind: WorkloadKind
     state: WorkloadState
     app_state: AppState | None = None
+    running_containers: Annotated[
+        int,
+        Field(
+            description="Containers of the workload's releases that are ready or draining.", ge=0
+        ),
+    ]
     version: Annotated[int | None, Field(description="The active version.")] = None
     release_id: Annotated[UUID | None, Field(description="The active release.")] = None
     created_at: AwareDatetime
@@ -2484,6 +2490,9 @@ class App(BaseModel):
     name: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
     state: AppState
     workloads: Annotated[int, Field(description="Deployed workloads that are not deleted.")]
+    running_containers: Annotated[
+        int, Field(description="Containers of the app that are ready or draining.", ge=0)
+    ]
     created_at: AwareDatetime
 
 
