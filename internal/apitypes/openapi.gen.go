@@ -2952,7 +2952,7 @@ type Container struct {
 	ExitCode    *int    `json:"exit_code,omitempty"`
 	ExitMessage *string `json:"exit_message,omitempty"`
 
-	// ExpiresAt When an instance with a timeout stops unless it is used again; absent without one.
+	// ExpiresAt When an instance with a timeout stops unless it is used again.
 	ExpiresAt *time.Time   `json:"expires_at,omitempty"`
 	Function  WorkloadName `json:"function"`
 	GpuCount  *int         `json:"gpu_count,omitempty"`

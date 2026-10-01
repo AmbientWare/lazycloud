@@ -2977,9 +2977,7 @@ class Container(BaseModel):
     gpu_count: int | None = None
     expires_at: Annotated[
         AwareDatetime | None,
-        Field(
-            description="When an instance with a timeout stops unless it is used again; absent without one."
-        ),
+        Field(description="When an instance with a timeout stops unless it is used again."),
     ] = None
 
 

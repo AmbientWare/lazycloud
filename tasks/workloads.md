@@ -207,7 +207,8 @@ server, scheduler and agent from this branch, images cached:
   checkpoint and restore, and connecting to supervisor sockets created
   inside the sandbox through the descriptor of their inode.
 - Under runc `docker_enabled` needs `-allow-privileged-docker` and gives the
-  workload host privilege; the local stack does not set it.
+  workload host privilege; `LAZYCLOUD_ALLOW_PRIVILEGED_DOCKER=true` sets it
+  for `deploy/local/run.sh`.
 - The TCP ingress needs a wildcard certificate and a listener in the Helm
   chart (operations).
 - Dashboard pages come with the web packet; their operations are below.

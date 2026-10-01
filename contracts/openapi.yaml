@@ -5769,9 +5769,7 @@ components:
           type: string
         gpu_count: { type: integer }
         expires_at:
-          description: >-
-            When an instance with a timeout stops unless it is used again;
-            absent without one.
+          description: When an instance with a timeout stops unless it is used again.
           type: string
           format: date-time
 
