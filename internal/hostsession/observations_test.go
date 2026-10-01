@@ -1,6 +1,8 @@
 package hostsession_test
 
 import (
+	"errors"
+	"io"
 	"testing"
 	"time"
 
@@ -74,5 +76,17 @@ func TestSessionStoresMetricsAndStartStagesOfTheHostsContainers(t *testing.T) {
 	}
 	if len(lifecycle.Stages) != 2 || lifecycle.Stages[0].Stage != "image" || *lifecycle.Stages[0].DurationMs != 300 {
 		t.Fatalf("lifecycle %+v", lifecycle)
+	}
+
+	// Metrics leave the session open, so the host closing it ends it cleanly.
+	if err := stream.CloseSend(); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		if _, err := stream.Recv(); errors.Is(err, io.EOF) {
+			break
+		} else if err != nil {
+			t.Fatalf("session ended: %v", err)
+		}
 	}
 }
