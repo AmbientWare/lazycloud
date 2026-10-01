@@ -194,7 +194,8 @@ supervisor Docker tests under it; all pass but the GPU test.
 | Restore from a snapshot | through Docker with a network holder (above): with the docker CLI a counting process resumed where it stopped 0.15 s after `docker start --checkpoint`, with a new environment value, a new mount source and working egress. Without one Docker fails with `bind-mount /proc/0/ns/net` (moby#50750). `TestSnapshotUnderRunscRestoresARunningPod` checks it end to end with a root agent |
 | Devbox on an NBD root disk (root agent) | live `test_ssh_config_makes_plain_ssh_reach_a_devbox`: deploy, seed the root disk (137 MB stored, generation 1), plain `ssh -F`, `lazycloud devbox <name> ssh -- echo devbox-ok`, `devbox status`, delete |
 | Everything above again with the root agent | `runsc_live.py` and the live suite pass |
-| With network holders and a root agent (snapshot-restore) | `runsc_live.py` (functions, endpoints, sandbox ports, block, allow list, filesystem image, snapshot upload, docker) and the live suite with the devbox pass; the first restore on the snapshot's host hit moby#42900, fixed with the restore marker, and waits on a rebuilt root agent |
+| With network holders and a root agent (snapshot-restore) | `runsc_live.py` (functions, endpoints, sandbox ports, block, allow list, filesystem image, snapshot upload, docker) and the live suite with the devbox pass; the first restore on the snapshot's host hit moby#42900, fixed with the restore marker |
+| Restore with holders and a root agent | `root_live.py`: snapshot in 0.74 s; restore to ready in 0.51 s with a counting process resuming (13 at restore, 18 a second later) rather than restarting; the same snapshot restores again on the host that took it; the restored sandbox reaches the network and a block applied after restore holds; a `block_network` sandbox stays blocked across its own snapshot and restore |
 
 ## Intentional differences from the reference
 
@@ -225,8 +226,8 @@ supervisor Docker tests under it; all pass but the GPU test.
 
 ## Gaps
 
-- Snapshot upload and restore need a root agent; CRIU is not installed, so
-  runc checkpoints only reach `unsupported`.
+- Snapshot upload and restore need a root agent, as in production; CRIU is
+  not installed here, so runc checkpoints only reach `unsupported`.
 - Docker uploads a checkpoint to containerd before restoring it and fails
   with `content ... already exists` when containerd holds that content
   (moby#42900), as on the host that took the snapshot and on any second
