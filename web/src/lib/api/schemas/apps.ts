@@ -2,9 +2,6 @@ import { z } from "zod";
 import { cpuRequestSchema, memoryRequestSchema } from "./resources";
 import { productRegionSchema } from "./placement";
 
-import { diskStatuses } from "./storage";
-import { stubSchema } from "./stubs";
-
 export const appSchema = z.object({
   id: z.string(),
   workspace_id: z.string(),
@@ -95,78 +92,3 @@ export const deploymentSchema = z.object({
     .nullish(),
 });
 export type Deployment = z.infer<typeof deploymentSchema>;
-
-export const devboxStates = ["running", "starting", "stopped"] as const;
-export const devboxPhases = [
-  "stopped",
-  "queued",
-  "pulling_image",
-  "restoring_disk",
-  "starting",
-  "running",
-  "stopping",
-  "failed",
-] as const;
-export type DevboxPhase = (typeof devboxPhases)[number];
-
-// Synced to python/shared/src/shared/http/deployments.py (DevboxResponse).
-export const devboxSchema = z.object({
-  ssh_command: z.string(),
-  ssh_host: z.string(),
-  state: z.enum(devboxStates),
-  phase: z.enum(devboxPhases),
-  phase_reason: z.string().default(""),
-  container_id: z.string().nullable(),
-  failed_container_id: z.string().nullable(),
-  open_connections: z.number().int().nonnegative(),
-  idle_deadline: z.string().nullable(),
-  disk: z
-    .object({
-      name: z.string(),
-      size_bytes: z.number(),
-      stored_bytes: z.number(),
-      generation: z.number().int().nonnegative(),
-      status: z.enum(diskStatuses),
-    })
-    .nullable(),
-});
-export type Devbox = z.infer<typeof devboxSchema>;
-
-export const deploymentListSchema = z.object({
-  data: z.array(deploymentSchema).default([]),
-  next: z.string().default(""),
-});
-export type DeploymentList = z.infer<typeof deploymentListSchema>;
-
-// Synced to python/shared/src/shared/http/deployments.py (DeploymentUrlResponse);
-// scoped to the invoke URL the dashboard consumes.
-export const deploymentUrlSchema = z.object({
-  url: z.string(),
-});
-export type DeploymentUrl = z.infer<typeof deploymentUrlSchema>;
-
-const appSummarySchema = z.object({
-  app: appSchema,
-  latest_workload: stubSchema.nullish(),
-  latest_deployment: deploymentSchema.nullish(),
-  // Devboxes are counted in devbox_count, not as pods.
-  workload_kinds: z.record(z.number()).default({}),
-  devbox_count: z.number().default(0),
-  workload_count: z.number().default(0),
-  active_versions: z.number().default(0),
-  running_containers: z.number().default(0),
-  runs_24h: z.number().default(0),
-  failed_runs_24h: z.number().default(0),
-  pending_runs_24h: z.number().default(0),
-  succeeded_runs_24h: z.number().default(0),
-  activity_24h: z.array(z.number()).default([]),
-  failures_24h: z.array(z.number()).default([]),
-  pending_24h: z.array(z.number()).default([]),
-  succeeded_24h: z.array(z.number()).default([]),
-  last_deployed_at: z.string().nullish(),
-});
-export type AppSummary = z.infer<typeof appSummarySchema>;
-
-export const appSummaryListSchema = z.object({
-  items: z.array(appSummarySchema).default([]),
-});

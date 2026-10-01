@@ -74,6 +74,7 @@ func (c *Control) ListDeployments(ctx context.Context, workspace identity.Worksp
 		page.Deployments[n] = workloadOut(WorkloadViewRow{
 			ID: row.ID, AppName: row.AppName, Name: row.Name, Kind: row.Kind, DesiredState: row.DesiredState,
 			AppState: row.AppState, Version: row.Version, ReleaseID: &release, CreatedAt: row.CreatedAt, DeployedAt: &deployed,
+			RunningContainers: row.RunningContainers,
 		})
 	}
 	return page, nil
@@ -200,7 +201,7 @@ func workloadOut(row WorkloadViewRow) apitypes.DeployedWorkload {
 		Id: row.ID, App: row.AppName, Name: row.Name, Kind: apitypes.WorkloadKind(row.Kind),
 		State: apitypes.WorkloadState(row.DesiredState), AppState: &appState,
 		Version: versionOf(row.Version), ReleaseId: row.ReleaseID,
-		CreatedAt: row.CreatedAt, DeployedAt: row.DeployedAt,
+		RunningContainers: int(row.RunningContainers), CreatedAt: row.CreatedAt, DeployedAt: row.DeployedAt,
 	}
 }
 

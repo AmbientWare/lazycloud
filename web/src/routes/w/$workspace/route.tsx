@@ -3,15 +3,15 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { Trash2, TriangleAlert } from "lucide-react";
 
 import { AppShell } from "@/components/shared/AppShell";
-import { AuthGate } from "@/components/shared/AuthGate";
+import { AuthGate, LoadingScreen } from "@/components/shared/AuthGate";
 import { settingsView, type SettingsView } from "@/components/shared/SettingsDialog/view";
-import { useSession } from "@/components/shared/AuthGate/session";
+import { useSession, useSessionRecheck } from "@/components/shared/AuthGate/session";
 import { PreShellScreen } from "@/components/shared/PreShellScreen";
 import { WorkspaceDeletionProvider } from "@/components/shared/WorkspaceDeletion";
 import { useWorkspaceDeletion } from "@/components/shared/WorkspaceDeletion/context";
 import { WorkspaceLiveUpdatesProvider } from "@/components/shared/WorkspaceLiveUpdates";
 import { Button } from "@/components/ui/button";
-import type { Workspace } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 import { WorkspaceContext, type WorkspaceContextValue } from "@/lib/workspace-context";
 import { useWorkspaceSelection } from "@/lib/workspace-selection";
 
@@ -36,6 +36,7 @@ function WorkspaceLayout() {
   const { workspaces } = useSession();
   const rememberWorkspaceName = useWorkspaceSelection((state) => state.rememberWorkspaceName);
   const workspace = workspaces.find((item) => item.name === workspaceName) ?? null;
+  const rechecking = useSessionRecheck(workspaceName, workspace === null);
 
   const contextValue = useMemo<WorkspaceContextValue | null>(
     () => (workspace ? { workspace, workspaces } : null),
@@ -48,12 +49,14 @@ function WorkspaceLayout() {
 
   return (
     <WorkspaceDeletionProvider>
-      {!workspace || !contextValue ? (
+      {rechecking ? (
+        <LoadingScreen />
+      ) : !workspace || !contextValue ? (
         <WorkspaceNotFound
           workspaceName={workspaceName}
           workspaceNames={workspaces.map((item) => item.name)}
         />
-      ) : workspace.status === "deleting" ? (
+      ) : workspace.state === "deleting" ? (
         <WorkspaceDeletionRecovery workspace={workspace} />
       ) : (
         <WorkspaceContext.Provider value={contextValue}>
@@ -69,7 +72,7 @@ function WorkspaceLayout() {
   );
 }
 
-function WorkspaceDeletionRecovery({ workspace }: { workspace: Workspace }) {
+function WorkspaceDeletionRecovery({ workspace }: { workspace: Schemas["Workspace"] }) {
   const deletion = useWorkspaceDeletion();
   return (
     <PreShellScreen width="lg">

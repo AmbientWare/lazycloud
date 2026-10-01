@@ -8,17 +8,17 @@ import { AppActivityChart, AppActivityLegend } from "./AppActivityChart";
 import { appRunActivity } from "./app-activity-buckets";
 
 export function AppActivitySection({
-  buckets,
+  series,
   runningContainers,
   pending,
   error,
 }: {
-  buckets: Schemas["ActivityBucket"][] | undefined;
-  runningContainers: number;
+  series: Schemas["ActivitySeries"][] | undefined;
+  runningContainers: number | undefined;
   pending: boolean;
   error: string | undefined;
 }) {
-  const activity = appRunActivity(buckets);
+  const activity = appRunActivity(series);
 
   return (
     <div
@@ -74,9 +74,11 @@ export function AppActivitySection({
               </span>
               {/* Counted now, not over the window the figures beside it cover —
                   labelled "running" rather than given the same 24-hour framing. */}
-              <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-                {countLabel(runningContainers, "container")} running
-              </span>
+              {runningContainers === undefined ? null : (
+                <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+                  {countLabel(runningContainers, "container")} running
+                </span>
+              )}
             </div>
             <AppActivityChart
               activity={activity}

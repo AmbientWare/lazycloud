@@ -45,7 +45,7 @@ function SandboxDetailPage() {
   const { containerId } = Route.useParams();
   const { workspace } = useWorkspace();
   const queryClient = useQueryClient();
-  const container = useQuery(containerDetailQueryOptions(workspace.id, containerId));
+  const container = useQuery(containerDetailQueryOptions(workspace.name, containerId));
   const stop = useMutation({
     ...stopContainerMutationOptions(workspace.name, containerId),
     onSuccess: () =>

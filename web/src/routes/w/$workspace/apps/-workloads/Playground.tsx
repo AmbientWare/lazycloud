@@ -9,100 +9,76 @@ import { ResultBody } from "@/components/shared/TaskDrawer/ResultBody";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { invokeDeployment, invokeFunctionTask, type InvokeResult } from "@/lib/api/invoke";
-import type { DeploymentManifest, JsonValue } from "@/lib/api/schemas";
-import { deploymentManifestQueryOptions } from "@/lib/queries/apps";
+import type { Schemas } from "@/lib/api/client";
+import {
+  invokeFunction,
+  invokeFunctionTask,
+  invokeHttp,
+  type InvokeResult,
+} from "@/lib/api/invoke";
+import type { JsonValue } from "@/lib/api/schemas";
+import type { Workload } from "@/lib/queries/deployments";
 import { failureText, taskQueryOptions } from "@/lib/queries/tasks";
 
 import {
   buildBody,
+  clientContract,
   exampleBody,
   playgroundFields,
   playgroundPythonOnlyReason,
   returnsPythonValue,
+  type ClientContract,
   type PlaygroundField,
 } from "./playground-form";
 
 /**
- * In-UI invoke for a deployed function or endpoint. The form is built
- * from the deployment's recorded callable contract; flat primitive schemas get typed inputs, anything
- * richer gets a raw JSON editor. Invoke fires the real invoke URL with the
- * session bearer token, except for a function returning a Python object,
- * which is invoked through the function API so the task stores the result.
+ * In-UI invoke for a deployed function or endpoint. The form is built from
+ * the release's recorded callable contract; flat primitive parameters get
+ * typed inputs, anything richer gets a raw JSON editor. A function runs
+ * through its invoke operation, or as a task when it returns a Python object
+ * so the task stores the result. An endpoint is called at its path on this
+ * origin, which the session authenticates.
  */
-export function Playground({
-  workspaceId,
-  workspaceName,
-  app,
-  workloadName,
-  workloadKind,
-  deploymentId,
-}: {
-  workspaceId: string;
-  workspaceName: string;
-  app: string;
-  workloadName: string;
-  workloadKind: string;
-  deploymentId: string;
-}) {
-  const manifest = useQuery(deploymentManifestQueryOptions(workspaceId, deploymentId));
-
-  if (manifest.isPending) {
-    return (
-      <div className="space-y-3 p-4" aria-hidden="true">
-        <Skeleton className="h-8 w-full" />
-        <Skeleton className="h-24 w-full" />
-      </div>
-    );
-  }
-  if (manifest.isError) {
-    return <PanelError message={manifest.error.message} />;
-  }
-  const pythonRequired = playgroundPythonOnlyReason(manifest.data);
+export function Playground({ workspace, workload }: { workspace: string; workload: Workload }) {
+  const contract = useMemo(
+    () => clientContract(workload.release.spec.client_contract),
+    [workload.release.spec.client_contract],
+  );
+  const pythonRequired = playgroundPythonOnlyReason(contract);
   if (pythonRequired) {
     return <p className="p-4 text-sm text-muted-foreground">{pythonRequired}</p>;
   }
-  return (
-    <PlaygroundForm
-      manifest={manifest.data}
-      workspaceId={workspaceId}
-      workspaceName={workspaceName}
-      app={app}
-      workloadName={workloadName}
-      workloadKind={workloadKind}
-    />
-  );
+  return <PlaygroundForm workspace={workspace} workload={workload} contract={contract} />;
 }
 
 function PlaygroundForm({
-  manifest,
-  workspaceId,
-  workspaceName,
-  app,
-  workloadName,
-  workloadKind,
+  workspace,
+  workload,
+  contract,
 }: {
-  manifest: DeploymentManifest;
-  workspaceId: string;
-  workspaceName: string;
-  app: string;
-  workloadName: string;
-  workloadKind: string;
+  workspace: string;
+  workload: Workload;
+  contract: ClientContract | null;
 }) {
-  const fields = useMemo(() => playgroundFields(manifest), [manifest]);
-  const seeded = useMemo(() => JSON.stringify(exampleBody(manifest), null, 2), [manifest]);
+  const fields = useMemo(() => playgroundFields(contract), [contract]);
+  const seeded = useMemo(() => JSON.stringify(exampleBody(contract), null, 2), [contract]);
   const [values, setValues] = useState<Record<string, string>>({});
   const [rawText, setRawText] = useState(seeded);
   const [inputError, setInputError] = useState<string | null>(null);
 
-  const pythonResult = manifest.kind === "function" && returnsPythonValue(manifest);
+  const { deployment, http, release } = workload;
   const invoke = useMutation({
-    // Same-origin: the published hostname is a different origin to the dashboard,
-    // and a deployed resource owes the dashboard no CORS permission.
-    mutationFn: (body: JsonValue) =>
-      pythonResult
-        ? invokeFunctionTask(workspaceId, manifest.stub_id, body)
-        : invokeDeployment(manifest.invoke_path, body),
+    mutationFn: (body: JsonValue) => {
+      if (http) {
+        const { route = "", methods = [] } = release.spec.http ?? {};
+        // POST carries the payload; an endpoint that takes no POST gets its first method.
+        const method = methods.length === 0 || methods.includes("POST") ? "POST" : methods[0];
+        return invokeHttp(http.invoke_path + route, method, body);
+      }
+      return returnsPythonValue(contract)
+        ? invokeFunctionTask(workspace, deployment.app, deployment.name, body)
+        : invokeFunction(workspace, deployment.app, deployment.name, body);
+    },
   });
 
   type BodyResult = { ok: true; body: JsonValue } | { ok: false; message: string };
@@ -172,10 +148,8 @@ function PlaygroundForm({
         <InvokeOutcome
           result={invoke.data}
           error={invoke.isError ? invoke.error : null}
-          workspaceName={workspaceName}
-          app={app}
-          workloadName={workloadName}
-          workloadKind={workloadKind}
+          workspace={workspace}
+          deployment={deployment}
         />
       </div>
     </div>
@@ -229,17 +203,13 @@ function FieldInput({
 function InvokeOutcome({
   result,
   error,
-  workspaceName,
-  app,
-  workloadName,
-  workloadKind,
+  workspace,
+  deployment,
 }: {
   result: InvokeResult | undefined;
   error: Error | null;
-  workspaceName: string;
-  app: string;
-  workloadName: string;
-  workloadKind: string;
+  workspace: string;
+  deployment: Schemas["DeployedWorkload"];
 }) {
   if (error) {
     return <div className="text-xs text-destructive">{error.message}</div>;
@@ -257,10 +227,8 @@ function InvokeOutcome({
       <TaskInvokeOutcome
         taskId={result.taskId}
         meta={meta}
-        workspaceName={workspaceName}
-        app={app}
-        workloadName={workloadName}
-        workloadKind={workloadKind}
+        workspace={workspace}
+        deployment={deployment}
       />
     );
   }
@@ -287,19 +255,15 @@ function DirectInvokeOutcome({ result, meta }: { result: InvokeResult; meta: Rea
 function TaskInvokeOutcome({
   taskId,
   meta,
-  workspaceName,
-  app,
-  workloadName,
-  workloadKind,
+  workspace,
+  deployment,
 }: {
   taskId: string;
   meta: ReactNode;
-  workspaceName: string;
-  app: string;
-  workloadName: string;
-  workloadKind: string;
+  workspace: string;
+  deployment: Schemas["DeployedWorkload"];
 }) {
-  const task = useQuery(taskQueryOptions(workspaceName, taskId));
+  const task = useQuery(taskQueryOptions(workspace, taskId));
 
   return (
     <section className="overflow-hidden rounded-md border border-border bg-muted/20">
@@ -311,10 +275,10 @@ function TaskInvokeOutcome({
         <Link
           to="/w/$workspace/apps/$app/workloads/$kind/$name/tasks/$taskId"
           params={{
-            workspace: workspaceName,
-            app,
-            kind: workloadKind,
-            name: workloadName,
+            workspace,
+            app: deployment.app,
+            kind: deployment.kind,
+            name: deployment.name,
             taskId,
           }}
           className="ml-auto flex items-center gap-1 text-xs font-medium text-brand hover:underline"

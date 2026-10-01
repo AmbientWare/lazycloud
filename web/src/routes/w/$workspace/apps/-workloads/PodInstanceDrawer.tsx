@@ -1,4 +1,4 @@
-import { useInfiniteQuery, useQuery, type UseQueryResult } from "@tanstack/react-query";
+import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 
 import { ApiErrorNotice } from "@/components/shared/ApiErrorNotice";
 import { CliHint } from "@/components/shared/CliHint";
@@ -21,9 +21,8 @@ import {
   containerDetailQueryOptions,
   containerMetricsQueryOptions,
 } from "@/lib/queries/containers";
-import { deploymentsInfiniteQueryOptions, selectDeploymentList } from "@/lib/queries/deployments";
 
-import { currentDeployment, findWorkloadGroup } from "./grouping";
+import { podDeploymentQueryOptions } from "./pods";
 import { podInstancePlacement, podInstanceUptime } from "./pod-instance-format";
 
 export function PodInstanceDrawer({
@@ -42,16 +41,8 @@ export function PodInstanceDrawer({
   onClose: () => void;
 }) {
   const container = useQuery(containerDetailQueryOptions(workspaceId, containerId));
-  const deployments = useInfiniteQuery(
-    deploymentsInfiniteQueryOptions(workspaceId, {
-      appId: app,
-      kind: workloadKind,
-      name: workloadName,
-    }),
-  );
-  const deploymentList = selectDeploymentList(deployments.data, deployments.hasNextPage);
-  const group = findWorkloadGroup(deploymentList.items, app, workloadKind, workloadName);
-  const deployment = group?.kind === "pod" ? currentDeployment(group) : undefined;
+  const deployments = useQuery(podDeploymentQueryOptions(workspaceId, app, workloadName));
+  const deployment = workloadKind === "pod" ? deployments.data : undefined;
   const member = Boolean(
     container.data && deployment?.stub_id && container.data.stub_id === deployment.stub_id,
   );

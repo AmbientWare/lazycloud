@@ -6,7 +6,7 @@ import {
   type MemoryRequest,
 } from "@/lib/api/schemas/resources";
 
-import type { RowValue } from "@/lib/api/resources";
+export type RowValue = string | number | boolean | null | undefined;
 
 export function displayValue(value: RowValue): string {
   if (value === null || value === undefined || value === "") return "None";
@@ -62,26 +62,6 @@ export function shareLabel(share: number): string {
 }
 
 export type TaskActivityBand = "succeeded" | "inFlight" | "failed" | "other";
-
-/**
- * Which band of an activity bar a task status belongs to. A running task is
- * in flight, not a success: over a window of finished work, counting it as
- * one would let an app whose queue never drained read as one where
- * everything worked. Cancelled work is neither.
- */
-export function taskActivityBand(status: string): TaskActivityBand {
-  switch (status) {
-    case "succeeded":
-      return "succeeded";
-    case "failed":
-      return "failed";
-    case "queued":
-    case "running":
-      return "inFlight";
-    default:
-      return "other";
-  }
-}
 
 export function formatDuration(milliseconds: number): string {
   if (milliseconds < 1_000) return `${Math.round(milliseconds)}ms`;

@@ -2194,7 +2194,10 @@ type App struct {
 	CreatedAt time.Time          `json:"created_at"`
 	Id        openapi_types.UUID `json:"id"`
 	Name      AppName            `json:"name"`
-	State     AppState           `json:"state"`
+
+	// RunningContainers Containers of the app that are ready or draining.
+	RunningContainers int      `json:"running_containers"`
+	State             AppState `json:"state"`
 
 	// Workloads Deployed workloads that are not deleted.
 	Workloads int `json:"workloads"`
@@ -2949,6 +2952,9 @@ type DeployedWorkload struct {
 	// ReleaseId The active release.
 	ReleaseId *openapi_types.UUID `json:"release_id,omitempty"`
 
+	// RunningContainers Containers of the workload's releases that are ready or draining.
+	RunningContainers int `json:"running_containers"`
+
 	// State Desired state. A paused app stops its active workloads too.
 	State WorkloadState `json:"state"`
 
@@ -3080,6 +3086,9 @@ type Disk struct {
 
 	// Generation The newest published generation; 0 before the first.
 	Generation int64 `json:"generation"`
+
+	// Holder The workload whose container holds the disk.
+	Holder *WorkloadRef `json:"holder,omitempty"`
 
 	// HolderContainerId The container holding the disk while attached or saving.
 	HolderContainerId *openapi_types.UUID `json:"holder_container_id,omitempty"`
@@ -4209,6 +4218,9 @@ type Secret struct {
 	// Name An environment variable name; the LAZYCLOUD_ prefix is reserved.
 	Name      SecretName `json:"name"`
 	UpdatedAt time.Time  `json:"updated_at"`
+
+	// UsedBy Workloads whose active release receives the secret.
+	UsedBy []WorkloadRef `json:"used_by"`
 }
 
 // SecretCreate defines model for SecretCreate.

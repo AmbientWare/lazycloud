@@ -3806,7 +3806,7 @@ components:
 
     App:
       type: object
-      required: [id, name, state, workloads, created_at]
+      required: [id, name, state, workloads, running_containers, created_at]
       properties:
         id: { type: string, format: uuid }
         name: { $ref: "#/components/schemas/AppName" }
@@ -3814,6 +3814,10 @@ components:
         workloads:
           description: Deployed workloads that are not deleted.
           type: integer
+        running_containers:
+          description: Containers of the app that are ready or draining.
+          type: integer
+          minimum: 0
         created_at: { type: string, format: date-time }
 
     FunctionSpec:
@@ -4270,11 +4274,15 @@ components:
 
     Secret:
       type: object
-      required: [name, created_at, updated_at]
+      required: [name, created_at, updated_at, used_by]
       properties:
         name: { $ref: "#/components/schemas/SecretName" }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+        used_by:
+          description: Workloads whose active release receives the secret.
+          type: array
+          items: { $ref: "#/components/schemas/WorkloadRef" }
 
     SecretValue:
       type: object
@@ -4658,6 +4666,9 @@ components:
           description: The container holding the disk while attached or saving.
           type: string
           format: uuid
+        holder:
+          description: The workload whose container holds the disk.
+          allOf: [{ $ref: "#/components/schemas/WorkloadRef" }]
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
 
@@ -4995,7 +5006,7 @@ components:
 
     DeployedWorkload:
       type: object
-      required: [id, app, name, kind, state, created_at]
+      required: [id, app, name, kind, state, running_containers, created_at]
       properties:
         id: { type: string, format: uuid }
         app: { $ref: "#/components/schemas/AppName" }
@@ -5003,6 +5014,10 @@ components:
         kind: { $ref: "#/components/schemas/WorkloadKind" }
         state: { $ref: "#/components/schemas/WorkloadState" }
         app_state: { $ref: "#/components/schemas/AppState" }
+        running_containers:
+          description: Containers of the workload's releases that are ready or draining.
+          type: integer
+          minimum: 0
         version:
           description: The active version.
           type: integer

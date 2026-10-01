@@ -32,6 +32,7 @@ describe("workspace live invalidation ownership", () => {
       { queryKey: workspaceQueryKeys.containers.lifecycle("dev", "container-1") },
       { queryKey: workspaceQueryKeys.tasks.aggregates("dev"), expensive: true },
       { queryKey: workspaceQueryKeys.apps.summaries("dev"), expensive: true },
+      { queryKey: workspaceQueryKeys.apps.activities("dev"), expensive: true },
     ]);
   });
 

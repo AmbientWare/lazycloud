@@ -2,18 +2,36 @@ import { describe, expect, it } from "vitest";
 
 import type { Schemas } from "@/lib/api/client";
 
-import { appRunActivity, appRunActivityFromSeries } from "./app-activity-buckets";
+import { appRunActivity } from "./app-activity-buckets";
 
 function counts(partial: Partial<Schemas["TaskStatusCounts"]>): Schemas["TaskStatusCounts"] {
   return { queued: 0, running: 0, succeeded: 0, failed: 0, cancelled: 0, ...partial };
 }
 
+function series(
+  fn: string,
+  buckets: { timestamp: string; counts: Partial<Schemas["TaskStatusCounts"]> }[],
+): Schemas["ActivitySeries"] {
+  return {
+    app: "shop",
+    function: fn,
+    total: 0,
+    buckets: buckets.map((bucket) => ({
+      timestamp: bucket.timestamp,
+      status_counts: counts(bucket.counts),
+    })),
+  };
+}
+
 describe("appRunActivity", () => {
-  it("fills the current 24 hourly slots from sparse app-scoped buckets", () => {
+  it("sums every function's series into the current 24 hourly slots", () => {
     const activity = appRunActivity(
       [
-        { timestamp: "2026-07-10T11:15:00Z", status_counts: counts({ succeeded: 3, failed: 1 }) },
-        { timestamp: "2026-07-10T12:00:00Z", status_counts: counts({ failed: 2 }) },
+        series("greet", [
+          { timestamp: "2026-07-10T11:00:00Z", counts: { succeeded: 3, failed: 1 } },
+          { timestamp: "2026-07-10T12:00:00Z", counts: { failed: 1 } },
+        ]),
+        series("report", [{ timestamp: "2026-07-10T12:00:00Z", counts: { failed: 1 } }]),
       ],
       new Date("2026-07-10T12:59:00Z"),
     );
@@ -26,12 +44,14 @@ describe("appRunActivity", () => {
     expect(activity.totals.failed).toBe(3);
   });
 
-  it("ignores invalid, future, and expired buckets", () => {
+  it("ignores invalid, future and expired buckets", () => {
     const activity = appRunActivity(
       [
-        { timestamp: "invalid", status_counts: counts({ failed: 8 }) },
-        { timestamp: "2026-07-09T12:00:00Z", status_counts: counts({ failed: 2 }) },
-        { timestamp: "2026-07-10T13:00:00Z", status_counts: counts({ failed: 1 }) },
+        series("greet", [
+          { timestamp: "invalid", counts: { failed: 8 } },
+          { timestamp: "2026-07-09T12:00:00Z", counts: { failed: 2 } },
+          { timestamp: "2026-07-10T13:00:00Z", counts: { failed: 1 } },
+        ]),
       ],
       new Date("2026-07-10T12:00:00Z"),
     );
@@ -43,55 +63,17 @@ describe("appRunActivity", () => {
   it("keeps unfinished and cancelled work out of the successful band", () => {
     const activity = appRunActivity(
       [
-        {
-          timestamp: "2026-08-24T22:00:00.000Z",
-          status_counts: counts({ queued: 4, running: 1, succeeded: 1, failed: 1, cancelled: 2 }),
-        },
+        series("greet", [
+          {
+            timestamp: "2026-08-24T22:00:00.000Z",
+            counts: { queued: 3, running: 1, succeeded: 1, failed: 2, cancelled: 1 },
+          },
+        ]),
       ],
       new Date("2026-08-24T22:00:00.000Z"),
     );
 
-    expect(activity.total).toBe(9);
-    expect(activity.totals).toEqual({ failed: 1, inFlight: 5, other: 2, succeeded: 1 });
-  });
-});
-
-describe("appRunActivityFromSeries", () => {
-  it("draws the card's hour the same way the app view draws it", () => {
-    // The same nine tasks, told twice: the app view resolves them from statuses,
-    // the card reads the series the list sends. A reader moving between the two
-    // is looking at one hour and must not see it change colour.
-    const view = appRunActivity(
-      [
-        {
-          timestamp: "2026-08-24T22:00:00.000Z",
-          status_counts: counts({ queued: 4, running: 1, succeeded: 1, failed: 1, cancelled: 2 }),
-        },
-      ],
-      new Date("2026-08-24T22:00:00.000Z"),
-    );
-    const card = appRunActivityFromSeries({
-      activity: [9],
-      failures: [1],
-      pending: [5],
-      succeeded: [1],
-    });
-
-    expect(card.totals).toEqual(view.totals);
-    expect(card.tasks.at(-1)).toBe(view.tasks.at(-1));
-    expect(card.bands.succeeded.at(-1)).toBe(view.bands.succeeded.at(-1));
-    expect(card.bands.other.at(-1)).toBe(view.bands.other.at(-1));
-  });
-
-  it("never draws a band taller than the hour it describes", () => {
-    const activity = appRunActivityFromSeries({
-      activity: [2],
-      failures: [5],
-      pending: [5],
-      succeeded: [5],
-    });
-
-    expect(activity.total).toBe(2);
-    expect(activity.totals).toEqual({ failed: 2, inFlight: 0, other: 0, succeeded: 0 });
+    expect(activity.total).toBe(8);
+    expect(activity.totals).toEqual({ failed: 2, inFlight: 4, other: 1, succeeded: 1 });
   });
 });

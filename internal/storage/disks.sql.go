@@ -15,10 +15,14 @@ import (
 const activeDisk = `-- name: ActiveDisk :one
 select d.id, d.name, d.size_bytes, d.stored_bytes, d.generation, d.holder_container_id,
        c.state as holder_state, c.stop_reason as holder_stop_reason, h.state as holder_host_state, d.released_at,
-       d.created_at, d.updated_at
+       d.created_at, d.updated_at,
+       a.name as holder_app, w.kind as holder_kind, w.name as holder_workload
 from disks d
 left join containers c on c.id = d.holder_container_id
 left join hosts h on h.id = c.host_id
+left join releases r on r.id = c.release_id
+left join workloads w on w.id = r.workload_id
+left join apps a on a.id = w.app_id
 where d.workspace_id = $1 and d.state = 'active' and d.name = $2
 `
 
@@ -40,6 +44,9 @@ type ActiveDiskRow struct {
 	ReleasedAt        *time.Time
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
+	HolderApp         *string
+	HolderKind        *string
+	HolderWorkload    *string
 }
 
 func (q *Queries) ActiveDisk(ctx context.Context, arg ActiveDiskParams) (ActiveDiskRow, error) {
@@ -58,6 +65,9 @@ func (q *Queries) ActiveDisk(ctx context.Context, arg ActiveDiskParams) (ActiveD
 		&i.ReleasedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.HolderApp,
+		&i.HolderKind,
+		&i.HolderWorkload,
 	)
 	return i, err
 }
@@ -277,10 +287,14 @@ func (q *Queries) InsertDiskGeneration(ctx context.Context, arg InsertDiskGenera
 const listDisks = `-- name: ListDisks :many
 select d.id, d.name, d.size_bytes, d.stored_bytes, d.generation, d.holder_container_id,
        c.state as holder_state, c.stop_reason as holder_stop_reason, h.state as holder_host_state, d.released_at,
-       d.created_at, d.updated_at
+       d.created_at, d.updated_at,
+       a.name as holder_app, w.kind as holder_kind, w.name as holder_workload
 from disks d
 left join containers c on c.id = d.holder_container_id
 left join hosts h on h.id = c.host_id
+left join releases r on r.id = c.release_id
+left join workloads w on w.id = r.workload_id
+left join apps a on a.id = w.app_id
 where d.workspace_id = $1 and d.state = 'active' and d.name > $2::text
 order by d.name
 limit $3
@@ -305,6 +319,9 @@ type ListDisksRow struct {
 	ReleasedAt        *time.Time
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
+	HolderApp         *string
+	HolderKind        *string
+	HolderWorkload    *string
 }
 
 func (q *Queries) ListDisks(ctx context.Context, arg ListDisksParams) ([]ListDisksRow, error) {
@@ -329,6 +346,9 @@ func (q *Queries) ListDisks(ctx context.Context, arg ListDisksParams) ([]ListDis
 			&i.ReleasedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.HolderApp,
+			&i.HolderKind,
+			&i.HolderWorkload,
 		); err != nil {
 			return nil, err
 		}

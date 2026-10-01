@@ -21,10 +21,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import type { Container, Deployment } from "@/lib/api/schemas";
 import { countLabel } from "@/lib/format";
 import { useLiveNow } from "@/hooks/use-live-now";
-import { scaleDeploymentMutationOptions } from "@/lib/queries/apps";
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 
 import { podInstanceUptime } from "./pod-instance-format";
+import { scaleDeploymentMutationOptions } from "./pods";
 
 export const ACTIVE_POD_CONTAINER_STATUSES = ["pending", "running"] as const;
 const ACTIVE_CONTAINER_STATUSES = new Set<string>(ACTIVE_POD_CONTAINER_STATUSES);
@@ -182,7 +182,7 @@ function ReplicaControl({
   const replicas = draft ?? configured;
   const queryClient = useQueryClient();
   const scale = useMutation({
-    ...scaleDeploymentMutationOptions(workspaceId, deployment.id, replicas),
+    ...scaleDeploymentMutationOptions,
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({

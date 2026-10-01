@@ -2,10 +2,7 @@ import { infiniteQueryOptions, mutationOptions, queryOptions } from "@tanstack/r
 
 import { ApiError, api, ok, type Schemas } from "@/lib/api/client";
 import type { ContainerDetail } from "@/lib/api/schemas";
-import { viewActiveDeployment, viewApp, viewContainer, viewStub } from "@/lib/api/views";
-import { workspaceName } from "@/lib/api/workspaces";
 
-import { appDirectory, workloadDirectory } from "./directory";
 import {
   LIVE_LIST_MAX_PAGES,
   nextListCursor,
@@ -83,34 +80,33 @@ export function containerQueryOptions(workspace: string, containerId: string) {
  * A container in the reference's detail shape, which the sandbox and pod
  * pages read until the workloads packet rewrites them.
  */
-export function containerDetailQueryOptions(workspaceId: string, containerId: string) {
+export function containerDetailQueryOptions(workspace: string, containerId: string) {
   return queryOptions({
-    queryKey: [
-      ...workspaceQueryKeys.containers.detail(workspaceId, containerId),
-      "reference",
-    ] as const,
-    queryFn: async ({ client }): Promise<ContainerDetail> => {
+    queryKey: [...workspaceQueryKeys.containers.detail(workspace, containerId), "reference"],
+    queryFn: async ({ signal }): Promise<ContainerDetail> => {
       const container = await ok(
         api.GET("/v1/workspaces/{workspace}/containers/{container}", {
-          params: { path: { workspace: workspaceName(workspaceId), container: containerId } },
+          params: { path: { workspace, container: containerId } },
+          signal,
         }),
       );
-      const [apps, workloads] = await Promise.all([
-        appDirectory(client, workspaceId),
-        workloadDirectory(client, workspaceId),
-      ]);
-      const app = apps.byName.get(container.app);
-      const workload = workloads.byName.get(`${container.app}/${container.function}`);
+      const live = container.state !== "stopped";
       return {
-        ...viewContainer(container, workspaceId, app?.id ?? null),
-        app: app ? viewApp(app, workspaceId) : null,
-        workload: workload ? viewStub(workload, workspaceId, app?.id ?? "") : null,
-        deployment: workload ? viewActiveDeployment(workload, app?.id ?? "") : null,
-        run_name: null,
-        run_status: null,
-        expires_at: null,
+        id: container.id,
+        name: `${container.function}-${container.id.slice(0, 8)}`,
+        image: container.image ?? "",
+        workspace_id: "",
+        runtime_machine_id: "",
+        runtime_worker_id: "",
+        status: live ? (container.state === "ready" ? "running" : "pending") : "stopped",
+        termination_reason: container.stop_reason ?? "UNKNOWN",
+        command: [],
+        ports: {},
+        created_at: container.created_at,
+        started_at: container.ready_at ?? null,
+        finished_at: container.stopped_at ?? null,
         actions: {
-          can_stop: container.state !== "stopped",
+          can_stop: live,
           can_shell: false,
           can_create_image: false,
           can_snapshot_memory: false,

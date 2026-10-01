@@ -204,7 +204,6 @@ function TaskDrawerBody({
   refreshPending: boolean;
   onRefresh: () => void;
 }) {
-  const workspaceId = useWorkspace().workspace.id;
   const facts = rowFacts(row);
   const task = isRequest(row) ? null : row;
   const finished = taskFinished(facts.status);
@@ -368,7 +367,7 @@ function TaskDrawerBody({
           </TabsContent>
           <TabsContent value="artifacts" className="m-0 min-h-0 flex-1 overflow-auto">
             <PanelErrorBoundary key={row.id} title="Artifacts could not be displayed">
-              <Artifacts key={`${workspace}/${row.id}`} workspaceId={workspaceId} taskId={row.id} />
+              <Artifacts key={`${workspace}/${row.id}`} taskId={row.id} />
             </PanelErrorBoundary>
           </TabsContent>
           <TabsContent value="trace" className="m-0 min-h-0 flex-1 overflow-auto">

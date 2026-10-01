@@ -60,8 +60,11 @@ visual parity.
   cookie, and the page confirms it with `/v1/me`.
 - Listed tokens show no prefix. The API stores only digests.
 - Log history has no backward paging.
-- Deleting a workload version deletes the workload, so only a workload's
-  active row or its last version offers Delete.
+- App URLs carry the app name, `/w/$workspace/apps/$app`, as the API
+  does. The reference used the app ID.
+- Deleting a workload deletes every version of it. In the version list only
+  a workload's one remaining version offers Delete, and the app's workload
+  list says the delete takes every version.
 - Map keys need at least one character.
 - Endpoint and ASGI requests are the edge's request records, listed where
   the reference listed their tasks. A request is complete, failed for a
@@ -73,10 +76,14 @@ visual parity.
 Data the API does not provide yet. Components show their empty state or the
 server's error.
 
-- Pods, devboxes, sandboxes and shells have no API. Their panels show the
-  server's "no such operation".
-- The endpoint playground cannot call an endpoint: its host takes a
-  workspace token and sends no CORS headers. It shows that as the error.
+- To restore when the workloads packet merges pod and devbox kinds: the app
+  card's "Devbox" count chip (removed because it was always 0) and the pod,
+  devbox, sandbox and shell pages, as the reference has them.
+- Pods, devboxes, sandboxes and shells have no API. Sandbox and shell
+  panels show the server's "no such operation". The Pod instance drawer and
+  the devbox panels stay in place and show "Pods and devboxes have no API
+  yet" until the workloads packet serves them; the API lists no Pod or
+  devbox workload, so the app and workload pages show none.
 - Containers have no image, command, ports or exit code. Tasks carry no
   handler, args or kwargs. Results have no rich display.
 - The artifact summary has no cost fields. Its tooltip reads "$0.00 accrued",

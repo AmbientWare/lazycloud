@@ -37,108 +37,83 @@ const workspaceRoot = (workspaceId: string) => ["workspace", workspaceId] as con
 export const workspaceQueryKeys = {
   root: workspaceRoot,
   apps: {
-    root: (workspaceId: string) => [...workspaceRoot(workspaceId), "apps"] as const,
-    summaries: (workspaceId: string) =>
-      [...workspaceRoot(workspaceId), "apps", "summaries"] as const,
-    details: (workspaceId: string) => [...workspaceRoot(workspaceId), "apps", "detail"] as const,
-    detail: (workspaceId: string, appId: string) =>
-      [...workspaceRoot(workspaceId), "apps", "detail", appId] as const,
-    deploymentManifest: (workspaceId: string, deploymentId: string) =>
-      [...workspaceRoot(workspaceId), "apps", "deployment-manifest", deploymentId] as const,
-    deploymentUrl: (workspaceId: string, deploymentId: string) =>
-      [...workspaceRoot(workspaceId), "apps", "deployment-url", deploymentId] as const,
+    root: (workspace: string) => [...workspaceRoot(workspace), "apps"] as const,
+    list: (workspace: string) => [...workspaceRoot(workspace), "apps", "list"] as const,
+    summaries: (workspace: string) => [...workspaceRoot(workspace), "apps", "summaries"] as const,
+    detail: (workspace: string, app: string) =>
+      [...workspaceRoot(workspace), "apps", "detail", app] as const,
+    activities: (workspace: string) => [...workspaceRoot(workspace), "apps", "activity"] as const,
+    activity: (workspace: string, app: string) =>
+      [...workspaceRoot(workspace), "apps", "activity", app] as const,
   },
+  search: (workspaceName: string, group: "apps" | "deployments" | "tasks", term: string) =>
+    [...workspaceRoot(workspaceName), "search", group, term] as const,
   members: (workspaceId: string) => [...workspaceRoot(workspaceId), "members"] as const,
   invitations: (workspaceId: string) => [...workspaceRoot(workspaceId), "invitations"] as const,
   deployments: {
-    root: (workspaceId: string) => [...workspaceRoot(workspaceId), "deployments"] as const,
-    list: (
-      workspaceId: string,
-      options: { limit: number; appId: string | null; name: string | null; kind: string | null },
-    ) => [...workspaceRoot(workspaceId), "deployments", "list", options] as const,
-    devbox: (workspaceId: string, deploymentId: string) =>
-      [...workspaceRoot(workspaceId), "deployments", "devbox", deploymentId] as const,
-  },
-  workloads: {
-    root: (workspaceId: string) => [...workspaceRoot(workspaceId), "workloads"] as const,
-    list: (workspaceId: string, appId: string | null) =>
-      [...workspaceRoot(workspaceId), "workloads", "list", { appId }] as const,
-    cron: (workspaceId: string) => [...workspaceRoot(workspaceId), "workloads", "cron"] as const,
+    root: (workspace: string) => [...workspaceRoot(workspace), "deployments"] as const,
+    list: (workspace: string, app: string | null) =>
+      [...workspaceRoot(workspace), "deployments", "list", { app }] as const,
+    workload: (workspace: string, app: string, kind: string, name: string) =>
+      [...workspaceRoot(workspace), "deployments", "workload", app, kind, name] as const,
+    versions: (workspace: string, deployment: string) =>
+      [...workspaceRoot(workspace), "deployments", "versions", deployment] as const,
+    performance: (workspace: string, deployment: string, windowSeconds: number) =>
+      [
+        ...workspaceRoot(workspace),
+        "deployments",
+        "performance",
+        deployment,
+        windowSeconds,
+      ] as const,
   },
   tasks: {
-    root: (workspaceId: string) => [...workspaceRoot(workspaceId), "tasks"] as const,
-    lists: (workspaceId: string) => [...workspaceRoot(workspaceId), "tasks", "list"] as const,
-    list: (workspaceId: string, options: TaskListKeyParts) =>
-      [...workspaceRoot(workspaceId), "tasks", "list", options] as const,
+    root: (workspace: string) => [...workspaceRoot(workspace), "tasks"] as const,
+    lists: (workspace: string) => [...workspaceRoot(workspace), "tasks", "list"] as const,
+    list: (workspace: string, options: TaskListKeyParts) =>
+      [...workspaceRoot(workspace), "tasks", "list", options] as const,
     // Under the task lists, so the changes that refresh those refresh these.
-    requests: (workspaceId: string, app: string, name: string, limit: number) =>
-      [...workspaceRoot(workspaceId), "tasks", "list", "requests", { app, name, limit }] as const,
-    details: (workspaceId: string) => [...workspaceRoot(workspaceId), "tasks", "detail"] as const,
-    detail: (workspaceId: string, taskId: string) =>
-      [...workspaceRoot(workspaceId), "tasks", "detail", taskId] as const,
-    request: (workspaceId: string, requestId: string) =>
-      [...workspaceRoot(workspaceId), "tasks", "detail", "request", requestId] as const,
-    callGraphs: (workspaceId: string) =>
-      [...workspaceRoot(workspaceId), "tasks", "call-graph"] as const,
-    callGraph: (workspaceId: string, rootTaskId: string) =>
-      [...workspaceRoot(workspaceId), "tasks", "call-graph", rootTaskId] as const,
-    aggregates: (workspaceId: string) =>
-      [...workspaceRoot(workspaceId), "tasks", "aggregate"] as const,
-    metrics: (workspaceId: string, hours: number, app: string | null) =>
-      [...workspaceRoot(workspaceId), "tasks", "aggregate", "metrics", hours, app] as const,
-    buckets: (workspaceId: string, windowSeconds: number, app: string | null, fn: string | null) =>
-      [
-        ...workspaceRoot(workspaceId),
-        "tasks",
-        "aggregate",
-        "buckets",
-        windowSeconds,
-        app,
-        fn,
-      ] as const,
-    latency: (
-      workspaceId: string,
-      stubIds: string,
-      deploymentId: string | null,
-      windowSeconds: number,
-    ) =>
-      [
-        ...workspaceRoot(workspaceId),
-        "tasks",
-        "aggregate",
-        "latency",
-        stubIds,
-        deploymentId,
-        windowSeconds,
-      ] as const,
+    requests: (workspace: string, app: string, name: string, limit: number) =>
+      [...workspaceRoot(workspace), "tasks", "list", "requests", { app, name, limit }] as const,
+    details: (workspace: string) => [...workspaceRoot(workspace), "tasks", "detail"] as const,
+    detail: (workspace: string, taskId: string) =>
+      [...workspaceRoot(workspace), "tasks", "detail", taskId] as const,
+    request: (workspace: string, requestId: string) =>
+      [...workspaceRoot(workspace), "tasks", "detail", "request", requestId] as const,
+    callGraphs: (workspace: string) =>
+      [...workspaceRoot(workspace), "tasks", "call-graph"] as const,
+    callGraph: (workspace: string, rootTaskId: string) =>
+      [...workspaceRoot(workspace), "tasks", "call-graph", rootTaskId] as const,
+    aggregates: (workspace: string) => [...workspaceRoot(workspace), "tasks", "aggregate"] as const,
+    metrics: (workspace: string, hours: number, app: string | null) =>
+      [...workspaceRoot(workspace), "tasks", "aggregate", "metrics", hours, app] as const,
   },
   containers: {
-    root: (workspaceId: string) => [...workspaceRoot(workspaceId), "containers"] as const,
-    lists: (workspaceId: string) => [...workspaceRoot(workspaceId), "containers", "list"] as const,
+    root: (workspace: string) => [...workspaceRoot(workspace), "containers"] as const,
+    lists: (workspace: string) => [...workspaceRoot(workspace), "containers", "list"] as const,
     list: (
-      workspaceId: string,
+      workspace: string,
       options: { app: string | null; function: string | null; live: boolean },
-    ) => [...workspaceRoot(workspaceId), "containers", "list", options] as const,
-    details: (workspaceId: string) =>
-      [...workspaceRoot(workspaceId), "containers", "detail"] as const,
-    detail: (workspaceId: string, containerId: string) =>
-      [...workspaceRoot(workspaceId), "containers", "detail", containerId] as const,
-    lifecycle: (workspaceId: string, containerId: string) =>
-      [...workspaceRoot(workspaceId), "containers", "lifecycle", containerId] as const,
-    metrics: (workspaceId: string, containerId: string) =>
-      [...workspaceRoot(workspaceId), "containers", "metrics", containerId] as const,
-    files: (workspaceId: string, containerId: string, path?: string) =>
+    ) => [...workspaceRoot(workspace), "containers", "list", options] as const,
+    details: (workspace: string) => [...workspaceRoot(workspace), "containers", "detail"] as const,
+    detail: (workspace: string, containerId: string) =>
+      [...workspaceRoot(workspace), "containers", "detail", containerId] as const,
+    lifecycle: (workspace: string, containerId: string) =>
+      [...workspaceRoot(workspace), "containers", "lifecycle", containerId] as const,
+    metrics: (workspace: string, containerId: string) =>
+      [...workspaceRoot(workspace), "containers", "metrics", containerId] as const,
+    files: (workspace: string, containerId: string, path?: string) =>
       [
-        ...workspaceRoot(workspaceId),
+        ...workspaceRoot(workspace),
         "containers",
         "files",
         containerId,
         ...(path ? [path] : []),
       ] as const,
     // Outside "containers" so container list refreshes never refetch a preview.
-    filePreview: (workspaceId: string, containerId: string, path: string, maxBytes: number) =>
+    filePreview: (workspace: string, containerId: string, path: string, maxBytes: number) =>
       [
-        ...workspaceRoot(workspaceId),
+        ...workspaceRoot(workspace),
         "container-file-previews",
         containerId,
         path,
@@ -159,44 +134,40 @@ export const workspaceQueryKeys = {
       [...workspaceRoot(workspaceId), "compute", "summary"] as const,
   },
   storage: {
-    root: (workspaceId: string) => [...workspaceRoot(workspaceId), "storage"] as const,
-    artifacts: (workspaceId: string) =>
-      [...workspaceRoot(workspaceId), "storage", "artifacts"] as const,
-    secrets: (workspaceId: string) =>
-      [...workspaceRoot(workspaceId), "storage", "secrets"] as const,
-    volumes: (workspaceId: string) =>
-      [...workspaceRoot(workspaceId), "storage", "volumes"] as const,
-    disks: (workspaceId: string) => [...workspaceRoot(workspaceId), "storage", "disks"] as const,
-    volumePath: (workspaceId: string, volumeName: string, path?: string) =>
+    root: (workspace: string) => [...workspaceRoot(workspace), "storage"] as const,
+    artifacts: (workspace: string) =>
+      [...workspaceRoot(workspace), "storage", "artifacts"] as const,
+    secrets: (workspace: string) => [...workspaceRoot(workspace), "storage", "secrets"] as const,
+    volumes: (workspace: string) => [...workspaceRoot(workspace), "storage", "volumes"] as const,
+    disks: (workspace: string) => [...workspaceRoot(workspace), "storage", "disks"] as const,
+    volumePath: (workspace: string, volume: string, path?: string) =>
       [
-        ...workspaceRoot(workspaceId),
+        ...workspaceRoot(workspace),
         "storage",
         "volume-path",
-        volumeName,
+        volume,
         ...(path ? [path] : []),
       ] as const,
   },
   collections: {
-    resource: (workspaceId: string, kind: "map" | "queue", name: string) =>
-      [...workspaceRoot(workspaceId), "collections", kind, name] as const,
-    queueSize: (workspaceId: string, name: string) =>
-      [...workspaceRoot(workspaceId), "collections", "queue", name, "size"] as const,
-    queuePeek: (workspaceId: string, name: string) =>
-      [...workspaceRoot(workspaceId), "collections", "queue", name, "peek"] as const,
-    mapCount: (workspaceId: string, name: string) =>
-      [...workspaceRoot(workspaceId), "collections", "map", name, "count"] as const,
-    mapKeys: (workspaceId: string, name: string) =>
-      [...workspaceRoot(workspaceId), "collections", "map", name, "keys"] as const,
-    mapValue: (workspaceId: string, name: string, key: string | null) =>
-      [...workspaceRoot(workspaceId), "collections", "map", name, "value", key] as const,
+    list: (workspace: string, kind: "maps" | "queues") =>
+      [...workspaceRoot(workspace), "collections", kind] as const,
+    resource: (workspace: string, kind: "map" | "queue", name: string) =>
+      [...workspaceRoot(workspace), "collections", kind, name] as const,
+    queue: (workspace: string, name: string) =>
+      [...workspaceRoot(workspace), "collections", "queue", name, "info"] as const,
+    queueHead: (workspace: string, name: string) =>
+      [...workspaceRoot(workspace), "collections", "queue", name, "head"] as const,
+    map: (workspace: string, name: string) =>
+      [...workspaceRoot(workspace), "collections", "map", name, "info"] as const,
+    mapKeys: (workspace: string, name: string) =>
+      [...workspaceRoot(workspace), "collections", "map", name, "keys"] as const,
+    mapValue: (workspace: string, name: string, key: string | null) =>
+      [...workspaceRoot(workspace), "collections", "map", name, "value", key] as const,
   },
   logs: {
     history: (workspaceId: string, source: LogSource) =>
       [...workspaceRoot(workspaceId), "logs", "history", source] as const,
-  },
-  resources: {
-    list: (workspaceId: string, configKey: string) =>
-      [...workspaceRoot(workspaceId), "resources", configKey] as const,
   },
 } as const;
 
@@ -230,7 +201,7 @@ export const accountQueryKeys = {
   billing: () => [...accountRoot, "billing"] as const,
   metrics: {
     root: () => [...accountRoot, "metrics"] as const,
-    containerCounts: () => [...accountRoot, "metrics", "container-counts"] as const,
+    summary: () => [...accountRoot, "metrics", "summary"] as const,
     activity: (scope: AccountActivityKeyParts) =>
       [...accountRoot, "metrics", "activity", scope] as const,
   },

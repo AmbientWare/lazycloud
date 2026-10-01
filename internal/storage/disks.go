@@ -254,6 +254,9 @@ func diskOut(row ListDisksRow) apitypes.Disk {
 	}
 	if status != apitypes.Detached {
 		out.HolderContainerId = row.HolderContainerID
+		if row.HolderApp != nil && row.HolderKind != nil && row.HolderWorkload != nil {
+			out.Holder = &apitypes.WorkloadRef{App: *row.HolderApp, Kind: apitypes.WorkloadRefKind(*row.HolderKind), Name: *row.HolderWorkload}
+		}
 	}
 	return out
 }

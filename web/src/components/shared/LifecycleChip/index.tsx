@@ -1,6 +1,8 @@
 import { Badge } from "@/components/ui/badge";
-import type { MachineLifecycle } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 import { capacityBadge } from "@/lib/machine-lifecycle";
+
+type MachineLifecycle = Schemas["MachineLifecycle"];
 
 type Tone = "success" | "warning" | "danger" | "muted";
 

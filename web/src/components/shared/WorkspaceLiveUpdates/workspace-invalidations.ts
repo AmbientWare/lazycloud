@@ -26,14 +26,14 @@ export function workspaceInvalidationTargets(
   const appSummaries = { queryKey: keys.apps.summaries(workspace), expensive: true };
 
   switch (change.topic) {
+    // A change names its app by id and app reads are keyed by name, so an app
+    // or deployment change, which is rare, refreshes every app read.
     case "apps":
-      return [appSummaries, { queryKey: keys.apps.details(workspace) }];
+      return [{ queryKey: keys.apps.root(workspace) }];
     case "deployments":
       return [
         { queryKey: keys.deployments.root(workspace) },
-        { queryKey: keys.workloads.root(workspace) },
-        appSummaries,
-        { queryKey: keys.apps.details(workspace) },
+        { queryKey: keys.apps.root(workspace) },
       ];
     case "tasks":
       return compact([
@@ -48,6 +48,7 @@ export function workspaceInvalidationTargets(
         containerId && { queryKey: keys.containers.lifecycle(workspace, containerId) },
         { queryKey: keys.tasks.aggregates(workspace), expensive: true },
         appSummaries,
+        { queryKey: keys.apps.activities(workspace), expensive: true },
       ]);
     case "containers":
       return compact([

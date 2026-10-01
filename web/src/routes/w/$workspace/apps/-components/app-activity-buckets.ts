@@ -1,5 +1,5 @@
 import type { Schemas } from "@/lib/api/client";
-import { taskActivityBand, type TaskActivityBand } from "@/lib/format";
+import type { TaskActivityBand } from "@/lib/format";
 
 const HOUR_MS = 60 * 60 * 1_000;
 const HOUR_COUNT = 24;
@@ -12,73 +12,45 @@ export type AppRunActivity = {
   total: number;
 };
 
-/** Maps sparse server-owned hourly buckets onto the current 24 UTC hours. */
+/** Unfinished work is in flight, and a cancelled task neither failed nor succeeded. */
+const STATUS_BANDS: Record<keyof Schemas["TaskStatusCounts"], TaskActivityBand> = {
+  queued: "inFlight",
+  running: "inFlight",
+  succeeded: "succeeded",
+  failed: "failed",
+  cancelled: "other",
+};
+
+/**
+ * Maps hourly activity buckets onto the current 24 UTC hours, summed over
+ * the series: one per function for an app, or the app's own series.
+ */
 export function appRunActivity(
-  buckets: Schemas["ActivityBucket"][] | undefined,
+  series: readonly Schemas["ActivitySeries"][] | undefined,
   now = new Date(),
 ): AppRunActivity {
-  const tasks = Array.from({ length: HOUR_COUNT }, () => 0);
-  const bands = emptyBands();
+  const tasks = hours();
+  const bands: Record<TaskActivityBand, number[]> = {
+    failed: hours(),
+    inFlight: hours(),
+    other: hours(),
+    succeeded: hours(),
+  };
   const currentHour = Math.floor(now.getTime() / HOUR_MS) * HOUR_MS;
   const firstHour = currentHour - (HOUR_COUNT - 1) * HOUR_MS;
 
-  for (const bucket of buckets ?? []) {
+  for (const bucket of (series ?? []).flatMap((item) => item.buckets)) {
     const timestamp = new Date(bucket.timestamp).getTime();
     if (!Number.isFinite(timestamp)) continue;
-    const hour = Math.floor(timestamp / HOUR_MS) * HOUR_MS;
-    const index = Math.floor((hour - firstHour) / HOUR_MS);
+    const index = Math.floor((Math.floor(timestamp / HOUR_MS) * HOUR_MS - firstHour) / HOUR_MS);
     if (index < 0 || index >= HOUR_COUNT) continue;
-
-    for (const [status, value] of Object.entries(bucket.status_counts)) {
-      const amount = Math.max(Math.trunc(value), 0);
-      if (amount === 0) continue;
+    for (const status of Object.keys(STATUS_BANDS) as (keyof typeof STATUS_BANDS)[]) {
+      const amount = Math.max(Math.trunc(bucket.status_counts[status]), 0);
       tasks[index] += amount;
-      bands[taskActivityBand(status)][index] += amount;
+      bands[STATUS_BANDS[status]][index] += amount;
     }
   }
 
-  return summarizeActivity(tasks, bands);
-}
-
-/** The same 24 hours from the app list, which sends one series per band.
-
-    The list cannot afford a bucket per app per status, so it sends four totals
-    an hour instead. Both sources end up in this shape so one chart draws them,
-    and the remainder of an hour that no band claims stays `other` rather than
-    being folded into the nearest one. */
-export function appRunActivityFromSeries(series: {
-  activity: number[];
-  failures: number[];
-  pending: number[];
-  succeeded: number[];
-}): AppRunActivity {
-  const tasks = alignToWindow(series.activity);
-  const bands = {
-    failed: alignToWindow(series.failures),
-    inFlight: alignToWindow(series.pending),
-    succeeded: alignToWindow(series.succeeded),
-    other: Array.from({ length: HOUR_COUNT }, () => 0),
-  };
-  const priority = ["failed", "inFlight", "succeeded"] as const;
-
-  for (let index = 0; index < HOUR_COUNT; index += 1) {
-    const total = Math.max(tasks[index], 0);
-    // Clamped against the hour's own total so a series that disagrees with it
-    // cannot draw a bar taller than the work it describes.
-    let claimed = 0;
-    for (const band of priority) {
-      const amount = Math.min(Math.max(bands[band][index], 0), Math.max(total - claimed, 0));
-      bands[band][index] = amount;
-      claimed += amount;
-    }
-    bands.other[index] = Math.max(total - claimed, 0);
-    tasks[index] = total;
-  }
-
-  return summarizeActivity(tasks, bands);
-}
-
-function summarizeActivity(tasks: number[], bands: AppRunActivity["bands"]): AppRunActivity {
   return {
     tasks,
     bands,
@@ -92,16 +64,8 @@ function summarizeActivity(tasks: number[], bands: AppRunActivity["bands"]): App
   };
 }
 
-/** Right-aligns a server series on the window: the last value is the current hour. */
-function alignToWindow(values: number[]): number[] {
-  if (values.length === HOUR_COUNT) return [...values];
-  const padding = Array.from({ length: Math.max(HOUR_COUNT - values.length, 0) }, () => 0);
-  return [...padding, ...values].slice(-HOUR_COUNT);
-}
-
-function emptyBands(): Record<TaskActivityBand, number[]> {
-  const hours = () => Array.from({ length: HOUR_COUNT }, () => 0);
-  return { failed: hours(), inFlight: hours(), other: hours(), succeeded: hours() };
+function hours(): number[] {
+  return Array.from({ length: HOUR_COUNT }, () => 0);
 }
 
 function sum(values: number[]): number {

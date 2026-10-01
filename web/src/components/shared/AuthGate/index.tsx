@@ -38,14 +38,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
   }, [navigate, queryClient]);
 
   const contextValue = useMemo<SessionContextValue | null>(
-    () =>
-      session.data
-        ? {
-            user: session.data.user,
-            workspaces: session.data.workspaces,
-            logout,
-          }
-        : null,
+    () => (session.data ? { ...session.data, logout } : null),
     [logout, session.data],
   );
 
@@ -94,7 +87,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
   return <SessionContext.Provider value={contextValue}>{children}</SessionContext.Provider>;
 }
 
-function LoadingScreen() {
+export function LoadingScreen() {
   return (
     <ContentTransition
       pending

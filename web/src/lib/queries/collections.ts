@@ -6,11 +6,12 @@ import {
 } from "@tanstack/react-query";
 
 import { api, ok } from "@/lib/api/client";
-import { jsonValueSchema, type MapEntry } from "@/lib/api/schemas";
-import { workspaceName } from "@/lib/api/workspaces";
 import { fileBase64 } from "@/lib/files";
 
+import { allPages } from "./storage";
 import { workspaceQueryKeys } from "./workspace-keys";
+
+export type CollectionKind = "maps" | "queues";
 
 /**
  * Queues and maps are written by running user code, which the change stream
@@ -20,104 +21,114 @@ import { workspaceQueryKeys } from "./workspace-keys";
  */
 const LIVE_INTERVAL_MS = 2_000;
 
-const queuePath = (workspaceId: string, queue: string) => ({
-  params: { path: { workspace: workspaceName(workspaceId), queue } },
+const queuePath = (workspace: string, queue: string) => ({
+  params: { path: { workspace, queue } },
 });
 
-const mapPath = (workspaceId: string, map: string) => ({
-  params: { path: { workspace: workspaceName(workspaceId), map } },
+const mapPath = (workspace: string, map: string) => ({
+  params: { path: { workspace, map } },
 });
 
-const entryPath = (workspaceId: string, map: string, key: string) => ({
-  params: { path: { workspace: workspaceName(workspaceId), map, key } },
+const entryPath = (workspace: string, map: string, key: string) => ({
+  params: { path: { workspace, map, key } },
 });
 
-export function queueSizeQueryOptions(workspaceId: string, name: string) {
+export function queuesQueryOptions(workspace: string) {
   return queryOptions({
-    queryKey: workspaceQueryKeys.collections.queueSize(workspaceId, name),
-    queryFn: async (): Promise<{ size: number }> => {
-      const queue = await ok(
-        api.GET("/v1/workspaces/{workspace}/queues/{queue}", queuePath(workspaceId, name)),
-      );
-      return { size: queue.size };
-    },
+    queryKey: workspaceQueryKeys.collections.list(workspace, "queues"),
+    queryFn: () =>
+      allPages(async (cursor) => {
+        const page = await ok(
+          api.GET("/v1/workspaces/{workspace}/queues", {
+            params: { path: { workspace }, query: { limit: 100, cursor } },
+          }),
+        );
+        return { items: page.queues, next: page.next_cursor };
+      }),
+    refetchInterval: 30_000,
+  });
+}
+
+export function mapsQueryOptions(workspace: string) {
+  return queryOptions({
+    queryKey: workspaceQueryKeys.collections.list(workspace, "maps"),
+    queryFn: () =>
+      allPages(async (cursor) => {
+        const page = await ok(
+          api.GET("/v1/workspaces/{workspace}/maps", {
+            params: { path: { workspace }, query: { limit: 100, cursor } },
+          }),
+        );
+        return { items: page.maps, next: page.next_cursor };
+      }),
+    refetchInterval: 30_000,
+  });
+}
+
+export function queueQueryOptions(workspace: string, name: string) {
+  return queryOptions({
+    queryKey: workspaceQueryKeys.collections.queue(workspace, name),
+    queryFn: () =>
+      ok(api.GET("/v1/workspaces/{workspace}/queues/{queue}", queuePath(workspace, name))),
     refetchInterval: LIVE_INTERVAL_MS,
   });
 }
 
-export function mapCountQueryOptions(workspaceId: string, name: string) {
+export function mapQueryOptions(workspace: string, name: string) {
   return queryOptions({
-    queryKey: workspaceQueryKeys.collections.mapCount(workspaceId, name),
-    queryFn: async (): Promise<{ count: number }> => {
-      const map = await ok(
-        api.GET("/v1/workspaces/{workspace}/maps/{map}", mapPath(workspaceId, name)),
-      );
-      return { count: map.count };
-    },
+    queryKey: workspaceQueryKeys.collections.map(workspace, name),
+    queryFn: () => ok(api.GET("/v1/workspaces/{workspace}/maps/{map}", mapPath(workspace, name))),
     refetchInterval: LIVE_INTERVAL_MS,
   });
 }
 
-export function queuePeekQueryOptions(workspaceId: string, name: string) {
+export function queueHeadQueryOptions(workspace: string, name: string) {
   return queryOptions({
-    queryKey: workspaceQueryKeys.collections.queuePeek(workspaceId, name),
-    queryFn: async (): Promise<{ value_base64: string }> => {
-      const head = await ok(
-        api.GET("/v1/workspaces/{workspace}/queues/{queue}/head", queuePath(workspaceId, name)),
-      );
-      return { value_base64: head.message ?? "" };
-    },
+    queryKey: workspaceQueryKeys.collections.queueHead(workspace, name),
+    queryFn: () =>
+      ok(api.GET("/v1/workspaces/{workspace}/queues/{queue}/head", queuePath(workspace, name))),
     refetchInterval: LIVE_INTERVAL_MS,
   });
 }
 
-export function mapKeysQueryOptions(workspaceId: string, name: string, prefix = "") {
+export function mapKeysQueryOptions(workspace: string, name: string, prefix = "") {
   return infiniteQueryOptions({
-    queryKey: [...workspaceQueryKeys.collections.mapKeys(workspaceId, name), prefix],
+    queryKey: [...workspaceQueryKeys.collections.mapKeys(workspace, name), prefix],
     initialPageParam: "",
-    queryFn: async ({ pageParam }): Promise<{ data: string[]; next: string | null }> => {
-      const page = await ok(
+    queryFn: ({ pageParam }) =>
+      ok(
         api.GET("/v1/workspaces/{workspace}/maps/{map}/keys", {
           params: {
-            ...mapPath(workspaceId, name).params,
+            ...mapPath(workspace, name).params,
             query: { prefix: prefix || undefined, cursor: pageParam || undefined },
           },
         }),
-      );
-      return { data: page.keys, next: page.next_cursor ?? null };
-    },
-    getNextPageParam: (page) => page.next ?? undefined,
+      ),
+    getNextPageParam: (page) => page.next_cursor,
     refetchInterval: 15_000,
   });
 }
 
-export function mapValueQueryOptions(workspaceId: string, name: string, key: string | null) {
+export function mapValueQueryOptions(workspace: string, name: string, key: string | null) {
   return queryOptions({
-    queryKey: workspaceQueryKeys.collections.mapValue(workspaceId, name, key),
+    queryKey: workspaceQueryKeys.collections.mapValue(workspace, name, key),
     queryFn:
       key === null
         ? skipToken
-        : async (): Promise<MapEntry> => {
-            const entry = await ok(
+        : () =>
+            ok(
               api.GET(
                 "/v1/workspaces/{workspace}/maps/{map}/entries/{key}",
-                entryPath(workspaceId, name, key),
+                entryPath(workspace, name, key),
               ),
-            );
-            return {
-              value_base64: entry.value,
-              revision: entry.revision,
-              expires_at: entry.expires_at ?? null,
-            };
-          },
+            ),
     refetchInterval: LIVE_INTERVAL_MS,
   });
 }
 
+/** The compact JSON a value is stored as; a parse failure throws. */
 export function parseCollectionJson(text: string): string {
-  const parsed = jsonValueSchema.safeParse(JSON.parse(text));
-  if (!parsed.success) throw new Error("Enter a valid JSON value.");
-  const serialized = JSON.stringify(parsed.data);
+  const serialized = JSON.stringify(JSON.parse(text));
   if (new TextEncoder().encode(serialized).length > 1024 * 1024) {
     throw new Error("Keep the JSON value under 1 MiB.");
   }
@@ -134,86 +145,65 @@ function encodeJson(json: string): Promise<string> {
  * condition is a conflict. A null `ttlSeconds` keeps the current expiry.
  */
 export async function setMapValue(
-  workspaceId: string,
+  workspace: string,
   name: string,
   key: string,
   json: string,
   ttlSeconds: number | null,
   revision?: string,
 ) {
-  await ok(
+  return ok(
     api.PUT("/v1/workspaces/{workspace}/maps/{map}/entries/{key}", {
-      ...entryPath(workspaceId, name, key),
+      ...entryPath(workspace, name, key),
       body: {
         value: await encodeJson(json),
         ...(ttlSeconds === null ? {} : { ttl_seconds: ttlSeconds }),
-        ...(revision === undefined
-          ? { if_absent: true }
-          : { if_absent: false, if_revision: revision }),
+        ...(revision === undefined ? { if_absent: true } : { if_revision: revision }),
       },
     }),
   );
-  return {};
 }
 
-export async function deleteMapKey(
-  workspaceId: string,
-  name: string,
-  key: string,
-  revision: string,
-) {
-  await ok(
+export function deleteMapKey(workspace: string, name: string, key: string, revision: string) {
+  return ok(
     api.DELETE("/v1/workspaces/{workspace}/maps/{map}/entries/{key}", {
-      params: { ...entryPath(workspaceId, name, key).params, query: { if_revision: revision } },
+      params: { ...entryPath(workspace, name, key).params, query: { if_revision: revision } },
     }),
   );
-  return {};
 }
 
-export async function putQueueMessage(workspaceId: string, name: string, json: string) {
-  await ok(
+export async function putQueueMessage(workspace: string, name: string, json: string) {
+  return ok(
     api.POST("/v1/workspaces/{workspace}/queues/{queue}/messages", {
-      ...queuePath(workspaceId, name),
+      ...queuePath(workspace, name),
       body: { messages: [await encodeJson(json)] },
     }),
   );
-  return {};
 }
 
-export async function popQueueMessage(
-  workspaceId: string,
-  name: string,
-): Promise<{ value_base64: string }> {
-  const result = await ok(
-    api.POST("/v1/workspaces/{workspace}/queues/{queue}/pop", queuePath(workspaceId, name)),
-  );
-  return { value_base64: result.message ?? "" };
+export function popQueueMessage(workspace: string, name: string) {
+  return ok(api.POST("/v1/workspaces/{workspace}/queues/{queue}/pop", queuePath(workspace, name)));
 }
 
-export async function deleteCollection(
-  workspaceId: string,
-  kind: "maps" | "queues",
-  name: string,
-): Promise<null> {
+export async function deleteCollection(workspace: string, kind: CollectionKind, name: string) {
   if (kind === "maps") {
-    await ok(api.DELETE("/v1/workspaces/{workspace}/maps/{map}", mapPath(workspaceId, name)));
+    await ok(api.DELETE("/v1/workspaces/{workspace}/maps/{map}", mapPath(workspace, name)));
   } else {
-    await ok(api.DELETE("/v1/workspaces/{workspace}/queues/{queue}", queuePath(workspaceId, name)));
+    await ok(api.DELETE("/v1/workspaces/{workspace}/queues/{queue}", queuePath(workspace, name)));
   }
-  return null;
 }
 
 export async function refreshCollection(
   client: QueryClient,
-  workspaceId: string,
-  kind: "maps" | "queues",
+  workspace: string,
+  kind: CollectionKind,
   name: string,
 ) {
   await Promise.all([
-    client.invalidateQueries({ queryKey: workspaceQueryKeys.resources.list(workspaceId, kind) }),
+    client.invalidateQueries({ queryKey: workspaceQueryKeys.collections.list(workspace, kind) }),
     client.invalidateQueries({
       queryKey: workspaceQueryKeys.collections.resource(
-        workspaceId,
+        workspace,
         kind === "maps" ? "map" : "queue",
         name,
       ),

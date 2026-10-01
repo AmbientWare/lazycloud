@@ -3,25 +3,17 @@ import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, expect, it, vi } from "vitest";
 
-import type { Workspace } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 import { WorkspaceContext } from "@/lib/workspace-context";
 
 import { ContainerFileBrowser } from ".";
 
-const workspace: Workspace = {
+const workspace: Schemas["Workspace"] = {
   id: "workspace-1",
   name: "workspace",
-  status: "active",
-  signing_key_prefix: null,
-  primary_token_id: null,
-  concurrency_limit_id: null,
-  connection_id: null,
-  storage: { backend: "s3", bucket: null, prefix: "" },
-  labels: {},
-  metadata: {},
+  state: "active",
   created_at: "2026-09-07T00:00:00Z",
-  updated_at: "2026-09-07T00:00:00Z",
 };
 let client: QueryClient;
 

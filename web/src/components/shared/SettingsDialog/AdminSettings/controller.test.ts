@@ -26,7 +26,7 @@ describe("admin settings controller", () => {
     expect(requests.puts()).toEqual([{ path: "/v1/users/user-2/role", body: { role: "member" } }]);
 
     const demoted = result.current.accounts.find((row) => row.user.id === "user-2")!;
-    expect(demoted.user.role).toBe("member");
+    expect(demoted.user.is_admin).toBe(false);
     act(() => result.current.toggleStatus(demoted));
     expect(result.current.confirming?.action).toBe("disable");
     act(() => result.current.confirm());
@@ -49,7 +49,7 @@ describe("admin settings controller", () => {
     expect(requests.puts()).toHaveLength(3);
     expect(
       result.current.accounts.find((row) => row.user.id === "user-2")?.complimentary_since,
-    ).toBeNull();
+    ).toBeUndefined();
   });
 
   it("refuses to demote or disable the acting administrator", async () => {

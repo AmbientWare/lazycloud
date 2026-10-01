@@ -1,7 +1,11 @@
 -- name: ListDeployments :many
 -- Deployed live workloads of live apps by app and name after the cursor.
+-- state <> 'stopped' lets the running count read the live-container index.
 select w.id, a.name as app_name, w.name, w.kind, w.desired_state, a.state as app_state,
-       r.version, r.id as release_id, w.created_at, r.created_at as deployed_at
+       r.version, r.id as release_id, w.created_at, r.created_at as deployed_at,
+       (select count(*) from releases wr
+        join containers c on c.release_id = wr.id
+        where wr.workload_id = w.id and c.state <> 'stopped' and c.state in ('ready', 'draining'))::int as running_containers
 from apps a
 join workloads w on w.app_id = a.id
 join releases r on r.id = w.active_release_id
@@ -18,7 +22,10 @@ limit @max_rows;
 
 -- name: WorkloadView :one
 select w.id, a.name as app_name, w.name, w.kind, w.desired_state, a.state as app_state,
-       r.version, r.id as release_id, w.created_at, r.created_at as deployed_at
+       r.version, r.id as release_id, w.created_at, r.created_at as deployed_at,
+       (select count(*) from releases wr
+        join containers c on c.release_id = wr.id
+        where wr.workload_id = w.id and c.state <> 'stopped' and c.state in ('ready', 'draining'))::int as running_containers
 from workloads w
 join apps a on a.id = w.app_id
 left join releases r on r.id = w.active_release_id

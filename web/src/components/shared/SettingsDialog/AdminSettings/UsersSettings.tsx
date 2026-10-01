@@ -33,10 +33,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { platformRoleSchema, userStatusSchema, type BillingAccountAdmin } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 import { formatCostNanos } from "@/lib/money";
 
 import {
+  platformRole,
   useAdminSettingsController,
   type AdminSettingsController,
   type PendingConfirmation,
@@ -45,6 +46,21 @@ import {
 const SELF_LOCKOUT = "You cannot change your own role or status. Ask another administrator.";
 
 const ANY = "any";
+
+type BillingAccountAdmin = Schemas["BillingAccountAdmin"];
+
+const ROLES = ["administrator", "member"] as const satisfies readonly Schemas["PlatformRole"][];
+const STATUSES = ["active", "disabled"] as const satisfies readonly Schemas["UserStatus"][];
+
+/** The option a select answered, or null for "any" and anything not offered. */
+function chosen<T extends string>(options: readonly T[], value: string): T | null {
+  return options.find((option) => option === value) ?? null;
+}
+
+/** The name an account goes by, falling back to its login or address when GitHub gave none. */
+function displayName(user: Schemas["User"]): string {
+  return user.display_name || user.github_login || user.email;
+}
 
 /**
  * What narrows the list.
@@ -65,9 +81,7 @@ function AccountFilterBar({ controller }: { controller: AdminSettingsController 
         value={filters.search}
       />
       <Select
-        onValueChange={(value) =>
-          controller.setRoleFilter(value === ANY ? null : platformRoleSchema.parse(value))
-        }
+        onValueChange={(value) => controller.setRoleFilter(chosen(ROLES, value))}
         value={filters.role ?? ANY}
       >
         <SelectTrigger aria-label="Filter by role" className="sm:w-40">
@@ -80,9 +94,7 @@ function AccountFilterBar({ controller }: { controller: AdminSettingsController 
         </SelectContent>
       </Select>
       <Select
-        onValueChange={(value) =>
-          controller.setStatusFilter(value === ANY ? null : userStatusSchema.parse(value))
-        }
+        onValueChange={(value) => controller.setStatusFilter(chosen(STATUSES, value))}
         value={filters.status ?? ANY}
       >
         <SelectTrigger aria-label="Filter by status" className="sm:w-36">
@@ -190,27 +202,31 @@ function AccountRow({
   const pending = controller.pendingUserId === user.id;
   const disabled = controller.pendingUserId !== null;
   const active = user.status === "active";
-  const complimentary = account.complimentary_since !== null;
+  const complimentary = Boolean(account.complimentary_since);
+  const name = displayName(user);
   const secondary = user.email || user.github_login;
 
   return (
     <TableRow>
       <TableCell className="max-w-64">
-        <div className="truncate text-sm font-medium">{user.display_name}</div>
+        <div className="truncate text-sm font-medium">{name}</div>
         {secondary ? (
           <div className="mt-0.5 truncate text-xs text-muted-foreground">{secondary}</div>
         ) : null}
       </TableCell>
       <TableCell>
         <Select
-          value={user.role}
+          value={platformRole(user)}
           disabled={disabled || self}
-          onValueChange={(value) => controller.setRole(account, platformRoleSchema.parse(value))}
+          onValueChange={(value) => {
+            const role = chosen(ROLES, value);
+            if (role) controller.setRole(account, role);
+          }}
         >
           <SelectTrigger
             size="sm"
             className="w-40 text-foreground"
-            aria-label={`Role for ${user.display_name}`}
+            aria-label={`Role for ${name}`}
             title={self ? SELF_LOCKOUT : undefined}
           >
             <SelectValue />
@@ -326,7 +342,7 @@ function ConfirmDialog({ controller }: { controller: AdminSettingsController }) 
 }
 
 function confirmTitle({ action, account }: PendingConfirmation): string {
-  const name = account.user.display_name;
+  const name = displayName(account.user);
   switch (action) {
     case "demote":
       return `Make ${name} a member?`;

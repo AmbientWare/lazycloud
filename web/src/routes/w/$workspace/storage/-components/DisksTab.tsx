@@ -10,27 +10,21 @@ import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { PanelError } from "@/components/shared/PanelError";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { Disk } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 import { formatBytes } from "@/lib/format";
-import { deleteDisk, disksQueryOptions, selectDiskList } from "@/lib/queries/storage";
+import { deleteDisk, disksQueryOptions } from "@/lib/queries/storage";
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 
-const STATUS_LABELS: Record<Disk["status"], string> = {
+const STATUS_LABELS: Record<Schemas["DiskStatus"], string> = {
   attached: "In use",
   saving: "Saving",
   detached: "Idle",
-  deleting: "Deleting",
 };
 
-export function DisksTab({
-  workspaceId,
-  workspaceName,
-}: {
-  workspaceId: string;
-  workspaceName: string;
-}) {
-  const query = useInfiniteQuery(disksQueryOptions(workspaceId));
-  const { items: disks, nextCursor } = selectDiskList(query.data, query.hasNextPage);
+export function DisksTab({ workspace }: { workspace: string }) {
+  const query = useInfiniteQuery(disksQueryOptions(workspace));
+  const disks = query.data?.pages.flatMap((page) => page.disks) ?? [];
+  const nextCursor = query.hasNextPage ? query.data?.pages.at(-1)?.next_cursor : undefined;
 
   return (
     <ContentTransition pending={query.isPending} className="min-h-full lg:h-full lg:min-h-0">
@@ -58,12 +52,7 @@ export function DisksTab({
           </div>
           <div className="divide-y divide-border/60">
             {disks.map((disk) => (
-              <DiskRow
-                key={disk.id}
-                workspaceId={workspaceId}
-                workspaceName={workspaceName}
-                disk={disk}
-              />
+              <DiskRow key={disk.id} workspace={workspace} disk={disk} />
             ))}
           </div>
           <InfiniteScrollBoundary
@@ -79,21 +68,13 @@ export function DisksTab({
   );
 }
 
-function DiskRow({
-  workspaceId,
-  workspaceName,
-  disk,
-}: {
-  workspaceId: string;
-  workspaceName: string;
-  disk: Disk;
-}) {
+function DiskRow({ workspace, disk }: { workspace: string; disk: Schemas["Disk"] }) {
   const queryClient = useQueryClient();
   const [confirming, setConfirming] = useState(false);
   const remove = useMutation({
-    mutationFn: () => deleteDisk(workspaceId, disk.name),
+    mutationFn: () => deleteDisk(workspace, disk.name),
     onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.storage.disks(workspaceId) }),
+      queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.storage.disks(workspace) }),
   });
   const deletable = disk.status === "detached";
 
@@ -108,7 +89,7 @@ function DiskRow({
             updated <LiveRelativeTime value={disk.updated_at} />
           </span>
         </span>
-        <DiskWorkload workspaceName={workspaceName} workload={disk.workload} />
+        <DiskWorkload workspace={workspace} holder={disk.holder} />
         <span className="mono text-right tabular-nums">{formatBytes(disk.size_bytes)}</span>
         <span className="mono text-right tabular-nums text-muted-foreground">
           {formatBytes(disk.stored_bytes)}
@@ -156,28 +137,21 @@ function DiskRow({
 }
 
 function DiskWorkload({
-  workspaceName,
-  workload,
+  workspace,
+  holder,
 }: {
-  workspaceName: string;
-  workload: Disk["workload"];
+  workspace: string;
+  holder: Schemas["WorkloadRef"] | undefined;
 }) {
-  if (!workload) return <span className="text-muted-foreground">None</span>;
+  if (!holder) return <span className="text-muted-foreground">None</span>;
   return (
     <Link
       to="/w/$workspace/apps/$app/workloads/$kind/$name"
-      params={{
-        workspace: workspaceName,
-        app: workload.app_name,
-        kind: workload.kind,
-        name: workload.name,
-      }}
+      params={{ workspace, app: holder.app, kind: holder.kind, name: holder.name }}
       className="min-w-0 truncate hover:text-foreground hover:underline"
     >
-      <span className="mono text-foreground">{workload.name}</span>{" "}
-      <span className="text-muted-foreground">
-        {workload.role === "devbox" ? "devbox" : "pod"} in {workload.app_name}
-      </span>
+      <span className="mono text-foreground">{holder.name}</span>{" "}
+      <span className="text-muted-foreground">pod in {holder.app}</span>
     </Link>
   );
 }

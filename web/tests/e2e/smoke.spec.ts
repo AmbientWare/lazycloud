@@ -7,6 +7,7 @@ const app: Schemas["App"] = {
   name: "square_app",
   state: "active",
   workloads: 1,
+  running_containers: 0,
   created_at: "2026-01-01T09:00:00Z",
 };
 
@@ -17,6 +18,7 @@ const workload: Schemas["DeployedWorkload"] = {
   name: "square",
   kind: "function",
   state: "active",
+  running_containers: 0,
   release_id: "release-1",
   version: 7,
   created_at: "2026-01-01T09:00:00Z",

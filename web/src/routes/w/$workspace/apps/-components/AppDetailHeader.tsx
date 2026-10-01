@@ -1,6 +1,5 @@
 import { LiveRelativeTime } from "@/components/shared/LiveTime";
 import { PageFacts } from "@/components/shared/WorkspacePage/PageFacts";
-import type { Deployment } from "@/lib/api/schemas";
 import { countLabel } from "@/lib/format";
 
 /**
@@ -11,11 +10,11 @@ import { countLabel } from "@/lib/format";
  * it here is the one that drifts.
  */
 export function AppDetailFacts({
-  latestDeployment,
+  lastDeployedAt,
   workloadCount,
   activeWorkloads,
 }: {
-  latestDeployment: Deployment | undefined;
+  lastDeployedAt: string | undefined;
   workloadCount: number;
   activeWorkloads: number;
 }) {
@@ -24,9 +23,9 @@ export function AppDetailFacts({
       items={[
         countLabel(workloadCount, "workload"),
         countLabel(activeWorkloads, "active version"),
-        latestDeployment ? (
+        lastDeployedAt ? (
           <span>
-            Last deployed <LiveRelativeTime value={latestDeployment.created_at} />
+            Last deployed <LiveRelativeTime value={lastDeployedAt} />
           </span>
         ) : (
           "No deployments yet"

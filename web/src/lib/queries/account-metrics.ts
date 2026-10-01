@@ -1,11 +1,6 @@
 import { queryOptions } from "@tanstack/react-query";
 
-import { api, ok } from "@/lib/api/client";
-import type {
-  AccountActivity,
-  AccountActivityMeasure,
-  AccountContainerCounts,
-} from "@/lib/api/schemas";
+import { api, ok, type Schemas } from "@/lib/api/client";
 
 import { accountQueryKeys, workspaceLiveQueryMeta } from "./workspace-keys";
 
@@ -17,13 +12,10 @@ import { accountQueryKeys, workspaceLiveQueryMeta } from "./workspace-keys";
  * plan belongs to a payer, so a figure covering one workspace would be compared
  * with a limit it is not counted for.
  */
-export function accountContainerCountsQueryOptions() {
+export function accountMetricsQueryOptions() {
   return queryOptions({
-    queryKey: accountQueryKeys.metrics.containerCounts(),
-    queryFn: async (): Promise<AccountContainerCounts> => {
-      const metrics = await ok(api.GET("/v1/me/metrics"));
-      return { pending: metrics.containers.pending, running: metrics.containers.running };
-    },
+    queryKey: accountQueryKeys.metrics.summary(),
+    queryFn: () => ok(api.GET("/v1/me/metrics")),
     meta: workspaceLiveQueryMeta(true),
   });
 }
@@ -58,7 +50,7 @@ export const accountActivityRanges = {
  * fresh cache entry on every render and never reuse one.
  */
 export function accountActivityQueryOptions(options: {
-  measure: AccountActivityMeasure;
+  measure: Schemas["ActivityMeasure"];
   range: AccountActivityRange;
   limit: number;
 }) {
@@ -66,8 +58,8 @@ export function accountActivityQueryOptions(options: {
   const { spanSeconds, windowSeconds } = accountActivityRanges[range];
   return queryOptions({
     queryKey: accountQueryKeys.metrics.activity({ measure, range, limit }),
-    queryFn: async (): Promise<AccountActivity> => {
-      const activity = await ok(
+    queryFn: () =>
+      ok(
         api.GET("/v1/me/activity", {
           params: {
             query: {
@@ -78,21 +70,7 @@ export function accountActivityQueryOptions(options: {
             },
           },
         }),
-      );
-      return {
-        ...activity,
-        series: activity.series.map((series) => ({
-          kind: series.kind,
-          // The API names a series' workspace; its labels read only the name.
-          workspace_id: "",
-          workspace_name: series.workspace ?? "",
-          app_id: series.app_id ?? "",
-          app_name: series.app ?? "",
-          total: series.total,
-          buckets: series.buckets,
-        })),
-      };
-    },
+      ),
     staleTime: 30_000,
     meta: workspaceLiveQueryMeta(true),
   });

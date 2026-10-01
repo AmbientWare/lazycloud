@@ -16,13 +16,13 @@ import {
 } from "@/components/ui/select";
 import type { Schemas } from "@/lib/api/client";
 import { countLabel } from "@/lib/format";
-import { appSummariesQueryOptions } from "@/lib/queries/apps";
+import { appsQueryOptions } from "@/lib/queries/apps";
 import {
   selectTaskList,
   taskMetricsQueryOptions,
   tasksInfiniteQueryOptions,
 } from "@/lib/queries/tasks";
-import { deployedStubsQueryOptions } from "@/lib/queries/stubs";
+import { deploymentsQueryOptions } from "@/lib/queries/deployments";
 import { useWorkspace } from "@/lib/workspace-context";
 
 const TASK_STATUSES: readonly Schemas["TaskStatus"][] = [
@@ -84,14 +84,18 @@ function TasksPage() {
       100,
     ),
   );
-  const apps = useQuery(appSummariesQueryOptions(workspace.id));
-  const appNames = (apps.data?.items ?? []).map((item) => item.app.name);
-  const appId = apps.data?.items.find((item) => item.app.name === search.app)?.app.id;
+  const apps = useQuery(appsQueryOptions(workspace.name));
+  // The API narrows to a function within an app, so workloads are offered once an app is.
   const workloads = useQuery({
-    ...deployedStubsQueryOptions(workspace.id, appId),
-    enabled: !search.app || Boolean(appId),
+    ...deploymentsQueryOptions(workspace.name, search.app),
+    enabled: Boolean(search.app),
   });
-  const workloadNames = [...new Set((workloads.data?.stubs ?? []).map((stub) => stub.name))];
+  const appNames = (apps.data ?? []).map((app) => app.name);
+  const workloadNames = search.app
+    ? (workloads.data ?? [])
+        .filter((workload) => workload.kind === "function")
+        .map((workload) => workload.name)
+    : [];
   const metrics = useQuery(taskMetricsQueryOptions(workspace.name));
   const taskList = selectTaskList(tasks.data, tasks.hasNextPage);
 

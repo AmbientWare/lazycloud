@@ -38,3 +38,14 @@ limit @max_rows;
 
 -- name: DeleteSecret :execrows
 delete from secrets where workspace_id = @workspace_id and name = @name;
+
+-- name: SecretUsers :many
+-- Workloads whose active release receives one of the named secrets.
+select s.name::text as secret, a.name as app, w.kind, w.name as workload
+from apps a
+join workloads w on w.app_id = a.id
+join releases r on r.id = w.active_release_id
+cross join lateral jsonb_array_elements_text(coalesce(r.spec -> 'secrets', '[]'::jsonb)) as s(name)
+where a.workspace_id = @workspace_id and w.desired_state = 'active'
+  and s.name = any(@names::text[])
+order by a.name, w.kind, w.name;
