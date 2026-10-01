@@ -24,9 +24,13 @@ func (q *Queries) CountOtherActiveWorkspaces(ctx context.Context, id uuid.UUID) 
 }
 
 const deleteDeletingWorkspace = `-- name: DeleteDeletingWorkspace :execrows
-delete from workspaces where id = $1 and state = 'deleting'
+delete from workspaces w
+where w.id = $1 and w.state = 'deleting'
+  and not exists (select 1 from containers c where c.workspace_id = w.id and c.state <> 'stopped')
 `
 
+// Runs after LockDeletingWorkspace in the same transaction; its own
+// snapshot sees containers committed while the lock was awaited.
 func (q *Queries) DeleteDeletingWorkspace(ctx context.Context, id uuid.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, deleteDeletingWorkspace, id)
 	if err != nil {
@@ -152,6 +156,19 @@ func (q *Queries) ListWorkspaces(ctx context.Context, arg ListWorkspacesParams) 
 		return nil, err
 	}
 	return items, nil
+}
+
+const lockDeletingWorkspace = `-- name: LockDeletingWorkspace :one
+select id from workspaces where id = $1 and state = 'deleting' for update
+`
+
+// Waits for transactions inserting rows that reference the workspace, and
+// holds off new ones, so the check below sees every container.
+func (q *Queries) LockDeletingWorkspace(ctx context.Context, id uuid.UUID) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, lockDeletingWorkspace, id)
+	var id_2 uuid.UUID
+	err := row.Scan(&id_2)
+	return id_2, err
 }
 
 const lockWorkspaceByName = `-- name: LockWorkspaceByName :one

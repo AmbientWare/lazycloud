@@ -41,5 +41,14 @@ where state = 'deleting'
 order by deletion_requested_at, id
 limit @row_limit;
 
+-- name: LockDeletingWorkspace :one
+-- Waits for transactions inserting rows that reference the workspace, and
+-- holds off new ones, so the check below sees every container.
+select id from workspaces where id = @id and state = 'deleting' for update;
+
 -- name: DeleteDeletingWorkspace :execrows
-delete from workspaces where id = @id and state = 'deleting';
+-- Runs after LockDeletingWorkspace in the same transaction; its own
+-- snapshot sees containers committed while the lock was awaited.
+delete from workspaces w
+where w.id = @id and w.state = 'deleting'
+  and not exists (select 1 from containers c where c.workspace_id = w.id and c.state <> 'stopped');

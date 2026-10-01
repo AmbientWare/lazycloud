@@ -281,16 +281,9 @@ func (i *Identity) AcceptInvitation(ctx context.Context, p Principal, token stri
 	)
 	err := pgx.BeginFunc(ctx, i.pool, func(tx pgx.Tx) error {
 		q := i.queries.WithTx(tx)
-		inv, err := redeemable(ctx, q, token)
+		inv, active, err := redeemable(ctx, q, token)
 		if err != nil {
 			return err
-		}
-		active, err := q.LockActiveWorkspace(ctx, inv.WorkspaceID)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrNotFound
-		}
-		if err != nil {
-			return fmt.Errorf("lock workspace: %w", err)
 		}
 		offered := Role(inv.Role)
 		current, err := q.LockMember(ctx, LockMemberParams{WorkspaceID: inv.WorkspaceID, UserID: uuid.UUID(p.User)})
@@ -334,7 +327,7 @@ func (i *Identity) AcceptInvitation(ctx context.Context, p Principal, token stri
 func (i *Identity) DeclineInvitation(ctx context.Context, token string) error {
 	err := pgx.BeginFunc(ctx, i.pool, func(tx pgx.Tx) error {
 		q := i.queries.WithTx(tx)
-		inv, err := redeemable(ctx, q, token)
+		inv, _, err := redeemable(ctx, q, token)
 		if err != nil {
 			return err
 		}
@@ -348,18 +341,42 @@ func (i *Identity) DeclineInvitation(ctx context.Context, token string) error {
 
 // redeemable locks the offer a link opens. An unknown link and a spent one
 // answer the same, because a redeemed offer leaves no row.
-func redeemable(ctx context.Context, q *Queries, token string) (LockInvitationByTokenRow, error) {
-	inv, err := q.LockInvitationByToken(ctx, HashToken(token))
+//
+// Lock order is workspace, then invitation, as in DeleteWorkspace, so a
+// deletion and an answer to one of its invitations cannot deadlock. The
+// workspace is read unlocked first; an offer of a deleting workspace is
+// gone.
+func redeemable(ctx context.Context, q *Queries, token string) (LockInvitationByTokenRow, LockActiveWorkspaceRow, error) {
+	var (
+		inv    LockInvitationByTokenRow
+		active LockActiveWorkspaceRow
+	)
+	hash := HashToken(token)
+	ws, err := q.InvitationWorkspace(ctx, hash)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return inv, ErrNotFound
+		return inv, active, ErrNotFound
 	}
 	if err != nil {
-		return inv, fmt.Errorf("lock invitation: %w", err)
+		return inv, active, fmt.Errorf("read invitation: %w", err)
+	}
+	active, err = q.LockActiveWorkspace(ctx, ws)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return inv, active, ErrNotFound
+	}
+	if err != nil {
+		return inv, active, fmt.Errorf("lock workspace: %w", err)
+	}
+	inv, err = q.LockInvitationByToken(ctx, hash)
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && inv.WorkspaceID != ws) {
+		return inv, active, ErrNotFound
+	}
+	if err != nil {
+		return inv, active, fmt.Errorf("lock invitation: %w", err)
 	}
 	if inv.Expired {
-		return inv, &ConflictError{Message: "this invitation has expired; ask for a new one"}
+		return inv, active, &ConflictError{Message: "this invitation has expired; ask for a new one"}
 	}
-	return inv, nil
+	return inv, active, nil
 }
 
 // answer removes an offer that was accepted or declined, and its email if

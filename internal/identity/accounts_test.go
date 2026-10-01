@@ -229,7 +229,7 @@ func TestDeviceLogin(t *testing.T) {
 	if p := poll(); p.Status != DeviceSlowDown || p.Interval != 10*time.Second {
 		t.Fatalf("early poll %+v", p)
 	}
-	code, err := f.id.DeviceLogin(ctx, "  "+lower(start.UserCode[:4])+start.UserCode[5:])
+	code, err := f.id.DeviceLogin(ctx, person, "  "+lower(start.UserCode[:4])+start.UserCode[5:])
 	if err != nil || code.ClientName != "cli@laptop" || code.Status != DevicePending {
 		t.Fatalf("lookup %+v %v", code, err)
 	}
@@ -240,11 +240,17 @@ func TestDeviceLogin(t *testing.T) {
 	if _, err := f.id.ApproveDeviceLogin(ctx, restricted, start.UserCode); !errors.As(err, &accountErr) {
 		t.Fatalf("restricted approve: %v", err)
 	}
+	if _, err := f.id.DenyDeviceLogin(ctx, restricted, start.UserCode); !errors.As(err, &accountErr) {
+		t.Fatalf("restricted deny: %v", err)
+	}
+	if _, err := f.id.DeviceLogin(ctx, restricted, start.UserCode); !errors.As(err, &accountErr) {
+		t.Fatalf("restricted read: %v", err)
+	}
 	if _, err := f.id.ApproveDeviceLogin(ctx, person, start.UserCode); err != nil {
 		t.Fatal(err)
 	}
 	var conflict *ConflictError
-	if _, err := f.id.DenyDeviceLogin(ctx, start.UserCode); !errors.As(err, &conflict) {
+	if _, err := f.id.DenyDeviceLogin(ctx, person, start.UserCode); !errors.As(err, &conflict) {
 		t.Fatalf("deny after approve: %v", err)
 	}
 	f.exec("update device_codes set last_polled_at = now() - interval '1 minute'")
@@ -272,7 +278,7 @@ func TestDeviceLogin(t *testing.T) {
 	}
 
 	denied, _ := f.id.StartDeviceLogin(ctx, "")
-	if _, err := f.id.DenyDeviceLogin(ctx, denied.UserCode); err != nil {
+	if _, err := f.id.DenyDeviceLogin(ctx, person, denied.UserCode); err != nil {
 		t.Fatal(err)
 	}
 	if p, err := f.id.PollDeviceLogin(ctx, denied.DeviceCode); err != nil || p.Status != DeviceDenied {
@@ -291,7 +297,7 @@ func TestDeviceLogin(t *testing.T) {
 		t.Fatalf("unknown device code: %v", err)
 	}
 	var invalid *InvalidError
-	if _, err := f.id.DeviceLogin(ctx, "BCD"); !errors.As(err, &invalid) {
+	if _, err := f.id.DeviceLogin(ctx, person, "BCD"); !errors.As(err, &invalid) {
 		t.Fatalf("short code: %v", err)
 	}
 }

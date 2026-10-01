@@ -152,10 +152,11 @@ func (s *Server) PollDeviceLogin(ctx context.Context, req PollDeviceLoginRequest
 
 // GetDeviceLogin reads the login a user code names.
 func (s *Server) GetDeviceLogin(ctx context.Context, req GetDeviceLoginRequestObject) (GetDeviceLoginResponseObject, error) {
-	if _, err := s.principal(ctx); err != nil {
+	p, err := s.principal(ctx)
+	if err != nil {
 		return nil, err
 	}
-	code, err := s.owners.Identity.DeviceLogin(ctx, req.UserCode)
+	code, err := s.owners.Identity.DeviceLogin(ctx, p, req.UserCode)
 	if err != nil {
 		return nil, err
 	}
@@ -177,10 +178,11 @@ func (s *Server) ApproveDeviceLogin(ctx context.Context, req ApproveDeviceLoginR
 
 // DenyDeviceLogin refuses a waiting CLI.
 func (s *Server) DenyDeviceLogin(ctx context.Context, req DenyDeviceLoginRequestObject) (DenyDeviceLoginResponseObject, error) {
-	if _, err := s.principal(ctx); err != nil {
+	p, err := s.principal(ctx)
+	if err != nil {
 		return nil, err
 	}
-	code, err := s.owners.Identity.DenyDeviceLogin(ctx, req.UserCode)
+	code, err := s.owners.Identity.DenyDeviceLogin(ctx, p, req.UserCode)
 	if err != nil {
 		return nil, err
 	}

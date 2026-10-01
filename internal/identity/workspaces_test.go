@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/AmbientWare/lazycloud/internal/notifications"
 )
@@ -105,16 +106,16 @@ func TestWorkspaceLifecycle(t *testing.T) {
 	if len(listed) != 1 || listed[0].Name != "gamma" {
 		t.Fatalf("deleting list %+v", listed)
 	}
-	if err := f.id.FinishWorkspaceDeletion(ctx, listed[0].ID); err != nil {
-		t.Fatal(err)
+	if removed, err := f.id.FinishWorkspaceDeletion(ctx, listed[0].ID); err != nil || !removed {
+		t.Fatalf("finish deleting workspace: removed=%v %v", removed, err)
 	}
 	if _, err := f.id.GetWorkspace(ctx, admin, "gamma"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("finished deletion: %v", err)
 	}
 	// An active workspace is never removed by the finishing step.
 	betaWS, _ := f.id.GetWorkspace(ctx, admin, "beta")
-	if err := f.id.FinishWorkspaceDeletion(ctx, betaWS.ID); err != nil {
-		t.Fatal(err)
+	if removed, err := f.id.FinishWorkspaceDeletion(ctx, betaWS.ID); err != nil || removed {
+		t.Fatalf("finish active workspace: removed=%v %v", removed, err)
 	}
 	if _, err := f.id.GetWorkspace(ctx, admin, "beta"); err != nil {
 		t.Fatalf("active workspace removed: %v", err)
@@ -378,6 +379,49 @@ func TestConcurrentAcceptIsSingleUse(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("%d accepts succeeded", count)
+	}
+}
+
+// Answering an invitation while its workspace is being deleted never
+// deadlocks: both lock the workspace before the invitation.
+func TestAnswerRacingDeletionDoesNotDeadlock(t *testing.T) {
+	f := newFixture(t)
+	ctx := t.Context()
+	admin := f.account("admin@example.com", true)
+	guest := f.account("guest@example.com", false)
+	if _, err := f.id.CreateOwnedWorkspace(ctx, admin, "keep"); err != nil {
+		t.Fatal(err)
+	}
+	for n := range 20 {
+		name := "race-" + string(rune('a'+n))
+		if _, err := f.id.CreateOwnedWorkspace(ctx, admin, name); err != nil {
+			t.Fatal(err)
+		}
+		inv, err := f.id.Invite(ctx, admin, name, "guest@example.com", RoleMember)
+		if err != nil {
+			t.Fatal(err)
+		}
+		token := strings.TrimPrefix(f.invitationLink(inv.ID), publicURL+"/invitations/")
+		var wg sync.WaitGroup
+		var deleteErr, answerErr error
+		wg.Go(func() { _, deleteErr = f.id.DeleteWorkspace(ctx, admin, name) })
+		wg.Go(func() {
+			if n%2 == 0 {
+				_, _, answerErr = f.id.AcceptInvitation(ctx, guest, token)
+			} else {
+				answerErr = f.id.DeclineInvitation(ctx, token)
+			}
+		})
+		wg.Wait()
+		var pgErr *pgconn.PgError
+		for _, err := range []error{deleteErr, answerErr} {
+			if errors.As(err, &pgErr) {
+				t.Fatalf("round %d: %v", n, err)
+			}
+		}
+		if deleteErr != nil || (answerErr != nil && !errors.Is(answerErr, ErrNotFound)) {
+			t.Fatalf("round %d: delete %v, answer %v", n, deleteErr, answerErr)
+		}
 	}
 }
 

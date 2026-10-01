@@ -96,6 +96,17 @@ func (q *Queries) InvitationByToken(ctx context.Context, tokenHash []byte) (Invi
 	return i, err
 }
 
+const invitationWorkspace = `-- name: InvitationWorkspace :one
+select workspace_id from invitations where token_hash = $1
+`
+
+func (q *Queries) InvitationWorkspace(ctx context.Context, tokenHash []byte) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, invitationWorkspace, tokenHash)
+	var workspace_id uuid.UUID
+	err := row.Scan(&workspace_id)
+	return workspace_id, err
+}
+
 const listInvitations = `-- name: ListInvitations :many
 select i.id, i.email, i.role, i.invited_by, i.message_id, i.expires_at, i.created_at, i.updated_at,
        coalesce(nullif(u.display_name, ''), u.email, '')::text as invited_by_name,

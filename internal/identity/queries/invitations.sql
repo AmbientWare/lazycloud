@@ -39,6 +39,9 @@ join workspaces w on w.id = i.workspace_id
 left join users u on u.id = i.invited_by
 where i.token_hash = @token_hash and w.state = 'active';
 
+-- name: InvitationWorkspace :one
+select workspace_id from invitations where token_hash = @token_hash;
+
 -- name: LockInvitationByToken :one
 select i.id, i.workspace_id, i.email, i.role, i.message_id, (i.expires_at <= now())::bool as expired
 from invitations i

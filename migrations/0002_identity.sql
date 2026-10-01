@@ -22,6 +22,9 @@ alter table workspaces
 
 create index workspaces_deleting on workspaces (deletion_requested_at) where state = 'deleting';
 
+-- Deletion waits for a workspace's live containers to stop.
+create index containers_live_workspace on containers (workspace_id) where state <> 'stopped';
+
 alter table workspace_members drop constraint workspace_members_role_check;
 alter table workspace_members
     add constraint workspace_members_role_check check (role in ('owner', 'administrator', 'member'));

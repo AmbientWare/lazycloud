@@ -130,8 +130,16 @@ type DeviceCode struct {
 	ExpiresAt  time.Time
 }
 
-// DeviceLogin reads the login a user code names.
-func (i *Identity) DeviceLogin(ctx context.Context, userCode string) (DeviceCode, error) {
+// DeviceLogin reads the login a user code names for the person deciding
+// it, which takes an account credential as deciding does.
+func (i *Identity) DeviceLogin(ctx context.Context, p Principal, userCode string) (DeviceCode, error) {
+	if err := p.requireAccount("read a device sign-in"); err != nil {
+		return DeviceCode{}, err
+	}
+	return i.deviceLogin(ctx, userCode)
+}
+
+func (i *Identity) deviceLogin(ctx context.Context, userCode string) (DeviceCode, error) {
 	code, err := NormalizeUserCode(userCode)
 	if err != nil {
 		return DeviceCode{}, err
@@ -168,8 +176,13 @@ func (i *Identity) ApproveDeviceLogin(ctx context.Context, p Principal, userCode
 	return i.decideDeviceLogin(ctx, userCode, deviceStatusApproved, &user)
 }
 
-// DenyDeviceLogin refuses the waiting client.
-func (i *Identity) DenyDeviceLogin(ctx context.Context, userCode string) (DeviceCode, error) {
+// DenyDeviceLogin refuses the waiting client. Like approval it takes an
+// account credential, so a workspace-restricted token cannot decide the
+// sign-in of the account.
+func (i *Identity) DenyDeviceLogin(ctx context.Context, p Principal, userCode string) (DeviceCode, error) {
+	if err := p.requireAccount("deny a device sign-in"); err != nil {
+		return DeviceCode{}, err
+	}
 	return i.decideDeviceLogin(ctx, userCode, deviceStatusDenied, nil)
 }
 
@@ -185,7 +198,7 @@ func (i *Identity) decideDeviceLogin(ctx context.Context, userCode, status strin
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return DeviceCode{}, fmt.Errorf("decide device code: %w", err)
 	}
-	current, err := i.DeviceLogin(ctx, code)
+	current, err := i.deviceLogin(ctx, code)
 	if err != nil {
 		return DeviceCode{}, err
 	}

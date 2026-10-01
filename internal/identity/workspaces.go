@@ -205,11 +205,28 @@ func (i *Identity) DeletingWorkspaces(ctx context.Context, limit int) ([]Deletin
 }
 
 // FinishWorkspaceDeletion removes a deleting workspace and, by cascade,
-// every row it owns. The caller first stops its containers and deletes its
-// objects. Finishing twice is harmless.
-func (i *Identity) FinishWorkspaceDeletion(ctx context.Context, id WorkspaceID) error {
-	if _, err := i.queries.DeleteDeletingWorkspace(ctx, uuid.UUID(id)); err != nil {
-		return fmt.Errorf("remove workspace %s: %w", id, err)
+// every row it owns, and reports whether it did. The caller first stops its
+// containers and deletes its objects. A container that became live since
+// then keeps the workspace for a later pass, so no running container loses
+// its row. Finishing twice is harmless.
+func (i *Identity) FinishWorkspaceDeletion(ctx context.Context, id WorkspaceID) (bool, error) {
+	removed := false
+	err := pgx.BeginFunc(ctx, i.pool, func(tx pgx.Tx) error {
+		q := i.queries.WithTx(tx)
+		if _, err := q.LockDeletingWorkspace(ctx, uuid.UUID(id)); errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		} else if err != nil {
+			return fmt.Errorf("lock workspace: %w", err)
+		}
+		deleted, err := q.DeleteDeletingWorkspace(ctx, uuid.UUID(id))
+		if err != nil {
+			return fmt.Errorf("delete workspace: %w", err)
+		}
+		removed = deleted > 0
+		return nil
+	})
+	if err != nil {
+		return false, fmt.Errorf("remove workspace %s: %w", id, err)
 	}
-	return nil
+	return removed, nil
 }
