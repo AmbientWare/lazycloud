@@ -59,17 +59,6 @@ async function signIn(page: Page, baseURL: string, value = session) {
   );
 }
 
-/** The dashboard addresses apps by ID; the journeys know the app by name. */
-async function appId(page: Page, name = app): Promise<string> {
-  const response = await page.request.get(`/v1/workspaces/${workspace}/apps?limit=1000`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  const { apps } = (await response.json()) as { apps: { id: string; name: string }[] };
-  const found = apps.find((item) => item.name === name);
-  if (!found) throw new Error(`app ${name} is not deployed to ${workspace}`);
-  return found.id;
-}
-
 function watchFailures(page: Page): string[] {
   const failures: string[] = [];
   page.on("pageerror", (error) => failures.push(error.message));
@@ -159,9 +148,8 @@ test("a deployed app is listed, invoked from the playground and its task opened 
   await signIn(page, baseURL!);
   await page.goto(`/w/${workspace}/apps`);
 
-  const id = await appId(page);
   await page.getByRole("link", { name: app, exact: true }).click();
-  await expect(page).toHaveURL(new RegExp(`/w/${workspace}/apps/${id}$`));
+  await expect(page).toHaveURL(new RegExp(`/w/${workspace}/apps/${app}$`));
   await page.getByRole("link", { name: /greet/ }).first().click();
   await expect(page.getByRole("heading", { name: "greet" })).toBeVisible();
 
@@ -173,7 +161,7 @@ test("a deployed app is listed, invoked from the playground and its task opened 
 
   await page.getByRole("link", { name: "Open task" }).click();
   const drawer = page.getByRole("dialog", { name: "greet" });
-  await expect(drawer.getByText("complete", { exact: true })).toBeVisible();
+  await expect(drawer.getByText("succeeded", { exact: true })).toBeVisible();
   await drawer.getByRole("tab", { name: "Logs" }).click();
   await expect(drawer.getByRole("list", { name: "Log output" })).toContainText(`greeting ${who}`);
   await drawer.getByRole("tab", { name: "Container" }).click();
@@ -183,6 +171,27 @@ test("a deployed app is listed, invoked from the playground and its task opened 
   await page.goto(`/w/${workspace}/tasks`);
   await expect(page.getByRole("heading", { name: "Tasks", exact: true })).toBeVisible();
   await expect(page.getByRole("link", { name: "greet" }).first()).toBeVisible();
+  expect(failures).toEqual([]);
+});
+
+test("the playground calls an endpoint and an ASGI app on this origin", async ({
+  page,
+  baseURL,
+}) => {
+  const failures = watchFailures(page);
+  await signIn(page, baseURL!);
+  const who = `e2e-${Date.now().toString(36)}`;
+  await page.goto(`/w/${workspace}/apps/${app}/workloads/endpoint/hello`);
+  await page.getByRole("textbox", { name: "JSON payload" }).fill(JSON.stringify({ name: who }));
+  await page.getByRole("button", { name: "Invoke", exact: true }).click();
+  // A cold container starts for the first request.
+  await expect(page.getByText(/^HTTP 200/)).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText(`"hello": "${who}"`)).toBeVisible();
+
+  await page.goto(`/w/${workspace}/apps/${app}/workloads/asgi/service`);
+  await page.getByRole("button", { name: "Invoke", exact: true }).click();
+  await expect(page.getByText(/^HTTP 200/)).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText(`"status": "ok"`)).toBeVisible();
   expect(failures).toEqual([]);
 });
 
@@ -336,13 +345,13 @@ test("an artifact a task saved is previewed from the task and listed in storage"
   const failures = watchFailures(page);
   await signIn(page, baseURL!);
   const title = `e2e ${Date.now().toString(36)}`;
-  await page.goto(`/w/${workspace}/apps/${await appId(page)}/workloads/function/report`);
+  await page.goto(`/w/${workspace}/apps/${app}/workloads/function/report`);
   await page.getByLabel("title").fill(title);
   await page.getByRole("button", { name: "Invoke", exact: true }).click();
   const outcome = page
     .locator("section")
     .filter({ has: page.getByRole("link", { name: "Open task" }) });
-  await expect(outcome.getByText("complete", { exact: true })).toBeVisible({ timeout: 60_000 });
+  await expect(outcome.getByText("succeeded", { exact: true })).toBeVisible({ timeout: 60_000 });
   await page.getByRole("link", { name: "Open task" }).click();
 
   const drawer = page.getByRole("dialog", { name: "report" });
