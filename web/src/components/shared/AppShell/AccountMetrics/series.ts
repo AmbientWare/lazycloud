@@ -1,4 +1,6 @@
-import type { AccountActivitySeries } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
+
+type AccountActivitySeries = Schemas["AccountActivitySeries"];
 
 /**
  * How many apps an account activity chart names before the rest are summed.
@@ -57,7 +59,7 @@ export function activitySeriesLabels(series: readonly AccountActivitySeries[]): 
   const seen = new Map<string, number>();
   for (const base of bases) seen.set(base, (seen.get(base) ?? 0) + 1);
   return bases.map((base, index) => {
-    const workspace = series[index]?.workspace_name;
+    const workspace = series[index]?.workspace;
     if ((seen.get(base) ?? 0) < 2 || !workspace) return base;
     return `${base} · ${workspace}`;
   });
@@ -66,7 +68,7 @@ export function activitySeriesLabels(series: readonly AccountActivitySeries[]): 
 function baseLabel(series: AccountActivitySeries): string {
   if (series.kind === "other") return "Other apps";
   if (series.kind === "unassigned") return "Outside an app";
-  return series.app_name || "Deleted app";
+  return series.app || "Deleted app";
 }
 
 /** Stable per-series key; also the suffix of the CSS variable holding its hue. */

@@ -1,4 +1,7 @@
-import type { AccountActivityMeasure, AccountActivityUnit } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
+
+type AccountActivityMeasure = Schemas["ActivityMeasure"];
+type AccountActivityUnit = Schemas["ActivityUnit"];
 
 /**
  * The resources one selector offers, in two groups.

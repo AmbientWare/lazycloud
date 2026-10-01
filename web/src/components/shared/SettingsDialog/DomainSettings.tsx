@@ -1,28 +1,32 @@
 import { useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, Loader2, Plus, Trash2 } from "lucide-react";
 
 import { useCopyToClipboard } from "@/components/shared/CopyButton/useCopyToClipboard";
+import { InfiniteScrollBoundary } from "@/components/shared/InfiniteScrollBoundary";
 import { Panel } from "@/components/shared/Panel";
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { CustomDomain } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 import {
   customDomainsQueryOptions,
   registerCustomDomain,
   removeCustomDomain,
 } from "@/lib/queries/domains";
 import { billingAccountQueryOptions } from "@/lib/queries/billing";
+import { selectInfiniteList } from "@/lib/queries/infinite-list";
 import { accountQueryKeys } from "@/lib/queries/workspace-keys";
+
+type Domain = Schemas["Domain"];
 
 export function DomainSettings({ onUpgrade }: { onUpgrade: () => void }) {
   const queryClient = useQueryClient();
   const [hostname, setHostname] = useState("");
   const [failure, setFailure] = useState<string | null>(null);
-  const domains = useQuery(customDomainsQueryOptions());
+  const domains = useInfiniteQuery(customDomainsQueryOptions());
   const billing = useQuery(billingAccountQueryOptions());
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: accountQueryKeys.domains() });
@@ -47,7 +51,8 @@ export function DomainSettings({ onUpgrade }: { onUpgrade: () => void }) {
   });
 
   const pending = register.isPending || remove.isPending;
-  const rows = domains.data?.data ?? [];
+  const list = selectInfiniteList(domains.data, domains.hasNextPage, (domain) => domain.id);
+  const rows = list.items;
   const customDomainsEnabled = billing.data?.entitlements?.custom_domains ?? false;
 
   return (
@@ -86,7 +91,7 @@ export function DomainSettings({ onUpgrade }: { onUpgrade: () => void }) {
         )
       }
     >
-      {billing.error || domains.error ? (
+      {billing.error || (domains.error && !domains.isFetchNextPageError) ? (
         <p className="border-b border-border/80 px-4 py-2 text-sm text-destructive" role="alert">
           {(billing.error ?? domains.error)?.message}
         </p>
@@ -111,16 +116,25 @@ export function DomainSettings({ onUpgrade }: { onUpgrade: () => void }) {
           className="flex-1 p-4"
         />
       ) : (
-        <ul className="divide-y divide-border/80">
-          {rows.map((domain) => (
-            <DomainRow
-              key={domain.id}
-              domain={domain}
-              disabled={pending}
-              onRemove={() => remove.mutate(domain.hostname)}
-            />
-          ))}
-        </ul>
+        <>
+          <ul className="divide-y divide-border/80">
+            {rows.map((domain) => (
+              <DomainRow
+                key={domain.id}
+                domain={domain}
+                disabled={pending}
+                onRemove={() => remove.mutate(domain.hostname)}
+              />
+            ))}
+          </ul>
+          <InfiniteScrollBoundary
+            nextCursor={list.nextCursor}
+            loading={domains.isFetchingNextPage}
+            error={domains.isFetchNextPageError}
+            onLoadMore={() => void domains.fetchNextPage()}
+            resourceLabel="domains"
+          />
+        </>
       )}
     </Panel>
   );
@@ -131,7 +145,7 @@ function DomainRow({
   disabled,
   onRemove,
 }: {
-  domain: CustomDomain;
+  domain: Domain;
   disabled: boolean;
   onRemove: () => void;
 }) {
@@ -166,7 +180,7 @@ function DomainRow({
 }
 
 /** The record to create, laid out the way a DNS form asks for it. */
-function DnsInstructions({ domain }: { domain: CustomDomain }) {
+function DnsInstructions({ domain }: { domain: Domain }) {
   return (
     <div className="mt-1.5 space-y-1.5">
       <p className="text-[11px] text-muted-foreground">
