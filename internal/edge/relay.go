@@ -198,6 +198,13 @@ func (e *Edge) peerFor(ctx context.Context, host uuid.UUID) (string, error) {
 	return address, nil
 }
 
+// forgetPeer drops the remembered edge of host.
+func (e *Edge) forgetPeer(host uuid.UUID) {
+	e.relay.mu.Lock()
+	delete(e.relay.links, host)
+	e.relay.mu.Unlock()
+}
+
 func (r *relaying) conn(address string) (*grpc.ClientConn, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -228,19 +235,22 @@ func (e *Edge) relayTo(ctx context.Context, address string, host uuid.UUID) (*pa
 		cancel()
 		return nil, fmt.Errorf("relay to edge %s: %w", address, err)
 	}
-	p := &parkedStream{stream: stream, done: make(chan struct{})}
+	relayed := &relayedStream{BidiStreamingClient: stream}
+	p := &parkedStream{stream: relayed, done: make(chan struct{}), relayed: true}
 	p.onFinish = func(err error) {
 		if err != nil {
 			cancel()
 			return
 		}
 		// Done with the stream: the other edge ends its agent's stream
-		// when it sees the half-close, and this side waits for that.
-		_ = stream.CloseSend()
+		// when it sees the half-close, and this side waits for that. A
+		// sender may still be in Send, so the half-close waits for it here
+		// rather than in finish's caller.
 		go func() {
 			defer cancel()
 			timer := time.AfterFunc(relayCloseWait, cancel)
 			defer timer.Stop()
+			relayed.closeSend()
 			for {
 				if _, err := stream.Recv(); err != nil {
 					return
@@ -249,6 +259,30 @@ func (e *Edge) relayTo(ctx context.Context, address string, host uuid.UUID) (*pa
 		}()
 	}
 	return p, nil
+}
+
+// relayedStream serializes Send with the half-close, which gRPC does not
+// allow at once; a Send after the half-close fails.
+type relayedStream struct {
+	grpc.BidiStreamingClient[hostproto.ForwardDown, hostproto.ForwardUp]
+	mu     sync.Mutex
+	closed bool
+}
+
+func (s *relayedStream) Send(msg *hostproto.ForwardDown) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	return s.BidiStreamingClient.Send(msg) //nolint:wrapcheck // the stream's status passes through
+}
+
+func (s *relayedStream) closeSend() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closed = true
+	_ = s.CloseSend()
 }
 
 // RelayServer serves EdgeRelay for other edges.
@@ -317,6 +351,11 @@ func (s *RelayServer) Forward(stream hostproto.EdgeRelay_ForwardServer) error {
 	if err != nil {
 		return err
 	}
+	// A caller whose link to this edge is stale learns at once, and reads
+	// the host's link again.
+	if !s.edge.hosts.connected(host) {
+		return status.Error(codes.Unavailable, "this edge does not hold the host's data connection")
+	}
 	p, err := s.edge.hosts.take(ctx, host)
 	if err != nil {
 		return status.Error(codes.Unavailable, err.Error())
@@ -343,9 +382,11 @@ func (s *RelayServer) Forward(stream hostproto.EdgeRelay_ForwardServer) error {
 	}()
 	stop := context.AfterFunc(ctx, func() { p.finish(status.Error(codes.Canceled, "the relaying edge left")) })
 	defer stop()
+	var agentErr error
 	for {
 		up, err := p.stream.Recv()
 		if err != nil {
+			agentErr = err
 			break
 		}
 		if stream.Send(up) != nil {
@@ -353,6 +394,18 @@ func (s *RelayServer) Forward(stream hostproto.EdgeRelay_ForwardServer) error {
 			break
 		}
 	}
-	<-toAgent
-	return nil
+	select {
+	case <-toAgent:
+		// The relaying edge was done with the stream first.
+		return nil
+	default:
+	}
+	// The agent's stream ended before the relaying edge was done, maybe
+	// without its response's end: ending this call tells that edge, whose
+	// receive is waiting. The receiver above ends with the call.
+	p.finish(status.Error(codes.Unavailable, "the host's stream ended"))
+	if s, ok := status.FromError(agentErr); ok && agentErr != nil && !errors.Is(agentErr, io.EOF) {
+		return s.Err()
+	}
+	return status.Error(codes.Unavailable, "the host's stream ended")
 }

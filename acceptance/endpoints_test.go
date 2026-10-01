@@ -224,6 +224,27 @@ func TestPublicWorkloadsAnswerWithoutAToken(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || string(body) != "auth=" {
 		t.Fatalf("public app with a platform token: %d %s", resp.StatusCode, body)
 	}
+
+	// The function goes private: its old public version stays closed on
+	// every host that names it.
+	fn.Authorized = nil
+	p.deploy("open", fn)
+	// The route table follows the deploy's notification.
+	p.waitForStatus(http.MethodPost, fmt.Sprintf("http://%s.lazycloud.localhost:%s/", fnHost, p.port()), http.StatusUnauthorized)
+	for _, url := range []string{
+		fmt.Sprintf("http://%s.lazycloud.localhost:%s/", fnHost, p.port()),
+		fmt.Sprintf("http://%s-v1.lazycloud.localhost:%s/", fnHost, p.port()),
+		fmt.Sprintf("http://%s.lazycloud.localhost:%s/", d.Releases[0].Id, p.port()),
+	} {
+		resp, err := p.request(http.MethodPost, url, "", strings.NewReader(`{"values": [1]}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("old public version at %s after going private: %d; want 401", url, resp.StatusCode)
+		}
+	}
 }
 
 const volumeApp = `
@@ -260,5 +281,26 @@ func TestEndpointMountsItsVolumes(t *testing.T) {
 	p.deploy("volumes", s)
 	if status, _, body := p.call(http.MethodGet, w.Url, ""); status != http.StatusOK || body != "3" {
 		t.Fatalf("after redeploy: %d %s", status, body)
+	}
+}
+
+// waitForStatus fails unless a request without a token gets status within
+// two seconds.
+func (p *platform) waitForStatus(method, url string, status int) {
+	p.t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		resp, err := p.request(method, url, "", strings.NewReader("{}"))
+		if err != nil {
+			p.t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode == status {
+			return
+		}
+		if time.Now().After(deadline) {
+			p.t.Fatalf("%s %s: %d; want %d", method, url, resp.StatusCode, status)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

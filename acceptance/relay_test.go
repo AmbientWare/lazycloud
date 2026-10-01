@@ -3,6 +3,7 @@ package acceptance
 import (
 	"bufio"
 	"context"
+	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -49,4 +50,50 @@ func TestRequestRelaysToTheEdgeHoldingTheHost(t *testing.T) {
 		samples = append(samples, time.Since(began))
 	}
 	t.Logf("warm through a relaying edge over 100: p50 %v, p95 %v", percentile(samples, 0.5), percentile(samples, 0.95))
+}
+
+// Through a relaying edge a WebSocket upgrades and echoes, and a response
+// that breaks off ends the relayed request and frees its capacity.
+func TestRelayCarriesUpgradesAndBrokenResponses(t *testing.T) {
+	p := startPlatform(t)
+	source := p.upload(map[string]string{"app.py": faultApp, "web.py": asgiApp})
+	p.deploy("faults", faultSpec(source), asgiSpec(source, "service", "web:service", apitypes.HttpKindAsgi, 4))
+	base := p.describe("faults", apitypes.WorkloadKindAsgi, "faults").Url
+	service := p.describe("faults", apitypes.WorkloadKindAsgi, "service").Url
+	expectOK(t, p, base+"/ok", "warm-up")
+	expectOK(t, p, service+"/headers", "warm-up")
+
+	other := p.startEdge()
+	ws := p.dialWebSocketVia(other, service+"/ws", p.token)
+	ws.send("relayed")
+	if got := ws.receive(); got != "echo:relayed" {
+		t.Fatalf("websocket echo through the relay %q", got)
+	}
+	ws.close()
+
+	client := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, other)
+	}}}
+	call := func(path string) (int, error) {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Authorization", "Bearer "+p.token)
+		resp, err := client.Do(req)
+		if err != nil {
+			return 0, err
+		}
+		defer func() { _ = resp.Body.Close() }()
+		_, err = io.ReadAll(resp.Body)
+		return resp.StatusCode, err
+	}
+	for range 3 {
+		if _, err := call("/broken"); err == nil {
+			t.Fatal("a broken response arrived complete through the relay")
+		}
+	}
+	if status, err := call("/ok"); err != nil || status != http.StatusOK {
+		t.Fatalf("after broken responses through the relay: %d %v", status, err)
+	}
 }

@@ -165,7 +165,19 @@ type target struct {
 	latest bool
 	// container restricts the request to one container.
 	container *uuid.UUID
+	// authorized requires a token: the target release, or the workload's
+	// active release, asks for one.
+	authorized bool
 }
+
+// withPolicy sets the target's token policy from its release and the
+// workload's active one.
+func (t target) withPolicy(activeAuthorized bool) target {
+	t.authorized = t.release.authorized || activeAuthorized
+	return t
+}
+
+func (w *workload) activeAuthorized() bool { return w.active != nil && w.active.authorized }
 
 // resolve finds what a request host names: a custom hostname, a deployment
 // label (latest or a pinned version), a release id or a container id.
@@ -200,13 +212,13 @@ func (e *Edge) resolve(ctx context.Context, host string) (target, error) {
 		if w.active == nil {
 			return target{}, errNoRoute
 		}
-		return target{workload: w, release: w.active, latest: true}, nil
+		return target{workload: w, release: w.active, latest: true}.withPolicy(w.activeAuthorized()), nil
 	}
 	if version == 0 {
 		if w.active == nil {
 			return target{}, errNoRoute
 		}
-		return target{workload: w, release: w.active, latest: true}, nil
+		return target{workload: w, release: w.active, latest: true}.withPolicy(w.activeAuthorized()), nil
 	}
 	key := versionKey{workload: w.id, version: version}
 	e.mu.Lock()
@@ -237,7 +249,7 @@ func (e *Edge) versionTarget(ctx context.Context, w *workload, id uuid.UUID) (ta
 	if err != nil {
 		return target{}, err
 	}
-	return target{workload: w, release: r}, nil
+	return target{workload: w, release: r}.withPolicy(w.activeAuthorized()), nil
 }
 
 // missTTL is how long the edge remembers that an id host names nothing, so
@@ -303,7 +315,7 @@ func (e *Edge) readID(ctx context.Context, id uuid.UUID) (target, error) {
 	case r.workingTree:
 		w.accepting = row.AppState == "active"
 	}
-	return target{workload: w, release: r, container: container}, nil
+	return target{workload: w, release: r, container: container}.withPolicy(row.ActiveAuthorized), nil
 }
 
 // release returns a release, cached: releases never change.

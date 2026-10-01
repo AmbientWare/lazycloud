@@ -52,7 +52,7 @@ func (e *Edge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "the deployment is stopped")
 		return
 	}
-	authorized := t.release.authorized
+	authorized := t.authorized
 	if authorized {
 		if err := e.authorize(ctx, r, t.workload); err != nil {
 			e.fail(w, r, err)
@@ -373,10 +373,22 @@ func (e *Edge) exchange(ctx context.Context, l *lease, rc *http.ResponseControll
 		if time.Now().After(deadline) {
 			return nil, errNoCapacity
 		}
+		if p.relayed && status.Code(err) == codes.Unavailable {
+			// The other edge no longer holds the host: the request never
+			// reached the workload, so it is offered again, and the next
+			// stream reads the host's link afresh.
+			e.forgetPeer(l.slot.host)
+			ex.first = forwardRefusal(hostproto.ForwardErrorKind_FORWARD_ERROR_KIND_NOT_RUNNING, err.Error())
+			return ex, nil
+		}
 		return nil, fmt.Errorf("receive response head: %w", err)
 	}
 	ex.first = first
 	return ex, nil
+}
+
+func forwardRefusal(kind hostproto.ForwardErrorKind, message string) *hostproto.ForwardUp {
+	return &hostproto.ForwardUp{Body: &hostproto.ForwardUp_Error{Error: &hostproto.ForwardError{Kind: kind, Message: message}}}
 }
 
 // close ends the RPC, which stops the body sender, and waits for it. A

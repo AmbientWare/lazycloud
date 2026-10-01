@@ -196,11 +196,17 @@ type webSocket struct {
 
 func (p *platform) dialWebSocket(rawURL, token string) *webSocket {
 	p.t.Helper()
+	return p.dialWebSocketVia(p.edgeAddr, rawURL, token)
+}
+
+// dialWebSocketVia upgrades through the edge at addr.
+func (p *platform) dialWebSocketVia(addr, rawURL, token string) *webSocket {
+	p.t.Helper()
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		p.t.Fatal(err)
 	}
-	conn, err := (&net.Dialer{}).DialContext(p.t.Context(), "tcp", p.edgeAddr)
+	conn, err := (&net.Dialer{}).DialContext(p.t.Context(), "tcp", addr)
 	if err != nil {
 		p.t.Fatal(err)
 	}

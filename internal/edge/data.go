@@ -51,8 +51,9 @@ type parkedStream struct {
 	done chan struct{}
 	err  error
 	once sync.Once
-	// onFinish ends a relayed stream.
+	// onFinish ends a relayed stream; relayed marks one.
 	onFinish func(error)
+	relayed  bool
 }
 
 func (p *parkedStream) finish(err error) {
