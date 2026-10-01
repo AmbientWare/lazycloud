@@ -7,25 +7,22 @@ import {
   type QueryClient,
 } from "@tanstack/react-query";
 
-import { ApiError } from "@/lib/api/client";
-import type {
-  BillingAccountAdmin,
-  BillingAccountAdminList,
-  PlatformRole,
-  User,
-} from "@/lib/api/schemas";
+import { ApiError, type Schemas } from "@/lib/api/client";
 import {
   billingAccountsQueryOptions,
-  selectBillingAccountList,
   setComplimentary,
   setUserRole,
   setUserStatus,
+  EVERY_ACCOUNT,
+  type AccountScope,
 } from "@/lib/queries/admin";
 import { accountQueryKeys } from "@/lib/queries/workspace-keys";
 
-type AccountPages = InfiniteData<BillingAccountAdminList, string>;
+type BillingAccountAdmin = Schemas["BillingAccountAdmin"];
+type PlatformRole = Schemas["PlatformRole"];
+type User = Schemas["User"];
 
-const NO_FILTERS: AccountFilters = { search: "", role: null, status: null };
+type AccountPages = InfiniteData<Schemas["BillingAccountAdminPage"], string | undefined>;
 
 const SEARCH_DEBOUNCE_MS = 250;
 
@@ -64,11 +61,7 @@ type Command =
 
 type CommandResult = { user: User } | { account: BillingAccountAdmin };
 
-export type AccountFilters = {
-  search: string;
-  role: PlatformRole | null;
-  status: User["status"] | null;
-};
+export type AccountFilters = AccountScope;
 
 export type AdminSettingsController = {
   accounts: readonly BillingAccountAdmin[];
@@ -112,14 +105,13 @@ export function useAdminSettingsController({
   actingUserId: string;
 }): AdminSettingsController {
   const queryClient = useQueryClient();
-  const [filters, setFilters] = useState<AccountFilters>(NO_FILTERS);
+  const [filters, setFilters] = useState<AccountFilters>(EVERY_ACCOUNT);
   // Typing should not fire a request per keystroke, and the search runs against
   // every account rather than the page in hand, so each one is a round trip.
   const search = useDebounced(filters.search, SEARCH_DEBOUNCE_MS);
   const query = useInfiniteQuery(
     billingAccountsQueryOptions({ search, role: filters.role, status: filters.status }),
   );
-  const list = selectBillingAccountList(query.data, query.hasNextPage);
   const [confirming, setConfirming] = useState<PendingConfirmation | null>(null);
 
   const command = useMutation({
@@ -144,7 +136,7 @@ export function useAdminSettingsController({
   };
 
   const setRole = (account: BillingAccountAdmin, role: PlatformRole) => {
-    if (command.isPending || account.user.role === role) return;
+    if (command.isPending || platformRole(account.user) === role) return;
     if (role === "member") {
       if (isSelf(account)) return;
       setConfirming({ action: "demote", account });
@@ -189,17 +181,17 @@ export function useAdminSettingsController({
   };
 
   return {
-    accounts: list.items,
+    accounts: query.data?.pages.flatMap((page) => page.accounts) ?? [],
     filters,
     setSearch: (search) => setFilters((current) => ({ ...current, search })),
     setRoleFilter: (role) => setFilters((current) => ({ ...current, role })),
     setStatusFilter: (status) => setFilters((current) => ({ ...current, status })),
-    clearFilters: () => setFilters(NO_FILTERS),
+    clearFilters: () => setFilters(EVERY_ACCOUNT),
     narrowed,
     isLoading: query.isPending,
     loadError: query.error,
     forbidden: query.error instanceof ApiError && query.error.status === 403,
-    nextCursor: list.nextCursor,
+    nextCursor: query.hasNextPage ? query.data?.pages.at(-1)?.next_cursor : undefined,
     loadingMore: query.isFetchingNextPage,
     loadMoreError: query.isFetchNextPageError,
     loadMore: () => void query.fetchNextPage(),
@@ -216,6 +208,10 @@ export function useAdminSettingsController({
     pendingUserId: command.isPending ? command.variables.userId : null,
     error: command.error,
   };
+}
+
+export function platformRole(user: User): PlatformRole {
+  return user.is_admin ? "administrator" : "member";
 }
 
 async function runCommand(sent: Command): Promise<CommandResult> {
@@ -245,7 +241,7 @@ function patchAccount(
             ...current,
             pages: current.pages.map((page) => ({
               ...page,
-              data: page.data.map((row) => (row.user.id === userId ? patch(row) : row)),
+              accounts: page.accounts.map((row) => (row.user.id === userId ? patch(row) : row)),
             })),
           }
         : current,

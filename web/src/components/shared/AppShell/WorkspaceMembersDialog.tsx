@@ -19,7 +19,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import type { Schemas } from "@/lib/api/client";
 import { usagePhrase } from "@/lib/entitlements";
 import { currentSessionQueryOptions } from "@/lib/queries/auth";
-import { billingSummaryQueryOptions } from "@/lib/queries/billing";
+import { billingAccountQueryOptions } from "@/lib/queries/billing";
 import {
   inviteWorkspaceMember,
   removeWorkspaceMember,
@@ -77,7 +77,7 @@ export function WorkspaceMembersDialog({
     ...workspaceInvitationsQueryOptions(workspace.name),
     enabled: manages,
   });
-  const billing = useQuery({ ...billingSummaryQueryOptions(), enabled: owner });
+  const billing = useQuery({ ...billingAccountQueryOptions(), enabled: owner });
 
   return (
     <Dialog open onOpenChange={(open) => (open ? undefined : onClose())}>

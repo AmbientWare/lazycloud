@@ -79,9 +79,9 @@ describe("billing settings controller", () => {
       expect(requests.planChanges()).toEqual([{ plan: "free", terms_version: "free-v2" }]),
     );
     await waitFor(() =>
-      expect(result.current.summary?.plan?.scheduled_terms_version).toBe("free-v2"),
+      expect(result.current.summary?.plan.scheduled_terms_version).toBe("free-v2"),
     );
-    expect(result.current.summary?.plan?.id).toBe("team");
+    expect(result.current.summary?.plan.id).toBe("team");
 
     // Choosing the held terms again is what cancels the scheduled move.
     act(() => result.current.cancelScheduledChange());

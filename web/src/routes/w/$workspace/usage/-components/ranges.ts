@@ -1,5 +1,7 @@
-import type { UsageCostBucket } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 import { calendarMonthWindow, type UsageCostWindow } from "@/lib/queries/usage";
+
+type UsageCostBucket = Schemas["UsageCostBucket"];
 
 export const usageRangeKeys = ["24h", "7d", "30d", "month"] as const;
 export type UsageRangeKey = (typeof usageRangeKeys)[number];

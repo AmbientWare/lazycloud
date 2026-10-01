@@ -1,4 +1,4 @@
-import type { UsageCostComponent } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 import { formatCostNanos } from "@/lib/money";
 
 import { COST_COMPONENT_LABELS } from "./cost-colors";
@@ -7,7 +7,7 @@ export function CostComponents({
   components,
   currency,
 }: {
-  components: UsageCostComponent[];
+  components: Schemas["UsageCostComponent"][];
   currency: string;
 }) {
   return (

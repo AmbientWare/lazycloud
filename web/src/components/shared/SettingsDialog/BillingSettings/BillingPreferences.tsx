@@ -4,21 +4,20 @@ import { useId, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { BillingPreferences as Preferences } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 import { formatCostNanos } from "@/lib/money";
 import {
-  automaticReloadStatusQueryOptions,
-  billingPreferencesQueryOptions,
+  billingAccountQueryOptions,
   resumeAutomaticReload,
   saveBillingPreferences,
-  usageBudgetQueryOptions,
 } from "@/lib/queries/billing";
 import { pricingCatalogQueryOptions } from "@/lib/queries/pricing";
+import { accountQueryKeys } from "@/lib/queries/workspace-keys";
 
 import { AmountSelect } from "./AmountSelect";
 
 export function BillingPreferences({ paymentMethodOnFile }: { paymentMethodOnFile: boolean }) {
-  const query = useQuery(billingPreferencesQueryOptions());
+  const query = useQuery(billingAccountQueryOptions({ balance: true }));
   if (query.isPending) return <Skeleton className="h-24 w-full" />;
   if (query.error)
     return (
@@ -26,20 +25,19 @@ export function BillingPreferences({ paymentMethodOnFile }: { paymentMethodOnFil
         {query.error.message}
       </p>
     );
-  return <PreferencesForm preferences={query.data} paymentMethodOnFile={paymentMethodOnFile} />;
+  return <PreferencesForm account={query.data} paymentMethodOnFile={paymentMethodOnFile} />;
 }
 
 function PreferencesForm({
-  preferences,
+  account,
   paymentMethodOnFile,
 }: {
-  preferences: Preferences;
+  account: Schemas["BillingAccount"];
   paymentMethodOnFile: boolean;
 }) {
   const queryClient = useQueryClient();
   const pricing = useQuery(pricingCatalogQueryOptions());
-  const status = useQuery(automaticReloadStatusQueryOptions());
-  const budget = useQuery(usageBudgetQueryOptions());
+  const { preferences, automatic_reload: reload, usage_budget: budget } = account;
   const id = useId();
   const [draft, setDraft] = useState<{
     enabled?: boolean;
@@ -52,7 +50,7 @@ function PreferencesForm({
   const amount = draft.amount ?? String(preferences.reload_amount_cents / 100);
   const usageLimit =
     draft.usageLimit ??
-    (preferences.monthly_usage_limit_nanos === null
+    (preferences.monthly_usage_limit_nanos === undefined
       ? ""
       : String(preferences.monthly_usage_limit_nanos / 1e9));
   const toCents = (value: string) =>
@@ -61,7 +59,7 @@ function PreferencesForm({
       : NaN;
   const thresholdCents = toCents(threshold);
   const amountCents = toCents(amount);
-  const usageLimitNanos = usageLimit === "" ? null : toCents(usageLimit) * 1e7;
+  const usageLimitNanos = usageLimit === "" ? undefined : toCents(usageLimit) * 1e7;
   const terms = pricing.data?.credit_purchase;
   const valid =
     terms &&
@@ -69,7 +67,8 @@ function PreferencesForm({
     thresholdCents <= terms.maximum_cents &&
     amountCents >= terms.minimum_cents &&
     amountCents <= terms.maximum_cents &&
-    (usageLimitNanos === null || (Number.isSafeInteger(usageLimitNanos) && usageLimitNanos >= 0));
+    (usageLimitNanos === undefined ||
+      (Number.isSafeInteger(usageLimitNanos) && usageLimitNanos >= 0));
   const dirty =
     enabled !== preferences.reload_enabled ||
     thresholdCents !== preferences.reload_threshold_cents ||
@@ -78,21 +77,16 @@ function PreferencesForm({
   const save = useMutation({
     mutationFn: saveBillingPreferences,
     onSuccess: (value) => {
-      queryClient.setQueryData(billingPreferencesQueryOptions().queryKey, value);
-      void queryClient.invalidateQueries({
-        queryKey: automaticReloadStatusQueryOptions().queryKey,
-      });
-      void queryClient.invalidateQueries({ queryKey: usageBudgetQueryOptions().queryKey });
+      queryClient.setQueryData(accountQueryKeys.billing(), value);
       setDraft({});
     },
   });
   const resume = useMutation({
     mutationFn: resumeAutomaticReload,
-    onSuccess: (value) =>
-      queryClient.setQueryData(automaticReloadStatusQueryOptions().queryKey, value),
+    onSuccess: (value) => queryClient.setQueryData(accountQueryKeys.billing(), value),
   });
   const busy = save.isPending || resume.isPending;
-  const error = save.error ?? resume.error ?? pricing.error ?? status.error ?? budget.error;
+  const error = save.error ?? resume.error ?? pricing.error;
 
   return (
     <form
@@ -161,11 +155,11 @@ function PreferencesForm({
               </div>
             ))}
           </div>
-          {status.data?.pause_reason ? (
+          {reload.pause_reason ? (
             <div className="space-y-2">
               <p role="status" className="text-xs text-warning">
                 Reload paused.{" "}
-                {status.data.pause_reason === "action_required"
+                {reload.pause_reason === "action_required"
                   ? "Your bank needs authentication. Add credit through checkout or update your card."
                   : "Your payment was declined. Update your card before resuming."}
               </p>
@@ -179,7 +173,7 @@ function PreferencesForm({
                 {resume.isPending ? "Resuming…" : "Resume reload"}
               </Button>
             </div>
-          ) : status.data?.pending_purchase_id ? (
+          ) : reload.pending_purchase_id ? (
             <p role="status" className="text-xs">
               An automatic payment is processing.
             </p>
@@ -190,11 +184,9 @@ function PreferencesForm({
             <label htmlFor={`${id}-usageLimit`} className="text-sm font-medium">
               Monthly usage limit, USD
             </label>
-            {budget.data ? (
-              <span className="text-xs text-muted-foreground">
-                {formatCostNanos(budget.data.spent_nanos)} used this month
-              </span>
-            ) : null}
+            <span className="text-xs text-muted-foreground">
+              {formatCostNanos(budget.spent_nanos)} used this month
+            </span>
           </div>
           <AmountSelect
             id={`${id}-usageLimit`}

@@ -3,7 +3,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { creditBalanceQueryOptions, purchaseCredit } from "@/lib/queries/billing";
+import { billingAccountQueryOptions, purchaseCredit } from "@/lib/queries/billing";
 import { formatCostNanos } from "@/lib/money";
 import { pricingCatalogQueryOptions } from "@/lib/queries/pricing";
 
@@ -11,7 +11,7 @@ import { AmountSelect } from "./AmountSelect";
 
 export function PrepaidCredit({ paymentMethodOnFile }: { paymentMethodOnFile: boolean }) {
   const pricing = useQuery(pricingCatalogQueryOptions());
-  const balance = useQuery(creditBalanceQueryOptions());
+  const balance = useQuery(billingAccountQueryOptions({ balance: true }));
   const [amount, setAmount] = useState<string | null>(null);
   const [requestKey, setRequestKey] = useState(() => crypto.randomUUID());
   const inputId = useId();
@@ -33,7 +33,7 @@ export function PrepaidCredit({ paymentMethodOnFile }: { paymentMethodOnFile: bo
     >
       <div className="min-w-0">
         <h3 className="text-sm font-medium">Available balance</h3>
-        {balance.data?.ready ? (
+        {balance.data ? (
           <p
             className="content-transition mt-1 font-mono text-2xl font-medium tracking-tight"
             aria-live="polite"
@@ -42,12 +42,8 @@ export function PrepaidCredit({ paymentMethodOnFile }: { paymentMethodOnFile: bo
           </p>
         ) : balance.isPending ? (
           <Skeleton className="my-2 h-8 w-28" aria-label="Loading balance" />
-        ) : !balance.error ? (
-          <p role="status" className="mt-1 text-sm">
-            Your balance is not available yet.
-          </p>
         ) : null}
-        {balance.data?.ready && balance.data.balance_nanos <= 0 ? (
+        {balance.data && balance.data.balance_nanos <= 0 ? (
           <p className="mt-1 text-xs text-destructive">
             Add credit to resume work. New credit covers any negative balance first.
           </p>
@@ -57,7 +53,7 @@ export function PrepaidCredit({ paymentMethodOnFile }: { paymentMethodOnFile: bo
         className="flex min-w-0 flex-col gap-2"
         onSubmit={(event) => {
           event.preventDefault();
-          if (valid && balance.data?.ready && !purchase.isPending) {
+          if (valid && balance.data && !purchase.isPending) {
             purchase.mutate({ requestKey, amountCents: cents });
           }
         }}
@@ -83,7 +79,7 @@ export function PrepaidCredit({ paymentMethodOnFile }: { paymentMethodOnFile: bo
           <Button
             type="submit"
             className="shrink-0"
-            disabled={!valid || !balance.data?.ready || purchase.isPending}
+            disabled={!valid || !balance.data || purchase.isPending}
           >
             {purchase.isPending ? "Opening checkout…" : "Add credits"}
           </Button>
