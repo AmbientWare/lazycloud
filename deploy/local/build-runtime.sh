@@ -15,7 +15,8 @@ versions=("$@")
 if [[ ${#versions[@]} -eq 0 ]]; then
   versions=(3.10 3.11 3.12 3.13 3.14)
 fi
-platform="x86_64-manylinux_2_28"
+# LAZYCLOUD_RUNTIME_PLATFORM selects the wheels; the agent bundle sets it per architecture.
+platform="${LAZYCLOUD_RUNTIME_PLATFORM:-x86_64-manylinux_2_28}"
 
 mkdir -p "$out"
 out="$(cd "$out" && pwd)"

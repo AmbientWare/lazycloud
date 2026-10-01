@@ -265,7 +265,7 @@ func (e *Edge) refreshed(ctx context.Context, row CustomDomain) CustomDomain {
 		}
 		state = got
 		if !found {
-			code := apitypes.HostnameRejected
+			code := apitypes.DomainErrorCodeHostnameRejected
 			message := "this domain is no longer registered with the certificate provider; remove it here and add it again"
 			state = ProviderHostname{Phase: apitypes.DomainPhaseActionRequired, ErrorCode: &code, ErrorMessage: &message}
 		}

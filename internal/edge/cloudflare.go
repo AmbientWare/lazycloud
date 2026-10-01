@@ -177,7 +177,7 @@ func (h cfHostname) state() (ProviderHostname, error) {
 		out.Phase = apitypes.DomainPhaseValidating
 	default:
 		out.Phase = apitypes.DomainPhaseActionRequired
-		code := apitypes.CertificateFailed
+		code := apitypes.DomainErrorCodeCertificateFailed
 		out.ErrorCode = &code
 	}
 	// Only records still outstanding: a satisfied one listed as missing

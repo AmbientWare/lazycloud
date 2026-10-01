@@ -293,7 +293,7 @@ func (a *Agent) createBuilder(ctx context.Context, c *container, spec *hostproto
 				{Type: mount.TypeBind, Source: filepath.Join(c.dir, "out"), Target: buildOutDir},
 				{Type: mount.TypeBind, Source: filepath.Join(c.dir, "docker"), Target: buildDockerConfig, ReadOnly: true},
 			},
-			Resources: containerResources(spec.GetResources(), a.capacity, limit),
+			Resources: containerResources(spec.GetResources(), a.capacity, limit, nil),
 		},
 	}
 	_, err := a.docker.ContainerCreate(ctx, options)
@@ -417,6 +417,24 @@ func (a *Agent) removeBuildContainers(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// removeHostContainers removes every container the agent created for this
+// host, running or not.
+func (a *Agent) removeHostContainers(ctx context.Context) error {
+	list, err := a.docker.ContainerList(ctx, client.ContainerListOptions{
+		All:     true,
+		Filters: client.Filters{}.Add("label", labelHost+"="+a.identity.HostID),
+	})
+	if err != nil {
+		return fmt.Errorf("list containers: %w", err)
+	}
+	for _, summary := range list.Items {
+		if err := a.removeContainer(ctx, summary.ID); err != nil {
+			return err
+		}
+	}
+	return a.removeBuildContainers(ctx)
 }
 
 // pullOptions carries a login and platform to one pull.

@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/images"
 )
@@ -145,8 +146,14 @@ func (s *Server) checkImages(ctx context.Context, workspace identity.WorkspaceID
 	return nil
 }
 
-// pinImage does checkImages for one function spec.
+// pinImage does checkImages for one function spec, and refuses a pin to a
+// machine that does not serve the workspace.
 func (s *Server) pinImage(ctx context.Context, workspace identity.WorkspaceID, spec *apitypes.FunctionSpec) error {
+	if machine := compute.PinnedMachine(*spec); machine != "" {
+		if err := s.owners.Compute.CheckMachineServes(ctx, workspace, machine); err != nil {
+			return err
+		}
+	}
 	image := &spec.Image
 	image.Reference = nil
 	if image.ImageId == nil {

@@ -8,8 +8,12 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
+	"slices"
+	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/feature/ec2/imds"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -25,7 +29,10 @@ type identity struct {
 
 func identityPath(stateDir string) string { return filepath.Join(stateDir, "identity.json") }
 
-func loadOrEnroll(ctx context.Context, cfg Config, capacity *hostproto.Capacity) (identity, error) {
+// loadOrEnroll returns the saved identity or enrolls with the join token or
+// cloud identity. A host that fails an error-severity preflight check still
+// enrolls, so the server records why, but its identity is not kept.
+func loadOrEnroll(ctx context.Context, cfg Config, offered offer, metadata *imds.Client) (identity, error) {
 	var id identity
 	data, err := os.ReadFile(identityPath(cfg.StateDir))
 	switch {
@@ -37,24 +44,54 @@ func loadOrEnroll(ctx context.Context, cfg Config, capacity *hostproto.Capacity)
 	case !errors.Is(err, fs.ErrNotExist):
 		return identity{}, fmt.Errorf("read host identity: %w", err)
 	}
-	if cfg.JoinToken == "" {
+	joinToken := cfg.JoinToken
+	if joinToken == "" && cfg.JoinTokenFile != "" {
+		data, err := os.ReadFile(cfg.JoinTokenFile)
+		if err != nil {
+			return identity{}, fmt.Errorf("read join token: %w", err)
+		}
+		joinToken = strings.TrimSpace(string(data))
+	}
+	if joinToken == "" && cfg.CloudHostID == "" {
 		return identity{}, errors.New("the host is not enrolled and no join token was given")
 	}
-	conn, err := dialServer(cfg.Server, "", cfg.Telemetry)
+	if cfg.CloudHostID != "" && metadata == nil {
+		return identity{}, errors.New("cloud enrollment needs the instance metadata endpoint")
+	}
+	conn, err := dialServer(cfg, "")
 	if err != nil {
 		return identity{}, err
 	}
 	defer func() { _ = conn.Close() }()
-	hostname, _ := os.Hostname()
-	request := &hostproto.EnrollRequest{JoinToken: cfg.JoinToken, Hostname: hostname, Capacity: capacity}
+	hostname := cfg.Hostname
+	if hostname == "" {
+		hostname, _ = os.Hostname()
+	}
+	request := &hostproto.EnrollRequest{
+		JoinToken:    joinToken,
+		Hostname:     hostname,
+		Capacity:     offered.capacity,
+		Preflight:    offered.checks,
+		Architecture: runtime.GOARCH,
+	}
 	delay := 250 * time.Millisecond
 	for {
+		if cfg.CloudHostID != "" {
+			// A proof expires within a minute, so each attempt signs anew.
+			if request.CloudIdentity, err = cloudIdentity(ctx, metadata, cfg.CloudHostID); err != nil {
+				return identity{}, err
+			}
+		}
 		response, err := hostproto.NewHostServiceClient(conn).Enroll(ctx, request)
 		if err == nil {
 			id = identity{HostID: response.GetHostId(), HostToken: response.GetHostToken()}
 			break
 		}
-		if status.Code(err) != codes.Unavailable {
+		code := status.Code(err)
+		if slices.Contains(refusals, code) {
+			return identity{}, fmt.Errorf("%w: %w", ErrEnrollmentRefused, err)
+		}
+		if code != codes.Unavailable {
 			return identity{}, fmt.Errorf("enroll: %w", err)
 		}
 		cfg.Logger.Warn("server unavailable for enrollment", "error", err)
@@ -63,6 +100,10 @@ func loadOrEnroll(ctx context.Context, cfg Config, capacity *hostproto.Capacity)
 		}
 		delay = min(2*delay, 10*time.Second)
 	}
+	if failed := offered.failed(); len(failed) > 0 {
+		removeJoinToken(cfg)
+		return identity{}, fmt.Errorf("%w: %s", ErrPreflightFailed, describeChecks(failed))
+	}
 	data, err = json.Marshal(id)
 	if err != nil {
 		return identity{}, fmt.Errorf("encode host identity: %w", err)
@@ -70,8 +111,30 @@ func loadOrEnroll(ctx context.Context, cfg Config, capacity *hostproto.Capacity)
 	if err := writeFileAtomic(identityPath(cfg.StateDir), data, 0o600); err != nil {
 		return identity{}, fmt.Errorf("save host identity: %w", err)
 	}
+	removeJoinToken(cfg)
 	cfg.Logger.Info("enrolled", "host_id", id.HostID)
 	return id, nil
+}
+
+// refusals are Enroll answers that a retry cannot change.
+var refusals = []codes.Code{codes.Unauthenticated, codes.PermissionDenied, codes.InvalidArgument, codes.FailedPrecondition, codes.NotFound} //nolint:gochecknoglobals // constant table
+
+// removeJoinToken deletes the used token file.
+func removeJoinToken(cfg Config) {
+	if cfg.JoinTokenFile == "" {
+		return
+	}
+	if err := os.Remove(cfg.JoinTokenFile); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		cfg.Logger.Warn("removing the used join token failed", "error", err)
+	}
+}
+
+// forgetIdentity deletes a revoked identity, so a later join enrolls anew.
+func forgetIdentity(stateDir string) error {
+	if err := os.Remove(identityPath(stateDir)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("remove revoked host identity: %w", err)
+	}
+	return nil
 }
 
 // writeFileAtomic writes data beside path and renames it into place.

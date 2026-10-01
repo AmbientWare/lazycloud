@@ -182,7 +182,7 @@ func startPlatform(t *testing.T) *platform {
 	if err != nil {
 		t.Fatal(err)
 	}
-	hosts := hostsession.NewServer(compute.NewCompute(pool), p.execution, p.storage, im, listener, hostsession.Config{
+	hosts := hostsession.NewServer(compute.NewCompute(pool, p.execution, compute.Config{}), p.execution, p.storage, im, listener, hostsession.Config{
 		ImageTemplate: "docker.io/library/python:{version}-slim", TouchInterval: 5 * time.Second,
 		Secrets: vault, ContainerAPI: containerAPI,
 	}, logger)
@@ -242,7 +242,7 @@ func startPlatform(t *testing.T) *platform {
 		hosts.Wait()
 	})
 
-	join, _, err := compute.NewCompute(pool).CreateJoinToken(ctx, time.Hour)
+	join, _, err := compute.NewCompute(pool, p.execution, compute.Config{}).CreateJoinToken(ctx, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,9 +274,8 @@ func startPlatform(t *testing.T) *platform {
 		err := agent.Run(ctx, agent.Config{
 			Server: grpcListener.Addr().String(), StateDir: stateDir, SocketDir: socketDir, JoinToken: join,
 			RuntimeDir: runtime, SupervisorPath: supervisorBinary, OCIRuntime: "runc",
-			GeeseFSPath: geesefs, MountImage: agent.DefaultMountImage,
-			Capacity: &hostproto.Capacity{CpuMillis: 16000, MemoryBytes: 16 << 30},
-			Labels:   map[string]string{testLabel: t.Name()}, Version: "test", Logger: logger,
+			GeeseFSPath: geesefs, MountImage: agent.DefaultMountImage, ServerPlaintext: true,
+			Labels: map[string]string{testLabel: t.Name()}, Version: "test", Logger: logger,
 		})
 		if err != nil && ctx.Err() == nil {
 			t.Errorf("agent: %v", err)

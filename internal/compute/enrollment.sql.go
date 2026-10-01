@@ -12,6 +12,147 @@ import (
 	"github.com/google/uuid"
 )
 
+const cloudHostIdentity = `-- name: CloudHostIdentity :one
+select h.id, h.kind, h.instance_id, h.phase, h.connection_id, h.region, h.node_role_arn,
+       cc.aws_account_id
+from hosts h
+left join cloud_connections cc on cc.id = h.connection_id
+where h.id = $1
+`
+
+type CloudHostIdentityRow struct {
+	ID           uuid.UUID
+	Kind         string
+	InstanceID   *string
+	Phase        string
+	ConnectionID *uuid.UUID
+	Region       string
+	NodeRoleArn  *string
+	AwsAccountID *string
+}
+
+// What an instance's identity proof must match: its account, through the
+// connection's active authorization when it runs in a customer account.
+func (q *Queries) CloudHostIdentity(ctx context.Context, id uuid.UUID) (CloudHostIdentityRow, error) {
+	row := q.db.QueryRow(ctx, cloudHostIdentity, id)
+	var i CloudHostIdentityRow
+	err := row.Scan(
+		&i.ID,
+		&i.Kind,
+		&i.InstanceID,
+		&i.Phase,
+		&i.ConnectionID,
+		&i.Region,
+		&i.NodeRoleArn,
+		&i.AwsAccountID,
+	)
+	return i, err
+}
+
+const enrollCloudHost = `-- name: EnrollCloudHost :one
+update hosts
+set token_hash = $1,
+    state = 'offline',
+    phase = 'joining',
+    phase_message = 'Agent joined; waiting for its first heartbeat',
+    phase_at = now(),
+    cpu_millis = $2,
+    memory_bytes = $3,
+    gpu_type = case when $4::text = '' then gpu_type else $4::text end,
+    gpu_count = greatest(gpu_count, $5::int),
+    architecture = $6,
+    preflight = $7,
+    updated_at = now()
+where id = $8 and provider = 'aws' and instance_id = $9
+  and phase in ('provisioning', 'booting') and token_hash is null
+returning id
+`
+
+type EnrollCloudHostParams struct {
+	TokenHash    []byte
+	CpuMillis    int64
+	MemoryBytes  int64
+	GpuType      string
+	GpuCount     int32
+	Architecture string
+	Preflight    []byte
+	ID           uuid.UUID
+	InstanceID   *string
+}
+
+// Issues the host token to a launched instance that proved its identity.
+// The instance id must be the one the launcher recorded.
+func (q *Queries) EnrollCloudHost(ctx context.Context, arg EnrollCloudHostParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, enrollCloudHost,
+		arg.TokenHash,
+		arg.CpuMillis,
+		arg.MemoryBytes,
+		arg.GpuType,
+		arg.GpuCount,
+		arg.Architecture,
+		arg.Preflight,
+		arg.ID,
+		arg.InstanceID,
+	)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
+const enrollMachine = `-- name: EnrollMachine :one
+update hosts
+set token_hash = $1,
+    state = 'offline',
+    phase = $2,
+    phase_message = $3,
+    phase_at = now(),
+    failure = $4,
+    cpu_millis = $5,
+    memory_bytes = $6,
+    gpu_type = $7,
+    gpu_count = $8,
+    architecture = $9,
+    preflight = $10,
+    updated_at = now()
+where id = $11 and kind = 'machine' and phase in ('requested', 'failed') and state <> 'retired'
+returning id
+`
+
+type EnrollMachineParams struct {
+	TokenHash    []byte
+	Phase        string
+	PhaseMessage string
+	Failure      *string
+	CpuMillis    int64
+	MemoryBytes  int64
+	GpuType      string
+	GpuCount     int32
+	Architecture string
+	Preflight    []byte
+	ID           uuid.UUID
+}
+
+// Binds the host token to the machine the join token was minted for. A
+// machine that already joined, or was removed, takes no second host.
+func (q *Queries) EnrollMachine(ctx context.Context, arg EnrollMachineParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, enrollMachine,
+		arg.TokenHash,
+		arg.Phase,
+		arg.PhaseMessage,
+		arg.Failure,
+		arg.CpuMillis,
+		arg.MemoryBytes,
+		arg.GpuType,
+		arg.GpuCount,
+		arg.Architecture,
+		arg.Preflight,
+		arg.ID,
+	)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
 const hostByToken = `-- name: HostByToken :one
 select id from hosts where token_hash = $1 and state <> 'retired'
 `
@@ -23,47 +164,58 @@ func (q *Queries) HostByToken(ctx context.Context, tokenHash []byte) (uuid.UUID,
 	return id, err
 }
 
-const insertHost = `-- name: InsertHost :one
-insert into hosts (name, token_hash, state, cpu_millis, memory_bytes)
-values ($1, $2, 'offline', $3, $4)
-returning id
-`
-
-type InsertHostParams struct {
-	Name        string
-	TokenHash   []byte
-	CpuMillis   int64
-	MemoryBytes int64
-}
-
-func (q *Queries) InsertHost(ctx context.Context, arg InsertHostParams) (uuid.UUID, error) {
-	row := q.db.QueryRow(ctx, insertHost,
-		arg.Name,
-		arg.TokenHash,
-		arg.CpuMillis,
-		arg.MemoryBytes,
-	)
-	var id uuid.UUID
-	err := row.Scan(&id)
-	return id, err
-}
-
 const insertJoinToken = `-- name: InsertJoinToken :one
-insert into host_join_tokens (token_hash, expires_at)
-values ($1, now() + make_interval(secs => $2::float8))
+insert into host_join_tokens (token_hash, expires_at, host_id)
+values ($1, now() + make_interval(secs => $2::float8), $3::uuid)
 returning expires_at
 `
 
 type InsertJoinTokenParams struct {
 	TokenHash  []byte
 	TtlSeconds float64
+	HostID     *uuid.UUID
 }
 
 func (q *Queries) InsertJoinToken(ctx context.Context, arg InsertJoinTokenParams) (time.Time, error) {
-	row := q.db.QueryRow(ctx, insertJoinToken, arg.TokenHash, arg.TtlSeconds)
+	row := q.db.QueryRow(ctx, insertJoinToken, arg.TokenHash, arg.TtlSeconds, arg.HostID)
 	var expires_at time.Time
 	err := row.Scan(&expires_at)
 	return expires_at, err
+}
+
+const insertPlatformHost = `-- name: InsertPlatformHost :one
+insert into hosts (name, token_hash, state, kind, provider, phase, phase_message, cpu_millis, memory_bytes,
+                   gpu_type, gpu_count, architecture, preflight)
+values ($1, $2, 'offline', 'platform', 'agent', 'joining', 'Agent joined; waiting for its first heartbeat',
+        $3, $4, $5, $6, $7, $8)
+returning id
+`
+
+type InsertPlatformHostParams struct {
+	Name         string
+	TokenHash    []byte
+	CpuMillis    int64
+	MemoryBytes  int64
+	GpuType      string
+	GpuCount     int32
+	Architecture string
+	Preflight    []byte
+}
+
+func (q *Queries) InsertPlatformHost(ctx context.Context, arg InsertPlatformHostParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, insertPlatformHost,
+		arg.Name,
+		arg.TokenHash,
+		arg.CpuMillis,
+		arg.MemoryBytes,
+		arg.GpuType,
+		arg.GpuCount,
+		arg.Architecture,
+		arg.Preflight,
+	)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
 }
 
 const openHostSession = `-- name: OpenHostSession :one
@@ -72,25 +224,40 @@ set session_epoch = session_epoch + 1,
     state = 'online',
     cpu_millis = $1,
     memory_bytes = $2,
-    boot_id = $3,
-    last_seen_at = now()
-where id = $4 and state <> 'retired'
+    gpu_type = $3,
+    gpu_count = $4,
+    boot_id = $5,
+    agent_version = $6,
+    updating_until = null,
+    phase = case when phase = 'joining' then 'ready' else phase end,
+    phase_message = case when phase = 'joining' then 'Ready for workloads' else phase_message end,
+    phase_at = case when phase = 'joining' then now() else phase_at end,
+    last_seen_at = now(),
+    updated_at = now()
+where id = $7 and state <> 'retired'
 returning session_epoch
 `
 
 type OpenHostSessionParams struct {
-	CpuMillis   int64
-	MemoryBytes int64
-	BootID      string
-	ID          uuid.UUID
+	CpuMillis    int64
+	MemoryBytes  int64
+	GpuType      string
+	GpuCount     int32
+	BootID       string
+	AgentVersion string
+	ID           uuid.UUID
 }
 
-// A new epoch supersedes every earlier session of the host.
+// A new epoch supersedes every earlier session of the host. The first
+// session of a joining host makes it ready.
 func (q *Queries) OpenHostSession(ctx context.Context, arg OpenHostSessionParams) (int64, error) {
 	row := q.db.QueryRow(ctx, openHostSession,
 		arg.CpuMillis,
 		arg.MemoryBytes,
+		arg.GpuType,
+		arg.GpuCount,
 		arg.BootID,
+		arg.AgentVersion,
 		arg.ID,
 	)
 	var session_epoch int64
@@ -123,12 +290,17 @@ func (q *Queries) TouchHost(ctx context.Context, arg TouchHostParams) (int64, er
 const useJoinToken = `-- name: UseJoinToken :one
 update host_join_tokens set used_at = now()
 where token_hash = $1 and used_at is null and expires_at > now()
-returning id
+returning id, host_id
 `
 
-func (q *Queries) UseJoinToken(ctx context.Context, tokenHash []byte) (uuid.UUID, error) {
+type UseJoinTokenRow struct {
+	ID     uuid.UUID
+	HostID *uuid.UUID
+}
+
+func (q *Queries) UseJoinToken(ctx context.Context, tokenHash []byte) (UseJoinTokenRow, error) {
 	row := q.db.QueryRow(ctx, useJoinToken, tokenHash)
-	var id uuid.UUID
-	err := row.Scan(&id)
-	return id, err
+	var i UseJoinTokenRow
+	err := row.Scan(&i.ID, &i.HostID)
+	return i, err
 }

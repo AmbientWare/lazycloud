@@ -232,6 +232,8 @@ with task as (
     select c.release_id,
            min(c.assigned_at) filter (where c.state = 'starting')::timestamptz as starting_since,
            min(c.created_at) filter (where c.state = 'pending')::timestamptz as unplaced_since,
+           count(*) filter (where c.state = 'pending' and c.capacity_wait = 'provisioning') as provisioning,
+           count(*) filter (where c.state = 'pending' and c.capacity_wait = 'limit') as limited,
            count(*) filter (where c.state = 'ready') as ready
     from containers c
     where c.release_id in (select release_id from task) and c.state <> 'stopped'
@@ -239,7 +241,8 @@ with task as (
 )
 select task.id, task.unmet_dependencies, task.attempt_count, task.available_at, task.created_at,
        task.last_finished_at, live.starting_since, live.unplaced_since,
-       coalesce(live.ready, 0)::int as ready, now()::timestamptz as observed_at
+       coalesce(live.ready, 0)::int as ready, coalesce(live.provisioning, 0)::int as provisioning,
+       coalesce(live.limited, 0)::int as limited, now()::timestamptz as observed_at
 from task
 left join live on live.release_id = task.release_id
 `
@@ -254,6 +257,8 @@ type PendingFactsRow struct {
 	StartingSince     *time.Time
 	UnplacedSince     *time.Time
 	Ready             int32
+	Provisioning      int32
+	Limited           int32
 	ObservedAt        time.Time
 }
 
@@ -279,6 +284,8 @@ func (q *Queries) PendingFacts(ctx context.Context, ids []uuid.UUID) ([]PendingF
 			&i.StartingSince,
 			&i.UnplacedSince,
 			&i.Ready,
+			&i.Provisioning,
+			&i.Limited,
 			&i.ObservedAt,
 		); err != nil {
 			return nil, err
