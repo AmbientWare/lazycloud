@@ -51,3 +51,10 @@ delete from container_logs where id in (
     limit @max_rows
     for update skip locked
 );
+
+-- name: ContainerOutputAfter :many
+select l.id, l.stream, l.data, l.logged_at
+from container_logs l
+where l.container_id = @container_id and l.id > @after
+order by l.id
+limit @max_entries;

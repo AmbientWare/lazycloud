@@ -33,6 +33,17 @@ func (q *Queries) ContainerNetwork(ctx context.Context, arg ContainerNetworkPara
 	return i, err
 }
 
+const containerReleaseOf = `-- name: ContainerReleaseOf :one
+select release_id::uuid as release_id from containers where id = $1 and release_id is not null
+`
+
+func (q *Queries) ContainerReleaseOf(ctx context.Context, id uuid.UUID) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, containerReleaseOf, id)
+	var release_id uuid.UUID
+	err := row.Scan(&release_id)
+	return release_id, err
+}
+
 const containerRoute = `-- name: ContainerRoute :one
 select c.id, c.host_id, c.state, c.purpose, c.exposed_ports, c.workspace_id, ws.name as workspace_name,
        w.id as workload_id, w.kind, a.state as app_state, w.desired_state, r.spec

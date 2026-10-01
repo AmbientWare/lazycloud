@@ -335,3 +335,6 @@ where c.workspace_id = @workspace_id and w.kind = 'sandbox' and c.created_at > n
   and (sqlc.narg('app')::text is null or a.name = sqlc.narg('app'))
 group by 1
 order by 1;
+
+-- name: ContainerReleaseOf :one
+select release_id::uuid as release_id from containers where id = @id and release_id is not null;

@@ -12,6 +12,52 @@ import (
 	"github.com/google/uuid"
 )
 
+const containerOutputAfter = `-- name: ContainerOutputAfter :many
+select l.id, l.stream, l.data, l.logged_at
+from container_logs l
+where l.container_id = $1 and l.id > $2
+order by l.id
+limit $3
+`
+
+type ContainerOutputAfterParams struct {
+	ContainerID uuid.UUID
+	After       int64
+	MaxEntries  int32
+}
+
+type ContainerOutputAfterRow struct {
+	ID       int64
+	Stream   string
+	Data     string
+	LoggedAt time.Time
+}
+
+func (q *Queries) ContainerOutputAfter(ctx context.Context, arg ContainerOutputAfterParams) ([]ContainerOutputAfterRow, error) {
+	rows, err := q.db.Query(ctx, containerOutputAfter, arg.ContainerID, arg.After, arg.MaxEntries)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ContainerOutputAfterRow
+	for rows.Next() {
+		var i ContainerOutputAfterRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Stream,
+			&i.Data,
+			&i.LoggedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const insertContainerLogs = `-- name: InsertContainerLogs :many
 with line as (
     select i as ord, ($1::text[])[i] as stream, ($2::text[])[i] as data,

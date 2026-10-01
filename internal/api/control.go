@@ -145,6 +145,11 @@ func (s *Server) ListDeployments(ctx context.Context, req ListDeploymentsRequest
 	if err != nil {
 		return nil, err
 	}
+	for n := range page.Deployments {
+		if err := s.podDeployment(ctx, &page.Deployments[n]); err != nil {
+			return nil, err
+		}
+	}
 	return ListDeployments200JSONResponse{Deployments: page.Deployments, NextCursor: nextCursor(page.Next)}, nil
 }
 
@@ -156,6 +161,9 @@ func (s *Server) GetDeployment(ctx context.Context, req GetDeploymentRequestObje
 	}
 	d, err := s.owners.Control.GetDeployment(ctx, ws.ID, control.WorkloadID(req.Deployment))
 	if err != nil {
+		return nil, err
+	}
+	if err := s.podDeployment(ctx, &d); err != nil {
 		return nil, err
 	}
 	return GetDeployment200JSONResponse(d), nil
