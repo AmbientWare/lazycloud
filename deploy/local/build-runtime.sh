@@ -31,13 +31,17 @@ for package in shared lazycloud runner; do
   rm -rf "$root/python/$package/build"
 done
 
+# Third-party versions follow uv.lock, so one commit builds the same runtime.
+"$uv" export --quiet --frozen --no-hashes --no-dev --no-emit-workspace \
+  --project "$root" --package runner --package lazycloud-client >"$work/constraints.txt"
+
 failed=()
 for version in "${versions[@]}"; do
   target="$work/$version"
   echo "building runtime for Python $version" >&2
   if ! "$uv" pip install --quiet --no-cache --target "$target" \
     --python-version "$version" --python-platform "$platform" \
-    --only-binary :all: "$work"/wheels/*.whl; then
+    --only-binary :all: --constraint "$work/constraints.txt" "$work"/wheels/*.whl; then
     failed+=("$version")
     continue
   fi
