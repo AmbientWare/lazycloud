@@ -136,14 +136,15 @@ export function viewSpec(spec: Schemas["FunctionSpec"] | undefined): Deployment[
 
 /**
  * One version of a deployed workload. Stop and start act on the workload, and
- * starting an inactive version makes it the active one; a version alone is
- * deleted only when it is the workload's last.
+ * starting an inactive version makes it the active one. Deleting removes the
+ * whole workload, so a row offers it only where it stands for the workload:
+ * the workload's active row, or its last version.
  */
 export function viewDeployment(
   workload: Schemas["DeployedWorkload"],
   appId: string,
   version: { version: number; release_id: string; active: boolean; created_at: string },
-  options: { spec?: Schemas["FunctionSpec"]; onlyVersion?: boolean } = {},
+  options: { spec?: Schemas["FunctionSpec"]; deletesWorkload?: boolean } = {},
 ): Deployment {
   const running = version.active && workload.state === "active" && workload.app_state !== "paused";
   return {
@@ -162,14 +163,14 @@ export function viewDeployment(
     actions: {
       can_start: !running,
       can_stop: running,
-      can_delete: Boolean(options.onlyVersion),
+      can_delete: Boolean(options.deletesWorkload) && workload.state !== "deleted",
       can_scale: false,
     },
     scaling: null,
   };
 }
 
-/** The active version of a workload as its deployment row. */
+/** The active version of a workload as its deployment row, standing for the workload. */
 export function viewActiveDeployment(
   workload: Schemas["DeployedWorkload"],
   appId: string,
@@ -184,7 +185,7 @@ export function viewActiveDeployment(
       active: true,
       created_at: workload.deployed_at ?? workload.created_at,
     },
-    { spec },
+    { spec, deletesWorkload: true },
   );
 }
 

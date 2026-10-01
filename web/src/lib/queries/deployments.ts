@@ -87,7 +87,7 @@ export function deploymentsInfiniteQueryOptions(
           data.push(
             viewDeployment(workload, id, version, {
               spec: fn.active_release.spec,
-              onlyVersion: versions.versions.length === 1,
+              deletesWorkload: versions.versions.length === 1,
             }),
           );
         }
