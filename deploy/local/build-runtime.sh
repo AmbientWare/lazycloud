@@ -31,9 +31,14 @@ for package in shared lazycloud runner; do
   rm -rf "$root/python/$package/build"
 done
 
-# Third-party versions follow uv.lock, so one commit builds the same runtime.
-"$uv" export --quiet --frozen --no-hashes --no-dev --no-emit-workspace \
-  --project "$root" --package runner --package lazycloud-client >"$work/constraints.txt"
+# Third-party versions and wheel digests follow uv.lock, so one commit builds
+# the same runtime and a tampered download fails. The workspace wheels are
+# pinned to the digests just built.
+"$uv" export --quiet --frozen --no-dev --no-emit-workspace \
+  --project "$root" --package runner --package lazycloud-client >"$work/requirements.txt"
+for wheel in "$work"/wheels/*.whl; do
+  echo "$wheel --hash=sha256:$(sha256sum "$wheel" | cut -d' ' -f1)" >>"$work/requirements.txt"
+done
 
 failed=()
 for version in "${versions[@]}"; do
@@ -41,7 +46,7 @@ for version in "${versions[@]}"; do
   echo "building runtime for Python $version" >&2
   if ! "$uv" pip install --quiet --no-cache --target "$target" \
     --python-version "$version" --python-platform "$platform" \
-    --only-binary :all: --constraint "$work/constraints.txt" "$work"/wheels/*.whl; then
+    --only-binary :all: --require-hashes --requirements "$work/requirements.txt"; then
     failed+=("$version")
     continue
   fi
