@@ -262,7 +262,7 @@ func startPlatform(t *testing.T) *platform {
 			Server: grpcListener.Addr().String(), StateDir: stateDir, SocketDir: socketDir, JoinToken: join,
 			RuntimeDir: runtime, SupervisorPath: supervisorBinary, OCIRuntime: "runc",
 			GeeseFSPath: geesefs, MountImage: agent.DefaultMountImage,
-			Capacity:    &hostproto.Capacity{CpuMillis: 16000, MemoryBytes: 16 << 30},
+			Capacity: &hostproto.Capacity{CpuMillis: 16000, MemoryBytes: 16 << 30},
 			Labels:   map[string]string{testLabel: t.Name()}, Version: "test", Logger: logger,
 		})
 		if err != nil && ctx.Err() == nil {

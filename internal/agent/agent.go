@@ -16,11 +16,13 @@ import (
 	"time"
 
 	"github.com/moby/moby/client"
+	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/AmbientWare/lazycloud/internal/diskengine"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 // Paths inside every workload container.
@@ -87,6 +89,11 @@ type Config struct {
 	Labels  map[string]string
 	Version string
 	Logger  *slog.Logger
+	// Telemetry traces calls to the server and attempts; nil traces
+	// nothing.
+	Telemetry *telemetry.Telemetry
+	// MetricsInterval paces container metric samples; zero means 5 s.
+	MetricsInterval time.Duration
 }
 
 // Agent owns one host's connection and containers.
@@ -117,6 +124,8 @@ type Agent struct {
 	// work tracks every goroutine the agent starts; Run waits for them.
 	work sync.WaitGroup
 	ctx  context.Context
+
+	metrics agentMetrics
 
 	mu         sync.Mutex
 	containers map[string]*container
@@ -163,19 +172,19 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	cfg.Logger = cfg.Logger.With("host_id", id.HostID)
 
-	control, err := dialServer(cfg.Server, id.HostToken)
+	control, err := dialServer(cfg.Server, id.HostToken, cfg.Telemetry)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = control.Close() }()
-	payload, err := dialServer(cfg.Server, id.HostToken)
+	payload, err := dialServer(cfg.Server, id.HostToken, cfg.Telemetry)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = payload.Close() }()
 	// Workload traffic has its own connection, so it shares flow control
 	// with neither commands nor task payloads.
-	traffic, err := dialServer(cfg.Server, id.HostToken)
+	traffic, err := dialServer(cfg.Server, id.HostToken, cfg.Telemetry)
 	if err != nil {
 		return err
 	}
@@ -207,6 +216,11 @@ func Run(ctx context.Context, cfg Config) error {
 	if !a.diskQuota {
 		a.log.Warn("docker storage here cannot limit container disk; disk limits are not enforced")
 	}
+	var registerer prometheus.Registerer
+	if cfg.Telemetry != nil {
+		registerer = cfg.Telemetry.Registry
+	}
+	a.metrics = newAgentMetrics(a, registerer)
 	defer a.shutdown()
 	if err := a.removeBuildContainers(ctx); err != nil {
 		return err
@@ -219,6 +233,7 @@ func Run(ctx context.Context, cfg Config) error {
 	a.goOwned(a.pruneExited)
 	data := &dataLink{a: a, client: hostproto.NewHostDataClient(traffic)}
 	a.goOwned(data.run)
+	a.goOwned(a.sampleUsage)
 	a.goOwned(a.releaseLoop)
 	a.sessions(ctx)
 	return nil
@@ -287,10 +302,13 @@ func (t hostToken) GetRequestMetadata(context.Context, ...string) (map[string]st
 
 func (hostToken) RequireTransportSecurity() bool { return false }
 
-func dialServer(address, token string) (*grpc.ClientConn, error) {
+func dialServer(address, token string, t *telemetry.Telemetry) (*grpc.ClientConn, error) {
 	options := []grpc.DialOption{
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(maxMessageBytes), grpc.MaxCallSendMsgSize(maxMessageBytes)),
+	}
+	if t != nil {
+		options = append(options, t.GRPCDialOption())
 	}
 	if token != "" {
 		options = append(options, grpc.WithPerRPCCredentials(hostToken(token)))

@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"time"
@@ -52,8 +52,8 @@ func newAccountLoops(pool *pgxpool.Pool, exec *execution.Execution, im *images.I
 		Bucket: os.Getenv("LAZYCLOUD_OBJECT_STORE_BUCKET"), AccessKeyID: os.Getenv("LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID"),
 		SecretAccessKey: os.Getenv("LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY"),
 	}
-	if store.Endpoint == "" || store.Region == "" || store.Bucket == "" || store.AccessKeyID == "" || store.SecretAccessKey == "" {
-		return nil, nil, errors.New("workspace deletion needs the object store: set LAZYCLOUD_OBJECT_STORE_ENDPOINT, _REGION, _BUCKET, _ACCESS_KEY_ID and _SECRET_ACCESS_KEY")
+	if err := store.Validate(); err != nil {
+		return nil, nil, fmt.Errorf("workspace deletion needs the object store (LAZYCLOUD_OBJECT_STORE_*): %w", err)
 	}
 	var sender *notifications.Resend
 	if key := os.Getenv("LAZYCLOUD_RESEND_API_KEY"); key != "" {

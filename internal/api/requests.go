@@ -31,7 +31,7 @@ func (s *Server) GetHttpRequest(ctx context.Context, req GetHttpRequestRequestOb
 	if err != nil {
 		return nil, err
 	}
-	out, err := s.owners.Edge.Request(ctx, ws.ID, uuid.UUID(req.HttpRequest))
+	out, err := s.owners.Edge.Request(ctx, ws.ID, req.HttpRequest)
 	if err != nil {
 		return nil, err
 	}
@@ -53,7 +53,7 @@ func (s *Server) ListHttpRequestLogs(ctx context.Context, req ListHttpRequestLog
 	if req.Params.Limit != nil {
 		limit = *req.Params.Limit
 	}
-	entries, err := s.owners.Execution.RequestLogs(ctx, uuid.UUID(ws.ID), uuid.UUID(req.HttpRequest), after, limit)
+	entries, err := s.owners.Execution.RequestLogs(ctx, uuid.UUID(ws.ID), req.HttpRequest, after, limit)
 	if err != nil {
 		return nil, err
 	}

@@ -162,6 +162,7 @@ func TestStalledRequestBodyDoesNotHoldCapacity(t *testing.T) {
 		t.Fatalf("read the early answer: %v", err)
 	}
 	_, _ = io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("early answer %d", resp.StatusCode)
 	}

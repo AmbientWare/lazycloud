@@ -20,9 +20,11 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/images"
 	"github.com/AmbientWare/lazycloud/internal/notifications"
+	"github.com/AmbientWare/lazycloud/internal/observability"
 	"github.com/AmbientWare/lazycloud/internal/schedules"
 	"github.com/AmbientWare/lazycloud/internal/secrets"
 	"github.com/AmbientWare/lazycloud/internal/storage"
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 // maxRequestBytes bounds a request body. A submit of large inputs is the
@@ -39,6 +41,9 @@ type Owners struct {
 	Notifications *notifications.Notifications
 	Secrets       *secrets.Secrets
 	Schedules     *schedules.Schedules
+	Observability *observability.Observability
+	// Changes fans out the workspace change streams.
+	Changes *observability.Changes
 	// Listener wakes waits on task, image build and queue changes. It must
 	// listen on database.ChannelTask, ChannelImageBuild, ChannelImageBuildLog
 	// and storage.ChannelQueue.
@@ -100,7 +105,7 @@ func newServer(owners Owners, cfg Config, logger *slog.Logger, authenticated ope
 	}
 	cfg.PublicURL = strings.TrimRight(cfg.PublicURL, "/")
 	s := &Server{owners: owners, cfg: cfg, logger: logger}
-	strict := NewStrictHandlerWithOptions(s, []StrictMiddlewareFunc{withQuery}, StrictHTTPServerOptions{
+	strict := NewStrictHandlerWithOptions(s, []StrictMiddlewareFunc{nameOperation, withQuery}, StrictHTTPServerOptions{
 		RequestErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {
 			s.writeError(w, r, fmt.Errorf("%w: %w", errInvalidRequest, err))
 		},
@@ -138,6 +143,14 @@ func newServer(owners Owners, cfg Config, logger *slog.Logger, authenticated ope
 		},
 	})
 	return s, validate(handler), nil
+}
+
+// nameOperation labels the request's metrics and span with its operation.
+func nameOperation(next StrictHandlerFunc, operationID string) StrictHandlerFunc {
+	return func(ctx context.Context, w http.ResponseWriter, r *http.Request, request any) (any, error) {
+		telemetry.SetRoute(ctx, operationID)
+		return next(ctx, w, r, request)
+	}
 }
 
 type principalKey struct{}
@@ -300,7 +313,7 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, identity.ErrExists):
 		writeJSONError(w, http.StatusConflict, apitypes.Conflict, "a workspace with that name already exists")
 	case errors.Is(err, identity.ErrNotFound), errors.Is(err, control.ErrNotFound), errors.Is(err, execution.ErrNotFound),
-		errors.Is(err, images.ErrNotFound):
+		errors.Is(err, images.ErrNotFound), errors.Is(err, observability.ErrNotFound):
 		writeJSONError(w, http.StatusNotFound, apitypes.NotFound, "not found")
 	case errors.Is(err, execution.ErrNoResult):
 		writeJSONError(w, http.StatusNotFound, apitypes.NotFound, "the task finished without a result")
@@ -310,7 +323,8 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, unknownTask.Error())
 	case errors.Is(err, control.ErrInvalidCursor), errors.Is(err, execution.ErrInvalidCursor):
 		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, "the cursor is not from this listing")
-	case errors.Is(err, execution.ErrInvalidFilter), errors.Is(err, execution.ErrInvalidSubmit):
+	case errors.Is(err, execution.ErrInvalidFilter), errors.Is(err, execution.ErrInvalidSubmit),
+		errors.Is(err, observability.ErrInvalidRange):
 		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, err.Error())
 	case errors.As(err, &invalidSpec):
 		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, invalidSpec.Error())
@@ -326,6 +340,10 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		writeJSONError(w, http.StatusBadRequest, apitypes.Unsupported, err.Error())
 	case errors.Is(err, images.ErrNotReady):
 		writeJSONError(w, http.StatusConflict, apitypes.Conflict, err.Error())
+	case errors.Is(err, observability.ErrTooManyStreams):
+		writeJSONError(w, http.StatusTooManyRequests, apitypes.Unavailable, err.Error())
+	case errors.Is(err, observability.ErrTooManySubscribers):
+		writeJSONError(w, http.StatusServiceUnavailable, apitypes.Unavailable, err.Error())
 	case errors.Is(err, images.ErrRegistryUnavailable):
 		writeJSONError(w, http.StatusServiceUnavailable, apitypes.Unavailable, err.Error())
 	case errors.As(err, &tooLarge), errors.Is(err, execution.ErrPayloadTooLarge):

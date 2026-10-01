@@ -102,7 +102,7 @@ func TestBufferedBodiesStayWithinTheEdgeBudget(t *testing.T) {
 	if !e.bodies.reserve(maxBufferedBodyBytes - 10) {
 		t.Fatal("reserve within the budget refused")
 	}
-	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(strings.Repeat("x", 64)))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", strings.NewReader(strings.Repeat("x", 64)))
 	if _, err := e.readBody(req, true); !errors.Is(err, errBufferFull) {
 		t.Fatalf("read past the budget: %v; want errBufferFull", err)
 	}
@@ -110,7 +110,7 @@ func TestBufferedBodiesStayWithinTheEdgeBudget(t *testing.T) {
 		t.Fatalf("a refused read kept %d bytes", used-(maxBufferedBodyBytes-10))
 	}
 	e.bodies.used.Store(0)
-	req = httptest.NewRequest(http.MethodPost, "/", bytes.NewReader([]byte(`{"a": 1}`)))
+	req = httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", bytes.NewReader([]byte(`{"a": 1}`)))
 	body, err := e.readBody(req, true)
 	if err != nil || e.bodies.used.Load() != 8 {
 		t.Fatalf("read %v, %d bytes held", err, e.bodies.used.Load())

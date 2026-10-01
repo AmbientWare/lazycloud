@@ -29,6 +29,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/hostsession"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/images"
+	"github.com/AmbientWare/lazycloud/internal/observability"
 	"github.com/AmbientWare/lazycloud/internal/schedules"
 	"github.com/AmbientWare/lazycloud/internal/secrets"
 	"github.com/AmbientWare/lazycloud/internal/storage"
@@ -42,6 +43,7 @@ type harness struct {
 	compute   *compute.Compute
 	execution *execution.Execution
 	secrets   *secrets.Secrets
+	obs       *observability.Observability
 }
 
 // start serves the host service on a random local port against real
@@ -71,11 +73,13 @@ func start(t *testing.T) *harness {
 		t.Fatal(err)
 	}
 	im := images.NewImages(pool, e, images.Config{Registry: "127.0.0.1:1", Repository: "lazycloud"})
+	obs := observability.NewObservability(pool, observability.Config{}, logger)
 	srv := hostsession.NewServer(c, e, store, im, listener, hostsession.Config{
 		ImageTemplate: "docker.io/library/python:{version}-slim",
 		TouchInterval: 100 * time.Millisecond,
 		Secrets:       vault,
 		ContainerAPI:  containerAPI,
+		Observability: obs,
 	}, logger)
 	g := grpc.NewServer(srv.ServerOptions()...)
 	hostproto.RegisterHostServiceServer(g, srv)
@@ -86,6 +90,8 @@ func start(t *testing.T) *harness {
 	runCtx, stop := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	wg.Go(func() { _ = listener.Run(runCtx) })
+	wg.Go(func() { _ = obs.RunIngest(runCtx) })
+	wg.Go(func() { _ = obs.RunStartedPublisher(runCtx) })
 	wg.Go(func() { _ = g.Serve(lis) })
 	conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
@@ -99,7 +105,7 @@ func start(t *testing.T) *harness {
 		stop()
 		wg.Wait()
 	})
-	return &harness{t: t, pool: pool, client: hostproto.NewHostServiceClient(conn), compute: c, execution: e, secrets: vault}
+	return &harness{t: t, pool: pool, client: hostproto.NewHostServiceClient(conn), compute: c, execution: e, secrets: vault, obs: obs}
 }
 
 func (h *harness) enroll() (compute.HostID, context.Context) {

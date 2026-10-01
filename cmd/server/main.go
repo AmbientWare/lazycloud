@@ -36,9 +36,11 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/images"
 	"github.com/AmbientWare/lazycloud/internal/notifications"
+	"github.com/AmbientWare/lazycloud/internal/observability"
 	"github.com/AmbientWare/lazycloud/internal/schedules"
 	"github.com/AmbientWare/lazycloud/internal/secrets"
 	"github.com/AmbientWare/lazycloud/internal/storage"
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 const shutdownGrace = 10 * time.Second
@@ -118,10 +120,10 @@ func serve(ctx context.Context, args []string) error {
 	fs.StringVar(&cfg.databaseURL, "database-url", env("LAZYCLOUD_DATABASE_URL", ""), "PostgreSQL URL (LAZYCLOUD_DATABASE_URL)")
 	fs.StringVar(&cfg.httpAddr, "http-addr", env("LAZYCLOUD_HTTP_ADDR", "127.0.0.1:8080"), "public API address (LAZYCLOUD_HTTP_ADDR)")
 	fs.StringVar(&cfg.grpcAddr, "grpc-addr", env("LAZYCLOUD_GRPC_ADDR", "127.0.0.1:8081"), "host connection address (LAZYCLOUD_GRPC_ADDR)")
-	fs.StringVar(&cfg.objectStore.Endpoint, "object-store-endpoint", env("LAZYCLOUD_OBJECT_STORE_ENDPOINT", ""), "S3-compatible endpoint URL (LAZYCLOUD_OBJECT_STORE_ENDPOINT)")
+	fs.StringVar(&cfg.objectStore.Endpoint, "object-store-endpoint", env("LAZYCLOUD_OBJECT_STORE_ENDPOINT", ""), "S3-compatible endpoint URL; empty is AWS S3 (LAZYCLOUD_OBJECT_STORE_ENDPOINT)")
 	fs.StringVar(&cfg.objectStore.Region, "object-store-region", env("LAZYCLOUD_OBJECT_STORE_REGION", ""), "object store region (LAZYCLOUD_OBJECT_STORE_REGION)")
 	fs.StringVar(&cfg.objectStore.Bucket, "object-store-bucket", env("LAZYCLOUD_OBJECT_STORE_BUCKET", ""), "bucket for source archives (LAZYCLOUD_OBJECT_STORE_BUCKET)")
-	fs.StringVar(&cfg.objectStore.AccessKeyID, "object-store-access-key-id", env("LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID", ""), "object store access key id (LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID)")
+	fs.StringVar(&cfg.objectStore.AccessKeyID, "object-store-access-key-id", env("LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID", ""), "object store access key id; empty uses the AWS default credential chain (LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID)")
 	fs.StringVar((*string)(&cfg.objectStore.Workspaces.Provider), "workspace-bucket-provider", env("LAZYCLOUD_WORKSPACE_BUCKET_PROVIDER", ""), "garage or aws: creates the per-workspace buckets of volumes and disks (LAZYCLOUD_WORKSPACE_BUCKET_PROVIDER)")
 	fs.StringVar(&cfg.objectStore.Workspaces.Prefix, "workspace-bucket-prefix", env("LAZYCLOUD_WORKSPACE_BUCKET_PREFIX", "lazycloud-ws"), "prefix of workspace bucket names (LAZYCLOUD_WORKSPACE_BUCKET_PREFIX)")
 	fs.StringVar(&cfg.objectStore.Workspaces.GarageAdminURL, "garage-admin-url", env("LAZYCLOUD_GARAGE_ADMIN_URL", ""), "Garage admin API URL (LAZYCLOUD_GARAGE_ADMIN_URL)")
@@ -154,23 +156,40 @@ func serve(ctx context.Context, args []string) error {
 	cfg.cloudflare.token = os.Getenv("LAZYCLOUD_CLOUDFLARE_API_TOKEN")
 	cfg.objectStore.SecretAccessKey = os.Getenv("LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY")
 	cfg.objectStore.Workspaces.GarageAdminToken = os.Getenv("LAZYCLOUD_GARAGE_ADMIN_TOKEN")
-	if cfg.objectStore.Endpoint == "" || cfg.objectStore.Region == "" || cfg.objectStore.Bucket == "" ||
-		cfg.objectStore.AccessKeyID == "" || cfg.objectStore.SecretAccessKey == "" {
-		return errors.New("the object store endpoint, region, bucket, access key id and LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY are required")
+	if err := cfg.objectStore.Validate(); err != nil {
+		return fmt.Errorf("object store: %w", err)
 	}
 	if cfg.secretsKey == "" {
 		return errors.New("the secrets key file is required: set LAZYCLOUD_SECRETS_KEY_FILE or -secrets-key-file")
 	}
-	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	format, err := telemetry.LogFormatFromEnv(telemetry.LogText)
+	if err != nil {
+		return err
+	}
+	logger := telemetry.NewLogger(os.Stderr, format, "server")
+	telemetryConfig, err := telemetry.ConfigFromEnv("server", "")
+	if err != nil {
+		return err
+	}
+	tel, err := telemetry.New(ctx, telemetryConfig)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tel.Shutdown(context.WithoutCancel(ctx)) }()
 	return withPool(ctx, cfg.databaseURL, func(pool *pgxpool.Pool) error {
 		if err := database.Migrate(ctx, pool); err != nil {
 			return err
 		}
-		return serveWith(ctx, pool, cfg, logger)
+		return serveWith(ctx, pool, cfg, tel, logger)
 	})
 }
 
-func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, logger *slog.Logger) error {
+func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, tel *telemetry.Telemetry, logger *slog.Logger) error {
+	tel.RegisterPool(pool)
+	// Billing supplies plan limits once it lands; until then account
+	// metrics leave them out.
+	obs := observability.NewObservability(pool, observability.Config{Registerer: tel.Registry}, logger)
+	changes := observability.NewChanges(pool, observability.DefaultChangesConfig(), tel.Registry, logger)
 	listener := database.NewListener(pool, logger, database.ChannelHost, database.ChannelTask, database.ChannelClaim,
 		database.ChannelLogs, database.ChannelImageBuild, database.ChannelImageBuildLog, storage.ChannelQueue,
 		execution.ChannelContainerLog)
@@ -198,6 +217,7 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, logger 
 		Identity: ident, Control: control.NewControl(pool), Storage: store,
 		Execution: exec, Images: im, Notifications: notifications.NewNotifications(pool, nil, logger),
 		Secrets: vault, Schedules: schedules.NewSchedules(pool, exec), Listener: listener, Edge: edges,
+		Observability: obs, Changes: changes,
 	}
 	handler, err := api.NewHandler(owners, cfg.api, logger)
 	if err != nil {
@@ -209,12 +229,12 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, logger 
 	}
 	hosts := hostsession.NewServer(compute.NewCompute(pool), exec, store, im, listener, hostsession.Config{
 		ImageTemplate: cfg.imageTemplate, TouchInterval: 10 * time.Second,
-		Secrets: vault, ContainerAPI: containerAPI,
+		Secrets: vault, ContainerAPI: containerAPI, Observability: obs,
 	}, logger)
-	grpcServer := grpc.NewServer(hosts.ServerOptions()...)
+	grpcServer := grpc.NewServer(append(hosts.ServerOptions(), tel.GRPCServerOption())...)
 	hostproto.RegisterHostServiceServer(grpcServer, hosts)
 	hostproto.RegisterHostDataServer(grpcServer, edges.DataServer(hostsession.HostFrom))
-	httpServer := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+	httpServer := &http.Server{Handler: tel.HTTPHandler(handler, tel.NewHTTPMetrics()), ReadHeaderTimeout: 10 * time.Second}
 	edgeServer := &http.Server{Handler: edges, ReadHeaderTimeout: 10 * time.Second}
 
 	var lc net.ListenConfig
@@ -238,6 +258,10 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, logger 
 
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error { return listener.Run(gctx) })
+	g.Go(func() error { return changes.Run(gctx) })
+	g.Go(func() error { return obs.RunIngest(gctx) })
+	g.Go(func() error { return obs.RunStartedPublisher(gctx) })
+	g.Go(func() error { return tel.ServeMetrics(gctx, logger) })
 	g.Go(func() error { return ident.RunTokenUse(gctx, logger) })
 	g.Go(func() error { return edges.Run(gctx) })
 	g.Go(func() error {

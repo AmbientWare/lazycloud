@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
@@ -92,10 +91,7 @@ func newBucketProvider(cfg Config, client *s3.Client) bucketProvider {
 	case ProviderAWS:
 		return &awsBuckets{
 			s3: client, region: cfg.Region, roleARN: cfg.Workspaces.RoleARN,
-			sts: sts.New(sts.Options{
-				Region:      cfg.Region,
-				Credentials: credentials.NewStaticCredentialsProvider(cfg.AccessKeyID, cfg.SecretAccessKey, ""),
-			}),
+			sts: sts.New(sts.Options{Region: cfg.Region, Credentials: credentialProvider(cfg)}),
 		}
 	}
 	return nil

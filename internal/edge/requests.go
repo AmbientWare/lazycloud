@@ -216,7 +216,7 @@ func (e *Edge) ListRequests(ctx context.Context, workspace identity.WorkspaceID,
 	}
 	out := make([]apitypes.HttpRequest, len(rows))
 	for n, row := range rows {
-		out[n] = requestOut(ListRequestsRow(row))
+		out[n] = requestOut(row)
 	}
 	return out, next, nil
 }
