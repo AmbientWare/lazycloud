@@ -383,7 +383,8 @@ select d.id, d.generation
 from disks d
 join containers c on c.id = d.holder_container_id
 where d.id = $1 and d.holder_container_id = $2 and d.lease_token = $3
-  and d.state = 'active' and c.state <> 'stopped' and c.host_id = $4
+  and d.state = 'active' and c.host_id = $4
+  and (c.state <> 'stopped' or (d.released_at is null and c.stop_reason is distinct from 'host_lost'))
 for update of d
 `
 
@@ -399,7 +400,9 @@ type LockLeasedDiskRow struct {
 	Generation int64
 }
 
-// The disk only while container holds it with token and has not stopped.
+// The disk only while container holds it with token: it has not stopped,
+// or it stopped on a live host and has not released the disk yet, which is
+// when its host publishes the final generation.
 func (q *Queries) LockLeasedDisk(ctx context.Context, arg LockLeasedDiskParams) (LockLeasedDiskRow, error) {
 	row := q.db.QueryRow(ctx, lockLeasedDisk,
 		arg.ID,

@@ -19,6 +19,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
+	"github.com/AmbientWare/lazycloud/internal/diskengine"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 )
 
@@ -87,6 +88,9 @@ type Agent struct {
 	volumes  *volumes
 	// diskQuota is whether Docker enforces writable layer limits here.
 	diskQuota bool
+	// diskEngine attaches durable disks; diskErr says why it cannot here.
+	diskEngine *diskengine.Engine
+	diskErr    error
 	// host carries claims, completions and logs on a connection separate from
 	// the session, so large payloads never delay commands.
 	host    hostproto.HostServiceClient
@@ -167,6 +171,10 @@ func Run(ctx context.Context, cfg Config) error {
 		containers: make(map[string]*container),
 	}
 	a.volumes = newVolumes(a)
+	a.diskEngine = diskengine.New(filepath.Join(cfg.StateDir, "disks", "engine"), a.log.With("component", "disk"))
+	if a.diskErr = a.diskEngine.Check(); a.diskErr != nil {
+		a.log.Info("durable disks are unavailable on this host", "reason", a.diskErr)
+	}
 	if a.diskQuota, err = detectDiskQuota(ctx, docker); err != nil {
 		return err
 	}
@@ -177,6 +185,7 @@ func Run(ctx context.Context, cfg Config) error {
 	if err := a.adopt(ctx); err != nil {
 		return err
 	}
+	a.recoverDisks(ctx)
 	a.log.Info("agent started", "containers", len(a.containers), "cpu_millis", capacity.GetCpuMillis(), "memory_bytes", capacity.GetMemoryBytes())
 	a.goOwned(a.pruneExited)
 	a.sessions(ctx)

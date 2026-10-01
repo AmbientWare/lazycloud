@@ -45,6 +45,7 @@ type container struct {
 	handler string
 	slots   int
 	logs    *logBatcher
+	disks   diskSet
 
 	// work covers preparation, claims and log delivery; claims stop earlier
 	// when the container begins stopping.
@@ -204,6 +205,16 @@ func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer)
 	if err != nil {
 		return err
 	}
+	diskBinds, diskWorkspaces, err := c.attachDisks(ctx, spec.GetDisks())
+	if err != nil {
+		return err
+	}
+	binds = append(binds, diskBinds...)
+	for _, ws := range diskWorkspaces {
+		if !slices.Contains(workspaces, ws) {
+			workspaces = append(workspaces, ws)
+		}
+	}
 	if err := c.a.createAndStart(ctx, c, spec, runtime, binds, workspaces); err != nil {
 		return err
 	}
@@ -324,7 +335,12 @@ func (c *container) cleanup(ctx context.Context) {
 	if err := c.a.removeContainer(ctx, c.dockerName()); err != nil {
 		c.log.Warn("removing docker container failed", "error", err)
 	}
-	for _, dir := range []string{c.dir, c.linkDir()} {
+	dirs := []string{c.dir, c.linkDir()}
+	if !c.releaseDisks(ctx) {
+		// The lease file stays for the next attempt; the disk stays held.
+		dirs = dirs[1:]
+	}
+	for _, dir := range dirs {
 		if err := os.RemoveAll(dir); err != nil {
 			c.log.Warn("removing container directory failed", "dir", dir, "error", err)
 		}

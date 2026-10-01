@@ -82,16 +82,20 @@ func TestDiskLeaseFencesHolders(t *testing.T) {
 	if _, err := s.AcquireDisk(ctx, f.host, second, "root"); !errors.As(err, &out) {
 		t.Fatalf("acquire while saving: %v", err)
 	}
-	// A stopped container publishes no more, but may release.
-	if err := s.RecordDiskGeneration(ctx, f.host, first, lease.Disk, lease.Token, generation(lease.Disk, 3, 2)); !errors.Is(err, ErrStaleLease) {
-		t.Fatalf("publish after stop: %v", err)
+	// A stopped holder publishes its final generation, then releases; after
+	// that it publishes no more.
+	if err := s.RecordDiskGeneration(ctx, f.host, first, lease.Disk, lease.Token, generation(lease.Disk, 3, 2)); err != nil {
+		t.Fatalf("final publish after stop: %v", err)
 	}
 	if err := s.ReleaseDisk(ctx, first, lease.Disk, lease.Token); err != nil {
 		t.Fatal(err)
 	}
+	if err := s.RecordDiskGeneration(ctx, f.host, first, lease.Disk, lease.Token, generation(lease.Disk, 4, 3)); !errors.Is(err, ErrStaleLease) {
+		t.Fatalf("publish after release: %v", err)
+	}
 
 	next, err := s.AcquireDisk(ctx, f.host, second, "root")
-	if err != nil || string(next.Token) == string(lease.Token) || len(next.Chain) != 2 || next.Chain[1].Generation != 2 {
+	if err != nil || string(next.Token) == string(lease.Token) || len(next.Chain) != 3 || next.Chain[2].Generation != 3 {
 		t.Fatalf("lease after release: %+v err=%v", next, err)
 	}
 	if err := s.ReleaseDisk(ctx, first, lease.Disk, lease.Token); !errors.Is(err, ErrStaleLease) {
@@ -99,12 +103,12 @@ func TestDiskLeaseFencesHolders(t *testing.T) {
 	}
 
 	// A flat generation starts a new chain.
-	flat := generation(next.Disk, 3, 0)
+	flat := generation(next.Disk, 4, 0)
 	flat.Flat = true
 	if err := s.RecordDiskGeneration(ctx, f.host, second, next.Disk, next.Token, flat); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.RecordDiskCollection(ctx, f.host, second, next.Disk, next.Token, 150, 3); err != nil {
+	if err := s.RecordDiskCollection(ctx, f.host, second, next.Disk, next.Token, 150, 4); err != nil {
 		t.Fatal(err)
 	}
 
@@ -112,7 +116,7 @@ func TestDiskLeaseFencesHolders(t *testing.T) {
 	f.stop(second, "host_lost")
 	third := f.container()
 	last, err := s.AcquireDisk(ctx, f.host, third, "root")
-	if err != nil || len(last.Chain) != 1 || last.Chain[0].Generation != 3 {
+	if err != nil || len(last.Chain) != 1 || last.Chain[0].Generation != 4 {
 		t.Fatalf("lease after host loss: %+v err=%v", last, err)
 	}
 	f.stop(third, "host_lost")

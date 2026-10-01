@@ -41,12 +41,15 @@ where g.disk_id = @disk_id
 order by g.generation;
 
 -- name: LockLeasedDisk :one
--- The disk only while container holds it with token and has not stopped.
+-- The disk only while container holds it with token: it has not stopped,
+-- or it stopped on a live host and has not released the disk yet, which is
+-- when its host publishes the final generation.
 select d.id, d.generation
 from disks d
 join containers c on c.id = d.holder_container_id
 where d.id = @id and d.holder_container_id = @container_id and d.lease_token = @lease_token
-  and d.state = 'active' and c.state <> 'stopped' and c.host_id = @host_id
+  and d.state = 'active' and c.host_id = @host_id
+  and (c.state <> 'stopped' or (d.released_at is null and c.stop_reason is distinct from 'host_lost'))
 for update of d;
 
 -- name: DiskGeneration :one
