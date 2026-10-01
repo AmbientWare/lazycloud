@@ -120,6 +120,15 @@ func TestBrowserSessionAndDeviceLogin(t *testing.T) {
 		t.Fatalf("me: %d %+v", resp.StatusCode, me)
 	}
 
+	// A signed-in browser that follows a sign-in link goes straight back.
+	if resp := b.do("GET", "/auth/github/start?return_to=/w/dana/apps", nil, nil); resp.StatusCode != http.StatusSeeOther ||
+		resp.Header.Get("Location") != "/w/dana/apps" {
+		t.Fatalf("signed-in start: %d %s", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	if resp := b.do("GET", "/auth/github/start?return_to=//evil.test", nil, nil); resp.Header.Get("Location") != "/signin?error=invalid_return_to" {
+		t.Fatalf("signed-in start to another host: %s", resp.Header.Get("Location"))
+	}
+
 	// The CLI side needs no credential.
 	cli := e.browser()
 	var start apitypes.DeviceLogin
