@@ -266,6 +266,10 @@ func accepting(fn LockFunctionForSubmitRow, explicit bool) bool {
 	if explicit && fn.Version == nil {
 		return true
 	}
+	// A preview, which `lazycloud serve` runs, admits while it runs.
+	if explicit && *fn.Version < 0 {
+		return fn.PreviewLive
+	}
 	return fn.DesiredState == "active"
 }
 
