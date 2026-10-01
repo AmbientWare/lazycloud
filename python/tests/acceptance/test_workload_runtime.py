@@ -162,9 +162,8 @@ def _deploy(
 
 
 def _logs(client: ApiClient, task_id: str) -> list[str]:
-    """The task's output as lines."""
-    text = "".join(e.data for e in client.stream_task_logs(WORKSPACE, uuid.UUID(task_id)))
-    return text.splitlines()
+    """The task's output lines; each log entry is one line without its newline."""
+    return [e.data for e in client.stream_task_logs(WORKSPACE, uuid.UUID(task_id))]
 
 
 def _verify(key: str, headers: dict[str, str], body: bytes) -> bool:

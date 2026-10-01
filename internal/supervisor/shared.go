@@ -185,7 +185,7 @@ func (sp *sharedProcess) read(ctx context.Context, s *Supervisor) {
 		for _, stream := range []hostproto.LogStream{hostproto.LogStream_LOG_STREAM_STDOUT, hostproto.LogStream_LOG_STREAM_STDERR} {
 			key := heldKey{attempt, stream}
 			if text := held[key]; text != "" {
-				s.out.push(outputMessage(attempt, stream, text))
+				s.pushOutputLines(attempt, "", stream, text)
 			}
 			delete(held, key)
 		}
@@ -212,7 +212,7 @@ func (sp *sharedProcess) read(ctx context.Context, s *Supervisor) {
 			text := s.redact.stream(&pending, strings.ToValidUTF8(string(frame.Payload), "\uFFFD"), false)
 			held[key] = pending
 			if text != "" {
-				s.out.push(outputMessage(out.AttemptId, stream, text))
+				s.pushOutputLines(out.AttemptId, "", stream, text)
 			}
 			if s.out.waitOutputSpace(ctx) != nil {
 				return

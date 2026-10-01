@@ -108,26 +108,26 @@ func (sl *slot) readHTTPOutput(ctx context.Context, p *runnerProcess) {
 		} else {
 			held[key] = pending
 		}
-		sl.sup.pushRequestOutput(key.request, stream, text)
+		sl.sup.pushOutputLines("", key.request, stream, text)
 		if sl.sup.out.waitOutputSpace(ctx) != nil {
 			return
 		}
 	}
 	for key, text := range held {
-		sl.sup.pushRequestOutput(key.request, key.stream, text)
+		sl.sup.pushOutputLines("", key.request, key.stream, text)
 	}
 }
 
-// pushRequestOutput queues text a request's handler wrote, a line per
-// message without its newline.
-func (s *Supervisor) pushRequestOutput(request string, stream hostproto.LogStream, text string) {
-	text = strings.TrimSuffix(text, "\n")
+// pushOutputLines queues output a runner framed for an attempt or a request,
+// a line per message without its newline, as a slot's own pipes are. A
+// runner frames whole lines, or the start of one when it flushes.
+func (s *Supervisor) pushOutputLines(attempt, request string, stream hostproto.LogStream, text string) {
 	if text == "" {
 		return
 	}
-	for line := range strings.SplitSeq(text, "\n") {
+	for line := range strings.SplitSeq(strings.TrimSuffix(text, "\n"), "\n") {
 		s.out.push(&hostproto.SupervisorMessage{Body: &hostproto.SupervisorMessage_Output{Output: &hostproto.OutputChunk{
-			RequestId: request, Stream: stream, Data: line, Time: timestamppb.Now(),
+			AttemptId: attempt, RequestId: request, Stream: stream, Data: line, Time: timestamppb.Now(),
 		}}})
 	}
 }
