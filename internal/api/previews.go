@@ -66,6 +66,9 @@ func (s *Server) CreatePreview(ctx context.Context, req CreatePreviewRequestObje
 	if req.Body.TimeoutSeconds != nil {
 		timeout = *req.Body.TimeoutSeconds
 	}
+	if err := s.pinImage(ctx, ws.ID, &req.Body.Spec); err != nil {
+		return nil, err
+	}
 	p, err := s.owners.Control.CreatePreview(ctx, ws.ID, user, req.App, req.Body.Spec, timeout)
 	if err != nil {
 		return nil, err
