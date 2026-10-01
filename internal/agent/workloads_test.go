@@ -543,7 +543,7 @@ func TestAdoptedPodKeepsItsConfiguration(t *testing.T) {
 
 	e.startAgent()
 	session = e.session()
-	session.phase(t, id, hostproto.ContainerPhase_CONTAINER_PHASE_READY)
+	session.adoptedReady(t, id)
 	if listing := e.server.data.forward(t, portHead(id, 8000, "/"), ""); listing.status != http.StatusOK || !strings.Contains(listing.body, "app.py") {
 		t.Fatalf("port 8000 after adoption: %+v", listing)
 	}
@@ -594,7 +594,7 @@ while True:
 	first.stop()
 	e.startAgent()
 	session = e.session()
-	session.phase(t, id, hostproto.ContainerPhase_CONTAINER_PHASE_READY)
+	session.adoptedReady(t, id)
 	session.send(t, &hostproto.ServerMessage{CommandId: uuid.NewString(), Body: &hostproto.ServerMessage_Network{Network: &hostproto.UpdateNetwork{
 		ContainerId: id, Policy: &hostproto.NetworkPolicy{Allow: []string{target + "/32"}}, Version: 1,
 	}}})
