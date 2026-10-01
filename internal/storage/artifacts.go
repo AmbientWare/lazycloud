@@ -218,7 +218,8 @@ func (s *Storage) ListArtifacts(ctx context.Context, workspace identity.Workspac
 	return page, nil
 }
 
-// ArtifactSummary counts the workspace's stored artifacts.
+// ArtifactSummary counts the workspace's stored artifacts and what they
+// cost.
 func (s *Storage) ArtifactSummary(ctx context.Context, workspace identity.WorkspaceID) (apitypes.ArtifactSummary, error) {
 	row, err := s.queries.ArtifactSummary(ctx, uuid.UUID(workspace))
 	if err != nil {
@@ -228,8 +229,13 @@ func (s *Storage) ArtifactSummary(ctx context.Context, workspace identity.Worksp
 	if err != nil {
 		return apitypes.ArtifactSummary{}, err
 	}
+	charges, err := billing.ArtifactCost(ctx, s.pool, uuid.UUID(workspace), row.SizeBytes, time.Now())
+	if err != nil {
+		return apitypes.ArtifactSummary{}, err
+	}
 	return apitypes.ArtifactSummary{
 		Count: row.Count, SizeBytes: row.SizeBytes, RetentionSeconds: int64(retention.Seconds()),
+		EstimatedMonthlyNanos: charges.MonthlyNanos, AccruedNanos: charges.AccruedNanos, AccruedSince: charges.Since,
 	}, nil
 }
 

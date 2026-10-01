@@ -80,6 +80,9 @@ class TokenStatus(str, Enum):
 class Token(BaseModel):
     id: UUID
     name: str
+    prefix: Annotated[
+        str, Field(description="The token's first characters; empty for older tokens.")
+    ]
     device: Annotated[bool, Field(description="Minted by `lazycloud login`.")]
     workspace_id: Annotated[
         UUID | None, Field(description="Set when the token reaches only this workspace.")
@@ -732,6 +735,15 @@ class PresignArtifactRequest(BaseModel):
 class ArtifactSummary(BaseModel):
     count: int
     size_bytes: int
+    estimated_monthly_nanos: Annotated[
+        int, Field(description="size_bytes for 30 days at the volume storage rate.")
+    ]
+    accrued_nanos: Annotated[
+        int, Field(description="Metered cost since accrued_since, by closed quarter-hour.")
+    ]
+    accrued_since: Annotated[
+        AwareDatetime, Field(description="The start of the current UTC month.")
+    ]
     retention_seconds: Annotated[
         int, Field(description="How long new artifacts are kept under the workspace's plan.")
     ]
@@ -969,6 +981,7 @@ class Container(BaseModel):
     running_tasks: Annotated[int, Field(description="Attempts running now.")]
     cpu_millis: int
     memory_mib: int
+    image: Annotated[str | None, Field(description="The image reference the release runs.")] = None
     created_at: AwareDatetime
     ready_at: AwareDatetime | None = None
     stopped_at: AwareDatetime | None = None
@@ -2837,6 +2850,10 @@ class Release(BaseModel):
         str | None,
         Field(description="Where an HTTP workload answers, following the active release."),
     ] = None
+    invoke_path: Annotated[
+        str | None,
+        Field(description="The HTTP workload on the API host, following the active release."),
+    ] = None
 
 
 class Function(BaseModel):
@@ -2899,6 +2916,12 @@ class HttpWorkload(BaseModel):
     url: Annotated[str, Field(description="Follows the active release across deploys.")]
     version_url: Annotated[str, Field(description="Pinned to the release's version.")]
     release_url: Annotated[str, Field(description="Addresses the release by id.")]
+    invoke_path: Annotated[
+        str, Field(description="The workload on the API host; append the request's path.")
+    ]
+    version_invoke_path: Annotated[
+        str, Field(description="The API-host path pinned to the release's version.")
+    ]
     domain_url: Annotated[
         str | None, Field(description="The custom hostname, once its registration is ready.")
     ] = None

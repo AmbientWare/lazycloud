@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/url"
+	"strconv"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -80,4 +83,41 @@ func (e *Edge) Describe(ctx context.Context, workspace identity.WorkspaceID, app
 		out.DomainUrl = &domain
 	}
 	return out, nil
+}
+
+// InvokePath is where the API host serves a deployed endpoint or ASGI app,
+// following its active release or pinned to version; the request's own path
+// follows it.
+func InvokePath(workspace, app string, kind apitypes.WorkloadKind, name string, version *int) string {
+	collection := "endpoints"
+	if kind == apitypes.WorkloadKindAsgi {
+		collection = "asgi"
+	}
+	p := "/v1/workspaces/" + url.PathEscape(workspace) + "/apps/" + url.PathEscape(app) + "/" + collection + "/" + url.PathEscape(name)
+	if version != nil {
+		p += "/versions/" + strconv.Itoa(*version)
+	}
+	return p + "/invoke"
+}
+
+// ServeWorkload serves a request the API host received for a deployed
+// endpoint or ASGI app of workspace, whose caller it authenticated for the
+// workspace and whose credentials it removed. subpath is the request's path
+// under the workload. The request is admitted, recorded and forwarded as
+// the workload's own host would.
+func (e *Edge) ServeWorkload(w http.ResponseWriter, r *http.Request, workspace identity.WorkspaceID, app string, kind apitypes.WorkloadKind, name string, version *int, subpath string) {
+	label := control.Subdomain(uuid.UUID(workspace), app, name, kind)
+	if version != nil {
+		label += "-v" + strconv.Itoa(*version)
+	}
+	t, err := e.resolveLabel(r.Context(), label, true)
+	if err == nil && (t.workload.workspace != workspace || t.workload.kind != kind) {
+		err = errNoRoute
+	}
+	if err != nil {
+		e.fail(w, r, err)
+		return
+	}
+	r.URL.Path, r.URL.RawPath = "/"+subpath, ""
+	e.serveTarget(w, r, t, true)
 }

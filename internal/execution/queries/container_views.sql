@@ -3,12 +3,14 @@
 select c.id, a.name as app_name, w.name as function_name, r.id as release_id, r.version, c.state,
        c.stop_reason, c.exit_message, c.slots, c.cpu_millis, c.memory_bytes,
        c.created_at, c.ready_at, c.stopped_at,
-       (select count(*) from attempts at where at.container_id = c.id and at.state = 'running')::int as running
+       (select count(*) from attempts at where at.container_id = c.id and at.state = 'running')::int as running,
+       coalesce(r.spec #>> '{image,reference}', '')::text as image
 from containers c
 join releases r on r.id = c.release_id
 join workloads w on w.id = r.workload_id
 join apps a on a.id = w.app_id
 where c.workspace_id = @workspace_id
+  and (sqlc.narg(app)::text is null or a.name = sqlc.narg(app)::text)
   and c.id < @before
 order by c.id desc
 limit @max_rows;
@@ -19,13 +21,15 @@ limit @max_rows;
 select c.id, a.name as app_name, w.name as function_name, r.id as release_id, r.version, c.state,
        c.stop_reason, c.exit_message, c.slots, c.cpu_millis, c.memory_bytes,
        c.created_at, c.ready_at, c.stopped_at,
-       (select count(*) from attempts at where at.container_id = c.id and at.state = 'running')::int as running
+       (select count(*) from attempts at where at.container_id = c.id and at.state = 'running')::int as running,
+       coalesce(r.spec #>> '{image,reference}', '')::text as image
 from containers c
 join releases r on r.id = c.release_id
 join workloads w on w.id = r.workload_id
 join apps a on a.id = w.app_id
 where c.workspace_id = @workspace_id
   and c.state <> 'stopped'
+  and (sqlc.narg(app)::text is null or a.name = sqlc.narg(app)::text)
   and c.id < @before
 order by c.id desc
 limit @max_rows;
@@ -34,7 +38,8 @@ limit @max_rows;
 select c.id, a.name as app_name, w.name as function_name, r.id as release_id, r.version, c.state,
        c.stop_reason, c.exit_message, c.slots, c.cpu_millis, c.memory_bytes,
        c.created_at, c.ready_at, c.stopped_at,
-       (select count(*) from attempts at where at.container_id = c.id and at.state = 'running')::int as running
+       (select count(*) from attempts at where at.container_id = c.id and at.state = 'running')::int as running,
+       coalesce(r.spec #>> '{image,reference}', '')::text as image
 from containers c
 join releases r on r.id = c.release_id
 join workloads w on w.id = r.workload_id

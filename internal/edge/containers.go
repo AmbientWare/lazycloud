@@ -252,7 +252,7 @@ func (e *Edge) acquire(ctx context.Context, t target, deadline time.Time) (*leas
 			e.kick(t.release.id)
 		}
 		if check {
-			if err := e.checkFailure(ctx, t.release.id); err != nil {
+			if err := e.checkFailure(ctx, t); err != nil {
 				return nil, err
 			}
 		}
@@ -368,7 +368,13 @@ func (l *lease) refused(reload bool) {
 
 // checkFailure returns a releaseFailedError when the release's containers
 // cannot start.
-func (e *Edge) checkFailure(ctx context.Context, release uuid.UUID) error {
+func (e *Edge) checkFailure(ctx context.Context, t target) error {
+	// Billing refusing the account means planning starts nothing; the
+	// request is answered now.
+	if err := e.execution.AdmitCold(ctx, uuid.UUID(t.workload.workspace), t.release.spec); err != nil {
+		return err //nolint:wrapcheck // the typed refusal reaches fail
+	}
+	release := t.release.id
 	failures, err := e.execution.ReleaseFailures(ctx, []uuid.UUID{release})
 	if err != nil {
 		return err

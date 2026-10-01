@@ -1,6 +1,6 @@
 -- name: ListUserTokens :many
 -- Newest first; ids are UUIDv7, so id order is creation order.
-select id, name, workspace_id, device, created_at, expires_at, last_used_at
+select id, name, workspace_id, prefix, device, created_at, expires_at, last_used_at
 from api_tokens
 where user_id = @user_id
   and revoked_at is null
