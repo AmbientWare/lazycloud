@@ -11,7 +11,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
 )
 
-func exec(t *testing.T, pool *pgxpool.Pool, sql string, args ...any) {
+func exec(t testing.TB, pool *pgxpool.Pool, sql string, args ...any) {
 	t.Helper()
 	if _, err := pool.Exec(t.Context(), sql, args...); err != nil {
 		t.Fatalf("%s: %v", sql, err)

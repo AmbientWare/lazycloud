@@ -102,8 +102,12 @@ func (c *Compute) PlanCapacity(ctx context.Context, logger *slog.Logger) (Capaci
 				short = append(short, n)
 			}
 		}
-		for _, n := range short {
-			wait := plan.buy(demand[n].need)
+		needs := make([]Requirement, len(short))
+		for i, n := range short {
+			needs[i] = demand[n].need
+		}
+		for i, n := range short {
+			wait := plan.buy(needs[i], needs[i+1:])
 			waits[n] = string(wait)
 			if wait == WaitLimit {
 				result.Limited++
@@ -136,6 +140,29 @@ func (c *Compute) PlanCapacity(ctx context.Context, logger *slog.Logger) (Capaci
 		logger.InfoContext(ctx, "host requested", "host_id", id)
 	}
 	return result, nil
+}
+
+// cheapestPerContainer picks the offer whose price per container is lowest
+// when r and then as much of later as fits first-fit go onto one new host.
+// Offers come best first, so a tie keeps the earlier one.
+func cheapestPerContainer(offers []Offer, target Target, r Requirement, later []Requirement) Offer {
+	best, bestCost := offers[0], 0.0
+	for n, o := range offers {
+		host := o.capacity(target)
+		host.Reserve(r)
+		placed := 1
+		for _, other := range later {
+			if host.Fits(other) {
+				host.Reserve(other)
+				placed++
+			}
+		}
+		cost := float64(o.HourlyMicros) / float64(placed)
+		if n == 0 || cost < bestCost {
+			best, bestCost = o, cost
+		}
+	}
+	return best
 }
 
 func pendingDemandOf(ctx context.Context, q *Queries) ([]demandItem, error) {
@@ -217,10 +244,15 @@ func (c *Compute) planner(ctx context.Context, q *Queries) (*purchasePlan, error
 	return p, nil
 }
 
-// buy finds room for r on a host bought in this pass, or buys the cheapest
-// offer that takes it. It reports WaitLimit when the owner's fleet is full,
-// and no wait when no offer can take r.
-func (p *purchasePlan) buy(r Requirement) CapacityWait {
+// offerChoices bounds the offers buy compares when it opens a host.
+const offerChoices = 12
+
+// buy finds room for r on a host bought in this pass, or opens a host for
+// it: of the cheapest offers that take r, the one with the lowest price per
+// container once the remaining shortfall is packed onto it. It reports
+// WaitLimit when the owner's fleet is full, and no wait when no offer can
+// take r.
+func (p *purchasePlan) buy(r Requirement, later []Requirement) CapacityWait {
 	target := Target{Kind: KindPlatform}
 	if r.Connection != nil {
 		target = Target{Kind: KindConnection, Connection: r.Connection}
@@ -245,7 +277,7 @@ func (p *purchasePlan) buy(r Requirement) CapacityWait {
 	if p.live[owner] >= p.fleet.MaxHosts {
 		return WaitLimit
 	}
-	o := offers[0]
+	o := cheapestPerContainer(offers[:min(len(offers), offerChoices)], target, r, later)
 	host := o.capacity(target)
 	host.Reserve(r)
 	p.opened = append(p.opened, host)
