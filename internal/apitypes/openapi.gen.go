@@ -28,6 +28,90 @@ func (e AppState) Valid() bool {
 	}
 }
 
+// Defines values for DeliveryState.
+const (
+	DeliveryBounced    DeliveryState = "bounced"
+	DeliveryComplained DeliveryState = "complained"
+	DeliveryDelivered  DeliveryState = "delivered"
+	DeliveryDiscarded  DeliveryState = "discarded"
+	DeliveryFailed     DeliveryState = "failed"
+	DeliveryQueued     DeliveryState = "queued"
+	DeliverySent       DeliveryState = "sent"
+)
+
+// Valid indicates whether the value is a known member of the DeliveryState enum.
+func (e DeliveryState) Valid() bool {
+	switch e {
+	case DeliveryBounced:
+		return true
+	case DeliveryComplained:
+		return true
+	case DeliveryDelivered:
+		return true
+	case DeliveryDiscarded:
+		return true
+	case DeliveryFailed:
+		return true
+	case DeliveryQueued:
+		return true
+	case DeliverySent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DeviceCodeStatus.
+const (
+	DeviceCodeStatusApproved DeviceCodeStatus = "approved"
+	DeviceCodeStatusDenied   DeviceCodeStatus = "denied"
+	DeviceCodeStatusExpired  DeviceCodeStatus = "expired"
+	DeviceCodeStatusPending  DeviceCodeStatus = "pending"
+)
+
+// Valid indicates whether the value is a known member of the DeviceCodeStatus enum.
+func (e DeviceCodeStatus) Valid() bool {
+	switch e {
+	case DeviceCodeStatusApproved:
+		return true
+	case DeviceCodeStatusDenied:
+		return true
+	case DeviceCodeStatusExpired:
+		return true
+	case DeviceCodeStatusPending:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DeviceTokenStatus.
+const (
+	DeviceTokenStatusApproved DeviceTokenStatus = "approved"
+	DeviceTokenStatusDenied   DeviceTokenStatus = "denied"
+	DeviceTokenStatusExpired  DeviceTokenStatus = "expired"
+	DeviceTokenStatusPending  DeviceTokenStatus = "pending"
+	DeviceTokenStatusSlowDown DeviceTokenStatus = "slow_down"
+)
+
+// Valid indicates whether the value is a known member of the DeviceTokenStatus enum.
+func (e DeviceTokenStatus) Valid() bool {
+	switch e {
+	case DeviceTokenStatusApproved:
+		return true
+	case DeviceTokenStatusDenied:
+		return true
+	case DeviceTokenStatusExpired:
+		return true
+	case DeviceTokenStatusPending:
+		return true
+	case DeviceTokenStatusSlowDown:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ErrorCode.
 const (
 	Conflict            ErrorCode = "conflict"
@@ -145,6 +229,24 @@ func (e ImageSpecPythonVersion) Valid() bool {
 	}
 }
 
+// Defines values for InvitationRole.
+const (
+	InvitationRoleAdministrator InvitationRole = "administrator"
+	InvitationRoleMember        InvitationRole = "member"
+)
+
+// Valid indicates whether the value is a known member of the InvitationRole enum.
+func (e InvitationRole) Valid() bool {
+	switch e {
+	case InvitationRoleAdministrator:
+		return true
+	case InvitationRoleMember:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for LogEntryStream.
 const (
 	LogEntryStreamStderr LogEntryStream = "stderr"
@@ -229,6 +331,24 @@ func (e TaskStatus) Valid() bool {
 	}
 }
 
+// Defines values for TokenStatus.
+const (
+	TokenStatusActive  TokenStatus = "active"
+	TokenStatusExpired TokenStatus = "expired"
+)
+
+// Valid indicates whether the value is a known member of the TokenStatus enum.
+func (e TokenStatus) Valid() bool {
+	switch e {
+	case TokenStatusActive:
+		return true
+	case TokenStatusExpired:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for UploadTargetMethod.
 const (
 	PUT UploadTargetMethod = "PUT"
@@ -242,6 +362,51 @@ func (e UploadTargetMethod) Valid() bool {
 	default:
 		return false
 	}
+}
+
+// Defines values for WorkspaceRole.
+const (
+	WorkspaceRoleAdministrator WorkspaceRole = "administrator"
+	WorkspaceRoleMember        WorkspaceRole = "member"
+	WorkspaceRoleOwner         WorkspaceRole = "owner"
+)
+
+// Valid indicates whether the value is a known member of the WorkspaceRole enum.
+func (e WorkspaceRole) Valid() bool {
+	switch e {
+	case WorkspaceRoleAdministrator:
+		return true
+	case WorkspaceRoleMember:
+		return true
+	case WorkspaceRoleOwner:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for WorkspaceState.
+const (
+	WorkspaceStateActive   WorkspaceState = "active"
+	WorkspaceStateDeleting WorkspaceState = "deleting"
+)
+
+// Valid indicates whether the value is a known member of the WorkspaceState enum.
+func (e WorkspaceState) Valid() bool {
+	switch e {
+	case WorkspaceStateActive:
+		return true
+	case WorkspaceStateDeleting:
+		return true
+	default:
+		return false
+	}
+}
+
+// AcceptedInvitation defines model for AcceptedInvitation.
+type AcceptedInvitation struct {
+	Member    Member    `json:"member"`
+	Workspace Workspace `json:"workspace"`
 }
 
 // App defines model for App.
@@ -265,6 +430,17 @@ type Autoscaler struct {
 	TasksPerContainer *int `json:"tasks_per_container,omitempty"`
 }
 
+// CreatedToken defines model for CreatedToken.
+type CreatedToken struct {
+	Record Token `json:"record"`
+
+	// Token The secret; it is not shown again.
+	Token string `json:"token"`
+}
+
+// DeliveryState What became of an email: `queued` until the provider accepts it, then `sent`, and `delivered`, `bounced` or `complained` as the provider reports; `failed` when delivery gave up; `discarded` when it was withdrawn before sending.
+type DeliveryState string
+
 // Deployment defines model for Deployment.
 type Deployment struct {
 	App      App            `json:"app"`
@@ -279,6 +455,57 @@ type DeploymentRequest struct {
 	// Prune Stop every function of the app that is not listed.
 	Prune *bool `json:"prune,omitempty"`
 }
+
+// DeviceCode defines model for DeviceCode.
+type DeviceCode struct {
+	ClientName string           `json:"client_name"`
+	CreatedAt  time.Time        `json:"created_at"`
+	ExpiresAt  time.Time        `json:"expires_at"`
+	Status     DeviceCodeStatus `json:"status"`
+	UserCode   string           `json:"user_code"`
+}
+
+// DeviceCodeStatus defines model for DeviceCodeStatus.
+type DeviceCodeStatus string
+
+// DeviceLogin defines model for DeviceLogin.
+type DeviceLogin struct {
+	// DeviceCode The CLI's secret for polling.
+	DeviceCode          string `json:"device_code"`
+	ExpiresInSeconds    int    `json:"expires_in_seconds"`
+	PollIntervalSeconds int    `json:"poll_interval_seconds"`
+
+	// UserCode What the person confirms at the verification page.
+	UserCode        string `json:"user_code"`
+	VerificationUri string `json:"verification_uri"`
+
+	// VerificationUriComplete The verification page with the code filled in.
+	VerificationUriComplete string `json:"verification_uri_complete"`
+}
+
+// DeviceLoginRequest defines model for DeviceLoginRequest.
+type DeviceLoginRequest struct {
+	// ClientName Names the device token, such as cli@laptop.
+	ClientName *string `json:"client_name,omitempty"`
+}
+
+// DeviceTokenRequest defines model for DeviceTokenRequest.
+type DeviceTokenRequest struct {
+	DeviceCode string `json:"device_code"`
+}
+
+// DeviceTokenResponse defines model for DeviceTokenResponse.
+type DeviceTokenResponse struct {
+	// PollIntervalSeconds Wait at least this long before the next poll.
+	PollIntervalSeconds int               `json:"poll_interval_seconds"`
+	Status              DeviceTokenStatus `json:"status"`
+
+	// Token The device token, on the poll that finds the login approved.
+	Token *string `json:"token,omitempty"`
+}
+
+// DeviceTokenStatus defines model for DeviceTokenStatus.
+type DeviceTokenStatus string
 
 // Error defines model for Error.
 type Error struct {
@@ -335,6 +562,54 @@ type ImageSpec struct {
 // ImageSpecPythonVersion defines model for ImageSpec.PythonVersion.
 type ImageSpecPythonVersion string
 
+// Invitation defines model for Invitation.
+type Invitation struct {
+	CreatedAt time.Time `json:"created_at"`
+
+	// Delivery What became of an email: `queued` until the provider accepts it, then `sent`, and `delivered`, `bounced` or `complained` as the provider reports; `failed` when delivery gave up; `discarded` when it was withdrawn before sending.
+	Delivery DeliveryState `json:"delivery"`
+	Email    string        `json:"email"`
+
+	// Expired Decided by the server's clock.
+	Expired         bool                `json:"expired"`
+	ExpiresAt       time.Time           `json:"expires_at"`
+	Id              openapi_types.UUID  `json:"id"`
+	InvitedByName   string              `json:"invited_by_name"`
+	InvitedByUserId *openapi_types.UUID `json:"invited_by_user_id,omitempty"`
+
+	// Role The roles an invitation or role change grants; ownership is never offered.
+	Role        InvitationRole     `json:"role"`
+	UpdatedAt   time.Time          `json:"updated_at"`
+	WorkspaceId openapi_types.UUID `json:"workspace_id"`
+}
+
+// InvitationList defines model for InvitationList.
+type InvitationList struct {
+	Invitations []Invitation `json:"invitations"`
+}
+
+// InvitationPreview defines model for InvitationPreview.
+type InvitationPreview struct {
+	Email         string    `json:"email"`
+	Expired       bool      `json:"expired"`
+	ExpiresAt     time.Time `json:"expires_at"`
+	InvitedByName string    `json:"invited_by_name"`
+
+	// Role The roles an invitation or role change grants; ownership is never offered.
+	Role          InvitationRole     `json:"role"`
+	WorkspaceId   openapi_types.UUID `json:"workspace_id"`
+	WorkspaceName Name               `json:"workspace_name"`
+}
+
+// InvitationRequest defines model for InvitationRequest.
+type InvitationRequest struct {
+	Email string          `json:"email"`
+	Role  *InvitationRole `json:"role,omitempty"`
+}
+
+// InvitationRole The roles an invitation or role change grants; ownership is never offered.
+type InvitationRole string
+
 // LogEntry defines model for LogEntry.
 type LogEntry struct {
 	Attempt int `json:"attempt"`
@@ -353,6 +628,27 @@ type LogEntryStream string
 type Me struct {
 	User       User        `json:"user"`
 	Workspaces []Workspace `json:"workspaces"`
+}
+
+// Member defines model for Member.
+type Member struct {
+	// CreatedAt When the user joined.
+	CreatedAt   time.Time          `json:"created_at"`
+	DisplayName string             `json:"display_name"`
+	Email       string             `json:"email"`
+	Role        WorkspaceRole      `json:"role"`
+	UserId      openapi_types.UUID `json:"user_id"`
+}
+
+// MemberList defines model for MemberList.
+type MemberList struct {
+	Members []Member `json:"members"`
+}
+
+// MemberRoleRequest defines model for MemberRoleRequest.
+type MemberRoleRequest struct {
+	// Role The roles an invitation or role change grants; ownership is never offered.
+	Role InvitationRole `json:"role"`
 }
 
 // Name defines model for Name.
@@ -467,6 +763,43 @@ type TaskFailure struct {
 // TaskStatus defines model for TaskStatus.
 type TaskStatus string
 
+// Token defines model for Token.
+type Token struct {
+	CreatedAt time.Time `json:"created_at"`
+
+	// Device Minted by `lazycloud login`.
+	Device bool `json:"device"`
+
+	// ExpiresAt Absent when the token never expires.
+	ExpiresAt *time.Time         `json:"expires_at,omitempty"`
+	Id        openapi_types.UUID `json:"id"`
+
+	// LastUsedAt Recorded within 30 seconds of use; absent if never used.
+	LastUsedAt *time.Time  `json:"last_used_at,omitempty"`
+	Name       string      `json:"name"`
+	Status     TokenStatus `json:"status"`
+
+	// WorkspaceId Set when the token reaches only this workspace.
+	WorkspaceId *openapi_types.UUID `json:"workspace_id,omitempty"`
+}
+
+// TokenCreateRequest defines model for TokenCreateRequest.
+type TokenCreateRequest struct {
+	// ExpiresInSeconds One to 90 days; omit for a token that never expires.
+	ExpiresInSeconds *int   `json:"expires_in_seconds,omitempty"`
+	Name             string `json:"name"`
+}
+
+// TokenList defines model for TokenList.
+type TokenList struct {
+	// NextCursor Pass as `cursor` for the next page; absent after the last.
+	NextCursor *openapi_types.UUID `json:"next_cursor,omitempty"`
+	Tokens     []Token             `json:"tokens"`
+}
+
+// TokenStatus defines model for TokenStatus.
+type TokenStatus string
+
 // UploadTarget Send the archive bytes with this request, then register the digest again.
 type UploadTarget struct {
 	ExpiresAt time.Time          `json:"expires_at"`
@@ -482,8 +815,19 @@ type UploadTargetMethod string
 
 // User defines model for User.
 type User struct {
-	Email string             `json:"email"`
-	Id    openapi_types.UUID `json:"id"`
+	AvatarUrl   string    `json:"avatar_url"`
+	CreatedAt   time.Time `json:"created_at"`
+	DisplayName string    `json:"display_name"`
+
+	// Email Empty when GitHub reported no verified primary address.
+	Email string `json:"email"`
+
+	// GithubLogin Empty for accounts that have not signed in with GitHub.
+	GithubLogin string             `json:"github_login"`
+	Id          openapi_types.UUID `json:"id"`
+
+	// IsAdmin Platform administrators reach every workspace.
+	IsAdmin bool `json:"is_admin"`
 }
 
 // WorkloadName defines model for WorkloadName.
@@ -491,9 +835,32 @@ type WorkloadName = string
 
 // Workspace defines model for Workspace.
 type Workspace struct {
-	Id   openapi_types.UUID `json:"id"`
-	Name Name               `json:"name"`
+	CreatedAt time.Time          `json:"created_at"`
+	Id        openapi_types.UUID `json:"id"`
+	Name      Name               `json:"name"`
+
+	// Role The caller's role; absent for an administrator who is not a member.
+	Role  *WorkspaceRole `json:"role,omitempty"`
+	State WorkspaceState `json:"state"`
 }
+
+// WorkspaceList defines model for WorkspaceList.
+type WorkspaceList struct {
+	// NextCursor Pass as `cursor` for the next page; absent after the last.
+	NextCursor *Name       `json:"next_cursor,omitempty"`
+	Workspaces []Workspace `json:"workspaces"`
+}
+
+// WorkspaceRequest defines model for WorkspaceRequest.
+type WorkspaceRequest struct {
+	Name Name `json:"name"`
+}
+
+// WorkspaceRole defines model for WorkspaceRole.
+type WorkspaceRole string
+
+// WorkspaceState defines model for WorkspaceState.
+type WorkspaceState string
 
 // AppPath defines model for AppPath.
 type AppPath = AppName
@@ -501,11 +868,41 @@ type AppPath = AppName
 // FunctionPath defines model for FunctionPath.
 type FunctionPath = WorkloadName
 
+// InvitationPath defines model for InvitationPath.
+type InvitationPath = openapi_types.UUID
+
+// InvitationTokenPath defines model for InvitationTokenPath.
+type InvitationTokenPath = string
+
+// Limit defines model for Limit.
+type Limit = int
+
 // TaskPath defines model for TaskPath.
 type TaskPath = openapi_types.UUID
 
+// UserCodePath defines model for UserCodePath.
+type UserCodePath = string
+
 // WorkspacePath defines model for WorkspacePath.
 type WorkspacePath = Name
+
+// ListTokensParams defines parameters for ListTokens.
+type ListTokensParams struct {
+	// IncludeDevice Include tokens minted by `lazycloud login`.
+	IncludeDevice *bool  `form:"include_device,omitempty" json:"include_device,omitempty"`
+	Limit         *Limit `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Cursor The `next_cursor` of the previous page.
+	Cursor *openapi_types.UUID `form:"cursor,omitempty" json:"cursor,omitempty"`
+}
+
+// ListWorkspacesParams defines parameters for ListWorkspaces.
+type ListWorkspacesParams struct {
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Cursor The `next_cursor` of the previous page.
+	Cursor *Name `form:"cursor,omitempty" json:"cursor,omitempty"`
+}
 
 // GetTaskParams defines parameters for GetTask.
 type GetTaskParams struct {
@@ -522,11 +919,32 @@ type StreamTaskLogsParams struct {
 	Follow *bool `form:"follow,omitempty" json:"follow,omitempty"`
 }
 
+// StartDeviceLoginJSONRequestBody defines body for StartDeviceLogin for application/json ContentType.
+type StartDeviceLoginJSONRequestBody = DeviceLoginRequest
+
+// PollDeviceLoginJSONRequestBody defines body for PollDeviceLogin for application/json ContentType.
+type PollDeviceLoginJSONRequestBody = DeviceTokenRequest
+
+// CreateTokenJSONRequestBody defines body for CreateToken for application/json ContentType.
+type CreateTokenJSONRequestBody = TokenCreateRequest
+
+// CreateWorkspaceJSONRequestBody defines body for CreateWorkspace for application/json ContentType.
+type CreateWorkspaceJSONRequestBody = WorkspaceRequest
+
+// RenameWorkspaceJSONRequestBody defines body for RenameWorkspace for application/json ContentType.
+type RenameWorkspaceJSONRequestBody = WorkspaceRequest
+
 // DeployAppJSONRequestBody defines body for DeployApp for application/json ContentType.
 type DeployAppJSONRequestBody = DeploymentRequest
 
 // SubmitTasksJSONRequestBody defines body for SubmitTasks for application/json ContentType.
 type SubmitTasksJSONRequestBody = SubmitTasksRequest
+
+// CreateInvitationJSONRequestBody defines body for CreateInvitation for application/json ContentType.
+type CreateInvitationJSONRequestBody = InvitationRequest
+
+// SetMemberRoleJSONRequestBody defines body for SetMemberRole for application/json ContentType.
+type SetMemberRoleJSONRequestBody = MemberRoleRequest
 
 // CreateSourceUploadJSONRequestBody defines body for CreateSourceUpload for application/json ContentType.
 type CreateSourceUploadJSONRequestBody = SourceUploadRequest
