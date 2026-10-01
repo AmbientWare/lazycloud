@@ -1036,6 +1036,531 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/workspaces/{workspace}/volumes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+            };
+            cookie?: never;
+        };
+        /** Volumes in the workspace, by name */
+        get: operations["listVolumes"];
+        put?: never;
+        /** Create a volume, or return the active one of that name */
+        post: operations["createVolume"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/volumes/{volume}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                volume: components["parameters"]["VolumePath"];
+            };
+            cookie?: never;
+        };
+        get: operations["getVolume"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete a volume and its files
+         * @description Refused with `conflict` while a container that mounts the volume has not stopped. The name is free at once; the files are removed in the background.
+         */
+        delete: operations["deleteVolume"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/volumes/{volume}/files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                volume: components["parameters"]["VolumePath"];
+            };
+            cookie?: never;
+        };
+        /** The entries of one directory, files and directories by name */
+        get: operations["listVolumeFiles"];
+        put?: never;
+        post?: never;
+        /** Remove a file, or a directory and everything under it */
+        delete: operations["removeVolumeFiles"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/volumes/{volume}/files/stat": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                volume: components["parameters"]["VolumePath"];
+            };
+            cookie?: never;
+        };
+        get: operations["statVolumeFile"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/volumes/{volume}/files/move": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                volume: components["parameters"]["VolumePath"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Move or rename a file or directory within the volume */
+        post: operations["moveVolumeFile"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/volumes/{volume}/files/url": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                volume: components["parameters"]["VolumePath"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** A presigned URL that reads, writes or uploads a part of one file */
+        post: operations["presignVolumeFile"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/volumes/{volume}/uploads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                volume: components["parameters"]["VolumePath"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start a multipart upload of one file and presign its parts */
+        post: operations["createVolumeUpload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/volumes/{volume}/uploads/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                volume: components["parameters"]["VolumePath"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["completeVolumeUpload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/volumes/{volume}/uploads/abort": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                volume: components["parameters"]["VolumePath"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["abortVolumeUpload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/disks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+            };
+            cookie?: never;
+        };
+        /** Disks in the workspace, by name */
+        get: operations["listDisks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/disks/{disk}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                disk: components["parameters"]["DiskPath"];
+            };
+            cookie?: never;
+        };
+        get: operations["getDisk"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete a disk and everything written to it
+         * @description Refused with `conflict` while a container holds the disk.
+         */
+        delete: operations["deleteDisk"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/artifacts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+            };
+            cookie?: never;
+        };
+        /** Stored, unexpired artifacts, newest first */
+        get: operations["listArtifacts"];
+        put?: never;
+        /** Start saving an artifact for a task and presign its upload */
+        post: operations["createArtifact"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/artifacts/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+            };
+            cookie?: never;
+        };
+        /** Stored artifact count, bytes and retention */
+        get: operations["getArtifactSummary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/artifacts/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Delete up to 100 artifacts */
+        post: operations["deleteArtifacts"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/artifacts/{artifact}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                artifact: components["parameters"]["ArtifactPath"];
+            };
+            cookie?: never;
+        };
+        get: operations["getArtifact"];
+        put?: never;
+        post?: never;
+        delete: operations["deleteArtifact"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/artifacts/{artifact}/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                artifact: components["parameters"]["ArtifactPath"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record an uploaded artifact and start its retention */
+        post: operations["completeArtifact"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/artifacts/{artifact}/url": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                artifact: components["parameters"]["ArtifactPath"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** A presigned GET for the artifact's bytes */
+        post: operations["presignArtifact"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/queues": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+            };
+            cookie?: never;
+        };
+        /** Queues in the workspace, by name */
+        get: operations["listQueues"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/queues/{queue}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                queue: components["parameters"]["QueuePath"];
+            };
+            cookie?: never;
+        };
+        /** The queue's size; a queue never written has size 0 */
+        get: operations["getQueue"];
+        put?: never;
+        post?: never;
+        /** Delete the queue and its messages */
+        delete: operations["deleteQueue"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/queues/{queue}/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                queue: components["parameters"]["QueuePath"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Append messages in order, creating the queue on first use */
+        post: operations["putQueueMessages"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/queues/{queue}/pop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                queue: components["parameters"]["QueuePath"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Remove and return the oldest message */
+        post: operations["popQueueMessage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/queues/{queue}/head": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                queue: components["parameters"]["QueuePath"];
+            };
+            cookie?: never;
+        };
+        /** The oldest message without removing it */
+        get: operations["peekQueueMessage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/maps": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+            };
+            cookie?: never;
+        };
+        /** Maps with at least one live key, by name */
+        get: operations["listMaps"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/maps/{map}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                map: components["parameters"]["MapPath"];
+            };
+            cookie?: never;
+        };
+        /** Live key count and expiry statistics; a map never written is empty */
+        get: operations["getMap"];
+        put?: never;
+        post?: never;
+        /** Delete the map and its keys */
+        delete: operations["deleteMap"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/maps/{map}/keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                map: components["parameters"]["MapPath"];
+            };
+            cookie?: never;
+        };
+        /** Live keys in byte order, optionally with a prefix */
+        get: operations["listMapKeys"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/maps/{map}/entries/{key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                map: components["parameters"]["MapPath"];
+                key: components["parameters"]["MapKeyPath"];
+            };
+            cookie?: never;
+        };
+        get: operations["getMapEntry"];
+        /**
+         * Write a key, creating the map on first use
+         * @description With `if_revision` the write applies only while the key holds that revision; with `if_absent` only while the key is missing. A failed condition is a `conflict`.
+         */
+        put: operations["setMapEntry"];
+        post?: never;
+        /** Delete a key; a missing key is `not_found` */
+        delete: operations["deleteMapEntry"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/workspaces/{workspace}/images/resolve": {
         parameters: {
             query?: never;
@@ -1440,6 +1965,7 @@ export interface components {
              */
             in_process: boolean;
             lifecycle_hooks?: components["schemas"]["LifecycleHooks"];
+            volumes?: components["schemas"]["VolumeMountSpec"][];
             /** @description The signature `lazycloud app export` types clients from. */
             client_contract?: {
                 [key: string]: unknown;
@@ -1464,6 +1990,8 @@ export interface components {
             cpu_limit_millis?: number;
             memory_mib: number;
             memory_limit_mib?: number;
+            /** @description Writable layer limit; enforced where Docker has project quotas. */
+            disk_mib?: number;
         };
         RetryPolicy: {
             /** @description Attempts including the first. */
@@ -1696,6 +2224,335 @@ export interface components {
             schedules: components["schemas"]["ScheduledFunction"][];
             /** @description Present when more schedules follow. */
             next_cursor?: string;
+        };
+        VolumeName: string;
+        DiskName: string;
+        /** @description A queue or map name; any characters except control characters. */
+        CollectionName: string;
+        MapKey: string;
+        /** @description A path below the volume root; `.` or empty is the root, `..` is refused. */
+        VolumeRelativePath: string;
+        /** @description A file or directory below the volume root. */
+        VolumeFilePath: string;
+        WorkloadRef: {
+            app: components["schemas"]["AppName"];
+            /** @enum {string} */
+            kind: "function";
+            name: components["schemas"]["WorkloadName"];
+        };
+        /** @description A volume, or with `cloud_bucket` an S3 bucket, mounted into every container of the workload. A platform volume is created on first use. */
+        VolumeMountSpec: {
+            name: components["schemas"]["VolumeName"];
+            /** @description Absolute, or relative to /volumes; the default is /volumes/<name>. */
+            mount_path?: string;
+            /** @default false */
+            read_only: boolean;
+            cloud_bucket?: components["schemas"]["CloudBucketSpec"];
+        };
+        CloudBucketSpec: {
+            bucket: string;
+            /**
+             * @description A key prefix ending in `/`, or empty for the whole bucket.
+             * @default
+             */
+            prefix: string;
+            region?: string;
+            /** @description An S3-compatible endpoint URL; AWS S3 when absent. */
+            endpoint?: string;
+            /** @default false */
+            force_path_style: boolean;
+            /** @description The workspace secret holding the access key id. */
+            access_key_secret?: components["schemas"]["SecretName"];
+            /** @description The workspace secret holding the secret access key. */
+            secret_key_secret?: components["schemas"]["SecretName"];
+        };
+        Volume: {
+            /** Format: uuid */
+            id: string;
+            name: components["schemas"]["VolumeName"];
+            /**
+             * Format: int64
+             * @description Bytes stored at the last measurement.
+             */
+            size_bytes: number;
+            /** Format: date-time */
+            size_measured_at?: string;
+            /** Format: date-time */
+            created_at: string;
+            /** @description Workloads whose active release mounts the volume. */
+            used_by: components["schemas"]["WorkloadRef"][];
+        };
+        VolumePage: {
+            volumes: components["schemas"]["Volume"][];
+            next_cursor?: string;
+        };
+        CreateVolumeRequest: {
+            name: components["schemas"]["VolumeName"];
+        };
+        VolumeFile: {
+            /** @description The path relative to the volume root. */
+            path: string;
+            is_dir: boolean;
+            /** Format: int64 */
+            size_bytes: number;
+            /**
+             * Format: date-time
+             * @description Absent for directories.
+             */
+            modified_at?: string;
+        };
+        VolumeFilePage: {
+            files: components["schemas"]["VolumeFile"][];
+            next_cursor?: string;
+        };
+        RemovedVolumeFiles: {
+            /** @description Removed file paths relative to the volume root. */
+            removed: string[];
+        };
+        MoveVolumeFileRequest: {
+            from: components["schemas"]["VolumeFilePath"];
+            to: components["schemas"]["VolumeFilePath"];
+        };
+        PresignVolumeFileRequest: {
+            path: components["schemas"]["VolumeFilePath"];
+            /** @enum {string} */
+            method: "get" | "head" | "put" | "upload_part";
+            /** @default 3600 */
+            expires_seconds: number;
+            /** @description Required for `upload_part`. */
+            upload_id?: string;
+            /** @description Required for `upload_part`. */
+            part_number?: number;
+        };
+        PresignedUrl: {
+            /** @description Absolute URL; the request carries no bearer token. */
+            url: string;
+            /** Format: date-time */
+            expires_at: string;
+        };
+        UploadPart: {
+            number: number;
+            /** Format: int64 */
+            offset: number;
+            /** Format: int64 */
+            size_bytes: number;
+            /** @description A presigned PUT of these bytes; its ETag completes a multipart upload. */
+            url: string;
+        };
+        /** @description Where to send bytes. With `upload_id` it is a multipart upload whose part ETags complete it; without, `parts` holds one plain PUT. */
+        Upload: {
+            upload_id?: string;
+            /** Format: int64 */
+            part_size_bytes?: number;
+            parts: components["schemas"]["UploadPart"][];
+            /** Format: date-time */
+            expires_at: string;
+        };
+        CompletedPart: {
+            number: number;
+            etag: string;
+        };
+        CreateVolumeUploadRequest: {
+            path: components["schemas"]["VolumeFilePath"];
+            /** Format: int64 */
+            size_bytes: number;
+            /**
+             * Format: int64
+             * @default 5242880
+             */
+            part_size_bytes: number;
+        };
+        MultipartUpload: {
+            upload_id: string;
+            path: string;
+            /** Format: int64 */
+            part_size_bytes: number;
+            parts: components["schemas"]["UploadPart"][];
+            /** Format: date-time */
+            expires_at: string;
+        };
+        CompleteVolumeUploadRequest: {
+            path: components["schemas"]["VolumeFilePath"];
+            upload_id: string;
+            parts: components["schemas"]["CompletedPart"][];
+        };
+        AbortVolumeUploadRequest: {
+            path: components["schemas"]["VolumeFilePath"];
+            upload_id: string;
+        };
+        /** @enum {string} */
+        DiskStatus: "detached" | "attached" | "saving";
+        Disk: {
+            /** Format: uuid */
+            id: string;
+            name: components["schemas"]["DiskName"];
+            /** Format: int64 */
+            size_bytes: number;
+            /**
+             * Format: int64
+             * @description Bytes the disk's published generations occupy in the object store.
+             */
+            stored_bytes: number;
+            /**
+             * Format: int64
+             * @description The newest published generation; 0 before the first.
+             */
+            generation: number;
+            status: components["schemas"]["DiskStatus"];
+            /**
+             * Format: uuid
+             * @description The container holding the disk while attached or saving.
+             */
+            holder_container_id?: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        DiskPage: {
+            disks: components["schemas"]["Disk"][];
+            next_cursor?: string;
+        };
+        Artifact: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            task_id?: string;
+            app?: components["schemas"]["AppName"];
+            filename: string;
+            content_type: string;
+            /** Format: int64 */
+            size_bytes: number;
+            /** @enum {string} */
+            state: "uploading" | "stored";
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            stored_at?: string;
+            /** Format: date-time */
+            expires_at?: string;
+        };
+        ArtifactPage: {
+            artifacts: components["schemas"]["Artifact"][];
+            next_cursor?: string;
+        };
+        CreateArtifactRequest: {
+            /** Format: uuid */
+            task_id: string;
+            /** @description A base name without `/`. */
+            filename: string;
+            /** @default application/octet-stream */
+            content_type: string;
+            /** Format: int64 */
+            size_bytes: number;
+        };
+        ArtifactUpload: {
+            artifact: components["schemas"]["Artifact"];
+            upload: components["schemas"]["Upload"];
+        };
+        CompleteArtifactRequest: {
+            /** @description The ETag of every part of a multipart upload. */
+            parts?: components["schemas"]["CompletedPart"][];
+        };
+        PresignArtifactRequest: {
+            /**
+             * @description Capped at the artifact's remaining retention.
+             * @default 3600
+             */
+            expires_seconds: number;
+            /**
+             * @description Ask browsers to save the file rather than show it.
+             * @default false
+             */
+            download: boolean;
+        };
+        ArtifactSummary: {
+            /** Format: int64 */
+            count: number;
+            /** Format: int64 */
+            size_bytes: number;
+            /**
+             * Format: int64
+             * @description How long new artifacts are kept under the workspace's plan.
+             */
+            retention_seconds: number;
+        };
+        DeleteArtifactsRequest: {
+            ids: string[];
+        };
+        DeletedArtifacts: {
+            deleted: string[];
+        };
+        /** @description In a list, statistics count at most 100,001 messages. */
+        QueueInfo: {
+            name: components["schemas"]["CollectionName"];
+            /** Format: int64 */
+            size: number;
+            /** Format: date-time */
+            oldest_message_at?: string;
+        };
+        QueuePage: {
+            queues: components["schemas"]["QueueInfo"][];
+            next_cursor?: string;
+        };
+        PutQueueMessagesRequest: {
+            /** @description Message bodies, base64; each at most 1 MiB. */
+            messages: string[];
+        };
+        QueueMessageResult: {
+            /** Format: byte */
+            message?: string;
+        };
+        /** @description In a list, statistics count at most 100,001 live keys. */
+        MapInfo: {
+            name: components["schemas"]["CollectionName"];
+            /** Format: int64 */
+            count: number;
+            /** Format: int64 */
+            size_bytes: number;
+            /** Format: int64 */
+            expiring_count: number;
+            /** Format: date-time */
+            next_expiry_at?: string;
+        };
+        MapPage: {
+            maps: components["schemas"]["MapInfo"][];
+            next_cursor?: string;
+        };
+        MapKeyPage: {
+            keys: string[];
+            next_cursor?: string;
+        };
+        MapEntry: {
+            key: string;
+            /**
+             * Format: byte
+             * @description Base64 bytes; SDK values are JSON, or cloudpickle (first byte 0x80).
+             */
+            value: string;
+            /** @description Changes on every write; pass it as `if_revision` to compare and set. */
+            revision: string;
+            /** Format: date-time */
+            expires_at?: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        SetMapEntryRequest: {
+            /**
+             * Format: byte
+             * @description At most 1 MiB, base64.
+             */
+            value: string;
+            /** @description Seconds to expiry, 0 for never; absent keeps an existing expiry. */
+            ttl_seconds?: number;
+            if_revision?: string;
+            /** @default false */
+            if_absent: boolean;
+        };
+        MapEntryWrite: {
+            revision: string;
+            /** Format: date-time */
+            expires_at?: string;
         };
         /** @description An app name or id. */
         AppRef: string;
@@ -1961,6 +2818,12 @@ export interface components {
         LogAfter: number;
         /** @description Start with only the last this many stored entries. */
         LogTail: number;
+        VolumePath: components["schemas"]["VolumeName"];
+        DiskPath: components["schemas"]["DiskName"];
+        ArtifactPath: string;
+        QueuePath: components["schemas"]["CollectionName"];
+        MapPath: components["schemas"]["CollectionName"];
+        MapKeyPath: components["schemas"]["MapKey"];
     };
     requestBodies: never;
     headers: never;
@@ -3553,6 +4416,945 @@ export interface operations {
                 };
             };
             default: components["responses"]["Error"];
+        };
+    };
+    listVolumes: {
+        parameters: {
+            query?: {
+                /** @description The next_cursor of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of volumes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VolumePage"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createVolume: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateVolumeRequest"];
+            };
+        };
+        responses: {
+            /** @description The volume */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Volume"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getVolume: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                volume: components["parameters"]["VolumePath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The volume */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Volume"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteVolume: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                volume: components["parameters"]["VolumePath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listVolumeFiles: {
+        parameters: {
+            query?: {
+                /** @description A directory relative to the volume root; empty is the root. */
+                path?: components["schemas"]["VolumeRelativePath"];
+                /** @description The next_cursor of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                volume: components["parameters"]["VolumePath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of entries */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VolumeFilePage"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    removeVolumeFiles: {
+        parameters: {
+            query: {
+                path: components["schemas"]["VolumeFilePath"];
+            };
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                volume: components["parameters"]["VolumePath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The removed paths */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RemovedVolumeFiles"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    statVolumeFile: {
+        parameters: {
+            query?: {
+                path?: components["schemas"]["VolumeRelativePath"];
+            };
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                volume: components["parameters"]["VolumePath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file or directory */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VolumeFile"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    moveVolumeFile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                volume: components["parameters"]["VolumePath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MoveVolumeFileRequest"];
+            };
+        };
+        responses: {
+            /** @description The moved entry at its new path */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VolumeFile"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    presignVolumeFile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                volume: components["parameters"]["VolumePath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PresignVolumeFileRequest"];
+            };
+        };
+        responses: {
+            /** @description The URL */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PresignedUrl"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createVolumeUpload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                volume: components["parameters"]["VolumePath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateVolumeUploadRequest"];
+            };
+        };
+        responses: {
+            /** @description The upload */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MultipartUpload"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    completeVolumeUpload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                volume: components["parameters"]["VolumePath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompleteVolumeUploadRequest"];
+            };
+        };
+        responses: {
+            /** @description The stored file */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VolumeFile"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    abortVolumeUpload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                volume: components["parameters"]["VolumePath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AbortVolumeUploadRequest"];
+            };
+        };
+        responses: {
+            /** @description Aborted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listDisks: {
+        parameters: {
+            query?: {
+                /** @description The next_cursor of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of disks */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiskPage"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getDisk: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                disk: components["parameters"]["DiskPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The disk */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Disk"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteDisk: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                disk: components["parameters"]["DiskPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listArtifacts: {
+        parameters: {
+            query?: {
+                task_id?: string;
+                app?: components["schemas"]["AppName"];
+                /** @description Case-insensitive substring of the filename. */
+                search?: string;
+                /** @description A content type prefix, such as `image/`. */
+                content_type?: string;
+                /** @description Inclusive lower bound on the save time. */
+                created_after?: string;
+                /** @description Exclusive upper bound on the save time. */
+                created_before?: string;
+                /** @description The next_cursor of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of artifacts */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactPage"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createArtifact: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateArtifactRequest"];
+            };
+        };
+        responses: {
+            /** @description The pending artifact and where to send its bytes */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactUpload"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getArtifactSummary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The summary */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactSummary"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteArtifacts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeleteArtifactsRequest"];
+            };
+        };
+        responses: {
+            /** @description The ids that were deleted; unknown ids are left out */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeletedArtifacts"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getArtifact: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                artifact: components["parameters"]["ArtifactPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The artifact */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Artifact"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteArtifact: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                artifact: components["parameters"]["ArtifactPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    completeArtifact: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                artifact: components["parameters"]["ArtifactPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompleteArtifactRequest"];
+            };
+        };
+        responses: {
+            /** @description The stored artifact */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Artifact"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    presignArtifact: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                artifact: components["parameters"]["ArtifactPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PresignArtifactRequest"];
+            };
+        };
+        responses: {
+            /** @description The URL */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PresignedUrl"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listQueues: {
+        parameters: {
+            query?: {
+                /** @description The next_cursor of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of queues */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QueuePage"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getQueue: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                queue: components["parameters"]["QueuePath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The queue */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QueueInfo"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteQueue: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                queue: components["parameters"]["QueuePath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    putQueueMessages: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                queue: components["parameters"]["QueuePath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutQueueMessagesRequest"];
+            };
+        };
+        responses: {
+            /** @description Appended */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    popQueueMessage: {
+        parameters: {
+            query?: {
+                /** @description Wait this long for a message when the queue is empty. */
+                wait_seconds?: number;
+            };
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                queue: components["parameters"]["QueuePath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The message; `message` is absent when the queue is empty */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QueueMessageResult"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    peekQueueMessage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                queue: components["parameters"]["QueuePath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The message; `message` is absent when the queue is empty */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QueueMessageResult"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listMaps: {
+        parameters: {
+            query?: {
+                /** @description The next_cursor of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of maps */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MapPage"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getMap: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                map: components["parameters"]["MapPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The map */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MapInfo"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteMap: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                map: components["parameters"]["MapPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listMapKeys: {
+        parameters: {
+            query?: {
+                prefix?: string;
+                /** @description The next_cursor of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                map: components["parameters"]["MapPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of keys */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MapKeyPage"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getMapEntry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                map: components["parameters"]["MapPath"];
+                key: components["parameters"]["MapKeyPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The entry */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MapEntry"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    setMapEntry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                map: components["parameters"]["MapPath"];
+                key: components["parameters"]["MapKeyPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetMapEntryRequest"];
+            };
+        };
+        responses: {
+            /** @description The entry after the write */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MapEntryWrite"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteMapEntry: {
+        parameters: {
+            query?: {
+                if_revision?: string;
+            };
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                map: components["parameters"]["MapPath"];
+                key: components["parameters"]["MapKeyPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     resolveImage: {
