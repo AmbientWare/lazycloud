@@ -3,6 +3,11 @@
 // run together: advisory locks serialize the planner and the placer, a
 // replica that finds a lock held skips the pass, and email and deletion
 // steps are claimed or idempotent.
+//
+// With LAZYCLOUD_HEALTH_ADDR set it serves /healthz, failing when a loop
+// stops finishing passes, and /readyz, true once every loop finished one. On
+// SIGTERM loops stop; a pass in flight is cancelled, its transaction rolls
+// back and another replica or the next start repeats it.
 package main
 
 import (
@@ -10,6 +15,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -49,21 +56,25 @@ const (
 	purgeInterval = time.Minute
 )
 
+// version is stamped by the image build with -ldflags "-X main.version=...".
+var version = "dev"
+
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	if err := run(logger); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	err := run(ctx, logger)
+	stop()
+	if err != nil {
 		logger.Error("scheduler stopped", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run(logger *slog.Logger) error {
+func run(ctx context.Context, logger *slog.Logger) error {
 	url := os.Getenv("LAZYCLOUD_DATABASE_URL")
 	if url == "" {
 		return errors.New("LAZYCLOUD_DATABASE_URL is required")
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	pool, err := database.Open(ctx, url)
 	if err != nil {
@@ -99,6 +110,7 @@ func run(logger *slog.Logger) error {
 		notifications.Channel, identity.ChannelWorkspace)
 	buildWake, cancelBuildWake := listener.Subscribe(database.ChannelImageBuild, "")
 	defer cancelBuildWake()
+	beats := newHeartbeats()
 	accounts, cancelAccounts, err := newAccountLoops(pool, exec, im, listener, logger)
 	if err != nil {
 		return err
@@ -112,10 +124,18 @@ func run(logger *slog.Logger) error {
 	// value is enough: placement reads every pending container.
 	placeNow := make(chan struct{}, 1)
 
+	var healthListener net.Listener
+	if addr := os.Getenv("LAZYCLOUD_HEALTH_ADDR"); addr != "" {
+		var lc net.ListenConfig
+		if healthListener, err = lc.Listen(ctx, "tcp", addr); err != nil {
+			return fmt.Errorf("listen on %s: %w", addr, err)
+		}
+	}
+
 	group, ctx := errgroup.WithContext(ctx)
 	group.Go(func() error { return listener.Run(ctx) })
 	group.Go(func() error {
-		return loop(ctx, tick, planWake, nil, func(ctx context.Context) bool {
+		return loop(ctx, tick, planWake, nil, beats.track("planning", tick, func(ctx context.Context) bool {
 			result, err := exec.Plan(ctx, logger)
 			if err != nil {
 				logger.ErrorContext(ctx, "planning pass", "error", err)
@@ -127,19 +147,19 @@ func run(logger *slog.Logger) error {
 				}
 			}
 			return result.Skipped
-		})
+		}))
 	})
 	group.Go(func() error {
-		return loop(ctx, tick, placeWake, placeNow, func(ctx context.Context) bool {
+		return loop(ctx, tick, placeWake, placeNow, beats.track("placement", tick, func(ctx context.Context) bool {
 			result, err := sched.Place(ctx)
 			if err != nil {
 				logger.ErrorContext(ctx, "placement pass", "error", err)
 			}
 			return result.Skipped
-		})
+		}))
 	})
 	group.Go(func() error {
-		return loop(ctx, tick, nil, nil, func(ctx context.Context) bool {
+		return loop(ctx, tick, nil, nil, beats.track("deadlines", tick, func(ctx context.Context) bool {
 			if _, err := exec.TimeOutAttempts(ctx, logger); err != nil {
 				logger.ErrorContext(ctx, "attempt deadline pass", "error", err)
 			}
@@ -147,19 +167,19 @@ func run(logger *slog.Logger) error {
 				logger.ErrorContext(ctx, "start deadline pass", "error", err)
 			}
 			return false
-		})
+		}))
 	})
 	group.Go(func() error {
-		return loop(ctx, tick, nil, nil, func(ctx context.Context) bool {
+		return loop(ctx, tick, nil, nil, beats.track("schedules", tick, func(ctx context.Context) bool {
 			if _, err := crons.Fire(ctx, logger); err != nil {
 				logger.ErrorContext(ctx, "schedule pass", "error", err)
 			}
 			return false
-		})
+		}))
 	})
 	group.Go(func() error {
 		lastPurge := time.Now()
-		return loop(ctx, tick, nil, nil, func(ctx context.Context) bool {
+		return loop(ctx, tick, nil, nil, beats.track("callbacks", tick, func(ctx context.Context) bool {
 			if _, err := deliverer.Deliver(ctx); err != nil {
 				logger.ErrorContext(ctx, "callback pass", "error", err)
 			}
@@ -170,30 +190,50 @@ func run(logger *slog.Logger) error {
 				}
 			}
 			return false
-		})
+		}))
 	})
 	group.Go(func() error {
-		return loop(ctx, hostLossTick, nil, nil, func(ctx context.Context) bool {
+		return loop(ctx, hostLossTick, nil, nil, beats.track("host loss", hostLossTick, func(ctx context.Context) bool {
 			if _, err := exec.ReleaseLostHosts(ctx, logger); err != nil {
 				logger.ErrorContext(ctx, "host loss pass", "error", err)
 			}
 			return false
-		})
+		}))
 	})
 	group.Go(func() error {
-		store.RunSweeper(ctx, sweepTick, logger)
-		return nil
+		return loop(ctx, sweepTick, nil, nil, beats.track("storage sweep", sweepTick, func(ctx context.Context) bool {
+			if _, err := store.Sweep(ctx, logger); err != nil && ctx.Err() == nil {
+				logger.WarnContext(ctx, "storage sweep incomplete", "error", err)
+			}
+			return false
+		}))
 	})
 	group.Go(func() error {
-		return loop(ctx, buildRecoveryTick, buildWake, nil, func(ctx context.Context) bool {
+		return loop(ctx, buildRecoveryTick, buildWake, nil, beats.track("build recovery", buildRecoveryTick, func(ctx context.Context) bool {
 			if _, err := im.Recover(ctx, logger); err != nil {
 				logger.ErrorContext(ctx, "image build recovery pass", "error", err)
 			}
 			return false
-		})
+		}))
 	})
-	accounts.start(ctx, group)
-	logger.Info("scheduler started")
+	accounts.start(ctx, group, beats)
+	if healthListener != nil {
+		server := &http.Server{Handler: beats.handler(), ReadHeaderTimeout: 5 * time.Second}
+		group.Go(func() error {
+			if err := server.Serve(healthListener); !errors.Is(err, http.ErrServerClosed) {
+				return fmt.Errorf("serve health: %w", err)
+			}
+			return nil
+		})
+		group.Go(func() error {
+			<-ctx.Done()
+			if err := server.Close(); err != nil {
+				return fmt.Errorf("close health server: %w", err)
+			}
+			return nil
+		})
+	}
+	logger.Info("scheduler started", "version", version)
 	if err := group.Wait(); err != nil {
 		return fmt.Errorf("scheduler loops: %w", err)
 	}

@@ -4,6 +4,11 @@
 //	server [serve] [flags]      serve HTTP and gRPC (migrates first)
 //	server migrate              apply database migrations
 //	server admin <command>      create-user, create-workspace, create-token, create-join-token
+//	server version              print the build version
+//
+// On SIGTERM the server reports not ready on /readyz, keeps serving for the
+// drain delay so load balancers stop routing to it, then ends host sessions
+// and gives open requests the shutdown grace to finish.
 package main
 
 import (
@@ -39,7 +44,12 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/storage"
 )
 
+// shutdownGrace bounds how long open requests and RPCs may finish after the
+// listeners close. Pod termination grace must cover the drain delay plus this.
 const shutdownGrace = 10 * time.Second
+
+// version is stamped by the image build with -ldflags "-X main.version=...".
+var version = "dev"
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -68,8 +78,10 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 		return withPool(ctx, *dbURL, func(pool *pgxpool.Pool) error { return database.Migrate(ctx, pool) })
 	case "admin":
 		return admin(ctx, args, out)
+	case "version":
+		return printLine(out, version)
 	}
-	return fmt.Errorf("unknown command %q; want serve, migrate or admin", command)
+	return fmt.Errorf("unknown command %q; want serve, migrate, admin or version", command)
 }
 
 func env(name, fallback string) string {
@@ -105,6 +117,9 @@ type serveConfig struct {
 	identity      identity.Config
 	api           api.Config
 	images        images.Config
+	// drainDelay is how long the server keeps serving after shutdown
+	// starts while /readyz reports draining.
+	drainDelay time.Duration
 }
 
 func serve(ctx context.Context, args []string) error {
@@ -129,8 +144,13 @@ func serve(ctx context.Context, args []string) error {
 	fs.StringVar(&cfg.images.Registry, "image-registry", env("LAZYCLOUD_IMAGE_REGISTRY", ""), "registry host[:port] that builds publish to (LAZYCLOUD_IMAGE_REGISTRY)")
 	fs.StringVar(&cfg.images.Repository, "image-repository", env("LAZYCLOUD_IMAGE_REPOSITORY", "lazycloud"), "path under the registry for images and build cache (LAZYCLOUD_IMAGE_REPOSITORY)")
 	fs.BoolVar(&cfg.images.Insecure, "image-registry-insecure", env("LAZYCLOUD_IMAGE_REGISTRY_INSECURE", "") == "true", "the image registry speaks plain HTTP (LAZYCLOUD_IMAGE_REGISTRY_INSECURE)")
+	drainDelay := fs.String("drain-delay", env("LAZYCLOUD_DRAIN_DELAY", "0s"), "time to keep serving after SIGTERM while /readyz reports draining (LAZYCLOUD_DRAIN_DELAY)")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
+	}
+	var err error
+	if cfg.drainDelay, err = time.ParseDuration(*drainDelay); err != nil || cfg.drainDelay < 0 {
+		return fmt.Errorf("drain delay %q is not a non-negative duration", *drainDelay)
 	}
 	if cfg.images.Registry == "" {
 		return errors.New("the image registry is required: set LAZYCLOUD_IMAGE_REGISTRY or -image-registry")
@@ -157,11 +177,24 @@ func serve(ctx context.Context, args []string) error {
 		if err := database.Migrate(ctx, pool); err != nil {
 			return err
 		}
-		return serveWith(ctx, pool, cfg, logger)
+		var lc net.ListenConfig
+		httpListener, err := lc.Listen(ctx, "tcp", cfg.httpAddr)
+		if err != nil {
+			return fmt.Errorf("listen on %s: %w", cfg.httpAddr, err)
+		}
+		grpcListener, err := lc.Listen(ctx, "tcp", cfg.grpcAddr)
+		if err != nil {
+			_ = httpListener.Close()
+			return fmt.Errorf("listen on %s: %w", cfg.grpcAddr, err)
+		}
+		// The servers close them too; this covers a failed setup.
+		defer func() { _ = httpListener.Close(); _ = grpcListener.Close() }()
+		return serveWith(ctx, pool, cfg, logger, httpListener, grpcListener)
 	})
 }
 
-func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, logger *slog.Logger) error {
+// serveWith serves on the listeners until ctx ends, then drains.
+func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, logger *slog.Logger, httpListener, grpcListener net.Listener) error {
 	listener := database.NewListener(pool, logger, database.ChannelHost, database.ChannelTask, database.ChannelClaim,
 		database.ChannelLogs, database.ChannelImageBuild, database.ChannelImageBuildLog, storage.ChannelQueue)
 	store := storage.NewStorage(pool, cfg.objectStore)
@@ -195,19 +228,9 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, logger 
 	}, logger)
 	grpcServer := grpc.NewServer(hosts.ServerOptions()...)
 	hostproto.RegisterHostServiceServer(grpcServer, hosts)
-	httpServer := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
-
-	var lc net.ListenConfig
-	httpListener, err := lc.Listen(ctx, "tcp", cfg.httpAddr)
-	if err != nil {
-		return fmt.Errorf("listen on %s: %w", cfg.httpAddr, err)
-	}
-	grpcListener, err := lc.Listen(ctx, "tcp", cfg.grpcAddr)
-	if err != nil {
-		_ = httpListener.Close()
-		return fmt.Errorf("listen on %s: %w", cfg.grpcAddr, err)
-	}
-	logger.InfoContext(ctx, "serving", "http", httpListener.Addr().String(), "grpc", grpcListener.Addr().String())
+	probes := &health{pool: pool}
+	httpServer := &http.Server{Handler: probes.withProbes(handler), ReadHeaderTimeout: 10 * time.Second}
+	logger.InfoContext(ctx, "serving", "version", version, "http", httpListener.Addr().String(), "grpc", grpcListener.Addr().String())
 
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error { return listener.Run(gctx) })
@@ -226,6 +249,12 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, logger 
 	})
 	g.Go(func() error {
 		<-gctx.Done()
+		probes.draining.Store(true)
+		if cfg.drainDelay > 0 {
+			logger.Info("draining", "delay", cfg.drainDelay.String())
+			delay := time.NewTimer(cfg.drainDelay)
+			<-delay.C
+		}
 		logger.Info("shutting down")
 		// Sessions and claim long polls end at once; agents reconnect.
 		hosts.Shutdown()

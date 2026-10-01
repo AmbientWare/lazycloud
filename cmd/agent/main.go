@@ -43,7 +43,7 @@ func main() {
 
 func parseConfig(args []string) (agent.Config, error) {
 	flags := flag.NewFlagSet("agent", flag.ContinueOnError)
-	cfg := agent.Config{Labels: map[string]string{}, Version: version()}
+	cfg := agent.Config{Labels: map[string]string{}, Version: agentVersion()}
 	executable, _ := os.Executable()
 	flags.StringVar(&cfg.Server, "server", os.Getenv("LAZYCLOUD_SERVER"), "control plane gRPC address, host:port")
 	flags.StringVar(&cfg.StateDir, "state-dir", envOr("LAZYCLOUD_AGENT_STATE_DIR", "/var/lib/lazycloud-agent"), "host identity, source cache and container state")
@@ -105,7 +105,15 @@ func envInt(key string) int64 {
 	return value
 }
 
-func version() string {
+// version is stamped by the image build with -ldflags "-X main.version=...".
+var version string
+
+// agentVersion is the stamped release version, else the VCS revision of a
+// local build.
+func agentVersion() string {
+	if version != "" {
+		return version
+	}
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
 		return "unknown"
