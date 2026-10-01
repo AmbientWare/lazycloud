@@ -56,16 +56,22 @@ func (e *Edge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		e.fail(w, r, err)
 		return
 	}
-	if !t.workload.accepting {
-		writeError(w, http.StatusNotFound, "the deployment is stopped")
-		return
-	}
-	authorized := t.authorized
-	if authorized {
+	if t.authorized {
 		if err := e.authorize(ctx, r, t.workload); err != nil {
 			e.fail(w, r, err)
 			return
 		}
+	}
+	e.serveTarget(w, r, t, t.authorized)
+}
+
+// serveTarget serves a resolved request whose caller passed t's token
+// policy; authorized says a platform credential was consumed and must not
+// reach the workload.
+func (e *Edge) serveTarget(w http.ResponseWriter, r *http.Request, t target, authorized bool) {
+	if !t.workload.accepting {
+		writeError(w, http.StatusNotFound, "the deployment is stopped")
+		return
 	}
 	switch t.workload.kind {
 	case apitypes.WorkloadKindFunction:

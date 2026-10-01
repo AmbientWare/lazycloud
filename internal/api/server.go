@@ -11,6 +11,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/control"
+	"github.com/AmbientWare/lazycloud/internal/edge"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/storage"
@@ -77,7 +79,8 @@ func (s *Server) DeployApp(ctx context.Context, req DeployAppRequestObject) (Dep
 	for n, release := range deployment.Releases {
 		if release.Spec.Http != nil {
 			url := s.owners.Edge.DeployedURL(ws.ID, req.App, release.Spec)
-			deployment.Releases[n].Url = &url
+			path := edge.InvokePath(ws.Name, req.App, control.KindOf(release.Spec), release.Function, nil)
+			deployment.Releases[n].Url, deployment.Releases[n].InvokePath = &url, &path
 		}
 		if url := s.owners.Edge.PodURL(release.Id, release.Spec); release.Spec.Pod != nil && url != "" {
 			deployment.Releases[n].Url = &url

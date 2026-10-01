@@ -1936,6 +1936,94 @@ paths:
               schema: { $ref: "#/components/schemas/HttpWorkload" }
         default: { $ref: "#/components/responses/Error" }
 
+  /v1/workspaces/{workspace}/apps/{app}/endpoints/{endpoint}/invoke:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/AppPath"
+      - $ref: "#/components/parameters/EndpointPath"
+    post:
+      operationId: requestEndpointPath
+      summary: Send a request to an endpoint through the API host
+      description: >-
+        Any method, and any path after /invoke, which becomes the request's
+        path. The request is forwarded to the workload as its own host would
+        forward it, with the same admission, records and token policy, and
+        streams both ways; WebSockets upgrade. The browser's session cookie
+        (from the dashboard origin for anything but GET and HEAD) or a bearer
+        token authenticates it, and neither reaches the workload.
+      x-lazycloud-opaque: true
+      responses:
+        default:
+          description: The workload's own response, or an Error from the platform.
+
+  /v1/workspaces/{workspace}/apps/{app}/endpoints/{endpoint}/versions/{version}/invoke:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/AppPath"
+      - $ref: "#/components/parameters/EndpointPath"
+      - name: version
+        in: path
+        required: true
+        schema: { type: integer, minimum: 1 }
+    post:
+      operationId: requestEndpointPathVersion
+      summary: Send a request to an endpoint version through the API host
+      description: >-
+        Any method, and any path after /invoke, which becomes the request's
+        path. The request is forwarded to the workload as its own host would
+        forward it, with the same admission, records and token policy, and
+        streams both ways; WebSockets upgrade. The browser's session cookie
+        (from the dashboard origin for anything but GET and HEAD) or a bearer
+        token authenticates it, and neither reaches the workload.
+      x-lazycloud-opaque: true
+      responses:
+        default:
+          description: The workload's own response, or an Error from the platform.
+
+  /v1/workspaces/{workspace}/apps/{app}/asgi/{endpoint}/invoke:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/AppPath"
+      - $ref: "#/components/parameters/EndpointPath"
+    post:
+      operationId: requestAsgiPath
+      summary: Send a request to an ASGI or realtime app through the API host
+      description: >-
+        Any method, and any path after /invoke, which becomes the request's
+        path. The request is forwarded to the workload as its own host would
+        forward it, with the same admission, records and token policy, and
+        streams both ways; WebSockets upgrade. The browser's session cookie
+        (from the dashboard origin for anything but GET and HEAD) or a bearer
+        token authenticates it, and neither reaches the workload.
+      x-lazycloud-opaque: true
+      responses:
+        default:
+          description: The workload's own response, or an Error from the platform.
+
+  /v1/workspaces/{workspace}/apps/{app}/asgi/{endpoint}/versions/{version}/invoke:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/AppPath"
+      - $ref: "#/components/parameters/EndpointPath"
+      - name: version
+        in: path
+        required: true
+        schema: { type: integer, minimum: 1 }
+    post:
+      operationId: requestAsgiPathVersion
+      summary: Send a request to an ASGI or realtime app version through the API host
+      description: >-
+        Any method, and any path after /invoke, which becomes the request's
+        path. The request is forwarded to the workload as its own host would
+        forward it, with the same admission, records and token policy, and
+        streams both ways; WebSockets upgrade. The browser's session cookie
+        (from the dashboard origin for anything but GET and HEAD) or a bearer
+        token authenticates it, and neither reaches the workload.
+      x-lazycloud-opaque: true
+      responses:
+        default:
+          description: The workload's own response, or an Error from the platform.
+
   /v1/workspaces/{workspace}/apps/{app}/asgi/{endpoint}:
     parameters:
       - $ref: "#/components/parameters/WorkspacePath"
@@ -4577,6 +4665,9 @@ components:
         url:
           description: Where an HTTP workload answers, following the active release.
           type: string
+        invoke_path:
+          description: The HTTP workload on the API host, following the active release.
+          type: string
 
     Function:
       type: object
@@ -5897,7 +5988,7 @@ components:
 
     HttpWorkload:
       type: object
-      required: [name, app, kind, state, release, url, version_url, release_url]
+      required: [name, app, kind, state, release, url, version_url, release_url, invoke_path, version_invoke_path]
       properties:
         name: { $ref: "#/components/schemas/WorkloadName" }
         app: { $ref: "#/components/schemas/AppName" }
@@ -5915,6 +6006,12 @@ components:
           type: string
         release_url:
           description: Addresses the release by id.
+          type: string
+        invoke_path:
+          description: The workload on the API host; append the request's path.
+          type: string
+        version_invoke_path:
+          description: The API-host path pinned to the release's version.
           type: string
         domain_url:
           description: The custom hostname, once its registration is ready.

@@ -3310,6 +3310,10 @@ class Release(BaseModel):
         str | None,
         Field(description="Where an HTTP workload answers, following the active release."),
     ] = None
+    invoke_path: Annotated[
+        str | None,
+        Field(description="The HTTP workload on the API host, following the active release."),
+    ] = None
 
 
 class Function(BaseModel):
@@ -3372,6 +3376,12 @@ class HttpWorkload(BaseModel):
     url: Annotated[str, Field(description="Follows the active release across deploys.")]
     version_url: Annotated[str, Field(description="Pinned to the release's version.")]
     release_url: Annotated[str, Field(description="Addresses the release by id.")]
+    invoke_path: Annotated[
+        str, Field(description="The workload on the API host; append the request's path.")
+    ]
+    version_invoke_path: Annotated[
+        str, Field(description="The API-host path pinned to the release's version.")
+    ]
     domain_url: Annotated[
         str | None, Field(description="The custom hostname, once its registration is ready.")
     ] = None

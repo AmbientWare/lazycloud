@@ -43,7 +43,14 @@ func (s *Server) describe(ctx context.Context, workspace, app string, kind apity
 	if err != nil {
 		return apitypes.HttpWorkload{}, err
 	}
-	return s.owners.Edge.Describe(ctx, ws.ID, app, kind, name, version)
+	out, err := s.owners.Edge.Describe(ctx, ws.ID, app, kind, name, version)
+	if err != nil {
+		return apitypes.HttpWorkload{}, err //nolint:wrapcheck // the edge's typed errors map to responses
+	}
+	out.InvokePath = edge.InvokePath(ws.Name, app, kind, name, nil)
+	out.VersionInvokePath = edge.InvokePath(ws.Name, app, kind, name, out.Release.Version)
+	out.Release.InvokePath = &out.InvokePath
+	return out, nil
 }
 
 // GetEndpoint returns an endpoint and its URLs.
