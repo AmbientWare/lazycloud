@@ -72,7 +72,9 @@ class Stream:
             headers["Last-Event-ID"] = last_event_id
         self._client = httpx.Client(timeout=httpx.Timeout(10, read=60))
         self._response = self._client.send(
-            self._client.build_request("GET", f"{ENDPOINT}/v1/workspaces/{WORKSPACE}/changes/stream", headers=headers),
+            self._client.build_request(
+                "GET", f"{ENDPOINT}/v1/workspaces/{WORKSPACE}/changes/stream", headers=headers
+            ),
             stream=True,
         )
         assert self._response.status_code == 200, self._response.read()
@@ -127,7 +129,9 @@ def api(monkeypatch: pytest.MonkeyPatch) -> Iterator[httpx.Client]:
     monkeypatch.setenv("LAZYCLOUD_TOKEN", TOKEN)
     monkeypatch.setenv("LAZYCLOUD_WORKSPACE", WORKSPACE)
     lazycloud.config.reset_settings_cache()
-    with httpx.Client(base_url=ENDPOINT, headers={"Authorization": f"Bearer {TOKEN}"}, timeout=30) as client:
+    with httpx.Client(
+        base_url=ENDPOINT, headers={"Authorization": f"Bearer {TOKEN}"}, timeout=30
+    ) as client:
         yield client
 
 
@@ -148,7 +152,9 @@ def _deploy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[str, Modul
     return app, loaded
 
 
-def test_observability_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, api: httpx.Client) -> None:
+def test_observability_end_to_end(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, api: httpx.Client
+) -> None:
     ws = f"/v1/workspaces/{WORKSPACE}"
     stream = Stream()
     app, module = _deploy(tmp_path, monkeypatch)
@@ -162,8 +168,13 @@ def test_observability_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     assert call.get(timeout_seconds=180) > 0
     finished_at = time.monotonic()
     _, _, _, seen_at = stream.wait(task_change(task_id, "succeeded"))
-    print(f"change stream: succeeded event {max(seen_at - finished_at, 0) * 1000:.0f} ms after the result returned")
-    stream.wait(lambda e: e[0] == "change" and any(c["topic"] == "containers" for c in e[2]["changes"]))
+    print(
+        "change stream: succeeded event "
+        f"{max(seen_at - finished_at, 0) * 1000:.0f} ms after the result returned"
+    )
+    stream.wait(
+        lambda e: e[0] == "change" and any(c["topic"] == "containers" for c in e[2]["changes"])
+    )
 
     # Resumption replays what followed the first event.
     resumed = Stream(first_id)
@@ -172,7 +183,12 @@ def test_observability_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 
     # Task drawer: timeline, container lifecycle and metrics.
     timeline = get(api, f"{ws}/tasks/{task_id}/timeline")
-    assert [e["kind"] for e in timeline["events"]] == ["submitted", "attempt_started", "attempt_finished", "finished"]
+    assert [e["kind"] for e in timeline["events"]] == [
+        "submitted",
+        "attempt_started",
+        "attempt_finished",
+        "finished",
+    ]
     container = timeline["events"][1]["container_id"]
     lifecycle = get(api, f"{ws}/containers/{container}/lifecycle")
     stages = [s["stage"] for s in lifecycle["stages"]]
@@ -192,7 +208,10 @@ def test_observability_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     assert graph["root_task_id"] == fan.task_id and len(graph["nodes"]) == 4
     child = graph["nodes"][1]["task_id"]
     assert get(api, f"{ws}/tasks/{child}/call-graph")["nodes"] == graph["nodes"]
-    batch = api.post(f"{ws}/containers/lifecycles", json={"container_ids": [n["container_id"] for n in graph["nodes"]]})
+    batch = api.post(
+        f"{ws}/containers/lifecycles",
+        json={"container_ids": [n["container_id"] for n in graph["nodes"]]},
+    )
     assert batch.status_code == 200 and len(batch.json()["lifecycles"]) >= 2
 
     # Workload performance and workspace metrics.
