@@ -386,7 +386,10 @@ func (c *Compute) connectionByID(ctx context.Context, id uuid.UUID) (Connection,
 		conn = connectionOf(row, auths)
 		return nil
 	})
-	return conn, err
+	if err != nil {
+		return Connection{}, fmt.Errorf("read connection: %w", err)
+	}
+	return conn, nil
 }
 
 func connectionOf(row CloudConnection, auths []CloudAuthorization) Connection {

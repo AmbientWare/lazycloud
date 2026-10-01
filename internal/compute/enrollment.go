@@ -176,7 +176,7 @@ func (c *Compute) OpenSession(ctx context.Context, host HostID, open SessionOpen
 		return notifyMachines(ctx, tx, uuid.UUID(host))
 	})
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("open session: %w", err)
 	}
 	return SessionEpoch(epoch), nil
 }
