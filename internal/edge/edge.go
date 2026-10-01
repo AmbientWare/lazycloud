@@ -107,6 +107,7 @@ func (e *Edge) Run(ctx context.Context) error {
 	g.Go(func() error { return e.watch(ctx) })
 	g.Go(func() error { e.refreshContainers(ctx); return nil })
 	g.Go(func() error { e.publishLoads(ctx); return nil })
+	g.Go(func() error { e.reconcileDomains(ctx); return nil })
 	if err := g.Wait(); err != nil && !errors.Is(err, context.Canceled) {
 		return fmt.Errorf("edge: %w", err)
 	}

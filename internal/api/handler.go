@@ -15,6 +15,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/control"
 	"github.com/AmbientWare/lazycloud/internal/database"
+	"github.com/AmbientWare/lazycloud/internal/edge"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/storage"
@@ -33,6 +34,8 @@ type Owners struct {
 	// Listener wakes waits on task changes. It must listen on
 	// database.ChannelTask.
 	Listener *database.Listener
+	// Edge describes HTTP workloads and owns custom domains.
+	Edge *edge.Edge
 }
 
 // NewHandler serves the public API: it limits the body, authenticates the
@@ -44,7 +47,7 @@ func NewHandler(owners Owners, logger *slog.Logger) (http.Handler, error) {
 		return nil, fmt.Errorf("load openapi document: %w", err)
 	}
 	s := &Server{owners: owners, logger: logger}
-	strict := NewStrictHandlerWithOptions(s, nil, StrictHTTPServerOptions{
+	strict := NewStrictHandlerWithOptions(s, []StrictMiddlewareFunc{withQuery}, StrictHTTPServerOptions{
 		RequestErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {
 			s.writeError(w, r, fmt.Errorf("%w: %w", errInvalidRequest, err))
 		},
@@ -149,6 +152,7 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		writeJSONError(w, http.StatusConflict, apitypes.Conflict, "the function is stopped or its app is paused")
 	case errors.Is(err, execution.ErrTaskNotFinished):
 		writeJSONError(w, http.StatusConflict, apitypes.TaskNotFinished, "the task has not finished")
+	case endpointError(w, err):
 	default:
 		s.logger.ErrorContext(r.Context(), "request failed", "method", r.Method, "path", r.URL.Path, "error", err)
 		writeJSONError(w, http.StatusInternalServerError, apitypes.Internal, "internal error")

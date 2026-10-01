@@ -640,7 +640,7 @@ type Invocation struct {
 }
 
 // InvocationBody defines model for InvocationBody.
-type InvocationBody map[string]interface{}
+type InvocationBody = json.RawMessage
 
 // LogEntry defines model for LogEntry.
 type LogEntry struct {

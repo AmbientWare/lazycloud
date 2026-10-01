@@ -3,3 +3,24 @@
 //   sqlc v1.31.1
 
 package edge
+
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
+
+type CustomDomain struct {
+	ID                 uuid.UUID
+	UserID             uuid.UUID
+	Hostname           string
+	Phase              string
+	ProviderHostnameID *string
+	RequiredRecords    []byte
+	ErrorCode          *string
+	ErrorMessage       *string
+	VerifiedAt         *time.Time
+	LastCheckedAt      *time.Time
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+}

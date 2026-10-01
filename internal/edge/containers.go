@@ -7,8 +7,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-
-	"github.com/AmbientWare/lazycloud/internal/execution"
 )
 
 // workloadState is the edge's view of a workload's ready containers and the

@@ -179,13 +179,31 @@ func (e *Edge) resolve(ctx context.Context, host string) (target, error) {
 		}
 		return target{workload: w, release: w.active, latest: true}, nil
 	}
-	id, err := e.queries.ReleaseOfVersion(ctx, ReleaseOfVersionParams{WorkloadID: w.id, Version: int32(version)}) //nolint:gosec // parsed from a label
-	if errors.Is(err, pgx.ErrNoRows) {
-		return target{}, errNoRoute
+	key := versionKey{workload: w.id, version: version}
+	e.mu.Lock()
+	id, known := e.versions[key]
+	e.mu.Unlock()
+	if !known {
+		id, err := e.queries.ReleaseOfVersion(ctx, ReleaseOfVersionParams{WorkloadID: w.id, Version: int32(version)}) //nolint:gosec // parsed from a label
+		if errors.Is(err, pgx.ErrNoRows) {
+			return target{}, errNoRoute
+		}
+		if err != nil {
+			return target{}, fmt.Errorf("read version: %w", err)
+		}
+		// A version names one release forever.
+		e.mu.Lock()
+		if len(e.versions) >= maxCachedReleases {
+			clear(e.versions)
+		}
+		e.versions[key] = id
+		e.mu.Unlock()
+		return e.versionTarget(ctx, w, id)
 	}
-	if err != nil {
-		return target{}, fmt.Errorf("read version: %w", err)
-	}
+	return e.versionTarget(ctx, w, id)
+}
+
+func (e *Edge) versionTarget(ctx context.Context, w *workload, id uuid.UUID) (target, error) {
 	r, err := e.release(ctx, id)
 	if err != nil {
 		return target{}, err

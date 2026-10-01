@@ -28,6 +28,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/control"
 	"github.com/AmbientWare/lazycloud/internal/database"
+	"github.com/AmbientWare/lazycloud/internal/edge"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/hostsession"
@@ -97,6 +98,9 @@ type serveConfig struct {
 	grpcAddr      string
 	objectStore   storage.Config
 	imageTemplate string
+	edgeAddr      string
+	edgeURL       string
+	cloudflare    struct{ zone, token string }
 }
 
 func serve(ctx context.Context, args []string) error {
@@ -110,11 +114,15 @@ func serve(ctx context.Context, args []string) error {
 	fs.StringVar(&cfg.objectStore.Bucket, "object-store-bucket", env("LAZYCLOUD_OBJECT_STORE_BUCKET", ""), "bucket for source archives (LAZYCLOUD_OBJECT_STORE_BUCKET)")
 	fs.StringVar(&cfg.objectStore.AccessKeyID, "object-store-access-key-id", env("LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID", ""), "object store access key id (LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID)")
 	fs.StringVar(&cfg.imageTemplate, "image-template", env("LAZYCLOUD_IMAGE_TEMPLATE", "docker.io/library/python:{version}-slim"), "container image per Python version (LAZYCLOUD_IMAGE_TEMPLATE)")
+	fs.StringVar(&cfg.edgeAddr, "edge-addr", env("LAZYCLOUD_EDGE_ADDR", "127.0.0.1:8082"), "workload traffic address (LAZYCLOUD_EDGE_ADDR)")
+	fs.StringVar(&cfg.edgeURL, "edge-url", env("LAZYCLOUD_EDGE_URL", "http://lazycloud.localhost:8082"), "public base URL workloads answer under (LAZYCLOUD_EDGE_URL)")
+	fs.StringVar(&cfg.cloudflare.zone, "cloudflare-zone-id", env("LAZYCLOUD_CLOUDFLARE_ZONE_ID", ""), "Cloudflare for SaaS zone for custom domains (LAZYCLOUD_CLOUDFLARE_ZONE_ID)")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
 	}
-	// The secret stays out of the process arguments.
+	// Secrets stay out of the process arguments.
 	cfg.objectStore.SecretAccessKey = os.Getenv("LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY")
+	cfg.cloudflare.token = os.Getenv("LAZYCLOUD_CLOUDFLARE_API_TOKEN")
 	if cfg.objectStore.Endpoint == "" || cfg.objectStore.Region == "" || cfg.objectStore.Bucket == "" ||
 		cfg.objectStore.AccessKeyID == "" || cfg.objectStore.SecretAccessKey == "" {
 		return errors.New("the object store endpoint, region, bucket, access key id and LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY are required")
@@ -129,12 +137,21 @@ func serve(ctx context.Context, args []string) error {
 }
 
 func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, logger *slog.Logger) error {
-	listener := database.NewListener(pool, logger, database.ChannelHost, database.ChannelTask, database.ChannelClaim)
+	listener := database.NewListener(pool, logger, database.ChannelHost, database.ChannelTask, database.ChannelClaim, execution.ChannelContainerLog)
 	store := storage.NewStorage(pool, cfg.objectStore)
 	exec := execution.NewExecution(pool)
+	ident := identity.NewIdentity(pool)
+	edgeConfig := edge.Config{URL: cfg.edgeURL}
+	if cfg.cloudflare.zone != "" && cfg.cloudflare.token != "" {
+		edgeConfig.Domains = edge.NewCloudflare(edge.CloudflareAPI, cfg.cloudflare.zone, cfg.cloudflare.token)
+	}
+	edges, err := edge.NewEdge(pool, ident, exec, listener, edgeConfig, logger)
+	if err != nil {
+		return err
+	}
 	handler, err := api.NewHandler(api.Owners{
-		Identity: identity.NewIdentity(pool), Control: control.NewControl(pool), Storage: store,
-		Execution: exec, Listener: listener,
+		Identity: ident, Control: control.NewControl(pool), Storage: store,
+		Execution: exec, Listener: listener, Edge: edges,
 	}, logger)
 	if err != nil {
 		return err
@@ -144,7 +161,9 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, logger 
 	}, logger)
 	grpcServer := grpc.NewServer(hosts.ServerOptions()...)
 	hostproto.RegisterHostServiceServer(grpcServer, hosts)
+	hostproto.RegisterHostDataServer(grpcServer, edges.DataServer())
 	httpServer := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+	edgeServer := &http.Server{Handler: edges, ReadHeaderTimeout: 10 * time.Second}
 
 	var lc net.ListenConfig
 	httpListener, err := lc.Listen(ctx, "tcp", cfg.httpAddr)
@@ -156,10 +175,24 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, logger 
 		_ = httpListener.Close()
 		return fmt.Errorf("listen on %s: %w", cfg.grpcAddr, err)
 	}
-	logger.InfoContext(ctx, "serving", "http", httpListener.Addr().String(), "grpc", grpcListener.Addr().String())
+	edgeListener, err := lc.Listen(ctx, "tcp", cfg.edgeAddr)
+	if err != nil {
+		_ = httpListener.Close()
+		_ = grpcListener.Close()
+		return fmt.Errorf("listen on %s: %w", cfg.edgeAddr, err)
+	}
+	logger.InfoContext(ctx, "serving", "http", httpListener.Addr().String(), "grpc", grpcListener.Addr().String(),
+		"edge", edgeListener.Addr().String(), "edge_url", cfg.edgeURL)
 
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error { return listener.Run(gctx) })
+	g.Go(func() error { return edges.Run(gctx) })
+	g.Go(func() error {
+		if err := edgeServer.Serve(edgeListener); !errors.Is(err, http.ErrServerClosed) {
+			return fmt.Errorf("serve edge: %w", err)
+		}
+		return nil
+	})
 	g.Go(func() error {
 		if err := httpServer.Serve(httpListener); !errors.Is(err, http.ErrServerClosed) {
 			return fmt.Errorf("serve http: %w", err)
@@ -175,8 +208,10 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, logger 
 	g.Go(func() error {
 		<-gctx.Done()
 		logger.Info("shutting down")
-		// Sessions and claim long polls end at once; agents reconnect.
+		// Sessions, claim long polls and idle data streams end at once;
+		// agents reconnect.
 		hosts.Shutdown()
+		edges.Shutdown()
 		stopped := make(chan struct{})
 		go func() { grpcServer.GracefulStop(); close(stopped) }()
 		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(gctx), shutdownGrace)
@@ -185,6 +220,9 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, logger 
 		// the grace period.
 		if err := httpServer.Shutdown(shutdownCtx); err != nil {
 			_ = httpServer.Close()
+		}
+		if err := edgeServer.Shutdown(shutdownCtx); err != nil {
+			_ = edgeServer.Close()
 		}
 		select {
 		case <-stopped:

@@ -953,6 +953,9 @@ components:
     InvocationBody:
       type: object
       additionalProperties: true
+      # Kept as raw JSON so arguments pass through unchanged, including
+      # integers beyond float64 precision.
+      x-go-type: json.RawMessage
 
     Invocation:
       type: object

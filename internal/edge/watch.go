@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgconn"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -102,7 +102,10 @@ func (e *Edge) listenChanges(ctx context.Context) error {
 			}
 		}
 	})
-	return g.Wait()
+	if err := g.Wait(); err != nil {
+		return fmt.Errorf("watch changes: %w", err)
+	}
+	return nil
 }
 
 func (e *Edge) reloadRoutes(ctx context.Context) error {

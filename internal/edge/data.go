@@ -22,8 +22,9 @@ const streamWait = 10 * time.Second
 
 // hostStreams holds each connected agent's idle Forward streams.
 type hostStreams struct {
-	mu    sync.Mutex
-	hosts map[uuid.UUID]*hostPool
+	mu     sync.Mutex
+	hosts  map[uuid.UUID]*hostPool
+	closed bool
 }
 
 type hostPool struct {
@@ -120,6 +121,10 @@ func (s *Server) Forward(stream grpc.BidiStreamingServer[hostproto.ForwardUp, ho
 	h := &s.edge.hosts
 	p := &parkedStream{stream: stream, done: make(chan struct{})}
 	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		return status.Error(codes.Unavailable, "the server is shutting down")
+	}
 	pool := h.poolLocked(id)
 	pool.idle = append(pool.idle, p)
 	close(pool.opened)
@@ -142,6 +147,23 @@ func (s *Server) Forward(stream grpc.BidiStreamingServer[hostproto.ForwardUp, ho
 	// A request took the stream as the agent went away; it ends the RPC.
 	<-p.done
 	return p.err
+}
+
+// Shutdown ends every idle stream and refuses new ones, so a graceful stop
+// of the gRPC server only waits for requests in flight.
+func (e *Edge) Shutdown() {
+	h := &e.hosts
+	h.mu.Lock()
+	h.closed = true
+	var idle []*parkedStream
+	for _, pool := range h.hosts {
+		idle = append(idle, pool.idle...)
+		pool.idle = nil
+	}
+	h.mu.Unlock()
+	for _, p := range idle {
+		p.finish(status.Error(codes.Unavailable, "the server is shutting down"))
+	}
 }
 
 // errNoStream means the container's agent opened no stream in time.
