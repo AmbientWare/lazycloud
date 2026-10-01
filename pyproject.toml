@@ -84,6 +84,7 @@ formatters = ["ruff-format"]
 [tool.datamodel-codegen.profiles.api]
 input = "contracts/openapi.yaml"
 output = "python/shared/src/shared/api.py"
+base-class = "shared.contracts.APIModel"
 
 [tool.datamodel-codegen.profiles.runner]
 input = "contracts/runner.yaml"
