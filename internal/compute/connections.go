@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
@@ -283,6 +284,9 @@ func (c *Compute) Connect(ctx context.Context, account identity.UserID, req Conn
 				return nil
 			}
 			return &ConflictError{Message: "this account already has an AWS account connection"}
+		}
+		if err := billing.AdmitConnectedCloud(ctx, tx, uuid.UUID(account)); err != nil {
+			return err
 		}
 		if err := roleFree(ctx, q, req.RoleARN, nil); err != nil {
 			return err

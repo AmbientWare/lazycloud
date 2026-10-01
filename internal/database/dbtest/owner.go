@@ -3,8 +3,25 @@ package dbtest
 import (
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// Waive gives users billing accounts with their usage charges waived, so
+// plan limits and credit do not refuse the work of fixtures that insert
+// users directly; billing tests those.
+func Waive(t testing.TB, pool *pgxpool.Pool, users ...uuid.UUID) {
+	t.Helper()
+	_, err := pool.Exec(t.Context(), `
+with account as (
+    insert into billing_accounts (user_id, complimentary_since) select unnest($1::uuid[]), now()
+)
+insert into billing_balances (user_id, month_started_at, recheck_at)
+select unnest($1::uuid[]), date_trunc('month', now(), 'UTC'), now() + interval '1 day'`, users)
+	if err != nil {
+		t.Fatalf("waive users: %v", err)
+	}
+}
 
 // OwnWorkspaces gives every workspace without one the owner each workspace
 // has, with its usage charges waived. Billing admits a workspace's work

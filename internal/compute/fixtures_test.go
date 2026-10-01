@@ -54,9 +54,12 @@ func scan[T any](t *testing.T, pool *pgxpool.Pool, sql string, args ...any) T {
 	return v
 }
 
+// newUser inserts a user whose usage charges are waived.
 func newUser(t *testing.T, pool *pgxpool.Pool, email string) identity.UserID {
 	t.Helper()
-	return identity.UserID(scan[uuid.UUID](t, pool, "insert into users (email) values ($1) returning id", email))
+	user := scan[uuid.UUID](t, pool, "insert into users (email) values ($1) returning id", email)
+	dbtest.Waive(t, pool, user)
+	return identity.UserID(user)
 }
 
 // newWorkspace inserts a workspace owned by owner.
