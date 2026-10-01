@@ -183,13 +183,14 @@ func NewIdentity(pool *pgxpool.Pool, cfg Config) *Identity {
 	}
 }
 
-// tokenPrefix marks LazyCloud credentials so scanners can recognize them.
-const tokenPrefix = "lc_"
+// TokenPrefix marks LazyCloud credentials so scanners, and the edge that
+// keeps them from workloads, can recognize them.
+const TokenPrefix = "lc_"
 
 // NewToken returns a fresh credential and the digest to store. Tokens carry
 // 32 random bytes, so a plain SHA-256 is a sufficient stored form.
 func NewToken() (token string, digest []byte, err error) {
-	return newSecret(tokenPrefix)
+	return newSecret(TokenPrefix)
 }
 
 func newSecret(prefix string) (secret string, digest []byte, err error) {
