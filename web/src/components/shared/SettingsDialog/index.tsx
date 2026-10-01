@@ -23,7 +23,7 @@ export function SettingsDialog({
   onClose: () => void;
 }) {
   const { user } = useSession();
-  const admin = user.role === "administrator";
+  const admin = user.is_admin;
   // A member can arrive at `?settings=admin` by typing it. The tab is not
   // rendered for them, so the view is shown as billing and the address is
   // corrected to say so.

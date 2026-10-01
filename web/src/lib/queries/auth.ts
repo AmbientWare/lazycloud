@@ -1,9 +1,6 @@
 import { mutationOptions, queryOptions } from "@tanstack/react-query";
-import type { z } from "zod";
 
-import { api, ok } from "@/lib/api/client";
-import type { CurrentSession, DeviceCode, sessionSchema } from "@/lib/api/schemas";
-import { viewUser, viewWorkspace } from "@/lib/api/views";
+import { api, ok, type Schemas } from "@/lib/api/client";
 import { rememberWorkspaces } from "@/lib/api/workspaces";
 
 /** The marker the page keeps once it holds a session; the cookie itself is HttpOnly. */
@@ -24,33 +21,26 @@ export function githubSignInHref(returnTo: string): string {
 
 /**
  * Finish the sign-in the callback page lands on: the cookie is already set, so
- * this confirms it opened a session and hands back where the browser was going.
+ * this confirms it opened a session.
  */
 export function completeSignInMutationOptions() {
   return mutationOptions({
-    mutationFn: async ({ code }: { code: string }): Promise<z.infer<typeof sessionSchema>> => {
-      const me = await ok(api.GET("/v1/me"));
-      rememberWorkspaces(me.workspaces);
-      return {
-        token: SESSION_MARKER,
-        expires_at: new Date(Date.now() + 12 * 3_600_000).toISOString(),
-        user: viewUser(me.user),
-        return_to: decodeURIComponent(code),
-      };
-    },
+    mutationFn: () => readSession(),
   });
 }
 
 export function currentSessionQueryOptions() {
   return queryOptions({
     queryKey: ["auth", "session"],
-    queryFn: async (): Promise<CurrentSession> => {
-      const me = await ok(api.GET("/v1/me"));
-      rememberWorkspaces(me.workspaces);
-      return { user: viewUser(me.user), workspaces: me.workspaces.map(viewWorkspace) };
-    },
+    queryFn: () => readSession(),
     retry: false,
   });
+}
+
+async function readSession(): Promise<Schemas["Me"]> {
+  const me = await ok(api.GET("/v1/me"));
+  rememberWorkspaces(me.workspaces);
+  return me;
 }
 
 /** End the session this browser holds, so signing out stops the credential working. */
@@ -64,7 +54,7 @@ const devicePath = (userCode: string) => ({ params: { path: { user_code: userCod
 export function deviceCodeQueryOptions(userCode: string) {
   return queryOptions({
     queryKey: ["auth", "device-code", userCode],
-    queryFn: (): Promise<DeviceCode> =>
+    queryFn: (): Promise<Schemas["DeviceCode"]> =>
       ok(api.GET("/v1/device-codes/{user_code}", devicePath(userCode))),
     enabled: userCode.length > 0,
     staleTime: 0,
@@ -76,14 +66,14 @@ export function approveDeviceCodeMutationOptions() {
   // No workspace: approving grants the CLI the signed-in account's own reach, and
   // the CLI chooses which of that account's workspaces is active.
   return mutationOptions({
-    mutationFn: ({ userCode }: { userCode: string }): Promise<DeviceCode> =>
+    mutationFn: ({ userCode }: { userCode: string }): Promise<Schemas["DeviceCode"]> =>
       ok(api.POST("/v1/device-codes/{user_code}/approve", devicePath(userCode))),
   });
 }
 
 export function denyDeviceCodeMutationOptions() {
   return mutationOptions({
-    mutationFn: ({ userCode }: { userCode: string }): Promise<DeviceCode> =>
+    mutationFn: ({ userCode }: { userCode: string }): Promise<Schemas["DeviceCode"]> =>
       ok(api.POST("/v1/device-codes/{user_code}/deny", devicePath(userCode))),
   });
 }

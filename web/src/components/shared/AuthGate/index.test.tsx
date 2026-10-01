@@ -14,7 +14,6 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { getStoredAuthToken, setStoredAuthToken, clearStoredAuthToken } from "@/lib/auth";
 import type { Schemas } from "@/lib/api/client";
-import { viewUser } from "@/lib/api/views";
 import { currentSessionQueryOptions, SESSION_MARKER } from "@/lib/queries/auth";
 import { Route as CallbackRoute } from "@/routes/callback";
 
@@ -90,7 +89,7 @@ it("keeps authorization failures distinct from an expired session", async () => 
 
 it("redeems a callback once under StrictMode and clears the previous account cache", async () => {
   queryClient.setQueryData(currentSessionQueryOptions().queryKey, {
-    user: { ...viewUser(session.user), id: "previous-user" },
+    user: { ...session.user, id: "previous-user" },
     workspaces: [],
   });
   queryClient.setQueryData(["apps", "previous-workspace"], { private: true });

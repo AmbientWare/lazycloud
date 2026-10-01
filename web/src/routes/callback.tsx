@@ -6,7 +6,11 @@ import { Loader2 } from "lucide-react";
 import { PreShellScreen } from "@/components/shared/PreShellScreen";
 import { Button } from "@/components/ui/button";
 import { ApiError, setAuthToken } from "@/lib/api/client";
-import { completeSignInMutationOptions, githubSignInHref } from "@/lib/queries/auth";
+import {
+  completeSignInMutationOptions,
+  githubSignInHref,
+  SESSION_MARKER,
+} from "@/lib/queries/auth";
 
 export const Route = createFileRoute("/callback")({
   component: SignInCallbackPage,
@@ -46,11 +50,11 @@ function SignInCallbackPage() {
   const redeemed = useRef(false);
   const complete = useMutation({
     ...completeSignInMutationOptions(),
-    onSuccess: (session) => {
+    onSuccess: () => {
       queryClient.clear();
-      setAuthToken(session.token);
+      setAuthToken(SESSION_MARKER);
       // `replace`, so Back cannot return to a callback URL whose code is spent.
-      void navigate({ to: signedInDestination(session.return_to), replace: true });
+      void navigate({ to: signedInDestination(decodeURIComponent(code)), replace: true });
     },
   });
 
@@ -60,7 +64,7 @@ function SignInCallbackPage() {
     redeemed.current = true;
     // Drop the code from the address bar so it does not sit in history.
     window.history.replaceState(null, "", window.location.pathname);
-    mutate({ code });
+    mutate();
   }, [code, mutate]);
 
   const failure = complete.isError

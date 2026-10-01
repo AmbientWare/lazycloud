@@ -11,7 +11,7 @@ import { WorkspaceDeletionProvider } from "@/components/shared/WorkspaceDeletion
 import { useWorkspaceDeletion } from "@/components/shared/WorkspaceDeletion/context";
 import { WorkspaceLiveUpdatesProvider } from "@/components/shared/WorkspaceLiveUpdates";
 import { Button } from "@/components/ui/button";
-import type { Workspace } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 import { WorkspaceContext, type WorkspaceContextValue } from "@/lib/workspace-context";
 import { useWorkspaceSelection } from "@/lib/workspace-selection";
 
@@ -53,7 +53,7 @@ function WorkspaceLayout() {
           workspaceName={workspaceName}
           workspaceNames={workspaces.map((item) => item.name)}
         />
-      ) : workspace.status === "deleting" ? (
+      ) : workspace.state === "deleting" ? (
         <WorkspaceDeletionRecovery workspace={workspace} />
       ) : (
         <WorkspaceContext.Provider value={contextValue}>
@@ -69,7 +69,7 @@ function WorkspaceLayout() {
   );
 }
 
-function WorkspaceDeletionRecovery({ workspace }: { workspace: Workspace }) {
+function WorkspaceDeletionRecovery({ workspace }: { workspace: Schemas["Workspace"] }) {
   const deletion = useWorkspaceDeletion();
   return (
     <PreShellScreen width="lg">
