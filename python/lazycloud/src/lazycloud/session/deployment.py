@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
+import io
 import re
+import zipfile
 from collections.abc import Callable, Sequence
 from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 from uuid import UUID
 
 from shared.api import (
@@ -48,10 +51,29 @@ from lazycloud.source_sync import (
 from lazycloud.terminal import Terminal, TerminalStep, humanize_bytes
 
 if TYPE_CHECKING:
-    from lazycloud.abstractions.function import Function
-    from lazycloud.abstractions.image import ImageBuildResult
+    from lazycloud.abstractions.image import Image, ImageBuildResult
 
 _VERSIONED_NAME = re.compile(r"(?P<name>.+)-v(?P<version>[1-9][0-9]*)")
+
+
+class Workload(Protocol):
+    """What a deployment needs of a function, endpoint, ASGI app, pod or sandbox."""
+
+    _app_slug: str
+    image: Image
+
+    @property
+    def resource_name(self) -> str: ...
+
+    def require_supported(self) -> None: ...
+
+    def handler_reference(self) -> str | None:
+        """The `module:qualname` the runner imports; None for a pod or sandbox."""
+        ...
+
+    def function_spec(
+        self, *, handler: Any, source_sha256: str, image: ImageBuildResult
+    ) -> FunctionSpec: ...
 
 
 class DeploymentOperationError(SdkError):
@@ -63,7 +85,7 @@ class AppFunctions:
     """The functions of one app that a deployment makes current."""
 
     app: str
-    functions: tuple[Function[..., Any], ...]
+    functions: tuple[Workload, ...]
     prune: bool = False
 
 
@@ -160,38 +182,39 @@ class DeploymentClient:
             cursor = page.next_cursor
         return deployments
 
-    def get(self, deployment_id_or_name: str) -> DeployedWorkload:
+    def get(self, deployment_id_or_name: str, *, app: str | None = None) -> DeployedWorkload:
         client, workspace = self._session()
-        return resolve_deployment(client, workspace, deployment_id_or_name).deployment
+        return resolve_deployment(client, workspace, deployment_id_or_name, app=app).deployment
 
     def handle(self, deployment_id_or_name: str) -> Deployment:
         return Deployment(deployment=self.get(deployment_id_or_name), client=self)
 
-    def stop(self, deployment_id_or_name: str) -> DeployedWorkload:
+    def stop(self, deployment_id_or_name: str, *, app: str | None = None) -> DeployedWorkload:
         """Stop a deployment; `NAME-vN` must name its active version."""
         client, workspace = self._session()
-        reference = resolve_deployment(client, workspace, deployment_id_or_name)
-        deployment = reference.deployment
-        if reference.version is not None and reference.version != deployment.version:
-            msg = (
-                f"version {reference.version} of {deployment.name} is not active; "
-                f"stop {deployment.name} to stop its active version"
-            )
-            raise DeploymentOperationError(msg)
+        deployment = self._active(client, workspace, deployment_id_or_name, app, "stop")
         return client.stop_deployment(workspace, deployment.id)
 
-    def start(self, deployment_id_or_name: str) -> DeployedWorkload:
+    def start(self, deployment_id_or_name: str, *, app: str | None = None) -> DeployedWorkload:
         """Start a deployment; `NAME-vN` makes version N active first."""
         client, workspace = self._session()
-        reference = resolve_deployment(client, workspace, deployment_id_or_name)
+        reference = resolve_deployment(client, workspace, deployment_id_or_name, app=app)
         return client.start_deployment(
             workspace, reference.deployment.id, version=reference.version
         )
 
-    def delete(self, deployment_id_or_name: str) -> DeployedWorkload:
+    def scale(
+        self, deployment_id_or_name: str, containers: int, *, app: str | None = None
+    ) -> DeployedWorkload:
+        """Hold a pod at `containers` containers; `NAME-vN` must name its active version."""
+        client, workspace = self._session()
+        deployment = self._active(client, workspace, deployment_id_or_name, app, "scale")
+        return client.scale_deployment(workspace, deployment.id, containers)
+
+    def delete(self, deployment_id_or_name: str, *, app: str | None = None) -> DeployedWorkload:
         """Delete a deployment and every version of it; a single version cannot be deleted."""
         client, workspace = self._session()
-        reference = resolve_deployment(client, workspace, deployment_id_or_name)
+        reference = resolve_deployment(client, workspace, deployment_id_or_name, app=app)
         if reference.version is not None:
             msg = (
                 f"{deployment_id_or_name} names one version; delete "
@@ -199,6 +222,19 @@ class DeploymentClient:
             )
             raise DeploymentOperationError(msg)
         return client.delete_deployment(workspace, reference.deployment.id)
+
+    def _active(
+        self, client: ApiClient, workspace: str, reference: str, app: str | None, action: str
+    ) -> DeployedWorkload:
+        resolved = resolve_deployment(client, workspace, reference, app=app)
+        deployment = resolved.deployment
+        if resolved.version is not None and resolved.version != deployment.version:
+            msg = (
+                f"version {resolved.version} of {deployment.name} is not active; "
+                f"{action} {deployment.name} to {action} its active version"
+            )
+            raise DeploymentOperationError(msg)
+        return deployment
 
     def submit(
         self,
@@ -267,7 +303,7 @@ def deploy_functions(
 
 
 def prepare_function_release(
-    function: Function[..., Any],
+    function: Workload,
     *,
     client: ApiClient,
     workspace: str,
@@ -288,7 +324,7 @@ def prepare_function_release(
 
 
 def prepare_spec(
-    workload: Function[..., Any],
+    workload: Workload,
     *,
     client: ApiClient,
     workspace: str,
@@ -304,37 +340,45 @@ def prepare_spec(
     spec = _function_specs(
         [workload], client=client, workspace=workspace, source_root=source_root, terminal=terminal
     )[id(workload)]
-    return spec, _source_placement(workload, Path(source_root or ".").expanduser().resolve())[1]
+    prefix = _source_placement(workload, Path(source_root or ".").expanduser().resolve())[1]
+    return spec, prefix or ()
 
 
-def resolve_deployment(client: ApiClient, workspace: str, reference: str) -> DeploymentReference:
-    """Find a deployment by id, by exact name, or as `NAME-vN` for version N of NAME."""
+def resolve_deployment(
+    client: ApiClient, workspace: str, reference: str, *, app: str | None = None
+) -> DeploymentReference:
+    """Find a deployment by id, by exact name, or as `NAME-vN` for version N of NAME.
+
+    `app` limits the names to one app's deployments.
+    """
     try:
         deployment_id = UUID(reference)
     except ValueError:
         pass
     else:
         return DeploymentReference(client.get_deployment(workspace, deployment_id))
-    named = _deployments_named(client, workspace, reference)
+    named = _deployments_named(client, workspace, reference, app)
     if named is not None:
         return DeploymentReference(named)
     versioned = _VERSIONED_NAME.fullmatch(reference)
     if versioned is not None:
-        named = _deployments_named(client, workspace, versioned["name"])
+        named = _deployments_named(client, workspace, versioned["name"], app)
         if named is not None:
             return DeploymentReference(named, int(versioned["version"]))
     raise DeploymentNotFoundError(reference)
 
 
-def _deployments_named(client: ApiClient, workspace: str, name: str) -> DeployedWorkload | None:
-    matches = client.list_deployments(workspace, name=name).deployments
+def _deployments_named(
+    client: ApiClient, workspace: str, name: str, app: str | None
+) -> DeployedWorkload | None:
+    matches = client.list_deployments(workspace, app=app, name=name).deployments
     if len(matches) > 1:
         raise AmbiguousDeploymentError(name, sorted(item.app for item in matches))
     return matches[0] if matches else None
 
 
 def _function_specs(
-    functions: Sequence[Function[..., Any]],
+    functions: Sequence[Workload],
     *,
     client: ApiClient,
     workspace: str,
@@ -349,12 +393,17 @@ def _function_specs(
         function.require_supported()
     placements = {id(function): _source_placement(function, root) for function in functions}
     images = _prepare_images(functions, client=client, workspace=workspace, terminal=terminal)
-    if ensure_source_ignore_file(root):
+    prefixes = list(dict.fromkeys(prefix for _, prefix in placements.values()))
+    if any(prefix is not None for prefix in prefixes) and ensure_source_ignore_file(root):
         terminal.detail(SOURCE_IGNORE_FILE_WRITTEN_NOTICE)
-    sources: dict[tuple[str, ...], str] = {}
-    for prefix in dict.fromkeys(prefix for _, prefix in placements.values()):
-        sources[prefix] = _upload_source(
-            client, workspace=workspace, root=root, archive_prefix=prefix, terminal=terminal
+    sources: dict[tuple[str, ...] | None, str] = {}
+    for prefix in prefixes:
+        sources[prefix] = (
+            _store_empty_source(client, workspace)
+            if prefix is None
+            else _upload_source(
+                client, workspace=workspace, root=root, archive_prefix=prefix, terminal=terminal
+            )
         )
     specs: dict[int, FunctionSpec] = {}
     for function in functions:
@@ -366,7 +415,7 @@ def _function_specs(
 
 
 def _prepare_images(
-    functions: Sequence[Function[..., Any]],
+    functions: Sequence[Workload],
     *,
     client: ApiClient,
     workspace: str,
@@ -395,13 +444,32 @@ def _runtime_done(step: TerminalStep, name: str, release: Release) -> None:
     step.done(f"{name} · {str(release.id)[:8]}")
 
 
-def _source_placement(function: Function[..., Any], root: Path) -> tuple[str, tuple[str, ...]]:
-    """The handler reference inside the archive and the archive's module prefix."""
+def _source_placement(
+    function: Workload, root: Path
+) -> tuple[str | None, tuple[str, ...] | None]:
+    """The handler reference inside the archive and the archive's module prefix.
+
+    A pod has no handler and gets the source root as its workspace. A sandbox
+    gets it only with `sync_local_dir`; otherwise its prefix is None and it
+    runs on an empty archive.
+    """
+    handler = function.handler_reference()
+    if handler is None:
+        return None, () if getattr(function, "sync_local_dir", True) else None
     try:
-        reference = source_root_handler_reference(function.handler_reference(), root)
+        reference = source_root_handler_reference(handler, root)
     except HandlerReferenceError as exc:
         raise DeploymentOperationError(str(exc)) from exc
     return reference.handler, reference.archive_prefix
+
+
+def _store_empty_source(client: ApiClient, workspace: str) -> str:
+    buffer = io.BytesIO()
+    zipfile.ZipFile(buffer, "w").close()
+    archive = buffer.getvalue()
+    sha256 = hashlib.sha256(archive).hexdigest()
+    client.store_source(workspace, sha256, archive)
+    return sha256
 
 
 def _upload_source(

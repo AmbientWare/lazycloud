@@ -40,6 +40,7 @@ from shared.api import (
     Me,
     Payload,
     Release,
+    ScaleRequest,
     SchedulePage,
     Secret,
     SecretCreate,
@@ -439,6 +440,17 @@ class ApiClient:
             body=StartDeploymentRequest(version=version) if version is not None else None,
         )
 
+    def scale_deployment(
+        self, workspace: str, deployment_id: UUID, containers: int
+    ) -> DeployedWorkload:
+        """Hold a pod at `containers` containers until the next scale."""
+        return self._send(
+            DeployedWorkload,
+            "POST",
+            _path("v1", "workspaces", workspace, "deployments", str(deployment_id), "scale"),
+            body=ScaleRequest(containers=containers),
+        )
+
     def delete_deployment(self, workspace: str, deployment_id: UUID) -> DeployedWorkload:
         return self._send(
             DeployedWorkload,
@@ -466,10 +478,16 @@ class ApiClient:
         workspace: str,
         *,
         live: bool = False,
+        deployment: UUID | None = None,
         limit: int = 100,
         cursor: str | None = None,
     ) -> ContainerPage:
-        params = _query(live="true" if live else None, limit=limit, cursor=cursor)
+        params = _query(
+            live="true" if live else None,
+            deployment=str(deployment) if deployment is not None else None,
+            limit=limit,
+            cursor=cursor,
+        )
         return self._send(
             ContainerPage, "GET", _path("v1", "workspaces", workspace, "containers"), params=params
         )
