@@ -80,8 +80,9 @@ requiring explicit scope and authorization.
 
 - Go owns platform backend decisions, orchestration and host runtime.
 - Python owns deployment authoring, SDK/CLI workflows and execution of Python user
-  code. The public CLI is in python/lazycloud. The former apps/cli was the internal
-  admin CLI; rebuild its supported operations through administration contracts.
+  code. The public CLI is in python/lazycloud and is the only CLI. The
+  reference's internal admin CLI and dashboard admin settings were unused and
+  are not rebuilt; the server binary keeps only its bootstrap subcommands.
 - TypeScript owns the existing frontend. Future TypeScript and Go SDKs should use
   the same public protocol without depending on Python implementation details.
 - The Python shared package supports retained consumers. Reduce it as contracts
@@ -472,6 +473,6 @@ Update the assigned checklist item only when its completion requirements are met
 - [ ] Notifications
 - [ ] Python SDK and public CLI integration
 - [ ] Web API integration and data flow
-- [ ] Operations and administration
+- [ ] Operations (packaging, deployment, release CI; no admin tooling)
 - [ ] Local development, CI and deployment
 - [ ] Platform acceptance, scale evidence and cutover
