@@ -83,6 +83,9 @@ class _Handler(BaseHTTPRequestHandler):
     def do_PUT(self) -> None:
         self._dispatch()
 
+    def do_DELETE(self) -> None:
+        self._dispatch()
+
     def _dispatch(self) -> None:
         parts = urlsplit(self.path)
         length = int(self.headers.get("Content-Length") or 0)

@@ -83,6 +83,7 @@ def _task(task_id: str, status: str = "queued", **extra: object) -> dict[str, ob
         "release_id": RELEASE_ID,
         "status": status,
         "attempts": 1 if status != "queued" else 0,
+        "max_attempts": 1,
         "created_at": NOW,
         **extra,
     }
@@ -137,8 +138,31 @@ def _serve_deployment(api: FakeApi, *, stored: set[str]) -> None:
             }
             for spec in functions
         ]
-        app = {"id": APP_ID, "name": "reports", "state": "active", "created_at": NOW}
-        return json_reply({"app": app, "releases": releases, "pruned": []})
+        return json_reply(
+            {
+                "app": _app(workloads=len(releases)),
+                "releases": releases,
+                "pruned": [],
+                "removed_versions": 0,
+            }
+        )
+
+    @api.route("POST", "/v1/workspaces/team/apps/reports/functions/[^/]+/releases")
+    def prepare(request: ApiRequest) -> Reply:
+        spec: dict[str, Any] = request.json()
+        return json_reply(
+            {"id": RELEASE_ID, "function": spec["name"], "created_at": NOW, "spec": spec}
+        )
+
+
+def _app(*, workloads: int = 1, state: str = "active") -> dict[str, object]:
+    return {
+        "id": APP_ID,
+        "name": "reports",
+        "state": state,
+        "workloads": workloads,
+        "created_at": NOW,
+    }
 
 
 def test_deploy_uploads_the_source_once_and_maps_function_options(
@@ -160,7 +184,10 @@ def test_deploy_uploads_the_source_once_and_maps_function_options(
     assert len(fake_api.calls("POST", "/v1/workspaces/team/sources")) == 2
     (request,) = fake_api.calls("POST", "/v1/workspaces/team/apps/reports/deployments")
     assert request.headers["authorization"] == f"Bearer {TOKEN}"
-    assert request.json() == {
+    body = request.json()
+    contract = body["functions"][0].pop("client_contract")
+    assert contract["operation"]["parameters"][0]["name"] == "values"
+    assert body == {
         "functions": [
             {
                 "name": "summarize_sales",
@@ -232,12 +259,14 @@ def test_remote_streams_output_resumes_dropped_logs_and_returns_the_value(
     fake_api: FakeApi,
 ) -> None:
     reports = _project(tmp_path, monkeypatch)
+    _serve_deployment(fake_api, stored=set())
     task_id = _task_id(7)
     log_streams: list[Iterator[bytes]] = []
 
     def entry(number: int, stream: str, data: str) -> bytes:
         record: dict[str, object] = {
             "id": number,
+            "task_id": task_id,
             "attempt": 1,
             "stream": stream,
             "data": data,
@@ -274,14 +303,15 @@ def test_remote_streams_output_resumes_dropped_logs_and_returns_the_value(
         (["0"], ["true"]),
         (["1"], ["true"]),
     ]
-    (wait,) = fake_api.calls("GET", f"/v1/workspaces/team/tasks/{task_id}")
-    assert wait.query["wait_seconds"] == ["30"]
+    reads = fake_api.calls("GET", f"/v1/workspaces/team/tasks/{task_id}")
+    assert [r.query["wait_seconds"] for r in reads if "wait_seconds" in r.query] == [["30"]]
     stderr = capsys.readouterr().err
     assert stderr.count("summing 3 values") == 1
     assert "total ready" in stderr
 
 
 def _serve_failed_task(api: FakeApi, failure: dict[str, object]) -> None:
+    _serve_deployment(api, stored=set())
     task_id = _task_id(9)
     api.route("POST", TASKS)(lambda _: json_reply({"tasks": [_task(task_id)]}, 201))
     api.route("GET", f"/v1/workspaces/team/tasks/{task_id}/logs")(lambda _: (200, {}, b""))
@@ -335,6 +365,7 @@ def test_spawn_map_submits_in_batches_and_keeps_input_order(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_api: FakeApi
 ) -> None:
     reports = _project(tmp_path, monkeypatch)
+    _serve_deployment(fake_api, stored=set())
     submitted: list[int] = []
 
     @fake_api.route("POST", TASKS)
@@ -365,6 +396,7 @@ def test_calling_an_undeployed_function_raises_a_typed_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_api: FakeApi
 ) -> None:
     reports = _project(tmp_path, monkeypatch)
+    _serve_deployment(fake_api, stored=set())
     fake_api.route("POST", TASKS)(lambda _: error_reply("not_found", "function not found", 404))
 
     with pytest.raises(FunctionNotDeployedError, match=r"reports\.summarize_sales"):
@@ -415,6 +447,7 @@ def test_cli_run_json_and_task_commands_use_the_task_api(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_api: FakeApi
 ) -> None:
     _project(tmp_path, monkeypatch)
+    _serve_deployment(fake_api, stored=set())
     task_id = _task_id(11)
     fake_api.route("POST", TASKS)(lambda _: json_reply({"tasks": [_task(task_id)]}, 201))
     fake_api.route("GET", f"/v1/workspaces/team/tasks/{task_id}/logs")(lambda _: (200, {}, b""))
@@ -437,7 +470,10 @@ def test_cli_run_json_and_task_commands_use_the_task_api(
     assert json.loads(ran.stdout) == 6
     (submit,) = fake_api.calls("POST", TASKS)
     arguments: dict[str, object] = {"args": [[1, 2, 3]], "kwargs": {}}
-    assert submit.json() == {"inputs": [{"encoding": "json", "value": arguments}]}
+    assert submit.json() == {
+        "inputs": [{"encoding": "json", "value": arguments}],
+        "release_id": RELEASE_ID,
+    }
     assert result.exit_code == 0, result.output
     assert json.loads(result.stdout) == 6
     assert cancelled.exit_code == 0, cancelled.output

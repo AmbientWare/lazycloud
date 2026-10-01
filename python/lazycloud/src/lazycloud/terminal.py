@@ -16,7 +16,7 @@ from rich.spinner import Spinner
 from rich.style import Style
 from rich.table import Table
 from rich.text import Text
-from shared.http.task_progress import TaskPendingProgress, TaskPendingReason
+from shared.api import TaskPendingProgress, TaskPendingReason
 from shared.timestamps import utc_now
 from typing_extensions import Self
 
