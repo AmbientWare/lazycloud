@@ -14,6 +14,9 @@ import { expect, test, type BrowserContext, type Page } from "@playwright/test";
  *                          "greeting <name>" and returns "hello <name>", and
  *                          whose `report(title: str)` saves report.txt as an
  *                          artifact of its task
+ *   WEB_E2E_INVITATION     optional: an invitation link to WEB_E2E_WORKSPACE,
+ *                          read from the queued email, and
+ *   WEB_E2E_GUEST_SESSION  a session of the account it invites
  *
  * GitHub sign-in needs a GitHub App the local platform does not have, so the
  * session comes from the admin command; the sign-in journey checks the path a
@@ -24,17 +27,19 @@ const session = process.env.WEB_E2E_SESSION ?? "";
 const token = process.env.WEB_E2E_TOKEN ?? "";
 const workspace = process.env.WEB_E2E_WORKSPACE ?? "";
 const app = process.env.WEB_E2E_APP ?? "";
+const invitation = process.env.WEB_E2E_INVITATION ?? "";
+const guestSession = process.env.WEB_E2E_GUEST_SESSION ?? "";
 
 test.skip(!stack, "WEB_E2E_STACK=1 and a running platform are required");
 // A first call may wait for a cold container and an image pull.
 test.setTimeout(90_000);
 
-async function signIn(context: BrowserContext, baseURL: string) {
+async function signIn(context: BrowserContext, baseURL: string, value = session) {
   const { hostname } = new URL(baseURL);
   await context.addCookies([
     {
       name: "__Host-lazycloud_session",
-      value: session,
+      value,
       domain: hostname,
       path: "/",
       secure: true,
@@ -343,4 +348,22 @@ test("an artifact a task saved is previewed from the task and listed in storage"
   await page.goto(`/w/${workspace}/storage?view=artifacts`);
   await expect(page.getByRole("button", { name: "Preview report.txt" }).first()).toBeVisible();
   expect(failures).toEqual([]);
+});
+
+test("an invited account previews the invitation and joins the workspace", async ({
+  page,
+  context,
+  baseURL,
+}) => {
+  test.skip(!invitation || !guestSession, "WEB_E2E_INVITATION and WEB_E2E_GUEST_SESSION");
+  await signIn(context, baseURL!, guestSession);
+  await page.goto(new URL(invitation).pathname);
+  await expect(page.getByRole("heading", { name: `Join ${workspace}` })).toBeVisible();
+  await expect(page.getByText("You will join as the account you are signed in as")).toBeVisible();
+  await page.getByRole("button", { name: "Accept" }).click();
+  await expect(page).toHaveURL(new RegExp(`/w/${workspace}/apps$`));
+
+  // The link is spent.
+  await page.goto(new URL(invitation).pathname);
+  await expect(page.getByRole("heading", { name: "This invitation is no longer open" })).toBeVisible();
 });
