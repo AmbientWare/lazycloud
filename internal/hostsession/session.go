@@ -391,11 +391,14 @@ func (s *Server) startMessage(ctx context.Context, id string, start execution.St
 	}
 	var function *hostproto.FunctionWorkload
 	var pod *hostproto.PodWorkload
+	var http *hostproto.HttpServing
 	if start.Spec.Pod != nil || start.Purpose == execution.PurposeShell {
+		// A shell container of an endpoint serves no HTTP.
 		if pod, err = s.podWorkload(ctx, start); err != nil {
 			return nil, err
 		}
 	} else {
+		http = httpServing(start.Spec)
 		function = &hostproto.FunctionWorkload{
 			Handler:   deref(start.Spec.Handler),
 			Slots:     int32(start.Slots), //nolint:gosec // The schema caps concurrency at 256.
@@ -421,7 +424,7 @@ func (s *Server) startMessage(ctx context.Context, id string, start execution.St
 		Docker:      start.Spec.DockerEnabled != nil && *start.Spec.DockerEnabled,
 		Restore:     restore,
 		Disks:       disksOut(start.Spec),
-		Http:        httpServing(start.Spec),
+		Http:        http,
 		Environment: env,
 		Volumes:     volumes,
 		Secrets:     secretValues,
