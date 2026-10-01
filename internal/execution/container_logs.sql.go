@@ -68,6 +68,29 @@ func (q *Queries) InsertContainerLogs(ctx context.Context, arg InsertContainerLo
 	return items, nil
 }
 
+const pruneContainerLogs = `-- name: PruneContainerLogs :execrows
+delete from container_logs where id in (
+    select old.id from container_logs old where old.logged_at < $1
+    order by old.logged_at
+    limit $2
+    for update skip locked
+)
+`
+
+type PruneContainerLogsParams struct {
+	Before  time.Time
+	MaxRows int32
+}
+
+// The oldest lines past the retention, a bounded batch at a time.
+func (q *Queries) PruneContainerLogs(ctx context.Context, arg PruneContainerLogsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, pruneContainerLogs, arg.Before, arg.MaxRows)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const releaseContainer = `-- name: ReleaseContainer :one
 select id, state, host_id from containers
 where release_id = $1::uuid and state <> 'stopped'

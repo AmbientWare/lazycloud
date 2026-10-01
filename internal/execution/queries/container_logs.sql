@@ -42,3 +42,12 @@ join containers c on c.id = l.container_id
 where l.request_id = @request_id and c.workspace_id = @workspace_id and l.id > @after
 order by l.id
 limit @max_entries;
+
+-- name: PruneContainerLogs :execrows
+-- The oldest lines past the retention, a bounded batch at a time.
+delete from container_logs where id in (
+    select old.id from container_logs old where old.logged_at < @before
+    order by old.logged_at
+    limit @max_rows
+    for update skip locked
+);

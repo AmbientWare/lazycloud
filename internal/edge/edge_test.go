@@ -310,3 +310,75 @@ select o.id, s.id from o, s`).Scan(&owner, &stranger)
 		t.Fatalf("remove a domain a route holds: %v; want DomainConflictError", err)
 	}
 }
+
+// releaseFixture inserts a workspace, an endpoint release and a container,
+// and returns their ids.
+func releaseFixture(t *testing.T, pool *pgxpool.Pool) (workspace, workload, release, container uuid.UUID) {
+	t.Helper()
+	err := pool.QueryRow(t.Context(), `
+with ws as (insert into workspaces (name) values ('ws') returning id),
+     a as (insert into apps (workspace_id, name, state) select id, 'shop', 'active' from ws returning id),
+     w as (insert into workloads (app_id, kind, name, desired_state) select id, 'endpoint', 'web', 'active' from a returning id),
+     r as (insert into releases (workload_id, version, spec, spec_digest, source_sha256)
+           select id, 1, '{}'::jsonb, sha256('spec'), sha256('src') from w returning id),
+     c as (insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes)
+           select ws.id, r.id, 'stopped', 1, 1000, 1 << 28 from ws, r returning id)
+select ws.id, w.id, r.id, c.id from ws, w, r, c`).Scan(&workspace, &workload, &release, &container)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return workspace, workload, release, container
+}
+
+// One retention pass deletes past a single batch, records and container
+// output both, and keeps what is still inside the retention.
+func TestRetentionPassDeletesEveryExpiredBatch(t *testing.T) {
+	pool := dbtest.New(t)
+	e := newTestEdge(t, pool)
+	ctx := t.Context()
+	ws, wl, rel, c := releaseFixture(t, pool)
+	old := time.Now().Add(-requestRetention - time.Hour)
+	rows := pruneBatch*2 + 5
+	if _, err := pool.Exec(ctx, `
+insert into http_requests (id, workspace_id, workload_id, release_id, method, path, status, started_at, duration_ms, request_bytes, response_bytes)
+select gen_random_uuid(), $1, $2, $3, 'GET', '/', 200, $4, 1, 0, 0 from generate_series(1, $5)`, ws, wl, rel, old, rows); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+insert into container_logs (container_id, stream, data, logged_at)
+select $1::uuid, 'stdout', 'old', $2::timestamptz from generate_series(1, $3::int)
+union all select $1::uuid, 'stdout', 'new', now()`, c, old, rows); err != nil {
+		t.Fatal(err)
+	}
+	e.prune(ctx)
+	var requests, logs int
+	if err := pool.QueryRow(ctx, `select (select count(*) from http_requests), (select count(*) from container_logs)`).Scan(&requests, &logs); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 0 || logs != 1 {
+		t.Fatalf("after one pass %d records and %d log lines remain; want 0 and the 1 recent line", requests, logs)
+	}
+}
+
+// Records still queued when the edge stops are written, and a batch whose
+// write failed is kept for the next one.
+func TestQueuedRecordsAreWrittenAtShutdown(t *testing.T) {
+	pool := dbtest.New(t)
+	e := newTestEdge(t, pool)
+	ws, wl, rel, _ := releaseFixture(t, pool)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { e.writeRequests(ctx); close(done) }()
+	for range 3 {
+		e.queueRecord(requestRecord{id: uuid.New(), workspace: ws, workload: wl, release: rel, method: "GET", path: "/", status: 200, started: time.Now()})
+	}
+	cancel()
+	<-done
+	var n int
+	if err := pool.QueryRow(t.Context(), `select count(*) from http_requests`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 3 {
+		t.Fatalf("%d records written at shutdown; want 3", n)
+	}
+}

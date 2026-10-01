@@ -121,10 +121,14 @@ var (
 	errBufferFull   = errors.New("the edge holds too many request bodies; try again")
 )
 
-// platformToken reports whether the request carries a LazyCloud bearer
-// token.
-func platformToken(r *http.Request) bool {
-	return strings.HasPrefix(bearerToken(r), identity.TokenPrefix)
+// isPlatformToken reports whether an Authorization value carries a
+// LazyCloud credential, in any scheme.
+func isPlatformToken(value string) bool {
+	_, credential, found := strings.Cut(strings.TrimSpace(value), " ")
+	if !found {
+		credential = value
+	}
+	return strings.HasPrefix(strings.TrimSpace(credential), identity.TokenPrefix)
 }
 
 // requestBody is what the edge sends a container: the whole body when it
@@ -299,11 +303,22 @@ func (e *Edge) requestHead(r *http.Request, authorized, upgrade bool, body *requ
 		header.Set("Connection", "Upgrade")
 		header.Set("Upgrade", r.Header.Get("Upgrade"))
 	}
-	if authorized || platformToken(r) {
-		// The token reached the platform, or is one: the workload never
-		// sees a platform credential. A public workload keeps any other
-		// Authorization, which is its own.
+	if authorized {
+		// The token reached the platform; the workload never sees it.
 		header.Del("Authorization")
+	} else {
+		// A public workload keeps Authorization values of its own, never a
+		// platform credential.
+		var own []string
+		for _, value := range header.Values("Authorization") {
+			if !isPlatformToken(value) {
+				own = append(own, value)
+			}
+		}
+		header.Del("Authorization")
+		for _, value := range own {
+			header.Add("Authorization", value)
+		}
 	}
 	if client, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
 		if prior := header.Get("X-Forwarded-For"); prior != "" {

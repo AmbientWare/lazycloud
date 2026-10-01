@@ -91,6 +91,7 @@ create table container_logs (
 
 create index container_logs_container on container_logs (container_id, id);
 create index container_logs_request on container_logs (request_id, id) where request_id is not null;
+create index container_logs_logged on container_logs (logged_at);
 
 -- One row per endpoint or ASGI request, which the edge writes in batches
 -- after each ends. The id is the X-Request-Id the caller and the workload
@@ -130,6 +131,7 @@ create table host_data_links (
 
 create index http_requests_workload on http_requests (workload_id, id desc);
 create index http_requests_started on http_requests (started_at);
+create index http_requests_workspace on http_requests (workspace_id, id desc);
 
 -- Wake-ups for the edge's route table and container sets. They are only
 -- signals: the edge re-reads durable state on every one.

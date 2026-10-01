@@ -213,7 +213,8 @@ func TestPublicWorkloadsAnswerWithoutAToken(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || string(body) != "auth=Basic dXNlcjpwdw==" {
 		t.Fatalf("public app: %d %s", resp.StatusCode, body)
 	}
-	// A platform token never reaches a workload, public or not.
+	// A platform token never reaches a workload, public or not, among the
+	// app's own Authorization values too.
 	req.Header.Set("Authorization", "Bearer "+p.token)
 	resp, err = p.client.Do(req)
 	if err != nil {
@@ -223,6 +224,17 @@ func TestPublicWorkloadsAnswerWithoutAToken(t *testing.T) {
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK || string(body) != "auth=" {
 		t.Fatalf("public app with a platform token: %d %s", resp.StatusCode, body)
+	}
+	req.Header.Set("Authorization", "Basic dXNlcjpwdw==")
+	req.Header.Add("Authorization", "Bearer "+p.token)
+	resp, err = p.client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || string(body) != "auth=Basic dXNlcjpwdw==" {
+		t.Fatalf("public app with its own and a platform credential: %d %s", resp.StatusCode, body)
 	}
 
 	// The function goes private: its old public version stays closed on

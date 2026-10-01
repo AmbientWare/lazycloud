@@ -11,7 +11,7 @@ delete from edges where id = @id;
 delete from edges where expires_at < now();
 
 -- name: EdgeToken :one
-select token_sha256 from edges where id = @id and expires_at > now();
+select token_sha256, expires_at from edges where id = @id and expires_at > now();
 
 -- name: LinkHost :exec
 insert into host_data_links (host_id, edge_id) values (@host_id, @edge_id)

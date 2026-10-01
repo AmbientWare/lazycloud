@@ -62,8 +62,14 @@ type relaying struct {
 	// links remembers which edge holds a host: its relay address, or ""
 	// for none.
 	links map[uuid.UUID]peerLink
-	// tokens caches other edges' token digests.
-	tokens map[uuid.UUID][]byte
+	// tokens caches other edges' token digests until their registration
+	// expires.
+	tokens map[uuid.UUID]peerToken
+}
+
+type peerToken struct {
+	digest  []byte
+	expires time.Time
 }
 
 type peerLink struct {
@@ -78,7 +84,7 @@ func newRelaying(address string) (*relaying, error) {
 	}
 	return &relaying{
 		address: address, token: hex.EncodeToString(secret),
-		peers: map[string]*grpc.ClientConn{}, links: map[uuid.UUID]peerLink{}, tokens: map[uuid.UUID][]byte{},
+		peers: map[string]*grpc.ClientConn{}, links: map[uuid.UUID]peerLink{}, tokens: map[uuid.UUID]peerToken{},
 	}, nil
 }
 
@@ -314,22 +320,26 @@ func (s *RelayServer) authenticate(ctx context.Context) (uuid.UUID, error) {
 	}
 	r := s.edge.relay
 	r.mu.Lock()
-	digest, known := r.tokens[caller]
+	cached, known := r.tokens[caller]
 	r.mu.Unlock()
-	if !known {
-		digest, err = s.edge.queries.EdgeToken(ctx, caller)
+	if !known || time.Now().After(cached.expires) {
+		row, err := s.edge.queries.EdgeToken(ctx, caller)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return uuid.Nil, unauthenticated
 		}
 		if err != nil {
 			return uuid.Nil, status.Error(codes.Unavailable, "read the edge's registration")
 		}
+		cached = peerToken{digest: row.TokenSha256, expires: row.ExpiresAt}
 		r.mu.Lock()
-		r.tokens[caller] = digest
+		if len(r.tokens) >= maxCachedReleases {
+			clear(r.tokens)
+		}
+		r.tokens[caller] = cached
 		r.mu.Unlock()
 	}
 	sum := sha256.Sum256([]byte(token))
-	if subtle.ConstantTimeCompare(sum[:], digest) != 1 {
+	if subtle.ConstantTimeCompare(sum[:], cached.digest) != 1 {
 		return uuid.Nil, unauthenticated
 	}
 	hosts := md.Get(hostMetadata)

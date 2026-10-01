@@ -13,14 +13,19 @@ import (
 )
 
 const edgeToken = `-- name: EdgeToken :one
-select token_sha256 from edges where id = $1 and expires_at > now()
+select token_sha256, expires_at from edges where id = $1 and expires_at > now()
 `
 
-func (q *Queries) EdgeToken(ctx context.Context, id uuid.UUID) ([]byte, error) {
+type EdgeTokenRow struct {
+	TokenSha256 []byte
+	ExpiresAt   time.Time
+}
+
+func (q *Queries) EdgeToken(ctx context.Context, id uuid.UUID) (EdgeTokenRow, error) {
 	row := q.db.QueryRow(ctx, edgeToken, id)
-	var token_sha256 []byte
-	err := row.Scan(&token_sha256)
-	return token_sha256, err
+	var i EdgeTokenRow
+	err := row.Scan(&i.TokenSha256, &i.ExpiresAt)
+	return i, err
 }
 
 const forgetEdge = `-- name: ForgetEdge :exec

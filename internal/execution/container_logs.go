@@ -74,6 +74,16 @@ func (e *Execution) AppendContainerLogs(ctx context.Context, host compute.HostID
 	return nil
 }
 
+// PruneContainerLogs deletes up to limit lines written before before, the
+// oldest first, and returns how many it deleted.
+func (e *Execution) PruneContainerLogs(ctx context.Context, before time.Time, limit int) (int, error) {
+	n, err := e.queries.PruneContainerLogs(ctx, PruneContainerLogsParams{Before: before, MaxRows: int32(limit)}) //nolint:gosec // bounded by the caller
+	if err != nil {
+		return 0, fmt.Errorf("prune container logs: %w", err)
+	}
+	return int(n), nil
+}
+
 // RequestLogs returns what was written while serving an HTTP request of the
 // workspace, after the cursor, in order.
 func (e *Execution) RequestLogs(ctx context.Context, workspace uuid.UUID, request uuid.UUID, after int64, limit int) ([]ContainerLogEntry, error) {

@@ -28,11 +28,16 @@ const (
 	// requestBatch and requestFlush bound one write.
 	requestBatch = 500
 	requestFlush = time.Second
-	// requestRetention is how long records are kept.
+	// requestRetention is how long records, and the output containers
+	// wrote, are kept.
 	requestRetention = 7 * 24 * time.Hour
-	// pruneInterval paces retention deletes, each of at most pruneBatch rows.
+	// pruneInterval paces retention passes; each deletes batches of
+	// pruneBatch rows for at most pruneBudget.
 	pruneInterval = 10 * time.Minute
 	pruneBatch    = 10_000
+	pruneBudget   = time.Minute
+	// finalFlush bounds the write of the records held at shutdown.
+	finalFlush    = 5 * time.Second
 	maxPathLength = 1024
 )
 
@@ -137,43 +142,96 @@ func (e *Edge) queueRecord(rec requestRecord) {
 	}
 }
 
-// writeRequests writes queued records in batches and prunes old ones until
-// ctx ends.
+// writeRequests writes queued records in batches and prunes old records
+// and request output until ctx ends, then writes what it still holds.
 func (e *Edge) writeRequests(ctx context.Context) {
 	flush := time.NewTicker(requestFlush)
 	defer flush.Stop()
 	prune := time.NewTicker(pruneInterval)
 	defer prune.Stop()
 	batch := make([]requestRecord, 0, requestBatch)
-	write := func() {
-		if len(batch) == 0 {
+	var retryAt time.Time
+	write := func(ctx context.Context) {
+		if len(batch) == 0 || time.Now().Before(retryAt) {
 			return
 		}
-		if err := e.insertRequests(ctx, batch); err != nil && ctx.Err() == nil {
-			e.logger.WarnContext(ctx, "write request records", "records", len(batch), "error", err)
+		if err := e.insertRequests(ctx, batch); err != nil {
+			if ctx.Err() == nil {
+				e.logger.WarnContext(ctx, "write request records; retrying", "records", len(batch), "error", err)
+			}
+			// Kept for the next flush, the oldest dropped past the queue's
+			// bound.
+			retryAt = time.Now().Add(requestFlush)
+			if over := len(batch) - requestQueue; over > 0 {
+				batch = append(batch[:0], batch[over:]...)
+				e.droppedRecords.Add(int64(over))
+			}
+			return
 		}
 		batch = batch[:0]
 		if dropped := e.droppedRecords.Swap(0); dropped > 0 {
-			e.logger.WarnContext(ctx, "request records dropped while the queue was full", "records", dropped)
+			e.logger.WarnContext(ctx, "request records dropped", "records", dropped)
 		}
 	}
 	for {
 		select {
 		case <-ctx.Done():
+			// The servers have stopped: write what is queued.
+			final, cancel := context.WithTimeout(context.WithoutCancel(ctx), finalFlush)
+			defer cancel()
+			for {
+				select {
+				case rec := <-e.records:
+					batch = append(batch, rec)
+					continue
+				default:
+				}
+				break
+			}
+			retryAt = time.Time{}
+			write(final)
 			return
 		case rec := <-e.records:
 			batch = append(batch, rec)
 			if len(batch) >= requestBatch {
-				write()
+				write(ctx)
 			}
 		case <-flush.C:
-			write()
+			write(ctx)
 		case <-prune.C:
-			if _, err := e.queries.PruneRequests(ctx, PruneRequestsParams{
-				Before: time.Now().Add(-requestRetention), MaxRows: pruneBatch,
-			}); err != nil && ctx.Err() == nil {
+			e.prune(ctx)
+		}
+	}
+}
+
+// prune deletes records and request output past the retention in bounded
+// batches until none are left or pruneBudget passes; several edges share
+// the work.
+func (e *Edge) prune(ctx context.Context) {
+	before := time.Now().Add(-requestRetention)
+	stop := time.Now().Add(pruneBudget)
+	for time.Now().Before(stop) {
+		n, err := e.queries.PruneRequests(ctx, PruneRequestsParams{Before: before, MaxRows: pruneBatch})
+		if err != nil {
+			if ctx.Err() == nil {
 				e.logger.WarnContext(ctx, "prune request records", "error", err)
 			}
+			return
+		}
+		if n < pruneBatch {
+			break
+		}
+	}
+	for time.Now().Before(stop) {
+		n, err := e.execution.PruneContainerLogs(ctx, before, pruneBatch)
+		if err != nil {
+			if ctx.Err() == nil {
+				e.logger.WarnContext(ctx, "prune container output", "error", err)
+			}
+			return
+		}
+		if n < pruneBatch {
+			return
 		}
 	}
 }
