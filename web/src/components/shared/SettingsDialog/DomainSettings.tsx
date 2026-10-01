@@ -15,7 +15,7 @@ import {
   registerCustomDomain,
   removeCustomDomain,
 } from "@/lib/queries/domains";
-import { billingSummaryQueryOptions } from "@/lib/queries/billing";
+import { billingAccountQueryOptions } from "@/lib/queries/billing";
 import { accountQueryKeys } from "@/lib/queries/workspace-keys";
 
 export function DomainSettings({ onUpgrade }: { onUpgrade: () => void }) {
@@ -23,7 +23,7 @@ export function DomainSettings({ onUpgrade }: { onUpgrade: () => void }) {
   const [hostname, setHostname] = useState("");
   const [failure, setFailure] = useState<string | null>(null);
   const domains = useQuery(customDomainsQueryOptions());
-  const billing = useQuery(billingSummaryQueryOptions());
+  const billing = useQuery(billingAccountQueryOptions());
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: accountQueryKeys.domains() });
 

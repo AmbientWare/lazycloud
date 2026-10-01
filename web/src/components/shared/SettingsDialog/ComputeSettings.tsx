@@ -33,7 +33,7 @@ import {
   connectionMachinesQueryOptions,
   machinesQueryOptions,
 } from "@/lib/queries/compute";
-import { billingSummaryQueryOptions } from "@/lib/queries/billing";
+import { billingAccountQueryOptions } from "@/lib/queries/billing";
 import { humanize } from "@/lib/machine-lifecycle";
 import { cn } from "@/lib/utils";
 import { useWorkspace } from "@/lib/workspace-context";
@@ -45,7 +45,7 @@ import { EditMachineWorkspacesDialog } from "./MachineWorkspaces";
 export function ComputeSettings({ onUpgrade }: { onUpgrade: () => void }) {
   const { workspace } = useWorkspace();
   const connection = useQuery(awsConnectionQueryOptions());
-  const billing = useQuery(billingSummaryQueryOptions());
+  const billing = useQuery(billingAccountQueryOptions());
   const instances = useQuery(connectionMachinesQueryOptions());
   const summary = useQuery(computeSummaryQueryOptions(workspace.id));
   const machines = useQuery(machinesQueryOptions());
