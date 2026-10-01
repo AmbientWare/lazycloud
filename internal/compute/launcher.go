@@ -165,7 +165,7 @@ func (c *Compute) launch(ctx context.Context, logger *slog.Logger, h ClaimLaunch
 // failLaunch fails a host that could not launch; cool also skips its offer
 // until the cooldown ends.
 func (c *Compute) failLaunch(ctx context.Context, h ClaimLaunchesRow, message string, cool bool) error {
-	return pgx.BeginFunc(ctx, c.pool, func(tx pgx.Tx) error {
+	return inTx(ctx, c, func(tx pgx.Tx) error {
 		q := c.queries.WithTx(tx)
 		if cool && h.Market != nil {
 			key := string(KindPlatform)

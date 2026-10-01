@@ -250,7 +250,7 @@ func (c *Compute) reconcileRegion(ctx context.Context, logger *slog.Logger, conn
 // containers stop through execution in the same transaction. An empty
 // failure marks a termination the fleet asked for.
 func (c *Compute) hostGone(ctx context.Context, host uuid.UUID, failure Failure, message string) error {
-	return pgx.BeginFunc(ctx, c.pool, func(tx pgx.Tx) error {
+	return inTx(ctx, c, func(tx pgx.Tx) error {
 		q := c.queries.WithTx(tx)
 		if failure == "" {
 			if err := q.MarkHostDeleted(ctx, host); err != nil {
