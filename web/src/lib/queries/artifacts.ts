@@ -1,137 +1,89 @@
-import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
+import { queryOptions, infiniteQueryOptions } from "@tanstack/react-query";
+import { z } from "zod";
+import { artifactStorageSummarySchema } from "@/lib/api/schemas/artifacts";
 
-import { api, ok, type Schemas } from "@/lib/api/client";
-import { nextPageCursor, selectPages } from "@/lib/queries/infinite-list";
+import { apiBlob, apiRequest, withWorkspace } from "@/lib/api/client";
+import { artifactListSchema } from "@/lib/api/schemas";
 
 import { workspaceQueryKeys } from "./workspace-keys";
-
-export type Artifact = Schemas["Artifact"];
 
 export type ArtifactFilters = {
   search?: string;
   task_id?: string;
-  app?: string;
+  app_id?: string;
   content_type?: string;
   created_after?: string;
   created_before?: string;
 };
 
-export function artifactsQuery(workspace: string, filters: ArtifactFilters) {
+export function artifactsQuery(workspaceId: string, filters: ArtifactFilters) {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(filters)) if (value) params.set(key, value);
   return infiniteQueryOptions({
-    queryKey: workspaceQueryKeys.storage.artifactList(workspace, filters),
+    queryKey: [...workspaceQueryKeys.storage.artifacts(workspaceId), "list", filters],
     initialPageParam: "",
     queryFn: ({ pageParam }) =>
-      ok(
-        api.GET("/v1/workspaces/{workspace}/artifacts", {
-          params: {
-            path: { workspace },
-            query: {
-              search: filters.search || undefined,
-              task_id: filters.task_id || undefined,
-              app: filters.app || undefined,
-              content_type: filters.content_type || undefined,
-              created_after: filters.created_after || undefined,
-              created_before: filters.created_before || undefined,
-              limit: 100,
-              cursor: pageParam || undefined,
-            },
-          },
-        }),
+      apiRequest(
+        withWorkspace(
+          `/api/v1/artifacts?${params}&cursor=${encodeURIComponent(pageParam)}`,
+          workspaceId,
+        ),
+        artifactListSchema,
       ),
-    getNextPageParam: nextPageCursor,
+    getNextPageParam: (page) => page.next || undefined,
     refetchInterval: 15_000,
   });
 }
-
-export function selectArtifacts(
-  data: { pages: readonly Schemas["ArtifactPage"][] } | undefined,
-  hasNextPage: boolean | undefined,
-) {
-  return selectPages(
-    data,
-    (page) => page.artifacts,
-    hasNextPage,
-    (artifact) => artifact.id,
-  );
-}
-
-export function artifactSummaryQuery(workspace: string) {
+export function artifactStorageQuery(workspaceId: string) {
   return queryOptions({
-    queryKey: workspaceQueryKeys.storage.artifactSummary(workspace),
+    queryKey: [...workspaceQueryKeys.storage.artifacts(workspaceId), "summary"],
     queryFn: () =>
-      ok(
-        api.GET("/v1/workspaces/{workspace}/artifacts/summary", {
-          params: { path: { workspace } },
-        }),
+      apiRequest(
+        withWorkspace("/api/v1/artifacts/summary", workspaceId),
+        artifactStorageSummarySchema,
       ),
     refetchInterval: 15_000,
   });
 }
-
-/** Deletes up to 100 artifacts in one request; ids already gone are left out of the answer. */
-export function deleteArtifacts(workspace: string, ids: string[]): Promise<string[]> {
-  return ok(
-    api.POST("/v1/workspaces/{workspace}/artifacts/delete", {
-      params: { path: { workspace } },
-      body: { ids },
-    }),
-  ).then((result) => result.deleted);
-}
-
-const URL_LIFETIME_SECONDS = 300;
-
-/**
- * A presigned GET for the artifact's bytes. `download` asks the store to send
- * it as an attachment. The URL names the object store and carries no session.
- */
-export async function artifactUrl(
-  workspace: string,
-  artifact: string,
-  download: boolean,
-): Promise<string> {
-  const presigned = await ok(
-    api.POST("/v1/workspaces/{workspace}/artifacts/{artifact}/url", {
-      params: { path: { workspace, artifact } },
-      body: { download, expires_seconds: URL_LIFETIME_SECONDS },
-    }),
+export function deleteArtifact(workspaceId: string, id: string) {
+  return apiRequest(
+    withWorkspace(`/api/v1/artifacts/${encodeURIComponent(id)}`, workspaceId),
+    z.null(),
+    { method: "DELETE" },
   );
-  return presigned.url;
 }
-
-export type PreviewKind = "image" | "pdf" | "text";
-
 /**
- * What a preview shows: images and PDFs load from the presigned URL itself;
- * text is read through it, which needs the store to allow this origin. Reused
- * until shortly before the URL expires.
+ * Fetch an artifact's bytes from the control plane.
+ *
+ * Same-origin on purpose: a presigned URL names the object store, which is
+ * routinely unreachable from wherever the dashboard is actually open. The
+ * Blob is returned rather than an object URL so the caller that renders it
+ * also owns creating and revoking the URL.
  */
-export function artifactPreviewQuery(workspace: string, artifact: string, kind: PreviewKind) {
-  return queryOptions({
-    queryKey: workspaceQueryKeys.storage.artifactUrl(workspace, artifact),
-    queryFn: async ({ signal }) => {
-      const url = await artifactUrl(workspace, artifact, false);
-      if (kind === "image") {
-        const image = new Image();
-        image.src = url;
-        await image.decode();
-      }
-      if (kind !== "text") return { url, text: null };
-      const response = await fetch(url, { signal });
-      if (!response.ok) throw new Error(`Could not read the file (${response.status})`);
-      return { url, text: await response.text() };
-    },
-    staleTime: (URL_LIFETIME_SECONDS - 60) * 1_000,
-    gcTime: 60_000,
-    retry: false,
+export async function fetchArtifactBlob(
+  workspaceId: string,
+  artifact: { id: string; task_id: string; filename: string },
+  signal?: AbortSignal,
+): Promise<Blob> {
+  const query = new URLSearchParams({
+    id: artifact.id,
+    task_id: artifact.task_id,
+    filename: artifact.filename,
   });
+  return apiBlob(
+    withWorkspace(`/api/v1/artifacts/content?${query.toString()}`, workspaceId),
+    signal,
+  );
 }
 
-/** Save the artifact through the browser's own download, without reading it into the page. */
-export async function downloadArtifact(workspace: string, artifact: string): Promise<void> {
-  const link = document.createElement("a");
-  link.href = await artifactUrl(workspace, artifact, true);
-  link.rel = "noopener noreferrer";
-  document.body.append(link);
-  link.click();
-  link.remove();
+export function artifactContentQueryOptions(
+  workspaceId: string,
+  artifact: { id: string; task_id: string; filename: string },
+) {
+  return queryOptions({
+    queryKey: [...workspaceQueryKeys.storage.artifacts(workspaceId), "content", artifact.id],
+    queryFn: ({ signal }) => fetchArtifactBlob(workspaceId, artifact, signal),
+    staleTime: Infinity,
+    gcTime: 60_000,
+  });
 }

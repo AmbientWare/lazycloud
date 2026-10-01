@@ -365,5 +365,7 @@ test("an invited account previews the invitation and joins the workspace", async
 
   // The link is spent.
   await page.goto(new URL(invitation).pathname);
-  await expect(page.getByRole("heading", { name: "This invitation is no longer open" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "This invitation is no longer open" }),
+  ).toBeVisible();
 });

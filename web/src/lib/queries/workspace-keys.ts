@@ -1,9 +1,16 @@
 export type TaskListKeyParts = {
   mode: "page" | "infinite";
   limit: number;
-  app: string | null;
-  function: string | null;
   status: string | null;
+  deploymentId: string | null;
+  appId: string | null;
+  stubIds: string | null;
+  kind: string | null;
+  createdAfter: string | null;
+  createdBefore: string | null;
+  createdWithinSeconds: number | null;
+  search: string | null;
+  rootOnly: boolean;
 };
 
 export type AccountActivityKeyParts = {
@@ -27,7 +34,6 @@ export type AccountCostSeriesKeyParts = {
   bucket: string;
 };
 
-/** Every key below is scoped by workspace name, the identifier the API paths use. */
 const workspaceRoot = (workspaceId: string) => ["workspace", workspaceId] as const;
 
 export const workspaceQueryKeys = {
@@ -50,10 +56,8 @@ export const workspaceQueryKeys = {
     root: (workspaceId: string) => [...workspaceRoot(workspaceId), "deployments"] as const,
     list: (
       workspaceId: string,
-      options: { limit: number; app: string | null; name: string | null },
+      options: { limit: number; appId: string | null; name: string | null; kind: string | null },
     ) => [...workspaceRoot(workspaceId), "deployments", "list", options] as const,
-    versions: (workspaceId: string, deploymentId: string) =>
-      [...workspaceRoot(workspaceId), "deployments", "versions", deploymentId] as const,
     devbox: (workspaceId: string, deploymentId: string) =>
       [...workspaceRoot(workspaceId), "deployments", "devbox", deploymentId] as const,
   },
@@ -61,8 +65,7 @@ export const workspaceQueryKeys = {
     root: (workspaceId: string) => [...workspaceRoot(workspaceId), "workloads"] as const,
     list: (workspaceId: string, appId: string | null) =>
       [...workspaceRoot(workspaceId), "workloads", "list", { appId }] as const,
-    detail: (workspaceId: string, app: string, name: string) =>
-      [...workspaceRoot(workspaceId), "workloads", "detail", app, name] as const,
+    cron: (workspaceId: string) => [...workspaceRoot(workspaceId), "workloads", "cron"] as const,
   },
   tasks: {
     root: (workspaceId: string) => [...workspaceRoot(workspaceId), "tasks"] as const,
@@ -72,8 +75,6 @@ export const workspaceQueryKeys = {
     details: (workspaceId: string) => [...workspaceRoot(workspaceId), "tasks", "detail"] as const,
     detail: (workspaceId: string, taskId: string) =>
       [...workspaceRoot(workspaceId), "tasks", "detail", taskId] as const,
-    result: (workspaceId: string, taskId: string) =>
-      [...workspaceRoot(workspaceId), "tasks", "result", taskId] as const,
     callGraphs: (workspaceId: string) =>
       [...workspaceRoot(workspaceId), "tasks", "call-graph"] as const,
     callGraph: (workspaceId: string, rootTaskId: string) =>
@@ -116,8 +117,10 @@ export const workspaceQueryKeys = {
   containers: {
     root: (workspaceId: string) => [...workspaceRoot(workspaceId), "containers"] as const,
     lists: (workspaceId: string) => [...workspaceRoot(workspaceId), "containers", "list"] as const,
-    list: (workspaceId: string, options: { live: boolean }) =>
-      [...workspaceRoot(workspaceId), "containers", "list", options] as const,
+    list: (
+      workspaceId: string,
+      options: { appId: string | null; stubIds: string | null; statuses: string | null },
+    ) => [...workspaceRoot(workspaceId), "containers", "list", options] as const,
     details: (workspaceId: string) =>
       [...workspaceRoot(workspaceId), "containers", "detail"] as const,
     detail: (workspaceId: string, containerId: string) =>
@@ -150,8 +153,6 @@ export const workspaceQueryKeys = {
     root: (workspaceId: string) => [...workspaceRoot(workspaceId), "sandboxes"] as const,
     list: (workspaceId: string, limit: number, appId: string | null) =>
       [...workspaceRoot(workspaceId), "sandboxes", "list", { limit, appId }] as const,
-    container: (workspaceId: string, containerId: string) =>
-      [...workspaceRoot(workspaceId), "sandboxes", "container", containerId] as const,
     processes: (workspaceId: string, containerId: string) =>
       [...workspaceRoot(workspaceId), "sandboxes", "processes", containerId] as const,
     urls: (workspaceId: string, containerId: string) =>
@@ -162,38 +163,36 @@ export const workspaceQueryKeys = {
       [...workspaceRoot(workspaceId), "compute", "summary"] as const,
   },
   storage: {
-    root: (workspace: string) => [...workspaceRoot(workspace), "storage"] as const,
-    artifacts: (workspace: string) =>
-      [...workspaceRoot(workspace), "storage", "artifacts"] as const,
-    artifactList: (workspace: string, filters: Record<string, string | undefined>) =>
-      [...workspaceRoot(workspace), "storage", "artifacts", "list", filters] as const,
-    artifactSummary: (workspace: string) =>
-      [...workspaceRoot(workspace), "storage", "artifacts", "summary"] as const,
-    artifactUrl: (workspace: string, artifact: string) =>
-      [...workspaceRoot(workspace), "storage", "artifacts", "url", artifact] as const,
-    secrets: (workspace: string) => [...workspaceRoot(workspace), "storage", "secrets"] as const,
-    volumes: (workspace: string) => [...workspaceRoot(workspace), "storage", "volumes"] as const,
-    volumeFiles: (workspace: string, volume: string, path?: string) =>
+    root: (workspaceId: string) => [...workspaceRoot(workspaceId), "storage"] as const,
+    artifacts: (workspaceId: string) =>
+      [...workspaceRoot(workspaceId), "storage", "artifacts"] as const,
+    secrets: (workspaceId: string) =>
+      [...workspaceRoot(workspaceId), "storage", "secrets"] as const,
+    volumes: (workspaceId: string) =>
+      [...workspaceRoot(workspaceId), "storage", "volumes"] as const,
+    disks: (workspaceId: string) => [...workspaceRoot(workspaceId), "storage", "disks"] as const,
+    volumePath: (workspaceId: string, volumeName: string, path?: string) =>
       [
-        ...workspaceRoot(workspace),
+        ...workspaceRoot(workspaceId),
         "storage",
-        "volume-files",
-        volume,
-        ...(path === undefined ? [] : [path]),
+        "volume-path",
+        volumeName,
+        ...(path ? [path] : []),
       ] as const,
-    disks: (workspace: string) => [...workspaceRoot(workspace), "storage", "disks"] as const,
   },
   collections: {
-    list: (workspace: string, kind: "queues" | "maps") =>
-      [...workspaceRoot(workspace), "collections", kind] as const,
-    item: (workspace: string, kind: "queues" | "maps", name: string) =>
-      [...workspaceRoot(workspace), "collections", kind, "item", name] as const,
-    queueHead: (workspace: string, name: string) =>
-      [...workspaceRoot(workspace), "collections", "queues", "item", name, "head"] as const,
-    mapKeys: (workspace: string, name: string, prefix: string) =>
-      [...workspaceRoot(workspace), "collections", "maps", "item", name, "keys", prefix] as const,
-    mapEntry: (workspace: string, name: string, key: string | null) =>
-      [...workspaceRoot(workspace), "collections", "maps", "item", name, "entry", key] as const,
+    resource: (workspaceId: string, kind: "map" | "queue", name: string) =>
+      [...workspaceRoot(workspaceId), "collections", kind, name] as const,
+    queueSize: (workspaceId: string, name: string) =>
+      [...workspaceRoot(workspaceId), "collections", "queue", name, "size"] as const,
+    queuePeek: (workspaceId: string, name: string) =>
+      [...workspaceRoot(workspaceId), "collections", "queue", name, "peek"] as const,
+    mapCount: (workspaceId: string, name: string) =>
+      [...workspaceRoot(workspaceId), "collections", "map", name, "count"] as const,
+    mapKeys: (workspaceId: string, name: string) =>
+      [...workspaceRoot(workspaceId), "collections", "map", name, "keys"] as const,
+    mapValue: (workspaceId: string, name: string, key: string | null) =>
+      [...workspaceRoot(workspaceId), "collections", "map", name, "value", key] as const,
   },
   logs: {
     history: (
@@ -283,3 +282,21 @@ export const accountQueryKeys = {
     ),
   },
 } as const;
+
+export type WorkspaceLiveQueryMeta = {
+  workspaceLiveEnabled: boolean;
+  workspaceLiveCritical: boolean;
+  workspaceLiveRecoverErrors: boolean;
+};
+
+export function workspaceLiveQueryMeta(
+  critical: boolean,
+  enabled = true,
+  recoverErrors = true,
+): WorkspaceLiveQueryMeta {
+  return {
+    workspaceLiveEnabled: enabled,
+    workspaceLiveCritical: critical,
+    workspaceLiveRecoverErrors: recoverErrors,
+  };
+}

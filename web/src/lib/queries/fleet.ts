@@ -1,6 +1,6 @@
 import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
 
-import { apiRequest } from "@/lib/api/unserved";
+import { apiRequest } from "@/lib/api/client";
 import { fleetNodeListSchema, fleetSummarySchema } from "@/lib/api/schemas";
 import { nextListCursor } from "@/lib/queries/infinite-list";
 import { accountQueryKeys } from "@/lib/queries/workspace-keys";

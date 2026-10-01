@@ -26,7 +26,7 @@ export function WorkspaceDeletionProvider({ children }: { children: ReactNode })
   const rememberWorkspaceName = useWorkspaceSelection((state) => state.rememberWorkspaceName);
   // The session states the role, so nothing here has to infer it from a 403 against
   // a workspace picked arbitrarily to ask in.
-  const canManage = user.is_admin;
+  const canManage = user.role === "administrator";
   const controller = useWorkspaceDeletionController({
     canManage,
     lastWorkspaceName,
@@ -55,7 +55,7 @@ function WorkspaceDeletionDialog({ controller }: { controller: WorkspaceDeletion
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>
-            {workspace?.state === "deleting" ? "Resume deleting" : "Delete"} {workspace?.name}?
+            {workspace?.status === "deleting" ? "Resume deleting" : "Delete"} {workspace?.name}?
           </AlertDialogTitle>
           <AlertDialogDescription>
             This permanently deletes the workspace, its access tokens and configuration, and the

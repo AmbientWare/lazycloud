@@ -1,4 +1,5 @@
-import { exampleBody, pythonLiteral, type DeploymentManifest } from "./playground-form";
+import type { DeploymentManifest } from "@/lib/api/schemas";
+import { exampleBody, pythonLiteral } from "./playground-form";
 
 type SourceImport = { importLine: string; reference: string };
 

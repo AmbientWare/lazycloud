@@ -11,7 +11,7 @@ export function AccountSettings() {
         ) : null}
         <div className="min-w-0 sm:flex sm:items-baseline sm:gap-3">
           <h2 className="truncate text-base font-semibold tracking-tight">{user.display_name}</h2>
-          {user.email && user.email !== user.display_name ? (
+          {user.email ? (
             <p className="truncate text-sm text-muted-foreground">{user.email}</p>
           ) : null}
         </div>

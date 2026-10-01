@@ -1,19 +1,22 @@
 import { useRef, useState } from "react";
-import { useInfiniteQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import {
+  useInfiniteQuery,
+  useQueryClient,
+  type InfiniteData,
+  type QueryClient,
+} from "@tanstack/react-query";
 
-import type { Schemas } from "@/lib/api/client";
+import type { AuthToken, TokenListResponse } from "@/lib/api/schemas";
 import {
   createToken,
   revokeToken,
   selectTokenList,
   tokensQueryOptions,
   type CreateTokenInput,
-  type TokenPages,
 } from "@/lib/queries/tokens";
 import { accountQueryKeys } from "@/lib/queries/workspace-keys";
 
-type AuthToken = Schemas["Token"];
-type TokenListResponse = Schemas["TokenList"];
+type TokenPages = InfiniteData<TokenListResponse, string>;
 
 type CreateMode = "closed" | "drafting" | "creating" | "issued" | "error";
 type ActionMode = "idle" | "confirming" | "running" | "error";
@@ -74,7 +77,7 @@ const IDLE: ControllerState = {
 export function useAccessTokensController(showDeviceTokens: boolean): AccessTokensController {
   const queryClient = useQueryClient();
   const query = useInfiniteQuery(tokensQueryOptions(showDeviceTokens));
-  const list = selectTokenList(query.data as TokenPages | undefined, query.hasNextPage);
+  const list = selectTokenList(query.data, query.hasNextPage);
   const [state, setState] = useState<ControllerState>(IDLE);
   // One command at a time, so a double submit cannot mint two credentials and a
   // confirm cannot race the request it is confirming.
@@ -105,9 +108,7 @@ export function useAccessTokensController(showDeviceTokens: boolean): AccessToke
             issued: {
               secret: result.token,
               name: result.record.name,
-              // Enough of the secret to recognize it once masked; the API keeps
-              // only its digest.
-              prefix: result.token.slice(0, 6),
+              prefix: result.record.prefix,
             },
           },
           action: { mode: "idle" },
@@ -199,7 +200,7 @@ function insertTokenRecord(queryClient: QueryClient, record: AuthToken): void {
     if (!current) return current;
     const [first, ...rest] = withoutToken(current.pages, record.id);
     if (!first) return current;
-    return { ...current, pages: [{ ...first, tokens: [record, ...first.tokens] }, ...rest] };
+    return { ...current, pages: [{ ...first, data: [record, ...first.data] }, ...rest] };
   });
 }
 
@@ -212,7 +213,7 @@ function removeTokenRecord(queryClient: QueryClient, tokenId: string): void {
 function withoutToken(pages: TokenListResponse[], tokenId: string): TokenListResponse[] {
   return pages.map((page) => ({
     ...page,
-    tokens: page.tokens.filter((token) => token.id !== tokenId),
+    data: page.data.filter((token) => token.id !== tokenId),
   }));
 }
 

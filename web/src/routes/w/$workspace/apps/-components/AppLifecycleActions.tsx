@@ -4,16 +4,24 @@ import { useNavigate } from "@tanstack/react-router";
 import { Loader2, Pause, Play, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import type { App } from "@/lib/api/schemas";
 import {
   deleteAppMutationOptions,
   invalidateAppLists,
   pauseAppMutationOptions,
   resumeAppMutationOptions,
-  type App,
 } from "@/lib/queries/apps";
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 
-export function AppLifecycleActions({ app, workspace }: { app: App; workspace: string }) {
+export function AppLifecycleActions({
+  app,
+  workspaceId,
+  workspaceName,
+}: {
+  app: App;
+  workspaceId: string;
+  workspaceName: string;
+}) {
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -21,29 +29,32 @@ export function AppLifecycleActions({ app, workspace }: { app: App; workspace: s
   const refresh = async () => {
     await Promise.all([
       queryClient.invalidateQueries({
-        queryKey: workspaceQueryKeys.apps.detail(workspace, app.name),
+        queryKey: workspaceQueryKeys.apps.detail(workspaceId, app.id),
       }),
-      invalidateAppLists(queryClient, workspace),
+      invalidateAppLists(queryClient, workspaceId),
     ]);
   };
   const pause = useMutation({
-    ...pauseAppMutationOptions(workspace, app.name),
+    ...pauseAppMutationOptions(workspaceId, app.id),
     onSuccess: refresh,
   });
   const resume = useMutation({
-    ...resumeAppMutationOptions(workspace, app.name),
+    ...resumeAppMutationOptions(workspaceId, app.id),
     onSuccess: refresh,
   });
   const remove = useMutation({
-    ...deleteAppMutationOptions(workspace, app.name),
+    ...deleteAppMutationOptions(workspaceId, app.id),
     onSuccess: async () => {
-      queryClient.removeQueries({ queryKey: workspaceQueryKeys.apps.detail(workspace, app.name) });
-      await invalidateAppLists(queryClient, workspace);
-      await navigate({ to: "/w/$workspace/apps", params: { workspace } });
+      queryClient.removeQueries({ queryKey: workspaceQueryKeys.apps.detail(workspaceId, app.id) });
+      await invalidateAppLists(queryClient, workspaceId);
+      await navigate({ to: "/w/$workspace/apps", params: { workspace: workspaceName } });
     },
   });
   const pending = pause.isPending || resume.isPending || remove.isPending;
   const error = pause.error ?? resume.error ?? remove.error;
+  const hasActions = app.actions.can_pause || app.actions.can_resume || app.actions.can_delete;
+
+  if (!hasActions) return null;
 
   return (
     <div className="flex min-w-0 flex-wrap items-center justify-end gap-1">
@@ -72,7 +83,7 @@ export function AppLifecycleActions({ app, workspace }: { app: App; workspace: s
         </>
       ) : (
         <>
-          {app.state === "active" ? (
+          {app.actions.can_pause ? (
             <Button
               type="button"
               variant="outline"
@@ -84,7 +95,7 @@ export function AppLifecycleActions({ app, workspace }: { app: App; workspace: s
               Pause
             </Button>
           ) : null}
-          {app.state === "paused" ? (
+          {app.actions.can_resume ? (
             <Button
               type="button"
               variant="default"
@@ -96,7 +107,7 @@ export function AppLifecycleActions({ app, workspace }: { app: App; workspace: s
               Resume
             </Button>
           ) : null}
-          {app.state !== "deleted" ? (
+          {app.actions.can_delete ? (
             <Button
               type="button"
               variant="ghost"

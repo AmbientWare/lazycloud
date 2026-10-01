@@ -14,38 +14,33 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { Schemas } from "@/lib/api/client";
-import { countLabel, formatKind } from "@/lib/format";
-import { appsQueryOptions, selectApps } from "@/lib/queries/apps";
-import { deploymentsQueryOptions, selectDeployments } from "@/lib/queries/deployments";
-import { taskMetricsQueryOptions } from "@/lib/queries/metrics";
-import { selectTaskList, tasksInfiniteQueryOptions } from "@/lib/queries/tasks";
+import { countLabel } from "@/lib/format";
+import { taskStatuses, workloadKinds } from "@/lib/api/schemas";
+import { appSummariesQueryOptions } from "@/lib/queries/apps";
+import {
+  selectTaskList,
+  taskMetricsQueryOptions,
+  tasksInfiniteQueryOptions,
+} from "@/lib/queries/tasks";
+import { deployedStubsQueryOptions } from "@/lib/queries/stubs";
 import { useWorkspace } from "@/lib/workspace-context";
 
-const TASK_STATUSES: readonly Schemas["TaskStatus"][] = [
-  "queued",
-  "running",
-  "succeeded",
-  "failed",
-  "cancelled",
-];
-const WORKLOAD_KINDS: readonly Schemas["WorkloadKind"][] = ["function"];
-
 type TasksSearch = {
-  status?: Schemas["TaskStatus"];
-  kind?: Schemas["WorkloadKind"];
-  /** App name. */
+  status?: string;
+  kind?: string;
   app?: string;
-  /** Workload name within `app`. */
   workload?: string;
+  deployment?: string;
 };
 
 export const Route = createFileRoute("/w/$workspace/tasks")({
   validateSearch: (search: Record<string, unknown>): TasksSearch => ({
-    status: pickOption(search.status, TASK_STATUSES),
-    kind: pickOption(search.kind, WORKLOAD_KINDS),
+    status: pickOption(search.status, taskStatuses),
+    kind: pickOption(search.kind, workloadKinds),
     app: typeof search.app === "string" && search.app ? search.app : undefined,
     workload: typeof search.workload === "string" && search.workload ? search.workload : undefined,
+    deployment:
+      typeof search.deployment === "string" && search.deployment ? search.deployment : undefined,
   }),
   component: TasksPage,
   errorComponent: RouteErrorFallback,
@@ -63,26 +58,22 @@ function TasksPage() {
   const search = Route.useSearch();
   const navigate = Route.useNavigate();
 
-  // Every task belongs to a function, the only workload kind with tasks, so
-  // the type filter narrows nothing further on the server.
   const tasks = useInfiniteQuery(
-    tasksInfiniteQueryOptions(workspace.name, {
+    tasksInfiniteQueryOptions(workspace.id, {
       limit: 100,
       status: search.status,
-      app: search.app,
-      function: search.app ? search.workload : undefined,
+      appId: search.app,
+      stubIds: search.workload ? [search.workload] : undefined,
+      deploymentId: search.deployment,
+      kind: search.kind,
     }),
   );
-  const apps = useInfiniteQuery(appsQueryOptions(workspace.name));
-  const workloads = useInfiniteQuery({
-    ...deploymentsQueryOptions(workspace.name, { app: search.app }),
-    enabled: Boolean(search.app),
-  });
-  const metrics = useQuery(taskMetricsQueryOptions(workspace.name));
+  const apps = useQuery(appSummariesQueryOptions(workspace.id));
+  const workloads = useQuery(deployedStubsQueryOptions(workspace.id, search.app));
+  const metrics = useQuery(taskMetricsQueryOptions(workspace.id));
   const taskList = selectTaskList(tasks.data, tasks.hasNextPage);
-  const appNames = selectApps(apps.data, false).items.map((app) => app.name);
-  const workloadNames = selectDeployments(workloads.data, false).items.map((item) => item.name);
-  const filtered = Boolean(search.status || search.kind || search.app || search.workload);
+  const selectedDeployment = taskList.items.find((task) => task.deployment_id === search.deployment)
+    ?.deployment?.name;
 
   const setSearch = (patch: Partial<TasksSearch>) => {
     void navigate({ search: (previous: TasksSearch) => ({ ...previous, ...patch }) });
@@ -114,51 +105,50 @@ function TasksPage() {
           >
             <div data-tasks-filters="" className="flex shrink-0 items-center gap-2">
               <FilterSelect
-                label="App"
-                value={search.app}
-                options={appNames}
-                allLabel="All apps"
-                onChange={(app) => setSearch({ app, workload: undefined })}
-              />
-              <FilterSelect
                 label="Status"
                 value={search.status}
-                options={TASK_STATUSES}
-                optionLabel={formatKind}
+                options={taskStatuses}
                 allLabel="All statuses"
-                onChange={(status) => setSearch({ status: pickOption(status, TASK_STATUSES) })}
+                onChange={(status) => setSearch({ status })}
               />
               <FilterSelect
                 label="Type"
                 value={search.kind}
-                options={WORKLOAD_KINDS}
-                optionLabel={formatKind}
+                options={workloadKinds}
                 allLabel="All types"
-                onChange={(kind) => setSearch({ kind: pickOption(kind, WORKLOAD_KINDS) })}
+                onChange={(kind) => setSearch({ kind })}
+              />
+              <FilterSelect
+                label="App"
+                value={search.app}
+                options={(apps.data?.items ?? []).map((item) => item.app.id)}
+                optionLabel={(appId) =>
+                  apps.data?.items.find((item) => item.app.id === appId)?.app.name ?? appId
+                }
+                allLabel="All apps"
+                onChange={(app) => setSearch({ app, workload: undefined })}
               />
               <FilterSelect
                 label="Workload"
                 value={search.workload}
-                options={workloadNames}
-                allLabel={search.app ? "All workloads" : "Choose an app"}
-                disabled={!search.app}
+                options={(workloads.data?.stubs ?? []).map((workload) => workload.id)}
+                optionLabel={(stubId) =>
+                  workloads.data?.stubs.find((workload) => workload.id === stubId)?.name ?? stubId
+                }
+                allLabel="All workloads"
                 onChange={(workload) => setSearch({ workload })}
               />
-              {filtered ? (
-                <button
-                  type="button"
-                  className="shrink-0 border-l border-border pl-3 text-xs text-brand hover:underline"
-                  onClick={() =>
-                    setSearch({
-                      status: undefined,
-                      kind: undefined,
-                      app: undefined,
-                      workload: undefined,
-                    })
-                  }
-                >
-                  Clear
-                </button>
+              {search.deployment ? (
+                <div className="flex shrink-0 items-center gap-2 border-l border-border pl-3 text-xs text-muted-foreground">
+                  <span>Version {selectedDeployment ?? search.deployment}</span>
+                  <button
+                    type="button"
+                    className="text-brand hover:underline"
+                    onClick={() => setSearch({ deployment: undefined })}
+                  >
+                    Clear
+                  </button>
+                </div>
               ) : null}
             </div>
           </div>
@@ -173,7 +163,11 @@ function TasksPage() {
                   params: { workspace: workspace.name, taskId },
                   search,
                 })}
-                emptyMessage={filtered ? "No tasks match these filters" : "No tasks yet"}
+                emptyMessage={
+                  search.status || search.kind || search.app || search.workload || search.deployment
+                    ? "No tasks match these filters"
+                    : "No tasks yet"
+                }
                 className="min-h-0 flex-1"
                 continuation={
                   <InfiniteScrollBoundary
@@ -201,7 +195,6 @@ function FilterSelect({
   options,
   optionLabel,
   allLabel,
-  disabled = false,
   onChange,
 }: {
   label: string;
@@ -209,13 +202,11 @@ function FilterSelect({
   options: readonly string[];
   optionLabel?: (value: string) => string;
   allLabel: string;
-  disabled?: boolean;
   onChange: (value: string | undefined) => void;
 }) {
   return (
     <Select
       value={value ?? "all"}
-      disabled={disabled}
       onValueChange={(next) => onChange(next === "all" ? undefined : next)}
     >
       <SelectTrigger aria-label={label} className="h-7 w-36 text-xs">

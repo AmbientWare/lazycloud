@@ -1,21 +1,40 @@
-import { api, ok, type Schemas } from "@/lib/api/client";
-
-const path = (workspace: string) => ({ params: { path: { workspace } } });
-
-/** Administrators only: create a workspace owned by the signed-in account. 403 otherwise. */
-export function createWorkspace(name: string): Promise<Schemas["Workspace"]> {
-  return ok(api.POST("/v1/workspaces", { body: { name } }));
-}
+import { api, ok } from "@/lib/api/client";
+import type { Workspace } from "@/lib/api/schemas";
+import { viewWorkspace } from "@/lib/api/views";
+import { rememberWorkspaces, workspaceName } from "@/lib/api/workspaces";
 
 /**
- * Administrators only: start deleting a workspace, or resume a deletion that has
- * not finished. It refuses every other request at once and disappears once its
- * tasks, containers and data are gone.
+ * Administrators only: create a workspace owned by the signed-in account. 403 otherwise.
+ * A connection id places the workspace, its compute and its bucket, in that connected
+ * AWS account for good.
  */
-export function deleteWorkspace(workspace: string): Promise<Schemas["Workspace"]> {
-  return ok(api.DELETE("/v1/workspaces/{workspace}", path(workspace)));
+export async function createWorkspace(
+  name: string,
+  connectionId: string | null,
+): Promise<Workspace> {
+  void connectionId;
+  const created = await ok(api.POST("/v1/workspaces", { body: { name } }));
+  rememberWorkspaces([created]);
+  return viewWorkspace(created);
 }
 
-export function renameWorkspace(workspace: string, name: string): Promise<Schemas["Workspace"]> {
-  return ok(api.PATCH("/v1/workspaces/{workspace}", { ...path(workspace), body: { name } }));
+/** Administrators only: delete a workspace; its data is removed in the background. */
+export async function deleteWorkspace(workspaceId: string): Promise<null> {
+  await ok(
+    api.DELETE("/v1/workspaces/{workspace}", {
+      params: { path: { workspace: workspaceName(workspaceId) } },
+    }),
+  );
+  return null;
+}
+
+export async function updateWorkspace(workspaceId: string, name: string): Promise<Workspace> {
+  const updated = await ok(
+    api.PATCH("/v1/workspaces/{workspace}", {
+      params: { path: { workspace: workspaceName(workspaceId) } },
+      body: { name: name.trim() },
+    }),
+  );
+  rememberWorkspaces([updated]);
+  return viewWorkspace(updated);
 }

@@ -18,30 +18,31 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { deleteAppMutationOptions, invalidateAppLists, type App } from "@/lib/queries/apps";
+import type { App } from "@/lib/api/schemas";
+import { deleteAppMutationOptions, invalidateAppLists } from "@/lib/queries/apps";
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 
 export function AppCardActions({
   app,
-  workspace,
+  workspaceId,
   actionIcon,
   defaultOpen = false,
 }: {
   app: App;
-  workspace: string;
+  workspaceId: string;
   actionIcon: ReactNode;
   defaultOpen?: boolean;
 }) {
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const queryClient = useQueryClient();
   const remove = useMutation({
-    ...deleteAppMutationOptions(workspace, app.name),
+    ...deleteAppMutationOptions(workspaceId, app.id),
     onSuccess: async () => {
       setConfirmingDelete(false);
       queryClient.removeQueries({
-        queryKey: workspaceQueryKeys.apps.detail(workspace, app.name),
+        queryKey: workspaceQueryKeys.apps.detail(workspaceId, app.id),
       });
-      await invalidateAppLists(queryClient, workspace);
+      await invalidateAppLists(queryClient, workspaceId);
     },
   });
 
@@ -61,10 +62,12 @@ export function AppCardActions({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-44">
-          <DropdownMenuItem variant="destructive" onSelect={() => setConfirmingDelete(true)}>
-            <Trash2 />
-            Delete app
-          </DropdownMenuItem>
+          {app.actions.can_delete ? (
+            <DropdownMenuItem variant="destructive" onSelect={() => setConfirmingDelete(true)}>
+              <Trash2 />
+              Delete app
+            </DropdownMenuItem>
+          ) : null}
         </DropdownMenuContent>
       </DropdownMenu>
 
@@ -73,8 +76,7 @@ export function AppCardActions({
           <AlertDialogHeader>
             <AlertDialogTitle>Delete {app.name}?</AlertDialogTitle>
             <AlertDialogDescription>
-              This deletes the app and every workload in it, cancels its queued and running tasks
-              and stops its containers. Task history, volumes, secrets and stored data stay.
+              This permanently deletes the app and stops its deployments and containers.
             </AlertDialogDescription>
           </AlertDialogHeader>
           {remove.error ? (

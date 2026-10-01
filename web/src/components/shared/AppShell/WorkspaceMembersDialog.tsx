@@ -16,8 +16,16 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { Schemas } from "@/lib/api/client";
-import { meQueryKey } from "@/lib/queries/auth";
+import type {
+  EmailDelivery,
+  InvitableRole,
+  Workspace,
+  WorkspaceInvitation,
+  WorkspaceMember,
+} from "@/lib/api/schemas";
+import { usagePhrase } from "@/lib/entitlements";
+import { currentSessionQueryOptions } from "@/lib/queries/auth";
+import { billingSummaryQueryOptions } from "@/lib/queries/billing";
 import {
   inviteWorkspaceMember,
   removeWorkspaceMember,
@@ -37,16 +45,13 @@ import { useWorkspaceSelection } from "@/lib/workspace-selection";
  * platform did its part and nobody has reported back, which is the ordinary
  * state and not worth putting in front of anyone.
  */
-type Workspace = Schemas["Workspace"];
-type InvitableRole = Schemas["InvitationRole"];
-
-const DELIVERY_NOTES: Partial<Record<Schemas["DeliveryState"], string>> = {
+const DELIVERY_NOTES: Partial<Record<EmailDelivery, string>> = {
   bounced: "Email bounced",
   complained: "Marked as spam",
   failed: "Email could not be sent",
 };
 
-const ROLE_LABELS: Record<Schemas["WorkspaceRole"], string> = {
+const ROLE_LABELS: Record<WorkspaceMember["role"], string> = {
   owner: "Owner",
   administrator: "Administrator",
   member: "Member",
@@ -67,14 +72,15 @@ export function WorkspaceMembersDialog({
   onClose: () => void;
 }) {
   const { user } = useSession();
-  const members = useQuery(workspaceMembersQueryOptions(workspace.name));
-  const me = members.data?.members.find((member) => member.user_id === user.id);
-  // Platform administrators manage every workspace without being a member of it.
-  const manages = user.is_admin || me?.role === "owner" || me?.role === "administrator";
+  const members = useQuery(workspaceMembersQueryOptions(workspace.id, workspace.name));
+  const me = members.data?.data.find((member) => member.user_id === user.id);
+  const manages = me?.role === "owner" || me?.role === "administrator";
+  const owner = me?.role === "owner";
   const invitations = useQuery({
-    ...workspaceInvitationsQueryOptions(workspace.name),
+    ...workspaceInvitationsQueryOptions(workspace.id, workspace.name),
     enabled: manages,
   });
+  const billing = useQuery({ ...billingSummaryQueryOptions(), enabled: owner });
 
   return (
     <Dialog open onOpenChange={(open) => (open ? undefined : onClose())}>
@@ -82,6 +88,15 @@ export function WorkspaceMembersDialog({
         <DialogHeader>
           <DialogTitle>{workspace.name} members</DialogTitle>
         </DialogHeader>
+        {owner && billing.data?.entitlements ? (
+          <p className="rounded-md border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+            {usagePhrase(
+              billing.data.usage.members,
+              billing.data.entitlements.max_members,
+              "account member",
+            )}
+          </p>
+        ) : null}
         {manages ? <InviteForm workspace={workspace} /> : null}
         {members.isPending ? (
           <div className="space-y-2" aria-hidden="true">
@@ -94,7 +109,7 @@ export function WorkspaceMembersDialog({
           </p>
         ) : (
           <ul className="content-transition divide-y divide-border border-y border-border">
-            {(members.data?.members ?? []).map((member) => (
+            {(members.data?.data ?? []).map((member) => (
               <MemberRow
                 key={member.user_id}
                 workspace={workspace}
@@ -105,7 +120,7 @@ export function WorkspaceMembersDialog({
               />
             ))}
             {manages
-              ? (invitations.data?.invitations ?? []).map((invitation) => (
+              ? (invitations.data?.data ?? []).map((invitation) => (
                   <InvitationRow
                     key={invitation.id}
                     workspace={workspace}
@@ -135,14 +150,14 @@ function InviteForm({ workspace }: { workspace: Workspace }) {
       setEmail("");
       toast.success(`Invitation sent to ${invitation.email}`);
       void queryClient.invalidateQueries({
-        queryKey: workspaceQueryKeys.invitations(workspace.name),
+        queryKey: workspaceQueryKeys.invitations(workspace.id),
       });
     },
     onError: (error) => {
       // A 503 here means the row exists and the email did not go out; the list
       // refetch is what surfaces it with a resend action.
       void queryClient.invalidateQueries({
-        queryKey: workspaceQueryKeys.invitations(workspace.name),
+        queryKey: workspaceQueryKeys.invitations(workspace.id),
       });
       toast.error("Could not invite", { description: error.message });
     },
@@ -220,7 +235,7 @@ function MemberRow({
   onLeft,
 }: {
   workspace: Workspace;
-  member: Schemas["Member"];
+  member: WorkspaceMember;
   self: boolean;
   manages: boolean;
   onLeft: () => void;
@@ -232,7 +247,7 @@ function MemberRow({
     mutationFn: (role: InvitableRole) =>
       setWorkspaceMemberRole(workspace.name, member.user_id, role),
     onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.members(workspace.name) }),
+      queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.members(workspace.id) }),
     onError: (error) => toast.error("Could not change role", { description: error.message }),
   });
   const remove = useMutation({
@@ -246,10 +261,10 @@ function MemberRow({
         onLeft();
         forgetWorkspaceName(workspace.name);
         await navigate({ to: "/dashboard" });
-        await queryClient.invalidateQueries({ queryKey: meQueryKey });
+        await queryClient.invalidateQueries({ queryKey: currentSessionQueryOptions().queryKey });
         return;
       }
-      await queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.members(workspace.name) });
+      await queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.members(workspace.id) });
     },
     onError: (error) =>
       toast.error(self ? "Could not leave" : "Could not remove member", {
@@ -310,11 +325,11 @@ function InvitationRow({
   invitation,
 }: {
   workspace: Workspace;
-  invitation: Schemas["Invitation"];
+  invitation: WorkspaceInvitation;
 }) {
   const queryClient = useQueryClient();
   const refresh = () =>
-    queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.invitations(workspace.name) });
+    queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.invitations(workspace.id) });
   const resend = useMutation({
     mutationFn: () => resendWorkspaceInvitation(workspace.name, invitation.id),
     onSuccess: () => {

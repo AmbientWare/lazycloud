@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { PreparationWindow as ContainerLifecycleMetric } from "./phases";
+import type { ContainerLifecycleMetric } from "@/lib/api/schemas";
 
 import { executionPhaseDomain, executionPhases } from "./phases";
 
@@ -10,13 +10,10 @@ const T10 = "2026-07-01T00:00:10Z";
 const T20 = "2026-07-01T00:00:20Z";
 const T40 = "2026-07-01T00:00:40Z";
 
-function metric(overrides: {
-  event_id: string;
-  start_time?: string;
-  end_time?: string;
-  duration_ms?: number;
-}): ContainerLifecycleMetric {
-  return { start_time: overrides.start_time ?? "", end_time: overrides.end_time ?? "" };
+function metric(
+  overrides: Partial<ContainerLifecycleMetric> & { event_id: string },
+): ContainerLifecycleMetric {
+  return { duration_ms: 0, start_time: null, end_time: null, ...overrides };
 }
 
 describe("task execution phase projection", () => {

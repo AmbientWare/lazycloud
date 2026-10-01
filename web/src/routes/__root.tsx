@@ -1,5 +1,5 @@
 import type { LinkHTMLAttributes, ReactNode } from "react";
-import { MutationCache, QueryCache, QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   createRootRoute,
   HeadContent,
@@ -14,22 +14,11 @@ import jetbrainsMonoUrl from "@fontsource-variable/jetbrains-mono/files/jetbrain
 
 import { PreShellScreen } from "@/components/shared/PreShellScreen";
 import { Button } from "@/components/ui/button";
-import { isApiError } from "@/lib/api/client";
-import { meQueryKey } from "@/lib/queries/auth";
 
 import "../styles.css";
 import "./-marketing/marketing.css";
 
-/* A 401 anywhere means the session cookie stopped working: expired, or signed
-   out in another tab. Re-reading who is signed in lets the auth gate show the
-   sign-in screen instead of every panel reporting its own failure. */
-const onUnauthenticated = (error: unknown) => {
-  if (isApiError(error, 401)) void queryClient.invalidateQueries({ queryKey: meQueryKey });
-};
-
-const queryClient: QueryClient = new QueryClient({
-  queryCache: new QueryCache({ onError: onUnauthenticated }),
-  mutationCache: new MutationCache({ onError: onUnauthenticated }),
+const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       retry: 1,

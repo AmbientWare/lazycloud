@@ -4,24 +4,24 @@ import { Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { isApiError } from "@/lib/api/client";
+import { ApiError } from "@/lib/api/client";
+import type { MapEntry } from "@/lib/api/schemas";
 import { base64ToBytes } from "@/lib/files";
 import {
-  mapEntryQueryOptions,
+  mapValueQueryOptions,
   parseCollectionJson,
   putQueueMessage,
   refreshCollection,
   setMapValue,
-  type CollectionKind,
-  type MapEntry,
 } from "@/lib/queries/collections";
 
 export type MapEdit = { key: string; value: MapEntry };
 
-/** The value as editable JSON; null for anything else, such as a pickled Python value. */
 export function editableJson(value: MapEntry): string | null {
   try {
-    const text = new TextDecoder("utf-8", { fatal: true }).decode(base64ToBytes(value.value));
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(
+      base64ToBytes(value.value_base64),
+    );
     return JSON.stringify(JSON.parse(parseCollectionJson(text)), null, 2);
   } catch {
     return null;
@@ -38,7 +38,7 @@ export function CollectionValueForm({
   onReload,
 }: {
   workspaceId: string;
-  kind: CollectionKind;
+  kind: "maps" | "queues";
   name?: string;
   entry?: MapEdit;
   onDone: (name: string, key: string) => void;
@@ -66,21 +66,21 @@ export function CollectionValueForm({
         );
     },
     onSuccess: async () => {
-      await refreshCollection(client, workspaceId, kind);
+      await refreshCollection(client, workspaceId, kind, name.trim());
       onDone(name.trim(), key);
     },
   });
   const reload = useMutation({
     mutationFn: async () => {
       const value = await client.fetchQuery({
-        ...mapEntryQueryOptions(workspaceId, name, key),
+        ...mapValueQueryOptions(workspaceId, name, key),
         staleTime: 0,
       });
       onReload?.({ key, value });
     },
   });
   const busy = save.isPending || reload.isPending;
-  const conflict = isApiError(save.error, 409);
+  const conflict = save.error instanceof ApiError && save.error.status === 409;
 
   return (
     <form
@@ -113,7 +113,6 @@ export function CollectionValueForm({
           <label className="grid gap-1.5 text-xs">
             Key
             <Input
-              required
               value={key}
               disabled={entry !== undefined}
               onChange={(event) => setKey(event.target.value)}

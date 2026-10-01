@@ -19,12 +19,11 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import type { ContainerDetail } from "@/lib/api/schemas";
+import { containerQueryOptions, stopContainerMutationOptions } from "@/lib/queries/containers";
 import {
   createSandboxImageMutationOptions,
-  sandboxContainerQueryOptions,
   sandboxUrlsQueryOptions,
   snapshotSandboxMemoryMutationOptions,
-  stopSandboxMutationOptions,
 } from "@/lib/queries/sandboxes";
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 import { useWorkspace } from "@/lib/workspace-context";
@@ -43,12 +42,12 @@ function SandboxDetailPage() {
   const { containerId } = Route.useParams();
   const { workspace } = useWorkspace();
   const queryClient = useQueryClient();
-  const container = useQuery(sandboxContainerQueryOptions(workspace.name, containerId));
+  const container = useQuery(containerQueryOptions(workspace.id, containerId));
   const stop = useMutation({
-    ...stopSandboxMutationOptions(workspace.name, containerId),
+    ...stopContainerMutationOptions(workspace.id, containerId),
     onSuccess: () =>
       queryClient.invalidateQueries({
-        queryKey: workspaceQueryKeys.sandboxes.container(workspace.name, containerId),
+        queryKey: workspaceQueryKeys.containers.detail(workspace.id, containerId),
       }),
   });
 
@@ -141,7 +140,7 @@ function SandboxDetailPage() {
           </TabsContent>
           <TabsContent value="network" className="m-0 min-h-0 flex-1 overflow-auto p-3">
             <PanelErrorBoundary key={containerId} title="Network details could not be displayed">
-              <SandboxNetwork record={record} workspaceId={workspace.name} />
+              <SandboxNetwork record={record} workspaceId={workspace.id} />
             </PanelErrorBoundary>
           </TabsContent>
         </Tabs>
@@ -161,10 +160,8 @@ function SandboxActions({
 }) {
   const { workspace } = useWorkspace();
   const stubId = record.workload?.id ?? "";
-  const image = useMutation(createSandboxImageMutationOptions(workspace.name, record.id, stubId));
-  const memory = useMutation(
-    snapshotSandboxMemoryMutationOptions(workspace.name, record.id, stubId),
-  );
+  const image = useMutation(createSandboxImageMutationOptions(workspace.id, record.id, stubId));
+  const memory = useMutation(snapshotSandboxMemoryMutationOptions(workspace.id, record.id, stubId));
   const actionError = image.error || memory.error;
   return (
     <div className="flex max-w-full flex-wrap justify-end gap-2">
@@ -245,8 +242,8 @@ function SandboxFacts({ record }: { record: ContainerDetail }) {
         <Fact label="Container" value={<CopyId value={record.id} className="-ml-1.5" />} />
       </FactGrid>
       <StopCause
-        reason={record.termination_reason}
-        state={record.status === "running" ? "ready" : "stopped"}
+        terminationReason={record.termination_reason}
+        status={record.status}
         className="mt-3 text-xs"
       />
     </>

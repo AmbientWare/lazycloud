@@ -9,11 +9,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  deleteCollection,
-  refreshCollection,
-  type CollectionKind,
-} from "@/lib/queries/collections";
+import { deleteCollection, refreshCollection } from "@/lib/queries/collections";
 
 export function ConfirmCollectionAction({
   label,
@@ -89,7 +85,7 @@ export function DeleteCollection({
   name,
 }: {
   workspaceId: string;
-  kind: CollectionKind;
+  kind: "maps" | "queues";
   name: string;
 }) {
   const client = useQueryClient();
@@ -99,7 +95,7 @@ export function DeleteCollection({
       description={`Delete "${name}" and all its ${kind === "maps" ? "keys" : "remaining messages"}? This cannot be undone. Running code can recreate it.`}
       action={async () => {
         await deleteCollection(workspaceId, kind, name);
-        await refreshCollection(client, workspaceId, kind);
+        await refreshCollection(client, workspaceId, kind, name);
       }}
     />
   );

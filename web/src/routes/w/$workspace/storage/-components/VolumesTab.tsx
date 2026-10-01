@@ -1,27 +1,23 @@
 import { useRef, useState } from "react";
-import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronRight, Download, File, Folder, Loader2, Trash2, Upload } from "lucide-react";
 
-import { InfiniteScrollBoundary } from "@/components/shared/InfiniteScrollBoundary";
 import { LiveRelativeTime } from "@/components/shared/LiveTime";
 import { PanelError } from "@/components/shared/PanelError";
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { ContentTransition } from "@/components/shared/ContentTransition";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import type { Volume, VolumePathInfo } from "@/lib/api/schemas";
 import { formatBytes } from "@/lib/format";
 import {
   createVolume,
   deleteVolume,
   deleteVolumePath,
-  selectVolumeFiles,
-  selectVolumes,
   uploadVolumeFile,
   volumeDownloadUrl,
-  volumeFilesQueryOptions,
+  volumePathQueryOptions,
   volumesQueryOptions,
-  type Volume,
-  type VolumeFile,
 } from "@/lib/queries/storage";
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 import { cn } from "@/lib/utils";
@@ -38,10 +34,10 @@ export function VolumesTab({
   creating: boolean;
   onCreatingChange: (open: boolean) => void;
 }) {
-  const query = useInfiniteQuery(volumesQueryOptions(workspaceId));
-  const { items: volumes, nextCursor } = selectVolumes(query.data, query.hasNextPage);
+  const query = useQuery(volumesQueryOptions(workspaceId));
   const [selectedName, setSelectedName] = useState("");
-  const selectedVolume = volumes.find((volume) => volume.name === selectedName) ?? volumes[0];
+  const selectedVolume =
+    query.data?.volumes.find((volume) => volume.name === selectedName) ?? query.data?.volumes[0];
 
   return (
     <ContentTransition
@@ -62,13 +58,13 @@ export function VolumesTab({
           ) : null}
           {query.isPending ? (
             <VolumesSkeleton />
-          ) : query.isError && !query.data ? (
+          ) : query.isError ? (
             <PanelError message={query.error.message} />
-          ) : volumes.length === 0 && !creating ? (
+          ) : query.data.volumes.length === 0 && !creating ? (
             <PanelEmpty message="No volumes. Create one to mount in a workload." className="p-6" />
           ) : (
             <div className="divide-y divide-border/60">
-              {volumes.map((volume) => (
+              {query.data.volumes.map((volume) => (
                 <VolumeRow
                   key={volume.id}
                   workspaceId={workspaceId}
@@ -80,13 +76,6 @@ export function VolumesTab({
               ))}
             </div>
           )}
-          <InfiniteScrollBoundary
-            nextCursor={nextCursor}
-            loading={query.isFetchingNextPage}
-            error={query.isFetchNextPageError}
-            onLoadMore={() => void query.fetchNextPage()}
-            resourceLabel="volumes"
-          />
         </aside>
         {selectedVolume ? (
           <VolumeBrowser
@@ -143,13 +132,23 @@ function VolumeRow({
   return (
     <div className="interactive-row group px-3 py-2.5" data-selected={selected}>
       <div className="flex min-w-0 items-center gap-2">
-        <button type="button" className="min-w-0 flex-1 text-left" onClick={onSelect}>
+        <button
+          type="button"
+          className="min-w-0 flex-1 text-left"
+          onClick={onSelect}
+          disabled={volume.deletion_requested_at !== null}
+        >
           <span className="mono block truncate text-[13px] font-medium text-foreground">
             {volume.name}
           </span>
           <span className="mt-0.5 block text-[11px] text-muted-foreground">
-            {formatBytes(volume.size_bytes)} · created{" "}
-            <LiveRelativeTime value={volume.created_at} />
+            {volume.deletion_requested_at ? (
+              "Deleting · billing stopped"
+            ) : (
+              <>
+                {formatBytes(volume.size)} · updated <LiveRelativeTime value={volume.updated_at} />
+              </>
+            )}
           </span>
         </button>
         {!confirming ? (
@@ -159,6 +158,7 @@ function VolumeRow({
             className="size-7 opacity-70 md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100"
             aria-label={`Delete volume ${volume.name}`}
             title="Delete volume"
+            disabled={volume.deletion_requested_at !== null}
             onClick={() => setConfirming(true)}
           >
             <Trash2 />
@@ -166,7 +166,11 @@ function VolumeRow({
         ) : null}
       </div>
       <div className="mt-1">
-        <ResourceWorkloadLinks workspaceName={workspaceName} workloads={volume.used_by} limit={1} />
+        <ResourceWorkloadLinks
+          workspaceName={workspaceName}
+          workloads={volume.workloads}
+          limit={1}
+        />
       </div>
       {confirming ? (
         <div className="mt-2 flex items-center gap-1.5">
@@ -196,8 +200,7 @@ function VolumeBrowser({ workspaceId, volume }: { workspaceId: string; volume: V
   const [path, setPath] = useState("");
   const [confirmPath, setConfirmPath] = useState("");
   const [transferError, setTransferError] = useState("");
-  const query = useInfiniteQuery(volumeFilesQueryOptions(workspaceId, volume.name, path));
-  const { items: files, nextCursor } = selectVolumeFiles(query.data, query.hasNextPage);
+  const query = useQuery(volumePathQueryOptions(workspaceId, volume.name, path));
   const upload = useMutation({
     mutationFn: (file: File) => uploadVolumeFile(workspaceId, volume.name, path, file),
     onSuccess: () => refreshVolumeQueries(queryClient, workspaceId, volume.name),
@@ -211,7 +214,7 @@ function VolumeBrowser({ workspaceId, volume }: { workspaceId: string; volume: V
     },
   });
 
-  const download = async (item: VolumeFile) => {
+  const download = async (item: VolumePathInfo) => {
     setTransferError("");
     try {
       const url = await volumeDownloadUrl(workspaceId, volume.name, item.path);
@@ -227,7 +230,7 @@ function VolumeBrowser({ workspaceId, volume }: { workspaceId: string; volume: V
     }
   };
 
-  const items = [...files].sort(byDirectoryThenName);
+  const items = [...(query.data?.path_infos ?? [])].sort(byDirectoryThenName);
 
   return (
     <section className="flex min-h-0 flex-col overflow-visible lg:overflow-hidden">
@@ -282,7 +285,7 @@ function VolumeBrowser({ workspaceId, volume }: { workspaceId: string; volume: V
       >
         {query.isPending ? (
           <FileSkeleton />
-        ) : query.isError && !query.data ? (
+        ) : query.isError ? (
           <PanelError message={query.error.message} />
         ) : items.length === 0 ? (
           <PanelEmpty message="Empty directory" className="p-8" />
@@ -312,14 +315,12 @@ function VolumeBrowser({ workspaceId, volume }: { workspaceId: string; volume: V
                   ) : (
                     <span className="mono min-w-0 flex-1 truncate text-[13px]">{itemName}</span>
                   )}
-                  {item.modified_at ? (
-                    <span className="hidden shrink-0 text-[11px] text-muted-foreground sm:inline">
-                      <LiveRelativeTime value={item.modified_at} />
-                    </span>
-                  ) : null}
+                  <span className="hidden shrink-0 text-[11px] text-muted-foreground sm:inline">
+                    <LiveRelativeTime value={item.mod_time} />
+                  </span>
                   {!item.is_dir ? (
                     <span className="mono w-16 shrink-0 text-right text-[11px] text-muted-foreground">
-                      {formatBytes(item.size_bytes)}
+                      {formatBytes(item.size)}
                     </span>
                   ) : null}
                   {confirming ? (
@@ -367,13 +368,6 @@ function VolumeBrowser({ workspaceId, volume }: { workspaceId: string; volume: V
             })}
           </div>
         )}
-        <InfiniteScrollBoundary
-          nextCursor={nextCursor}
-          loading={query.isFetchingNextPage}
-          error={query.isFetchNextPageError}
-          onLoadMore={() => void query.fetchNextPage()}
-          resourceLabel="files"
-        />
       </ContentTransition>
       {remove.isError ? (
         <p className="border-t border-border px-3 py-2 text-xs text-destructive">
@@ -415,7 +409,7 @@ function VolumeForm({
       void queryClient.invalidateQueries({
         queryKey: workspaceQueryKeys.storage.volumes(workspaceId),
       });
-      onCreated(volume.name);
+      onCreated(volume?.name ?? name.trim());
     },
   });
 
@@ -454,7 +448,7 @@ function refreshVolumeQueries(
 ) {
   return Promise.all([
     queryClient.invalidateQueries({
-      queryKey: workspaceQueryKeys.storage.volumeFiles(workspaceId, volumeName),
+      queryKey: workspaceQueryKeys.storage.volumePath(workspaceId, volumeName),
     }),
     queryClient.invalidateQueries({
       queryKey: workspaceQueryKeys.storage.volumes(workspaceId),
@@ -466,7 +460,7 @@ function fileName(path: string): string {
   return path.split("/").filter(Boolean).at(-1) ?? path;
 }
 
-function byDirectoryThenName(left: VolumeFile, right: VolumeFile): number {
+function byDirectoryThenName(left: VolumePathInfo, right: VolumePathInfo): number {
   if (left.is_dir !== right.is_dir) return left.is_dir ? -1 : 1;
   return left.path.localeCompare(right.path);
 }

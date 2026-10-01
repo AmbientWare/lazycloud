@@ -1,100 +1,205 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Download, FileCode2 } from "lucide-react";
 
 import { CopyButton } from "@/components/shared/CopyButton";
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { Button } from "@/components/ui/button";
-import type { Schemas } from "@/lib/api/client";
+import {
+  functionResultSchema,
+  type FunctionCloudpickleResult,
+  type FunctionResultRichDisplay,
+} from "@/lib/api/schemas/functions";
 import { base64ToBytes, downloadBlob } from "@/lib/files";
 import { formatBytes } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
-const FAILURE_KINDS: Record<Schemas["FailureKind"], string> = {
-  user_error: "The function raised an exception",
-  load_error: "The handler failed to load",
-  timeout: "The task ran past its timeout",
-  lost: "The container running it was lost",
-  start_failed: "Its container failed to start",
-  system: "The platform failed to run it",
-  dependency_failed: "A task it depends on did not succeed",
-};
-
 /**
- * A task's recorded outcome: the value it returned, or how it failed. A Python
- * value is only ever offered as a file; the dashboard never evaluates it.
+ * A task's recorded outcome. A Python result shows the display the runner
+ * stored beside the pickle; the pickle itself is only ever offered as a file.
  */
 export function ResultBody({
-  failure,
-  payload,
+  error,
+  result,
 }: {
-  failure: Schemas["TaskFailure"] | null | undefined;
-  payload: Schemas["Payload"] | null | undefined;
+  error: string | null | undefined;
+  result: unknown;
 }): ReactNode {
-  if (failure) {
-    const heading = failure.type ? `${failure.type}: ${failure.message}` : failure.message;
-    const text = failure.traceback ? `${failure.traceback.trimEnd()}` : heading;
+  if (error) {
+    return <TextResult label="Error" text={error} extension="txt" tone="error" />;
+  }
+  if (result === null || result === undefined) {
+    return <PanelEmpty message="No result recorded" className="h-24" />;
+  }
+  const parsed = functionResultSchema.safeParse(result);
+  if (!parsed.success) {
+    return <TextResult label="Result" text={JSON.stringify(result, null, 2)} extension="json" />;
+  }
+  if (parsed.data.encoding === "json") {
     return (
       <TextResult
-        label="Error"
-        detail={FAILURE_KINDS[failure.kind] ?? failure.kind}
-        text={text}
-        extension="txt"
-        tone="error"
+        label="Result"
+        text={JSON.stringify(parsed.data.value, null, 2)}
+        extension="json"
       />
     );
   }
-  if (!payload) {
-    return <PanelEmpty message="No result recorded" className="h-24" />;
-  }
-  if (payload.encoding === "json") {
-    return (
-      <TextResult label="Result" text={JSON.stringify(payload.value, null, 2)} extension="json" />
-    );
-  }
-  return <PythonResult data={payload.data ?? ""} />;
+  return <PythonResult payload={parsed.data} />;
 }
 
-function PythonResult({ data }: { data: string }) {
-  const bytes = base64ToBytes(data);
+function PythonResult({ payload }: { payload: FunctionCloudpickleResult }) {
+  const display = payload.display;
+  const rich = display?.rich ?? null;
+  const [view, setView] = useState<"rendered" | "text">("rendered");
+  const showRich = rich !== null && view === "rendered";
+
+  const downloadPickle = () =>
+    downloadBlob(
+      "task-result.pkl",
+      new Blob([base64ToBytes(payload.value_base64)], { type: "application/octet-stream" }),
+    );
+
   return (
     <div className="flex min-h-full flex-col">
       <div className="flex h-10 shrink-0 items-center border-b border-border px-2">
         <span className="px-1 text-xs text-muted-foreground">Result</span>
+        {rich !== null ? (
+          <div className="ml-2 flex items-center gap-0.5" role="group" aria-label="Result view">
+            <ViewToggle active={view === "rendered"} onClick={() => setView("rendered")}>
+              Rendered
+            </ViewToggle>
+            <ViewToggle active={view === "text"} onClick={() => setView("text")}>
+              Text
+            </ViewToggle>
+          </div>
+        ) : null}
         <div className="ml-auto flex items-center gap-1">
+          {display ? <CopyButton value={display.text} label="result text" /> : null}
+          {rich !== null ? <RichDownload rich={rich} /> : null}
           <Button
             variant="ghost"
             size="icon"
             aria-label="Download Python object"
-            title={`Download Python object (${formatBytes(bytes.byteLength)}, pickle)`}
-            onClick={() =>
-              downloadBlob(
-                "task-result.pkl",
-                new Blob([bytes], { type: "application/octet-stream" }),
-              )
-            }
+            title={`Download Python object (${formatBytes(payload.size_bytes)}, pickle)`}
+            onClick={downloadPickle}
           >
             <FileCode2 className="size-3.5" />
           </Button>
         </div>
       </div>
-      <PanelEmpty
-        message={`Python object, ${formatBytes(bytes.byteLength)}`}
-        detail="Download it and load it with the Python SDK."
-        className="h-24"
-      />
+      {display === null ? (
+        <PanelEmpty
+          message={`Python object, ${formatBytes(payload.size_bytes)}`}
+          detail="Download it and load it with the Python SDK."
+          className="h-24"
+        />
+      ) : showRich ? (
+        <RichDisplay rich={rich} />
+      ) : (
+        <pre className="mono min-h-0 flex-1 whitespace-pre-wrap break-all p-3 text-xs">
+          {display.text}
+        </pre>
+      )}
     </div>
+  );
+}
+
+function ViewToggle({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      aria-pressed={active}
+      onClick={onClick}
+      className={cn("h-6 px-1.5 text-xs", active && "bg-accent text-foreground")}
+    >
+      {children}
+    </Button>
+  );
+}
+
+function RichDownload({ rich }: { rich: FunctionResultRichDisplay }) {
+  const download = () => {
+    if (rich.kind === "image") {
+      downloadBlob(
+        "task-result.png",
+        new Blob([base64ToBytes(rich.value_base64)], { type: rich.media_type }),
+      );
+      return;
+    }
+    downloadBlob("task-result.html", new Blob([rich.html], { type: "text/html;charset=utf-8" }));
+  };
+  const what = rich.kind === "image" ? "image" : "HTML";
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      aria-label={`Download ${what}`}
+      title={`Download ${what}`}
+      onClick={download}
+    >
+      <Download className="size-3.5" />
+    </Button>
+  );
+}
+
+function RichDisplay({ rich }: { rich: FunctionResultRichDisplay }) {
+  if (rich.kind === "image") {
+    return (
+      <div className="min-h-0 flex-1 overflow-auto p-3">
+        <img
+          src={`data:${rich.media_type};base64,${rich.value_base64}`}
+          alt="Result image"
+          className="max-w-full"
+        />
+      </div>
+    );
+  }
+  return (
+    <iframe
+      title="Rendered result"
+      sandbox=""
+      srcDoc={htmlDocument(rich.html)}
+      className="min-h-0 w-full flex-1 border-0 bg-transparent"
+    />
+  );
+}
+
+/**
+ * The sandboxed frame cannot read our stylesheet, so the rules a bare table
+ * needs on the dark panel travel with the document.
+ */
+function htmlDocument(html: string): string {
+  return (
+    '<!doctype html><html><head><meta charset="utf-8"><style>' +
+    ":root{color-scheme:dark}" +
+    "body{margin:0;padding:12px;background:transparent;color:CanvasText;" +
+    "font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}" +
+    "table{border-collapse:collapse}" +
+    "th,td{border:1px solid color-mix(in srgb,CanvasText 22%,transparent);padding:2px 8px;text-align:right}" +
+    "th{font-weight:600}" +
+    "img,svg{max-width:100%}" +
+    "</style></head><body>" +
+    html +
+    "</body></html>"
   );
 }
 
 function TextResult({
   label,
-  detail,
   text,
   extension,
   tone = "neutral",
 }: {
   label: "Result" | "Error";
-  detail?: string;
   text: string;
   extension: "json" | "txt";
   tone?: "neutral" | "error";
@@ -103,7 +208,6 @@ function TextResult({
     <div className="flex min-h-full flex-col">
       <div className="flex h-10 shrink-0 items-center border-b border-border px-2">
         <span className="px-1 text-xs text-muted-foreground">{label}</span>
-        {detail ? <span className="px-1 text-xs text-muted-foreground">· {detail}</span> : null}
         <div className="ml-auto flex items-center gap-1">
           <CopyButton value={text} label={label.toLowerCase()} />
           <Button

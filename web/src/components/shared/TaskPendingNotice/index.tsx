@@ -1,9 +1,15 @@
 import { useLiveNow } from "@/hooks/use-live-now";
-import type { Task } from "@/lib/queries/tasks";
+import type { TaskSummary } from "@/lib/api/schemas/tasks";
 
-/** Why a queued task has not started, once it has waited five seconds. */
-export function TaskPendingNotice({ task, compact = false }: { task: Task; compact?: boolean }) {
-  const progress = task.status === "queued" ? task.pending : undefined;
+export function TaskPendingNotice({
+  task,
+  compact = false,
+}: {
+  task: TaskSummary;
+  compact?: boolean;
+}) {
+  const pending = task.status === "pending" || task.status === "retry";
+  const progress = pending ? task.pending_progress : null;
   const now = useLiveNow(Boolean(progress));
   if (!progress) return null;
   const elapsed = Math.max(0, Math.floor((now - Date.parse(progress.pending_since)) / 1_000));

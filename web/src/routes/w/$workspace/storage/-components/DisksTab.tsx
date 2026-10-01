@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "@tanstack/react-router";
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Trash2 } from "lucide-react";
 
@@ -9,19 +10,27 @@ import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { PanelError } from "@/components/shared/PanelError";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import type { Disk } from "@/lib/api/schemas";
 import { formatBytes } from "@/lib/format";
-import { deleteDisk, disksQueryOptions, selectDisks, type Disk } from "@/lib/queries/storage";
+import { deleteDisk, disksQueryOptions, selectDiskList } from "@/lib/queries/storage";
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 
 const STATUS_LABELS: Record<Disk["status"], string> = {
   attached: "In use",
   saving: "Saving",
   detached: "Idle",
+  deleting: "Deleting",
 };
 
-export function DisksTab({ workspaceId }: { workspaceId: string }) {
+export function DisksTab({
+  workspaceId,
+  workspaceName,
+}: {
+  workspaceId: string;
+  workspaceName: string;
+}) {
   const query = useInfiniteQuery(disksQueryOptions(workspaceId));
-  const { items: disks, nextCursor } = selectDisks(query.data, query.hasNextPage);
+  const { items: disks, nextCursor } = selectDiskList(query.data, query.hasNextPage);
 
   return (
     <ContentTransition pending={query.isPending} className="min-h-full lg:h-full lg:min-h-0">
@@ -49,7 +58,12 @@ export function DisksTab({ workspaceId }: { workspaceId: string }) {
           </div>
           <div className="divide-y divide-border/60">
             {disks.map((disk) => (
-              <DiskRow key={disk.id} workspaceId={workspaceId} disk={disk} />
+              <DiskRow
+                key={disk.id}
+                workspaceId={workspaceId}
+                workspaceName={workspaceName}
+                disk={disk}
+              />
             ))}
           </div>
           <InfiniteScrollBoundary
@@ -65,7 +79,15 @@ export function DisksTab({ workspaceId }: { workspaceId: string }) {
   );
 }
 
-function DiskRow({ workspaceId, disk }: { workspaceId: string; disk: Disk }) {
+function DiskRow({
+  workspaceId,
+  workspaceName,
+  disk,
+}: {
+  workspaceId: string;
+  workspaceName: string;
+  disk: Disk;
+}) {
   const queryClient = useQueryClient();
   const [confirming, setConfirming] = useState(false);
   const remove = useMutation({
@@ -86,7 +108,7 @@ function DiskRow({ workspaceId, disk }: { workspaceId: string; disk: Disk }) {
             updated <LiveRelativeTime value={disk.updated_at} />
           </span>
         </span>
-        <DiskHolder containerId={disk.holder_container_id} />
+        <DiskWorkload workspaceName={workspaceName} workload={disk.workload} />
         <span className="mono text-right tabular-nums">{formatBytes(disk.size_bytes)}</span>
         <span className="mono text-right tabular-nums text-muted-foreground">
           {formatBytes(disk.stored_bytes)}
@@ -133,14 +155,30 @@ function DiskRow({ workspaceId, disk }: { workspaceId: string; disk: Disk }) {
   );
 }
 
-/** The disk names only the container holding it, not that container's workload. */
-function DiskHolder({ containerId }: { containerId: string | undefined }) {
-  if (!containerId) return <span className="text-muted-foreground">None</span>;
+function DiskWorkload({
+  workspaceName,
+  workload,
+}: {
+  workspaceName: string;
+  workload: Disk["workload"];
+}) {
+  if (!workload) return <span className="text-muted-foreground">None</span>;
   return (
-    <span className="min-w-0 truncate" title={containerId}>
-      <span className="text-muted-foreground">Container </span>
-      <span className="mono text-foreground">{containerId.slice(0, 8)}</span>
-    </span>
+    <Link
+      to="/w/$workspace/apps/$appId/workloads/$kind/$name"
+      params={{
+        workspace: workspaceName,
+        appId: workload.app_id,
+        kind: workload.kind,
+        name: workload.name,
+      }}
+      className="min-w-0 truncate hover:text-foreground hover:underline"
+    >
+      <span className="mono text-foreground">{workload.name}</span>{" "}
+      <span className="text-muted-foreground">
+        {workload.role === "devbox" ? "devbox" : "pod"} in {workload.app_name}
+      </span>
+    </Link>
   );
 }
 

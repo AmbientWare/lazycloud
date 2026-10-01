@@ -24,41 +24,35 @@ import { InfiniteScrollBoundary } from "@/components/shared/InfiniteScrollBounda
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { ContentTransition } from "@/components/shared/ContentTransition";
 import { Skeleton } from "@/components/ui/skeleton";
+import { formatCostNanos } from "@/lib/money";
 import { countLabel, formatBytes } from "@/lib/format";
 import { useWorkspace } from "@/lib/workspace-context";
+import type { ArtifactSummary } from "@/lib/api/schemas/artifacts";
 import {
   artifactsQuery,
-  artifactSummaryQuery,
-  deleteArtifacts,
-  selectArtifacts,
-  type Artifact,
+  artifactStorageQuery,
+  deleteArtifact,
   type ArtifactFilters,
 } from "@/lib/queries/artifacts";
-import { appsQueryOptions, selectApps } from "@/lib/queries/apps";
+import { appSummariesQueryOptions } from "@/lib/queries/apps";
 import { workspaceQueryKeys, accountQueryKeys } from "@/lib/queries/workspace-keys";
 import { ArtifactRow } from "./ArtifactRow";
-
-/** One bulk delete request takes at most this many ids. */
-const MAX_SELECTED = 100;
-const TASK_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function Artifacts({ workspaceId, taskId }: { workspaceId: string; taskId?: string }) {
   const { workspace } = useWorkspace();
   const client = useQueryClient();
   const [filters, setFilters] = useState<ArtifactFilters>({});
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [deleting, setDeleting] = useState<Artifact[] | null>(null);
+  const [deleting, setDeleting] = useState<ArtifactSummary[] | null>(null);
   const [showFilters, setShowFilters] = useState(false);
-  // The list filters on whole task IDs only; a partial one waits until it is complete.
-  const typedTaskId = filters.task_id?.trim() ?? "";
-  const taskFilter = taskId ?? (TASK_ID.test(typedTaskId) ? typedTaskId : undefined);
-  const partialTaskId = !taskId && typedTaskId !== "" && taskFilter === undefined;
-  const query = useInfiniteQuery(artifactsQuery(workspaceId, { ...filters, task_id: taskFilter }));
-  const summary = useQuery({ ...artifactSummaryQuery(workspaceId), enabled: !taskId });
-  const apps = useInfiniteQuery({ ...appsQueryOptions(workspaceId), enabled: !taskId });
-  const { items: rows, nextCursor } = selectArtifacts(query.data, query.hasNextPage);
+  const query = useInfiniteQuery(
+    artifactsQuery(workspaceId, { ...filters, ...(taskId ? { task_id: taskId } : {}) }),
+  );
+  const summary = useQuery({ ...artifactStorageQuery(workspaceId), enabled: !taskId });
+  const apps = useQuery({ ...appSummariesQueryOptions(workspaceId), enabled: !taskId });
+  const rows = query.data?.pages.flatMap((page) => page.data) ?? [];
   const selected = rows.filter((row) => selectedIds.includes(row.id));
-  const selectable = rows.slice(0, MAX_SELECTED);
+  const selectable = rows.filter((row) => !row.deleting).slice(0, 100);
   const allSelected =
     selectable.length > 0 && selectable.every((row) => selectedIds.includes(row.id));
   const hasFilters = Object.values(filters).some(Boolean);
@@ -77,7 +71,7 @@ export function Artifacts({ workspaceId, taskId }: { workspaceId: string; taskId
       client.invalidateQueries({ queryKey: accountQueryKeys.usage.root() }),
     ]);
   };
-  const fileRow = (artifact: Artifact, compact = false) => (
+  const fileRow = (artifact: ArtifactSummary, compact = false) => (
     <ArtifactRow
       key={artifact.id}
       artifact={artifact}
@@ -92,7 +86,9 @@ export function Artifacts({ workspaceId, taskId }: { workspaceId: string; taskId
             className="size-3.5"
             aria-label={`Select ${artifact.filename}`}
             checked={selectedIds.includes(artifact.id)}
-            disabled={selected.length >= MAX_SELECTED && !selectedIds.includes(artifact.id)}
+            disabled={
+              artifact.deleting || (selected.length >= 100 && !selectedIds.includes(artifact.id))
+            }
             onCheckedChange={(checked) =>
               setSelectedIds(
                 checked === true
@@ -124,16 +120,16 @@ export function Artifacts({ workspaceId, taskId }: { workspaceId: string; taskId
         {!taskId && (
           <>
             <Select
-              value={filters.app || "all"}
-              onValueChange={(value) => updateFilter("app", value === "all" ? "" : value)}
+              value={filters.app_id || "all"}
+              onValueChange={(value) => updateFilter("app_id", value === "all" ? "" : value)}
             >
               <SelectTrigger size="sm" className="max-w-44 text-xs" aria-label="Filter by app">
                 <SelectValue placeholder="All apps" />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All apps</SelectItem>
-                {selectApps(apps.data, false).items.map((app) => (
-                  <SelectItem key={app.id} value={app.name}>
+                {apps.data?.items.map(({ app }) => (
+                  <SelectItem key={app.id} value={app.id}>
                     {app.name}
                   </SelectItem>
                 ))}
@@ -196,11 +192,9 @@ export function Artifacts({ workspaceId, taskId }: { workspaceId: string; taskId
             <Input
               className="h-8 text-xs"
               placeholder="Any task"
-              aria-invalid={partialTaskId}
               value={filters.task_id ?? ""}
               onChange={(event) => updateFilter("task_id", event.target.value)}
             />
-            {partialTaskId ? <span>Enter the full task ID</span> : null}
           </label>
           <label className="flex flex-col gap-1.5 text-xs text-muted-foreground">
             Saved from
@@ -237,7 +231,7 @@ export function Artifacts({ workspaceId, taskId }: { workspaceId: string; taskId
           <span className="mr-auto">
             {selected.length} selected{" "}
             <span className="ml-2 text-muted-foreground">
-              {formatBytes(selected.reduce((sum, row) => sum + row.size_bytes, 0))}
+              {formatBytes(selected.reduce((sum, row) => sum + row.size, 0))}
             </span>
           </span>
           <Button
@@ -330,7 +324,7 @@ export function Artifacts({ workspaceId, taskId }: { workspaceId: string; taskId
         )}
         <InfiniteScrollBoundary
           key={JSON.stringify(filters)}
-          nextCursor={nextCursor}
+          nextCursor={query.data?.pages.at(-1)?.next}
           loading={query.isFetchingNextPage}
           error={query.isFetchNextPageError}
           onLoadMore={() => void query.fetchNextPage()}
@@ -344,6 +338,13 @@ export function Artifacts({ workspaceId, taskId }: { workspaceId: string; taskId
               <span>
                 {countLabel(summary.data.count, "file")}
                 <span className="ml-3 tabular-nums">{formatBytes(summary.data.size_bytes)}</span>
+              </span>
+              <span
+                title={`Billed as volume storage. ${formatCostNanos(summary.data.accrued_nanos)} accrued since ${new Date(summary.data.accrued_since).toLocaleDateString()}.`}
+              >
+                {summary.data.estimated_monthly_nanos === null
+                  ? "Storage rate unavailable"
+                  : `Volume storage: ${formatCostNanos(summary.data.estimated_monthly_nanos)} / month`}
               </span>
               <span>
                 New uploads expire after {countLabel(summary.data.retention_seconds / 86400, "day")}
@@ -377,24 +378,18 @@ function ArtifactDeleteDialog({
   onComplete,
   invalidate,
 }: {
-  artifacts: Artifact[];
+  artifacts: ArtifactSummary[];
   workspaceId: string;
   onClose: () => void;
   onComplete: () => void;
   invalidate: () => Promise<void>;
 }) {
   const mutation = useMutation({
-    mutationFn: () =>
-      deleteArtifacts(
-        workspaceId,
-        artifacts.map((artifact) => artifact.id),
-      ),
-    onSuccess: (deleted) => {
-      toast.success(
-        deleted.length === artifacts.length
-          ? `Deleted ${countLabel(deleted.length, "file")}`
-          : `Deleted ${countLabel(deleted.length, "file")}; the rest were already gone`,
-      );
+    mutationFn: async () => {
+      for (const artifact of artifacts) await deleteArtifact(workspaceId, artifact.id);
+    },
+    onSuccess: () => {
+      toast.success("Deletion requested");
       onComplete();
     },
     onSettled: invalidate,
@@ -419,7 +414,7 @@ function ArtifactDeleteDialog({
               <File className="size-4 shrink-0 text-muted-foreground" />
               <span className="min-w-0 flex-1 truncate">{item.filename}</span>
               <span className="shrink-0 text-xs text-muted-foreground">
-                {formatBytes(item.size_bytes)}
+                {formatBytes(item.size)}
               </span>
             </div>
           ))}

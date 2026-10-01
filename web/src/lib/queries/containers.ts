@@ -1,88 +1,160 @@
 import { infiniteQueryOptions, mutationOptions, queryOptions } from "@tanstack/react-query";
 
-import { api, ok, type Schemas } from "@/lib/api/client";
-import { containerMetricsTimeseriesSchema } from "@/lib/api/schemas";
-import { apiRequest, withWorkspace } from "@/lib/api/unserved";
+import { api, apiRequest, ok, withWorkspace } from "@/lib/api/client";
+import {
+  containerMetricsTimeseriesSchema,
+  type Container,
+  type ContainerDetail,
+  type ContainerWithAppPage,
+} from "@/lib/api/schemas";
+import {
+  parseStubId,
+  viewActiveDeployment,
+  viewApp,
+  viewContainer,
+  viewStub,
+} from "@/lib/api/views";
+import { workspaceName } from "@/lib/api/workspaces";
 
-import { LIVE_LIST_MAX_PAGES, nextPageCursor, selectPages } from "./infinite-list";
-import { workspaceQueryKeys } from "./workspace-keys";
+import { appById, appDirectory, workloadDirectory } from "./directory";
 
-export type Container = Schemas["Container"];
+import {
+  LIVE_LIST_MAX_PAGES,
+  nextListCursor,
+  selectInfiniteList,
+  type InfiniteListQueryData,
+} from "./infinite-list";
+import { workspaceLiveQueryMeta, workspaceQueryKeys } from "./workspace-keys";
 
-/** A container that is up and taking work, or finishing it while it drains. */
-export function isRunningContainer(container: { state: Container["state"] }): boolean {
-  return container.state === "ready" || container.state === "draining";
-}
+export type ContainerListOptions = {
+  appId?: string;
+  stubIds?: string[];
+  statuses?: ContainerListStatus[];
+  enabled?: boolean;
+};
 
-/**
- * The workspace's containers, newest first; with `live`, only those that have
- * not stopped. The API filters by liveness only, so app and workload views
- * narrow the live page themselves.
- */
-export function containersQueryOptions(workspace: string, { live = false } = {}) {
+export type ContainerListStatus = "pending" | "running" | "exited" | "failed" | "stopped";
+
+export function containersQueryOptions(workspaceId: string, options: ContainerListOptions = {}) {
   return infiniteQueryOptions({
-    queryKey: workspaceQueryKeys.containers.list(workspace, { live }),
+    queryKey: workspaceQueryKeys.containers.list(workspaceId, {
+      appId: options.appId ?? null,
+      stubIds: options.stubIds?.join(",") ?? null,
+      statuses: options.statuses?.join(",") ?? null,
+    }),
     initialPageParam: "",
-    queryFn: ({ pageParam }) =>
-      ok(
+    // The API lists the workspace's containers, or its live ones; the app,
+    // workload and status narrowing happens here on that page.
+    queryFn: async ({ pageParam, client }): Promise<ContainerWithAppPage> => {
+      const live =
+        options.statuses !== undefined &&
+        options.statuses.every((status) => status === "pending" || status === "running");
+      const page = await ok(
         api.GET("/v1/workspaces/{workspace}/containers", {
           params: {
-            path: { workspace },
+            path: { workspace: workspaceName(workspaceId) },
             query: { live, limit: live ? 1000 : 100, cursor: pageParam || undefined },
           },
         }),
-      ),
-    getNextPageParam: nextPageCursor,
+      );
+      const apps = await appDirectory(client, workspaceId);
+      const app = options.appId ? await appById(client, workspaceId, options.appId) : undefined;
+      const workloads = new Set(
+        (options.stubIds ?? []).map((id) => {
+          const stub = parseStubId(id);
+          return `${stub.app}/${stub.name}`;
+        }),
+      );
+      const data = page.containers
+        .filter((container) => !app || container.app === app.name)
+        .filter(
+          (container) => !workloads.size || workloads.has(`${container.app}/${container.function}`),
+        )
+        .map((container) => {
+          const appId = apps.byName.get(container.app)?.id ?? "";
+          return { container: viewContainer(container, workspaceId, appId), app_id: appId };
+        })
+        .filter(
+          ({ container }) =>
+            !options.statuses || options.statuses.includes(container.status as ContainerListStatus),
+        );
+      return { data, next: page.next_cursor ?? "" };
+    },
+    getNextPageParam: nextListCursor,
     maxPages: LIVE_LIST_MAX_PAGES,
+    enabled: options.enabled,
+    meta: workspaceLiveQueryMeta(true),
   });
 }
 
-export function selectContainers(
-  data: { pages: readonly Schemas["ContainerPage"][] } | undefined,
+export function selectContainerList(
+  data: InfiniteListQueryData<ContainerWithAppPage["data"][number]> | undefined,
   hasNextPage: boolean | undefined,
 ) {
-  return selectPages(
-    data,
-    (page) => page.containers,
-    hasNextPage,
-    (item) => item.id,
-  );
+  return selectInfiniteList(data, hasNextPage, (item) => item.container.id);
 }
 
-export function containerQueryOptions(workspace: string, container: string) {
+export function containerQueryOptions(workspaceId: string, containerId: string) {
   return queryOptions({
-    queryKey: workspaceQueryKeys.containers.detail(workspace, container),
-    queryFn: () =>
-      ok(
+    queryKey: workspaceQueryKeys.containers.detail(workspaceId, containerId),
+    queryFn: async ({ client }): Promise<ContainerDetail> => {
+      const container = await ok(
         api.GET("/v1/workspaces/{workspace}/containers/{container}", {
-          params: { path: { workspace, container } },
+          params: { path: { workspace: workspaceName(workspaceId), container: containerId } },
         }),
-      ),
+      );
+      const [apps, workloads] = await Promise.all([
+        appDirectory(client, workspaceId),
+        workloadDirectory(client, workspaceId),
+      ]);
+      const app = apps.byName.get(container.app);
+      const workload = workloads.byName.get(`${container.app}/${container.function}`);
+      const view = viewContainer(container, workspaceId, app?.id ?? null);
+      return {
+        ...view,
+        app: app ? viewApp(app, workspaceId) : null,
+        workload: workload ? viewStub(workload, workspaceId, app?.id ?? "") : null,
+        deployment: workload ? viewActiveDeployment(workload, app?.id ?? "") : null,
+        run_name: null,
+        run_status: null,
+        expires_at: null,
+        actions: {
+          can_stop: container.state !== "stopped",
+          can_shell: false,
+          can_create_image: false,
+          can_snapshot_memory: false,
+        },
+      };
+    },
+    meta: workspaceLiveQueryMeta(true),
   });
 }
 
-export function stopContainerMutationOptions(workspace: string, container: string) {
+export function stopContainerMutationOptions(workspaceId: string, containerId: string) {
   return mutationOptions({
-    mutationFn: () =>
-      ok(
-        api.POST("/v1/workspaces/{workspace}/containers/{container}/stop", {
-          params: { path: { workspace, container } },
-        }),
+    mutationFn: async (): Promise<Container> =>
+      viewContainer(
+        await ok(
+          api.POST("/v1/workspaces/{workspace}/containers/{container}/stop", {
+            params: { path: { workspace: workspaceName(workspaceId), container: containerId } },
+          }),
+        ),
+        workspaceId,
+        null,
       ),
   });
 }
 
-/** CPU, memory and GPU over the container's life; the observability packet serves it. */
 export function containerMetricsTimeseriesQueryOptions(
-  workspace: string,
-  container: string,
+  workspaceId: string,
+  containerId: string,
   live: boolean,
 ) {
   return queryOptions({
-    queryKey: workspaceQueryKeys.containers.metrics(workspace, container),
+    queryKey: workspaceQueryKeys.containers.metrics(workspaceId, containerId),
     queryFn: () =>
       apiRequest(
-        withWorkspace(`/api/v1/metrics/containers/${container}/timeseries`, workspace),
+        withWorkspace(`/api/v1/metrics/containers/${containerId}/timeseries`, workspaceId),
         containerMetricsTimeseriesSchema,
       ),
     refetchInterval: live ? 5_000 : false,

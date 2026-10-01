@@ -2,9 +2,10 @@ import { Slot } from "@radix-ui/react-slot";
 import { cva, type VariantProps } from "class-variance-authority";
 import { useEffect, useState, type ComponentPropsWithoutRef, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
-import { ArrowUpRight } from "lucide-react";
+import { ArrowRight, ArrowUpRight } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { useAuthToken } from "@/hooks/use-auth-token";
 import { githubSignInHref } from "@/lib/queries/auth";
 import { cn } from "@/lib/utils";
 import { MarketingReveal } from "./MarketingReveal";
@@ -141,10 +142,9 @@ export function MarketingButton({
 /**
  * The way in, wherever a marketing page asks for one.
  *
- * Always the sign-in link: the session cookie is HttpOnly, so the page cannot
- * tell who is signed in, and the server sends a browser whose session is live
- * straight to the dashboard instead of to GitHub. A real anchor, because
- * leaving for GitHub is a document navigation.
+ * A browser that already holds a credential enters the dashboard without
+ * restarting OAuth. The signed-out action remains a real anchor because leaving
+ * for GitHub is a document navigation.
  */
 export function GetStartedButton({
   className,
@@ -155,6 +155,14 @@ export function GetStartedButton({
   label?: string;
   variant?: "default" | "secondary";
 }) {
+  const token = useAuthToken();
+  const content = (
+    <>
+      <span>{token ? "Dashboard" : label}</span>
+      {token ? <ArrowRight aria-hidden="true" /> : <ArrowUpRight aria-hidden="true" />}
+    </>
+  );
+
   return (
     <Button
       asChild
@@ -166,10 +174,11 @@ export function GetStartedButton({
         className,
       )}
     >
-      <a href={githubSignInHref("/dashboard")}>
-        <span>{label}</span>
-        <ArrowUpRight aria-hidden="true" />
-      </a>
+      {token ? (
+        <Link to="/dashboard">{content}</Link>
+      ) : (
+        <a href={githubSignInHref("/dashboard")}>{content}</a>
+      )}
     </Button>
   );
 }

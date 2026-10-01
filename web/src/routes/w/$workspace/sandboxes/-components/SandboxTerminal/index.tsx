@@ -19,7 +19,7 @@ export function SandboxTerminal({
 }) {
   const { workspace } = useWorkspace();
   const session = useMutation({
-    mutationFn: () => createContainerShell(workspace.name, containerId),
+    mutationFn: () => createContainerShell(workspace.id, containerId),
   });
   const mutate = session.mutate;
   useEffect(() => {

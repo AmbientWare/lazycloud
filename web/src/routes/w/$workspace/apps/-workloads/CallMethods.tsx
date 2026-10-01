@@ -1,31 +1,48 @@
 import type { ReactNode } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { ChevronRight } from "lucide-react";
 
 import { CopyButton } from "@/components/shared/CopyButton";
+import { PanelError } from "@/components/shared/PanelError";
 import { highlight, type CodeLanguage } from "@/components/ui/code-syntax";
+import { Skeleton } from "@/components/ui/skeleton";
+import { deploymentManifestQueryOptions } from "@/lib/queries/apps";
 import {
   curlSnippet,
   exampleBody,
   pythonOnlyReason,
   pythonSnippet,
   shellSingleQuote,
-  type DeploymentManifest,
 } from "./playground-form";
 import { pythonCall, sourceImport, sourceSnippet } from "./call-snippets";
 
 export function CallMethods({
+  workspaceId,
   workspaceName,
-  resource,
+  deploymentId,
+  handler,
 }: {
+  workspaceId: string;
   workspaceName: string;
-  resource: DeploymentManifest;
+  deploymentId: string;
+  handler?: string | null;
 }) {
+  const manifest = useQuery(deploymentManifestQueryOptions(workspaceId, deploymentId));
+  if (manifest.isPending)
+    return (
+      <div className="space-y-2 p-4" aria-hidden="true">
+        {Array.from({ length: 4 }, (_, i) => (
+          <Skeleton key={i} className="h-9 w-full" />
+        ))}
+      </div>
+    );
+  if (manifest.isError) return <PanelError message={manifest.error.message} />;
+  const resource = manifest.data;
   const asgi = resource.kind === "asgi";
   const body = asgi ? undefined : exampleBody(resource);
-  const method = "POST";
-  const source = sourceImport(resource.handler);
+  const method = asgi && resource.methods.includes("GET") ? "GET" : "POST";
+  const source = handler ? sourceImport(handler) : null;
   const pythonRequired = pythonOnlyReason(resource);
-  const url = resource.invoke_url;
 
   return (
     <div className="content-transition min-w-0 divide-y divide-border/70 px-4 py-1">
@@ -54,15 +71,19 @@ export function CallMethods({
           />
         </CallSection>
       )}
-      {!pythonRequired && url && (
+      {!pythonRequired && (
         <CallSection title="curl">
-          <Code text={curlSnippet(url, body, method)} language="shell" label="curl command" />
+          <Code
+            text={curlSnippet(resource.invoke_url, body, method)}
+            language="shell"
+            label="curl command"
+          />
         </CallSection>
       )}
-      {!pythonRequired && url && (
+      {!pythonRequired && (
         <CallSection title="Python requests">
           <Code
-            text={pythonSnippet(url, body, method)}
+            text={pythonSnippet(resource.invoke_url, body, method)}
             language="python"
             label="Python HTTP request"
           />

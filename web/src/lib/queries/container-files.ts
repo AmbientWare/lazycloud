@@ -1,6 +1,6 @@
 import { mutationOptions, queryOptions } from "@tanstack/react-query";
 
-import { apiRequest, postJson, withWorkspace } from "@/lib/api/unserved";
+import { apiRequest, postJson, withWorkspace } from "@/lib/api/client";
 import { base64ToBytes, downloadBlob, fileBase64 } from "@/lib/files";
 import {
   podEmptyMutationSchema,

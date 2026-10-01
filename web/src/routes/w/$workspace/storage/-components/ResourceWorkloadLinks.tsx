@@ -1,7 +1,7 @@
 import { Link } from "@tanstack/react-router";
 
 import { StubKindIcon } from "@/components/shared/StubKindIcon";
-import type { Schemas } from "@/lib/api/client";
+import type { ResourceWorkloadReference } from "@/lib/api/schemas";
 
 export function ResourceWorkloadLinks({
   workspaceName,
@@ -9,7 +9,7 @@ export function ResourceWorkloadLinks({
   limit = 2,
 }: {
   workspaceName: string;
-  workloads: Schemas["WorkloadRef"][];
+  workloads: ResourceWorkloadReference[];
   limit?: number;
 }) {
   if (workloads.length === 0) {
@@ -23,16 +23,16 @@ export function ResourceWorkloadLinks({
       <span>Used by</span>
       {visible.map((workload) => (
         <Link
-          key={`${workload.app}:${workload.kind}:${workload.name}`}
-          to="/w/$workspace/apps/$app/workloads/$kind/$name"
+          key={`${workload.app_id}:${workload.kind}:${workload.name}`}
+          to="/w/$workspace/apps/$appId/workloads/$kind/$name"
           params={{
             workspace: workspaceName,
-            app: workload.app,
+            appId: workload.app_id,
             kind: workload.kind,
             name: workload.name,
           }}
           className="interactive-link inline-flex min-w-0 items-center gap-1 text-foreground"
-          title={`${workload.app} / ${workload.name}`}
+          title={`${workload.app_name} / ${workload.name}`}
         >
           <StubKindIcon kind={workload.kind} className="size-3 shrink-0" />
           <span className="mono max-w-32 truncate">{workload.name}</span>

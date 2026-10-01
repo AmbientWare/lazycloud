@@ -9,8 +9,9 @@ import { useSession } from "@/components/shared/AuthGate/session";
 import { PreShellScreen } from "@/components/shared/PreShellScreen";
 import { WorkspaceDeletionProvider } from "@/components/shared/WorkspaceDeletion";
 import { useWorkspaceDeletion } from "@/components/shared/WorkspaceDeletion/context";
+import { WorkspaceLiveUpdatesProvider } from "@/components/shared/WorkspaceLiveUpdates";
 import { Button } from "@/components/ui/button";
-import type { Schemas } from "@/lib/api/client";
+import type { Workspace } from "@/lib/api/schemas";
 import { WorkspaceContext, type WorkspaceContextValue } from "@/lib/workspace-context";
 import { useWorkspaceSelection } from "@/lib/workspace-selection";
 
@@ -52,18 +53,23 @@ function WorkspaceLayout() {
           workspaceName={workspaceName}
           workspaceNames={workspaces.map((item) => item.name)}
         />
-      ) : workspace.state === "deleting" ? (
+      ) : workspace.status === "deleting" ? (
         <WorkspaceDeletionRecovery workspace={workspace} />
       ) : (
         <WorkspaceContext.Provider value={contextValue}>
-          <AppShell key={contextValue.workspace.id} />
+          <WorkspaceLiveUpdatesProvider
+            key={contextValue.workspace.id}
+            workspaceId={contextValue.workspace.id}
+          >
+            <AppShell />
+          </WorkspaceLiveUpdatesProvider>
         </WorkspaceContext.Provider>
       )}
     </WorkspaceDeletionProvider>
   );
 }
 
-function WorkspaceDeletionRecovery({ workspace }: { workspace: Schemas["Workspace"] }) {
+function WorkspaceDeletionRecovery({ workspace }: { workspace: Workspace }) {
   const deletion = useWorkspaceDeletion();
   return (
     <PreShellScreen width="lg">

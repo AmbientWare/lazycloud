@@ -1,26 +1,24 @@
 import { describe, expect, it } from "vitest";
 
-import { nextPageCursor, selectPages } from "./infinite-list";
+import { nextListCursor, selectInfiniteList } from "./infinite-list";
 
 it("stops paging when the API repeats a cursor", () => {
-  const first = { next_cursor: "cursor-2" };
-  const repeated = { next_cursor: "cursor-2" };
+  const first = { next: "cursor-2" };
+  const repeated = { next: "cursor-2" };
 
-  expect(nextPageCursor(first, [first])).toBe("cursor-2");
-  expect(nextPageCursor(repeated, [first, repeated])).toBeUndefined();
-  expect(nextPageCursor({}, [first, {}])).toBeUndefined();
+  expect(nextListCursor(first, [first])).toBe("cursor-2");
+  expect(nextListCursor(repeated, [first, repeated])).toBeUndefined();
 });
 
-describe("selectPages", () => {
+describe("selectInfiniteList", () => {
   it("exposes items and the active continuation cursor without page plumbing", () => {
-    const selection = selectPages(
+    const selection = selectInfiniteList(
       {
         pages: [
-          { tasks: [{ id: "run-3" }, { id: "run-2" }], next_cursor: "cursor-2" },
-          { tasks: [{ id: "run-1" }], next_cursor: "cursor-1" },
+          { data: [{ id: "run-3" }, { id: "run-2" }], next: "cursor-2" },
+          { data: [{ id: "run-1" }], next: "cursor-1" },
         ],
       },
-      (page) => page.tasks,
       true,
       (item) => item.id,
     );
@@ -32,14 +30,13 @@ describe("selectPages", () => {
   });
 
   it("deduplicates overlapping pages by the domain identity key", () => {
-    const selection = selectPages(
+    const selection = selectInfiniteList(
       {
         pages: [
-          { containers: [{ id: "container-2" }], next_cursor: "cursor-2" },
-          { containers: [{ id: "container-2" }, { id: "container-1" }] },
+          { data: [{ id: "container-2" }], next: "cursor-2" },
+          { data: [{ id: "container-2" }, { id: "container-1" }], next: "" },
         ],
       },
-      (page) => page.containers,
       false,
       (item) => item.id,
     );

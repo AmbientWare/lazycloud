@@ -6,19 +6,19 @@ import { RowsSkeleton } from "@/components/shared/RowsSkeleton";
 import { LiveDuration, LiveRelativeTime } from "@/components/shared/LiveTime";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { StubKindIcon } from "@/components/shared/StubKindIcon";
+import type { TaskSummary } from "@/lib/api/schemas";
 import { startupBetween } from "@/lib/format";
-import type { Task } from "@/lib/queries/tasks";
 
 export function AppRecentTasksSection({
   workspaceName,
-  app,
+  appId,
   tasks,
   pending,
   error,
 }: {
   workspaceName: string;
-  app: string;
-  tasks: Task[] | undefined;
+  appId: string;
+  tasks: TaskSummary[] | undefined;
   pending: boolean;
   error: string | undefined;
 }) {
@@ -44,7 +44,7 @@ export function AppRecentTasksSection({
         ) : (tasks?.length ?? 0) === 0 ? (
           <PanelEmpty message="No recent tasks" className="min-h-32" />
         ) : (
-          <RecentRunsList tasks={tasks ?? []} workspaceName={workspaceName} app={app} />
+          <RecentRunsList tasks={tasks ?? []} workspaceName={workspaceName} appId={appId} />
         )}
       </Panel>
     </div>
@@ -54,11 +54,11 @@ export function AppRecentTasksSection({
 function RecentRunsList({
   tasks,
   workspaceName,
-  app,
+  appId,
 }: {
-  tasks: Task[];
+  tasks: TaskSummary[];
   workspaceName: string;
-  app: string;
+  appId: string;
 }) {
   return (
     <div className="divide-y divide-border/80">
@@ -69,23 +69,35 @@ function RecentRunsList({
         >
           <span className="min-w-0">
             <Link
-              to="/w/$workspace/apps/$app/tasks/$taskId"
-              params={{ workspace: workspaceName, app, taskId: task.id }}
+              to="/w/$workspace/apps/$appId/tasks/$taskId"
+              params={{ workspace: workspaceName, appId, taskId: task.id }}
               className="interactive-link block min-w-0 truncate text-sm font-medium text-foreground"
-              title={task.id}
             >
-              {task.function}
+              {task.name}
             </Link>
             <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
-              <StubKindIcon kind="function" className="size-3" />
-              <Link
-                to="/w/$workspace/apps/$app/workloads/$kind/$name"
-                params={{ workspace: workspaceName, app, kind: "function", name: task.function }}
-                className="interactive-link min-w-0 truncate"
-              >
-                {task.function}
-              </Link>
-              {task.version ? <span className="mono shrink-0">v{task.version}</span> : null}
+              {task.workload ? (
+                <>
+                  <StubKindIcon kind={task.workload.kind} className="size-3" />
+                  <Link
+                    to="/w/$workspace/apps/$appId/workloads/$kind/$name"
+                    params={{
+                      workspace: workspaceName,
+                      appId,
+                      kind: task.workload.kind,
+                      name: task.workload.name,
+                    }}
+                    className="interactive-link min-w-0 truncate"
+                  >
+                    {task.workload.name}
+                  </Link>
+                  {task.deployment ? (
+                    <span className="mono shrink-0">v{task.deployment.version}</span>
+                  ) : null}
+                </>
+              ) : (
+                <span>Workload unavailable</span>
+              )}
             </span>
           </span>
           <StatusChip status={task.status} live={task.status === "running"} />

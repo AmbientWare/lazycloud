@@ -1,55 +1,52 @@
 import type { ReactNode } from "react";
 
-import type { Schemas } from "@/lib/api/client";
-import { cpuAllocation, formatDuration, memoryAllocation } from "@/lib/format";
+import type { Deployment } from "@/lib/api/schemas";
+import { formatDuration, resourceAllocation } from "@/lib/format";
 
-export function WorkloadConfiguration({ spec }: { spec: Schemas["FunctionSpec"] }) {
-  const resources = spec.resources;
-  const autoscaler = spec.autoscaler;
-  const retry = spec.retry_policy;
+export function WorkloadConfiguration({
+  deployment,
+  kind,
+}: {
+  deployment: Deployment;
+  kind: string;
+}) {
+  const resources = deployment.spec.resources;
+  // A Pod holds connections rather than executing tasks, so per-task
+  // concurrency and timeout describe nothing it does.
+  const executesTasks = kind !== "pod";
 
   return (
     <div className="@container min-w-0 space-y-5 p-4">
       <div className="grid min-w-0 gap-x-8 gap-y-5 @xl:grid-cols-2">
         <ConfigurationGroup title="Runtime">
-          <ConfigurationFact
-            label="CPU"
-            value={cpuAllocation(resources.cpu_millis, resources.cpu_limit_millis)}
-          />
-          <ConfigurationFact
-            label="Memory"
-            value={memoryAllocation(resources.memory_mib, resources.memory_limit_mib)}
-          />
-          <ConfigurationFact label="Python" value={spec.image.python_version} />
-          <ConfigurationFact
-            label="Image"
-            value={<span className="mono">{spec.image.image_id ?? "Platform image"}</span>}
-          />
-          <ConfigurationFact label="Handler" value={<span className="mono">{spec.handler}</span>} />
+          <ConfigurationFact label="CPU" value={resourceAllocation(resources.cpu, "vCPUs")} />
+          <ConfigurationFact label="Memory" value={resourceAllocation(resources.memory)} />
+          {resources.gpu.length > 0 ? (
+            <ConfigurationFact
+              label="GPU"
+              value={`${resources.gpu.join(" → ")}${resources.gpu_count > 1 ? ` x${resources.gpu_count}` : ""}`}
+            />
+          ) : null}
+          {deployment.spec.machine ? (
+            <ConfigurationFact label="Machine" value={deployment.spec.machine} />
+          ) : null}
+          <ConfigurationFact label="Region" value={resources.region || "Automatic"} />
+          {resources.availability_zone ? (
+            <ConfigurationFact label="Availability zone" value={resources.availability_zone} />
+          ) : null}
         </ConfigurationGroup>
 
         <ConfigurationGroup title="Execution">
-          <ConfigurationFact
-            label="Concurrency"
-            value={Intl.NumberFormat().format(spec.concurrency ?? 1)}
-          />
-          <ConfigurationFact label="Timeout" value={timeoutLabel(spec.timeout_seconds)} />
-          <ConfigurationFact label="Keep warm" value={retentionLabel(spec.keep_warm_seconds)} />
-          <ConfigurationFact
-            label="Containers"
-            value={`${autoscaler?.min_containers ?? 0} to ${autoscaler?.max_containers ?? 1}`}
-          />
-          <ConfigurationFact
-            label="Pending limit"
-            value={Intl.NumberFormat().format(spec.max_pending_tasks ?? 100)}
-          />
-          <ConfigurationFact label="Retries" value={retryLabel(retry)} />
-          {spec.secrets?.length ? (
+          {executesTasks ? (
             <ConfigurationFact
-              label="Secrets"
-              value={<span className="mono">{spec.secrets.join(", ")}</span>}
+              label="Concurrency"
+              value={Intl.NumberFormat().format(resources.concurrency)}
             />
           ) : null}
+          {executesTasks ? (
+            <ConfigurationFact label="Timeout" value={timeoutLabel(resources.timeout_seconds)} />
+          ) : null}
+          <ConfigurationFact label="Keep warm" value={retentionLabel(resources.keep_warm)} />
         </ConfigurationGroup>
       </div>
     </div>
@@ -75,19 +72,14 @@ function ConfigurationFact({ label, value }: { label: string; value: ReactNode }
 }
 
 /** `-1` is the container that never retires itself; the autoscaler removes it. */
-function retentionLabel(seconds: number | undefined): string {
-  if (seconds === undefined) return "Default";
+function retentionLabel(seconds: number | null | undefined): string {
+  if (seconds == null) return "Default";
   if (seconds < 0) return "Always warm";
   if (seconds === 0) return "Scale to zero";
   return formatDuration(seconds * 1_000);
 }
 
-function timeoutLabel(seconds: number | undefined): string {
-  return formatDuration((seconds ?? 3600) * 1_000);
-}
-
-function retryLabel(retry: Schemas["RetryPolicy"] | undefined): string {
-  if (!retry || retry.max_attempts <= 1) return "None";
-  const delay = retry.delay_seconds ? ` · ${formatDuration(retry.delay_seconds * 1_000)}` : "";
-  return `${retry.max_attempts - 1} (${retry.backoff ?? "fixed"}${delay})`;
+function timeoutLabel(seconds: number | null | undefined): string {
+  if (seconds == null || seconds === 0) return "No limit";
+  return formatDuration(seconds * 1_000);
 }

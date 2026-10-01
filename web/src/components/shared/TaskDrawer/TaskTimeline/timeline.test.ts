@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { flattenCallGraph, timelineDomain, type CallGraphNode } from "./timeline";
+import type { CallGraphNode } from "@/lib/api/schemas";
+
+import { flattenCallGraph, timelineDomain } from "./timeline";
 
 function node(overrides: Partial<CallGraphNode> & { task_id: string }): CallGraphNode {
   return {
@@ -13,6 +15,7 @@ function node(overrides: Partial<CallGraphNode> & { task_id: string }): CallGrap
     created_at: null,
     started_at: null,
     finished_at: null,
+    dependencies: [],
     children: [],
     ...overrides,
   };

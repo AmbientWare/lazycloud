@@ -3,19 +3,30 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, expect, it, vi } from "vitest";
 
+import { rememberWorkspaces } from "@/lib/api/workspaces";
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 import { SecretsTab } from "./SecretsTab";
 
 const secret = {
   name: "API_KEY",
+  value: "********",
   created_at: "2026-09-07T00:00:00Z",
   updated_at: "2026-09-07T00:00:00Z",
+  workloads: [],
 };
 
-const page = (secrets: (typeof secret)[]) => ({ pages: [{ secrets }], pageParams: [""] });
-const revealed = (value: string) => Response.json({ ...secret, value });
+beforeEach(() => {
+  vi.useFakeTimers();
+  rememberWorkspaces([{ id: "workspace-1", name: "workspace" }]);
+});
 
-beforeEach(() => vi.useFakeTimers());
+const revealed = (value: string) =>
+  Response.json({
+    name: secret.name,
+    value,
+    created_at: secret.created_at,
+    updated_at: secret.updated_at,
+  });
 
 it("keeps a pending reveal masked during deletion and allows a fresh reveal after keeping it", async () => {
   let resolveReveal: ((response: Response) => void) | undefined;
@@ -24,11 +35,11 @@ it("keeps a pending reveal masked during deletion and allows a fresh reveal afte
   });
   vi.stubGlobal("fetch", () => response);
   const client = testQueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
-  client.setQueryData(workspaceQueryKeys.storage.secrets("workspace"), page([secret]));
+  client.setQueryData(workspaceQueryKeys.storage.secrets("workspace-1"), { secrets: [secret] });
   render(
     <QueryClientProvider client={client}>
       <SecretsTab
-        workspaceId="workspace"
+        workspaceId="workspace-1"
         workspaceName="workspace"
         creating={false}
         onCreatingChange={() => {}}
@@ -78,12 +89,12 @@ it("clears revealed values on rotation and ignores responses for the previous ve
   let response = Promise.resolve(revealed("test-only-old-value"));
   vi.stubGlobal("fetch", () => response);
   const client = testQueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
-  const queryKey = workspaceQueryKeys.storage.secrets("workspace");
-  client.setQueryData(queryKey, page([secret]));
+  const queryKey = workspaceQueryKeys.storage.secrets("workspace-1");
+  client.setQueryData(queryKey, { secrets: [secret] });
   render(
     <QueryClientProvider client={client}>
       <SecretsTab
-        workspaceId="workspace"
+        workspaceId="workspace-1"
         workspaceName="workspace"
         creating={false}
         onCreatingChange={() => {}}
@@ -96,7 +107,9 @@ it("clears revealed values on rotation and ignores responses for the previous ve
   );
   expect(screen.getByText("test-only-old-value")).toBeVisible();
   await act(async () => {
-    client.setQueryData(queryKey, page([{ ...secret, updated_at: "2026-09-07T00:01:00Z" }]));
+    client.setQueryData(queryKey, {
+      secrets: [{ ...secret, updated_at: "2026-09-07T00:01:00Z" }],
+    });
     await vi.advanceTimersByTimeAsync(1);
   });
   expect(screen.queryByText("test-only-old-value")).not.toBeInTheDocument();
@@ -107,7 +120,9 @@ it("clears revealed values on rotation and ignores responses for the previous ve
   });
   fireEvent.click(screen.getByRole("button", { name: "Reveal secret API_KEY" }));
   await act(async () => {
-    client.setQueryData(queryKey, page([{ ...secret, updated_at: "2026-09-07T00:02:00Z" }]));
+    client.setQueryData(queryKey, {
+      secrets: [{ ...secret, updated_at: "2026-09-07T00:02:00Z" }],
+    });
     await vi.advanceTimersByTimeAsync(1);
   });
   await act(async () => {

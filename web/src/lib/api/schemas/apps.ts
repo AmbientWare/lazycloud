@@ -2,9 +2,8 @@ import { z } from "zod";
 import { cpuRequestSchema, memoryRequestSchema } from "./resources";
 import { productRegionSchema } from "./placement";
 
+import { diskStatuses } from "./storage";
 import { stubSchema } from "./stubs";
-
-const diskStatuses = ["detached", "attached", "saving", "deleting"] as const;
 
 export const appSchema = z.object({
   id: z.string(),

@@ -1,8 +1,7 @@
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 
-import type { Task } from "@/lib/queries/tasks";
-
+import { taskSchema } from "@/lib/api/schemas/tasks";
 import { TaskPendingNotice } from ".";
 
 afterEach(() => {
@@ -14,24 +13,19 @@ it("shows a delayed pending notice and clears it when execution starts", () => {
   vi.useFakeTimers();
   const now = new Date();
   vi.setSystemTime(now);
-  const task: Task = {
+  const task = taskSchema.parse({
     id: "task",
-    app: "media",
-    function: "transcribe",
-    release_id: "release",
-    status: "queued",
-    attempts: 0,
-    max_attempts: 1,
-    root_task_id: "task",
+    name: "transcribe",
+    status: "pending",
     created_at: now.toISOString(),
-    pending: {
+    pending_progress: {
       reason: "provisioning_compute",
       message: "Compute progress from the server",
       since: now.toISOString(),
       pending_since: now.toISOString(),
       observed_at: now.toISOString(),
     },
-  };
+  });
   const view = render(<TaskPendingNotice task={task} />);
   expect(screen.queryByRole("status")).toBeNull();
   act(() => vi.advanceTimersByTime(5_000));

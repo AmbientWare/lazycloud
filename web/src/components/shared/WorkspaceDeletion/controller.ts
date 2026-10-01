@@ -1,13 +1,11 @@
 import { useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
-import type { Schemas } from "@/lib/api/client";
-import { meQueryKey } from "@/lib/queries/auth";
+import type { CurrentSession, Workspace } from "@/lib/api/schemas";
+import { currentSessionQueryOptions } from "@/lib/queries/auth";
 import { deleteWorkspace } from "@/lib/queries/workspace";
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
-
-type Workspace = Schemas["Workspace"];
-type Me = Schemas["Me"];
+import { workspaceDeleteAvailability } from "@/lib/workspace-deletion";
 
 export type WorkspaceDeletionTarget = {
   workspace: Workspace;
@@ -20,7 +18,7 @@ type WorkspaceDeletionControllerOptions = {
   rememberWorkspaceName: (workspaceName: string) => void;
   replacePath: (path: string) => void;
   workspaces: Workspace[];
-  deleteCommand?: (workspace: string) => Promise<Workspace>;
+  deleteCommand?: (workspaceId: string) => Promise<null>;
 };
 
 export function useWorkspaceDeletionController({
@@ -37,24 +35,29 @@ export function useWorkspaceDeletionController({
   const [confirmation, setConfirmation] = useState("");
 
   const remove = useMutation({
-    mutationFn: (requested: WorkspaceDeletionTarget) => deleteCommand(requested.workspace.name),
-    onSuccess: async (deleting, requested) => {
-      const rootKey = workspaceQueryKeys.root(requested.workspace.name);
+    mutationFn: (requested: WorkspaceDeletionTarget) => deleteCommand(requested.workspace.id),
+    onSuccess: async (_result, requested) => {
+      const workspaceId = requested.workspace.id;
+      const rootKey = workspaceQueryKeys.root(workspaceId);
+      const sessionKey = currentSessionQueryOptions().queryKey;
 
       await queryClient.cancelQueries({ queryKey: rootKey });
       queryClient.removeQueries({ queryKey: rootKey });
 
-      // The session owns the account's workspace list. The workspace stays in it
-      // as deleting until its cleanup finishes, so it has to change state there
-      // before anything navigates.
-      const session = queryClient.getQueryData<Me>(meQueryKey);
-      const listed = (session?.workspaces ?? workspaces).map((item) =>
-        item.id === deleting.id ? { ...item, state: deleting.state } : item,
+      // The session owns the account's workspace list, so the deleted one has to
+      // leave it before anything navigates.
+      const session = queryClient.getQueryData<CurrentSession>(sessionKey);
+      const remaining = (session?.workspaces ?? workspaces).filter(
+        (item) => item.id !== workspaceId,
       );
-      if (session) queryClient.setQueryData<Me>(meQueryKey, { ...session, workspaces: listed });
-      const remaining = listed.filter((item) => item.id !== deleting.id);
+      if (session) {
+        queryClient.setQueryData<CurrentSession>(sessionKey, {
+          ...session,
+          workspaces: remaining,
+        });
+      }
 
-      const nextWorkspace = remaining.find((item) => item.state === "active") ?? remaining[0];
+      const nextWorkspace = remaining.find((item) => item.status === "active") ?? remaining[0];
       if (nextWorkspace && (requested.selected || lastWorkspaceName === requested.workspace.name)) {
         rememberWorkspaceName(nextWorkspace.name);
       }
@@ -64,7 +67,7 @@ export function useWorkspaceDeletionController({
 
       setTarget(null);
       setConfirmation("");
-      void queryClient.invalidateQueries({ queryKey: meQueryKey, exact: true });
+      void queryClient.invalidateQueries({ queryKey: sessionKey, exact: true });
     },
     onSettled: () => {
       commandInFlight.current = false;
@@ -78,15 +81,11 @@ export function useWorkspaceDeletionController({
         reason: "Administrator access is required",
       };
     }
-    if (workspace.state === "deleting") {
+    if (workspace.status === "deleting") {
       return { allowed: true as const };
     }
-    // A hint, not the decision: the server refuses deleting the last active
-    // workspace regardless.
-    if (workspaces.filter((item) => item.state === "active").length <= 1) {
-      return { allowed: false as const, reason: "The final workspace is protected" };
-    }
-    return { allowed: true as const };
+    const activeWorkspaceCount = workspaces.filter((item) => item.status === "active").length;
+    return workspaceDeleteAvailability(workspace, activeWorkspaceCount);
   };
 
   const begin = (workspace: Workspace, selected: boolean) => {
