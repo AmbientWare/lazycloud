@@ -105,7 +105,7 @@ func (d *dataLink) listen(ctx context.Context) error {
 		case err := <-failed:
 			return fmt.Errorf("receive: %w", err)
 		case event := <-received:
-			d.open(ctx, min(int(event.GetStreams()), maxStreamsPerEvent))
+			d.fill(ctx, min(int(event.GetStreams()), maxStreamsPerEvent))
 		case <-ticker.C:
 			d.topUp(ctx)
 		}
@@ -113,9 +113,13 @@ func (d *dataLink) listen(ctx context.Context) error {
 }
 
 // topUp opens streams until minIdleStreams are idle.
-func (d *dataLink) topUp(ctx context.Context) {
+func (d *dataLink) topUp(ctx context.Context) { d.fill(ctx, minIdleStreams) }
+
+// fill opens streams until n are idle, counting those still opening, so an
+// edge that asks again for the same requests gets no more.
+func (d *dataLink) fill(ctx context.Context, n int) {
 	d.mu.Lock()
-	missing := minIdleStreams - d.idle
+	missing := n - d.idle
 	d.mu.Unlock()
 	d.open(ctx, missing)
 }
@@ -169,11 +173,15 @@ func (d *dataLink) forward(ctx context.Context) {
 	if refill {
 		d.open(ctx, 1)
 	}
-	in := receive(stream, &d.streams)
+	// The request ends when the edge ends the stream with an error, which
+	// is how it says the client left.
+	requestCtx, cancelRequest := context.WithCancel(streamCtx)
+	defer cancelRequest()
+	in := receive(stream, &d.streams, cancelRequest)
 	head := first.GetHead()
 	switch kind := head.GetKind().(type) {
 	case *hostproto.RequestHead_Http:
-		d.serveHTTP(streamCtx, stream, in, d.a.lookup(head.GetContainerId()), kind.Http)
+		d.serveHTTP(requestCtx, stream, in, d.a.lookup(head.GetContainerId()), kind.Http)
 	case *hostproto.RequestHead_Sync:
 		d.serveSync(stream, in, d.a.lookup(head.GetContainerId()))
 	default:
@@ -291,6 +299,8 @@ func forwardError(kind hostproto.ForwardErrorKind, message string) *hostproto.Fo
 // receive concurrently. Read returns the body bytes until End.
 type inbound struct {
 	messages chan *hostproto.ForwardDown
+	// abort cancels the request when the stream fails.
+	abort func()
 	// failed holds the receive error that ended the messages early.
 	failed  error
 	stopped chan struct{}
@@ -302,8 +312,9 @@ type inbound struct {
 	done    bool
 }
 
-func receive(stream forwardStream, owner *sync.WaitGroup) *inbound {
+func receive(stream forwardStream, owner *sync.WaitGroup, abort func()) *inbound {
 	in := &inbound{
+		abort:    abort,
 		messages: make(chan *hostproto.ForwardDown, inboundQueue),
 		stopped:  make(chan struct{}),
 		ended:    make(chan struct{}),
@@ -320,6 +331,7 @@ func (in *inbound) run(stream forwardStream) {
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
 				in.failed = err
+				in.abort()
 			}
 			return
 		}

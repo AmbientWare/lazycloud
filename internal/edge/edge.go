@@ -48,6 +48,7 @@ type Edge struct {
 	reloadStarted time.Time
 	auth          authCache
 	hosts         hostStreams
+	bodies        bodyBudget
 
 	// mu guards releases, versions, workloads and loads. It is held only for
 	// map and counter updates, never across I/O.
@@ -56,6 +57,7 @@ type Edge struct {
 	versions  map[versionKey]uuid.UUID
 	workloads map[uuid.UUID]*workloadState
 	loads     map[uuid.UUID]*releaseLoad
+	ids       map[uuid.UUID]idEntry
 	// refresh holds workloads whose container set changed; publish kicks
 	// the demand publisher.
 	refresh chan uuid.UUID
@@ -81,11 +83,13 @@ func NewEdge(pool *pgxpool.Pool, id *identity.Identity, exec *execution.Executio
 		versions:  map[versionKey]uuid.UUID{},
 		workloads: map[uuid.UUID]*workloadState{},
 		loads:     map[uuid.UUID]*releaseLoad{},
+		ids:       map[uuid.UUID]idEntry{},
 		refresh:   make(chan uuid.UUID, refreshQueue),
 		publish:   make(chan struct{}, 1),
 	}
 	e.auth.entries = map[authKey]time.Time{}
 	e.hosts.hosts = map[uuid.UUID]*hostPool{}
+	e.hosts.shut = make(chan struct{})
 	e.routes.Store(&routeTable{
 		bySubdomain: map[string]*workload{}, byHostname: map[string]*workload{}, byID: map[uuid.UUID]*workload{},
 	})

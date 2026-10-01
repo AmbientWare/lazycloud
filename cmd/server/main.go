@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -260,22 +261,27 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, logger 
 	g.Go(func() error {
 		<-gctx.Done()
 		logger.Info("shutting down")
-		// Sessions, claim long polls and idle data streams end at once;
-		// agents reconnect.
+		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(gctx), shutdownGrace)
+		defer cancel()
+		// Sessions and claim long polls end at once; agents reconnect.
 		hosts.Shutdown()
+		// Both servers stop accepting and finish their requests, under one
+		// grace period; waits and log follows keep a request open until
+		// Close ends them. Edge requests still need the agents' data
+		// streams, which stay open until the edge is done.
+		var servers sync.WaitGroup
+		for _, server := range []*http.Server{httpServer, edgeServer} {
+			servers.Go(func() {
+				if err := server.Shutdown(shutdownCtx); err != nil {
+					_ = server.Close()
+				}
+			})
+		}
+		servers.Wait()
+		// Idle data streams and Listen calls end now.
 		edges.Shutdown()
 		stopped := make(chan struct{})
 		go func() { grpcServer.GracefulStop(); close(stopped) }()
-		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(gctx), shutdownGrace)
-		defer cancel()
-		// Waits and log follows keep a request open; Close ends them after
-		// the grace period.
-		if err := httpServer.Shutdown(shutdownCtx); err != nil {
-			_ = httpServer.Close()
-		}
-		if err := edgeServer.Shutdown(shutdownCtx); err != nil {
-			_ = edgeServer.Close()
-		}
 		select {
 		case <-stopped:
 		case <-shutdownCtx.Done():

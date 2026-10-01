@@ -51,11 +51,14 @@ func (q *Queries) DomainByHostname(ctx context.Context, arg DomainByHostnamePara
 }
 
 const domainServes = `-- name: DomainServes :many
-select a.name as app_name, w.name
+select a.name as app_name, w.name,
+       exists (
+           select 1 from workspace_members m
+           where m.workspace_id = a.workspace_id and m.user_id = $1 and m.role = 'owner'
+       )::bool as visible
 from http_routes r
 join workloads w on w.id = r.workload_id
 join apps a on a.id = w.app_id
-join workspace_members m on m.workspace_id = a.workspace_id and m.user_id = $1 and m.role = 'owner'
 where r.hostname = $2 and w.desired_state <> 'deleted' and a.state <> 'deleted'
 order by a.name, w.name
 `
@@ -68,9 +71,11 @@ type DomainServesParams struct {
 type DomainServesRow struct {
 	AppName string
 	Name    string
+	Visible bool
 }
 
-// Deployments in any workspace the user owns that answer on the hostname.
+// Deployments that claim the hostname, in any workspace; visible says
+// whether the user owns the deployment's workspace.
 func (q *Queries) DomainServes(ctx context.Context, arg DomainServesParams) ([]DomainServesRow, error) {
 	rows, err := q.db.Query(ctx, domainServes, arg.UserID, arg.Hostname)
 	if err != nil {
@@ -80,7 +85,7 @@ func (q *Queries) DomainServes(ctx context.Context, arg DomainServesParams) ([]D
 	var items []DomainServesRow
 	for rows.Next() {
 		var i DomainServesRow
-		if err := rows.Scan(&i.AppName, &i.Name); err != nil {
+		if err := rows.Scan(&i.AppName, &i.Name, &i.Visible); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

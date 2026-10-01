@@ -20,11 +20,17 @@ import (
 // once it asked for one.
 const streamWait = 10 * time.Second
 
+// maxIdleStreams bounds the idle streams one host parks; more are ended at
+// once and the agent opens them again only when asked.
+const maxIdleStreams = 256
+
 // hostStreams holds each connected agent's idle Forward streams.
 type hostStreams struct {
 	mu     sync.Mutex
 	hosts  map[uuid.UUID]*hostPool
 	closed bool
+	// shut is closed by Shutdown, which ends every Listen call.
+	shut chan struct{}
 }
 
 type hostPool struct {
@@ -107,6 +113,8 @@ func (s *Server) Listen(_ *hostproto.ListenRequest, stream grpc.ServerStreamingS
 		select {
 		case <-stream.Context().Done():
 			return nil
+		case <-h.shut:
+			return status.Error(codes.Unavailable, "the server is shutting down")
 		case n := <-demand:
 			if err := stream.Send(&hostproto.ListenEvent{Streams: n}); err != nil {
 				return fmt.Errorf("send demand: %w", err)
@@ -130,6 +138,10 @@ func (s *Server) Forward(stream grpc.BidiStreamingServer[hostproto.ForwardUp, ho
 		return status.Error(codes.Unavailable, "the server is shutting down")
 	}
 	pool := h.poolLocked(id)
+	if len(pool.idle) >= maxIdleStreams {
+		h.mu.Unlock()
+		return nil
+	}
 	pool.idle = append(pool.idle, p)
 	close(pool.opened)
 	pool.opened = make(chan struct{})
@@ -158,6 +170,9 @@ func (s *Server) Forward(stream grpc.BidiStreamingServer[hostproto.ForwardUp, ho
 func (e *Edge) Shutdown() {
 	h := &e.hosts
 	h.mu.Lock()
+	if !h.closed {
+		close(h.shut)
+	}
 	h.closed = true
 	var idle []*parkedStream
 	for _, pool := range h.hosts {
@@ -188,6 +203,7 @@ func (h *hostStreams) take(ctx context.Context, host uuid.UUID) (*parkedStream, 
 			pool.idle = pool.idle[:n-1]
 			if asked {
 				pool.waiting--
+				asked = false
 			}
 			h.mu.Unlock()
 			if p.stream.Context().Err() != nil {
@@ -202,8 +218,10 @@ func (h *hostStreams) take(ctx context.Context, host uuid.UUID) (*parkedStream, 
 		}
 		opened := pool.opened
 		if pool.demand != nil {
+			// The agent opens streams until this many are idle, so a
+			// repeated ask never opens more.
 			select {
-			case pool.demand <- int32(pool.waiting): //nolint:gosec // bounded by concurrent requests
+			case pool.demand <- int32(min(pool.waiting, maxIdleStreams)): //nolint:gosec // bounded by maxIdleStreams
 			default:
 			}
 		}

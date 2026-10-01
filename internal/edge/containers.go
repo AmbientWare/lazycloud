@@ -7,14 +7,22 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/AmbientWare/lazycloud/internal/execution"
 )
 
 // workloadState is the edge's view of a workload's ready containers and the
 // requests each runs. It is loaded on the first request and reloaded when a
 // container of the workload changes state.
 type workloadState struct {
-	id         uuid.UUID
-	loaded     bool
+	id     uuid.UUID
+	loaded bool
+	// started numbers container-set reads and applied is the newest one
+	// applied, so a slow read never replaces a newer one.
+	started, applied uint64
+	// stale is set when a reload could not be queued; the next waiting
+	// request reloads instead.
+	stale      bool
 	containers map[uuid.UUID]*slot
 	// changed is closed and replaced whenever a container appears, goes or
 	// frees capacity, waking waiting requests.
@@ -57,6 +65,11 @@ func (e *Edge) stateLocked(workload uuid.UUID) *workloadState {
 // counts of containers still present. Each container's release is cached
 // first, since its settings bound the container's capacity.
 func (e *Edge) load(ctx context.Context, workload uuid.UUID) error {
+	e.mu.Lock()
+	ws := e.stateLocked(workload)
+	ws.started++
+	read := ws.started
+	e.mu.Unlock()
 	rows, err := e.execution.EndpointContainers(ctx, workload)
 	if err != nil {
 		return err
@@ -68,7 +81,18 @@ func (e *Edge) load(ctx context.Context, workload uuid.UUID) error {
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	ws := e.stateLocked(workload)
+	e.applyLocked(ws, read, rows)
+	return nil
+}
+
+// applyLocked replaces the workload's container set with the rows of read,
+// unless a newer read was applied already.
+func (e *Edge) applyLocked(ws *workloadState, read uint64, rows []execution.EndpointContainer) {
+	if read < ws.applied {
+		return
+	}
+	ws.applied = read
+	ws.stale = false
 	next := make(map[uuid.UUID]*slot, len(rows))
 	for _, row := range rows {
 		id := uuid.UUID(row.Container)
@@ -82,13 +106,12 @@ func (e *Edge) load(ctx context.Context, workload uuid.UUID) error {
 	ws.containers = next
 	ws.loaded = true
 	ws.wake()
-	return nil
 }
 
 // markChanged queues a reload of a tracked workload's containers.
 func (e *Edge) markChanged(workload uuid.UUID) {
 	e.mu.Lock()
-	_, tracked := e.workloads[workload]
+	ws, tracked := e.workloads[workload]
 	e.mu.Unlock()
 	if !tracked {
 		return
@@ -96,7 +119,12 @@ func (e *Edge) markChanged(workload uuid.UUID) {
 	select {
 	case e.refresh <- workload:
 	default:
-		// The queue is full; waiting requests reload on their next wake.
+		// The queue is full; the next waiting request reloads, and a wake
+		// tells the waiting ones.
+		e.mu.Lock()
+		ws.stale = true
+		ws.wake()
+		e.mu.Unlock()
 	}
 }
 
@@ -161,7 +189,7 @@ func (e *Edge) acquire(ctx context.Context, t target, deadline time.Time) (*leas
 			return nil, err
 		}
 	}
-	load := e.demand(t.release)
+	var load *releaseLoad
 	waiting := false
 	defer func() {
 		if waiting {
@@ -175,6 +203,18 @@ func (e *Edge) acquire(ctx context.Context, t target, deadline time.Time) (*leas
 	defer timer.Stop()
 	for {
 		e.mu.Lock()
+		if ws.stale {
+			e.mu.Unlock()
+			if err := e.load(ctx, t.workload.id); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if !waiting {
+			// Found under the lock that counts the request, so the
+			// publisher never forgets a release a request counts against.
+			load = e.demandLocked(t.release)
+		}
 		s, any := e.pickLocked(ws, t)
 		if s != nil {
 			s.inflight++
@@ -257,10 +297,16 @@ func (e *Edge) pickLocked(ws *workloadState, t target) (*slot, bool) {
 		return best, found
 	}
 	// The active release has no ready container yet: the newest deployed
-	// release that has one keeps serving until it does.
+	// release older than it that has one keeps serving until it does. A
+	// release newer than the active one was rolled back from and never
+	// serves latest.
+	active := t.release.version
+	if active == nil {
+		return nil, false
+	}
 	newest := 0
 	for _, s := range ws.containers {
-		if s.version > newest {
+		if s.version > newest && s.version < *active {
 			newest = s.version
 		}
 	}

@@ -39,7 +39,9 @@ type release struct {
 	// for one a local process prepared; neither is a deployed version.
 	preview     bool
 	workingTree bool
-	spec        apitypes.FunctionSpec
+	// version is the deployed version, nil for a working-tree release.
+	version *int
+	spec    apitypes.FunctionSpec
 	// capacity is the requests one container admits: workers times
 	// concurrency.
 	capacity   int
@@ -59,6 +61,7 @@ func newRelease(id, workload uuid.UUID, version *int32, rawSpec []byte) (*releas
 	}
 	r := &release{
 		id: id, workload: workload, preview: version != nil && *version < 0, workingTree: version == nil, spec: spec,
+		version:  intPointer(version),
 		capacity: 1, authorized: true, timeout: time.Hour, maxPending: 100, attempts: 1,
 	}
 	concurrency := 1
@@ -96,6 +99,14 @@ func newRelease(id, workload uuid.UUID, version *int32, rawSpec []byte) (*releas
 		}
 	}
 	return r, nil
+}
+
+func intPointer(v *int32) *int {
+	if v == nil {
+		return nil
+	}
+	n := int(*v)
+	return &n
 }
 
 func (r *release) allows(method string) bool {
@@ -229,9 +240,40 @@ func (e *Edge) versionTarget(ctx context.Context, w *workload, id uuid.UUID) (ta
 	return target{workload: w, release: r}, nil
 }
 
+// idTTL is how long the edge remembers what an id host names, or that it
+// names nothing, so repeated requests for one id read the database once.
+const idTTL = 2 * time.Second
+
+type idEntry struct {
+	target target
+	err    error
+	at     time.Time
+}
+
 // resolveID resolves a release id, including a preview's, or a container
-// id.
+// id, from a short-lived cache.
 func (e *Edge) resolveID(ctx context.Context, id uuid.UUID) (target, error) {
+	now := time.Now()
+	e.mu.Lock()
+	entry, cached := e.ids[id]
+	e.mu.Unlock()
+	if cached && now.Sub(entry.at) < idTTL {
+		return entry.target, entry.err
+	}
+	t, err := e.readID(ctx, id)
+	if err != nil && !errors.Is(err, errNoRoute) {
+		return t, err
+	}
+	e.mu.Lock()
+	if len(e.ids) >= maxCachedReleases {
+		clear(e.ids)
+	}
+	e.ids[id] = idEntry{target: t, err: err, at: now}
+	e.mu.Unlock()
+	return t, err
+}
+
+func (e *Edge) readID(ctx context.Context, id uuid.UUID) (target, error) {
 	row, err := e.queries.ReleaseRoute(ctx, id)
 	var container *uuid.UUID
 	if errors.Is(err, pgx.ErrNoRows) {

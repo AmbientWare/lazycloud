@@ -185,9 +185,19 @@ func (e *Edge) RemoveDomain(ctx context.Context, user identity.UserID, hostname 
 		return fmt.Errorf("read deployments serving the domain: %w", err)
 	}
 	if len(serving) > 0 {
-		names := make([]string, len(serving))
-		for n, s := range serving {
-			names[n] = s.AppName + ":" + s.Name
+		// A route that keeps the hostname must give it up first, or a later
+		// registration of the same name would serve it.
+		var names []string
+		hidden := 0
+		for _, s := range serving {
+			if s.Visible {
+				names = append(names, s.AppName+":"+s.Name)
+			} else {
+				hidden++
+			}
+		}
+		if hidden > 0 {
+			names = append(names, fmt.Sprintf("%d deployment(s) in workspaces you do not own", hidden))
 		}
 		return &DomainConflictError{Reason: fmt.Sprintf("%s still serves %s; remove the domain from those deployments first", row.Hostname, strings.Join(names, ", "))}
 	}

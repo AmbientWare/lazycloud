@@ -167,7 +167,8 @@ def resolve_url(
     """Where a request goes, the token to send, and the read timeout.
 
     A running preview this machine started wins unless the target is
-    `deployed`; `served` never falls back to the deployment.
+    `deployed`; `served` never falls back to the deployment. A public target
+    gets no token: the platform credential never reaches a workload.
     """
     from lazycloud.abstractions.serve import read_serve_preview
 
@@ -193,7 +194,9 @@ def resolve_url(
             client=client,
         )
         if record is not None:
-            return record.url, config.token, timeout
+            # The preview runs this definition.
+            token = config.token if owner.authorized is not False else None
+            return record.url, token, timeout
         if target == "served":
             raise InvocationTargetError(f"no active served {kind} target found for {name}")
     workload = get_http_workload(
@@ -205,7 +208,8 @@ def resolve_url(
         version=options.deployment_version,
     )
     url = workload.version_url if options.deployment_version is not None else workload.url
-    return url, config.token, timeout
+    token = config.token if workload.release.spec.authorized is not False else None
+    return url, token, timeout
 
 
 def send_request(

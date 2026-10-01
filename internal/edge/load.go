@@ -38,10 +38,17 @@ type releaseLoad struct {
 	everPushed bool
 }
 
-// demand returns the release's load, creating it.
-func (e *Edge) demand(r *release) *releaseLoad {
+// overPending reports whether the release already has max_pending requests
+// waiting at this edge.
+func (e *Edge) overPending(r *release) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	l := e.loads[r.id]
+	return l != nil && l.waiting >= r.maxPending
+}
+
+// demandLocked returns the release's load, creating it. Call with e.mu held.
+func (e *Edge) demandLocked(r *release) *releaseLoad {
 	l := e.loads[r.id]
 	if l == nil {
 		l = &releaseLoad{release: r.id, keepWarm: r.keepWarm}

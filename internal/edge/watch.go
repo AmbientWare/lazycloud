@@ -146,11 +146,34 @@ func (e *Edge) forgetReplacedWindows(previous, next *routeTable) {
 // reloadOnMiss reloads the route table for a request that arrived at since
 // and found no route, unless a reload that began after it already finished.
 // Reloads are serialized, so misses never run more than one at a time.
+//
+// Misses reload at most every missReloadInterval: a miss inside it waits
+// for the interval to pass, and shares the reload another waiter starts.
 func (e *Edge) reloadOnMiss(ctx context.Context, since time.Time) error {
 	e.reloading.Lock()
 	defer e.reloading.Unlock()
 	if e.reloadStarted.After(since) {
 		return nil
 	}
+	if wait := missReloadInterval - time.Since(e.reloadStarted); wait > 0 {
+		e.reloading.Unlock()
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+		case <-timer.C:
+		}
+		timer.Stop()
+		e.reloading.Lock()
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("wait to reload routes: %w", err)
+		}
+		if e.reloadStarted.After(since) {
+			return nil
+		}
+	}
 	return e.reloadLocked(ctx)
 }
+
+// missReloadInterval bounds how often requests for hosts the route table
+// does not know reload it.
+const missReloadInterval = 250 * time.Millisecond

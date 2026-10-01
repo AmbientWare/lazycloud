@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -97,7 +98,7 @@ func (e *Edge) fail(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, http.StatusInternalServerError, failed.Error())
 	case errors.Is(err, errBodyTooLarge):
 		writeError(w, http.StatusRequestEntityTooLarge, err.Error())
-	case errors.Is(err, errBusy), errors.Is(err, errNoStream):
+	case errors.Is(err, errBusy), errors.Is(err, errNoStream), errors.Is(err, errBufferFull):
 		writeError(w, http.StatusServiceUnavailable, err.Error())
 	case r.Context().Err() != nil:
 		// The client is gone.
@@ -116,7 +117,14 @@ func writeError(w http.ResponseWriter, status int, message string) {
 var (
 	errBodyTooLarge = fmt.Errorf("the request body exceeds %d bytes", execution.MaxPayloadBytes)
 	errBusy         = errors.New("every container is busy")
+	errBufferFull   = errors.New("the edge holds too many request bodies; try again")
 )
+
+// platformToken reports whether the request carries a LazyCloud bearer
+// token.
+func platformToken(r *http.Request) bool {
+	return strings.HasPrefix(bearerToken(r), identity.TokenPrefix)
+}
 
 // requestBody is what the edge sends a container: the whole body when it
 // is small or the workload is an endpoint, so it can be sent again, or the
@@ -127,29 +135,71 @@ type requestBody struct {
 	// upgrade sends no body and no end: after the 101 the client's bytes
 	// follow, and their end closes the tunnel.
 	upgrade bool
+	// release returns the buffered bytes to the edge's budget.
+	release func()
 }
 
 func (b *requestBody) replayable() bool { return b.stream == nil }
 
-func readBody(r *http.Request, endpoint bool) (*requestBody, error) {
+// maxBufferedBodyBytes bounds the request bodies one edge holds in memory
+// at once; past it requests are refused as busy.
+const maxBufferedBodyBytes = 512 << 20
+
+// bodyBudget counts the buffered request bytes the edge holds.
+type bodyBudget struct{ used atomic.Int64 }
+
+func (b *bodyBudget) reserve(n int64) bool {
+	if b.used.Add(n) > maxBufferedBodyBytes {
+		b.used.Add(-n)
+		return false
+	}
+	return true
+}
+
+// budgetReader reserves each chunk it reads.
+type budgetReader struct {
+	r        io.Reader
+	budget   *bodyBudget
+	reserved int64
+}
+
+func (br *budgetReader) Read(p []byte) (int, error) {
+	n, err := br.r.Read(p)
+	if n > 0 {
+		if !br.budget.reserve(int64(n)) {
+			return 0, errBufferFull
+		}
+		br.reserved += int64(n)
+	}
+	return n, err //nolint:wrapcheck // a body reader's EOF must pass through unwrapped
+}
+
+func (e *Edge) readBody(r *http.Request, endpoint bool) (*requestBody, error) {
 	limit := int64(replayBytes)
 	if endpoint {
 		limit = execution.MaxPayloadBytes
 	}
 	if r.Body == nil || r.Body == http.NoBody || r.ContentLength == 0 {
-		return &requestBody{}, nil
+		return &requestBody{release: func() {}}, nil
 	}
 	if endpoint || (r.ContentLength > 0 && r.ContentLength <= limit) {
-		data, err := io.ReadAll(io.LimitReader(r.Body, limit+1))
+		reader := &budgetReader{r: r.Body, budget: &e.bodies}
+		release := func() { e.bodies.used.Add(-reader.reserved) }
+		data, err := io.ReadAll(io.LimitReader(reader, limit+1))
 		if err != nil {
+			release()
+			if errors.Is(err, errBufferFull) {
+				return nil, errBufferFull
+			}
 			return nil, fmt.Errorf("read request body: %w", err)
 		}
 		if int64(len(data)) > limit {
+			release()
 			return nil, errBodyTooLarge
 		}
-		return &requestBody{buffered: data}, nil
+		return &requestBody{buffered: data, release: release}, nil
 	}
-	return &requestBody{stream: r.Body}, nil
+	return &requestBody{stream: r.Body, release: func() {}}, nil
 }
 
 // proxy forwards the request to a container of the target. A container that
@@ -158,13 +208,20 @@ func readBody(r *http.Request, endpoint bool) (*requestBody, error) {
 // its retry policy.
 func (e *Edge) proxy(w http.ResponseWriter, r *http.Request, t target, authorized bool) {
 	ctx := r.Context()
+	// Past max_pending the request is refused before its body is read.
+	if e.overPending(t.release) {
+		e.fail(w, r, errTooManyWait)
+		return
+	}
 	upgrade := r.Header.Get("Upgrade") != ""
-	body, err := readBody(r, t.workload.kind == apitypes.WorkloadKindEndpoint)
+	body, err := e.readBody(r, t.workload.kind == apitypes.WorkloadKindEndpoint)
 	if err != nil {
 		e.fail(w, r, err)
 		return
 	}
+	defer body.release()
 	body.upgrade = upgrade
+	rc := http.NewResponseController(w)
 	head := e.requestHead(r, authorized, upgrade, body)
 	deadline := time.Now().Add(t.release.timeout)
 	attempts := 1
@@ -178,14 +235,16 @@ func (e *Edge) proxy(w http.ResponseWriter, r *http.Request, t target, authorize
 			e.fail(w, r, err)
 			return
 		}
-		ex, err := e.exchange(ctx, lease, head, body, deadline)
+		// Ending is idempotent; this covers a response that breaks off and
+		// aborts the handler.
+		defer lease.end()
+		ex, err := e.exchange(ctx, lease, rc, head, body, deadline)
 		if err != nil {
 			lease.end()
 			e.fail(w, r, err)
 			return
 		}
 		if refusal := ex.first.GetError(); refusal != nil {
-			ex.close()
 			refused := refusal.GetKind() == hostproto.ForwardErrorKind_FORWARD_ERROR_KIND_BUSY ||
 				refusal.GetKind() == hostproto.ForwardErrorKind_FORWARD_ERROR_KIND_NOT_RUNNING
 			if refused {
@@ -193,6 +252,7 @@ func (e *Edge) proxy(w http.ResponseWriter, r *http.Request, t target, authorize
 			} else {
 				lease.end()
 			}
+			ex.close()
 			if refused && body.replayable() && tries < maxForwardTries {
 				continue
 			}
@@ -206,8 +266,8 @@ func (e *Edge) proxy(w http.ResponseWriter, r *http.Request, t target, authorize
 		}
 		status := int(ex.first.GetHead().GetStatus())
 		if (status < 200 || status >= 400) && status != http.StatusSwitchingProtocols && attempt < attempts && body.replayable() {
-			ex.close()
 			lease.end()
+			ex.close()
 			attempt++
 			if !sleepUntil(ctx, policy.NextAttemptDelay(attempt), deadline) {
 				e.fail(w, r, errNoCapacity)
@@ -232,8 +292,10 @@ func (e *Edge) requestHead(r *http.Request, authorized, upgrade bool, body *requ
 		header.Set("Connection", "Upgrade")
 		header.Set("Upgrade", r.Header.Get("Upgrade"))
 	}
-	if authorized {
-		// The token reached the platform; the workload never sees it.
+	if authorized || platformToken(r) {
+		// The token reached the platform, or is one: the workload never
+		// sees a platform credential. A public workload keeps any other
+		// Authorization, which is its own.
 		header.Del("Authorization")
 	}
 	if client, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
@@ -262,6 +324,9 @@ func (e *Edge) requestHead(r *http.Request, authorized, upgrade bool, body *requ
 // exchangeState is one request on one agent stream.
 type exchangeState struct {
 	stream *parkedStream
+	body   *requestBody
+	// rc reaches the client's connection, to end a stalled body read.
+	rc *http.ResponseController
 	// first is the agent's first answer: the response head or an error.
 	first *hostproto.ForwardUp
 	// sending ends when the request body is sent; started says whether its
@@ -273,12 +338,12 @@ type exchangeState struct {
 
 // exchange sends the head and body to the lease's container and waits for
 // the first answer until deadline.
-func (e *Edge) exchange(ctx context.Context, l *lease, head *hostproto.HttpRequest, body *requestBody, deadline time.Time) (*exchangeState, error) {
+func (e *Edge) exchange(ctx context.Context, l *lease, rc *http.ResponseController, head *hostproto.HttpRequest, body *requestBody, deadline time.Time) (*exchangeState, error) {
 	p, err := e.hosts.take(ctx, l.slot.host)
 	if err != nil {
 		return nil, err
 	}
-	ex := &exchangeState{stream: p, sending: make(chan struct{})}
+	ex := &exchangeState{stream: p, body: body, rc: rc, sending: make(chan struct{})}
 	// A client that leaves ends the stream, which cancels the request in
 	// the container.
 	ex.stop = context.AfterFunc(ctx, func() { p.finish(status.Error(codes.Canceled, "the client left")) })
@@ -307,13 +372,24 @@ func (e *Edge) exchange(ctx context.Context, l *lease, head *hostproto.HttpReque
 	return ex, nil
 }
 
-// close ends the RPC, which stops the body sender, and waits for it.
+// close ends the RPC, which stops the body sender, and waits for it. A
+// sender still reading a streamed body may be blocked on a client that
+// stopped sending; a read deadline in the past ends that read.
 func (ex *exchangeState) close() {
 	ex.stop()
 	ex.stream.finish(nil)
-	if ex.started {
-		<-ex.sending
+	if !ex.started {
+		return
 	}
+	select {
+	case <-ex.sending:
+		return
+	default:
+	}
+	if !ex.body.replayable() && !ex.body.upgrade && ex.rc != nil {
+		_ = ex.rc.SetReadDeadline(time.Now())
+	}
+	<-ex.sending
 }
 
 func sendRequestBody(p *parkedStream, body *requestBody) error {
@@ -370,7 +446,7 @@ func (e *Edge) respond(w http.ResponseWriter, r *http.Request, ex *exchangeState
 		header.Del(name)
 	}
 	w.WriteHeader(int(head.GetStatus()))
-	rc := http.NewResponseController(w)
+	rc := ex.rc
 	_ = rc.Flush()
 	complete := false
 	for {

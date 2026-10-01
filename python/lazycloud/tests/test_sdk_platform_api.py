@@ -493,6 +493,55 @@ def test_deploy_maps_endpoint_and_asgi_options_to_http_specs(
     assert (service["concurrency"], service["keep_warm_seconds"]) == (4, 60)
 
 
+@pytest.mark.parametrize("authorized", [True, False])
+def test_endpoint_request_sends_the_token_only_to_an_authorized_deployment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_api: FakeApi, authorized: bool
+) -> None:
+    source = (
+        REPORTS
+        + "\n@app.endpoint(name='api', route='/count')\ndef api(text: str) -> dict: return {}\n"
+    )
+    reports = _project(tmp_path, monkeypatch, source)
+    spec: dict[str, object] = {
+        "name": "api",
+        "handler": "reports:api",
+        "source": {"sha256": "0" * 64},
+        "image": {"python_version": "3.12"},
+        "resources": {"cpu_millis": 250, "memory_mib": 256},
+        "http": {"kind": "endpoint"},
+        "authorized": authorized,
+    }
+    url = f"{fake_api.url}/count"
+    fake_api.route("GET", "/v1/workspaces/team/apps/reports/endpoints/api")(
+        lambda request: json_reply(
+            {
+                "name": "api",
+                "app": "reports",
+                "kind": "endpoint",
+                "state": "active",
+                "release": {
+                    "id": RELEASE_ID,
+                    "function": "api",
+                    "version": 1,
+                    "created_at": NOW,
+                    "spec": spec,
+                },
+                "url": url,
+                "version_url": url,
+                "release_url": url,
+            }
+        )
+    )
+    fake_api.route("POST", "/count")(lambda request: json_reply({"words": 1}))
+
+    response = reports.api.target("deployed").request(text="one")
+
+    assert response.status_code == 200
+    (call,) = fake_api.calls("POST", "/count")
+    sent = {key.lower(): value for key, value in call.headers.items()}
+    assert ("authorization" in sent) is authorized
+
+
 def test_remote_streams_output_resumes_dropped_logs_and_returns_the_value(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

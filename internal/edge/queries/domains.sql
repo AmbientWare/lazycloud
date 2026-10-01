@@ -29,12 +29,16 @@ returning *;
 delete from custom_domains where id = @id;
 
 -- name: DomainServes :many
--- Deployments in any workspace the user owns that answer on the hostname.
-select a.name as app_name, w.name
+-- Deployments that claim the hostname, in any workspace; visible says
+-- whether the user owns the deployment's workspace.
+select a.name as app_name, w.name,
+       exists (
+           select 1 from workspace_members m
+           where m.workspace_id = a.workspace_id and m.user_id = @user_id and m.role = 'owner'
+       )::bool as visible
 from http_routes r
 join workloads w on w.id = r.workload_id
 join apps a on a.id = w.app_id
-join workspace_members m on m.workspace_id = a.workspace_id and m.user_id = @user_id and m.role = 'owner'
 where r.hostname = @hostname and w.desired_state <> 'deleted' and a.state <> 'deleted'
 order by a.name, w.name;
 
