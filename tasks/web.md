@@ -73,6 +73,10 @@ visual parity.
 Data the API does not provide yet. Components show their empty state or the
 server's error.
 
+- To restore when the workloads packet merges pod and devbox kinds: the app
+  card's "Devbox" count chip (removed because it was always 0) and the pod,
+  devbox, sandbox and shell pages, as the reference has them.
+
 - Pods, devboxes, sandboxes and shells have no API. Their panels show the
   server's "no such operation".
 - The endpoint playground cannot call an endpoint: its host takes a
