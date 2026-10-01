@@ -1,0 +1,114 @@
+package edge
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/sync/errgroup"
+
+	"github.com/AmbientWare/lazycloud/internal/database"
+	"github.com/AmbientWare/lazycloud/internal/execution"
+	"github.com/AmbientWare/lazycloud/internal/identity"
+)
+
+// Config tunes the edge.
+type Config struct {
+	// URL is the public base URL workloads answer under, such as
+	// https://lazycloud.run.
+	URL string
+	// Domains registers customer hostnames; nil leaves custom domains
+	// unavailable.
+	Domains Provider
+}
+
+// Edge routes workload traffic. One edge runs in each server process; each
+// publishes its own demand under its own id.
+type Edge struct {
+	id        uuid.UUID
+	pool      *pgxpool.Pool
+	queries   *Queries
+	identity  *identity.Identity
+	execution *execution.Execution
+	listener  *database.Listener
+	urls      URLs
+	domains   Provider
+	logger    *slog.Logger
+
+	routes atomic.Pointer[routeTable]
+	auth   authCache
+	hosts  hostStreams
+
+	// mu guards releases, versions, workloads and loads. It is held only for
+	// map and counter updates, never across I/O.
+	mu        sync.Mutex
+	releases  map[uuid.UUID]*release
+	versions  map[versionKey]uuid.UUID
+	workloads map[uuid.UUID]*workloadState
+	loads     map[uuid.UUID]*releaseLoad
+	// refresh holds workloads whose container set changed; publish kicks
+	// the demand publisher.
+	refresh chan uuid.UUID
+	publish chan struct{}
+}
+
+type versionKey struct {
+	workload uuid.UUID
+	version  int
+}
+
+// NewEdge returns the edge. listener must listen on database.ChannelTask
+// for function invocations.
+func NewEdge(pool *pgxpool.Pool, id *identity.Identity, exec *execution.Execution, listener *database.Listener, cfg Config, logger *slog.Logger) (*Edge, error) {
+	urls, err := ParseURLs(cfg.URL)
+	if err != nil {
+		return nil, err
+	}
+	e := &Edge{
+		id: uuid.New(), pool: pool, queries: New(pool), identity: id, execution: exec, listener: listener,
+		urls: urls, domains: cfg.Domains, logger: logger,
+		releases:  map[uuid.UUID]*release{},
+		versions:  map[versionKey]uuid.UUID{},
+		workloads: map[uuid.UUID]*workloadState{},
+		loads:     map[uuid.UUID]*releaseLoad{},
+		refresh:   make(chan uuid.UUID, refreshQueue),
+		publish:   make(chan struct{}, 1),
+	}
+	e.auth.entries = map[authKey]time.Time{}
+	e.hosts.hosts = map[uuid.UUID]*hostPool{}
+	e.routes.Store(&routeTable{
+		bySubdomain: map[string]*workload{}, byHostname: map[string]*workload{}, byID: map[uuid.UUID]*workload{},
+	})
+	return e, nil
+}
+
+// URLs builds the addresses workloads answer on.
+func (e *Edge) URLs() URLs { return e.urls }
+
+// refreshQueue bounds workloads waiting for their container set to reload;
+// a full queue drops the wake and the next wait reloads instead.
+const refreshQueue = 1024
+
+// Run keeps the route table and container sets current from NOTIFY, and
+// publishes demand, until ctx ends.
+func (e *Edge) Run(ctx context.Context) error {
+	routes, err := e.loadRoutes(ctx)
+	if err != nil {
+		return err
+	}
+	e.routes.Store(routes)
+	g, ctx := errgroup.WithContext(ctx)
+	g.Go(func() error { return e.watch(ctx) })
+	g.Go(func() error { e.refreshContainers(ctx); return nil })
+	g.Go(func() error { e.publishLoads(ctx); return nil })
+	if err := g.Wait(); err != nil && !errors.Is(err, context.Canceled) {
+		return fmt.Errorf("edge: %w", err)
+	}
+	return nil
+}
