@@ -1550,6 +1550,8 @@ type PresignArtifactRequest struct {
 
 // PresignVolumeFileRequest defines model for PresignVolumeFileRequest.
 type PresignVolumeFileRequest struct {
+	// Download For `get`, have a browser save the file instead of showing it.
+	Download       *bool                          `json:"download,omitempty"`
 	ExpiresSeconds *int                           `json:"expires_seconds,omitempty"`
 	Method         PresignVolumeFileRequestMethod `json:"method"`
 

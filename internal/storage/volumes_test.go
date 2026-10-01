@@ -110,7 +110,8 @@ func TestVolumeFiles(t *testing.T) {
 
 // TestBrowserUploadsFromTheDashboard: a workspace bucket answers the
 // dashboard's CORS preflight for a presigned PUT and refuses other origins,
-// so uploads go from the page straight to the store.
+// so uploads go from the page straight to the store, and a download URL
+// makes the browser save the file.
 func TestBrowserUploadsFromTheDashboard(t *testing.T) {
 	ctx := t.Context()
 	f := newFixture(t, volumeSpec)
@@ -145,6 +146,21 @@ func TestBrowserUploadsFromTheDashboard(t *testing.T) {
 	}
 	if status, _ := preflight("https://elsewhere.test"); status != http.StatusForbidden {
 		t.Fatalf("another origin's preflight: %d", status)
+	}
+
+	// A download link makes the browser save the file rather than show it.
+	f.storage = s
+	putFile(t, s, f, "dir/notes.txt", []byte("notes"))
+	download := true
+	saved, err := s.PresignVolumeFile(ctx, f.ws, "data", apitypes.PresignVolumeFileRequest{
+		Path: "dir/notes.txt", Method: apitypes.PresignVolumeFileRequestMethodGet, Download: &download,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status, body, header := get(t, saved.Url); status != http.StatusOK || string(body) != "notes" ||
+		header.Get("Content-Disposition") != `attachment; filename=notes.txt` {
+		t.Fatalf("download: %d %q %q", status, body, header.Get("Content-Disposition"))
 	}
 }
 

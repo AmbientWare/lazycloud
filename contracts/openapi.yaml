@@ -3060,6 +3060,10 @@ components:
           type: integer
           minimum: 1
           maximum: 10000
+        download:
+          description: For `get`, have a browser save the file instead of showing it.
+          type: boolean
+          default: false
 
     PresignedUrl:
       type: object

@@ -574,6 +574,9 @@ class PresignVolumeFileRequest(BaseModel):
     part_number: Annotated[
         int | None, Field(description="Required for `upload_part`.", ge=1, le=10000)
     ] = None
+    download: Annotated[
+        bool, Field(description="For `get`, have a browser save the file instead of showing it.")
+    ] = False
 
 
 class PresignedUrl(BaseModel):
