@@ -70,9 +70,11 @@ func (s *Storage) CreateArtifact(ctx context.Context, workspace identity.Workspa
 	key := artifactKey(workspace, id)
 	upload := apitypes.Upload{ExpiresAt: time.Now().Add(uploadLifetime)}
 	if req.SizeBytes <= artifactPartBytes {
+		// The signed length makes the store refuse other bytes. The content
+		// type is applied when the artifact is read, so clients send no
+		// signed headers.
 		r, err := s.presign.PresignPutObject(ctx, &s3.PutObjectInput{
-			Bucket: aws.String(s.bucket), Key: aws.String(key), ContentType: aws.String(contentType),
-			ContentLength: aws.Int64(req.SizeBytes),
+			Bucket: aws.String(s.bucket), Key: aws.String(key), ContentLength: aws.Int64(req.SizeBytes),
 		}, s3.WithPresignExpires(uploadLifetime))
 		if err != nil {
 			return apitypes.ArtifactUpload{}, fmt.Errorf("presign artifact upload: %w", err)
