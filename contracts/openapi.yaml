@@ -1406,7 +1406,9 @@ components:
 
     MapKey:
       type: string
-      pattern: "^[^\\x00-\\x1f\\x7f]{1,1024}$"
+      minLength: 1
+      maxLength: 1024
+      pattern: "^[^\\x00-\\x1f\\x7f]+$"
 
     VolumeRelativePath:
       description: >-

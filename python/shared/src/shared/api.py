@@ -173,7 +173,7 @@ class LogEntry(BaseModel):
 
 
 class MapKey(RootModel[str]):
-    root: Annotated[str, Field(pattern="^[^\\x00-\\x1f\\x7f]{1,1024}$")]
+    root: Annotated[str, Field(max_length=1024, min_length=1, pattern="^[^\\x00-\\x1f\\x7f]+$")]
 
 
 class VolumeRelativePath(RootModel[str]):
