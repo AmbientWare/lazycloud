@@ -25,7 +25,6 @@ from shared.api import (
     ImageStepKind,
 )
 from shared.image_building import (
-    DEFAULT_IMAGE_BASE,
     fingerprint_build_context,
     fingerprint_files,
     load_requirements_file,
@@ -545,7 +544,7 @@ class Image:
     def spec(self) -> ImageSpec:
         return ImageSpec(
             architecture=self.architecture,
-            base=self.base or DEFAULT_IMAGE_BASE,
+            base=self.base or "",
             python_version=normalize_python_version(self.python_version),
             packages=list(self.packages),
             commands=list(self.commands),

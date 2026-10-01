@@ -4,7 +4,6 @@ from pydantic import Field
 
 from shared.contracts import ContractModel
 from shared.enums import StringEnum
-from shared.image_building.constants import DEFAULT_IMAGE_BASE
 
 
 class ImageBuildStepKind(StringEnum):
@@ -54,7 +53,8 @@ class ImageFilesystemSource(ContractModel):
 
 class ImageSpec(ContractModel):
     architecture: LinuxArchitecture = LinuxArchitecture.Amd64
-    base: str = DEFAULT_IMAGE_BASE
+    # Empty means the platform's Python image for python_version.
+    base: str = ""
     python_version: str = "3.12"
     packages: list[str] = Field(default_factory=list)
     commands: list[str] = Field(default_factory=list)
