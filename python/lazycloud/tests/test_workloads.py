@@ -123,6 +123,7 @@ def _deployed(name: str = "web", **extra: object) -> dict[str, object]:
         "state": "active",
         "version": 2,
         "release_id": RELEASE,
+        "running_containers": 0,
         "created_at": NOW,
         **extra,
     }
@@ -175,6 +176,7 @@ def _serve_releases(api: FakeApi, stored: set[str]) -> None:
                     "name": "tools",
                     "state": "active",
                     "workloads": len(functions),
+                    "running_containers": 0,
                     "created_at": NOW,
                 },
                 "releases": [

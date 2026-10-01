@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Annotated
 
 import typer
-from shared.api import Secret
+from shared.api import Secret, SecretValue
 
 from lazycloud._terminal.cards import notice_card, result_card
 from lazycloud._terminal.formatting import timestamp
@@ -109,12 +109,10 @@ def secret_show(
     client, selected = _session(workspace)
     # The value is fetched only when asked for, so a masked show never
     # transfers it.
+    secret: Secret | SecretValue
     if reveal:
-        revealed = client.get_secret_value(selected, name)
-        secret = Secret(
-            name=revealed.name, created_at=revealed.created_at, updated_at=revealed.updated_at
-        )
-        payload = _secret_payload(secret, value=revealed.value)
+        secret = client.get_secret_value(selected, name)
+        payload = secret.model_dump(mode="json")
     else:
         secret = client.get_secret(selected, name)
         payload = _secret_payload(secret)
