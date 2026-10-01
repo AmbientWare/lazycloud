@@ -325,12 +325,12 @@ def upload_file_parts(source: Path, parts: Sequence[UploadPart]) -> list[Complet
         httpx.Client(timeout=_TRANSFER_TIMEOUT) as http,
         ThreadPoolExecutor(max_workers=_PART_CONCURRENCY) as pool,
     ):
-        etags = pool.map(
-            lambda part: _put(
-                http, part.url, _file_range(source, part.offset, part.size_bytes), part.size_bytes
-            ),
-            parts,
-        )
+
+        def send(part: UploadPart) -> str:
+            content = _file_range(source, part.offset, part.size_bytes)
+            return _put(http, part.url, content, part.size_bytes)
+
+        etags = pool.map(send, parts)
         completed = [
             CompletedPart(number=part.number, etag=etag)
             for part, etag in zip(parts, etags, strict=True)

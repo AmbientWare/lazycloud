@@ -313,11 +313,11 @@ class Volume(ResourceControlBinding[StorageClient]):
             raise FileNotFoundError(source_path)
         destination_root = _relative_path(destination or source_path.name)
         if source_path.is_file():
-            return self._upload_file(source_path, destination_root)
+            return self._upload_file(source_path, destination_root.as_posix())
         for path in sorted(item for item in source_path.rglob("*") if item.is_file()):
             relative = path.relative_to(source_path)
-            self._upload_file(path, PurePosixPath(destination_root, relative.as_posix()))
-        return self._volume_path(destination_root)
+            self._upload_file(path, (destination_root / relative.as_posix()).as_posix())
+        return self._volume_path(destination_root.as_posix())
 
     def get(self, source: str | Path, destination: str | Path) -> Path:
         destination_path = Path(destination).expanduser().resolve()
@@ -354,12 +354,15 @@ class Volume(ResourceControlBinding[StorageClient]):
         upload_id: str | None = None,
         part_number: int | None = None,
     ) -> PresignedUrl:
-        request = api.PresignVolumeFileRequest(
-            path=_relative_path(relative_path).as_posix(),
-            method=_PRESIGN_METHODS[method],
-            expires_seconds=expires_seconds,
-            upload_id=upload_id,
-            part_number=part_number,
+        fields: dict[str, object] = {
+            "path": _relative_path(relative_path).as_posix(),
+            "method": _PRESIGN_METHODS[method],
+            "expires_seconds": expires_seconds,
+            "upload_id": upload_id,
+            "part_number": part_number,
+        }
+        request = api.PresignVolumeFileRequest.model_validate(
+            {name: value for name, value in fields.items() if value is not None}
         )
         response = self.control_client.presign_volume_file(self.name, request)
         return PresignedUrl(
@@ -422,7 +425,7 @@ class Volume(ResourceControlBinding[StorageClient]):
         )
         return MultipartAbort(upload_id=upload_id, volume_name=self.name, volume_path=path)
 
-    def _upload_file(self, source: Path, destination: PurePosixPath) -> str:
+    def _upload_file(self, source: Path, destination: str) -> str:
         size = source.stat().st_size
         if size <= MULTIPART_THRESHOLD_BYTES:
             return self.write_bytes(destination, source.read_bytes())
