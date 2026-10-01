@@ -11,7 +11,9 @@ import { expect, test, type BrowserContext, type Page } from "@playwright/test";
  *   WEB_E2E_WORKSPACE      a workspace the administrator owns
  *   WEB_E2E_APP            an app deployed there with the SDK whose function
  *                          `greet(name: str, times: int = 1)` prints
- *                          "greeting <name>" and returns "hello <name>"
+ *                          "greeting <name>" and returns "hello <name>", and
+ *                          whose `report(title: str)` saves report.txt as an
+ *                          artifact of its task
  *
  * GitHub sign-in needs a GitHub App the local platform does not have, so the
  * session comes from the admin command; the sign-in journey checks the path a
@@ -24,6 +26,8 @@ const workspace = process.env.WEB_E2E_WORKSPACE ?? "";
 const app = process.env.WEB_E2E_APP ?? "";
 
 test.skip(!stack, "WEB_E2E_STACK=1 and a running platform are required");
+// A first call may wait for a cold container and an image pull.
+test.setTimeout(90_000);
 
 async function signIn(context: BrowserContext, baseURL: string) {
   const { hostname } = new URL(baseURL);
@@ -224,4 +228,119 @@ test("a secret is created masked, revealed on request and deleted", async ({
   expect(((await secrets.json()) as { secrets: { name: string }[] }).secrets).not.toContainEqual(
     expect.objectContaining({ name }),
   );
+});
+
+test("a volume is created, a file uploaded, listed, downloaded and removed", async ({
+  page,
+  context,
+  baseURL,
+}) => {
+  const failures = watchFailures(page);
+  await signIn(context, baseURL!);
+  const name = `e2e-${Date.now().toString(36)}`;
+  await page.goto(`/w/${workspace}/storage?view=volumes`);
+  await page.getByRole("button", { name: "New volume" }).click();
+  await page.getByPlaceholder("volume-name").fill(name);
+  await page.getByRole("button", { name: "Create", exact: true }).click();
+  await page.getByRole("button", { name, exact: true }).click();
+
+  await page.locator('input[type="file"]').setInputFiles({
+    name: "notes.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.from("written from the dashboard\n"),
+  });
+  await expect(page.getByRole("button", { name: "Download notes.txt" })).toBeVisible();
+  const download = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Download notes.txt" }).click();
+  expect((await download).suggestedFilename()).toBe("notes.txt");
+
+  await page.getByRole("button", { name: "Delete notes.txt" }).click();
+  await page.getByRole("button", { name: "Delete", exact: true }).click();
+  await expect(page.getByText("Empty directory")).toBeVisible();
+  await page.getByRole("button", { name: `Delete volume ${name}` }).click();
+  await page.getByRole("button", { name: "Delete", exact: true }).click();
+  await expect(page.getByRole("button", { name, exact: true })).toHaveCount(0);
+  expect(failures).toEqual([]);
+});
+
+test("a queue takes a message, shows its head and gives it up", async ({
+  page,
+  context,
+  baseURL,
+}) => {
+  const failures = watchFailures(page);
+  await signIn(context, baseURL!);
+  const name = `e2e-${Date.now().toString(36)}`;
+  await page.goto(`/w/${workspace}/storage?view=queues`);
+  await page.getByRole("button", { name: "New queue" }).click();
+  await page.getByLabel("Queue name").fill(name);
+  await page.getByLabel("Message (JSON)").fill('{"job": 1}');
+  await page.getByRole("button", { name: "Add message" }).click();
+  const inspector = page.getByRole("region", { name: `${name} queue inspector` });
+  await expect(inspector).toContainText('"job": 1');
+  await inspector.getByRole("button", { name: "Remove next message" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Remove next message" }).click();
+  await inspector.getByRole("button", { name: "Delete queue" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Delete queue" }).click();
+  await expect(page.getByRole("button", { name: new RegExp(name) })).toHaveCount(0);
+  expect(failures).toEqual([]);
+});
+
+test("a map key is added, edited with a revision check and deleted", async ({
+  page,
+  context,
+  baseURL,
+}) => {
+  const failures = watchFailures(page);
+  await signIn(context, baseURL!);
+  const name = `e2e-${Date.now().toString(36)}`;
+  await page.goto(`/w/${workspace}/storage?view=maps`);
+  await page.getByRole("button", { name: "New map" }).click();
+  await page.getByLabel("Map name").fill(name);
+  await page.getByLabel("Key", { exact: true }).fill("status");
+  await page.getByLabel("Value (JSON)").fill('{"ready": false}');
+  await page.getByLabel("Expiry").selectOption("never");
+  await page.getByRole("button", { name: "Add key" }).click();
+  const inspector = page.getByRole("region", { name: `${name} map inspector` });
+  await expect(inspector).toContainText('"ready": false');
+
+  await inspector.getByRole("button", { name: "Edit value" }).click();
+  const editor = page.getByRole("dialog", { name: "Edit value" });
+  await editor.getByLabel("Value (JSON)").fill('{"ready": true}');
+  await editor.getByRole("button", { name: "Save value" }).click();
+  await expect(inspector).toContainText('"ready": true');
+
+  await inspector.getByRole("button", { name: "Delete map" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Delete map" }).click();
+  await expect(page.getByRole("button", { name: new RegExp(name) })).toHaveCount(0);
+  expect(failures).toEqual([]);
+});
+
+test("an artifact a task saved is previewed from the task and listed in storage", async ({
+  page,
+  context,
+  baseURL,
+}) => {
+  const failures = watchFailures(page);
+  await signIn(context, baseURL!);
+  const title = `e2e ${Date.now().toString(36)}`;
+  await page.goto(`/w/${workspace}/apps/${app}/workloads/function/report`);
+  await page.getByLabel("title").fill(title);
+  await page.getByRole("button", { name: "Invoke" }).click();
+  const outcome = page
+    .locator("section")
+    .filter({ has: page.getByRole("link", { name: "Open task" }) });
+  await expect(outcome.getByText("succeeded", { exact: true })).toBeVisible({ timeout: 60_000 });
+  await page.getByRole("link", { name: "Open task" }).click();
+
+  const drawer = page.getByRole("dialog", { name: "report" });
+  await drawer.getByRole("tab", { name: "Artifacts" }).click();
+  await drawer.getByRole("button", { name: "Preview report.txt" }).click();
+  await expect(page.getByText(`report ${title}`)).toBeVisible();
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Escape");
+
+  await page.goto(`/w/${workspace}/storage?view=artifacts`);
+  await expect(page.getByRole("button", { name: "Preview report.txt" }).first()).toBeVisible();
+  expect(failures).toEqual([]);
 });

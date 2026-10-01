@@ -210,7 +210,10 @@ export function deleteVolumePath(
   );
 }
 
-/** A short-lived presigned GET; the URL carries no session credential. */
+/**
+ * A short-lived presigned GET that has the browser save the file; the URL
+ * carries no session credential.
+ */
 export async function volumeDownloadUrl(
   workspace: string,
   volume: string,
@@ -219,7 +222,7 @@ export async function volumeDownloadUrl(
   const presigned = await ok(
     api.POST("/v1/workspaces/{workspace}/volumes/{volume}/files/url", {
       params: { path: { workspace, volume } },
-      body: { path, method: "get", expires_seconds: 300 },
+      body: { path, method: "get", expires_seconds: 300, download: true },
     }),
   );
   return presigned.url;

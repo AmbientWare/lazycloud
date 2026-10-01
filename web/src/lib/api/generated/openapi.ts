@@ -1773,7 +1773,7 @@ export interface components {
              * @description Names the device token, such as cli@laptop.
              * @default cli
              */
-            client_name: string;
+            client_name?: string;
         };
         DeviceLogin: {
             /** @description The CLI's secret for polling. */
@@ -1840,7 +1840,7 @@ export interface components {
         InvitationRequest: {
             email: string;
             /** @default member */
-            role: components["schemas"]["InvitationRole"];
+            role?: components["schemas"]["InvitationRole"];
         };
         Invitation: {
             /** Format: uuid */
@@ -1910,7 +1910,7 @@ export interface components {
              * @description Delete every function of the app that is not listed.
              * @default false
              */
-            prune: boolean;
+            prune?: boolean;
         };
         Deployment: {
             app: components["schemas"]["App"];
@@ -1938,18 +1938,18 @@ export interface components {
             image: components["schemas"]["ImageSpec"];
             resources: components["schemas"]["Resources"];
             /** @default 3600 */
-            timeout_seconds: number;
+            timeout_seconds?: number;
             retry_policy?: components["schemas"]["RetryPolicy"];
             /**
              * @description Tasks one container runs at once, one process per slot.
              * @default 1
              */
-            concurrency: number;
+            concurrency?: number;
             /** @description Idle seconds before a container above the minimum stops. */
             keep_warm_seconds?: number;
             autoscaler?: components["schemas"]["Autoscaler"];
             /** @default 100 */
-            max_pending_tasks: number;
+            max_pending_tasks?: number;
             environment?: {
                 [key: string]: string;
             };
@@ -1963,7 +1963,7 @@ export interface components {
              * @description Run the concurrency slots as threads of one runner process.
              * @default false
              */
-            in_process: boolean;
+            in_process?: boolean;
             lifecycle_hooks?: components["schemas"]["LifecycleHooks"];
             volumes?: components["schemas"]["VolumeMountSpec"][];
             /** @description The signature `lazycloud app export` types clients from. */
@@ -1997,21 +1997,21 @@ export interface components {
             /** @description Attempts including the first. */
             max_attempts: number;
             /** @default 0 */
-            delay_seconds: number;
+            delay_seconds?: number;
             /**
              * @default fixed
              * @enum {string}
              */
-            backoff: "fixed" | "exponential";
+            backoff?: "fixed" | "exponential";
             max_delay_seconds?: number;
         };
         Autoscaler: {
             /** @default 0 */
-            min_containers: number;
+            min_containers?: number;
             /** @default 1 */
-            max_containers: number;
+            max_containers?: number;
             /** @default 1 */
-            tasks_per_container: number;
+            tasks_per_container?: number;
         };
         Release: {
             /** Format: uuid */
@@ -2246,7 +2246,7 @@ export interface components {
             /** @description Absolute, or relative to /volumes; the default is /volumes/<name>. */
             mount_path?: string;
             /** @default false */
-            read_only: boolean;
+            read_only?: boolean;
             cloud_bucket?: components["schemas"]["CloudBucketSpec"];
         };
         CloudBucketSpec: {
@@ -2255,12 +2255,12 @@ export interface components {
              * @description A key prefix ending in `/`, or empty for the whole bucket.
              * @default
              */
-            prefix: string;
+            prefix?: string;
             region?: string;
             /** @description An S3-compatible endpoint URL; AWS S3 when absent. */
             endpoint?: string;
             /** @default false */
-            force_path_style: boolean;
+            force_path_style?: boolean;
             /** @description The workspace secret holding the access key id. */
             access_key_secret?: components["schemas"]["SecretName"];
             /** @description The workspace secret holding the secret access key. */
@@ -2318,11 +2318,16 @@ export interface components {
             /** @enum {string} */
             method: "get" | "head" | "put" | "upload_part";
             /** @default 3600 */
-            expires_seconds: number;
+            expires_seconds?: number;
             /** @description Required for `upload_part`. */
             upload_id?: string;
             /** @description Required for `upload_part`. */
             part_number?: number;
+            /**
+             * @description For `get`, have a browser save the file instead of showing it.
+             * @default false
+             */
+            download?: boolean;
         };
         PresignedUrl: {
             /** @description Absolute URL; the request carries no bearer token. */
@@ -2360,7 +2365,7 @@ export interface components {
              * Format: int64
              * @default 5242880
              */
-            part_size_bytes: number;
+            part_size_bytes?: number;
         };
         MultipartUpload: {
             upload_id: string;
@@ -2442,7 +2447,7 @@ export interface components {
             /** @description A base name without `/`. */
             filename: string;
             /** @default application/octet-stream */
-            content_type: string;
+            content_type?: string;
             /** Format: int64 */
             size_bytes: number;
         };
@@ -2459,12 +2464,12 @@ export interface components {
              * @description Capped at the artifact's remaining retention.
              * @default 3600
              */
-            expires_seconds: number;
+            expires_seconds?: number;
             /**
              * @description Ask browsers to save the file rather than show it.
              * @default false
              */
-            download: boolean;
+            download?: boolean;
         };
         ArtifactSummary: {
             /** Format: int64 */
@@ -2547,7 +2552,7 @@ export interface components {
             ttl_seconds?: number;
             if_revision?: string;
             /** @default false */
-            if_absent: boolean;
+            if_absent?: boolean;
         };
         MapEntryWrite: {
             revision: string;
@@ -2580,7 +2585,7 @@ export interface components {
         DeploymentPlanRequest: {
             workloads: components["schemas"]["WorkloadIdentity"][];
             /** @default false */
-            prune: boolean;
+            prune?: boolean;
         };
         WorkloadIdentity: {
             kind: components["schemas"]["WorkloadKind"];
@@ -2700,7 +2705,7 @@ export interface components {
              * @description Micromamba provides Python and the base environment.
              * @default false
              */
-            micromamba: boolean;
+            micromamba?: boolean;
             /** @description A registry image to start from. */
             base_image?: string;
             /** @description Registry credentials by environment variable name. */
@@ -2711,7 +2716,7 @@ export interface components {
              * @default amd64
              * @enum {string}
              */
-            architecture: "amd64" | "arm64";
+            architecture?: "amd64" | "arm64";
             python_packages?: string[];
             steps?: components["schemas"]["ImageStep"][];
             commands?: string[];
