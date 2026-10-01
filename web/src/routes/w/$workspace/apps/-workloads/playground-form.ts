@@ -1,17 +1,65 @@
-import type { DeploymentManifest, JsonValue } from "@/lib/api/schemas";
+import { z } from "zod";
 
-/** Deployment kinds the playground can invoke with a JSON payload. */
+import type { JsonValue } from "@/lib/api/schemas";
+import { jsonValueSchema } from "@/lib/api/schemas/json";
+
+/** Workload kinds the playground can invoke with a JSON payload. */
 export const PLAYGROUND_KINDS = new Set(["function", "endpoint"]);
+
+// The callable contract a deploy records. The API leaves `client_contract`
+// open; the SDK writes it as python/shared/src/shared/http/client_manifests.py
+// describes, and the playground and call examples read it.
+const clientParameterSchema = z
+  .object({
+    name: z.string(),
+    json_schema: z.record(jsonValueSchema).nullable().default({}),
+    python_type: z.string().default(""),
+    required: z.boolean().default(true),
+    default: jsonValueSchema.nullish(),
+    python_default: z.boolean().default(false),
+    parameter_kind: z.string().default("keyword"),
+  })
+  .refine(
+    (parameter) => (parameter.json_schema === null) === Boolean(parameter.python_type),
+    "A Python-only parameter must name its type and omit its JSON schema",
+  )
+  .refine(
+    (parameter) => !parameter.python_default || (!parameter.required && parameter.default == null),
+    "Python defaults remain in the handler",
+  );
+
+const clientContractSchema = z.object({
+  operation: z
+    .object({
+      name: z.string(),
+      parameters: z.array(clientParameterSchema).default([]),
+      return_schema: z.record(jsonValueSchema).nullable().default({}),
+      return_python_type: z.string().default(""),
+    })
+    .refine(
+      (operation) => (operation.return_schema === null) === Boolean(operation.return_python_type),
+      "A Python-only return must name its type and omit its JSON schema",
+    ),
+});
+
+export type ClientContract = z.infer<typeof clientContractSchema>;
+
+/** The release's callable contract, or null when it records none the dashboard can read. */
+export function clientContract(value: unknown): ClientContract | null {
+  const parsed = clientContractSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
 
 const PRIMITIVE_TYPES = ["string", "integer", "number", "boolean"] as const;
 type PrimitiveType = (typeof PRIMITIVE_TYPES)[number];
 
 /** Why an HTTP caller cannot use this function: Python-only arguments or return. */
-export function pythonOnlyReason(manifest: DeploymentManifest): string | null {
-  const operation = manifest.client_contract?.operation;
-  if (!operation) return null;
-  const reasons = parameterPythonReasons(manifest);
-  if (operation.return_python_type) reasons.push(`return: ${operation.return_python_type}`);
+export function pythonOnlyReason(contract: ClientContract | null): string | null {
+  if (!contract) return null;
+  const reasons = parameterPythonReasons(contract);
+  if (contract.operation.return_python_type) {
+    reasons.push(`return: ${contract.operation.return_python_type}`);
+  }
   return reasons.length ? `Use the Python SDK. ${reasons.join("; ")}.` : null;
 }
 
@@ -20,20 +68,18 @@ export function pythonOnlyReason(manifest: DeploymentManifest): string | null {
  * Python-only return is requested as a stored Python result and shown from
  * the task, the same way `lazycloud run` shows it.
  */
-export function playgroundPythonOnlyReason(manifest: DeploymentManifest): string | null {
-  const reasons = parameterPythonReasons(manifest);
+export function playgroundPythonOnlyReason(contract: ClientContract | null): string | null {
+  const reasons = parameterPythonReasons(contract);
   return reasons.length ? `Use the Python SDK. ${reasons.join("; ")}.` : null;
 }
 
-export function returnsPythonValue(manifest: DeploymentManifest): boolean {
-  return Boolean(manifest.client_contract?.operation.return_python_type);
+export function returnsPythonValue(contract: ClientContract | null): boolean {
+  return Boolean(contract?.operation.return_python_type);
 }
 
-function parameterPythonReasons(manifest: DeploymentManifest): string[] {
-  const operation = manifest.client_contract?.operation;
-  if (!operation) return [];
+function parameterPythonReasons(contract: ClientContract | null): string[] {
   const reasons: string[] = [];
-  for (const parameter of operation.parameters) {
+  for (const parameter of contract?.operation.parameters ?? []) {
     if (parameter.python_type) reasons.push(`${parameter.name}: ${parameter.python_type}`);
     if (parameter.python_default) reasons.push(`${parameter.name} has a Python default`);
   }
@@ -54,45 +100,31 @@ function primitiveType(value: string | undefined): PrimitiveType | null {
     : null;
 }
 
-/**
- * Typed per-field inputs are only offered when the recorded schema is a flat
- * object of primitives; anything richer (arrays, objects, files, unknown
- * shapes) falls back to the raw JSON editor instead of a fake form.
- *
- * The callable contract is preferred; the SDK `inputs` Schema metadata is the fallback.
- */
-export function playgroundFields(manifest: DeploymentManifest): PlaygroundField[] | null {
-  const contract = manifest.client_contract;
-  if (contract) {
-    const parameters = contract.operation.parameters.filter(
-      (parameter) => !["var_positional", "var_keyword"].includes(parameter.parameter_kind),
-    );
-    if (parameters.length === 0) return [];
-    const fields: PlaygroundField[] = [];
-    for (const parameter of parameters) {
-      const rawType = parameter.json_schema?.type;
-      const type = primitiveType(typeof rawType === "string" ? rawType : undefined);
-      if (!type) return null;
-      fields.push({
-        name: parameter.name,
-        type,
-        required: parameter.required,
-        defaultText:
-          parameter.default === null || parameter.default === undefined
-            ? ""
-            : JSON.stringify(parameter.default),
-      });
-    }
-    return fields;
-  }
+const VARIADIC = ["var_positional", "var_keyword"];
 
-  const entries = Object.entries(manifest.inputs.fields);
-  if (entries.length === 0) return null;
+/**
+ * Typed per-field inputs are only offered when the recorded contract is a
+ * flat list of primitives. Anything richer (arrays, objects, unknown shapes),
+ * or no contract at all, falls back to the raw JSON editor instead of a fake
+ * form.
+ */
+export function playgroundFields(contract: ClientContract | null): PlaygroundField[] | null {
+  if (!contract) return null;
   const fields: PlaygroundField[] = [];
-  for (const [name, field] of entries) {
-    const type = primitiveType(field.type);
+  for (const parameter of contract.operation.parameters) {
+    if (VARIADIC.includes(parameter.parameter_kind)) continue;
+    const rawType = parameter.json_schema?.type;
+    const type = primitiveType(typeof rawType === "string" ? rawType : undefined);
     if (!type) return null;
-    fields.push({ name, type, required: true, defaultText: "" });
+    fields.push({
+      name: parameter.name,
+      type,
+      required: parameter.required,
+      defaultText:
+        parameter.default === null || parameter.default === undefined
+          ? ""
+          : JSON.stringify(parameter.default),
+    });
   }
   return fields;
 }
@@ -101,25 +133,17 @@ export function playgroundFields(manifest: DeploymentManifest): PlaygroundField[
  * Seed payload for the raw JSON editor: one key per known parameter with its
  * default (or a type-appropriate placeholder), `{}` when nothing is recorded.
  */
-export function exampleBody(manifest: DeploymentManifest): Record<string, JsonValue> {
+export function exampleBody(contract: ClientContract | null): Record<string, JsonValue> {
   const body: Record<string, JsonValue> = {};
-  const contract = manifest.client_contract;
-  if (contract) {
-    for (const parameter of contract.operation.parameters) {
-      if (["var_positional", "var_keyword"].includes(parameter.parameter_kind)) continue;
-      if (parameter.python_type || parameter.python_default) continue;
-      if (parameter.default !== null && parameter.default !== undefined) {
-        body[parameter.name] = parameter.default;
-        continue;
-      }
-      const type =
-        typeof parameter.json_schema?.type === "string" ? parameter.json_schema.type : "";
-      body[parameter.name] = placeholderValue(type);
+  for (const parameter of contract?.operation.parameters ?? []) {
+    if (VARIADIC.includes(parameter.parameter_kind)) continue;
+    if (parameter.python_type || parameter.python_default) continue;
+    if (parameter.default !== null && parameter.default !== undefined) {
+      body[parameter.name] = parameter.default;
+      continue;
     }
-    return body;
-  }
-  for (const [name, field] of Object.entries(manifest.inputs.fields)) {
-    body[name] = placeholderValue(field.type);
+    const type = typeof parameter.json_schema?.type === "string" ? parameter.json_schema.type : "";
+    body[parameter.name] = placeholderValue(type);
   }
   return body;
 }
@@ -136,7 +160,6 @@ function placeholderValue(type: string): JsonValue {
     case "array":
       return [];
     case "object":
-    case "json":
       return {};
     default:
       return null;

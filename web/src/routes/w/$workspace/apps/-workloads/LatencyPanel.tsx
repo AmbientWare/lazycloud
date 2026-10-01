@@ -10,7 +10,7 @@ import {
   type ChartConfig,
 } from "@/components/ui/chart";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { TaskLatencyBucket } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 import { formatDuration } from "@/lib/format";
 
 /**
@@ -20,7 +20,7 @@ import { formatDuration } from "@/lib/format";
  * the chart would be: the region beneath it already says a workload has run
  * nothing, and one silence stated twice reads as two separate findings.
  */
-export function latencyHasSignal(buckets: TaskLatencyBucket[] | undefined): boolean {
+export function latencyHasSignal(buckets: Schemas["PerformanceBucket"][] | undefined): boolean {
   return (buckets ?? []).some((bucket) => bucket.count > 0 || bucket.cold_starts > 0);
 }
 
@@ -35,7 +35,7 @@ export function LatencyPanel({
   error,
   kind,
 }: {
-  buckets: TaskLatencyBucket[] | undefined;
+  buckets: Schemas["PerformanceBucket"][] | undefined;
   pending: boolean;
   error: Error | null;
   kind: string;
@@ -52,13 +52,13 @@ export function LatencyPanel({
 
   const tasks = buckets.reduce((total, bucket) => total + bucket.count, 0);
   const coldStarts = buckets.reduce((total, bucket) => total + bucket.cold_starts, 0);
-  const failures = buckets.reduce((total, bucket) => total + (bucket.status_counts.failed ?? 0), 0);
+  const failures = buckets.reduce((total, bucket) => total + bucket.status_counts.failed, 0);
   const latest = [...buckets].reverse().find((bucket) => bucket.count > 0);
 
   const data = buckets.map((bucket) => ({
     label: formatBucketTime(bucket.timestamp),
-    p50: bucket.p50_ms,
-    p95: bucket.p95_ms,
+    p50: bucket.p50_ms ?? null,
+    p95: bucket.p95_ms ?? null,
   }));
   const config: ChartConfig = {
     p50: { label: "p50", color: "var(--muted-foreground)" },

@@ -2194,7 +2194,10 @@ type App struct {
 	CreatedAt time.Time          `json:"created_at"`
 	Id        openapi_types.UUID `json:"id"`
 	Name      AppName            `json:"name"`
-	State     AppState           `json:"state"`
+
+	// RunningContainers Containers of the app that are ready or draining.
+	RunningContainers int      `json:"running_containers"`
+	State             AppState `json:"state"`
 
 	// Workloads Deployed workloads that are not deleted.
 	Workloads int `json:"workloads"`
@@ -2948,6 +2951,9 @@ type DeployedWorkload struct {
 
 	// ReleaseId The active release.
 	ReleaseId *openapi_types.UUID `json:"release_id,omitempty"`
+
+	// RunningContainers Containers of the workload's releases that are ready or draining.
+	RunningContainers int `json:"running_containers"`
 
 	// State Desired state. A paused app stops its active workloads too.
 	State WorkloadState `json:"state"`

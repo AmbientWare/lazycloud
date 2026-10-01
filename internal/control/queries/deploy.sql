@@ -37,10 +37,6 @@ where w.app_id = @app_id and w.desired_state <> 'deleted'
 returning w.name,
           (select count(*) from releases r where r.workload_id = w.id and r.version > 0)::int as versions;
 
--- name: CountDeployedWorkloads :one
-select count(*)::int from workloads
-where app_id = @app_id and desired_state <> 'deleted' and active_release_id is not null;
-
 -- name: FunctionRelease :one
 select w.name, w.desired_state, a.name as app_name,
        r.id, r.version, r.spec, r.created_at

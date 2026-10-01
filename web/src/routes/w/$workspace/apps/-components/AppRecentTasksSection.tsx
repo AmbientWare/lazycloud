@@ -11,13 +11,13 @@ import { startupBetween } from "@/lib/format";
 
 export function AppRecentTasksSection({
   workspaceName,
-  appId,
+  app,
   tasks,
   pending,
   error,
 }: {
   workspaceName: string;
-  appId: string;
+  app: string;
   tasks: TaskSummary[] | undefined;
   pending: boolean;
   error: string | undefined;
@@ -44,7 +44,7 @@ export function AppRecentTasksSection({
         ) : (tasks?.length ?? 0) === 0 ? (
           <PanelEmpty message="No recent tasks" className="min-h-32" />
         ) : (
-          <RecentRunsList tasks={tasks ?? []} workspaceName={workspaceName} appId={appId} />
+          <RecentRunsList tasks={tasks ?? []} workspaceName={workspaceName} app={app} />
         )}
       </Panel>
     </div>
@@ -54,11 +54,11 @@ export function AppRecentTasksSection({
 function RecentRunsList({
   tasks,
   workspaceName,
-  appId,
+  app,
 }: {
   tasks: TaskSummary[];
   workspaceName: string;
-  appId: string;
+  app: string;
 }) {
   return (
     <div className="divide-y divide-border/80">
@@ -69,8 +69,8 @@ function RecentRunsList({
         >
           <span className="min-w-0">
             <Link
-              to="/w/$workspace/apps/$appId/tasks/$taskId"
-              params={{ workspace: workspaceName, appId, taskId: task.id }}
+              to="/w/$workspace/apps/$app/tasks/$taskId"
+              params={{ workspace: workspaceName, app, taskId: task.id }}
               className="interactive-link block min-w-0 truncate text-sm font-medium text-foreground"
             >
               {task.name}
@@ -80,10 +80,10 @@ function RecentRunsList({
                 <>
                   <StubKindIcon kind={task.workload.kind} className="size-3" />
                   <Link
-                    to="/w/$workspace/apps/$appId/workloads/$kind/$name"
+                    to="/w/$workspace/apps/$app/workloads/$kind/$name"
                     params={{
                       workspace: workspaceName,
-                      appId,
+                      app,
                       kind: task.workload.kind,
                       name: task.workload.name,
                     }}

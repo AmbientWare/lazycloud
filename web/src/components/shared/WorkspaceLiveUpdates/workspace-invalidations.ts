@@ -29,7 +29,6 @@ export function workspaceInvalidationTargets(
     case "deployments":
       return compactTargets([
         { queryKey: workspaceQueryKeys.deployments.root(workspaceId) },
-        { queryKey: workspaceQueryKeys.workloads.root(workspaceId) },
         { queryKey: workspaceQueryKeys.apps.summaries(workspaceId), expensive: true },
         appId ? { queryKey: workspaceQueryKeys.apps.detail(workspaceId, appId) } : null,
         { queryKey: workspaceQueryKeys.tasks.details(workspaceId) },
@@ -37,7 +36,6 @@ export function workspaceInvalidationTargets(
       ]);
     case "workloads":
       return compactTargets([
-        { queryKey: workspaceQueryKeys.workloads.root(workspaceId) },
         { queryKey: workspaceQueryKeys.deployments.root(workspaceId) },
         { queryKey: workspaceQueryKeys.sandboxes.root(workspaceId) },
         { queryKey: workspaceQueryKeys.apps.summaries(workspaceId), expensive: true },
@@ -60,6 +58,7 @@ export function workspaceInvalidationTargets(
           : null,
         { queryKey: workspaceQueryKeys.tasks.aggregates(workspaceId), expensive: true },
         { queryKey: workspaceQueryKeys.apps.summaries(workspaceId), expensive: true },
+        { queryKey: workspaceQueryKeys.apps.activities(workspaceId), expensive: true },
       ]);
     case "containers":
       return compactTargets([

@@ -7,6 +7,7 @@ const firstApp: Schemas["App"] = {
   name: "quickstart",
   state: "active",
   workloads: 1,
+  running_containers: 0,
   created_at: "2026-01-02T10:00:00Z",
 };
 
@@ -17,6 +18,7 @@ const firstWorkload: Schemas["DeployedWorkload"] = {
   name: "hello",
   kind: "function",
   state: "active",
+  running_containers: 0,
   created_at: "2026-01-02T10:00:00Z",
 };
 

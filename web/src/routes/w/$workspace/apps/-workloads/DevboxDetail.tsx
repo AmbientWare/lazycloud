@@ -20,17 +20,19 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
-import type { Devbox, DevboxPhase } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 import { formatBytes } from "@/lib/format";
 import { containerMetricsTimeseriesQueryOptions } from "@/lib/queries/containers";
+import { workloadRunning } from "@/lib/queries/deployments";
+import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
+
 import {
   devboxQueryOptions,
   startDevboxMutationOptions,
   stopDevboxMutationOptions,
-} from "@/lib/queries/deployments";
-import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
-
-import type { WorkloadGroup } from "./grouping";
+  type Devbox,
+  type DevboxPhase,
+} from "./pods";
 import { VersionHistory } from "./VersionHistory";
 import { WorkloadConfiguration } from "./WorkloadConfiguration";
 
@@ -103,15 +105,13 @@ export function DevboxActions({
   // The container a stop was asked of, held until the server answers the stop.
   const [stopRequest, setStopRequest] = useState<{ containerId: string | null } | null>(null);
   const stopRequested = stopRequest !== null;
-  const status = useQuery(
-    devboxQueryOptions(workspaceId, deploymentId, { awaitingChange: stopRequested }),
-  );
+  const status = useQuery(devboxQueryOptions(workspaceId, deploymentId));
   const devbox = status.data;
-  const key = workspaceQueryKeys.deployments.devbox(workspaceId, deploymentId);
+  const key = devboxQueryOptions(workspaceId, deploymentId).queryKey;
   // A poll that left before the request could land after its answer and undo it.
   const cancelPolls = () => queryClient.cancelQueries({ queryKey: key });
   const start = useMutation({
-    ...startDevboxMutationOptions(workspaceId, deploymentId),
+    ...startDevboxMutationOptions,
     onMutate: cancelPolls,
     onSuccess: async (next) => {
       queryClient.setQueryData(key, next);
@@ -123,7 +123,7 @@ export function DevboxActions({
     onError: () => queryClient.invalidateQueries({ queryKey: key }),
   });
   const stop = useMutation({
-    ...stopDevboxMutationOptions(workspaceId, deploymentId),
+    ...stopDevboxMutationOptions,
     onMutate: cancelPolls,
     onSuccess: (next) => queryClient.setQueryData(key, next),
     onError: () => {
@@ -352,27 +352,17 @@ function idleStop(devbox: Devbox): ReactNode {
 export function DevboxWorkspace({
   workspaceId,
   workspaceName,
-  appId,
-  group,
-  deploymentId,
-  nextCursor,
-  loadingMore,
-  loadMoreError,
-  onLoadMore,
+  workload,
+  spec,
 }: {
   workspaceId: string;
   workspaceName: string;
-  appId: string;
-  group: WorkloadGroup;
-  deploymentId: string;
-  nextCursor: string | undefined;
-  loadingMore: boolean;
-  loadMoreError: boolean;
-  onLoadMore: () => void;
+  workload: Schemas["DeployedWorkload"];
+  spec: Schemas["FunctionSpec"];
 }) {
+  const deploymentId = workload.id;
   const status = useQuery(devboxQueryOptions(workspaceId, deploymentId));
   const devbox = status.data;
-  const current = group.deployments.find((deployment) => deployment.id === deploymentId);
 
   return (
     <>
@@ -404,7 +394,8 @@ export function DevboxWorkspace({
             <PanelEmpty
               message={notRunningMessage(devbox)}
               detail={
-                current?.active && (devbox.phase === "stopped" || devbox.phase === "failed") ? (
+                workloadRunning(workload) &&
+                (devbox.phase === "stopped" || devbox.phase === "failed") ? (
                   <>
                     <code className="mono">{devbox.ssh_command}</code> starts it.
                   </>
@@ -415,19 +406,10 @@ export function DevboxWorkspace({
           )}
         </TabsContent>
         <TabsContent value="versions" className="m-0 min-h-0 flex-1 overflow-auto">
-          <VersionHistory
-            group={group}
-            appId={appId}
-            workspaceId={workspaceId}
-            workspaceName={workspaceName}
-            nextCursor={nextCursor}
-            loadingMore={loadingMore}
-            loadMoreError={loadMoreError}
-            onLoadMore={onLoadMore}
-          />
+          <VersionHistory workspace={workspaceName} workload={workload} />
         </TabsContent>
         <TabsContent value="configuration" className="m-0 min-h-0 flex-1 overflow-auto">
-          {current ? <WorkloadConfiguration deployment={current} kind={group.kind} /> : null}
+          <WorkloadConfiguration spec={spec} />
         </TabsContent>
       </Tabs>
 

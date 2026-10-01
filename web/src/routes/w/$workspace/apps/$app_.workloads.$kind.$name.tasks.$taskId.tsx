@@ -5,14 +5,14 @@ import { TaskDrawer } from "@/components/shared/TaskDrawer";
 import { useWorkspace } from "@/lib/workspace-context";
 
 export const Route = createFileRoute(
-  "/w/$workspace/apps/$appId_/workloads/$kind/$name/tasks/$taskId",
+  "/w/$workspace/apps/$app_/workloads/$kind/$name/tasks/$taskId",
 )({
   component: WorkloadTaskDrawerRoute,
   errorComponent: RouteErrorFallback,
 });
 
 function WorkloadTaskDrawerRoute() {
-  const { appId, kind, name, taskId } = Route.useParams();
+  const { app, kind, name, taskId } = Route.useParams();
   const { workspace } = useWorkspace();
   const navigate = useNavigate();
 
@@ -20,10 +20,10 @@ function WorkloadTaskDrawerRoute() {
     <TaskDrawer
       taskId={taskId}
       taskLink={(nextTaskId) => ({
-        to: "/w/$workspace/apps/$appId/workloads/$kind/$name/tasks/$taskId",
+        to: "/w/$workspace/apps/$app/workloads/$kind/$name/tasks/$taskId",
         params: {
           workspace: workspace.name,
-          appId,
+          app,
           kind,
           name,
           taskId: nextTaskId,
@@ -31,8 +31,8 @@ function WorkloadTaskDrawerRoute() {
       })}
       onClose={() => {
         void navigate({
-          to: "/w/$workspace/apps/$appId/workloads/$kind/$name",
-          params: { workspace: workspace.name, appId, kind, name },
+          to: "/w/$workspace/apps/$app/workloads/$kind/$name",
+          params: { workspace: workspace.name, app, kind, name },
         });
       }}
     />

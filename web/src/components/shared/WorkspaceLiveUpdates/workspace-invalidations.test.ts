@@ -39,6 +39,7 @@ describe("workspace live invalidation ownership", () => {
       { queryKey: workspaceQueryKeys.containers.eventSummary("workspace-1", "container-1") },
       { queryKey: workspaceQueryKeys.tasks.aggregates("workspace-1"), expensive: true },
       { queryKey: workspaceQueryKeys.apps.summaries("workspace-1"), expensive: true },
+      { queryKey: workspaceQueryKeys.apps.activities("workspace-1"), expensive: true },
     ]);
   });
 

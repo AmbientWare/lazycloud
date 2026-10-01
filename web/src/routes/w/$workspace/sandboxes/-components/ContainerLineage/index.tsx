@@ -19,8 +19,8 @@ export function ContainerLineage({
     >
       {record.app ? (
         <Link
-          to="/w/$workspace/apps/$appId"
-          params={{ workspace: workspaceName, appId: record.app.id }}
+          to="/w/$workspace/apps/$app"
+          params={{ workspace: workspaceName, app: record.app.name }}
           className="text-brand hover:underline"
         >
           {record.app.name}
@@ -31,10 +31,10 @@ export function ContainerLineage({
       ) : null}
       {record.app && record.workload ? (
         <Link
-          to="/w/$workspace/apps/$appId/workloads/$kind/$name"
+          to="/w/$workspace/apps/$app/workloads/$kind/$name"
           params={{
             workspace: workspaceName,
-            appId: record.app.id,
+            app: record.app.name,
             kind: record.workload.kind,
             name: record.workload.name,
           }}

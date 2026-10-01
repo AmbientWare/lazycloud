@@ -21,10 +21,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import type { Container, Deployment } from "@/lib/api/schemas";
 import { countLabel } from "@/lib/format";
 import { useLiveNow } from "@/hooks/use-live-now";
-import { scaleDeploymentMutationOptions } from "@/lib/queries/apps";
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
 
 import { podInstanceUptime } from "./pod-instance-format";
+import { scaleDeploymentMutationOptions } from "./pods";
 
 export const ACTIVE_POD_CONTAINER_STATUSES = ["pending", "running"] as const;
 const ACTIVE_CONTAINER_STATUSES = new Set<string>(ACTIVE_POD_CONTAINER_STATUSES);
@@ -33,7 +33,7 @@ export type PodInstanceStatusFilter = "active" | "all";
 export function PodInstances({
   workspaceId,
   workspaceName,
-  appId,
+  app,
   workloadName,
   deployment,
   statusFilter,
@@ -48,7 +48,7 @@ export function PodInstances({
 }: {
   workspaceId: string;
   workspaceName: string;
-  appId: string;
+  app: string;
   workloadName: string;
   deployment: Deployment;
   statusFilter: PodInstanceStatusFilter;
@@ -78,7 +78,7 @@ export function PodInstances({
         </p>
         <InstanceControls
           workspaceId={workspaceId}
-          appId={appId}
+          app={app}
           deployment={deployment}
           running={running}
           statusFilter={statusFilter}
@@ -103,7 +103,7 @@ export function PodInstances({
                 <InstanceRow
                   key={container.id}
                   workspaceName={workspaceName}
-                  appId={appId}
+                  app={app}
                   workloadName={workloadName}
                   container={container}
                   now={now}
@@ -137,14 +137,14 @@ export function PodInstances({
 
 function InstanceControls({
   workspaceId,
-  appId,
+  app,
   deployment,
   running,
   statusFilter,
   onStatusFilterChange,
 }: {
   workspaceId: string;
-  appId: string;
+  app: string;
   deployment: Deployment;
   running: number;
   statusFilter: PodInstanceStatusFilter;
@@ -157,7 +157,7 @@ function InstanceControls({
     >
       <ReplicaControl
         workspaceId={workspaceId}
-        appId={appId}
+        app={app}
         deployment={deployment}
         running={running}
       />
@@ -168,12 +168,12 @@ function InstanceControls({
 
 function ReplicaControl({
   workspaceId,
-  appId,
+  app,
   deployment,
   running,
 }: {
   workspaceId: string;
-  appId: string;
+  app: string;
   deployment: Deployment;
   running: number;
 }) {
@@ -182,7 +182,7 @@ function ReplicaControl({
   const replicas = draft ?? configured;
   const queryClient = useQueryClient();
   const scale = useMutation({
-    ...scaleDeploymentMutationOptions(workspaceId, deployment.id, replicas),
+    ...scaleDeploymentMutationOptions,
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({
@@ -193,7 +193,7 @@ function ReplicaControl({
           refetchType: "active",
         }),
         queryClient.invalidateQueries({
-          queryKey: workspaceQueryKeys.apps.detail(workspaceId, appId),
+          queryKey: workspaceQueryKeys.apps.detail(workspaceId, app),
         }),
       ]);
       setDraft(null);
@@ -307,13 +307,13 @@ function InstanceListHeader() {
 
 function InstanceRow({
   workspaceName,
-  appId,
+  app,
   workloadName,
   container,
   now,
 }: {
   workspaceName: string;
-  appId: string;
+  app: string;
   workloadName: string;
   container: Container;
   now: number;
@@ -322,10 +322,10 @@ function InstanceRow({
   return (
     <div role="listitem" className="border-b border-border/70 last:border-b-0">
       <Link
-        to="/w/$workspace/apps/$appId/workloads/$kind/$name/instances/$containerId"
+        to="/w/$workspace/apps/$app/workloads/$kind/$name/instances/$containerId"
         params={{
           workspace: workspaceName,
-          appId,
+          app,
           kind: "pod",
           name: workloadName,
           containerId: container.id,
