@@ -45,8 +45,8 @@ FROM gcr.io/distroless/static-debian13:nonroot@sha256:e2e927ec666bae08560abb3c55
 ARG VERSION=dev
 LABEL org.opencontainers.image.title="lazycloud-server" org.opencontainers.image.version="${VERSION}"
 COPY --from=go /out/server /usr/local/bin/server
-ENV LAZYCLOUD_HTTP_ADDR=0.0.0.0:8080 LAZYCLOUD_GRPC_ADDR=0.0.0.0:8081
-EXPOSE 8080 8081
+ENV LAZYCLOUD_HTTP_ADDR=0.0.0.0:8080 LAZYCLOUD_GRPC_ADDR=0.0.0.0:8081 LAZYCLOUD_HEALTH_ADDR=0.0.0.0:8090
+EXPOSE 8080 8081 8090
 ENTRYPOINT ["/usr/local/bin/server"]
 CMD ["serve"]
 
@@ -54,6 +54,8 @@ FROM gcr.io/distroless/static-debian13:nonroot@sha256:e2e927ec666bae08560abb3c55
 ARG VERSION=dev
 LABEL org.opencontainers.image.title="lazycloud-scheduler" org.opencontainers.image.version="${VERSION}"
 COPY --from=go /out/scheduler /usr/local/bin/scheduler
+ENV LAZYCLOUD_HEALTH_ADDR=0.0.0.0:8090
+EXPOSE 8090
 ENTRYPOINT ["/usr/local/bin/scheduler"]
 
 # The agent's release bundle. Hosts install /opt/lazycloud from it; the agent
