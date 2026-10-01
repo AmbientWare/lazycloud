@@ -123,7 +123,11 @@ function WorkloadDetailPage() {
         />
       }
       actions={backLink}
-      headerDetails={<WorkloadOperation fn={fn.data} resource={resource} active={active} />}
+      headerDetails={
+        !active || resource.invoke_url || fn.data.schedule ? (
+          <WorkloadOperation fn={fn.data} resource={resource} active={active} />
+        ) : undefined
+      }
       contentClassName="flex flex-col gap-3 overflow-y-auto xl:grid xl:grid-cols-[minmax(20rem,2fr)_minmax(0,3fr)] xl:overflow-hidden"
     >
       <Tabs

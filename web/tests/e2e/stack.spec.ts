@@ -1,0 +1,227 @@
+import { expect, test, type BrowserContext, type Page } from "@playwright/test";
+
+/*
+ * Journeys against a running platform: the dashboard dev server proxying to a
+ * real server, scheduler and agent. Nothing here is mocked.
+ *
+ *   WEB_E2E_STACK=1        run these journeys
+ *   WEB_E2E_SESSION        a browser session cookie value, from
+ *                          `server admin create-session --email <admin>`
+ *   WEB_E2E_TOKEN          an API token of the same platform administrator
+ *   WEB_E2E_WORKSPACE      a workspace the administrator owns
+ *   WEB_E2E_APP            an app deployed there with the SDK whose function
+ *                          `greet(name: str, times: int = 1)` prints
+ *                          "greeting <name>" and returns "hello <name>"
+ *
+ * GitHub sign-in needs a GitHub App the local platform does not have, so the
+ * session comes from the admin command; the sign-in journey checks the path a
+ * browser takes up to GitHub.
+ */
+const stack = process.env.WEB_E2E_STACK === "1";
+const session = process.env.WEB_E2E_SESSION ?? "";
+const token = process.env.WEB_E2E_TOKEN ?? "";
+const workspace = process.env.WEB_E2E_WORKSPACE ?? "";
+const app = process.env.WEB_E2E_APP ?? "";
+
+test.skip(!stack, "WEB_E2E_STACK=1 and a running platform are required");
+
+async function signIn(context: BrowserContext, baseURL: string) {
+  const { hostname } = new URL(baseURL);
+  await context.addCookies([
+    {
+      name: "__Host-lazycloud_session",
+      value: session,
+      domain: hostname,
+      path: "/",
+      secure: true,
+      httpOnly: true,
+      sameSite: "Lax",
+    },
+  ]);
+}
+
+function watchFailures(page: Page): string[] {
+  const failures: string[] = [];
+  page.on("pageerror", (error) => failures.push(error.message));
+  page.on("response", (response) => {
+    const path = new URL(response.url()).pathname;
+    if (path.startsWith("/v1/") && response.status() >= 500) {
+      failures.push(`${response.status()} ${path}`);
+    }
+  });
+  return failures;
+}
+
+test("a signed-out visitor is sent to sign in, and a session opens the dashboard", async ({
+  page,
+  context,
+  baseURL,
+}) => {
+  await page.goto("/dashboard");
+  const signInLink = page.getByRole("link", { name: "Continue with GitHub" });
+  await expect(signInLink).toHaveAttribute("href", "/auth/github/start?return_to=%2Fdashboard");
+  await signInLink.click();
+  // No GitHub App is configured on a local platform, which the server reports.
+  await expect(page).toHaveURL(/\/signin\?error=provider_unavailable$/);
+  await expect(page.getByRole("alert")).toHaveText(
+    "Signing in is unavailable right now. Try again shortly.",
+  );
+
+  await signIn(context, baseURL!);
+  // A live session skips GitHub entirely.
+  await page.goto("/auth/github/start?return_to=%2Fdashboard");
+  await expect(page).toHaveURL(new RegExp(`/w/${workspace}/apps$`));
+  await expect(page.getByRole("heading", { name: "Apps", exact: true })).toBeVisible();
+});
+
+test("an administrator creates, renames, invites to and deletes a workspace", async ({
+  page,
+  context,
+  baseURL,
+}) => {
+  const failures = watchFailures(page);
+  await signIn(context, baseURL!);
+  const name = `e2e-${Date.now().toString(36)}`;
+  await page.goto(`/w/${workspace}/apps`);
+
+  await page.getByRole("button", { name: "Workspace", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Create workspace" }).click();
+  await page.getByRole("dialog").getByRole("textbox").fill(name);
+  await page.getByRole("button", { name: "Create", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/w/${name}/apps$`));
+  await expect(page.getByText("Run your first function")).toBeVisible();
+
+  const renamed = `${name}-x`;
+  await page.getByRole("button", { name: "Workspace", exact: true }).click();
+  await page.getByRole("menuitem", { name: `Manage ${name} workspace` }).click();
+  await page.getByRole("menuitem", { name: "Rename" }).click();
+  await page.getByRole("textbox", { name: "Workspace name" }).fill(renamed);
+  await page.getByRole("button", { name: "Rename", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/w/${renamed}/apps$`));
+
+  await page.getByRole("button", { name: "Workspace", exact: true }).click();
+  await page.getByRole("menuitem", { name: `Manage ${renamed} workspace` }).click();
+  await page.getByRole("menuitem", { name: "Members" }).click();
+  const members = page.getByRole("dialog", { name: `${renamed} members` });
+  await members.getByRole("textbox", { name: "Email address to invite" }).fill("guest@example.com");
+  await members.getByRole("button", { name: "Invite" }).click();
+  await expect(page.getByText("Invitation sent to guest@example.com")).toBeVisible();
+  await members.getByRole("button", { name: "Revoke the invitation to guest@example.com" }).click();
+  await expect(members.getByText("guest@example.com")).toHaveCount(0);
+  await page.keyboard.press("Escape");
+
+  await page.getByRole("button", { name: "Workspace", exact: true }).click();
+  await page.getByRole("menuitem", { name: `Manage ${renamed} workspace` }).click();
+  await page.getByRole("menuitem", { name: "Delete" }).click();
+  const confirm = page.getByRole("alertdialog");
+  await expect(confirm.getByRole("button", { name: "Delete permanently" })).toBeDisabled();
+  await confirm.getByRole("textbox").fill(renamed);
+  await confirm.getByRole("button", { name: "Delete permanently" }).click();
+  await expect(page).toHaveURL(new RegExp(`/w/${workspace}/apps$`));
+  expect(failures).toEqual([]);
+});
+
+test("a deployed app is listed, invoked from the playground and its task opened with logs", async ({
+  page,
+  context,
+  baseURL,
+}) => {
+  const failures = watchFailures(page);
+  await signIn(context, baseURL!);
+  await page.goto(`/w/${workspace}/apps`);
+
+  await page.getByRole("link", { name: app, exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/w/${workspace}/apps/${app}$`));
+  await page.getByRole("link", { name: /greet/ }).first().click();
+  await expect(page.getByRole("heading", { name: "greet" })).toBeVisible();
+
+  const who = `e2e ${Date.now().toString(36)}`;
+  await page.getByLabel("name").fill(who);
+  await page.getByRole("button", { name: "Invoke" }).click();
+  // A cold container starts for the first call.
+  await expect(page.getByText(`"hello ${who}"`)).toBeVisible({ timeout: 60_000 });
+
+  await page.getByRole("link", { name: "Open task" }).click();
+  const drawer = page.getByRole("dialog", { name: "greet" });
+  await expect(drawer.getByText("succeeded", { exact: true })).toBeVisible();
+  await drawer.getByRole("tab", { name: "Logs" }).click();
+  await expect(drawer.getByRole("list", { name: "Log output" })).toContainText(`greeting ${who}`);
+  await drawer.getByRole("tab", { name: "Container" }).click();
+  await expect(drawer.getByText("Container ID")).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  await page.goto(`/w/${workspace}/tasks`);
+  await expect(page.getByRole("heading", { name: "Tasks", exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "greet" }).first()).toBeVisible();
+  expect(failures).toEqual([]);
+});
+
+test("an access token is created, shown once and deleted", async ({ page, context, baseURL }) => {
+  await signIn(context, baseURL!);
+  await page.goto(`/w/${workspace}/apps?settings=tokens`);
+  const name = `e2e-${Date.now().toString(36)}`;
+  await page.getByRole("button", { name: "Create token" }).first().click();
+  await page.getByPlaceholder("ci-deploy").fill(name);
+  await page.getByRole("button", { name: "Create token" }).last().click();
+  await expect(page.getByText("Token created")).toBeVisible();
+  await expect(page.getByText(/^lc_.{3}•+$/)).toBeVisible();
+  await page.getByRole("button", { name: "Reveal token value" }).click();
+  await expect(page.getByText(/^lc_[A-Za-z0-9_-]{43}$/)).toBeVisible();
+  await page.getByRole("button", { name: "Done" }).click();
+  // The value is gone from the page once dismissed.
+  await expect(page.getByText(/^lc_[A-Za-z0-9_-]{43}$/)).toHaveCount(0);
+  await page.getByRole("button", { name: `Delete ${name}` }).click();
+  await page.getByRole("button", { name: "Delete", exact: true }).click();
+  await expect(page.getByRole("button", { name: `Delete ${name}` })).toHaveCount(0);
+});
+
+test("a waiting CLI is approved at /activate", async ({ page, context, baseURL, request }) => {
+  const start = await request.post("/v1/device-codes", { data: { client_name: "cli@e2e" } });
+  expect(start.status()).toBe(201);
+  const login = (await start.json()) as { device_code: string; user_code: string };
+
+  await signIn(context, baseURL!);
+  await page.goto(`/activate?code=${login.user_code}`);
+  await expect(page.getByText("cli@e2e")).toBeVisible();
+  await page.getByRole("button", { name: "Approve" }).click();
+  await expect(page.getByText("CLI connected")).toBeVisible();
+
+  // The CLI's next poll picks up its token once the interval has passed.
+  await page.waitForTimeout(5_500);
+  const poll = await request.post("/v1/device-codes/token", {
+    data: { device_code: login.device_code },
+  });
+  const answer = (await poll.json()) as { status: string; token?: string };
+  expect(answer.status).toBe("approved");
+  const me = await request.get("/v1/me", { headers: { Authorization: `Bearer ${answer.token}` } });
+  expect(me.status()).toBe(200);
+});
+
+test("a secret is created masked, revealed on request and deleted", async ({
+  page,
+  context,
+  baseURL,
+}) => {
+  await signIn(context, baseURL!);
+  const name = `E2E_${Date.now().toString(36).toUpperCase()}`;
+  await page.goto(`/w/${workspace}/storage?view=secrets`);
+  await page.getByRole("button", { name: "New secret" }).click();
+  await page.getByPlaceholder("SECRET_NAME").fill(name);
+  await page.getByLabel("Value", { exact: true }).fill("test-only-value");
+  await page.getByRole("button", { name: "Create", exact: true }).click();
+  await expect(page.getByRole("button", { name: `Reveal secret ${name}` })).toBeVisible();
+  await expect(page.getByText("test-only-value")).toHaveCount(0);
+  await page.getByRole("button", { name: `Reveal secret ${name}` }).click();
+  await expect(page.getByText("test-only-value")).toBeVisible();
+  await page.getByRole("button", { name: `Delete secret ${name}` }).click();
+  await page.getByRole("button", { name: "Delete", exact: true }).click();
+  await expect(page.getByRole("button", { name: `Reveal secret ${name}` })).toHaveCount(0);
+
+  // Leave the workspace's API state as it was found.
+  const secrets = await page.request.get(`/v1/workspaces/${workspace}/secrets`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  expect(((await secrets.json()) as { secrets: { name: string }[] }).secrets).not.toContainEqual(
+    expect.objectContaining({ name }),
+  );
+});

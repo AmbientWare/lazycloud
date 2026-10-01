@@ -35,7 +35,20 @@ export function AuthGate({ children }: { children: ReactNode }) {
   }, [navigate, queryClient]);
 
   const contextValue = useMemo<SessionContextValue | null>(
-    () => (me.data ? { user: me.data.user, workspaces: me.data.workspaces, logout } : null),
+    () =>
+      me.data
+        ? {
+            // An account that never signed in with GitHub has no name; the
+            // shell always has something to call it by.
+            user: {
+              ...me.data.user,
+              display_name:
+                me.data.user.display_name || me.data.user.github_login || me.data.user.email,
+            },
+            workspaces: me.data.workspaces,
+            logout,
+          }
+        : null,
     [logout, me.data],
   );
 
