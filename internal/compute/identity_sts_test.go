@@ -81,3 +81,19 @@ func presign(ctx context.Context, t *testing.T, cfg aws.Config, host HostID) Ide
 	}
 	return IdentityProof{URL: presigned.URL, Method: presigned.Method, Headers: headers}
 }
+
+// Only STS endpoints pass: a lookalike such as an S3 website host does not.
+func TestIdentityProofsTargetOnlySTS(t *testing.T) {
+	for host, want := range map[string]bool{
+		"sts.amazonaws.com":                      true,
+		"sts.us-east-2.amazonaws.com":            true,
+		"sts.us-gov-west-1.amazonaws.com":        true,
+		"sts.s3-website-us-east-1.amazonaws.com": false,
+		"sts.us-east-2.amazonaws.com.evil.test":  false,
+		"evil.sts.us-east-2.amazonaws.com":       false,
+	} {
+		if got := stsHost.MatchString(host); got != want {
+			t.Errorf("%s: accepted %v, want %v", host, got, want)
+		}
+	}
+}

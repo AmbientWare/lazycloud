@@ -330,6 +330,10 @@ func (c *Compute) UpdateMachineWorkspaces(ctx context.Context, account identity.
 		if err := q.ReplaceMachineWorkspaces(ctx, ReplaceMachineWorkspacesParams{HostID: host, WorkspaceIds: workspaces}); err != nil {
 			return fmt.Errorf("set machine workspaces: %w", err)
 		}
+		// Work of a workspace the machine no longer serves leaves it.
+		if err := c.containers.DrainHostWorkspaces(ctx, tx, HostID(host), dropped); err != nil {
+			return err
+		}
 		return notifyMachines(ctx, tx, host)
 	})
 	if err != nil {

@@ -42,7 +42,7 @@ type callerIdentity struct {
 }
 
 var (
-	stsHost        = regexp.MustCompile(`^sts(\.[a-z0-9-]+)?\.amazonaws\.com$`)
+	stsHost        = regexp.MustCompile(`^sts(\.[a-z]{2}(-gov)?-[a-z]+-[0-9]+)?\.amazonaws\.com$`)
 	assumedRoleArn = regexp.MustCompile(`^arn:aws:sts::([0-9]{12}):assumed-role/([A-Za-z0-9+=,.@_-]+)/(i-[0-9a-f]{8,32})$`)
 	roleArn        = regexp.MustCompile(`^arn:aws:iam::([0-9]{12}):role/(?:[A-Za-z0-9+=,.@_/-]*/)?([A-Za-z0-9+=,.@_-]+)$`)
 )
@@ -66,9 +66,12 @@ func (c *Compute) EnrollCloud(ctx context.Context, host HostID, proof IdentityPr
 	if row.InstanceID == nil {
 		return HostID{}, "", &IdentityError{Message: "the host has no instance yet"}
 	}
-	account, role := c.fleet.AccountID, c.fleet.NodeRoleARN
+	// The role the host launched with; platform hosts run as the fleet's.
+	account, role := c.fleet.AccountID, deref(row.NodeRoleArn)
 	if HostKind(row.Kind) == KindConnection {
-		account, role = deref(row.AwsAccountID), deref(row.NodeRoleArn)
+		account = deref(row.AwsAccountID)
+	} else if role == "" {
+		role = c.fleet.NodeRoleARN
 	}
 	caller, err := c.verifyProof(ctx, host, proof)
 	if err != nil {
@@ -85,6 +88,15 @@ func (c *Compute) EnrollCloud(ctx context.Context, host HostID, proof IdentityPr
 	if m[1] != account || caller.Account != account || m[2] != wantRole || m[3] != *row.InstanceID ||
 		!strings.HasSuffix(caller.UserID, ":"+*row.InstanceID) {
 		return HostID{}, "", &IdentityError{Message: "the proof does not match the host's instance and role"}
+	}
+	if failed := failedChecks(report.Preflight); len(failed) > 0 {
+		// The instance cannot serve; reconciliation terminates it as an
+		// orphan of a failed host.
+		message := strings.Join(failed, "; ")
+		if err := c.queries.FailHost(ctx, FailHostParams{ID: uuid.UUID(host), Failure: ptr(string(FailurePreflight)), Message: truncate(message)}); err != nil {
+			return HostID{}, "", fmt.Errorf("fail host: %w", err)
+		}
+		return HostID{}, "", &IdentityError{Message: "the host failed its preflight checks: " + message}
 	}
 	token, digest, err := identity.NewToken()
 	if err != nil {

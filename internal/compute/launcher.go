@@ -39,6 +39,10 @@ type launchTarget struct {
 	scope           awsScope
 	network         Network
 	instanceProfile string
+	// authorization and nodeRole are what a connection host launches
+	// under; its identity proof must name nodeRole.
+	authorization *uuid.UUID
+	nodeRole      string
 }
 
 // Launch starts instances for requested hosts. Each launch is claimed with
@@ -152,6 +156,7 @@ func (c *Compute) launch(ctx context.Context, logger *slog.Logger, h ClaimLaunch
 	}
 	n, err := c.queries.RecordLaunch(ctx, RecordLaunchParams{
 		ID: h.ID, InstanceID: instance.InstanceId, AvailabilityZone: zone, AvailabilityZoneID: zoneID,
+		AuthorizationID: target.authorization, NodeRoleArn: nilIfEmpty(target.nodeRole),
 	})
 	if err != nil {
 		return false, fmt.Errorf("record launch: %w", err)
@@ -177,12 +182,12 @@ func (c *Compute) failLaunch(ctx context.Context, h ClaimLaunchesRow, message st
 			}
 			if err := q.InsertCooldown(ctx, InsertCooldownParams{
 				ConnectionKey: key, Region: h.Region, InstanceType: h.InstanceType, Market: *h.Market,
-				Seconds: c.fleet.CapacityCooldown.Seconds(), Reason: truncate(message, 512),
+				Seconds: c.fleet.CapacityCooldown.Seconds(), Reason: truncate(message),
 			}); err != nil {
 				return fmt.Errorf("insert cooldown: %w", err)
 			}
 		}
-		if err := q.FailHost(ctx, FailHostParams{ID: h.ID, Failure: ptr(string(FailureUnknown)), Message: truncate("Launch failed: "+message, 512)}); err != nil {
+		if err := q.FailHost(ctx, FailHostParams{ID: h.ID, Failure: ptr(string(FailureUnknown)), Message: truncate("Launch failed: " + message)}); err != nil {
 			return fmt.Errorf("fail host: %w", err)
 		}
 		return notifyChannel(ctx, tx, h.ID)
@@ -197,7 +202,10 @@ func (c *Compute) launchTarget(ctx context.Context, connection *uuid.UUID, regio
 		if !ok {
 			return launchTarget{}, fmt.Errorf("the platform has no network in %s", region)
 		}
-		return launchTarget{scope: awsScope{key: string(KindPlatform)}, network: network, instanceProfile: c.fleet.InstanceProfile}, nil
+		return launchTarget{
+			scope: awsScope{key: string(KindPlatform)}, network: network, instanceProfile: c.fleet.InstanceProfile,
+			nodeRole: c.fleet.NodeRoleARN,
+		}, nil
 	}
 	row, err := c.queries.ConnectionScope(ctx, *connection)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -215,7 +223,13 @@ func (c *Compute) launchTarget(ctx context.Context, connection *uuid.UUID, regio
 		return launchTarget{}, fmt.Errorf("the connection has no network in %s", region)
 	}
 	scope := c.aws().assume(row.RoleArn, row.ExternalID, "lazycloud-fleet-"+connection.String()[:8], connection.String())
-	return launchTarget{scope: scope, network: network, instanceProfile: deref(row.NodeInstanceProfile)}, nil
+	if deref(row.NodeRoleArn) == "" || deref(row.NodeInstanceProfile) == "" {
+		return launchTarget{}, errors.New("the connection's authorization names no node role")
+	}
+	return launchTarget{
+		scope: scope, network: network, instanceProfile: deref(row.NodeInstanceProfile),
+		authorization: &row.AuthorizationID, nodeRole: deref(row.NodeRoleArn),
+	}, nil
 }
 
 // bootstrap is the instance's user data: install Docker if the image lacks

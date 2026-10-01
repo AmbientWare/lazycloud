@@ -2,6 +2,7 @@ package compute_test
 
 import (
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -79,6 +80,8 @@ func TestReconcileFollowsWhatEC2Reports(t *testing.T) {
 	dev := newWorkspace(t, o.pool, "dev", alice)
 	gone := newHost(t, o.pool, hostSpec{Provider: compute.ProviderAWS, Phase: compute.PhaseTerminating, Region: "us-east-2", InstanceID: "i-0000000000000b001"})
 	vanished := cloudHost(t, o, compute.MarketSpot, "i-0000000000000b002")
+	// Past the grace EC2 gets to list a new instance.
+	run(t, o.pool, "update hosts set launched_at = now() - interval '10 minutes' where id = $1", uuid.UUID(vanished))
 	slow := newHost(t, o.pool, hostSpec{Provider: compute.ProviderAWS, Phase: compute.PhaseProvisioning, Region: "us-east-2", InstanceID: "i-0000000000000b003"})
 	run(t, o.pool, "update hosts set launched_at = now() - interval '20 minutes' where id = $1", uuid.UUID(slow))
 	starting := newHost(t, o.pool, hostSpec{Provider: compute.ProviderAWS, Phase: compute.PhaseProvisioning, Region: "us-east-2", InstanceID: "i-0000000000000b004"})
@@ -89,7 +92,10 @@ func TestReconcileFollowsWhatEC2Reports(t *testing.T) {
 	tags := func(host string) map[string]string {
 		return map[string]string{"lazycloud:fleet": "lazycloud-test", "lazycloud:host-id": host, "Name": "lazycloud"}
 	}
-	emulator.on("DescribeInstances", func(awsCall) awsReply {
+	emulator.on("DescribeInstances", func(call awsCall) awsReply {
+		if !strings.Contains(call.Header.Get("Authorization"), "/us-east-2/") {
+			return describeInstancesReply()
+		}
 		return describeInstancesReply(
 			ec2Instance{ID: "i-0000000000000b003", State: "running", Tags: tags(slow.String())},
 			ec2Instance{ID: "i-0000000000000b004", State: "running", Tags: tags(starting.String())},
@@ -104,10 +110,15 @@ func TestReconcileFollowsWhatEC2Reports(t *testing.T) {
 	if err := o.compute.Reconcile(t.Context(), discard()); err != nil {
 		t.Fatal(err)
 	}
+	// Every configured region is read, each by the fleet tag.
 	describe := emulator.calls("DescribeInstances")
-	if len(describe) != 1 || describe[0].Form.Get("Filter.1.Name") != "tag:lazycloud:fleet" ||
-		describe[0].Form.Get("Filter.1.Value.1") != "lazycloud-test" {
-		t.Fatalf("DescribeInstances calls %v, want one filtered by the fleet tag", describe)
+	if len(describe) != len(fleetNetworks()) {
+		t.Fatalf("DescribeInstances %d times, want once per configured region", len(describe))
+	}
+	for _, call := range describe {
+		if call.Form.Get("Filter.1.Name") != "tag:lazycloud:fleet" || call.Form.Get("Filter.1.Value.1") != "lazycloud-test" {
+			t.Fatalf("DescribeInstances call %v, want it filtered by the fleet tag", call.Form)
+		}
 	}
 	if got, want := terminated(emulator), []string{"i-0000000000000b003", "i-0000000000000b005", "i-0000000000000b007"}; !slices.Equal(got, want) {
 		t.Fatalf("terminated %v, want the timed-out, orphaned and stopped instances %v", got, want)

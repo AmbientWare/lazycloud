@@ -85,3 +85,23 @@ select a.*, cc.aws_account_id, cc.phase as connection_phase
 from cloud_authorizations a
 join cloud_connections cc on cc.id = a.connection_id
 where a.connection_id = @connection_id and a.slot = 'active' and a.phase = 'ready';
+
+-- name: RoleBoundElsewhere :one
+-- Whether another connection holds an authorization for this role.
+select exists (
+    select 1 from cloud_authorizations a
+    where a.role_arn = @role_arn and a.slot is not null and a.connection_id is distinct from sqlc.narg(connection_id)::uuid
+)::bool;
+
+-- name: AuthorizationLiveHosts :one
+select count(*)::int from hosts
+where authorization_id = @authorization_id and phase not in ('deleted', 'failed');
+
+-- name: DrainAuthorizationHosts :many
+-- Hosts launched under a replaced authorization stop taking work; retirement
+-- terminates each once it is empty.
+update hosts
+set phase = 'draining', capacity_state = 'draining', capacity_reason = 'authorization replaced',
+    phase_message = 'Draining; no new work is placed here', phase_at = now(), updated_at = now()
+where authorization_id = @authorization_id and phase in ('ready', 'joining')
+returning id;

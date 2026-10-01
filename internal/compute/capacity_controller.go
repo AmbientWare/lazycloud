@@ -38,6 +38,11 @@ type demandItem struct {
 	id   uuid.UUID
 	need Requirement
 	wait *string
+	// bought is the host bought for the container, with its phase and
+	// offer.
+	bought      *uuid.UUID
+	boughtPhase Phase
+	boughtOffer [3]string
 }
 
 // PlanCapacity buys what pending containers need. Under the capacity lock it
@@ -90,15 +95,33 @@ func (c *Compute) PlanCapacity(ctx context.Context, logger *slog.Logger) (Capaci
 		// fragment them.
 		slices.SortStableFunc(demand, func(a, b demandItem) int { return size(b.need) - size(a.need) })
 		waits := make([]string, len(demand))
+		hosts := make([]uuid.UUID, len(demand))
 		var short []int
 		for n, d := range demand {
 			switch {
 			case d.need.Machine != "":
 				// A pinned machine joins by itself; nothing is bought.
-			case fitFirst(ready, d.need):
-			case fitFirst(coming, d.need):
-				waits[n] = string(WaitProvisioning)
+			case fitFirst(ready, d.need) >= 0:
+			case d.bought != nil && inFlight(d.boughtPhase):
+				// Its host is on the way; buying another would double it.
+				waits[n], hosts[n] = string(WaitProvisioning), *d.bought
+				for i := range coming {
+					if uuid.UUID(coming[i].Host) == *d.bought {
+						coming[i].Reserve(d.need)
+					}
+				}
 			default:
+				if i := fitFirst(coming, d.need); i >= 0 {
+					waits[n], hosts[n] = string(WaitProvisioning), uuid.UUID(coming[i].Host)
+					continue
+				}
+				if d.bought != nil && d.boughtPhase == PhaseReady {
+					// The host bought for it joined and still cannot take
+					// it, so the offer is not what it predicted: cool it.
+					if err := plan.coolDown(ctx, q, d); err != nil {
+						return err
+					}
+				}
 				short = append(short, n)
 			}
 		}
@@ -106,9 +129,13 @@ func (c *Compute) PlanCapacity(ctx context.Context, logger *slog.Logger) (Capaci
 		for i, n := range short {
 			needs[i] = demand[n].need
 		}
+		boughtFor := map[int]int{}
 		for i, n := range short {
-			wait := plan.buy(needs[i], needs[i+1:])
+			wait, bin := plan.buy(needs[i], needs[i+1:])
 			waits[n] = string(wait)
+			if bin >= 0 {
+				boughtFor[n] = bin
+			}
 			if wait == WaitLimit {
 				result.Limited++
 			}
@@ -120,12 +147,15 @@ func (c *Compute) PlanCapacity(ctx context.Context, logger *slog.Logger) (Capaci
 			}
 			requested = append(requested, id)
 		}
+		for n, bin := range boughtFor {
+			hosts[n] = requested[bin]
+		}
 		result.Requested = len(plan.bought)
 		ids := make([]uuid.UUID, len(demand))
 		for n, d := range demand {
 			ids[n] = d.id
 		}
-		if _, err := q.SetCapacityWaits(ctx, SetCapacityWaitsParams{Ids: ids, Waits: waits}); err != nil {
+		if _, err := q.SetCapacityWaits(ctx, SetCapacityWaitsParams{Ids: ids, Waits: waits, Hosts: hosts}); err != nil {
 			return fmt.Errorf("record capacity waits: %w", err)
 		}
 		if len(requested) > 0 {
@@ -172,11 +202,14 @@ func pendingDemandOf(ctx context.Context, q *Queries) ([]demandItem, error) {
 	}
 	out := make([]demandItem, len(rows))
 	for n, r := range rows {
-		out[n] = demandItem{id: r.ID, wait: r.CapacityWait, need: Requirement{
-			Workspace: r.WorkspaceID, Connection: r.ConnectionID, Machine: r.Machine, Region: r.Region, Zone: r.Zone,
-			Preemptible: r.Preemptible, GPUs: r.Gpus, GPUCount: int(r.GpuCount),
-			CPUMillis: r.CpuMillis, MemoryBytes: r.MemoryBytes,
-		}}
+		out[n] = demandItem{
+			id: r.ID, wait: r.CapacityWait, bought: r.CapacityHostID, boughtPhase: Phase(r.BoughtPhase),
+			boughtOffer: [3]string{r.BoughtRegion, r.BoughtType, r.BoughtMarket},
+			need: Requirement{
+				Workspace: r.WorkspaceID, Connection: r.ConnectionID, Machine: r.Machine, Region: r.Region, Zone: r.Zone,
+				Preemptible: r.Preemptible, GPUs: r.Gpus, GPUCount: int(r.GpuCount),
+				CPUMillis: r.CpuMillis, MemoryBytes: r.MemoryBytes,
+			}}
 	}
 	return out, nil
 }
@@ -187,15 +220,41 @@ func size(r Requirement) int {
 	return r.GPUsNeeded()<<40 + int(r.CPUMillis) + int(r.MemoryBytes>>20)/4
 }
 
-// fitFirst reserves r on the first host that fits it.
-func fitFirst(hosts []HostCapacity, r Requirement) bool {
+// fitFirst reserves r on the first host that fits it and returns its index,
+// or -1.
+func fitFirst(hosts []HostCapacity, r Requirement) int {
 	for i := range hosts {
 		if hosts[i].Fits(r) {
 			hosts[i].Reserve(r)
-			return true
+			return i
 		}
 	}
-	return false
+	return -1
+}
+
+func inFlight(p Phase) bool {
+	return p == PhaseRequested || p == PhaseProvisioning || p == PhaseBooting || p == PhaseJoining
+}
+
+// coolDown skips the offer bought for d, in this pass and until the
+// cooldown ends.
+func (p *purchasePlan) coolDown(ctx context.Context, q *Queries, d demandItem) error {
+	owner := string(KindPlatform)
+	if d.need.Connection != nil {
+		owner = d.need.Connection.String()
+	}
+	region, instanceType, market := d.boughtOffer[0], d.boughtOffer[1], d.boughtOffer[2]
+	if instanceType == "" || market == "" {
+		return nil
+	}
+	p.cooled[owner+"/"+region+"/"+instanceType+"/"+market] = true
+	if err := q.InsertCooldown(ctx, InsertCooldownParams{
+		ConnectionKey: owner, Region: region, InstanceType: instanceType, Market: market,
+		Seconds: p.fleet.CapacityCooldown.Seconds(), Reason: "the host bought for a container could not take it",
+	}); err != nil {
+		return fmt.Errorf("insert cooldown: %w", err)
+	}
+	return nil
 }
 
 // purchasePlan is one pass's purchases.
@@ -252,7 +311,7 @@ const offerChoices = 12
 // container once the remaining shortfall is packed onto it. It reports
 // WaitLimit when the owner's fleet is full, and no wait when no offer can
 // take r.
-func (p *purchasePlan) buy(r Requirement, later []Requirement) CapacityWait {
+func (p *purchasePlan) buy(r Requirement, later []Requirement) (CapacityWait, int) {
 	target := Target{Kind: KindPlatform}
 	if r.Connection != nil {
 		target = Target{Kind: KindConnection, Connection: r.Connection}
@@ -261,21 +320,21 @@ func (p *purchasePlan) buy(r Requirement, later []Requirement) CapacityWait {
 	for i := range p.opened {
 		if p.openedFor[i] == owner && p.opened[i].Fits(r) {
 			p.opened[i].Reserve(r)
-			return WaitProvisioning
+			return WaitProvisioning, i
 		}
 	}
 	networks, ok := p.networks[owner]
 	if !ok {
-		return ""
+		return "", -1
 	}
 	offers := offersFor(r, networks, func(region, instanceType string, market Market) bool {
 		return p.cooled[owner+"/"+region+"/"+instanceType+"/"+string(market)]
 	})
 	if len(offers) == 0 {
-		return ""
+		return "", -1
 	}
 	if p.live[owner] >= p.fleet.MaxHosts {
-		return WaitLimit
+		return WaitLimit, -1
 	}
 	o := cheapestPerContainer(offers[:min(len(offers), offerChoices)], target, r, later)
 	host := o.capacity(target)
@@ -291,5 +350,5 @@ func (p *purchasePlan) buy(r Requirement, later []Requirement) CapacityWait {
 		Market:       ptr(string(o.Market)),
 		HourlyMicros: &o.HourlyMicros,
 	})
-	return WaitProvisioning
+	return WaitProvisioning, len(p.bought) - 1
 }

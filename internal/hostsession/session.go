@@ -90,7 +90,7 @@ func (s *Server) Session(stream grpc.BidiStreamingServer[hostproto.HostMessage, 
 		return s.grpcError(ctx, err)
 	}
 	if update != nil {
-		if err := sess.send(updateMessage(update)); err != nil {
+		if err := sess.sendUpdate(ctx, update); err != nil {
 			return err
 		}
 	}
@@ -165,6 +165,17 @@ func (s *Server) Session(stream grpc.BidiStreamingServer[hostproto.HostMessage, 
 			}
 			if err := sess.sync(ctx); err != nil {
 				return err
+			}
+			// A release published while the session is open, or widened
+			// to this host, reaches it here.
+			update, err := s.compute.UpdateFor(ctx, host, hello.GetAgentVersion(), hello.GetRejectedVersion(), hello.GetUpdatable())
+			if err != nil {
+				return s.grpcError(ctx, err)
+			}
+			if update != nil && !sess.sent["update:"+update.Version] {
+				if err := sess.sendUpdate(ctx, update); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -479,4 +490,13 @@ func exitIn(e *hostproto.ContainerExit) execution.ContainerExit {
 		exit.Reason = execution.StopCrashed
 	}
 	return exit
+}
+
+// sendUpdate tells the agent to install a release and gives its host the
+// update window to restart in.
+func (sess *session) sendUpdate(ctx context.Context, update *compute.AgentUpdate) error {
+	if err := sess.server.compute.UpdateSent(ctx, sess.host); err != nil {
+		return sess.server.grpcError(ctx, err)
+	}
+	return sess.send(updateMessage(update))
 }

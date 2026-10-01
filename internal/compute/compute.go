@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -56,6 +58,8 @@ type Containers interface {
 	// DrainHostContainers stops claims on the host's ready containers and
 	// stops the ones still starting.
 	DrainHostContainers(ctx context.Context, tx pgx.Tx, host HostID) error
+	// DrainHostWorkspaces drains the host's containers of workspaces.
+	DrainHostWorkspaces(ctx context.Context, tx pgx.Tx, host HostID, workspaces []uuid.UUID) error
 }
 
 // Config is what compute needs to tell hosts how to reach the platform.
@@ -95,4 +99,22 @@ func NewCompute(pool *pgxpool.Pool, containers Containers, config Config) *Compu
 func isUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
+// CheckFleet refuses a configuration that would launch instances unable to
+// reach the platform: with fleet networks or connections enabled, instances
+// download the agent from InstallURL over HTTPS and dial ServerAddress with
+// TLS, so neither may be empty or on loopback.
+func (c Config) CheckFleet() error {
+	if len(c.Fleet.Networks) == 0 && c.Fleet.PrincipalARN == "" {
+		return nil
+	}
+	u, err := url.Parse(c.InstallURL)
+	if c.InstallURL == "" || err != nil || u.Scheme != "https" || loopback(c.InstallURL) {
+		return errors.New("LAZYCLOUD_INSTALL_URL must be the public https origin cloud instances download the agent from")
+	}
+	if c.ServerAddress == "" || PlaintextAgents(c.ServerAddress, false) || c.ServerPlaintext {
+		return errors.New("LAZYCLOUD_AGENT_SERVER_ADDR must be the public host:port cloud instances dial with TLS")
+	}
+	return nil
 }

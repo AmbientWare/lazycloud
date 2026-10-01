@@ -14,6 +14,8 @@ order by id;
 -- name: PendingDemand :many
 -- Pending containers with what they need from a host, oldest first.
 select c.id, c.workspace_id, c.cpu_millis, c.memory_bytes, c.capacity_wait, ws.connection_id,
+       c.capacity_host_id, coalesce(bh.phase, '')::text as bought_phase, coalesce(bh.region, '')::text as bought_region,
+       coalesce(bh.instance_type, '')::text as bought_type, coalesce(bh.market, '')::text as bought_market,
        coalesce(r.spec -> 'placement' ->> 'machine', '')::text as machine,
        coalesce(r.spec -> 'placement' ->> 'region', '')::text as region,
        coalesce(r.spec -> 'placement' ->> 'availability_zone', '')::text as zone,
@@ -23,6 +25,7 @@ select c.id, c.workspace_id, c.cpu_millis, c.memory_bytes, c.capacity_wait, ws.c
 from containers c
 join workspaces ws on ws.id = c.workspace_id
 left join releases r on r.id = c.release_id
+left join hosts bh on bh.id = c.capacity_host_id
 where c.state = 'pending'
 order by c.created_at, c.id
 limit @batch_size;
@@ -58,9 +61,11 @@ returning id;
 -- Records why each pending container waits; unchanged rows are not
 -- written.
 update containers c
-set capacity_wait = nullif(w.wait, '')
-from (select unnest(@ids::uuid[]) as id, unnest(@waits::text[]) as wait) w
-where c.id = w.id and c.state = 'pending' and c.capacity_wait is distinct from nullif(w.wait, '');
+set capacity_wait = nullif(w.wait, ''), capacity_host_id = nullif(w.host, '00000000-0000-0000-0000-000000000000'::uuid)
+from (select unnest(@ids::uuid[]) as id, unnest(@waits::text[]) as wait, unnest(@hosts::uuid[]) as host) w
+where c.id = w.id and c.state = 'pending'
+  and (c.capacity_wait is distinct from nullif(w.wait, '')
+       or c.capacity_host_id is distinct from nullif(w.host, '00000000-0000-0000-0000-000000000000'::uuid));
 
 -- name: ClaimLaunches :many
 -- Requested hosts whose launch is not held by another launcher. The lease
@@ -83,7 +88,8 @@ returning h.id, h.kind, h.connection_id, h.region, h.availability_zone, h.instan
 update hosts
 set instance_id = @instance_id, availability_zone = @availability_zone, availability_zone_id = @availability_zone_id,
     phase = 'provisioning', phase_message = 'Instance is starting; waiting for the node to report', phase_at = now(),
-    launched_at = now(), launch_lease_until = null, updated_at = now()
+    launched_at = now(), launch_lease_until = null, updated_at = now(),
+    authorization_id = sqlc.narg(authorization_id), node_role_arn = @node_role_arn
 where id = @id and phase = 'requested';
 
 -- name: FailHost :exec
@@ -150,9 +156,17 @@ where h.provider = 'aws' and h.phase = 'draining' and h.instance_id is not null
   and not exists (select 1 from containers c where c.host_id = h.id and c.state <> 'stopped')
 returning h.id, h.connection_id, h.region, h.instance_id;
 
+-- name: ManagedConnectionNetworks :many
+-- Connections whose account may still hold fleet instances, with the
+-- networks of their active authorization.
+select cc.id, a.networks
+from cloud_connections cc
+join cloud_authorizations a on a.connection_id = cc.id and a.slot = 'active' and a.phase = 'ready'
+where cc.phase not in ('awaiting_authorization', 'validating');
+
 -- name: FleetHostsInRegion :many
 -- Cloud hosts of one owner and region the provider should know about.
-select id, phase, state, instance_id, launched_at, last_seen_at, phase_at
+select id, phase, state, instance_id, launched_at, last_seen_at, phase_at, updating_until
 from hosts
 where provider = 'aws' and region = @region
   and connection_id is not distinct from sqlc.narg(connection_id)::uuid
@@ -179,7 +193,8 @@ set phase = 'deleted', phase_message = 'Removed', phase_at = now(), state = 'ret
 where id = @id;
 
 -- name: ConnectionScope :one
-select a.role_arn, a.external_id, a.networks, a.node_instance_profile, cc.phase
+select a.id as authorization_id, a.role_arn, a.external_id, a.networks, a.node_instance_profile,
+       a.node_role_arn, cc.phase
 from cloud_connections cc
 join cloud_authorizations a on a.connection_id = cc.id and a.slot = 'active'
 where cc.id = @id;

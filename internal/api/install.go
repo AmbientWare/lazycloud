@@ -1,8 +1,6 @@
 package api
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"io"
 	"net/http"
@@ -34,8 +32,9 @@ func (s *Server) installScript(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.WriteString(w, script)
 }
 
-// installArchive serves a release archive after checking it against the
-// release's digest. Without a version it serves the target release.
+// installArchive serves a release archive. Publishing hashed it into the
+// release row and the installer checks that digest, so serving does not
+// read it twice. Without a version it serves the target release.
 func (s *Server) installArchive(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	osName, arch, version := r.PathValue("os"), r.PathValue("arch"), r.PathValue("version")
@@ -64,8 +63,7 @@ func (s *Server) installArchive(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, err)
 		return
 	}
-	digest, ok := release.SHA256[arch]
-	if !ok {
+	if _, ok := release.SHA256[arch]; !ok {
 		writeJSONError(w, http.StatusNotFound, apitypes.NotFound, "agent binary artifact not found")
 		return
 	}
@@ -76,15 +74,6 @@ func (s *Server) installArchive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { _ = f.Close() }()
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil || hex.EncodeToString(h.Sum(nil)) != digest {
-		writeJSONError(w, http.StatusServiceUnavailable, apitypes.Unavailable, "agent binary artifact failed integrity verification")
-		return
-	}
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		s.writeError(w, r, err)
-		return
-	}
 	info, err := f.Stat()
 	if err != nil {
 		s.writeError(w, r, err)

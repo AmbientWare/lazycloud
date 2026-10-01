@@ -124,6 +124,13 @@ alter table hosts
     add column idle_since timestamptz,
     -- The provider will reclaim the instance at this time.
     add column interruption_at timestamptz,
+    -- The authorization and node role a connection host launched with: its
+    -- identity proof must name that role, and a replaced authorization's
+    -- stack stays until its hosts are gone.
+    add column authorization_id uuid references cloud_authorizations (id) on delete set null,
+    add column node_role_arn text,
+    -- An agent restarting into a new release stays unlost until this passes.
+    add column updating_until timestamptz,
     add column updated_at timestamptz not null default now();
 
 -- A machine name is unique in its account among machines that still exist.
@@ -161,7 +168,11 @@ create table capacity_cooldowns (
 -- Why a pending container is still waiting for compute: a host is being
 -- provisioned for it, or the fleet limit holds it back. The capacity
 -- controller writes it; pending reasons read it.
-alter table containers add column capacity_wait text check (capacity_wait in ('provisioning', 'limit'));
+alter table containers
+    add column capacity_wait text check (capacity_wait in ('provisioning', 'limit')),
+    -- The host bought for the container. When it is ready and the container
+    -- still fits nowhere, its offer cools down instead of being bought again.
+    add column capacity_host_id uuid references hosts (id) on delete set null;
 
 -- The GPUs a release's container reserves: gpu_count, or one when it names
 -- models without a count.
@@ -178,6 +189,8 @@ create table agent_releases (
     sha256_amd64 text check (sha256_amd64 ~ '^[0-9a-f]{64}$'),
     sha256_arm64 text check (sha256_arm64 ~ '^[0-9a-f]{64}$'),
     target boolean not null default false,
+    -- The share of updatable hosts, by host id, the target reaches.
+    rollout_percent integer not null default 100 check (rollout_percent between 0 and 100),
     created_at timestamptz not null default now(),
     check (sha256_amd64 is not null or sha256_arm64 is not null)
 );

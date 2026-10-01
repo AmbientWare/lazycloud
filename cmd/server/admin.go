@@ -83,11 +83,15 @@ func admin(ctx context.Context, args []string, out io.Writer) error {
 	case "publish-agent-release":
 		version := fs.String("version", "", "release version")
 		dist := fs.String("dist", env("LAZYCLOUD_AGENT_DIST_DIR", ""), "directory holding <version>/lazycloud-agent-linux-<arch>.tar.gz")
+		rollout := fs.Int("rollout", 100, "percent of updatable hosts that move to the release; publish again to widen it")
 		run = func(pool *pgxpool.Pool) error {
 			if !compute.ValidVersion(*version) || *dist == "" {
 				return errors.New("-version and -dist are required")
 			}
-			release := compute.AgentRelease{Version: *version, SHA256: map[string]string{}}
+			if *rollout < 0 || *rollout > 100 {
+				return errors.New("-rollout must be 0 to 100")
+			}
+			release := compute.AgentRelease{Version: *version, SHA256: map[string]string{}, RolloutPercent: *rollout}
 			for _, arch := range []string{"amd64", "arm64"} {
 				digest, err := fileSHA256(filepath.Join(*dist, *version, compute.ArchiveName(arch)))
 				if errors.Is(err, iofs.ErrNotExist) {

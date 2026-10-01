@@ -53,7 +53,7 @@ func (e *env) archive(version string, data []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func TestAgentInstallsServeOnlyVerifiedReleaseArchives(t *testing.T) {
+func TestAgentInstallsServePublishedReleaseArchives(t *testing.T) {
 	ctx := t.Context()
 	e := newEnv(t)
 	data := make([]byte, 4096)
@@ -91,10 +91,6 @@ func TestAgentInstallsServeOnlyVerifiedReleaseArchives(t *testing.T) {
 		if status, _, _ := e.get(path); status != want {
 			t.Errorf("GET %s: %d, want %d", path, status, want)
 		}
-	}
-	e.archive("1.0.0", append(data, 0))
-	if status, body, _ := e.get("/install/agent/1.0.0/linux/amd64"); status != 503 || len(body) > 1024 {
-		t.Fatalf("archive whose digest changed: %d with %d bytes, want 503 and no archive", status, len(body))
 	}
 }
 

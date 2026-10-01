@@ -13,11 +13,10 @@ import (
 )
 
 const cloudHostIdentity = `-- name: CloudHostIdentity :one
-select h.id, h.kind, h.instance_id, h.phase, h.connection_id, h.region,
-       cc.aws_account_id, a.node_role_arn
+select h.id, h.kind, h.instance_id, h.phase, h.connection_id, h.region, h.node_role_arn,
+       cc.aws_account_id
 from hosts h
 left join cloud_connections cc on cc.id = h.connection_id
-left join cloud_authorizations a on a.connection_id = cc.id and a.slot = 'active'
 where h.id = $1
 `
 
@@ -28,8 +27,8 @@ type CloudHostIdentityRow struct {
 	Phase        string
 	ConnectionID *uuid.UUID
 	Region       string
-	AwsAccountID *string
 	NodeRoleArn  *string
+	AwsAccountID *string
 }
 
 // What an instance's identity proof must match: its account, through the
@@ -44,8 +43,8 @@ func (q *Queries) CloudHostIdentity(ctx context.Context, id uuid.UUID) (CloudHos
 		&i.Phase,
 		&i.ConnectionID,
 		&i.Region,
-		&i.AwsAccountID,
 		&i.NodeRoleArn,
+		&i.AwsAccountID,
 	)
 	return i, err
 }
@@ -229,6 +228,7 @@ set session_epoch = session_epoch + 1,
     gpu_count = $4,
     boot_id = $5,
     agent_version = $6,
+    updating_until = null,
     phase = case when phase = 'joining' then 'ready' else phase end,
     phase_message = case when phase = 'joining' then 'Ready for workloads' else phase_message end,
     phase_at = case when phase = 'joining' then now() else phase_at end,

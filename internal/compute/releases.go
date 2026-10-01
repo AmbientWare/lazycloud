@@ -2,9 +2,12 @@ package compute
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -16,10 +19,17 @@ type AgentRelease struct {
 	Version string
 	// SHA256 maps amd64 and arm64 to the archive's hex digest.
 	SHA256 map[string]string
+	// RolloutPercent is the share of updatable hosts, by host id, that move
+	// to the release while it is the target; zero publishes it to none.
+	RolloutPercent int
 }
 
-func releaseOf(version string, amd64, arm64 *string) AgentRelease {
-	r := AgentRelease{Version: version, SHA256: map[string]string{}}
+// updateWindow is how long an updating agent may stay away before its host
+// counts as lost: three wrapper starts and a rollback fit in it.
+const updateWindow = 5 * time.Minute
+
+func releaseOf(version string, amd64, arm64 *string, rollout int32) AgentRelease {
+	r := AgentRelease{Version: version, SHA256: map[string]string{}, RolloutPercent: int(rollout)}
 	if amd64 != nil {
 		r.SHA256["amd64"] = *amd64
 	}
@@ -43,6 +53,7 @@ func (c *Compute) PublishAgentRelease(ctx context.Context, release AgentRelease)
 		q := c.queries.WithTx(tx)
 		n, err := q.UpsertAgentRelease(ctx, UpsertAgentReleaseParams{
 			Version: release.Version, Sha256Amd64: digest("amd64"), Sha256Arm64: digest("arm64"),
+			RolloutPercent: int32(release.RolloutPercent), //nolint:gosec // The schema bounds it to 0-100.
 		})
 		if err != nil {
 			return fmt.Errorf("insert release: %w", err)
@@ -73,7 +84,7 @@ func (c *Compute) TargetRelease(ctx context.Context) (AgentRelease, error) {
 	if err != nil {
 		return AgentRelease{}, fmt.Errorf("read target release: %w", err)
 	}
-	return releaseOf(row.Version, row.Sha256Amd64, row.Sha256Arm64), nil
+	return releaseOf(row.Version, row.Sha256Amd64, row.Sha256Arm64, row.RolloutPercent), nil
 }
 
 // Release returns a published release, or ErrNotFound.
@@ -85,7 +96,7 @@ func (c *Compute) Release(ctx context.Context, version string) (AgentRelease, er
 	if err != nil {
 		return AgentRelease{}, fmt.Errorf("read release: %w", err)
 	}
-	return releaseOf(row.Version, row.Sha256Amd64, row.Sha256Arm64), nil
+	return releaseOf(row.Version, row.Sha256Amd64, row.Sha256Arm64, row.RolloutPercent), nil
 }
 
 // AgentUpdate is the release a host should install.
@@ -110,7 +121,7 @@ func (c *Compute) UpdateFor(ctx context.Context, host HostID, version, rejected 
 	if err != nil {
 		return nil, err
 	}
-	if target.Version == version || target.Version == rejected {
+	if target.Version == version || target.Version == rejected || rolloutBucket(host) >= target.RolloutPercent {
 		return nil, nil
 	}
 	arch, err := c.queries.HostArchitecture(ctx, uuid.UUID(host))
@@ -126,4 +137,20 @@ func (c *Compute) UpdateFor(ctx context.Context, host HostID, version, rejected 
 		URL:     fmt.Sprintf("%s/install/agent/%s/linux/%s", strings.TrimRight(c.config.InstallURL, "/"), target.Version, arch),
 		SHA256:  digest,
 	}, nil
+}
+
+// rolloutBucket places a host in 0-99, stable across releases, so a
+// percentage rollout reaches the same hosts first each time.
+func rolloutBucket(host HostID) int {
+	sum := sha256.Sum256(host[:])
+	return int(binary.BigEndian.Uint16(sum[:2])) % 100
+}
+
+// UpdateSent records that host was told to update: while it restarts into
+// the release, within updateWindow, it is not lost.
+func (c *Compute) UpdateSent(ctx context.Context, host HostID) error {
+	if err := c.queries.MarkUpdating(ctx, MarkUpdatingParams{ID: uuid.UUID(host), Seconds: updateWindow.Seconds()}); err != nil {
+		return fmt.Errorf("mark updating: %w", err)
+	}
+	return nil
 }

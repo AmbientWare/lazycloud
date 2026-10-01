@@ -35,7 +35,22 @@ func (e *Execution) StopHostContainers(ctx context.Context, tx pgx.Tx, host comp
 // draining in tx: they claim nothing more and the host stops each once its
 // running attempts finish. Planning replaces them elsewhere as demand needs.
 func (e *Execution) DrainHostContainers(ctx context.Context, tx pgx.Tx, host compute.HostID) error {
-	drained, err := e.queries.WithTx(tx).DrainContainersOnHost(ctx, ptr(uuid.UUID(host)))
+	return e.drainHost(ctx, tx, host, nil)
+}
+
+// DrainHostWorkspaces drains the host's containers of the given workspaces,
+// as when a machine stops serving them.
+func (e *Execution) DrainHostWorkspaces(ctx context.Context, tx pgx.Tx, host compute.HostID, workspaces []uuid.UUID) error {
+	if len(workspaces) == 0 {
+		return nil
+	}
+	return e.drainHost(ctx, tx, host, workspaces)
+}
+
+func (e *Execution) drainHost(ctx context.Context, tx pgx.Tx, host compute.HostID, workspaces []uuid.UUID) error {
+	drained, err := e.queries.WithTx(tx).DrainContainersOnHost(ctx, DrainContainersOnHostParams{
+		HostID: ptr(uuid.UUID(host)), WorkspaceIds: workspaces,
+	})
 	if err != nil {
 		return fmt.Errorf("drain containers: %w", err)
 	}

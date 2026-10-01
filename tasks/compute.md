@@ -133,7 +133,7 @@ aws` and `cloud authorize` put the same fleet in a customer account.
       cloud identity, install script, bundle
 - [x] Python SDK and CLI
 - [x] Integrated run on a private stack
-- [ ] Real EC2 launch check, blocked by the `default-test` role's permissions
+- [x] Real EC2 launch and terminate check with `default-test`, on-demand and Spot
 
 ## Delivered
 
@@ -167,6 +167,13 @@ release archive published with `server admin publish-agent-release`, on a
 | Unpinned function in the same workspace | stays queued as `capacity_unavailable` because no platform host exists |
 | `machine remove` with a running task | container stopped, attempt retried, agent exited 78 within 0.3 s |
 | Capacity pass, 2,000 pending containers in 20 workspaces, two regions | 288 hosts requested; p50 120 ms, p95 130 ms (`BenchmarkPlanCapacity`) |
+| Real EC2, t3.micro in us-east-2 with `default-test`, on-demand | RunInstances 1.2 s, running 6 s after launch, shutting down 6 s after TerminateInstances |
+| Real EC2, the same as Spot | RunInstances 1.4 s, running 7 s after launch, shutting down 6 s after TerminateInstances |
+
+`TestRealEC2LaunchesAndTerminatesOneInstance` runs the launcher, reconciliation
+and retirement against EC2 with fleet tag `acceptance`. A deferred sweep
+terminates every live `lazycloud:fleet=acceptance` instance and checks that
+none is left; both instances read `terminated` afterwards.
 
 ## API for the web packet
 
@@ -212,11 +219,9 @@ release archive published with `server admin publish-agent-release`, on a
 
 ## Gaps
 
-- Real EC2 launch and termination are unverified. The `default-test` role
-  lacks `ssm:GetParameters`, `ec2:DescribeImages` and `ec2:DescribeSubnets`,
-  so no AMI or subnet could be resolved; RunInstances, TerminateInstances
-  and DescribeInstances are covered only against recorded responses. Cloud
-  enrollment and Spot notices on real EC2 are unverified for the same reason.
+- Cloud enrollment and Spot notices on real EC2 are unverified: the
+  acceptance instances cannot reach a local server. Enrollment is covered
+  against real STS and the IMDS and STS emulators.
 - `--background` installs as root under system systemd did not run here (no
   sudo); the unit and rollback wrapper ran under `systemd --user`.
 - Plan gates (Business for connected clouds, Team for region pinning) belong

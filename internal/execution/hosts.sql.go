@@ -15,8 +15,14 @@ const drainContainersOnHost = `-- name: DrainContainersOnHost :many
 update containers
 set state = 'draining', drain_started_at = now()
 where host_id = $1 and state in ('starting', 'ready')
+  and ($2::uuid[] is null or workspace_id = any($2::uuid[]))
 returning id, release_id, image_build_id
 `
+
+type DrainContainersOnHostParams struct {
+	HostID       *uuid.UUID
+	WorkspaceIds []uuid.UUID
+}
 
 type DrainContainersOnHostRow struct {
 	ID           uuid.UUID
@@ -26,8 +32,8 @@ type DrainContainersOnHostRow struct {
 
 // Starting and ready containers on the host stop claiming; the host stops
 // them once their running attempts finish.
-func (q *Queries) DrainContainersOnHost(ctx context.Context, hostID *uuid.UUID) ([]DrainContainersOnHostRow, error) {
-	rows, err := q.db.Query(ctx, drainContainersOnHost, hostID)
+func (q *Queries) DrainContainersOnHost(ctx context.Context, arg DrainContainersOnHostParams) ([]DrainContainersOnHostRow, error) {
+	rows, err := q.db.Query(ctx, drainContainersOnHost, arg.HostID, arg.WorkspaceIds)
 	if err != nil {
 		return nil, err
 	}

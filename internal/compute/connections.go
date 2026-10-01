@@ -246,18 +246,18 @@ var roleARNPattern = regexp.MustCompile(`^arn:(aws|aws-us-gov|aws-cn):iam::([0-9
 // authorization. Repeating an unfinished setup for the same account and
 // role returns it again.
 func (c *Compute) Connect(ctx context.Context, account identity.UserID, req ConnectRequest) (Connection, error) {
+	if req.ExternalID != "" {
+		// A caller-chosen external ID would let one account aim the platform
+		// at a role another account set up.
+		return Connection{}, &InvalidError{Message: "LazyCloud generates the external ID; make the role require the one it returns"}
+	}
 	if req.RoleARN != "" {
 		m := roleARNPattern.FindStringSubmatch(req.RoleARN)
 		if m == nil || m[2] != req.AWSAccountID {
 			return Connection{}, &InvalidError{Message: "AWS role ARN must belong to account_id"}
 		}
-	} else {
-		if len(req.Networks) > 0 {
-			return Connection{}, &InvalidError{Message: "AWS network may only be supplied with an existing role"}
-		}
-		if req.ExternalID != "" {
-			return Connection{}, &InvalidError{Message: "AWS external ID may only be supplied with an existing role"}
-		}
+	} else if len(req.Networks) > 0 {
+		return Connection{}, &InvalidError{Message: "AWS network may only be supplied with an existing role"}
 	}
 	if c.fleet.PrincipalARN == "" {
 		return Connection{}, &UnavailableError{Message: "AWS account connections are not configured on this platform"}
@@ -283,6 +283,9 @@ func (c *Compute) Connect(ctx context.Context, account identity.UserID, req Conn
 				return nil
 			}
 			return &ConflictError{Message: "this account already has an AWS account connection"}
+		}
+		if err := roleFree(ctx, q, req.RoleARN, nil); err != nil {
+			return err
 		}
 		row, err := q.InsertConnection(ctx, InsertConnectionParams{AccountID: uuid.UUID(account), AwsAccountID: req.AWSAccountID})
 		if err != nil {
@@ -334,8 +337,23 @@ func (c *Compute) insertAuthorization(ctx context.Context, q *Queries, conn Clou
 	return nil
 }
 
-// existingRoleNodeProfile is the instance profile an existing-role account
-// provides for its instances.
+// roleFree refuses an existing role another connection already uses.
+func roleFree(ctx context.Context, q *Queries, role string, connection *uuid.UUID) error {
+	if role == "" {
+		return nil
+	}
+	taken, err := q.RoleBoundElsewhere(ctx, RoleBoundElsewhereParams{RoleArn: role, ConnectionID: connection})
+	if err != nil {
+		return fmt.Errorf("check role: %w", err)
+	}
+	if taken {
+		return &ConflictError{Message: "that AWS role already backs another account's connection"}
+	}
+	return nil
+}
+
+// existingRoleNodeProfile names the role and instance profile an
+// existing-role account provides for its instances.
 const existingRoleNodeProfile = "lazycloud-node"
 
 func connectionSuffix(conn CloudConnection) string {
@@ -519,6 +537,9 @@ func (c *Compute) Reconnect(ctx context.Context, account identity.UserID, roleAR
 				return &InvalidError{Message: "existing-role reconnect must revalidate the connected role"}
 			}
 			return &ConflictError{Message: "AWS reconnect must preserve its authorization mode"}
+		}
+		if err := roleFree(ctx, q, roleARN, &row.ID); err != nil {
+			return err
 		}
 		gen, err := q.NextGeneration(ctx, row.ID)
 		if err != nil {

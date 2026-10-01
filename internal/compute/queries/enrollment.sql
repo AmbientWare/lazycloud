@@ -58,11 +58,10 @@ returning id;
 -- name: CloudHostIdentity :one
 -- What an instance's identity proof must match: its account, through the
 -- connection's active authorization when it runs in a customer account.
-select h.id, h.kind, h.instance_id, h.phase, h.connection_id, h.region,
-       cc.aws_account_id, a.node_role_arn
+select h.id, h.kind, h.instance_id, h.phase, h.connection_id, h.region, h.node_role_arn,
+       cc.aws_account_id
 from hosts h
 left join cloud_connections cc on cc.id = h.connection_id
-left join cloud_authorizations a on a.connection_id = cc.id and a.slot = 'active'
 where h.id = @id;
 
 -- name: HostByToken :one
@@ -80,6 +79,7 @@ set session_epoch = session_epoch + 1,
     gpu_count = @gpu_count,
     boot_id = @boot_id,
     agent_version = @agent_version,
+    updating_until = null,
     phase = case when phase = 'joining' then 'ready' else phase end,
     phase_message = case when phase = 'joining' then 'Ready for workloads' else phase_message end,
     phase_at = case when phase = 'joining' then now() else phase_at end,

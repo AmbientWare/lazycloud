@@ -99,6 +99,18 @@ func (q *Queries) AuthorizationFailed(ctx context.Context, arg AuthorizationFail
 	return err
 }
 
+const authorizationLiveHosts = `-- name: AuthorizationLiveHosts :one
+select count(*)::int from hosts
+where authorization_id = $1 and phase not in ('deleted', 'failed')
+`
+
+func (q *Queries) AuthorizationLiveHosts(ctx context.Context, authorizationID *uuid.UUID) (int32, error) {
+	row := q.db.QueryRow(ctx, authorizationLiveHosts, authorizationID)
+	var column_1 int32
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const authorizationValidated = `-- name: AuthorizationValidated :exec
 update cloud_authorizations
 set phase = 'ready', error_code = null, error_message = null, last_validated_at = now(),
@@ -243,6 +255,36 @@ delete from cloud_connections where id = $1
 func (q *Queries) DeleteConnection(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, deleteConnection, id)
 	return err
+}
+
+const drainAuthorizationHosts = `-- name: DrainAuthorizationHosts :many
+update hosts
+set phase = 'draining', capacity_state = 'draining', capacity_reason = 'authorization replaced',
+    phase_message = 'Draining; no new work is placed here', phase_at = now(), updated_at = now()
+where authorization_id = $1 and phase in ('ready', 'joining')
+returning id
+`
+
+// Hosts launched under a replaced authorization stop taking work; retirement
+// terminates each once it is empty.
+func (q *Queries) DrainAuthorizationHosts(ctx context.Context, authorizationID *uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, drainAuthorizationHosts, authorizationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const dueConnections = `-- name: DueConnections :many
@@ -439,6 +481,26 @@ func (q *Queries) ReadyConnectionOfAccount(ctx context.Context, accountID uuid.U
 	var i ReadyConnectionOfAccountRow
 	err := row.Scan(&i.ID, &i.Phase)
 	return i, err
+}
+
+const roleBoundElsewhere = `-- name: RoleBoundElsewhere :one
+select exists (
+    select 1 from cloud_authorizations a
+    where a.role_arn = $1 and a.slot is not null and a.connection_id is distinct from $2::uuid
+)::bool
+`
+
+type RoleBoundElsewhereParams struct {
+	RoleArn      string
+	ConnectionID *uuid.UUID
+}
+
+// Whether another connection holds an authorization for this role.
+func (q *Queries) RoleBoundElsewhere(ctx context.Context, arg RoleBoundElsewhereParams) (bool, error) {
+	row := q.db.QueryRow(ctx, roleBoundElsewhere, arg.RoleArn, arg.ConnectionID)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
 }
 
 const setAuthorizationPhase = `-- name: SetAuthorizationPhase :exec

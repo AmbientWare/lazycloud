@@ -29,14 +29,17 @@ type validationFailure struct {
 func (f *validationFailure) Error() string { return f.message }
 
 func fail(code AuthorizationError, format string, args ...any) *validationFailure {
-	return &validationFailure{code: code, message: truncate(fmt.Sprintf(format, args...), 512)}
+	return &validationFailure{code: code, message: truncate(fmt.Sprintf(format, args...))}
 }
 
-func truncate(s string, n int) string {
-	if len(s) <= n {
+// maxMessage bounds the error and phase messages stored for users.
+const maxMessage = 512
+
+func truncate(s string) string {
+	if len(s) <= maxMessage {
 		return s
 	}
-	return s[:n]
+	return s[:maxMessage]
 }
 
 // validated is what a passing check learned.
@@ -300,7 +303,10 @@ func (c *Compute) checkNetworks(ctx context.Context, clients awsClients, scope a
 	if len(a.networks) == 0 {
 		return validated{}, fail(ErrPermissionDrift, "AWS connection has no regional networks")
 	}
-	out := validated{networks: map[string]Network{}, instanceProfile: existingRoleNodeProfile}
+	out := validated{
+		networks: map[string]Network{}, instanceProfile: existingRoleNodeProfile,
+		nodeRoleARN: fmt.Sprintf("arn:aws:iam::%s:role/%s", accountOfRole(a.RoleARN), existingRoleNodeProfile),
+	}
 	for region, n := range a.networks {
 		ids := make([]string, 0, len(n.Subnets))
 		for _, s := range n.Subnets {
@@ -372,4 +378,12 @@ func (c *Compute) advanceConnection(ctx context.Context, id uuid.UUID) error {
 	case ConnReady, ConnActionRequire:
 	}
 	return nil
+}
+
+// accountOfRole is the account id in a role ARN.
+func accountOfRole(arn string) string {
+	if m := roleARNPattern.FindStringSubmatch(arn); m != nil {
+		return m[2]
+	}
+	return ""
 }

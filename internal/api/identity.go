@@ -224,7 +224,10 @@ func (s *Server) CreateWorkspace(ctx context.Context, req CreateWorkspaceRequest
 		return nil, err
 	}
 	var connection *uuid.UUID
-	if req.Body.Cloud != nil && p.IsAdmin {
+	if req.Body.Cloud != nil {
+		if !p.IsAdmin {
+			return nil, identity.ErrAdminRequired
+		}
 		id, err := s.owners.Compute.WorkspaceConnection(ctx, p.User)
 		if err != nil {
 			return nil, err

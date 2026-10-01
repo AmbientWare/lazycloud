@@ -326,6 +326,16 @@ func TestReconnectRetiresTheReplacedStack(t *testing.T) {
 	if conn.Phase != compute.ConnRetiring || conn.Active == nil || conn.Active.Generation != 2 || conn.Retiring == nil {
 		t.Fatalf("after validating the replacement: %s active %+v retiring %+v", conn.Phase, conn.Active, conn.Retiring)
 	}
+	// A host launched under the first generation runs as its role, so the
+	// stack stays until the host drained and is gone.
+	host := newHost(t, o.pool, hostSpec{Kind: compute.KindConnection, Provider: compute.ProviderAWS, Region: "us-east-2", InstanceID: "i-0000000000000f001"})
+	run(t, o.pool, "update hosts set connection_id = $1, authorization_id = $2 where id = $3", conn.ID, first.Active.ID, uuid.UUID(host))
+	advance(t, o)
+	if phase, _ := hostPhase(t, o.pool, host); phase != string(compute.PhaseDraining) || len(emulator.calls("DeleteStack")) != 0 {
+		t.Fatalf("with a host on the old role: host %s, %d DeleteStack calls; want it draining and the stack kept", phase, len(emulator.calls("DeleteStack")))
+	}
+	run(t, o.pool, "update hosts set phase = 'deleted' where id = $1", uuid.UUID(host))
+	due(t, o, conn)
 	advance(t, o)
 	deletes := emulator.calls("DeleteStack")
 	if len(deletes) != 1 || deletes[0].Form.Get("StackName") != first.Active.StackName ||

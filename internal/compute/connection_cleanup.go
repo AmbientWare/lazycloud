@@ -76,6 +76,17 @@ func (c *Compute) removeStack(ctx context.Context, conn Connection, a *Authoriza
 	if a == nil || conn.Active == nil {
 		return c.finishRemoval(ctx, conn, a, after)
 	}
+	if after != "" {
+		// A replaced authorization's stack holds the role its hosts run
+		// as, so they drain and terminate before it goes.
+		live, err := c.drainAuthorization(ctx, a.ID)
+		if err != nil {
+			return err
+		}
+		if live > 0 {
+			return c.cleanupLater(ctx, conn, nil)
+		}
+	}
 	if a.Mode == ModeExistingRole || a.StackName == "" {
 		return c.finishRemoval(ctx, conn, a, after)
 	}
@@ -116,6 +127,31 @@ func (c *Compute) removeStack(ctx context.Context, conn Connection, a *Authoriza
 		}
 		return setPhase(ctx, c.queries.WithTx(tx), conn.ID, next, ptr(time.Now().Add(10*time.Second)), 0, [2]string{})
 	})
+}
+
+// drainAuthorization drains the hosts launched under an authorization and
+// returns how many still exist.
+func (c *Compute) drainAuthorization(ctx context.Context, authorization uuid.UUID) (int, error) {
+	var live int
+	err := inTx(ctx, c, func(tx pgx.Tx) error {
+		q := c.queries.WithTx(tx)
+		drained, err := q.DrainAuthorizationHosts(ctx, &authorization)
+		if err != nil {
+			return fmt.Errorf("drain hosts: %w", err)
+		}
+		for _, h := range drained {
+			if err := c.containers.DrainHostContainers(ctx, tx, HostID(h)); err != nil {
+				return err
+			}
+		}
+		n, err := q.AuthorizationLiveHosts(ctx, &authorization)
+		live = int(n)
+		if err != nil {
+			return fmt.Errorf("count hosts: %w", err)
+		}
+		return nil
+	})
+	return live, err
 }
 
 // cleanupLater schedules the next cleanup step with backoff, and hands the

@@ -114,11 +114,15 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	comp := compute.NewCompute(pool, exec, compute.Config{
-		InstallURL: os.Getenv("LAZYCLOUD_INSTALL_URL"), ServerAddress: os.Getenv("LAZYCLOUD_AGENT_SERVER_ADDR"),
-		ServerPlaintext: compute.PlaintextAgents(os.Getenv("LAZYCLOUD_AGENT_SERVER_ADDR"), os.Getenv("LAZYCLOUD_GRPC_TLS_CERT") != ""),
-		Fleet:           fleet,
-	})
+	// Cloud instances reach the server across a network, so they always
+	// dial with TLS.
+	computeConfig := compute.Config{
+		InstallURL: os.Getenv("LAZYCLOUD_INSTALL_URL"), ServerAddress: os.Getenv("LAZYCLOUD_AGENT_SERVER_ADDR"), Fleet: fleet,
+	}
+	if err := computeConfig.CheckFleet(); err != nil {
+		return err
+	}
+	comp := compute.NewCompute(pool, exec, computeConfig)
 	keyFile := os.Getenv("LAZYCLOUD_SECRETS_KEY_FILE")
 	if keyFile == "" {
 		return errors.New("LAZYCLOUD_SECRETS_KEY_FILE is required: callbacks are signed with workspace secrets")

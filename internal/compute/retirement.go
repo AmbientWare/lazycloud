@@ -2,6 +2,7 @@ package compute
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -14,9 +15,13 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// serviceLostAfter is how long a ready cloud host may stay lost before its
-// instance is replaced.
-const serviceLostAfter = 5 * time.Minute
+const (
+	// serviceLostAfter is how long a ready cloud host may stay lost before
+	// its instance is replaced.
+	serviceLostAfter = 5 * time.Minute
+	// launchGrace is how long EC2 may take to list a launched instance.
+	launchGrace = 2 * time.Minute
+)
 
 // RetireResult summarizes one retirement pass.
 type RetireResult struct {
@@ -118,19 +123,66 @@ func (c *Compute) scopeOf(ctx context.Context, connection *uuid.UUID) (awsScope,
 // enrolled, or a ready host lost for long, is replaced; instances no host
 // wants are terminated.
 func (c *Compute) Reconcile(ctx context.Context, logger *slog.Logger) error {
-	pairs, err := c.queries.FleetRegions(ctx)
+	pairs, err := c.reconcileRegions(ctx)
 	if err != nil {
-		return fmt.Errorf("list fleet regions: %w", err)
+		return err
 	}
 	for _, p := range pairs {
-		if err := c.reconcileRegion(ctx, logger, p.ConnectionID, p.Region); err != nil {
+		if err := c.reconcileRegion(ctx, logger, p.connection, p.region); err != nil {
 			if ctx.Err() != nil {
 				return err
 			}
-			logger.ErrorContext(ctx, "reconcile region", "connection_id", p.ConnectionID, "region", p.Region, "error", err)
+			logger.ErrorContext(ctx, "reconcile region", "connection_id", p.connection, "region", p.region, "error", err)
 		}
 	}
 	return nil
+}
+
+type ownerRegion struct {
+	connection *uuid.UUID
+	region     string
+}
+
+// reconcileRegions are every region the fleet may hold instances in: the
+// platform's networks, each managed connection's networks, and any region a
+// cloud host still records, so an orphan is found where no host lives.
+func (c *Compute) reconcileRegions(ctx context.Context) ([]ownerRegion, error) {
+	seen := map[string]bool{}
+	var out []ownerRegion
+	add := func(connection *uuid.UUID, region string) {
+		key := region
+		if connection != nil {
+			key = connection.String() + "/" + region
+		}
+		if region != "" && !seen[key] {
+			seen[key] = true
+			out = append(out, ownerRegion{connection: connection, region: region})
+		}
+	}
+	for region := range c.fleet.Networks {
+		add(nil, region)
+	}
+	connections, err := c.queries.ManagedConnectionNetworks(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list connection networks: %w", err)
+	}
+	for _, conn := range connections {
+		var networks map[string]Network
+		if err := json.Unmarshal(conn.Networks, &networks); err != nil {
+			return nil, fmt.Errorf("decode networks of connection %s: %w", conn.ID, err)
+		}
+		for region := range networks {
+			add(&conn.ID, region)
+		}
+	}
+	pairs, err := c.queries.FleetRegions(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list fleet regions: %w", err)
+	}
+	for _, p := range pairs {
+		add(p.ConnectionID, p.Region)
+	}
+	return out, nil
 }
 
 type observedInstance struct {
@@ -142,6 +194,13 @@ func (c *Compute) reconcileRegion(ctx context.Context, logger *slog.Logger, conn
 	scope, err := c.scopeOf(ctx, connection)
 	if err != nil {
 		return err
+	}
+	// Hosts first: an instance launched after this read is not in it, so
+	// it cannot look like an orphan, and one launched just before may not
+	// be listed by EC2 yet, which launchGrace covers.
+	hosts, err := c.queries.FleetHostsInRegion(ctx, FleetHostsInRegionParams{Region: region, ConnectionID: connection})
+	if err != nil {
+		return fmt.Errorf("list region hosts: %w", err)
 	}
 	client := c.aws().ec2(scope, region)
 	observed := map[string]observedInstance{}
@@ -165,10 +224,6 @@ func (c *Compute) reconcileRegion(ctx context.Context, logger *slog.Logger, conn
 			}
 		}
 	}
-	hosts, err := c.queries.FleetHostsInRegion(ctx, FleetHostsInRegionParams{Region: region, ConnectionID: connection})
-	if err != nil {
-		return fmt.Errorf("list region hosts: %w", err)
-	}
 	wanted := map[string]bool{}
 	for _, h := range hosts {
 		if h.InstanceID == nil {
@@ -177,11 +232,20 @@ func (c *Compute) reconcileRegion(ctx context.Context, logger *slog.Logger, conn
 		instance := *h.InstanceID
 		wanted[instance] = true
 		o, seen := observed[instance]
+		if !seen && Phase(h.Phase) != PhaseTerminating && h.LaunchedAt != nil && time.Since(*h.LaunchedAt) < launchGrace {
+			// EC2 lists new instances eventually.
+			continue
+		}
 		gone := !seen || o.state == ec2types.InstanceStateNameTerminated || o.state == ec2types.InstanceStateNameShuttingDown
+		terminated := !seen || o.state == ec2types.InstanceStateNameTerminated
 		stopped := seen && (o.state == ec2types.InstanceStateNameStopped || o.state == ec2types.InstanceStateNameStopping)
+		updating := h.UpdatingUntil != nil && time.Now().Before(*h.UpdatingUntil)
 		phase := Phase(h.Phase)
 		switch {
-		case phase == PhaseTerminating && gone:
+		case phase == PhaseTerminating && terminated:
+			err = c.hostGone(ctx, h.ID, "", "")
+		case phase == PhaseTerminating && o.state == ec2types.InstanceStateNameShuttingDown:
+			// Terminating; EC2 confirms it on a later pass.
 			err = c.hostGone(ctx, h.ID, "", "")
 		case phase == PhaseTerminating:
 			err = c.terminate(ctx, scope, region, instance)
@@ -196,11 +260,15 @@ func (c *Compute) reconcileRegion(ctx context.Context, logger *slog.Logger, conn
 			if err = c.hostGone(ctx, h.ID, FailureBootstrapTimedOut, "The instance did not enroll in time"); err == nil {
 				err = c.terminate(ctx, scope, region, instance)
 			}
+		case phase == PhaseJoining && time.Since(h.PhaseAt) > c.fleet.BootTimeout:
+			if err = c.hostGone(ctx, h.ID, FailureEnrollment, "The agent enrolled but never opened a session"); err == nil {
+				err = c.terminate(ctx, scope, region, instance)
+			}
 		case phase == PhaseProvisioning && o.state == ec2types.InstanceStateNameRunning:
 			_, err = c.queries.SetHostPhase(ctx, SetHostPhaseParams{
 				ID: h.ID, FromPhase: string(PhaseProvisioning), Phase: string(PhaseBooting), Message: PhaseBooting.Message(),
 			})
-		case phase == PhaseReady && HostState(h.State) == HostLost && h.LastSeenAt != nil &&
+		case phase == PhaseReady && HostState(h.State) == HostLost && !updating && h.LastSeenAt != nil &&
 			time.Since(*h.LastSeenAt) > serviceLostAfter:
 			if err = c.hostGone(ctx, h.ID, FailureServiceLost, "The agent stopped reporting"); err == nil {
 				err = c.terminate(ctx, scope, region, instance)

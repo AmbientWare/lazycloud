@@ -12,19 +12,25 @@ import (
 )
 
 const agentRelease = `-- name: AgentRelease :one
-select version, sha256_amd64, sha256_arm64 from agent_releases where version = $1
+select version, sha256_amd64, sha256_arm64, rollout_percent from agent_releases where version = $1
 `
 
 type AgentReleaseRow struct {
-	Version     string
-	Sha256Amd64 *string
-	Sha256Arm64 *string
+	Version        string
+	Sha256Amd64    *string
+	Sha256Arm64    *string
+	RolloutPercent int32
 }
 
 func (q *Queries) AgentRelease(ctx context.Context, version string) (AgentReleaseRow, error) {
 	row := q.db.QueryRow(ctx, agentRelease, version)
 	var i AgentReleaseRow
-	err := row.Scan(&i.Version, &i.Sha256Amd64, &i.Sha256Arm64)
+	err := row.Scan(
+		&i.Version,
+		&i.Sha256Amd64,
+		&i.Sha256Arm64,
+		&i.RolloutPercent,
+	)
 	return i, err
 }
 
@@ -48,6 +54,21 @@ func (q *Queries) HostArchitecture(ctx context.Context, id uuid.UUID) (string, e
 	return architecture, err
 }
 
+const markUpdating = `-- name: MarkUpdating :exec
+update hosts set updating_until = now() + make_interval(secs => $1::float8) where id = $2
+`
+
+type MarkUpdatingParams struct {
+	Seconds float64
+	ID      uuid.UUID
+}
+
+// An agent told to update restarts; until this passes it is not lost.
+func (q *Queries) MarkUpdating(ctx context.Context, arg MarkUpdatingParams) error {
+	_, err := q.db.Exec(ctx, markUpdating, arg.Seconds, arg.ID)
+	return err
+}
+
 const setTargetRelease = `-- name: SetTargetRelease :execrows
 update agent_releases set target = true where version = $1
 `
@@ -61,40 +82,52 @@ func (q *Queries) SetTargetRelease(ctx context.Context, version string) (int64, 
 }
 
 const targetRelease = `-- name: TargetRelease :one
-select version, sha256_amd64, sha256_arm64 from agent_releases where target
+select version, sha256_amd64, sha256_arm64, rollout_percent from agent_releases where target
 `
 
 type TargetReleaseRow struct {
-	Version     string
-	Sha256Amd64 *string
-	Sha256Arm64 *string
+	Version        string
+	Sha256Amd64    *string
+	Sha256Arm64    *string
+	RolloutPercent int32
 }
 
 func (q *Queries) TargetRelease(ctx context.Context) (TargetReleaseRow, error) {
 	row := q.db.QueryRow(ctx, targetRelease)
 	var i TargetReleaseRow
-	err := row.Scan(&i.Version, &i.Sha256Amd64, &i.Sha256Arm64)
+	err := row.Scan(
+		&i.Version,
+		&i.Sha256Amd64,
+		&i.Sha256Arm64,
+		&i.RolloutPercent,
+	)
 	return i, err
 }
 
 const upsertAgentRelease = `-- name: UpsertAgentRelease :execrows
-insert into agent_releases (version, sha256_amd64, sha256_arm64)
-values ($1, $2, $3)
+insert into agent_releases (version, sha256_amd64, sha256_arm64, rollout_percent)
+values ($1, $2, $3, $4)
 on conflict (version) do update
-set sha256_amd64 = excluded.sha256_amd64, sha256_arm64 = excluded.sha256_arm64
+set rollout_percent = excluded.rollout_percent
 where agent_releases.sha256_amd64 is not distinct from excluded.sha256_amd64
   and agent_releases.sha256_arm64 is not distinct from excluded.sha256_arm64
 `
 
 type UpsertAgentReleaseParams struct {
-	Version     string
-	Sha256Amd64 *string
-	Sha256Arm64 *string
+	Version        string
+	Sha256Amd64    *string
+	Sha256Arm64    *string
+	RolloutPercent int32
 }
 
 // A version is immutable: republishing it with other digests changes no row.
 func (q *Queries) UpsertAgentRelease(ctx context.Context, arg UpsertAgentReleaseParams) (int64, error) {
-	result, err := q.db.Exec(ctx, upsertAgentRelease, arg.Version, arg.Sha256Amd64, arg.Sha256Arm64)
+	result, err := q.db.Exec(ctx, upsertAgentRelease,
+		arg.Version,
+		arg.Sha256Amd64,
+		arg.Sha256Arm64,
+		arg.RolloutPercent,
+	)
 	if err != nil {
 		return 0, err
 	}
