@@ -6,10 +6,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
@@ -18,7 +20,7 @@ import (
 // once; only their digests are stored.
 func admin(ctx context.Context, args []string, out io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("admin needs a command: create-user, create-workspace, create-token or create-join-token")
+		return errors.New("admin needs a command: create-user, create-workspace, create-token, set-complimentary or create-join-token")
 	}
 	command, args := args[0], args[1:]
 	fs := flag.NewFlagSet("admin "+command, flag.ContinueOnError)
@@ -64,6 +66,15 @@ func admin(ctx context.Context, args []string, out io.Writer) error {
 				return err
 			}
 			return printLine(out, token)
+		}
+	case "set-complimentary":
+		email := fs.String("email", "", "email of the account to waive usage charges for")
+		off := fs.Bool("off", false, "stop waiving them")
+		run = func(pool *pgxpool.Pool) error {
+			if *email == "" {
+				return errors.New("-email is required")
+			}
+			return billing.NewBilling(pool, billing.Config{}, slog.New(slog.DiscardHandler)).SetComplimentaryByEmail(ctx, *email, !*off)
 		}
 	case "create-join-token":
 		ttl := fs.Duration("ttl", time.Hour, "time the token stays valid")

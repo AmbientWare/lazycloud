@@ -193,6 +193,7 @@ func run(logger *slog.Logger) error {
 		})
 	})
 	accounts.start(ctx, group)
+	newBillingLoops(pool, exec, logger).start(ctx, group)
 	logger.Info("scheduler started")
 	if err := group.Wait(); err != nil {
 		return fmt.Errorf("scheduler loops: %w", err)

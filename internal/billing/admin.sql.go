@@ -146,3 +146,14 @@ func (q *Queries) AdminAccounts(ctx context.Context, arg AdminAccountsParams) ([
 	}
 	return items, nil
 }
+
+const userByEmail = `-- name: UserByEmail :one
+select id from users where email = $1
+`
+
+func (q *Queries) UserByEmail(ctx context.Context, email *string) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, userByEmail, email)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
+}

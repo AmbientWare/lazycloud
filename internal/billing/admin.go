@@ -98,6 +98,20 @@ func (b *Billing) SetComplimentary(ctx context.Context, user uuid.UUID, complime
 	return adminAccountOut(row, since)
 }
 
+// SetComplimentaryByEmail is SetComplimentary for the user with email. The
+// local stack waives its development account, which has no way to pay.
+func (b *Billing) SetComplimentaryByEmail(ctx context.Context, email string, complimentary bool) error {
+	user, err := b.queries.UserByEmail(ctx, &email)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("user %s: %w", email, ErrNotFound)
+	}
+	if err != nil {
+		return fmt.Errorf("read user: %w", err)
+	}
+	_, err = b.SetComplimentary(ctx, user, complimentary)
+	return err
+}
+
 func adminAccountOut(row AdminAccountRow, since time.Time) (apitypes.BillingAccountAdmin, error) {
 	out := apitypes.BillingAccountAdmin{
 		User: apitypes.User{

@@ -22,3 +22,6 @@ select u.id, u.email, u.display_name, u.avatar_url, u.github_login, u.is_admin, 
 from users u
 left join billing_accounts a on a.user_id = u.id
 where u.id = @id;
+
+-- name: UserByEmail :one
+select id from users where email = @email;
