@@ -46,6 +46,11 @@ func TestMetricSamplesComeOnlyFromTheAssignedHost(t *testing.T) {
 	if p := metrics.Points[1]; p.CpuMillicores != 1000 || p.MemoryRssBytes != 96<<20 || p.NetworkRecvBytes != 100 || p.GpuUtilizationPct != nil {
 		t.Fatalf("second point %+v", p)
 	}
+	// A sample older than the rollup watermark is refused, not lost later.
+	f.exec1("update container_metric_rollup set rolled_through = $1", now.Add(time.Minute))
+	if late, err := f.obs.StoreSamples(t.Context(), []observability.MetricSample{sample(host, container, now, 1, 1)}); err != nil || late != 0 {
+		t.Fatalf("late sample stored %d: %v", late, err)
+	}
 	if _, err := f.obs.ContainerMetrics(t.Context(), f.workspace, execution.ContainerID(uuid.New()), observability.MetricsQuery{}); !errors.Is(err, observability.ErrNotFound) {
 		t.Fatalf("unknown container: %v", err)
 	}

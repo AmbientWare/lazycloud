@@ -144,6 +144,7 @@ from (
            unnest($14::bigint[]) as gpu_memory_total_bytes, unnest($15::text[]) as gpu_type
 ) s
 join containers c on c.id = s.container_id and c.host_id = s.host_id
+join (select rolled_through from container_metric_rollup for share) w on s.sampled_at >= w.rolled_through
 on conflict do nothing
 `
 
@@ -166,7 +167,11 @@ type InsertMetricSamplesParams struct {
 }
 
 // One statement stores a batch from any number of hosts. A sample counts
-// only when its container is assigned to the host that sent it.
+// only when its container is assigned to the host that sent it and it is
+// not older than what the rollup already folded.
+// A sample older than the rollup watermark would never be folded. The
+// share lock waits out a rollup in progress, so the watermark read is the
+// one the next rollup starts from.
 func (q *Queries) InsertMetricSamples(ctx context.Context, arg InsertMetricSamplesParams) (int64, error) {
 	result, err := q.db.Exec(ctx, insertMetricSamples,
 		arg.ContainerIds,

@@ -147,7 +147,7 @@ select $1, $2, 'ready', $3, 1, 1000, 1 << 30, now() from generate_series(1, $4) 
 	t.Logf("one container's last hour: %d points at %ds in %s", len(metrics.Points), metrics.StepSeconds, time.Since(began))
 	step := time.Minute
 	began = time.Now()
-	week := minute.Add(-7 * 24 * time.Hour)
+	week := time.Now().Add(-7*24*time.Hour + time.Minute)
 	metrics, err = f.obs.ContainerMetrics(t.Context(), f.workspace, all[0].container, observability.MetricsQuery{Start: &week, Step: &step})
 	if err != nil {
 		t.Fatal(err)

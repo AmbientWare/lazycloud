@@ -65,7 +65,6 @@ func (r *receiver) Export(_ context.Context, req *collector.ExportTraceServiceRe
 	return &collector.ExportTraceServiceResponse{}, nil
 }
 
-
 // Without an endpoint nothing is traced; with one, request spans named by
 // their operation export over OTLP, linked to the caller's trace, and
 // /metrics reports the request.

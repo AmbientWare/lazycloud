@@ -1,6 +1,7 @@
 -- name: InsertMetricSamples :execrows
 -- One statement stores a batch from any number of hosts. A sample counts
--- only when its container is assigned to the host that sent it.
+-- only when its container is assigned to the host that sent it and it is
+-- not older than what the rollup already folded.
 insert into container_metric_samples (
     container_id, sampled_at, interval_ms, cpu_usage_usec, memory_rss_bytes, memory_swap_bytes,
     network_rx_bytes, network_tx_bytes, disk_read_bytes, disk_write_bytes,
@@ -20,6 +21,10 @@ from (
            unnest(@gpu_memory_total_bytes::bigint[]) as gpu_memory_total_bytes, unnest(@gpu_type::text[]) as gpu_type
 ) s
 join containers c on c.id = s.container_id and c.host_id = s.host_id
+-- A sample older than the rollup watermark would never be folded. The
+-- share lock waits out a rollup in progress, so the watermark read is the
+-- one the next rollup starts from.
+join (select rolled_through from container_metric_rollup for share) w on s.sampled_at >= w.rolled_through
 on conflict do nothing;
 
 -- name: LockRollup :one
