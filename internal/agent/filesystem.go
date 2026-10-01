@@ -139,7 +139,6 @@ func (a *Agent) pushFilesystem(ctx context.Context, request *hostproto.PublishFi
 		return "", "", fmt.Errorf("push %s: %w", tag, err)
 	}
 	defer func() { _ = pushed.Close() }()
-	var digest string
 	for message, err := range pushed.JSONMessages(ctx) {
 		if err != nil {
 			return "", "", fmt.Errorf("push %s: %w", tag, err)
@@ -147,15 +146,14 @@ func (a *Agent) pushFilesystem(ctx context.Context, request *hostproto.PublishFi
 		if message.Error != nil {
 			return "", "", fmt.Errorf("push %s: %w", tag, message.Error)
 		}
-		if message.Aux != nil {
-			var aux struct {
-				Digest string `json:"Digest"`
-			}
-			if json.Unmarshal(*message.Aux, &aux) == nil && aux.Digest != "" {
-				digest = aux.Digest
-			}
-		}
 	}
+	// The push output names the digest only on some Docker versions; the
+	// registry is the authority on what the tag now points to.
+	pushedAt, err := a.docker.DistributionInspect(ctx, tag, client.DistributionInspectOptions{EncodedRegistryAuth: options.RegistryAuth})
+	if err != nil {
+		return "", "", fmt.Errorf("read the pushed digest of %s: %w", tag, err)
+	}
+	digest := pushedAt.Descriptor.Digest.String()
 	if !strings.HasPrefix(digest, "sha256:") {
 		return "", "", fmt.Errorf("push %s: the registry reported no digest", tag)
 	}

@@ -322,7 +322,7 @@ func (a *Agent) checkpoint(ctx context.Context, c *container, options client.Che
 // to a checkpoint that failed.
 func cannotCheckpoint(err error) bool {
 	message := strings.ToLower(err.Error())
-	for _, sign := range []string{"criu version check failed", `"criu": executable file not found`, "only supported in experimental", "not supported", "not implemented"} {
+	for _, sign := range []string{"criu version check failed", `"criu": executable file not found`, "only supported in experimental", "experimental feature is disabled", "not supported", "not implemented"} {
 		if strings.Contains(message, sign) {
 			return true
 		}
