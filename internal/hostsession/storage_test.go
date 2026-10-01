@@ -1,0 +1,118 @@
+package hostsession_test
+
+import (
+	"errors"
+	"strings"
+	"testing"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/google/uuid"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
+	"github.com/AmbientWare/lazycloud/internal/compute"
+	"github.com/AmbientWare/lazycloud/internal/hostproto"
+	"github.com/AmbientWare/lazycloud/internal/identity"
+	"github.com/AmbientWare/lazycloud/internal/storage"
+	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
+)
+
+// startingWith inserts a starting container of a release with spec.
+func (h *harness) startingWith(host compute.HostID, spec string) (identity.WorkspaceID, uuid.UUID) {
+	h.t.Helper()
+	var ws, release, container uuid.UUID
+	err := h.pool.QueryRow(h.t.Context(), `
+with ws as (insert into workspaces (name) values ('ws-' || substr(md5(random()::text), 1, 8)) returning id),
+     app as (insert into apps (workspace_id, name, state) select id, 'reports', 'active' from ws returning id),
+     wl as (insert into workloads (app_id, kind, name, desired_state) select id, 'function', 'summarize', 'active' from app returning id),
+     rel as (insert into releases (workload_id, version, spec, spec_digest, source_sha256)
+             select id, 1, $1::jsonb, sha256('spec'), sha256('src') from wl returning id)
+select ws.id, rel.id from ws, rel`, spec).Scan(&ws, &release)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	err = h.pool.QueryRow(h.t.Context(), `
+insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at)
+values ($1, $2, 'starting', $3, 1, 1000, 1 << 28, now()) returning id`, ws, release, uuid.UUID(host)).Scan(&container)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return identity.WorkspaceID(ws), container
+}
+
+// TestStartSendsAWorkspaceGrantFirst covers volume delivery: the host gets
+// a grant for the workspace bucket before the start that mounts from it,
+// the start names the volume's prefix, and the recorded mount blocks
+// deleting the volume.
+func TestStartSendsAWorkspaceGrantFirst(t *testing.T) {
+	h := start(t)
+	host, ctx := h.enroll()
+	ws, container := h.startingWith(host, `{"handler": "reports:summarize", "image": {"python_version": "3.12"},
+		"resources": {"cpu_millis": 1000, "memory_mib": 256, "disk_mib": 2048},
+		"volumes": [{"name": "data", "mount_path": "models", "read_only": true}]}`)
+	stream := open(t, ctx, h.client)
+
+	grant := receive(t, stream).GetStorageGrant()
+	if grant.GetWorkspaceId() != ws.String() || grant.GetAccessKeyId() == "" || grant.GetBucket() == "" {
+		t.Fatalf("first command %v, want the workspace's storage grant", grant)
+	}
+	start := receive(t, stream).GetStart()
+	if start.GetContainerId() != container.String() || len(start.GetVolumes()) != 1 || start.GetResources().GetDiskLimitBytes() != 2048<<20 {
+		t.Fatalf("start %v", start)
+	}
+	mount := start.GetVolumes()[0]
+	volume := mount.GetVolume()
+	if mount.GetMountPath() != "/volumes/models" || !mount.GetReadOnly() || volume.GetPrefix() != "volumes/"+volume.GetVolumeId()+"/" {
+		t.Fatalf("volume mount %v", mount)
+	}
+
+	client := s3.New(s3.Options{
+		Region: grant.GetRegion(), BaseEndpoint: aws.String(grant.GetEndpoint()), UsePathStyle: true,
+		Credentials: credentials.NewStaticCredentialsProvider(grant.GetAccessKeyId(), grant.GetSecretAccessKey(), grant.GetSessionToken()),
+	})
+	if _, err := client.PutObject(t.Context(), &s3.PutObjectInput{
+		Bucket: aws.String(grant.GetBucket()), Key: aws.String(volume.GetPrefix() + "x"), Body: strings.NewReader("x"),
+	}); err != nil {
+		t.Fatalf("write with the grant: %v", err)
+	}
+
+	store := storage.NewStorage(h.pool, storagetest.Config())
+	var inUse *storage.ConflictError
+	if err := store.DeleteVolume(t.Context(), ws, "data"); !errors.As(err, &inUse) {
+		t.Fatalf("delete of a mounted volume: %v", err)
+	}
+}
+
+func TestDiskLeaseOverTheHostConnection(t *testing.T) {
+	h := start(t)
+	host, ctx := h.enroll()
+	_, container := h.startingWith(host, `{"handler": "a:b", "image": {"python_version": "3.12"},
+		"disks": [{"name": "root", "size_bytes": 1073741824, "mount_path": "/data"}]}`)
+
+	lease, err := h.client.AcquireDisk(ctx, &hostproto.AcquireDiskRequest{ContainerId: container.String(), Name: "root"})
+	if err != nil || lease.GetSizeBytes() != 1<<30 || len(lease.GetLeaseToken()) != 32 {
+		t.Fatalf("acquire: %v err=%v", lease, err)
+	}
+	if _, err := h.client.AcquireDisk(ctx, &hostproto.AcquireDiskRequest{ContainerId: container.String(), Name: "other"}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("undeclared disk: %v", err)
+	}
+	record := &hostproto.RecordDiskGenerationRequest{
+		ContainerId: container.String(), DiskId: lease.GetDiskId(), LeaseToken: lease.GetLeaseToken(),
+		Generation: 1, ManifestKey: "disks/" + lease.GetDiskId() + "/manifests/000000000001.json", ManifestSha256: strings.Repeat("a", 64),
+	}
+	if _, err := h.client.RecordDiskGeneration(ctx, record); err != nil {
+		t.Fatal(err)
+	}
+	record.Generation, record.ParentGeneration = 3, 1
+	if _, err := h.client.RecordDiskGeneration(ctx, record); status.Code(err) != codes.Aborted {
+		t.Fatalf("out-of-order generation: %v", err)
+	}
+	if _, err := h.client.ReleaseDisk(ctx, &hostproto.ReleaseDiskRequest{ContainerId: container.String(), DiskId: lease.GetDiskId(), LeaseToken: []byte("x")}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("release with a forged token: %v", err)
+	}
+	if _, err := h.client.ReleaseDisk(ctx, &hostproto.ReleaseDiskRequest{ContainerId: container.String(), DiskId: lease.GetDiskId(), LeaseToken: lease.GetLeaseToken()}); err != nil {
+		t.Fatal(err)
+	}
+}
