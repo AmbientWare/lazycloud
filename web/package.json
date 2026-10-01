@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite dev",
     "routegen": "tsr generate",
-    "apigen": "openapi-typescript ../contracts/openapi.yaml --default-non-nullable false -o src/lib/api/generated/openapi.ts",
+    "apigen": "openapi-typescript ../contracts/openapi.yaml --default-non-nullable false --enum-values -o src/lib/api/generated/openapi.ts",
     "build": "bun run routegen && vite build && test -f dist/client/index.html",
     "start": "node dist/server/index.mjs",
     "lint": "eslint .",

@@ -19,6 +19,7 @@ import { countLabel } from "@/lib/format";
 import { containersQueryOptions, selectContainerList } from "@/lib/queries/containers";
 import {
   performanceQueryOptions,
+  isWorkloadKind,
   workloadNotFound,
   workloadQueryOptions,
   workloadRunning,
@@ -55,26 +56,34 @@ function WorkloadDetailRoute() {
 
 function WorkloadDetailPage() {
   const { app, kind, name } = Route.useParams();
-  // The server answers an unknown kind as it does any other bad address.
-  const ref: WorkloadRef = { app, kind: kind as Schemas["WorkloadKind"], name };
+  // The API refuses a kind it does not define as an invalid request, so an
+  // unknown kind is answered here as the workload it cannot name.
+  if (!isWorkloadKind(kind)) return <WorkloadNotFound name={name} />;
+  return <WorkloadDetail address={{ app, kind, name }} />;
+}
+
+function WorkloadNotFound({ name }: { name: string }) {
+  return (
+    <PanelEmpty message={`No deployed workload named ${name} in this app`} className="h-full" />
+  );
+}
+
+function WorkloadDetail({ address }: { address: WorkloadRef }) {
+  const { app, name } = address;
   const { workspace } = useWorkspace();
   const [podInstanceStatus, setPodInstanceStatus] = useState<PodInstanceStatusFilter>("active");
-  const query = useQuery(workloadQueryOptions(workspace.name, ref));
+  const query = useQuery(workloadQueryOptions(workspace.name, address));
   const loaded = query.data?.workload;
   // Only a Pod lists its containers; a devbox is one machine whose status names it.
   const containers = useInfiniteQuery(
-    containersQueryOptions(workspace.name, ref, {
+    containersQueryOptions(workspace.name, address, {
       live: podInstanceStatus === "active",
       enabled: loaded?.kind === "pod" && loaded.role !== "devbox",
     }),
   );
 
   if (query.isPending) return <WorkloadSkeleton />;
-  if (workloadNotFound(query.error)) {
-    return (
-      <PanelEmpty message={`No deployed workload named ${name} in this app`} className="h-full" />
-    );
-  }
+  if (workloadNotFound(query.error)) return <WorkloadNotFound name={name} />;
   if (query.isError) return <PanelError message={query.error.message} />;
 
   const detail = query.data;

@@ -1,6 +1,7 @@
 import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
 
 import { ApiError, api, ok, type Schemas } from "@/lib/api/client";
+import { workloadKindValues } from "@/lib/api/generated/openapi";
 
 import { nextListCursor, selectInfiniteList, type InfiniteListQueryData } from "./infinite-list";
 import { workspaceLiveQueryMeta, workspaceQueryKeys, type WorkloadRef } from "./workspace-keys";
@@ -51,6 +52,11 @@ export function newestFirst(workloads: Schemas["Workload"][]): Schemas["Workload
 /** Whether the workload admits work: started, in a running app, on a deployed version. */
 export function workloadRunning(workload: Schemas["Workload"]): boolean {
   return workload.state === "active" && workload.app_state !== "paused";
+}
+
+/** Whether a route's kind segment names a workload kind the API addresses. */
+export function isWorkloadKind(kind: string): kind is Schemas["WorkloadKind"] {
+  return (workloadKindValues as readonly string[]).includes(kind);
 }
 
 /** Whether the app deploys no live workload of that kind and name. */
