@@ -8,18 +8,18 @@ from typing import Annotated, Any
 
 import typer
 from pydantic import TypeAdapter
-from shared.aws_connections import (
-    AwsAccountConnectionPhase,
-    AwsAccountNetwork,
-    AwsRegion,
+from shared.api import (
+    AwsConnection,
+    AwsConnectionPhase,
+    AwsConnectionRequest,
+    AwsNetwork,
+    AwsReconnectRequest,
+    ComputeInstancePage,
+    ComputeWorkloadPage,
+    MachineJoinRequest,
+    MachineUpdate,
 )
-from shared.http.aws_connections import (
-    AwsConnectionResponse,
-)
-from shared.http.compute import (
-    ContainerResponse,
-    MachineJoinCommandRequest,
-)
+from shared.http.compute import ContainerResponse
 from shared.http.gateway import (
     AttachToContainerResponse,
     CheckpointContainerRequest,
@@ -38,12 +38,13 @@ from lazycloud.cli.components.output import (
     write_stream,
 )
 from lazycloud.cli.control import (
-    compute_client,
     gateway_client,
     resource_client,
 )
 from lazycloud.cli.machine_join import agent_join_interrupted, build_machine_join_command
 from lazycloud.clients.aws import create_connection_stack
+from lazycloud.clients.compute import ComputeApi
+from lazycloud.control import api_client, require_workspace, resolve_control_client_config
 
 container_app = typer.Typer(help="Inspect and manage containers.")
 machine_app = typer.Typer(help="Manage self-hosted machines.")
@@ -53,12 +54,22 @@ cloud_app.add_typer(cloud_connect_app, name="connect")
 compute_app = typer.Typer(help="Inspect workspace compute capacity.")
 
 
+def _compute(workspace: str | None = None) -> ComputeApi:
+    return ComputeApi(api_client(resolve_control_client_config(workspace=workspace)))
+
+
+def _workspace_compute(workspace: str | None) -> tuple[ComputeApi, str]:
+    config = resolve_control_client_config(workspace=workspace)
+    return ComputeApi(api_client(config)), require_workspace(config)
+
+
 @compute_app.command("status", help="Show workspace compute capacity.")
 def compute_status(
     ctx: typer.Context,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
-    response = compute_client(workspace=workspace).summary()
+    compute, selected = _workspace_compute(workspace)
+    response = compute.summary(selected)
     if json_output_enabled(ctx):
         print_payload(ctx, response.model_dump(mode="json"))
         return
@@ -84,9 +95,9 @@ def compute_instances(
     ctx: typer.Context,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
-    response = compute_client(workspace=workspace).instances()
+    instances = _compute(workspace).instances()
     if json_output_enabled(ctx):
-        print_payload(ctx, response.model_dump(mode="json"))
+        print_payload(ctx, ComputeInstancePage(instances=instances).model_dump(mode="json"))
         return
     rows = [
         [
@@ -97,7 +108,7 @@ def compute_instances(
             item.lifecycle_failure.value if item.lifecycle_failure is not None else "",
             item.lifecycle_message,
         ]
-        for item in response.data
+        for item in instances
     ]
     console.print(
         table(
@@ -113,11 +124,12 @@ def compute_workloads(
     ctx: typer.Context,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
-    response = compute_client(workspace=workspace).workloads()
+    compute, selected = _workspace_compute(workspace)
+    workloads = compute.workloads(selected)
     if json_output_enabled(ctx):
-        print_payload(ctx, response.model_dump(mode="json"))
+        print_payload(ctx, ComputeWorkloadPage(workloads=workloads).model_dump(mode="json"))
         return
-    rows = [[item.name, item.kind.value, item.machine] for item in response.data]
+    rows = [[item.name, item.kind, item.machine] for item in workloads]
     console.print(table("Compute workloads", ["name", "kind", "machine"], rows))
 
 
@@ -138,12 +150,13 @@ def cloud_connect_aws(
     ] = "{}",
 ) -> None:
     """Connect an AWS account, which backs every workspace you own."""
-    networks = TypeAdapter(dict[AwsRegion, AwsAccountNetwork]).validate_json(networks_json)
-    response = compute_client().connect_account(
-        account_id=account_id,
-        role_arn=role_arn,
-        networks=networks,
-    )
+    networks = TypeAdapter(dict[str, AwsNetwork]).validate_json(networks_json)
+    fields: dict[str, object] = {"account_id": account_id}
+    if role_arn is not None:
+        fields["role_arn"] = role_arn
+    if networks:
+        fields["networks"] = networks
+    response = _compute().connect_aws(AwsConnectionRequest.model_validate(fields))
     if response.authorization.stack is None and response.authorization.external_id is None:
         raise RuntimeError("existing-role authorization did not return its external ID")
     authorization: dict[str, object] = {
@@ -175,7 +188,9 @@ def cloud_reconnect(
     ] = None,
 ) -> None:
     """Start replacement authorization for the connected account."""
-    response = compute_client().reconnect_account(role_arn=role_arn)
+    response = _compute().reconnect_aws(
+        AwsReconnectRequest(role_arn=role_arn) if role_arn is not None else AwsReconnectRequest()
+    )
     account_id = response.connection.account_id
     authorization: dict[str, object] = {
         "account_id": account_id,
@@ -205,7 +220,7 @@ def cloud_authorize(
     ] = None,
 ) -> None:
     """Create the pending IAM connection stack in your AWS account."""
-    connection = compute_client().current_connection()
+    connection = _compute().aws_connection()
     action = connection.customer_action if connection is not None else None
     if action is None or action.stack is None:
         raise RuntimeError("there is no pending AWS connection stack to authorize")
@@ -226,7 +241,7 @@ def cloud_validate(
     ctx: typer.Context,
 ) -> None:
     """Validate the pending or active cloud authorization."""
-    response = compute_client().validate_connection()
+    response = _compute().validate_aws()
     account_id = response.account_id
     failure = _aws_validation_failure(response)
     summary: dict[str, object] = {
@@ -255,7 +270,7 @@ def cloud_status(
     ctx: typer.Context,
     watch: Annotated[bool, typer.Option("--watch", help="Wait for a connection phase.")] = False,
     until: Annotated[
-        AwsAccountConnectionPhase | None,
+        AwsConnectionPhase | None,
         typer.Option("--until", help="Connection phase to wait for."),
     ] = None,
     interval_seconds: Annotated[float, typer.Option("--interval", min=0.2)] = 2.0,
@@ -266,8 +281,8 @@ def cloud_status(
         raise typer.BadParameter("--until requires --watch")
     if watch and until is None:
         raise typer.BadParameter("--watch requires --until")
-    client = compute_client()
-    response = client.current_connection()
+    compute = _compute()
+    response = compute.aws_connection()
     if response is None:
         emit(
             ctx,
@@ -291,7 +306,7 @@ def cloud_status(
                     f"timed out waiting for AWS account {account_id} to reach {target_phase.value}"
                 )
             time.sleep(interval_seconds)
-            current = client.current_connection()
+            current = compute.aws_connection()
             if current is None:
                 raise RuntimeError("the AWS account connection was removed while waiting")
             response = current
@@ -320,23 +335,20 @@ def cloud_disconnect(
     timeout_seconds: Annotated[float, typer.Option("--timeout", min=1.0)] = 600.0,
 ) -> None:
     """Disconnect the cloud account and remove its managed compute."""
-    client = compute_client()
-    current = client.current_connection()
+    compute = _compute()
+    current = compute.aws_connection()
     if current is None:
         raise RuntimeError("this workspace does not have an AWS account connection")
     account_id = current.account_id
-    connection = client.remove_account()
+    connection = compute.disconnect_aws()
     if wait and connection is not None:
         deadline = time.monotonic() + timeout_seconds
-        while (
-            connection is not None
-            and connection.phase is not AwsAccountConnectionPhase.ActionRequired
-        ):
+        while connection is not None and connection.phase is not AwsConnectionPhase.action_required:
             _print_cloud_poll(account_id, connection, started_at=deadline - timeout_seconds)
             if time.monotonic() >= deadline:
                 raise RuntimeError(f"timed out waiting for AWS account {account_id} removal")
             time.sleep(interval_seconds)
-            connection = client.current_connection()
+            connection = compute.aws_connection()
     payload: dict[str, object] = {
         "connection": connection.model_dump(mode="json") if connection is not None else None
     }
@@ -356,7 +368,7 @@ def cloud_disconnect(
     )
     if connection is None:
         return
-    if connection.phase is AwsAccountConnectionPhase.ActionRequired:
+    if connection.phase is AwsConnectionPhase.action_required:
         if (
             open_console
             and connection.customer_action is not None
@@ -371,7 +383,7 @@ def cloud_cancel_reconnect(
     ctx: typer.Context,
 ) -> None:
     """Cancel a pending replacement authorization."""
-    response = compute_client().cancel_reconnect()
+    response = _compute().cancel_aws_reconnect()
     emit(
         ctx,
         payload=response.model_dump(mode="json"),
@@ -388,7 +400,7 @@ def cloud_retry(
     ctx: typer.Context,
 ) -> None:
     """Retry the connection's current pending action."""
-    response = compute_client().retry_connection()
+    response = _compute().retry_aws()
     emit(
         ctx,
         payload=response.model_dump(mode="json"),
@@ -400,14 +412,14 @@ def cloud_retry(
     )
 
 
-def _aws_validation_failure(response: AwsConnectionResponse) -> tuple[str, str] | None:
+def _aws_validation_failure(response: AwsConnection) -> tuple[str, str] | None:
     for authorization in (response.pending_authorization, response.active_authorization):
         if authorization is not None and authorization.error_code is not None:
             return authorization.error_code.value, authorization.error_message or response.detail
     return None
 
 
-def _connection_summary(response: AwsConnectionResponse) -> dict[str, object]:
+def _connection_summary(response: AwsConnection) -> dict[str, object]:
     summary: dict[str, object] = {
         "account_id": response.account_id,
         "phase": response.phase.value,
@@ -422,7 +434,7 @@ def _connection_summary(response: AwsConnectionResponse) -> dict[str, object]:
 
 def _print_cloud_poll(
     account_id: str,
-    response: AwsConnectionResponse,
+    response: AwsConnection,
     *,
     started_at: float,
 ) -> None:
@@ -542,12 +554,13 @@ def machine_list(
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
     """List the machines this account has joined."""
-    machines = resource_client(workspace=workspace).list_machines().machines
+    compute, selected = _workspace_compute(workspace)
+    machines = compute.machines(selected)
     if json_output_enabled(ctx):
         print_payload(ctx, [item.model_dump(mode="json") for item in machines])
         return
     rows: list[list[str]] = [
-        [item.name, ", ".join(item.workspaces), item.lifecycle.value, item.gpu or "", item.id]
+        [item.name, ", ".join(item.workspaces), item.lifecycle.value, item.gpu, str(item.id)]
         for item in machines
     ]
     console.print(table("Machines", ["name", "workspaces", "lifecycle", "gpu", "id"], rows))
@@ -568,7 +581,9 @@ def machine_update(
     names = _workspace_names(workspaces)
     if not names:
         raise typer.BadParameter("--workspaces needs at least one workspace name")
-    response = compute_client().update_machine(machine, workspaces=names)
+    response = _compute().update_machine(
+        machine, MachineUpdate.model_validate({"workspaces": names})
+    )
     emit(
         ctx,
         payload=response.model_dump(mode="json"),
@@ -641,11 +656,9 @@ def machine_join(
     if not workspace_names:
         raise typer.BadParameter("--workspaces needs at least one workspace name")
 
-    response = compute_client().machine_join_command(
-        MachineJoinCommandRequest(
-            name=name,
-            workspaces=workspace_names,
-            gpu=list(gpu or []),
+    response = _compute().join_command(
+        MachineJoinRequest.model_validate(
+            {"name": name, "workspaces": workspace_names, "gpu": list(gpu or [])}
         )
     )
     command = build_machine_join_command(
@@ -683,7 +696,7 @@ def machine_remove(
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
     """Remove a machine this account joined."""
-    compute_client(workspace=workspace).remove_machine(machine_id)
+    _compute(workspace).remove_machine(machine_id)
     emit(
         ctx,
         payload={"machine_id": machine_id, "removed": True},

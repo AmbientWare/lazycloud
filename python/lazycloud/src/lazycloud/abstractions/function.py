@@ -289,21 +289,14 @@ class Function(Generic[P, R]):
 
     def unsupported_options(self) -> list[str]:
         """Declared options the platform cannot run yet, by name."""
-        found: list[str] = []
-        if self.gpu is not None or self.gpu_count:
-            found.append("gpu")
         declared = {
             "disk": self.disk is not None,
             "volumes": bool(self.volumes),
             "authorized": self.authorized is not DEFAULT_FUNCTION_AUTHORIZED,
             "docker_enabled": self.docker_enabled,
-            "preemptible": self.preemptible is not DEFAULT_WORKLOAD_PREEMPTIBLE,
-            "region": self.region is not None,
-            "availability_zone": bool(self.availability_zone),
-            "machine": self.machine is not None,
             "metadata": bool(self.metadata),
         }
-        found.extend(name for name, present in declared.items() if present)
+        found = [name for name, present in declared.items() if present]
         policy = self._retry_policy()
         if policy.retry_on_statuses != DEFAULT_RETRYABLE_TASK_STATUS_SEQUENCE:
             found.append("retry_policy.retry_on_statuses")
@@ -358,9 +351,18 @@ class Function(Generic[P, R]):
         try:
             callback_url = normalize_callback_url(self.callback_url)
             hooks = self._lifecycle_hooks()
+            gpu = gpu_preference(self.gpu)
+            placement = self._placement()
         except (TypeError, ValueError) as exc:
             msg = f"function {self.resource_name} has invalid options: {exc}"
             raise FunctionOperationError(msg) from exc
+        if gpu:
+            spec["resources"]["gpu"] = list(gpu)
+        if self.gpu_count:
+            # Without gpu_count the server reserves one card per container.
+            spec["resources"]["gpu_count"] = self.gpu_count
+        if placement:
+            spec["placement"] = placement
         if callback_url is not None:
             spec["callback_url"] = callback_url
         if hooks.configured:
@@ -514,6 +516,22 @@ class Function(Generic[P, R]):
             on_failure=self.on_failure,
             on_finish=self.on_finish,
         )
+
+    def _placement(self) -> dict[str, Any]:
+        """The placement fields this function sets; empty runs anywhere in the workspace.
+
+        `spec()` validates the combination when the function is declared.
+        """
+        placement: dict[str, Any] = {}
+        if self.machine:
+            placement["machine"] = self.machine
+        if self.region is not None:
+            placement["region"] = self.region
+        if self.availability_zone:
+            placement["availability_zone"] = self.availability_zone
+        if not self.preemptible:
+            placement["preemptible"] = False
+        return placement
 
     def _retry_policy(self) -> RetryPolicy:
         policy = retry_policy_config(

@@ -8,11 +8,11 @@ import tempfile
 from pathlib import Path
 
 from pydantic import BaseModel, Field
-from shared.aws_connections import (
-    AWS_MANAGED_NETWORK_ZONE_PARAMETERS,
-    AwsConnectionStackAction,
-    AwsStackParameter,
-)
+from shared.api import AwsStackAction, AwsStackParameter
+
+# The connection template's zone parameters, filled in order with the region's
+# standard zones.
+_ZONE_PARAMETERS = tuple(f"AvailabilityZone{slot}" for slot in "ABCDEF")
 
 
 class _CallerIdentity(BaseModel):
@@ -32,13 +32,11 @@ class _AvailabilityZones(BaseModel):
 
 
 def create_connection_stack(
-    action: AwsConnectionStackAction,
+    action: AwsStackAction,
     *,
     profile: str | None,
-    execution_role_arn: str | None = None,
-    aws_cli: str = "aws",
 ) -> str:
-    arguments = [aws_cli, "--region", action.region]
+    arguments = ["aws", "--region", action.region]
     if profile is not None:
         arguments.extend(["--profile", profile])
     environment = {**os.environ, "AWS_PAGER": ""}
@@ -87,31 +85,28 @@ def create_connection_stack(
             f"AWS region {action.region} needs two available standard zones; "
             f"this account has {len(zones)}. No stack was created."
         )
-    if len(zones) > len(AWS_MANAGED_NETWORK_ZONE_PARAMETERS):
+    if len(zones) > len(_ZONE_PARAMETERS):
         raise RuntimeError(
             f"AWS region {action.region} has {len(zones)} standard zones, exceeding this "
             "connection template's capacity. Update lazycloud before creating the stack."
         )
-    parameters = (
+    parameters = [
         *action.request.Parameters,
         *(
-            AwsStackParameter(
-                ParameterKey=AWS_MANAGED_NETWORK_ZONE_PARAMETERS[index], ParameterValue=zone
-            )
-            for index, zone in enumerate(zones)
+            AwsStackParameter(ParameterKey=key, ParameterValue=zone)
+            for key, zone in zip(_ZONE_PARAMETERS, zones, strict=False)
         ),
-    )
+    ]
     stack_request = action.request.model_copy(update={"Parameters": parameters})
-    create_arguments = [*arguments, "cloudformation", "create-stack"]
-    if execution_role_arn is not None:
-        create_arguments.extend(["--role-arn", execution_role_arn])
     with tempfile.TemporaryDirectory(prefix="lazycloud-aws-") as directory:
         request = Path(directory) / "connection.json"
         request.write_text(stack_request.model_dump_json(), encoding="utf-8")
         request.chmod(0o600)
         created = subprocess.run(
             [
-                *create_arguments,
+                *arguments,
+                "cloudformation",
+                "create-stack",
                 "--cli-input-json",
                 f"file://{request}",
                 "--output",

@@ -115,64 +115,6 @@ class UnitScaleResponse(HttpModel):
     degraded_reason: str | None = None
 
 
-class MachineResponse(HttpModel):
-    id: str
-    name: str = ""
-    workspaces: list[str] = Field(default_factory=list)
-    """Names of the workspaces this machine may run workloads for."""
-    placement: Placement
-    provider: str = "local"
-    lifecycle: MachineLifecycle
-    lifecycle_message: str = ""
-    lifecycle_failure: MachineBootstrapFailureReason | None = None
-    lifecycle_at: datetime
-    cpu: float | None = None
-    memory: str | None = None
-    gpu: str | None = None
-    gpu_count: int = Field(default=0, ge=0)
-    address: str | None = None
-    labels: dict[str, str] = Field(default_factory=dict)
-    created_at: datetime
-    updated_at: datetime
-
-
-class MachineListResponse(HttpModel):
-    machines: list[MachineResponse] = Field(default_factory=list)
-
-
-class MachineJoinCommandRequest(HttpModel):
-    """Request the join command for one machine the account owns.
-
-    The name is how workloads pin to it, so it is unique across the account.
-    The workspaces are the only ones whose workloads may land on it.
-    """
-
-    ttl: str = ""
-    name: str = Field(
-        min_length=1, max_length=63, pattern=r"^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$"
-    )
-    workspaces: list[str] = Field(min_length=1)
-    gpu: list[str] = Field(default_factory=list)
-
-
-class MachineJoinCommandResponse(HttpModel):
-    command: str = ""
-    expires_at: datetime
-
-
-class MachineJoinTokenResponse(HttpModel):
-    """The bare one-use credential, for an operator who runs the agent themselves."""
-
-    token: str = Field(repr=False)
-    expires_at: datetime
-
-
-class MachineUpdateRequest(HttpModel):
-    """Replace the workspaces one joined machine serves."""
-
-    workspaces: list[str] = Field(min_length=1)
-
-
 class WorkerContainerResponse(HttpModel):
     container_id: str
     workspace_id: str = ""
@@ -358,12 +300,6 @@ __all__ = [
     "ContainerStopAllResponse",
     "ContainerWithAppPageResponse",
     "ContainerWithAppResponse",
-    "MachineJoinCommandRequest",
-    "MachineJoinCommandResponse",
-    "MachineJoinTokenResponse",
-    "MachineListResponse",
-    "MachineResponse",
-    "MachineUpdateRequest",
     "UnitCreateRequest",
     "UnitJoinCommandRequest",
     "UnitJoinCommandResponse",
