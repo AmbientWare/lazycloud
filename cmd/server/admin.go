@@ -32,7 +32,7 @@ func admin(ctx context.Context, args []string, out io.Writer) error {
 			if *email == "" {
 				return errors.New("-email is required")
 			}
-			id, err := identity.NewIdentity(pool).CreateUser(ctx, *email, *isAdmin)
+			id, err := identity.NewIdentity(pool, identity.Config{}).CreateUser(ctx, *email, *isAdmin)
 			if err != nil {
 				return err
 			}
@@ -45,7 +45,7 @@ func admin(ctx context.Context, args []string, out io.Writer) error {
 			if *name == "" || *owner == "" {
 				return errors.New("-name and -owner-email are required")
 			}
-			ws, err := identity.NewIdentity(pool).CreateWorkspace(ctx, *name, *owner)
+			ws, err := identity.NewIdentity(pool, identity.Config{}).CreateWorkspace(ctx, *name, *owner)
 			if err != nil {
 				return err
 			}
@@ -59,7 +59,7 @@ func admin(ctx context.Context, args []string, out io.Writer) error {
 			if *email == "" || *name == "" {
 				return errors.New("-email and -name are required")
 			}
-			token, err := identity.NewIdentity(pool).CreateToken(ctx, *email, *workspace, *name)
+			token, err := identity.NewIdentity(pool, identity.Config{}).CreateToken(ctx, *email, *workspace, *name)
 			if err != nil {
 				return err
 			}
