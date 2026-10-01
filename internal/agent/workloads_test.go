@@ -396,14 +396,19 @@ func TestPodCommandExitReportsItsCode(t *testing.T) {
 	imageOwn := e.podCommand(&hostproto.PodWorkload{})
 	session.send(t, failing)
 	session.send(t, imageOwn)
-	for _, want := range []struct {
-		start *hostproto.ServerMessage
-		code  int32
-	}{{failing, 7}, {imageOwn, 0}} {
-		id := want.start.GetStart().GetContainerId()
-		exit := session.phase(t, id, hostproto.ContainerPhase_CONTAINER_PHASE_EXITED).GetExit()
-		if exit.GetReason() != hostproto.ExitReason_EXIT_REASON_EXITED || exit.GetExitCode() != want.code {
-			t.Fatalf("pod %s exit %v, want EXITED with %d", id, exit, want.code)
+	// The two exit in either order.
+	want := map[string]int32{failing.GetStart().GetContainerId(): 7, imageOwn.GetStart().GetContainerId(): 0}
+	exits := map[string]*hostproto.ContainerExit{}
+	session.until(t, 120*time.Second, func(m *hostproto.HostMessage) bool {
+		r := m.GetContainer()
+		if _, ok := want[r.GetContainerId()]; ok && r.GetPhase() == hostproto.ContainerPhase_CONTAINER_PHASE_EXITED {
+			exits[r.GetContainerId()] = r.GetExit()
+		}
+		return len(exits) == len(want)
+	})
+	for id, code := range want {
+		if exit := exits[id]; exit.GetReason() != hostproto.ExitReason_EXIT_REASON_EXITED || exit.GetExitCode() != code {
+			t.Fatalf("pod %s exit %v, want EXITED with %d", id, exit, code)
 		}
 	}
 	deadline := time.Now().Add(10 * time.Second)

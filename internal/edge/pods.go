@@ -451,8 +451,9 @@ func (e *Edge) renewHolds(ctx context.Context) {
 		}
 		select {
 		case <-ctx.Done():
-			_, ended := e.holds.take()
-			held, _ := e.holds.take()
+			// Connections end with the edge; their containers keep their
+			// keep-warm windows.
+			held, ended := e.holds.take()
 			_ = e.execution.ReleaseContainers(context.WithoutCancel(ctx), e.id, append(held, ended...))
 			return
 		case <-ticker.C:
