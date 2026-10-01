@@ -43,20 +43,48 @@ type hostPool struct {
 	demand chan int32
 }
 
-// parkedStream is an agent's Forward stream waiting for a request.
+// parkedStream is a stream to an agent for one request: one of its Forward
+// streams parked here, or a relay through the edge that holds them.
 type parkedStream struct {
-	stream grpc.BidiStreamingServer[hostproto.ForwardUp, hostproto.ForwardDown]
-	// done ends the RPC with err once the request is over.
+	stream forwardStream
+	// done ends a parked RPC with err once the request is over.
 	done chan struct{}
 	err  error
 	once sync.Once
+	// onFinish ends a relayed stream.
+	onFinish func(error)
 }
 
 func (p *parkedStream) finish(err error) {
 	p.once.Do(func() {
 		p.err = err
 		close(p.done)
+		if p.onFinish != nil {
+			p.onFinish(err)
+		}
 	})
+}
+
+// listening returns the hosts whose Listen call this edge holds.
+func (h *hostStreams) listening() []uuid.UUID {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var hosts []uuid.UUID
+	for id, pool := range h.hosts {
+		if pool.demand != nil {
+			hosts = append(hosts, id)
+		}
+	}
+	return hosts
+}
+
+// connected reports whether the host's agent holds its data connection to
+// this edge.
+func (h *hostStreams) connected(host uuid.UUID) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	pool := h.hosts[host]
+	return pool != nil && (pool.demand != nil || len(pool.idle) > 0)
 }
 
 func (h *hostStreams) poolLocked(host uuid.UUID) *hostPool {
@@ -102,12 +130,18 @@ func (s *Server) Listen(_ *hostproto.ListenRequest, stream grpc.ServerStreamingS
 	pool := h.poolLocked(id)
 	pool.demand = demand
 	h.mu.Unlock()
+	// Other edges relay requests for the host here while this call lasts.
+	s.edge.linkHost(stream.Context(), id)
 	defer func() {
 		h.mu.Lock()
-		if pool.demand == demand {
+		current := pool.demand == demand
+		if current {
 			pool.demand = nil
 		}
 		h.mu.Unlock()
+		if current {
+			s.edge.unlinkHost(stream.Context(), id)
+		}
 	}()
 	for {
 		select {

@@ -178,3 +178,109 @@ var HostData_ServiceDesc = grpc.ServiceDesc{
 	},
 	Metadata: "host/v1/data.proto",
 }
+
+const (
+	EdgeRelay_Forward_FullMethodName = "/lazycloud.host.v1.EdgeRelay/Forward"
+)
+
+// EdgeRelayClient is the client API for EdgeRelay service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// EdgeRelay lets an edge reach a host whose data connection another server
+// holds. Forward carries one request as HostData.Forward does, in the
+// edge's direction; the call names the host in its `lazycloud-host`
+// metadata and authenticates with the calling edge's id and token.
+type EdgeRelayClient interface {
+	Forward(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ForwardDown, ForwardUp], error)
+}
+
+type edgeRelayClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewEdgeRelayClient(cc grpc.ClientConnInterface) EdgeRelayClient {
+	return &edgeRelayClient{cc}
+}
+
+func (c *edgeRelayClient) Forward(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ForwardDown, ForwardUp], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &EdgeRelay_ServiceDesc.Streams[0], EdgeRelay_Forward_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ForwardDown, ForwardUp]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type EdgeRelay_ForwardClient = grpc.BidiStreamingClient[ForwardDown, ForwardUp]
+
+// EdgeRelayServer is the server API for EdgeRelay service.
+// All implementations must embed UnimplementedEdgeRelayServer
+// for forward compatibility.
+//
+// EdgeRelay lets an edge reach a host whose data connection another server
+// holds. Forward carries one request as HostData.Forward does, in the
+// edge's direction; the call names the host in its `lazycloud-host`
+// metadata and authenticates with the calling edge's id and token.
+type EdgeRelayServer interface {
+	Forward(grpc.BidiStreamingServer[ForwardDown, ForwardUp]) error
+	mustEmbedUnimplementedEdgeRelayServer()
+}
+
+// UnimplementedEdgeRelayServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedEdgeRelayServer struct{}
+
+func (UnimplementedEdgeRelayServer) Forward(grpc.BidiStreamingServer[ForwardDown, ForwardUp]) error {
+	return status.Error(codes.Unimplemented, "method Forward not implemented")
+}
+func (UnimplementedEdgeRelayServer) mustEmbedUnimplementedEdgeRelayServer() {}
+func (UnimplementedEdgeRelayServer) testEmbeddedByValue()                   {}
+
+// UnsafeEdgeRelayServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to EdgeRelayServer will
+// result in compilation errors.
+type UnsafeEdgeRelayServer interface {
+	mustEmbedUnimplementedEdgeRelayServer()
+}
+
+func RegisterEdgeRelayServer(s grpc.ServiceRegistrar, srv EdgeRelayServer) {
+	// If the following call panics, it indicates UnimplementedEdgeRelayServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&EdgeRelay_ServiceDesc, srv)
+}
+
+func _EdgeRelay_Forward_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(EdgeRelayServer).Forward(&grpc.GenericServerStream[ForwardDown, ForwardUp]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type EdgeRelay_ForwardServer = grpc.BidiStreamingServer[ForwardDown, ForwardUp]
+
+// EdgeRelay_ServiceDesc is the grpc.ServiceDesc for EdgeRelay service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var EdgeRelay_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "lazycloud.host.v1.EdgeRelay",
+	HandlerType: (*EdgeRelayServer)(nil),
+	Methods:     []grpc.MethodDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "Forward",
+			Handler:       _EdgeRelay_Forward_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
+		},
+	},
+	Metadata: "host/v1/data.proto",
+}

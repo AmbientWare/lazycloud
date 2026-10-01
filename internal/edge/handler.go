@@ -346,7 +346,7 @@ type exchangeState struct {
 // exchange sends the head and body to the lease's container and waits for
 // the first answer until deadline.
 func (e *Edge) exchange(ctx context.Context, l *lease, rc *http.ResponseController, head *hostproto.HttpRequest, body *requestBody, deadline time.Time) (*exchangeState, error) {
-	p, err := e.hosts.take(ctx, l.slot.host)
+	p, err := e.stream(ctx, l.slot.host)
 	if err != nil {
 		return nil, err
 	}

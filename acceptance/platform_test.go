@@ -91,6 +91,8 @@ type platform struct {
 	api string
 	// geesefs is the GeeseFS binary the agent mounts volumes with, if any.
 	geesefs string
+	// newEdge makes another server's edge on the same database, for relays.
+	newEdge func(url, relay string) (*edge.Edge, error)
 }
 
 func (p *platform) port() string {
@@ -142,10 +144,19 @@ func startPlatform(t *testing.T) *platform {
 	}
 	p.edgeAddr = edgeListener.Addr().String()
 	_, port, _ := net.SplitHostPort(p.edgeAddr)
-	p.edge, err = edge.NewEdge(pool, ident, p.execution, listener, edge.Config{URL: "http://lazycloud.localhost:" + port}, logger)
+	relayListener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
+	p.newEdge = func(url, relay string) (*edge.Edge, error) {
+		return edge.NewEdge(pool, ident, p.execution, listener, edge.Config{URL: url, RelayAddress: relay}, logger)
+	}
+	p.edge, err = p.newEdge("http://lazycloud.localhost:"+port, relayListener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	relayServer := grpc.NewServer()
+	hostproto.RegisterEdgeRelayServer(relayServer, p.edge.RelayServer())
 	p.client = &http.Client{Transport: &http.Transport{
 		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
 			return (&net.Dialer{}).DialContext(ctx, network, p.edgeAddr)
@@ -195,6 +206,7 @@ func startPlatform(t *testing.T) *platform {
 	wg.Go(func() { _ = listener.Run(ctx) })
 	wg.Go(func() { _ = p.edge.Run(ctx) })
 	wg.Go(func() { _ = grpcServer.Serve(grpcListener) })
+	wg.Go(func() { _ = relayServer.Serve(relayListener) })
 	wg.Go(func() { _ = edgeServer.Serve(edgeListener) })
 	wg.Go(func() { _ = apiServer.Serve(apiListener) })
 	wg.Go(func() {
@@ -224,6 +236,7 @@ func startPlatform(t *testing.T) *platform {
 		hosts.Shutdown()
 		p.edge.Shutdown()
 		grpcServer.Stop()
+		relayServer.Stop()
 		_ = edgeServer.Close()
 		_ = apiServer.Close()
 		hosts.Wait()
@@ -457,4 +470,40 @@ func (p *platform) apiCall(method, path string, body any, out any) int {
 		p.t.Logf("%s %s: %d %s", method, path, resp.StatusCode, data)
 	}
 	return resp.StatusCode
+}
+
+// startEdge runs another server's edge on the database, with no agent of
+// its own, and returns the address it serves workload traffic on.
+func (p *platform) startEdge() string {
+	p.t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	listen := func() net.Listener {
+		l, err := (&net.ListenConfig{}).Listen(ctx, "tcp", "127.0.0.1:0")
+		if err != nil {
+			p.t.Fatal(err)
+		}
+		return l
+	}
+	traffic, relay := listen(), listen()
+	// Hosts are named under the first edge's base URL, as one deployment's
+	// servers share it.
+	_, port, _ := net.SplitHostPort(p.edgeAddr)
+	e, err := p.newEdge("http://lazycloud.localhost:"+port, relay.Addr().String())
+	if err != nil {
+		p.t.Fatal(err)
+	}
+	relayServer := grpc.NewServer()
+	hostproto.RegisterEdgeRelayServer(relayServer, e.RelayServer())
+	server := &http.Server{Handler: e, ReadHeaderTimeout: 10 * time.Second}
+	var wg sync.WaitGroup
+	wg.Go(func() { _ = e.Run(ctx) })
+	wg.Go(func() { _ = relayServer.Serve(relay) })
+	wg.Go(func() { _ = server.Serve(traffic) })
+	p.t.Cleanup(func() {
+		cancel()
+		_ = server.Close()
+		relayServer.Stop()
+		wg.Wait()
+	})
+	return traffic.Addr().String()
 }

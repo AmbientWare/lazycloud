@@ -110,6 +110,24 @@ create table http_requests (
     response_bytes bigint not null
 );
 
+-- Each running server's edge, renewed while it runs. An edge relays a
+-- request for a host whose data connection another edge holds to that
+-- edge's relay address, authenticated by the token whose digest is here.
+create table edges (
+    id uuid primary key,
+    relay_address text not null,
+    token_sha256 bytea not null,
+    expires_at timestamptz not null
+);
+
+-- The edge holding each host's data connection; the edge writes it when the
+-- agent's Listen call opens and removes it when it ends.
+create table host_data_links (
+    host_id uuid primary key references hosts (id) on delete cascade,
+    edge_id uuid not null references edges (id) on delete cascade,
+    updated_at timestamptz not null default now()
+);
+
 create index http_requests_workload on http_requests (workload_id, id desc);
 create index http_requests_started on http_requests (started_at);
 

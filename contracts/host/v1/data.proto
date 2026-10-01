@@ -20,10 +20,18 @@ service HostData {
   rpc Forward(stream ForwardUp) returns (stream ForwardDown);
 }
 
+// EdgeRelay lets an edge reach a host whose data connection another server
+// holds. Forward carries one request as HostData.Forward does, in the
+// edge's direction; the call names the host in its `lazycloud-host`
+// metadata and authenticates with the calling edge's id and token.
+service EdgeRelay {
+  rpc Forward(stream ForwardDown) returns (stream ForwardUp);
+}
+
 message ListenRequest {}
 
 message ListenEvent {
-  // Open this many more idle Forward streams.
+  // Keep this many Forward streams idle, counting those still opening.
   int32 streams = 1;
 }
 

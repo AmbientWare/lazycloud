@@ -111,6 +111,8 @@ type serveConfig struct {
 	images        images.Config
 	edgeAddr      string
 	edgeURL       string
+	relayAddr     string
+	relayURL      string
 	cloudflare    struct{ zone, token string }
 }
 
@@ -138,6 +140,10 @@ func serve(ctx context.Context, args []string) error {
 	fs.BoolVar(&cfg.images.Insecure, "image-registry-insecure", env("LAZYCLOUD_IMAGE_REGISTRY_INSECURE", "") == "true", "the image registry speaks plain HTTP (LAZYCLOUD_IMAGE_REGISTRY_INSECURE)")
 	fs.StringVar(&cfg.edgeAddr, "edge-addr", env("LAZYCLOUD_EDGE_ADDR", "127.0.0.1:8082"), "workload traffic address (LAZYCLOUD_EDGE_ADDR)")
 	fs.StringVar(&cfg.edgeURL, "edge-url", env("LAZYCLOUD_EDGE_URL", "http://lazycloud.localhost:8082"), "public base URL workloads answer under (LAZYCLOUD_EDGE_URL)")
+	fs.StringVar(&cfg.relayAddr, "edge-relay-addr", env("LAZYCLOUD_EDGE_RELAY_ADDR", "127.0.0.1:8083"),
+		"address other servers' edges relay requests to, inside the cluster (LAZYCLOUD_EDGE_RELAY_ADDR)")
+	fs.StringVar(&cfg.relayURL, "edge-relay-advertise", env("LAZYCLOUD_EDGE_RELAY_ADVERTISE", ""),
+		"host:port other servers reach the relay address at, such as the pod IP; defaults to -edge-relay-addr (LAZYCLOUD_EDGE_RELAY_ADVERTISE)")
 	fs.StringVar(&cfg.cloudflare.zone, "cloudflare-zone-id", env("LAZYCLOUD_CLOUDFLARE_ZONE_ID", ""), "Cloudflare for SaaS zone for custom domains (LAZYCLOUD_CLOUDFLARE_ZONE_ID)")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
@@ -205,7 +211,11 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, tel *te
 	if cfg.identity.GitHub.ClientID == "" || cfg.identity.GitHub.ClientSecret == "" {
 		logger.WarnContext(ctx, "dashboard sign-in is unavailable: set LAZYCLOUD_GITHUB_CLIENT_ID and LAZYCLOUD_GITHUB_CLIENT_SECRET")
 	}
-	edgeConfig := edge.Config{URL: cfg.edgeURL}
+	relayURL := cfg.relayURL
+	if relayURL == "" {
+		relayURL = cfg.relayAddr
+	}
+	edgeConfig := edge.Config{URL: cfg.edgeURL, RelayAddress: relayURL}
 	if cfg.cloudflare.zone != "" && cfg.cloudflare.token != "" {
 		edgeConfig.Domains = edge.NewCloudflare(edge.CloudflareAPI, cfg.cloudflare.zone, cfg.cloudflare.token)
 	}
@@ -253,8 +263,17 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, tel *te
 		_ = grpcListener.Close()
 		return fmt.Errorf("listen on %s: %w", cfg.edgeAddr, err)
 	}
+	relayListener, err := lc.Listen(ctx, "tcp", cfg.relayAddr)
+	if err != nil {
+		_ = httpListener.Close()
+		_ = grpcListener.Close()
+		_ = edgeListener.Close()
+		return fmt.Errorf("listen on %s: %w", cfg.relayAddr, err)
+	}
+	relayServer := grpc.NewServer()
+	hostproto.RegisterEdgeRelayServer(relayServer, edges.RelayServer())
 	logger.InfoContext(ctx, "serving", "http", httpListener.Addr().String(), "grpc", grpcListener.Addr().String(),
-		"edge", edgeListener.Addr().String(), "edge_url", cfg.edgeURL)
+		"edge", edgeListener.Addr().String(), "edge_url", cfg.edgeURL, "edge_relay", relayListener.Addr().String())
 
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error { return listener.Run(gctx) })
@@ -283,6 +302,12 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, tel *te
 		return nil
 	})
 	g.Go(func() error {
+		if err := relayServer.Serve(relayListener); err != nil {
+			return fmt.Errorf("serve edge relay: %w", err)
+		}
+		return nil
+	})
+	g.Go(func() error {
 		<-gctx.Done()
 		logger.Info("shutting down")
 		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(gctx), shutdownGrace)
@@ -301,17 +326,12 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, tel *te
 				}
 			})
 		}
+		// Requests other edges relay here finish too.
+		servers.Go(func() { gracefulStop(shutdownCtx, relayServer) })
 		servers.Wait()
 		// Idle data streams and Listen calls end now.
 		edges.Shutdown()
-		stopped := make(chan struct{})
-		go func() { grpcServer.GracefulStop(); close(stopped) }()
-		select {
-		case <-stopped:
-		case <-shutdownCtx.Done():
-			grpcServer.Stop()
-			<-stopped
-		}
+		gracefulStop(shutdownCtx, grpcServer)
 		return nil
 	})
 	err = g.Wait()
@@ -320,4 +340,17 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, tel *te
 		return fmt.Errorf("serve: %w", err)
 	}
 	return nil
+}
+
+// gracefulStop stops server once its calls finish, or at once when ctx
+// ends first.
+func gracefulStop(ctx context.Context, server *grpc.Server) {
+	stopped := make(chan struct{})
+	go func() { server.GracefulStop(); close(stopped) }()
+	select {
+	case <-stopped:
+	case <-ctx.Done():
+		server.Stop()
+		<-stopped
+	}
 }

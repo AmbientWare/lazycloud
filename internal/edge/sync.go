@@ -17,7 +17,7 @@ var ErrSyncRefused = errors.New("the container could not apply the sync")
 // Sync streams a tar of source changes to a container's workspace over its
 // host's data connection, and returns what the agent applied.
 func (e *Edge) Sync(ctx context.Context, host, container uuid.UUID, archive io.Reader) (written, removed int, err error) {
-	p, err := e.hosts.take(ctx, host)
+	p, err := e.stream(ctx, host)
 	if err != nil {
 		return 0, 0, err
 	}

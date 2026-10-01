@@ -116,7 +116,7 @@ func (*ListenRequest) Descriptor() ([]byte, []int) {
 
 type ListenEvent struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Open this many more idle Forward streams.
+	// Keep this many Forward streams idle, counting those still opening.
 	Streams       int32 `protobuf:"varint,1,opt,name=streams,proto3" json:"streams,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -890,7 +890,9 @@ const file_host_v1_data_proto_rawDesc = "" +
 	"\x19FORWARD_ERROR_KIND_FAILED\x10\x032\xa5\x01\n" +
 	"\bHostData\x12L\n" +
 	"\x06Listen\x12 .lazycloud.host.v1.ListenRequest\x1a\x1e.lazycloud.host.v1.ListenEvent0\x01\x12K\n" +
-	"\aForward\x12\x1c.lazycloud.host.v1.ForwardUp\x1a\x1e.lazycloud.host.v1.ForwardDown(\x010\x01B5Z3github.com/AmbientWare/lazycloud/internal/hostprotob\x06proto3"
+	"\aForward\x12\x1c.lazycloud.host.v1.ForwardUp\x1a\x1e.lazycloud.host.v1.ForwardDown(\x010\x012X\n" +
+	"\tEdgeRelay\x12K\n" +
+	"\aForward\x12\x1e.lazycloud.host.v1.ForwardDown\x1a\x1c.lazycloud.host.v1.ForwardUp(\x010\x01B5Z3github.com/AmbientWare/lazycloud/internal/hostprotob\x06proto3"
 
 var (
 	file_host_v1_data_proto_rawDescOnce sync.Once
@@ -935,10 +937,12 @@ var file_host_v1_data_proto_depIdxs = []int32{
 	0,  // 10: lazycloud.host.v1.ForwardError.kind:type_name -> lazycloud.host.v1.ForwardErrorKind
 	1,  // 11: lazycloud.host.v1.HostData.Listen:input_type -> lazycloud.host.v1.ListenRequest
 	9,  // 12: lazycloud.host.v1.HostData.Forward:input_type -> lazycloud.host.v1.ForwardUp
-	2,  // 13: lazycloud.host.v1.HostData.Listen:output_type -> lazycloud.host.v1.ListenEvent
-	3,  // 14: lazycloud.host.v1.HostData.Forward:output_type -> lazycloud.host.v1.ForwardDown
-	13, // [13:15] is the sub-list for method output_type
-	11, // [11:13] is the sub-list for method input_type
+	3,  // 13: lazycloud.host.v1.EdgeRelay.Forward:input_type -> lazycloud.host.v1.ForwardDown
+	2,  // 14: lazycloud.host.v1.HostData.Listen:output_type -> lazycloud.host.v1.ListenEvent
+	3,  // 15: lazycloud.host.v1.HostData.Forward:output_type -> lazycloud.host.v1.ForwardDown
+	9,  // 16: lazycloud.host.v1.EdgeRelay.Forward:output_type -> lazycloud.host.v1.ForwardUp
+	14, // [14:17] is the sub-list for method output_type
+	11, // [11:14] is the sub-list for method input_type
 	11, // [11:11] is the sub-list for extension type_name
 	11, // [11:11] is the sub-list for extension extendee
 	0,  // [0:11] is the sub-list for field type_name
@@ -973,7 +977,7 @@ func file_host_v1_data_proto_init() {
 			NumEnums:      1,
 			NumMessages:   12,
 			NumExtensions: 0,
-			NumServices:   1,
+			NumServices:   2,
 		},
 		GoTypes:           file_host_v1_data_proto_goTypes,
 		DependencyIndexes: file_host_v1_data_proto_depIdxs,

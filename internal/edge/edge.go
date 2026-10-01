@@ -26,6 +26,9 @@ type Config struct {
 	// Domains registers customer hostnames; nil leaves custom domains
 	// unavailable.
 	Domains Provider
+	// RelayAddress is where other servers' edges reach this one's
+	// EdgeRelay service.
+	RelayAddress string
 }
 
 // Edge routes workload traffic. One edge runs in each server process; each
@@ -49,6 +52,7 @@ type Edge struct {
 	auth          authCache
 	hosts         hostStreams
 	bodies        bodyBudget
+	relay         *relaying
 	// records queues finished requests for writeRequests; droppedRecords
 	// counts those a full queue refused.
 	records        chan requestRecord
@@ -93,6 +97,11 @@ func NewEdge(pool *pgxpool.Pool, id *identity.Identity, exec *execution.Executio
 		records:   make(chan requestRecord, requestQueue),
 	}
 	e.auth.entries = map[authKey]time.Time{}
+	relay, err := newRelaying(cfg.RelayAddress)
+	if err != nil {
+		return nil, err
+	}
+	e.relay = relay
 	e.hosts.hosts = map[uuid.UUID]*hostPool{}
 	e.hosts.shut = make(chan struct{})
 	e.routes.Store(&routeTable{
@@ -111,6 +120,9 @@ const refreshQueue = 1024
 // Run keeps the route table and container sets current from NOTIFY, and
 // publishes demand, until ctx ends.
 func (e *Edge) Run(ctx context.Context) error {
+	if err := e.registerOnce(ctx); err != nil {
+		return err
+	}
 	routes, err := e.loadRoutes(ctx)
 	if err != nil {
 		return err
@@ -122,6 +134,7 @@ func (e *Edge) Run(ctx context.Context) error {
 	g.Go(func() error { e.publishLoads(ctx); return nil })
 	g.Go(func() error { e.reconcileDomains(ctx); return nil })
 	g.Go(func() error { e.writeRequests(ctx); return nil })
+	g.Go(func() error { e.register(ctx); return nil })
 	if err := g.Wait(); err != nil && !errors.Is(err, context.Canceled) {
 		return fmt.Errorf("edge: %w", err)
 	}

@@ -241,7 +241,7 @@ func (f *fakeListen) SetTrailer(metadata.MD)            {}
 // Shutdown ends Listen calls, so a graceful gRPC stop does not wait for
 // agents to hang up.
 func TestShutdownEndsListen(t *testing.T) {
-	e := newTestEdge(t, nil)
+	e := newTestEdge(t, dbtest.New(t))
 	s := &Server{edge: e, hostOf: func(context.Context) (compute.HostID, bool) { return compute.HostID(uuid.New()), true }}
 	ended := make(chan error, 1)
 	go func() { ended <- s.Listen(&hostproto.ListenRequest{}, &fakeListen{ctx: t.Context()}) }()
