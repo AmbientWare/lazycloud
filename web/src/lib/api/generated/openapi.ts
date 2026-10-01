@@ -1750,6 +1750,104 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/workspaces/{workspace}/apps/{app}/endpoints/{endpoint}/invoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                app: components["parameters"]["AppPath"];
+                endpoint: components["parameters"]["EndpointPath"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send a request to an endpoint through the API host
+         * @description Any method, and any path after /invoke, which becomes the request's path. The request is forwarded to the workload as its own host would forward it, with the same admission, records and token policy, and streams both ways; WebSockets upgrade. The browser's session cookie (from the dashboard origin for anything but GET and HEAD) or a bearer token authenticates it, and neither reaches the workload.
+         */
+        post: operations["requestEndpointPath"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/apps/{app}/endpoints/{endpoint}/versions/{version}/invoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                app: components["parameters"]["AppPath"];
+                endpoint: components["parameters"]["EndpointPath"];
+                version: number;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send a request to an endpoint version through the API host
+         * @description Any method, and any path after /invoke, which becomes the request's path. The request is forwarded to the workload as its own host would forward it, with the same admission, records and token policy, and streams both ways; WebSockets upgrade. The browser's session cookie (from the dashboard origin for anything but GET and HEAD) or a bearer token authenticates it, and neither reaches the workload.
+         */
+        post: operations["requestEndpointPathVersion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/apps/{app}/asgi/{endpoint}/invoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                app: components["parameters"]["AppPath"];
+                endpoint: components["parameters"]["EndpointPath"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send a request to an ASGI or realtime app through the API host
+         * @description Any method, and any path after /invoke, which becomes the request's path. The request is forwarded to the workload as its own host would forward it, with the same admission, records and token policy, and streams both ways; WebSockets upgrade. The browser's session cookie (from the dashboard origin for anything but GET and HEAD) or a bearer token authenticates it, and neither reaches the workload.
+         */
+        post: operations["requestAsgiPath"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/apps/{app}/asgi/{endpoint}/versions/{version}/invoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                app: components["parameters"]["AppPath"];
+                endpoint: components["parameters"]["EndpointPath"];
+                version: number;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send a request to an ASGI or realtime app version through the API host
+         * @description Any method, and any path after /invoke, which becomes the request's path. The request is forwarded to the workload as its own host would forward it, with the same admission, records and token policy, and streams both ways; WebSockets upgrade. The browser's session cookie (from the dashboard origin for anything but GET and HEAD) or a bearer token authenticates it, and neither reaches the workload.
+         */
+        post: operations["requestAsgiPathVersion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/workspaces/{workspace}/apps/{app}/asgi/{endpoint}": {
         parameters: {
             query?: never;
@@ -3134,6 +3232,8 @@ export interface components {
             spec: components["schemas"]["FunctionSpec"];
             /** @description Where an HTTP workload answers, following the active release. */
             url?: string;
+            /** @description The HTTP workload on the API host, following the active release. */
+            invoke_path?: string;
         };
         Function: {
             name: components["schemas"]["WorkloadName"];
@@ -3954,6 +4054,10 @@ export interface components {
             version_url: string;
             /** @description Addresses the release by id. */
             release_url: string;
+            /** @description The workload on the API host; append the request's path. */
+            invoke_path: string;
+            /** @description The API-host path pinned to the release's version. */
+            version_invoke_path: string;
             /** @description The custom hostname, once its registration is ready. */
             domain_url?: string;
         };
@@ -8053,6 +8157,96 @@ export interface operations {
                 };
             };
             default: components["responses"]["Error"];
+        };
+    };
+    requestEndpointPath: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                app: components["parameters"]["AppPath"];
+                endpoint: components["parameters"]["EndpointPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The workload's own response, or an Error from the platform. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    requestEndpointPathVersion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                app: components["parameters"]["AppPath"];
+                endpoint: components["parameters"]["EndpointPath"];
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The workload's own response, or an Error from the platform. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    requestAsgiPath: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                app: components["parameters"]["AppPath"];
+                endpoint: components["parameters"]["EndpointPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The workload's own response, or an Error from the platform. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    requestAsgiPathVersion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+                app: components["parameters"]["AppPath"];
+                endpoint: components["parameters"]["EndpointPath"];
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The workload's own response, or an Error from the platform. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     getAsgi: {

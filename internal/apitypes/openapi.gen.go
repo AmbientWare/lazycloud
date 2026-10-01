@@ -3422,10 +3422,13 @@ type HttpWorkload struct {
 	App AppName `json:"app"`
 
 	// DomainUrl The custom hostname, once its registration is ready.
-	DomainUrl *string      `json:"domain_url,omitempty"`
-	Kind      HttpKind     `json:"kind"`
-	Name      WorkloadName `json:"name"`
-	Release   Release      `json:"release"`
+	DomainUrl *string `json:"domain_url,omitempty"`
+
+	// InvokePath The workload on the API host; append the request's path.
+	InvokePath string       `json:"invoke_path"`
+	Kind       HttpKind     `json:"kind"`
+	Name       WorkloadName `json:"name"`
+	Release    Release      `json:"release"`
 
 	// ReleaseUrl Addresses the release by id.
 	ReleaseUrl string            `json:"release_url"`
@@ -3433,6 +3436,9 @@ type HttpWorkload struct {
 
 	// Url Follows the active release across deploys.
 	Url string `json:"url"`
+
+	// VersionInvokePath The API-host path pinned to the release's version.
+	VersionInvokePath string `json:"version_invoke_path"`
 
 	// VersionUrl Pinned to the release's version.
 	VersionUrl string `json:"version_url"`
@@ -4091,7 +4097,10 @@ type Release struct {
 	CreatedAt time.Time          `json:"created_at"`
 	Function  WorkloadName       `json:"function"`
 	Id        openapi_types.UUID `json:"id"`
-	Spec      FunctionSpec       `json:"spec"`
+
+	// InvokePath The HTTP workload on the API host, following the active release.
+	InvokePath *string      `json:"invoke_path,omitempty"`
+	Spec       FunctionSpec `json:"spec"`
 
 	// Url Where an HTTP workload answers, following the active release.
 	Url *string `json:"url,omitempty"`
