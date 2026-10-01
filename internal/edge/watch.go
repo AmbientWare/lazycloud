@@ -120,9 +120,27 @@ func (e *Edge) reloadLocked(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	e.routes.Store(routes)
+	previous := e.routes.Swap(routes)
 	e.reloadStarted = started
+	e.forgetReplacedWindows(previous, routes)
 	return nil
+}
+
+// forgetReplacedWindows clears the keep-warm window of releases a deploy
+// replaced: the traffic it remembers now goes to the new release, and only
+// pinned requests should keep the old one warm.
+func (e *Edge) forgetReplacedWindows(previous, next *routeTable) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for id, before := range previous.byID {
+		after := next.byID[id]
+		if before.active == nil || (after != nil && after.active != nil && after.active.id == before.active.id) {
+			continue
+		}
+		if l := e.loads[before.active.id]; l != nil {
+			l.window = windowMax{}
+		}
+	}
 }
 
 // reloadOnMiss reloads the route table for a request that arrived at since

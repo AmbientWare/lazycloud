@@ -78,8 +78,14 @@ type platform struct {
 	workspace identity.Workspace
 	token     string
 	// edgeAddr is where the edge listens; client dials it whatever the host.
-	edgeAddr string
-	client   *http.Client
+	edgeAddr  string
+	client    *http.Client
+	socketDir string
+}
+
+func (p *platform) port() string {
+	_, port, _ := net.SplitHostPort(p.edgeAddr)
+	return port
 }
 
 func runtimeDir(t *testing.T) string {
@@ -194,6 +200,7 @@ func startPlatform(t *testing.T) *platform {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
+	p.socketDir = socketDir
 	stateDir := t.TempDir()
 	// Cleanups run last first: this one stops everything before the
 	// database and directories go.
