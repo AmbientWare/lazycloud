@@ -51,7 +51,7 @@ export function appSummariesQueryOptions(workspaceId: string) {
             params: { path: { workspace }, query: { live: true, limit: 1000 } },
           }),
         ),
-        taskActivity(workspaceId, 3600),
+        taskActivity(workspace, 3600),
       ]);
       const activityByApp = new Map(activity.series.map((series) => [series.app, series]));
       const items: AppSummary[] = [...apps.byId.values()]

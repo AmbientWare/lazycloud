@@ -95,7 +95,7 @@ async function listTasks(
     ...filter,
     function: fn,
     version: fn ? filter.version : undefined,
-    search: filter.search || undefined,
+    search: filter.search?.slice(0, 100) || undefined,
     root_only: filter.root_only || undefined,
     limit,
     cursor: cursor || undefined,
