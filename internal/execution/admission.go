@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -66,9 +67,13 @@ type SubmitRequest struct {
 	Function  string
 	// Release targets a release of the function instead of its active one.
 	Release *uuid.UUID
-	// Parent is the task that submits these tasks.
+	// Parent is the running task that spawns these. The root of their call
+	// graph is read from the parent's row.
 	Parent *TaskID
-	Inputs []TaskInput
+	// ScheduledFor is the cron occurrence admitting the task. One task
+	// exists per occurrence.
+	ScheduledFor *time.Time
+	Inputs       []TaskInput
 }
 
 // Submit admits every input or none. The workload lock serializes submits of
@@ -78,6 +83,21 @@ type SubmitRequest struct {
 // upstream already failed fails at once. Planning and waiting claims wake
 // when the transaction commits.
 func (e *Execution) Submit(ctx context.Context, req SubmitRequest) ([]Task, error) {
+	var tasks []Task
+	err := pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
+		var err error
+		tasks, err = e.SubmitInTx(ctx, tx, req)
+		return err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("submit: %w", err)
+	}
+	return tasks, nil
+}
+
+// SubmitInTx admits req inside tx, so a caller can commit the admission with
+// its own facts, such as a schedule's next occurrence.
+func (e *Execution) SubmitInTx(ctx context.Context, tx pgx.Tx, req SubmitRequest) ([]Task, error) {
 	encodings := make([]string, len(req.Inputs))
 	data := make([][]byte, len(req.Inputs))
 	var upstream []uuid.UUID
@@ -98,7 +118,7 @@ func (e *Execution) Submit(ctx context.Context, req SubmitRequest) ([]Task, erro
 	upstream = slices.Compact(upstream)
 
 	var tasks []Task
-	err := pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
+	err := func() error {
 		q := e.queries.WithTx(tx)
 		fn, err := q.LockFunctionForSubmit(ctx, LockFunctionForSubmitParams{
 			WorkspaceID: uuid.UUID(req.Workspace), AppName: req.App, Name: req.Function, ReleaseID: req.Release,
@@ -183,6 +203,7 @@ func (e *Execution) Submit(ctx context.Context, req SubmitRequest) ([]Task, erro
 			MaxAttempts:  int32(RetryPolicyOf(spec).MaxAttempts), //nolint:gosec // The schema caps max_attempts at 100.
 			ParentTaskID: parent,
 			RootTaskID:   root,
+			ScheduledFor: req.ScheduledFor,
 		})
 		if err != nil {
 			return fmt.Errorf("insert tasks: %w", err)
@@ -194,8 +215,11 @@ func (e *Execution) Submit(ctx context.Context, req SubmitRequest) ([]Task, erro
 		for n, row := range rows {
 			tasks[n] = Task{
 				ID: TaskID(row.ID), App: fn.AppName, Function: fn.Name, Release: fn.ReleaseID, Version: versionOf(fn.Version),
-				Status: TaskQueued, MaxAttempts: RetryPolicyOf(spec).MaxAttempts, Parent: taskIDPtr(parent), Root: taskIDPtr(root),
-				CreatedAt: row.CreatedAt,
+				Status: TaskQueued, MaxAttempts: RetryPolicyOf(spec).MaxAttempts, Parent: taskIDPtr(parent), Root: TaskID(row.ID),
+				ScheduledFor: req.ScheduledFor, CreatedAt: row.CreatedAt,
+			}
+			if root != nil {
+				tasks[n].Root = TaskID(*root)
 			}
 		}
 		failNew := func(indexes []int, failure Failure) error {
@@ -221,10 +245,13 @@ func (e *Execution) Submit(ctx context.Context, req SubmitRequest) ([]Task, erro
 		if err := database.Notify(ctx, tx, database.ChannelExecution, fn.ReleaseID.String()); err != nil {
 			return err
 		}
-		return database.Notify(ctx, tx, database.ChannelClaim, fn.ReleaseID.String())
-	})
+		if err := database.Notify(ctx, tx, database.ChannelClaim, fn.ReleaseID.String()); err != nil {
+			return err
+		}
+		return nil
+	}()
 	if err != nil {
-		return nil, fmt.Errorf("submit: %w", err)
+		return nil, err
 	}
 	return tasks, nil
 }

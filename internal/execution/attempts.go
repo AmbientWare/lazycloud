@@ -82,6 +82,9 @@ func (e *Execution) finishAttempt(ctx context.Context, tx pgx.Tx, host *compute.
 		if err := q.SucceedTask(ctx, task.ID); err != nil {
 			return fmt.Errorf("succeed task: %w", err)
 		}
+		if err := recordCallbacks(ctx, q, CallbackSucceeded, []uuid.UUID{task.ID}, nil); err != nil {
+			return err
+		}
 		if err := e.resolveDependents(ctx, tx, []uuid.UUID{task.ID}, upstreamSucceeded); err != nil {
 			return err
 		}
@@ -97,6 +100,9 @@ func (e *Execution) finishAttempt(ctx context.Context, tx pgx.Tx, host *compute.
 			delay := RetryPolicyOf(spec).NextAttemptDelay(int(task.AttemptCount) + 1)
 			if err := q.RequeueTask(ctx, RequeueTaskParams{ID: task.ID, DelaySeconds: delay.Seconds()}); err != nil {
 				return fmt.Errorf("requeue task: %w", err)
+			}
+			if err := recordCallbacks(ctx, q, CallbackRetry, []uuid.UUID{task.ID}, outcome.Failure); err != nil {
+				return err
 			}
 			if err := database.Notify(ctx, tx, database.ChannelClaim, task.ReleaseID.String()); err != nil {
 				return err
@@ -129,5 +135,5 @@ func (e *Execution) failTask(ctx context.Context, q *Queries, task uuid.UUID, fa
 	if err := q.FailTask(ctx, FailTaskParams{ID: task, Failure: encoded}); err != nil {
 		return fmt.Errorf("fail task: %w", err)
 	}
-	return nil
+	return recordCallbacks(ctx, q, CallbackFailed, []uuid.UUID{task}, nil)
 }

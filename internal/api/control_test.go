@@ -58,7 +58,7 @@ func TestControlRoutesAuthorizeValidateAndRoute(t *testing.T) {
 		t.Fatalf("submit: %d %+v", status, submitted)
 	}
 	task := submitted.Tasks[0]
-	if task.MaxAttempts != 1 || task.RootTaskId == nil || *task.RootTaskId != task.Id {
+	if task.MaxAttempts != 1 || task.RootTaskId != task.Id {
 		t.Fatalf("submitted task %+v", task)
 	}
 	var page apitypes.TaskPage

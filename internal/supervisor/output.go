@@ -32,6 +32,8 @@ type outputPipe struct {
 	raw     syscall.RawConn
 	stream  hostproto.LogStream
 	pending []byte
+	// held is decoded output that may begin a secret value.
+	held string
 }
 
 func newOutputPipe(file *os.File, stream hostproto.LogStream) (*outputPipe, error) {
@@ -73,7 +75,9 @@ func (sl *slot) readOutput(ctx context.Context, pipe *outputPipe) {
 // drainLocked emits what the current runner's pipes hold now. flush also
 // emits an incomplete UTF-8 sequence, which happens when an attempt ends.
 func (sl *slot) drainLocked(flush bool) {
-	if sl.proc == nil {
+	// A shared runner's pipes carry no attempt's output; its own slot reads
+	// them.
+	if sl.proc == nil || sl.shared {
 		return
 	}
 	for _, pipe := range sl.proc.pipes {
@@ -94,16 +98,24 @@ func (sl *slot) drainLocked(flush bool) {
 }
 
 func (sl *slot) emitLocked(pipe *outputPipe, data []byte, flush bool) {
-	text := pipe.decode(data, flush)
+	text := sl.sup.redact.stream(&pipe.held, pipe.decode(data, flush), flush)
 	if text == "" {
 		return
 	}
-	sl.sup.out.push(&hostproto.SupervisorMessage{Body: &hostproto.SupervisorMessage_Output{Output: &hostproto.OutputChunk{
-		AttemptId: sl.attempt,
-		Stream:    pipe.stream,
+	attempt := sl.attempt
+	if sl.soleAttempt != nil {
+		attempt = sl.soleAttempt()
+	}
+	sl.sup.out.push(outputMessage(attempt, pipe.stream, text))
+}
+
+func outputMessage(attempt string, stream hostproto.LogStream, text string) *hostproto.SupervisorMessage {
+	return &hostproto.SupervisorMessage{Body: &hostproto.SupervisorMessage_Output{Output: &hostproto.OutputChunk{
+		AttemptId: attempt,
+		Stream:    stream,
 		Data:      text,
 		Time:      timestamppb.Now(),
-	}}})
+	}}}
 }
 
 // decode returns data as valid UTF-8. It holds back an incomplete trailing

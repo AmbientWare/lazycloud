@@ -15,7 +15,7 @@ import (
 const listAppTasks = `-- name: ListAppTasks :many
 select t.id, a.name as app_name, w.name as function_name, t.release_id, r.version, t.status,
        t.attempt_count, t.max_attempts, t.parent_task_id, t.root_task_id, t.available_at,
-       t.created_at, t.started_at, t.finished_at, t.failure,
+       t.created_at, t.started_at, t.finished_at, t.failure, t.scheduled_for,
        -- The latest attempt's container, as zero or one element: a scalar
        -- subquery keeps the per-row index lookup, and the array keeps sqlc
        -- from reading it as non-null.
@@ -24,7 +24,7 @@ select t.id, a.name as app_name, w.name as function_name, t.release_id, r.versio
 from workloads w
 join apps a on a.id = w.app_id
 cross join lateral (
-    select id, workspace_id, workload_id, release_id, status, attempt_count, max_attempts, available_at, current_attempt_id, failure, created_at, started_at, finished_at, parent_task_id, root_task_id, unmet_dependencies from tasks t
+    select id, workspace_id, workload_id, release_id, status, attempt_count, max_attempts, available_at, current_attempt_id, failure, created_at, started_at, finished_at, unmet_dependencies, parent_task_id, root_task_id, scheduled_for from tasks t
     where t.workload_id = w.id
       and ($1::text is null or t.status = $1::text)
       and t.id < $2
@@ -63,6 +63,7 @@ type ListAppTasksRow struct {
 	StartedAt    *time.Time
 	FinishedAt   *time.Time
 	Failure      []byte
+	ScheduledFor *time.Time
 	ContainerIds []uuid.UUID
 }
 
@@ -100,6 +101,7 @@ func (q *Queries) ListAppTasks(ctx context.Context, arg ListAppTasksParams) ([]L
 			&i.StartedAt,
 			&i.FinishedAt,
 			&i.Failure,
+			&i.ScheduledFor,
 			&i.ContainerIds,
 		); err != nil {
 			return nil, err
@@ -115,7 +117,7 @@ func (q *Queries) ListAppTasks(ctx context.Context, arg ListAppTasksParams) ([]L
 const listTasks = `-- name: ListTasks :many
 select t.id, a.name as app_name, w.name as function_name, t.release_id, r.version, t.status,
        t.attempt_count, t.max_attempts, t.parent_task_id, t.root_task_id, t.available_at,
-       t.created_at, t.started_at, t.finished_at, t.failure,
+       t.created_at, t.started_at, t.finished_at, t.failure, t.scheduled_for,
        -- The latest attempt's container, as zero or one element: a scalar
        -- subquery keeps the per-row index lookup, and the array keeps sqlc
        -- from reading it as non-null.
@@ -155,6 +157,7 @@ type ListTasksRow struct {
 	StartedAt    *time.Time
 	FinishedAt   *time.Time
 	Failure      []byte
+	ScheduledFor *time.Time
 	ContainerIds []uuid.UUID
 }
 
@@ -189,6 +192,7 @@ func (q *Queries) ListTasks(ctx context.Context, arg ListTasksParams) ([]ListTas
 			&i.StartedAt,
 			&i.FinishedAt,
 			&i.Failure,
+			&i.ScheduledFor,
 			&i.ContainerIds,
 		); err != nil {
 			return nil, err
@@ -353,7 +357,7 @@ func (q *Queries) TaskResult(ctx context.Context, arg TaskResultParams) (TaskRes
 const taskView = `-- name: TaskView :one
 select t.id, a.name as app_name, w.name as function_name, t.release_id, r.version, t.status,
        t.attempt_count, t.max_attempts, t.parent_task_id, t.root_task_id, t.available_at,
-       t.created_at, t.started_at, t.finished_at, t.failure,
+       t.created_at, t.started_at, t.finished_at, t.failure, t.scheduled_for,
        -- The latest attempt's container, as zero or one element: a scalar
        -- subquery keeps the per-row index lookup, and the array keeps sqlc
        -- from reading it as non-null.
@@ -387,6 +391,7 @@ type TaskViewRow struct {
 	StartedAt    *time.Time
 	FinishedAt   *time.Time
 	Failure      []byte
+	ScheduledFor *time.Time
 	ContainerIds []uuid.UUID
 }
 
@@ -409,6 +414,7 @@ func (q *Queries) TaskView(ctx context.Context, arg TaskViewParams) (TaskViewRow
 		&i.StartedAt,
 		&i.FinishedAt,
 		&i.Failure,
+		&i.ScheduledFor,
 		&i.ContainerIds,
 	)
 	return i, err

@@ -27,6 +27,9 @@ type Server struct {
 var _ StrictServerInterface = (*Server)(nil)
 
 func (s *Server) workspace(ctx context.Context, name string) (identity.Workspace, error) {
+	if c, ok := containerFrom(ctx); ok {
+		return c.AuthorizeWorkspace(name)
+	}
 	p, ok := principalFrom(ctx)
 	if !ok {
 		return identity.Workspace{}, identity.ErrUnauthenticated
@@ -84,6 +87,14 @@ func (s *Server) GetFunction(ctx context.Context, req GetFunctionRequestObject) 
 	if err != nil {
 		return nil, err
 	}
+	schedule, err := s.owners.Schedules.ForFunction(ctx, ws.ID, req.App, req.Function)
+	if err != nil {
+		return nil, err
+	}
+	if schedule != nil {
+		out := scheduleOut(*schedule)
+		fn.Schedule = &out
+	}
 	return GetFunction200JSONResponse(fn), nil
 }
 
@@ -111,7 +122,12 @@ func (s *Server) SubmitTasks(ctx context.Context, req SubmitTasksRequestObject) 
 	submit := execution.SubmitRequest{
 		Workspace: ws.ID, App: req.App, Function: req.Function, Inputs: inputs, Release: req.Body.ReleaseId,
 	}
-	if req.Body.ParentTaskId != nil {
+	switch c, ok := containerFrom(ctx); {
+	case ok && c.Task != nil:
+		// A task spawned from inside a running task records it as parent,
+		// whatever the body names.
+		submit.Parent = (*execution.TaskID)(c.Task)
+	case req.Body.ParentTaskId != nil:
 		parent := execution.TaskID(*req.Body.ParentTaskId)
 		submit.Parent = &parent
 	}
@@ -294,12 +310,9 @@ func taskOut(t execution.Task) apitypes.Task {
 	out := apitypes.Task{
 		Id: uuid.UUID(t.ID), App: t.App, Function: t.Function, ReleaseId: t.Release, Version: t.Version,
 		Status: apitypes.TaskStatus(t.Status), Attempts: t.Attempts, MaxAttempts: t.MaxAttempts,
-		ParentTaskId: (*uuid.UUID)(t.Parent), RootTaskId: (*uuid.UUID)(t.Root), ContainerId: (*uuid.UUID)(t.Container),
-		NextAttemptAt: t.NextAttemptAt,
-		CreatedAt:     t.CreatedAt, StartedAt: t.StartedAt, FinishedAt: t.FinishedAt,
-	}
-	if out.RootTaskId == nil {
-		out.RootTaskId = &out.Id
+		ParentTaskId: (*uuid.UUID)(t.Parent), RootTaskId: uuid.UUID(t.Root), ContainerId: (*uuid.UUID)(t.Container),
+		NextAttemptAt: t.NextAttemptAt, ScheduledFor: t.ScheduledFor,
+		CreatedAt: t.CreatedAt, StartedAt: t.StartedAt, FinishedAt: t.FinishedAt,
 	}
 	if p := t.Pending; p != nil {
 		out.Pending = &apitypes.TaskPendingProgress{

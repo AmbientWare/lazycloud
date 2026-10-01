@@ -1,7 +1,7 @@
 -- name: TaskView :one
 select t.id, a.name as app_name, w.name as function_name, t.release_id, r.version, t.status,
        t.attempt_count, t.max_attempts, t.parent_task_id, t.root_task_id, t.available_at,
-       t.created_at, t.started_at, t.finished_at, t.failure,
+       t.created_at, t.started_at, t.finished_at, t.failure, t.scheduled_for,
        -- The latest attempt's container, as zero or one element: a scalar
        -- subquery keeps the per-row index lookup, and the array keeps sqlc
        -- from reading it as non-null.
@@ -17,7 +17,7 @@ where t.id = @id and t.workspace_id = @workspace_id;
 -- Newest first below the cursor, from the workspace's recent index.
 select t.id, a.name as app_name, w.name as function_name, t.release_id, r.version, t.status,
        t.attempt_count, t.max_attempts, t.parent_task_id, t.root_task_id, t.available_at,
-       t.created_at, t.started_at, t.finished_at, t.failure,
+       t.created_at, t.started_at, t.finished_at, t.failure, t.scheduled_for,
        -- The latest attempt's container, as zero or one element: a scalar
        -- subquery keeps the per-row index lookup, and the array keeps sqlc
        -- from reading it as non-null.
@@ -38,7 +38,7 @@ limit @max_rows;
 -- yields at most a page, and the pages merge.
 select t.id, a.name as app_name, w.name as function_name, t.release_id, r.version, t.status,
        t.attempt_count, t.max_attempts, t.parent_task_id, t.root_task_id, t.available_at,
-       t.created_at, t.started_at, t.finished_at, t.failure,
+       t.created_at, t.started_at, t.finished_at, t.failure, t.scheduled_for,
        -- The latest attempt's container, as zero or one element: a scalar
        -- subquery keeps the per-row index lookup, and the array keeps sqlc
        -- from reading it as non-null.

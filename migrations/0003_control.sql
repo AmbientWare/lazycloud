@@ -20,19 +20,16 @@ create unique index workloads_live_name on workloads (app_id, kind, name) where 
 alter table releases alter column version drop not null;
 create index releases_workload_digest on releases (workload_id, spec_digest);
 
--- Execution: task listing, call graphs and dependencies.
+-- Execution: task listing and dependencies.
 
+-- Lineage (parent_task_id, root_task_id) belongs to 0004.
 alter table tasks
-    add column parent_task_id uuid references tasks (id) on delete set null,
-    add column root_task_id uuid references tasks (id) on delete set null,
     -- Upstream tasks that have not succeeded yet. Claims and planning take
     -- only queued tasks without any.
     add column unmet_dependencies integer not null default 0 check (unmet_dependencies >= 0);
 
 create index tasks_workspace_recent on tasks (workspace_id, id desc);
 create index tasks_workload_recent on tasks (workload_id, id desc);
-create index tasks_parent on tasks (parent_task_id) where parent_task_id is not null;
-create index tasks_root on tasks (root_task_id) where root_task_id is not null;
 
 create table task_dependencies (
     task_id uuid not null references tasks (id) on delete cascade,

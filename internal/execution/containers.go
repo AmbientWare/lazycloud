@@ -95,6 +95,9 @@ func (e *Execution) containerExited(ctx context.Context, tx pgx.Tx, container Co
 		if err != nil {
 			return fmt.Errorf("fail queued tasks: %w", err)
 		}
+		if err := recordCallbacks(ctx, q, CallbackFailed, failed, nil); err != nil {
+			return err
+		}
 		if err := notifyAll(ctx, tx, database.ChannelTask, uuidStrings(failed)); err != nil {
 			return err
 		}

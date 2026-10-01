@@ -517,8 +517,14 @@ type Configure struct {
 	Slots            int32                  `protobuf:"varint,2,opt,name=slots,proto3" json:"slots,omitempty"`
 	RunnerCommand    []string               `protobuf:"bytes,3,rep,name=runner_command,json=runnerCommand,proto3" json:"runner_command,omitempty"`
 	WorkingDirectory string                 `protobuf:"bytes,4,opt,name=working_directory,json=workingDirectory,proto3" json:"working_directory,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Run every slot as a thread of one runner process.
+	InProcess bool            `protobuf:"varint,10,opt,name=in_process,json=inProcess,proto3" json:"in_process,omitempty"`
+	Hooks     *LifecycleHooks `protobuf:"bytes,11,opt,name=hooks,proto3" json:"hooks,omitempty"`
+	// Environment variables holding secret values; their values are replaced
+	// in task output.
+	SecretEnv     []string `protobuf:"bytes,12,rep,name=secret_env,json=secretEnv,proto3" json:"secret_env,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Configure) Reset() {
@@ -579,6 +585,27 @@ func (x *Configure) GetWorkingDirectory() string {
 	return ""
 }
 
+func (x *Configure) GetInProcess() bool {
+	if x != nil {
+		return x.InProcess
+	}
+	return false
+}
+
+func (x *Configure) GetHooks() *LifecycleHooks {
+	if x != nil {
+		return x.Hooks
+	}
+	return nil
+}
+
+func (x *Configure) GetSecretEnv() []string {
+	if x != nil {
+		return x.SecretEnv
+	}
+	return nil
+}
+
 type RunAttempt struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TaskId        string                 `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
@@ -586,8 +613,11 @@ type RunAttempt struct {
 	InputEncoding PayloadEncoding        `protobuf:"varint,3,opt,name=input_encoding,json=inputEncoding,proto3,enum=lazycloud.host.v1.PayloadEncoding" json:"input_encoding,omitempty"`
 	Input         []byte                 `protobuf:"bytes,4,opt,name=input,proto3" json:"input,omitempty"`
 	Deadline      *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=deadline,proto3" json:"deadline,omitempty"`
+	AttemptNumber int32                  `protobuf:"varint,10,opt,name=attempt_number,json=attemptNumber,proto3" json:"attempt_number,omitempty"`
+	MaxAttempts   int32                  `protobuf:"varint,11,opt,name=max_attempts,json=maxAttempts,proto3" json:"max_attempts,omitempty"`
+	RootTaskId    string                 `protobuf:"bytes,12,opt,name=root_task_id,json=rootTaskId,proto3" json:"root_task_id,omitempty"`
+	ParentTaskId  string                 `protobuf:"bytes,13,opt,name=parent_task_id,json=parentTaskId,proto3" json:"parent_task_id,omitempty"`
 	Dependencies  []*DependencyResult    `protobuf:"bytes,60,rep,name=dependencies,proto3" json:"dependencies,omitempty"`
-	RootTaskId    string                 `protobuf:"bytes,61,opt,name=root_task_id,json=rootTaskId,proto3" json:"root_task_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -657,11 +687,18 @@ func (x *RunAttempt) GetDeadline() *timestamppb.Timestamp {
 	return nil
 }
 
-func (x *RunAttempt) GetDependencies() []*DependencyResult {
+func (x *RunAttempt) GetAttemptNumber() int32 {
 	if x != nil {
-		return x.Dependencies
+		return x.AttemptNumber
 	}
-	return nil
+	return 0
+}
+
+func (x *RunAttempt) GetMaxAttempts() int32 {
+	if x != nil {
+		return x.MaxAttempts
+	}
+	return 0
 }
 
 func (x *RunAttempt) GetRootTaskId() string {
@@ -669,6 +706,20 @@ func (x *RunAttempt) GetRootTaskId() string {
 		return x.RootTaskId
 	}
 	return ""
+}
+
+func (x *RunAttempt) GetParentTaskId() string {
+	if x != nil {
+		return x.ParentTaskId
+	}
+	return ""
+}
+
+func (x *RunAttempt) GetDependencies() []*DependencyResult {
+	if x != nil {
+		return x.Dependencies
+	}
+	return nil
 }
 
 // CancelSlot kills the process running the attempt and starts a replacement.
@@ -789,12 +840,18 @@ const file_host_v1_container_proto_rawDesc = "" +
 	"\x03run\x18\x02 \x01(\v2\x1d.lazycloud.host.v1.RunAttemptH\x00R\x03run\x127\n" +
 	"\x06cancel\x18\x03 \x01(\v2\x1d.lazycloud.host.v1.CancelSlotH\x00R\x06cancel\x120\n" +
 	"\x05drain\x18\x04 \x01(\v2\x18.lazycloud.host.v1.DrainH\x00R\x05drainB\x06\n" +
-	"\x04body\"\x8f\x01\n" +
+	"\x04body\"\x86\x02\n" +
 	"\tConfigure\x12\x18\n" +
 	"\ahandler\x18\x01 \x01(\tR\ahandler\x12\x14\n" +
 	"\x05slots\x18\x02 \x01(\x05R\x05slots\x12%\n" +
 	"\x0erunner_command\x18\x03 \x03(\tR\rrunnerCommand\x12+\n" +
-	"\x11working_directory\x18\x04 \x01(\tR\x10workingDirectory\"\xc8\x02\n" +
+	"\x11working_directory\x18\x04 \x01(\tR\x10workingDirectory\x12\x1d\n" +
+	"\n" +
+	"in_process\x18\n" +
+	" \x01(\bR\tinProcess\x127\n" +
+	"\x05hooks\x18\v \x01(\v2!.lazycloud.host.v1.LifecycleHooksR\x05hooks\x12\x1d\n" +
+	"\n" +
+	"secret_env\x18\f \x03(\tR\tsecretEnv\"\xb8\x03\n" +
 	"\n" +
 	"RunAttempt\x12\x17\n" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12\x1d\n" +
@@ -802,17 +859,22 @@ const file_host_v1_container_proto_rawDesc = "" +
 	"attempt_id\x18\x02 \x01(\tR\tattemptId\x12I\n" +
 	"\x0einput_encoding\x18\x03 \x01(\x0e2\".lazycloud.host.v1.PayloadEncodingR\rinputEncoding\x12\x14\n" +
 	"\x05input\x18\x04 \x01(\fR\x05input\x126\n" +
-	"\bdeadline\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\bdeadline\x12G\n" +
-	"\fdependencies\x18< \x03(\v2#.lazycloud.host.v1.DependencyResultR\fdependencies\x12 \n" +
-	"\froot_task_id\x18= \x01(\tR\n" +
-	"rootTaskId\"+\n" +
+	"\bdeadline\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\bdeadline\x12%\n" +
+	"\x0eattempt_number\x18\n" +
+	" \x01(\x05R\rattemptNumber\x12!\n" +
+	"\fmax_attempts\x18\v \x01(\x05R\vmaxAttempts\x12 \n" +
+	"\froot_task_id\x18\f \x01(\tR\n" +
+	"rootTaskId\x12$\n" +
+	"\x0eparent_task_id\x18\r \x01(\tR\fparentTaskId\x12G\n" +
+	"\fdependencies\x18< \x03(\v2#.lazycloud.host.v1.DependencyResultR\fdependencies\"+\n" +
 	"\n" +
 	"CancelSlot\x12\x1d\n" +
 	"\n" +
 	"attempt_id\x18\x01 \x01(\tR\tattemptId\"\a\n" +
-	"\x05Drain2j\n" +
+	"\x05Drain2\xb4\x01\n" +
 	"\rContainerLink\x12Y\n" +
-	"\aConnect\x12$.lazycloud.host.v1.SupervisorMessage\x1a$.lazycloud.host.v1.SupervisorCommand(\x010\x01B5Z3github.com/AmbientWare/lazycloud/internal/hostprotob\x06proto3"
+	"\aConnect\x12$.lazycloud.host.v1.SupervisorMessage\x1a$.lazycloud.host.v1.SupervisorCommand(\x010\x01\x12H\n" +
+	"\x03API\x12\x1d.lazycloud.host.v1.APIRequest\x1a\x1e.lazycloud.host.v1.APIResponse(\x010\x01B5Z3github.com/AmbientWare/lazycloud/internal/hostprotob\x06proto3"
 
 var (
 	file_host_v1_container_proto_rawDescOnce sync.Once
@@ -843,8 +905,11 @@ var file_host_v1_container_proto_goTypes = []any{
 	(*TaskFailure)(nil),           // 12: lazycloud.host.v1.TaskFailure
 	(LogStream)(0),                // 13: lazycloud.host.v1.LogStream
 	(*timestamppb.Timestamp)(nil), // 14: google.protobuf.Timestamp
-	(PayloadEncoding)(0),          // 15: lazycloud.host.v1.PayloadEncoding
-	(*DependencyResult)(nil),      // 16: lazycloud.host.v1.DependencyResult
+	(*LifecycleHooks)(nil),        // 15: lazycloud.host.v1.LifecycleHooks
+	(PayloadEncoding)(0),          // 16: lazycloud.host.v1.PayloadEncoding
+	(*DependencyResult)(nil),      // 17: lazycloud.host.v1.DependencyResult
+	(*APIRequest)(nil),            // 18: lazycloud.host.v1.APIRequest
+	(*APIResponse)(nil),           // 19: lazycloud.host.v1.APIResponse
 }
 var file_host_v1_container_proto_depIdxs = []int32{
 	1,  // 0: lazycloud.host.v1.SupervisorMessage.ready:type_name -> lazycloud.host.v1.SlotsReady
@@ -860,16 +925,19 @@ var file_host_v1_container_proto_depIdxs = []int32{
 	7,  // 10: lazycloud.host.v1.SupervisorCommand.run:type_name -> lazycloud.host.v1.RunAttempt
 	8,  // 11: lazycloud.host.v1.SupervisorCommand.cancel:type_name -> lazycloud.host.v1.CancelSlot
 	9,  // 12: lazycloud.host.v1.SupervisorCommand.drain:type_name -> lazycloud.host.v1.Drain
-	15, // 13: lazycloud.host.v1.RunAttempt.input_encoding:type_name -> lazycloud.host.v1.PayloadEncoding
-	14, // 14: lazycloud.host.v1.RunAttempt.deadline:type_name -> google.protobuf.Timestamp
-	16, // 15: lazycloud.host.v1.RunAttempt.dependencies:type_name -> lazycloud.host.v1.DependencyResult
-	0,  // 16: lazycloud.host.v1.ContainerLink.Connect:input_type -> lazycloud.host.v1.SupervisorMessage
-	5,  // 17: lazycloud.host.v1.ContainerLink.Connect:output_type -> lazycloud.host.v1.SupervisorCommand
-	17, // [17:18] is the sub-list for method output_type
-	16, // [16:17] is the sub-list for method input_type
-	16, // [16:16] is the sub-list for extension type_name
-	16, // [16:16] is the sub-list for extension extendee
-	0,  // [0:16] is the sub-list for field type_name
+	15, // 13: lazycloud.host.v1.Configure.hooks:type_name -> lazycloud.host.v1.LifecycleHooks
+	16, // 14: lazycloud.host.v1.RunAttempt.input_encoding:type_name -> lazycloud.host.v1.PayloadEncoding
+	14, // 15: lazycloud.host.v1.RunAttempt.deadline:type_name -> google.protobuf.Timestamp
+	17, // 16: lazycloud.host.v1.RunAttempt.dependencies:type_name -> lazycloud.host.v1.DependencyResult
+	0,  // 17: lazycloud.host.v1.ContainerLink.Connect:input_type -> lazycloud.host.v1.SupervisorMessage
+	18, // 18: lazycloud.host.v1.ContainerLink.API:input_type -> lazycloud.host.v1.APIRequest
+	5,  // 19: lazycloud.host.v1.ContainerLink.Connect:output_type -> lazycloud.host.v1.SupervisorCommand
+	19, // 20: lazycloud.host.v1.ContainerLink.API:output_type -> lazycloud.host.v1.APIResponse
+	19, // [19:21] is the sub-list for method output_type
+	17, // [17:19] is the sub-list for method input_type
+	17, // [17:17] is the sub-list for extension type_name
+	17, // [17:17] is the sub-list for extension extendee
+	0,  // [0:17] is the sub-list for field type_name
 }
 
 func init() { file_host_v1_container_proto_init() }

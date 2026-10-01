@@ -168,32 +168,13 @@ func TestRerunSubmitsTheSameInputToTheSameRelease(t *testing.T) {
 	}
 }
 
-func TestParentLinksTheCallGraphRoot(t *testing.T) {
+// Lineage itself is proven in workload_runtime_test.go.
+func TestSubmitRejectsAParentOutsideTheWorkspace(t *testing.T) {
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
 	f := deployedFunction(t, pool, `{"max_pending_tasks": 10}`)
-	root := submit(t, e, f, 1)[0]
-	child, err := e.Submit(t.Context(), SubmitRequest{
-		Workspace: f.workspace, App: "reports", Function: "summarize", Parent: &root.ID, Inputs: jsonInputs(1),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	grandchild, err := e.Submit(t.Context(), SubmitRequest{
-		Workspace: f.workspace, App: "reports", Function: "summarize", Parent: &child[0].ID, Inputs: jsonInputs(1),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	view, err := e.readTask(t.Context(), f.workspace, grandchild[0].ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if view.Parent == nil || *view.Parent != child[0].ID || view.Root == nil || *view.Root != root.ID {
-		t.Fatalf("grandchild parent %v root %v, want %s and %s", view.Parent, view.Root, child[0].ID, root.ID)
-	}
 	missing := TaskID(uuid.New())
-	_, err = e.Submit(t.Context(), SubmitRequest{
+	_, err := e.Submit(t.Context(), SubmitRequest{
 		Workspace: f.workspace, App: "reports", Function: "summarize", Parent: &missing, Inputs: jsonInputs(1),
 	})
 	var unknown *UnknownTaskError

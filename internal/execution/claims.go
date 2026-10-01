@@ -25,14 +25,16 @@ var ErrNotAssigned = errors.New("container is not assigned to this host")
 
 // ClaimedTask is a task a container's slot runs as attempt Attempt.
 type ClaimedTask struct {
-	Task TaskID
-	// Root is the first task of the task's call graph, Task itself when
-	// nothing spawned it.
-	Root     TaskID
-	Attempt  AttemptID
-	Number   int
-	Input    Payload
-	Deadline time.Time
+	Task        TaskID
+	Attempt     AttemptID
+	Number      int
+	MaxAttempts int
+	Input       Payload
+	Deadline    time.Time
+	// Root is the root of the task's call graph, the task itself when no
+	// task spawned it; Parent is set when one did.
+	Root   TaskID
+	Parent *TaskID
 	// Dependencies are the results of the upstream tasks the input refers
 	// to.
 	Dependencies []DependencyResult
@@ -147,8 +149,10 @@ func (e *Execution) claimOnce(ctx context.Context, host compute.HostID, containe
 		index := make(map[uuid.UUID]int, len(rows))
 		for n, row := range rows {
 			claimed[n] = ClaimedTask{
-				Task: TaskID(row.TaskID), Root: TaskID(row.RootTaskID), Attempt: AttemptID(row.AttemptID), Number: int(row.Number),
-				Input: Payload{Encoding: Encoding(row.Encoding), Data: row.Data}, Deadline: row.DeadlineAt,
+				Task: TaskID(row.TaskID), Attempt: AttemptID(row.AttemptID), Number: int(row.Number),
+				MaxAttempts: int(row.MaxAttempts),
+				Input:       Payload{Encoding: Encoding(row.Encoding), Data: row.Data}, Deadline: row.DeadlineAt,
+				Root: TaskID(row.RootTaskID), Parent: (*TaskID)(row.ParentTaskID),
 			}
 			ids[n] = row.TaskID
 			index[row.TaskID] = n

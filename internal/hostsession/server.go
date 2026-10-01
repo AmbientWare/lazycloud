@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -25,6 +26,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/images"
+	"github.com/AmbientWare/lazycloud/internal/secrets"
 	"github.com/AmbientWare/lazycloud/internal/storage"
 )
 
@@ -46,6 +48,10 @@ type Config struct {
 	// TouchInterval is how often a session records presence and checks that
 	// it is still the host's latest session.
 	TouchInterval time.Duration
+	// Secrets resolves the secrets each start carries.
+	Secrets *secrets.Secrets
+	// ContainerAPI serves container API requests; see api.NewContainerHandler.
+	ContainerAPI http.Handler
 }
 
 // Server implements hostproto.HostService.
@@ -223,6 +229,10 @@ func (s *Server) ClaimTasks(ctx context.Context, req *hostproto.ClaimTasksReques
 			Input:         c.Input.Data,
 			Deadline:      timestamppb.New(c.Deadline),
 			RootTaskId:    c.Root.String(),
+			MaxAttempts:   int32(c.MaxAttempts), //nolint:gosec // Attempts are capped at 100.
+		}
+		if c.Parent != nil {
+			out.Tasks[n].ParentTaskId = c.Parent.String()
 		}
 		for _, dep := range c.Dependencies {
 			out.Tasks[n].Dependencies = append(out.Tasks[n].Dependencies, &hostproto.DependencyResult{

@@ -17,6 +17,10 @@ import (
 const ActivatePath = "/activate"
 
 func (s *Server) principal(ctx context.Context) (identity.Principal, error) {
+	// A container acts for its workspace, not for a user or account.
+	if _, ok := containerFrom(ctx); ok {
+		return identity.Principal{}, identity.ErrForbidden
+	}
 	p, ok := principalFrom(ctx)
 	if !ok {
 		return identity.Principal{}, identity.ErrUnauthenticated

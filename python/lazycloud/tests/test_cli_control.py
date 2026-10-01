@@ -71,6 +71,7 @@ def _task(status: str = "running", **extra: object) -> dict[str, object]:
         "app": "reports",
         "function": "summarize_sales",
         "release_id": RELEASE_ID,
+        "root_task_id": TASK_ID,
         "status": status,
         "attempts": 2,
         "max_attempts": 3,

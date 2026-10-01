@@ -130,6 +130,7 @@ def _task(task_id: str, function: str, status: str, **extra: object) -> dict[str
         "app": "reports",
         "function": function,
         "release_id": _uuid(101),
+        "root_task_id": task_id,
         "status": status,
         "attempts": 1,
         "max_attempts": 1,

@@ -180,6 +180,30 @@ type ServerInterface interface {
 	// SetMemberRole Change a member's role; administrators only, never the owner's
 	// (PATCH /v1/workspaces/{workspace}/members/{user})
 	SetMemberRole(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, user openapi_types.UUID)
+	// ListSchedules Scheduled functions with their next and last runs
+	// (GET /v1/workspaces/{workspace}/schedules)
+	ListSchedules(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, params ListSchedulesParams)
+	// ListSecrets Secret names and update times, without values
+	// (GET /v1/workspaces/{workspace}/secrets)
+	ListSecrets(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, params ListSecretsParams)
+	// CreateSecret Create a secret; an existing name is a conflict
+	// (POST /v1/workspaces/{workspace}/secrets)
+	CreateSecret(w http.ResponseWriter, r *http.Request, workspace WorkspacePath)
+
+	// (DELETE /v1/workspaces/{workspace}/secrets/{secret})
+	DeleteSecret(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, secret SecretPath)
+	// GetSecret A secret without its value
+	// (GET /v1/workspaces/{workspace}/secrets/{secret})
+	GetSecret(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, secret SecretPath)
+	// UpdateSecret Replace an existing secret's value
+	// (PATCH /v1/workspaces/{workspace}/secrets/{secret})
+	UpdateSecret(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, secret SecretPath)
+	// SetSecret Create the secret or replace its value
+	// (PUT /v1/workspaces/{workspace}/secrets/{secret})
+	SetSecret(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, secret SecretPath)
+	// GetSecretValue Reveal a secret's value
+	// (GET /v1/workspaces/{workspace}/secrets/{secret}/value)
+	GetSecretValue(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, secret SecretPath)
 	// CreateSourceUpload Register a source archive by digest and get an upload URL when it is missing
 	// (POST /v1/workspaces/{workspace}/sources)
 	CreateSourceUpload(w http.ResponseWriter, r *http.Request, workspace WorkspacePath)
@@ -2087,6 +2111,317 @@ func (siw *ServerInterfaceWrapper) SetMemberRole(w http.ResponseWriter, r *http.
 	handler.ServeHTTP(w, r)
 }
 
+// ListSchedules operation middleware
+func (siw *ServerInterfaceWrapper) ListSchedules(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "workspace" -------------
+	var workspace WorkspacePath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "workspace", r.PathValue("workspace"), &workspace, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListSchedulesParams
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", r.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "cursor"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cursor", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListSchedules(w, r, workspace, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListSecrets operation middleware
+func (siw *ServerInterfaceWrapper) ListSecrets(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "workspace" -------------
+	var workspace WorkspacePath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "workspace", r.PathValue("workspace"), &workspace, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListSecretsParams
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", r.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "cursor"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cursor", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListSecrets(w, r, workspace, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateSecret operation middleware
+func (siw *ServerInterfaceWrapper) CreateSecret(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "workspace" -------------
+	var workspace WorkspacePath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "workspace", r.PathValue("workspace"), &workspace, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateSecret(w, r, workspace)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteSecret operation middleware
+func (siw *ServerInterfaceWrapper) DeleteSecret(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "workspace" -------------
+	var workspace WorkspacePath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "workspace", r.PathValue("workspace"), &workspace, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "secret" -------------
+	var secret SecretPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "secret", r.PathValue("secret"), &secret, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "secret", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteSecret(w, r, workspace, secret)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetSecret operation middleware
+func (siw *ServerInterfaceWrapper) GetSecret(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "workspace" -------------
+	var workspace WorkspacePath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "workspace", r.PathValue("workspace"), &workspace, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "secret" -------------
+	var secret SecretPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "secret", r.PathValue("secret"), &secret, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "secret", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetSecret(w, r, workspace, secret)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateSecret operation middleware
+func (siw *ServerInterfaceWrapper) UpdateSecret(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "workspace" -------------
+	var workspace WorkspacePath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "workspace", r.PathValue("workspace"), &workspace, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "secret" -------------
+	var secret SecretPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "secret", r.PathValue("secret"), &secret, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "secret", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateSecret(w, r, workspace, secret)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SetSecret operation middleware
+func (siw *ServerInterfaceWrapper) SetSecret(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "workspace" -------------
+	var workspace WorkspacePath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "workspace", r.PathValue("workspace"), &workspace, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "secret" -------------
+	var secret SecretPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "secret", r.PathValue("secret"), &secret, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "secret", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SetSecret(w, r, workspace, secret)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetSecretValue operation middleware
+func (siw *ServerInterfaceWrapper) GetSecretValue(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "workspace" -------------
+	var workspace WorkspacePath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "workspace", r.PathValue("workspace"), &workspace, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "secret" -------------
+	var secret SecretPath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "secret", r.PathValue("secret"), &secret, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "secret", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetSecretValue(w, r, workspace, secret)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // CreateSourceUpload operation middleware
 func (siw *ServerInterfaceWrapper) CreateSourceUpload(w http.ResponseWriter, r *http.Request) {
 
@@ -2640,6 +2975,14 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/workspaces/{workspace}/containers/{container}", wrapper.GetContainer)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/workspaces/{workspace}/containers/{container}/stop", wrapper.StopContainer)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/workspaces/{workspace}/containers/{container}/logs", wrapper.StreamContainerLogs)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/workspaces/{workspace}/secrets", wrapper.ListSecrets)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/workspaces/{workspace}/secrets", wrapper.CreateSecret)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/v1/workspaces/{workspace}/secrets/{secret}", wrapper.DeleteSecret)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/workspaces/{workspace}/secrets/{secret}", wrapper.GetSecret)
+	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/v1/workspaces/{workspace}/secrets/{secret}", wrapper.UpdateSecret)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/v1/workspaces/{workspace}/secrets/{secret}", wrapper.SetSecret)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/workspaces/{workspace}/secrets/{secret}/value", wrapper.GetSecretValue)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/workspaces/{workspace}/schedules", wrapper.ListSchedules)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/workspaces/{workspace}/images/resolve", wrapper.ResolveImage)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/workspaces/{workspace}/images", wrapper.BuildImage)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/workspaces/{workspace}/images/{image}", wrapper.GetImage)
@@ -4742,6 +5085,322 @@ func (response SetMemberRoledefaultJSONResponse) VisitSetMemberRoleResponse(w ht
 	return err
 }
 
+type ListSchedulesRequestObject struct {
+	Workspace WorkspacePath `json:"workspace"`
+	Params    ListSchedulesParams
+}
+
+type ListSchedulesResponseObject interface {
+	VisitListSchedulesResponse(w http.ResponseWriter) error
+}
+
+type ListSchedules200JSONResponse SchedulePage
+
+func (response ListSchedules200JSONResponse) VisitListSchedulesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSchedulesdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ListSchedulesdefaultJSONResponse) VisitListSchedulesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSecretsRequestObject struct {
+	Workspace WorkspacePath `json:"workspace"`
+	Params    ListSecretsParams
+}
+
+type ListSecretsResponseObject interface {
+	VisitListSecretsResponse(w http.ResponseWriter) error
+}
+
+type ListSecrets200JSONResponse SecretPage
+
+func (response ListSecrets200JSONResponse) VisitListSecretsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSecretsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ListSecretsdefaultJSONResponse) VisitListSecretsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateSecretRequestObject struct {
+	Workspace WorkspacePath `json:"workspace"`
+	Body      *CreateSecretJSONRequestBody
+}
+
+type CreateSecretResponseObject interface {
+	VisitCreateSecretResponse(w http.ResponseWriter) error
+}
+
+type CreateSecret201JSONResponse Secret
+
+func (response CreateSecret201JSONResponse) VisitCreateSecretResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateSecretdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response CreateSecretdefaultJSONResponse) VisitCreateSecretResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteSecretRequestObject struct {
+	Workspace WorkspacePath `json:"workspace"`
+	Secret    SecretPath    `json:"secret"`
+}
+
+type DeleteSecretResponseObject interface {
+	VisitDeleteSecretResponse(w http.ResponseWriter) error
+}
+
+type DeleteSecret204Response struct {
+}
+
+func (response DeleteSecret204Response) VisitDeleteSecretResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeleteSecretdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response DeleteSecretdefaultJSONResponse) VisitDeleteSecretResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSecretRequestObject struct {
+	Workspace WorkspacePath `json:"workspace"`
+	Secret    SecretPath    `json:"secret"`
+}
+
+type GetSecretResponseObject interface {
+	VisitGetSecretResponse(w http.ResponseWriter) error
+}
+
+type GetSecret200JSONResponse Secret
+
+func (response GetSecret200JSONResponse) VisitGetSecretResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSecretdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetSecretdefaultJSONResponse) VisitGetSecretResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateSecretRequestObject struct {
+	Workspace WorkspacePath `json:"workspace"`
+	Secret    SecretPath    `json:"secret"`
+	Body      *UpdateSecretJSONRequestBody
+}
+
+type UpdateSecretResponseObject interface {
+	VisitUpdateSecretResponse(w http.ResponseWriter) error
+}
+
+type UpdateSecret200JSONResponse Secret
+
+func (response UpdateSecret200JSONResponse) VisitUpdateSecretResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateSecretdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response UpdateSecretdefaultJSONResponse) VisitUpdateSecretResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSecretRequestObject struct {
+	Workspace WorkspacePath `json:"workspace"`
+	Secret    SecretPath    `json:"secret"`
+	Body      *SetSecretJSONRequestBody
+}
+
+type SetSecretResponseObject interface {
+	VisitSetSecretResponse(w http.ResponseWriter) error
+}
+
+type SetSecret200JSONResponse Secret
+
+func (response SetSecret200JSONResponse) VisitSetSecretResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSecretdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response SetSecretdefaultJSONResponse) VisitSetSecretResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSecretValueRequestObject struct {
+	Workspace WorkspacePath `json:"workspace"`
+	Secret    SecretPath    `json:"secret"`
+}
+
+type GetSecretValueResponseObject interface {
+	VisitGetSecretValueResponse(w http.ResponseWriter) error
+}
+
+type GetSecretValue200JSONResponse SecretValue
+
+func (response GetSecretValue200JSONResponse) VisitGetSecretValueResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSecretValuedefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetSecretValuedefaultJSONResponse) VisitGetSecretValueResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type CreateSourceUploadRequestObject struct {
 	Workspace WorkspacePath `json:"workspace"`
 	Body      *CreateSourceUploadJSONRequestBody
@@ -5248,6 +5907,30 @@ type StrictServerInterface interface {
 	// SetMemberRole Change a member's role; administrators only, never the owner's
 	// (PATCH /v1/workspaces/{workspace}/members/{user})
 	SetMemberRole(ctx context.Context, request SetMemberRoleRequestObject) (SetMemberRoleResponseObject, error)
+	// ListSchedules Scheduled functions with their next and last runs
+	// (GET /v1/workspaces/{workspace}/schedules)
+	ListSchedules(ctx context.Context, request ListSchedulesRequestObject) (ListSchedulesResponseObject, error)
+	// ListSecrets Secret names and update times, without values
+	// (GET /v1/workspaces/{workspace}/secrets)
+	ListSecrets(ctx context.Context, request ListSecretsRequestObject) (ListSecretsResponseObject, error)
+	// CreateSecret Create a secret; an existing name is a conflict
+	// (POST /v1/workspaces/{workspace}/secrets)
+	CreateSecret(ctx context.Context, request CreateSecretRequestObject) (CreateSecretResponseObject, error)
+
+	// (DELETE /v1/workspaces/{workspace}/secrets/{secret})
+	DeleteSecret(ctx context.Context, request DeleteSecretRequestObject) (DeleteSecretResponseObject, error)
+	// GetSecret A secret without its value
+	// (GET /v1/workspaces/{workspace}/secrets/{secret})
+	GetSecret(ctx context.Context, request GetSecretRequestObject) (GetSecretResponseObject, error)
+	// UpdateSecret Replace an existing secret's value
+	// (PATCH /v1/workspaces/{workspace}/secrets/{secret})
+	UpdateSecret(ctx context.Context, request UpdateSecretRequestObject) (UpdateSecretResponseObject, error)
+	// SetSecret Create the secret or replace its value
+	// (PUT /v1/workspaces/{workspace}/secrets/{secret})
+	SetSecret(ctx context.Context, request SetSecretRequestObject) (SetSecretResponseObject, error)
+	// GetSecretValue Reveal a secret's value
+	// (GET /v1/workspaces/{workspace}/secrets/{secret}/value)
+	GetSecretValue(ctx context.Context, request GetSecretValueRequestObject) (GetSecretValueResponseObject, error)
 	// CreateSourceUpload Register a source archive by digest and get an upload URL when it is missing
 	// (POST /v1/workspaces/{workspace}/sources)
 	CreateSourceUpload(ctx context.Context, request CreateSourceUploadRequestObject) (CreateSourceUploadResponseObject, error)
@@ -6765,6 +7448,242 @@ func (sh *strictHandler) SetMemberRole(w http.ResponseWriter, r *http.Request, w
 	}
 }
 
+// ListSchedules operation middleware
+func (sh *strictHandler) ListSchedules(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, params ListSchedulesParams) {
+	var request ListSchedulesRequestObject
+
+	request.Workspace = workspace
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListSchedules(ctx, request.(ListSchedulesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListSchedules")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListSchedulesResponseObject); ok {
+		if err := validResponse.VisitListSchedulesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListSecrets operation middleware
+func (sh *strictHandler) ListSecrets(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, params ListSecretsParams) {
+	var request ListSecretsRequestObject
+
+	request.Workspace = workspace
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListSecrets(ctx, request.(ListSecretsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListSecrets")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListSecretsResponseObject); ok {
+		if err := validResponse.VisitListSecretsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateSecret operation middleware
+func (sh *strictHandler) CreateSecret(w http.ResponseWriter, r *http.Request, workspace WorkspacePath) {
+	var request CreateSecretRequestObject
+
+	request.Workspace = workspace
+
+	var body CreateSecretJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateSecret(ctx, request.(CreateSecretRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateSecret")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateSecretResponseObject); ok {
+		if err := validResponse.VisitCreateSecretResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeleteSecret operation middleware
+func (sh *strictHandler) DeleteSecret(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, secret SecretPath) {
+	var request DeleteSecretRequestObject
+
+	request.Workspace = workspace
+	request.Secret = secret
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteSecret(ctx, request.(DeleteSecretRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteSecret")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteSecretResponseObject); ok {
+		if err := validResponse.VisitDeleteSecretResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetSecret operation middleware
+func (sh *strictHandler) GetSecret(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, secret SecretPath) {
+	var request GetSecretRequestObject
+
+	request.Workspace = workspace
+	request.Secret = secret
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetSecret(ctx, request.(GetSecretRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetSecret")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetSecretResponseObject); ok {
+		if err := validResponse.VisitGetSecretResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateSecret operation middleware
+func (sh *strictHandler) UpdateSecret(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, secret SecretPath) {
+	var request UpdateSecretRequestObject
+
+	request.Workspace = workspace
+	request.Secret = secret
+
+	var body UpdateSecretJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateSecret(ctx, request.(UpdateSecretRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateSecret")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateSecretResponseObject); ok {
+		if err := validResponse.VisitUpdateSecretResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// SetSecret operation middleware
+func (sh *strictHandler) SetSecret(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, secret SecretPath) {
+	var request SetSecretRequestObject
+
+	request.Workspace = workspace
+	request.Secret = secret
+
+	var body SetSecretJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.SetSecret(ctx, request.(SetSecretRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "SetSecret")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(SetSecretResponseObject); ok {
+		if err := validResponse.VisitSetSecretResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetSecretValue operation middleware
+func (sh *strictHandler) GetSecretValue(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, secret SecretPath) {
+	var request GetSecretValueRequestObject
+
+	request.Workspace = workspace
+	request.Secret = secret
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetSecretValue(ctx, request.(GetSecretValueRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetSecretValue")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetSecretValueResponseObject); ok {
+		if err := validResponse.VisitGetSecretValueResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // CreateSourceUpload operation middleware
 func (sh *strictHandler) CreateSourceUpload(w http.ResponseWriter, r *http.Request, workspace WorkspacePath) {
 	var request CreateSourceUploadRequestObject
@@ -7000,186 +7919,205 @@ func (sh *strictHandler) GetTaskResult(w http.ResponseWriter, r *http.Request, w
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"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",
+	"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",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,

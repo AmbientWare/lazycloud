@@ -12,6 +12,10 @@ option go_package = "github.com/AmbientWare/lazycloud/internal/hostproto";
 // the socket identifies the container. Agent and supervisor ship together.
 service ContainerLink {
   rpc Connect(stream SupervisorMessage) returns (stream SupervisorCommand);
+  // API forwards one request to the container API, which the agent relays
+  // to HostService.ContainerAPI. The agent sets head.container_id and
+  // bounds body size and concurrent calls per container.
+  rpc API(stream APIRequest) returns (stream APIResponse);
 }
 
 message SupervisorMessage {
@@ -68,6 +72,12 @@ message Configure {
   int32 slots = 2;
   repeated string runner_command = 3;
   string working_directory = 4;
+  // Run every slot as a thread of one runner process.
+  bool in_process = 10;
+  LifecycleHooks hooks = 11;
+  // Environment variables holding secret values; their values are replaced
+  // in task output.
+  repeated string secret_env = 12;
 }
 
 message RunAttempt {
@@ -76,8 +86,11 @@ message RunAttempt {
   PayloadEncoding input_encoding = 3;
   bytes input = 4;
   google.protobuf.Timestamp deadline = 5;
+  int32 attempt_number = 10;
+  int32 max_attempts = 11;
+  string root_task_id = 12;
+  string parent_task_id = 13;
   repeated DependencyResult dependencies = 60;
-  string root_task_id = 61;
 }
 
 // CancelSlot kills the process running the attempt and starts a replacement.

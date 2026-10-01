@@ -51,6 +51,9 @@ func (e *Execution) cancelTask(ctx context.Context, tx pgx.Tx, workspace *identi
 	if err := q.CancelTask(ctx, task.ID); err != nil {
 		return false, fmt.Errorf("cancel task: %w", err)
 	}
+	if err := recordCallbacks(ctx, q, CallbackCancelled, []uuid.UUID{task.ID}, nil); err != nil {
+		return false, err
+	}
 	if status == TaskRunning && task.CurrentAttemptID != nil {
 		attempt := *task.CurrentAttemptID
 		// The task is already cancelled, so finishAttempt only records

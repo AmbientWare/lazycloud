@@ -38,9 +38,12 @@ type Task struct {
 	Status      TaskStatus
 	Attempts    int
 	MaxAttempts int
-	Parent      *TaskID
-	// Root is the first task of the call graph, nil when the task is one.
-	Root *TaskID
+	// Parent is the task that spawned this one; Root is the root of its
+	// call graph, the task itself when nothing spawned it.
+	Parent *TaskID
+	Root   TaskID
+	// ScheduledFor is the cron occurrence that admitted the task.
+	ScheduledFor *time.Time
 	// Container ran the latest attempt.
 	Container *ContainerID
 	// NextAttemptAt is when a queued task that already ran is due again.
@@ -103,8 +106,11 @@ func taskFrom(row TaskViewRow) (Task, error) {
 		ID: TaskID(row.ID), App: row.AppName, Function: row.FunctionName, Release: row.ReleaseID,
 		Version: versionOf(row.Version), Status: TaskStatus(row.Status),
 		Attempts: int(row.AttemptCount), MaxAttempts: int(row.MaxAttempts),
-		Parent: taskIDPtr(row.ParentTaskID), Root: taskIDPtr(row.RootTaskID),
+		Parent: taskIDPtr(row.ParentTaskID), Root: TaskID(row.ID), ScheduledFor: row.ScheduledFor,
 		CreatedAt: row.CreatedAt, StartedAt: row.StartedAt, FinishedAt: row.FinishedAt,
+	}
+	if row.RootTaskID != nil {
+		task.Root = TaskID(*row.RootTaskID)
 	}
 	if len(row.ContainerIds) > 0 {
 		c := ContainerID(row.ContainerIds[0])

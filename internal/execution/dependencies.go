@@ -110,8 +110,12 @@ func (e *Execution) failQueued(ctx context.Context, tx pgx.Tx, ids, releases []u
 	if err != nil {
 		return fmt.Errorf("encode failure: %w", err)
 	}
-	if err := e.queries.WithTx(tx).FailTasks(ctx, FailTasksParams{Ids: ids, Failure: encoded}); err != nil {
+	q := e.queries.WithTx(tx)
+	if err := q.FailTasks(ctx, FailTasksParams{Ids: ids, Failure: encoded}); err != nil {
 		return fmt.Errorf("fail tasks: %w", err)
+	}
+	if err := recordCallbacks(ctx, q, CallbackFailed, ids, nil); err != nil {
+		return err
 	}
 	if err := notifyAll(ctx, tx, database.ChannelTask, uuidStrings(ids)); err != nil {
 		return err

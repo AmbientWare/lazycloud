@@ -13,14 +13,20 @@ info:
     most 1 MiB and payloads at most 64 MiB. The header's `type` selects the
     schema below; frames without a payload carry a zero payload length.
 
-    1. The supervisor sends `load`. The runner imports the handler and replies
-       `loaded`, or `load_failed` and exits.
+    1. The supervisor sends `load`. The runner imports the handler, runs the
+       on_start hooks and replies `loaded`, or `load_failed` and exits.
     2. The supervisor sends one `dependency` frame per upstream result the
        input refers to, then `invoke` with the input as payload. The runner
-       replies `succeeded` with the result as payload, or `failed` with an
-       optional serialized exception as payload. One attempt runs at a time.
+       runs the attempt's hooks around the handler and replies `succeeded`
+       with the result as payload, or `failed` with an optional serialized
+       exception as payload. With `concurrency` 1 one attempt runs at a time
+       and stdout and stderr written during it are its output. With a larger
+       `concurrency` up to that many attempts run at once on threads, and the
+       runner sends each attempt's output as `output` frames; stdout and
+       stderr then carry only output outside an attempt.
     3. Closing the socket asks the runner to exit. The supervisor kills the
-       process group to cancel an attempt.
+       process group to cancel an attempt; with a larger `concurrency` that
+       ends every attempt the process runs.
 
     The runner exits 0 after the socket closes, 1 after `load_failed` and 2 on
     a protocol error such as a malformed frame or an unsupported
@@ -67,6 +73,36 @@ components:
         handler:
           description: "module:qualname importable from the working directory"
           type: string
+        concurrency:
+          description: Attempts the runner may run at once, each on its own thread.
+          type: integer
+          minimum: 1
+          maximum: 256
+          default: 1
+        hooks: { $ref: "#/components/schemas/LifecycleHooks" }
+
+    LifecycleHooks:
+      description: >-
+        `module:qualname` references called with one context argument.
+        on_start runs once after the handler loads; a failure is a load
+        failure. on_running runs before the handler. A success runs
+        on_success then on_finish. A failure runs on_error, then on_retry
+        when another attempt follows or on_failure when none does, then
+        on_finish. Failures of these hooks are written to the attempt's
+        stderr and do not change the outcome.
+      type: object
+      properties:
+        on_start: { $ref: "#/components/schemas/HookReferences" }
+        on_running: { $ref: "#/components/schemas/HookReferences" }
+        on_success: { $ref: "#/components/schemas/HookReferences" }
+        on_error: { $ref: "#/components/schemas/HookReferences" }
+        on_retry: { $ref: "#/components/schemas/HookReferences" }
+        on_failure: { $ref: "#/components/schemas/HookReferences" }
+        on_finish: { $ref: "#/components/schemas/HookReferences" }
+
+    HookReferences:
+      type: array
+      items: { type: string }
 
     Loaded:
       type: object
@@ -97,15 +133,24 @@ components:
     Invoke:
       description: The payload is the encoded Arguments.
       type: object
-      required: [type, task_id, root_task_id, attempt_id, input_encoding]
+      required: [type, task_id, attempt_id, input_encoding]
       properties:
         type: { type: string, enum: [invoke] }
         task_id: { type: string }
-        root_task_id:
-          description: The first task of the call graph, the task itself when nothing spawned it.
-          type: string
         attempt_id: { type: string }
         input_encoding: { $ref: "#/components/schemas/Encoding" }
+        root_task_id:
+          description: The root of the call graph; the task itself when nothing spawned it.
+          type: string
+        parent_task_id:
+          description: The task that spawned this one, when one did.
+          type: string
+        attempt_number: { type: integer, minimum: 1, default: 1 }
+        max_attempts:
+          description: A failure of an attempt below this number is retried.
+          type: integer
+          minimum: 1
+          default: 1
 
     Succeeded:
       description: The payload is the encoded return value.
@@ -124,3 +169,15 @@ components:
         type: { type: string, enum: [failed] }
         attempt_id: { type: string }
         error: { $ref: "#/components/schemas/RunnerError" }
+
+    Output:
+      description: >-
+        Output an attempt wrote while the runner runs several attempts at
+        once, as the UTF-8 payload of at most 256 KiB. Sent only for a
+        `concurrency` above 1.
+      type: object
+      required: [type, attempt_id, stream]
+      properties:
+        type: { type: string, enum: [output] }
+        attempt_id: { type: string }
+        stream: { type: string, enum: [stdout, stderr] }

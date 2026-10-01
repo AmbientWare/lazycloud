@@ -272,6 +272,9 @@ func (e *Execution) stopRelease(ctx context.Context, tx pgx.Tx, plan *releasePla
 		return fmt.Errorf("cancel queued tasks: %w", err)
 	}
 	plan.cancelled = len(cancelled)
+	if err := recordCallbacks(ctx, q, CallbackCancelled, cancelled, nil); err != nil {
+		return err
+	}
 	if err := notifyAll(ctx, tx, database.ChannelTask, uuidStrings(cancelled)); err != nil {
 		return err
 	}

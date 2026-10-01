@@ -6,7 +6,6 @@ from lazycloud.clients.disk.control import DiskControlClient
 from lazycloud.clients.domain.control import DomainControlClient
 from lazycloud.clients.gateway.control import GatewayControlClient
 from lazycloud.clients.resource.control import ResourceControlClient
-from lazycloud.clients.secret.control import SecretControlClient
 from lazycloud.clients.ssh.control import SshControlClient
 from lazycloud.clients.volume.control import VolumeControlClient
 from lazycloud.control import (
@@ -97,20 +96,6 @@ def domain_client(
     )
 
 
-def secret_client(
-    *,
-    workspace: str | None = None,
-    timeout_seconds: float = 10.0,
-) -> SecretControlClient:
-    config = control_config(workspace=workspace, timeout_seconds=timeout_seconds)
-    return SecretControlClient.from_endpoint(
-        config.endpoint,
-        token=config.token,
-        timeout_seconds=config.timeout_seconds,
-        workspace=config.workspace,
-    )
-
-
 def disk_client(
     *,
     workspace: str | None = None,
@@ -144,7 +129,6 @@ __all__ = [
     "compute_client",
     "control_config",
     "gateway_client",
-    "secret_client",
     "ssh_client",
     "volume_client",
 ]
