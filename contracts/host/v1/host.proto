@@ -12,7 +12,8 @@ option go_package = "github.com/AmbientWare/lazycloud/internal/hostproto";
 // results and logs travel on their own calls so large payloads never delay
 // commands or presence.
 service HostService {
-  // Enroll exchanges a single-use join token for a host identity.
+  // Enroll exchanges a single-use join token, or a cloud instance's identity
+  // proof, for a host identity.
   rpc Enroll(EnrollRequest) returns (EnrollResponse);
   // Session is the host's control stream. The first HostMessage is Hello.
   // Commands are derived from durable state and resent after reconnect, so
@@ -38,9 +39,38 @@ service HostService {
 }
 
 message EnrollRequest {
+  // A single-use join token. Cloud hosts send cloud_identity instead.
   string join_token = 1;
   string hostname = 2;
   Capacity capacity = 3;
+  // What the host checked before joining. A failed error-severity check
+  // fails a joined machine with host_preflight_failed.
+  repeated PreflightCheck preflight = 70;
+  // amd64 or arm64.
+  string architecture = 71;
+  // Proves a cloud instance's identity in place of a join token.
+  CloudIdentity cloud_identity = 72;
+}
+
+message PreflightCheck {
+  string name = 1;
+  bool ok = 2;
+  string message = 3;
+  // info, warning or error.
+  string severity = 4;
+  string remediation = 5;
+}
+
+// CloudIdentity is an STS GetCallerIdentity request the instance signed with
+// its instance-profile credentials, which the server sends to STS. The
+// signature covers the LazyCloud-Host-Id header, so the request names one
+// host and cannot be replayed for another.
+message CloudIdentity {
+  string host_id = 1;
+  string url = 2;
+  string method = 3;
+  map<string, string> headers = 4;
+  bytes body = 5;
 }
 
 message EnrollResponse {
@@ -51,6 +81,9 @@ message EnrollResponse {
 message Capacity {
   int64 cpu_millis = 1;
   int64 memory_bytes = 2;
+  // The GPUs the host offers, all of one model.
+  string gpu_type = 70;
+  int32 gpu_count = 71;
 }
 
 message HostMessage {
@@ -58,7 +91,17 @@ message HostMessage {
     Hello hello = 1;
     ContainerReport container = 2;
     Ack ack = 3;
+    // The provider will reclaim the host. Sent again after reconnects while
+    // the notice stands.
+    Interruption interruption = 70;
   }
+}
+
+// Interruption is a provider's notice that it reclaims the instance at
+// reclaim_at, such as an EC2 Spot interruption.
+message Interruption {
+  string reason = 1;
+  google.protobuf.Timestamp reclaim_at = 2;
 }
 
 // Hello opens a session. It lists every container the host runs so the server
@@ -68,6 +111,10 @@ message Hello {
   Capacity capacity = 2;
   repeated ContainerReport containers = 3;
   string agent_version = 4;
+  // The agent runs under its service and can replace itself on UpdateAgent.
+  bool updatable = 70;
+  // A release the host rolled back from; the server does not offer it again.
+  string rejected_version = 71;
 }
 
 enum ContainerPhase {
@@ -131,7 +178,18 @@ message ServerMessage {
     StartContainer start = 2;
     StopContainer stop = 3;
     CancelAttempt cancel = 4;
+    UpdateAgent update = 70;
   }
+}
+
+// UpdateAgent asks an updatable agent to install a release and restart into
+// it. The agent verifies the archive's digest, and its service rolls back to
+// the previous release if the new one does not reconnect.
+message UpdateAgent {
+  string version = 1;
+  // Where the release archive for the host's architecture downloads from.
+  string url = 2;
+  string sha256 = 3;
 }
 
 message StartContainer {
@@ -199,6 +257,8 @@ message Resources {
   int64 memory_bytes = 2;
   int64 cpu_limit_millis = 3;
   int64 memory_limit_bytes = 4;
+  // GPUs the host gives the container; the host picks free devices.
+  int32 gpu_count = 70;
 }
 
 message FunctionWorkload {

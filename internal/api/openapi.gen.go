@@ -27,6 +27,30 @@ import (
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
+	// DisconnectAws Disconnect the AWS account
+	// (DELETE /v1/aws-connection)
+	DisconnectAws(w http.ResponseWriter, r *http.Request)
+	// GetAwsConnection The account's AWS connection
+	// (GET /v1/aws-connection)
+	GetAwsConnection(w http.ResponseWriter, r *http.Request)
+	// ConnectAws Connect an AWS account to back the workspaces the account owns
+	// (POST /v1/aws-connection)
+	ConnectAws(w http.ResponseWriter, r *http.Request)
+	// CancelAwsReconnect Cancel a pending replacement authorization
+	// (DELETE /v1/aws-connection/reconnect)
+	CancelAwsReconnect(w http.ResponseWriter, r *http.Request)
+	// ReconnectAws Start a replacement authorization while the current one keeps serving
+	// (POST /v1/aws-connection/reconnect)
+	ReconnectAws(w http.ResponseWriter, r *http.Request)
+	// RetryAwsConnection Retry the step the connection is waiting on
+	// (POST /v1/aws-connection/retry)
+	RetryAwsConnection(w http.ResponseWriter, r *http.Request)
+	// ValidateAwsConnection Check the pending or active authorization now
+	// (POST /v1/aws-connection/validate)
+	ValidateAwsConnection(w http.ResponseWriter, r *http.Request)
+	// ListComputeInstances Instances running in the account's connected AWS account
+	// (GET /v1/compute/instances)
+	ListComputeInstances(w http.ResponseWriter, r *http.Request, params ListComputeInstancesParams)
 	// StartDeviceLogin Start a device-code login for a CLI
 	// (POST /v1/device-codes)
 	StartDeviceLogin(w http.ResponseWriter, r *http.Request)
@@ -51,6 +75,18 @@ type ServerInterface interface {
 	// DeclineInvitation Refuse an invitation
 	// (POST /v1/invitations/{token}/decline)
 	DeclineInvitation(w http.ResponseWriter, r *http.Request, token InvitationTokenPath)
+	// ListMachines Machines the account joined
+	// (GET /v1/machines)
+	ListMachines(w http.ResponseWriter, r *http.Request, params ListMachinesParams)
+	// CreateMachineJoinCommand The command that joins a host to the account as a named machine
+	// (POST /v1/machines/join-command)
+	CreateMachineJoinCommand(w http.ResponseWriter, r *http.Request)
+	// RemoveMachine Remove a machine and revoke its host credential
+	// (DELETE /v1/machines/{machine})
+	RemoveMachine(w http.ResponseWriter, r *http.Request, machine string)
+	// UpdateMachine Change the workspaces a machine serves
+	// (PATCH /v1/machines/{machine})
+	UpdateMachine(w http.ResponseWriter, r *http.Request, machine string)
 	// GetMe The authenticated user and the workspaces they are a member of
 	// (GET /v1/me)
 	GetMe(w http.ResponseWriter, r *http.Request)
@@ -90,6 +126,12 @@ type ServerInterface interface {
 	// SubmitTasks Admit one task per input against the function's active release
 	// (POST /v1/workspaces/{workspace}/apps/{app}/functions/{function}/tasks)
 	SubmitTasks(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, app AppPath, function FunctionPath)
+	// GetComputeSummary Where the workspace runs and how much capacity serves it
+	// (GET /v1/workspaces/{workspace}/compute)
+	GetComputeSummary(w http.ResponseWriter, r *http.Request, workspace WorkspacePath)
+	// ListComputeWorkloads Deployed workloads with their sizes and machine pins
+	// (GET /v1/workspaces/{workspace}/compute/workloads)
+	ListComputeWorkloads(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, params ListComputeWorkloadsParams)
 	// GetImageBuild Read a build, optionally waiting until it finishes
 	// (GET /v1/workspaces/{workspace}/image-builds/{build})
 	GetImageBuild(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, build ImageBuildPath, params GetImageBuildParams)
@@ -117,6 +159,9 @@ type ServerInterface interface {
 	// ResendInvitation Send the invitation again on a new link; the previous link stops working
 	// (POST /v1/workspaces/{workspace}/invitations/{invitation}/resend)
 	ResendInvitation(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, invitation InvitationPath)
+	// ListWorkspaceMachines Joined machines that serve the workspace
+	// (GET /v1/workspaces/{workspace}/machines)
+	ListWorkspaceMachines(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, params ListWorkspaceMachinesParams)
 	// ListMembers The workspace's members, owner first
 	// (GET /v1/workspaces/{workspace}/members)
 	ListMembers(w http.ResponseWriter, r *http.Request, workspace WorkspacePath)
@@ -175,6 +220,150 @@ type ServerInterfaceWrapper struct {
 }
 
 type MiddlewareFunc func(http.Handler) http.Handler
+
+// DisconnectAws operation middleware
+func (siw *ServerInterfaceWrapper) DisconnectAws(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DisconnectAws(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetAwsConnection operation middleware
+func (siw *ServerInterfaceWrapper) GetAwsConnection(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetAwsConnection(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ConnectAws operation middleware
+func (siw *ServerInterfaceWrapper) ConnectAws(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ConnectAws(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CancelAwsReconnect operation middleware
+func (siw *ServerInterfaceWrapper) CancelAwsReconnect(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CancelAwsReconnect(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ReconnectAws operation middleware
+func (siw *ServerInterfaceWrapper) ReconnectAws(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ReconnectAws(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RetryAwsConnection operation middleware
+func (siw *ServerInterfaceWrapper) RetryAwsConnection(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RetryAwsConnection(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ValidateAwsConnection operation middleware
+func (siw *ServerInterfaceWrapper) ValidateAwsConnection(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ValidateAwsConnection(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListComputeInstances operation middleware
+func (siw *ServerInterfaceWrapper) ListComputeInstances(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListComputeInstancesParams
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", r.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "cursor"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cursor", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListComputeInstances(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
 
 // StartDeviceLogin operation middleware
 func (siw *ServerInterfaceWrapper) StartDeviceLogin(w http.ResponseWriter, r *http.Request) {
@@ -351,6 +540,118 @@ func (siw *ServerInterfaceWrapper) DeclineInvitation(w http.ResponseWriter, r *h
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.DeclineInvitation(w, r, token)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListMachines operation middleware
+func (siw *ServerInterfaceWrapper) ListMachines(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListMachinesParams
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", r.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "cursor"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cursor", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListMachines(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateMachineJoinCommand operation middleware
+func (siw *ServerInterfaceWrapper) CreateMachineJoinCommand(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateMachineJoinCommand(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RemoveMachine operation middleware
+func (siw *ServerInterfaceWrapper) RemoveMachine(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "machine" -------------
+	var machine string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "machine", r.PathValue("machine"), &machine, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "machine", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RemoveMachine(w, r, machine)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateMachine operation middleware
+func (siw *ServerInterfaceWrapper) UpdateMachine(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "machine" -------------
+	var machine string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "machine", r.PathValue("machine"), &machine, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "machine", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateMachine(w, r, machine)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -748,6 +1049,87 @@ func (siw *ServerInterfaceWrapper) SubmitTasks(w http.ResponseWriter, r *http.Re
 	handler.ServeHTTP(w, r)
 }
 
+// GetComputeSummary operation middleware
+func (siw *ServerInterfaceWrapper) GetComputeSummary(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "workspace" -------------
+	var workspace WorkspacePath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "workspace", r.PathValue("workspace"), &workspace, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetComputeSummary(w, r, workspace)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListComputeWorkloads operation middleware
+func (siw *ServerInterfaceWrapper) ListComputeWorkloads(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "workspace" -------------
+	var workspace WorkspacePath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "workspace", r.PathValue("workspace"), &workspace, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListComputeWorkloadsParams
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", r.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "cursor"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cursor", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListComputeWorkloads(w, r, workspace, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // GetImageBuild operation middleware
 func (siw *ServerInterfaceWrapper) GetImageBuild(w http.ResponseWriter, r *http.Request) {
 
@@ -1079,6 +1461,61 @@ func (siw *ServerInterfaceWrapper) ResendInvitation(w http.ResponseWriter, r *ht
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.ResendInvitation(w, r, workspace, invitation)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListWorkspaceMachines operation middleware
+func (siw *ServerInterfaceWrapper) ListWorkspaceMachines(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "workspace" -------------
+	var workspace WorkspacePath
+
+	err = runtime.BindStyledParameterWithOptions("simple", "workspace", r.PathValue("workspace"), &workspace, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "workspace", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListWorkspaceMachinesParams
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", r.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "cursor"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cursor", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListWorkspaceMachines(w, r, workspace, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1872,11 +2309,333 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/workspaces/{workspace}/images/{image}", wrapper.GetImage)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/workspaces/{workspace}/image-builds/{build}", wrapper.GetImageBuild)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/workspaces/{workspace}/image-builds/{build}/logs", wrapper.StreamImageBuildLogs)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/workspaces/{workspace}/compute", wrapper.GetComputeSummary)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/workspaces/{workspace}/compute/workloads", wrapper.ListComputeWorkloads)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/workspaces/{workspace}/machines", wrapper.ListWorkspaceMachines)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/compute/instances", wrapper.ListComputeInstances)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/v1/aws-connection", wrapper.DisconnectAws)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/aws-connection", wrapper.GetAwsConnection)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/aws-connection", wrapper.ConnectAws)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/aws-connection/validate", wrapper.ValidateAwsConnection)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/v1/aws-connection/reconnect", wrapper.CancelAwsReconnect)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/aws-connection/reconnect", wrapper.ReconnectAws)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/aws-connection/retry", wrapper.RetryAwsConnection)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/v1/machines", wrapper.ListMachines)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/v1/machines/join-command", wrapper.CreateMachineJoinCommand)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/v1/machines/{machine}", wrapper.RemoveMachine)
+	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/v1/machines/{machine}", wrapper.UpdateMachine)
 
 	return m
 }
 
 type ErrorJSONResponse Error
+
+type DisconnectAwsRequestObject struct {
+}
+
+type DisconnectAwsResponseObject interface {
+	VisitDisconnectAwsResponse(w http.ResponseWriter) error
+}
+
+type DisconnectAws202JSONResponse AwsConnectionEnvelope
+
+func (response DisconnectAws202JSONResponse) VisitDisconnectAwsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(202)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DisconnectAwsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response DisconnectAwsdefaultJSONResponse) VisitDisconnectAwsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetAwsConnectionRequestObject struct {
+}
+
+type GetAwsConnectionResponseObject interface {
+	VisitGetAwsConnectionResponse(w http.ResponseWriter) error
+}
+
+type GetAwsConnection200JSONResponse AwsConnectionEnvelope
+
+func (response GetAwsConnection200JSONResponse) VisitGetAwsConnectionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetAwsConnectiondefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetAwsConnectiondefaultJSONResponse) VisitGetAwsConnectionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ConnectAwsRequestObject struct {
+	Body *ConnectAwsJSONRequestBody
+}
+
+type ConnectAwsResponseObject interface {
+	VisitConnectAwsResponse(w http.ResponseWriter) error
+}
+
+type ConnectAws201JSONResponse AwsConnectionAuthorization
+
+func (response ConnectAws201JSONResponse) VisitConnectAwsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ConnectAwsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ConnectAwsdefaultJSONResponse) VisitConnectAwsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CancelAwsReconnectRequestObject struct {
+}
+
+type CancelAwsReconnectResponseObject interface {
+	VisitCancelAwsReconnectResponse(w http.ResponseWriter) error
+}
+
+type CancelAwsReconnect200JSONResponse AwsConnection
+
+func (response CancelAwsReconnect200JSONResponse) VisitCancelAwsReconnectResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CancelAwsReconnectdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response CancelAwsReconnectdefaultJSONResponse) VisitCancelAwsReconnectResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ReconnectAwsRequestObject struct {
+	Body *ReconnectAwsJSONRequestBody
+}
+
+type ReconnectAwsResponseObject interface {
+	VisitReconnectAwsResponse(w http.ResponseWriter) error
+}
+
+type ReconnectAws200JSONResponse AwsConnectionAuthorization
+
+func (response ReconnectAws200JSONResponse) VisitReconnectAwsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ReconnectAwsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ReconnectAwsdefaultJSONResponse) VisitReconnectAwsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RetryAwsConnectionRequestObject struct {
+}
+
+type RetryAwsConnectionResponseObject interface {
+	VisitRetryAwsConnectionResponse(w http.ResponseWriter) error
+}
+
+type RetryAwsConnection200JSONResponse AwsConnection
+
+func (response RetryAwsConnection200JSONResponse) VisitRetryAwsConnectionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RetryAwsConnectiondefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response RetryAwsConnectiondefaultJSONResponse) VisitRetryAwsConnectionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ValidateAwsConnectionRequestObject struct {
+}
+
+type ValidateAwsConnectionResponseObject interface {
+	VisitValidateAwsConnectionResponse(w http.ResponseWriter) error
+}
+
+type ValidateAwsConnection200JSONResponse AwsConnection
+
+func (response ValidateAwsConnection200JSONResponse) VisitValidateAwsConnectionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ValidateAwsConnectiondefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ValidateAwsConnectiondefaultJSONResponse) VisitValidateAwsConnectionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListComputeInstancesRequestObject struct {
+	Params ListComputeInstancesParams
+}
+
+type ListComputeInstancesResponseObject interface {
+	VisitListComputeInstancesResponse(w http.ResponseWriter) error
+}
+
+type ListComputeInstances200JSONResponse ComputeInstancePage
+
+func (response ListComputeInstances200JSONResponse) VisitListComputeInstancesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListComputeInstancesdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ListComputeInstancesdefaultJSONResponse) VisitListComputeInstancesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
 
 type StartDeviceLoginRequestObject struct {
 	Body *StartDeviceLoginJSONRequestBody
@@ -2173,6 +2932,157 @@ type DeclineInvitationdefaultJSONResponse struct {
 }
 
 func (response DeclineInvitationdefaultJSONResponse) VisitDeclineInvitationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListMachinesRequestObject struct {
+	Params ListMachinesParams
+}
+
+type ListMachinesResponseObject interface {
+	VisitListMachinesResponse(w http.ResponseWriter) error
+}
+
+type ListMachines200JSONResponse MachinePage
+
+func (response ListMachines200JSONResponse) VisitListMachinesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListMachinesdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ListMachinesdefaultJSONResponse) VisitListMachinesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateMachineJoinCommandRequestObject struct {
+	Body *CreateMachineJoinCommandJSONRequestBody
+}
+
+type CreateMachineJoinCommandResponseObject interface {
+	VisitCreateMachineJoinCommandResponse(w http.ResponseWriter) error
+}
+
+type CreateMachineJoinCommand201JSONResponse MachineJoinCommand
+
+func (response CreateMachineJoinCommand201JSONResponse) VisitCreateMachineJoinCommandResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateMachineJoinCommanddefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response CreateMachineJoinCommanddefaultJSONResponse) VisitCreateMachineJoinCommandResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RemoveMachineRequestObject struct {
+	Machine string `json:"machine"`
+}
+
+type RemoveMachineResponseObject interface {
+	VisitRemoveMachineResponse(w http.ResponseWriter) error
+}
+
+type RemoveMachine204Response struct {
+}
+
+func (response RemoveMachine204Response) VisitRemoveMachineResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type RemoveMachinedefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response RemoveMachinedefaultJSONResponse) VisitRemoveMachineResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateMachineRequestObject struct {
+	Machine string `json:"machine"`
+	Body    *UpdateMachineJSONRequestBody
+}
+
+type UpdateMachineResponseObject interface {
+	VisitUpdateMachineResponse(w http.ResponseWriter) error
+}
+
+type UpdateMachine200JSONResponse Machine
+
+func (response UpdateMachine200JSONResponse) VisitUpdateMachineResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateMachinedefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response UpdateMachinedefaultJSONResponse) VisitUpdateMachineResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -2685,6 +3595,85 @@ func (response SubmitTasksdefaultJSONResponse) VisitSubmitTasksResponse(w http.R
 	return err
 }
 
+type GetComputeSummaryRequestObject struct {
+	Workspace WorkspacePath `json:"workspace"`
+}
+
+type GetComputeSummaryResponseObject interface {
+	VisitGetComputeSummaryResponse(w http.ResponseWriter) error
+}
+
+type GetComputeSummary200JSONResponse ComputeSummary
+
+func (response GetComputeSummary200JSONResponse) VisitGetComputeSummaryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetComputeSummarydefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetComputeSummarydefaultJSONResponse) VisitGetComputeSummaryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListComputeWorkloadsRequestObject struct {
+	Workspace WorkspacePath `json:"workspace"`
+	Params    ListComputeWorkloadsParams
+}
+
+type ListComputeWorkloadsResponseObject interface {
+	VisitListComputeWorkloadsResponse(w http.ResponseWriter) error
+}
+
+type ListComputeWorkloads200JSONResponse ComputeWorkloadPage
+
+func (response ListComputeWorkloads200JSONResponse) VisitListComputeWorkloadsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListComputeWorkloadsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ListComputeWorkloadsdefaultJSONResponse) VisitListComputeWorkloadsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetImageBuildRequestObject struct {
 	Workspace WorkspacePath  `json:"workspace"`
 	Build     ImageBuildPath `json:"build"`
@@ -3059,6 +4048,46 @@ type ResendInvitationdefaultJSONResponse struct {
 }
 
 func (response ResendInvitationdefaultJSONResponse) VisitResendInvitationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListWorkspaceMachinesRequestObject struct {
+	Workspace WorkspacePath `json:"workspace"`
+	Params    ListWorkspaceMachinesParams
+}
+
+type ListWorkspaceMachinesResponseObject interface {
+	VisitListWorkspaceMachinesResponse(w http.ResponseWriter) error
+}
+
+type ListWorkspaceMachines200JSONResponse MachinePage
+
+func (response ListWorkspaceMachines200JSONResponse) VisitListWorkspaceMachinesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListWorkspaceMachinesdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ListWorkspaceMachinesdefaultJSONResponse) VisitListWorkspaceMachinesResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -3733,6 +4762,30 @@ func (response GetTaskResultdefaultJSONResponse) VisitGetTaskResultResponse(w ht
 
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
+	// DisconnectAws Disconnect the AWS account
+	// (DELETE /v1/aws-connection)
+	DisconnectAws(ctx context.Context, request DisconnectAwsRequestObject) (DisconnectAwsResponseObject, error)
+	// GetAwsConnection The account's AWS connection
+	// (GET /v1/aws-connection)
+	GetAwsConnection(ctx context.Context, request GetAwsConnectionRequestObject) (GetAwsConnectionResponseObject, error)
+	// ConnectAws Connect an AWS account to back the workspaces the account owns
+	// (POST /v1/aws-connection)
+	ConnectAws(ctx context.Context, request ConnectAwsRequestObject) (ConnectAwsResponseObject, error)
+	// CancelAwsReconnect Cancel a pending replacement authorization
+	// (DELETE /v1/aws-connection/reconnect)
+	CancelAwsReconnect(ctx context.Context, request CancelAwsReconnectRequestObject) (CancelAwsReconnectResponseObject, error)
+	// ReconnectAws Start a replacement authorization while the current one keeps serving
+	// (POST /v1/aws-connection/reconnect)
+	ReconnectAws(ctx context.Context, request ReconnectAwsRequestObject) (ReconnectAwsResponseObject, error)
+	// RetryAwsConnection Retry the step the connection is waiting on
+	// (POST /v1/aws-connection/retry)
+	RetryAwsConnection(ctx context.Context, request RetryAwsConnectionRequestObject) (RetryAwsConnectionResponseObject, error)
+	// ValidateAwsConnection Check the pending or active authorization now
+	// (POST /v1/aws-connection/validate)
+	ValidateAwsConnection(ctx context.Context, request ValidateAwsConnectionRequestObject) (ValidateAwsConnectionResponseObject, error)
+	// ListComputeInstances Instances running in the account's connected AWS account
+	// (GET /v1/compute/instances)
+	ListComputeInstances(ctx context.Context, request ListComputeInstancesRequestObject) (ListComputeInstancesResponseObject, error)
 	// StartDeviceLogin Start a device-code login for a CLI
 	// (POST /v1/device-codes)
 	StartDeviceLogin(ctx context.Context, request StartDeviceLoginRequestObject) (StartDeviceLoginResponseObject, error)
@@ -3757,6 +4810,18 @@ type StrictServerInterface interface {
 	// DeclineInvitation Refuse an invitation
 	// (POST /v1/invitations/{token}/decline)
 	DeclineInvitation(ctx context.Context, request DeclineInvitationRequestObject) (DeclineInvitationResponseObject, error)
+	// ListMachines Machines the account joined
+	// (GET /v1/machines)
+	ListMachines(ctx context.Context, request ListMachinesRequestObject) (ListMachinesResponseObject, error)
+	// CreateMachineJoinCommand The command that joins a host to the account as a named machine
+	// (POST /v1/machines/join-command)
+	CreateMachineJoinCommand(ctx context.Context, request CreateMachineJoinCommandRequestObject) (CreateMachineJoinCommandResponseObject, error)
+	// RemoveMachine Remove a machine and revoke its host credential
+	// (DELETE /v1/machines/{machine})
+	RemoveMachine(ctx context.Context, request RemoveMachineRequestObject) (RemoveMachineResponseObject, error)
+	// UpdateMachine Change the workspaces a machine serves
+	// (PATCH /v1/machines/{machine})
+	UpdateMachine(ctx context.Context, request UpdateMachineRequestObject) (UpdateMachineResponseObject, error)
 	// GetMe The authenticated user and the workspaces they are a member of
 	// (GET /v1/me)
 	GetMe(ctx context.Context, request GetMeRequestObject) (GetMeResponseObject, error)
@@ -3796,6 +4861,12 @@ type StrictServerInterface interface {
 	// SubmitTasks Admit one task per input against the function's active release
 	// (POST /v1/workspaces/{workspace}/apps/{app}/functions/{function}/tasks)
 	SubmitTasks(ctx context.Context, request SubmitTasksRequestObject) (SubmitTasksResponseObject, error)
+	// GetComputeSummary Where the workspace runs and how much capacity serves it
+	// (GET /v1/workspaces/{workspace}/compute)
+	GetComputeSummary(ctx context.Context, request GetComputeSummaryRequestObject) (GetComputeSummaryResponseObject, error)
+	// ListComputeWorkloads Deployed workloads with their sizes and machine pins
+	// (GET /v1/workspaces/{workspace}/compute/workloads)
+	ListComputeWorkloads(ctx context.Context, request ListComputeWorkloadsRequestObject) (ListComputeWorkloadsResponseObject, error)
 	// GetImageBuild Read a build, optionally waiting until it finishes
 	// (GET /v1/workspaces/{workspace}/image-builds/{build})
 	GetImageBuild(ctx context.Context, request GetImageBuildRequestObject) (GetImageBuildResponseObject, error)
@@ -3823,6 +4894,9 @@ type StrictServerInterface interface {
 	// ResendInvitation Send the invitation again on a new link; the previous link stops working
 	// (POST /v1/workspaces/{workspace}/invitations/{invitation}/resend)
 	ResendInvitation(ctx context.Context, request ResendInvitationRequestObject) (ResendInvitationResponseObject, error)
+	// ListWorkspaceMachines Joined machines that serve the workspace
+	// (GET /v1/workspaces/{workspace}/machines)
+	ListWorkspaceMachines(ctx context.Context, request ListWorkspaceMachinesRequestObject) (ListWorkspaceMachinesResponseObject, error)
 	// ListMembers The workspace's members, owner first
 	// (GET /v1/workspaces/{workspace}/members)
 	ListMembers(ctx context.Context, request ListMembersRequestObject) (ListMembersResponseObject, error)
@@ -3910,6 +4984,217 @@ type strictHandler struct {
 	ssi         StrictServerInterface
 	middlewares []StrictMiddlewareFunc
 	options     StrictHTTPServerOptions
+}
+
+// DisconnectAws operation middleware
+func (sh *strictHandler) DisconnectAws(w http.ResponseWriter, r *http.Request) {
+	var request DisconnectAwsRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DisconnectAws(ctx, request.(DisconnectAwsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DisconnectAws")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DisconnectAwsResponseObject); ok {
+		if err := validResponse.VisitDisconnectAwsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetAwsConnection operation middleware
+func (sh *strictHandler) GetAwsConnection(w http.ResponseWriter, r *http.Request) {
+	var request GetAwsConnectionRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetAwsConnection(ctx, request.(GetAwsConnectionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetAwsConnection")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetAwsConnectionResponseObject); ok {
+		if err := validResponse.VisitGetAwsConnectionResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ConnectAws operation middleware
+func (sh *strictHandler) ConnectAws(w http.ResponseWriter, r *http.Request) {
+	var request ConnectAwsRequestObject
+
+	var body ConnectAwsJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ConnectAws(ctx, request.(ConnectAwsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ConnectAws")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ConnectAwsResponseObject); ok {
+		if err := validResponse.VisitConnectAwsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CancelAwsReconnect operation middleware
+func (sh *strictHandler) CancelAwsReconnect(w http.ResponseWriter, r *http.Request) {
+	var request CancelAwsReconnectRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CancelAwsReconnect(ctx, request.(CancelAwsReconnectRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CancelAwsReconnect")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CancelAwsReconnectResponseObject); ok {
+		if err := validResponse.VisitCancelAwsReconnectResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ReconnectAws operation middleware
+func (sh *strictHandler) ReconnectAws(w http.ResponseWriter, r *http.Request) {
+	var request ReconnectAwsRequestObject
+
+	var body ReconnectAwsJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		if !errors.Is(err, io.EOF) {
+			sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+			return
+		}
+	} else {
+		request.Body = &body
+	}
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ReconnectAws(ctx, request.(ReconnectAwsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ReconnectAws")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ReconnectAwsResponseObject); ok {
+		if err := validResponse.VisitReconnectAwsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RetryAwsConnection operation middleware
+func (sh *strictHandler) RetryAwsConnection(w http.ResponseWriter, r *http.Request) {
+	var request RetryAwsConnectionRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RetryAwsConnection(ctx, request.(RetryAwsConnectionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RetryAwsConnection")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RetryAwsConnectionResponseObject); ok {
+		if err := validResponse.VisitRetryAwsConnectionResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ValidateAwsConnection operation middleware
+func (sh *strictHandler) ValidateAwsConnection(w http.ResponseWriter, r *http.Request) {
+	var request ValidateAwsConnectionRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ValidateAwsConnection(ctx, request.(ValidateAwsConnectionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ValidateAwsConnection")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ValidateAwsConnectionResponseObject); ok {
+		if err := validResponse.VisitValidateAwsConnectionResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListComputeInstances operation middleware
+func (sh *strictHandler) ListComputeInstances(w http.ResponseWriter, r *http.Request, params ListComputeInstancesParams) {
+	var request ListComputeInstancesRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListComputeInstances(ctx, request.(ListComputeInstancesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListComputeInstances")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListComputeInstancesResponseObject); ok {
+		if err := validResponse.VisitListComputeInstancesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
 }
 
 // StartDeviceLogin operation middleware
@@ -4123,6 +5408,122 @@ func (sh *strictHandler) DeclineInvitation(w http.ResponseWriter, r *http.Reques
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(DeclineInvitationResponseObject); ok {
 		if err := validResponse.VisitDeclineInvitationResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListMachines operation middleware
+func (sh *strictHandler) ListMachines(w http.ResponseWriter, r *http.Request, params ListMachinesParams) {
+	var request ListMachinesRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListMachines(ctx, request.(ListMachinesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListMachines")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListMachinesResponseObject); ok {
+		if err := validResponse.VisitListMachinesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateMachineJoinCommand operation middleware
+func (sh *strictHandler) CreateMachineJoinCommand(w http.ResponseWriter, r *http.Request) {
+	var request CreateMachineJoinCommandRequestObject
+
+	var body CreateMachineJoinCommandJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateMachineJoinCommand(ctx, request.(CreateMachineJoinCommandRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateMachineJoinCommand")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateMachineJoinCommandResponseObject); ok {
+		if err := validResponse.VisitCreateMachineJoinCommandResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RemoveMachine operation middleware
+func (sh *strictHandler) RemoveMachine(w http.ResponseWriter, r *http.Request, machine string) {
+	var request RemoveMachineRequestObject
+
+	request.Machine = machine
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RemoveMachine(ctx, request.(RemoveMachineRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RemoveMachine")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RemoveMachineResponseObject); ok {
+		if err := validResponse.VisitRemoveMachineResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateMachine operation middleware
+func (sh *strictHandler) UpdateMachine(w http.ResponseWriter, r *http.Request, machine string) {
+	var request UpdateMachineRequestObject
+
+	request.Machine = machine
+
+	var body UpdateMachineJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateMachine(ctx, request.(UpdateMachineRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateMachine")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateMachineResponseObject); ok {
+		if err := validResponse.VisitUpdateMachineResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -4500,6 +5901,59 @@ func (sh *strictHandler) SubmitTasks(w http.ResponseWriter, r *http.Request, wor
 	}
 }
 
+// GetComputeSummary operation middleware
+func (sh *strictHandler) GetComputeSummary(w http.ResponseWriter, r *http.Request, workspace WorkspacePath) {
+	var request GetComputeSummaryRequestObject
+
+	request.Workspace = workspace
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetComputeSummary(ctx, request.(GetComputeSummaryRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetComputeSummary")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetComputeSummaryResponseObject); ok {
+		if err := validResponse.VisitGetComputeSummaryResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListComputeWorkloads operation middleware
+func (sh *strictHandler) ListComputeWorkloads(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, params ListComputeWorkloadsParams) {
+	var request ListComputeWorkloadsRequestObject
+
+	request.Workspace = workspace
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListComputeWorkloads(ctx, request.(ListComputeWorkloadsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListComputeWorkloads")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListComputeWorkloadsResponseObject); ok {
+		if err := validResponse.VisitListComputeWorkloadsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // GetImageBuild operation middleware
 func (sh *strictHandler) GetImageBuild(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, build ImageBuildPath, params GetImageBuildParams) {
 	var request GetImageBuildRequestObject
@@ -4756,6 +6210,33 @@ func (sh *strictHandler) ResendInvitation(w http.ResponseWriter, r *http.Request
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(ResendInvitationResponseObject); ok {
 		if err := validResponse.VisitResendInvitationResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListWorkspaceMachines operation middleware
+func (sh *strictHandler) ListWorkspaceMachines(w http.ResponseWriter, r *http.Request, workspace WorkspacePath, params ListWorkspaceMachinesParams) {
+	var request ListWorkspaceMachinesRequestObject
+
+	request.Workspace = workspace
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListWorkspaceMachines(ctx, request.(ListWorkspaceMachinesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListWorkspaceMachines")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListWorkspaceMachinesResponseObject); ok {
+		if err := validResponse.VisitListWorkspaceMachinesResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -5234,156 +6715,221 @@ func (sh *strictHandler) GetTaskResult(w http.ResponseWriter, r *http.Request, w
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"7H1rd9w2kuhfweHdc7J7D/W0rST2h70aZ5J4xk58/Nicu45uCyLR3RixCQYAJXU0+u/3VOFBkASbbKml",
-	"zezOl8RqkkChUFWoN26TTKwqUbJSq+TlbVJRSVdMM4l/nVbVe6qX8E9eJi+TCv5Ik5KuWPIyoVWVpIlk",
-	"v9Vcsjx5qWXN0kRlS7ai8Mm/SDZPXib/66CZ4sA8VQenVfUTjHJ3lyava6mEhC9ypjLJK80FzPZpyUjJ",
-	"bvQswxeImBO9ZKSS7IqLWpGKLth+khrQfquZXDewmU+SEJwVvXnLygUs58XRcZrodQVvKi15uUBAvq/L",
-	"DObesOa5feXeC/9FyMtC0Nyv/s2KLtifal7kG6a9gOcb55wLuaI6eZnUNc+T2Opwog1zcHh+73Xh6G9y",
-	"M1N5xTUdwST3Lz10XX6gT+KS+Sn7tKRYJpkmcylWSEgNBKTg5aUnpTacGgbdCGJAWMeHh2my4qX7+ygG",
-	"8Fu+4tpjpUO4BT4Mh8/ZnNaFTl6+gLHpDV/Vq+TlkZ3J/uXn4aVmCyZxoo+44A17YDBy7z0343tK/kTV",
-	"5YbJNFWXD9zqz4rJ1yJnw3uciZzh5r5++4aopbhWKVF1tiRUkT+9/u77vR9+/MtfU8JLQss1yahiA9te",
-	"KyZnMNpGkCuqNZPw9f/7crr3n3Tv97Pb53d7/x788S/RlYAYUBXNNjHktXvn3htkt+YOvleVKBVDsf5n",
-	"KY28zUSpWYm0SKuq4Blyw8HfFODzduIkZjScpb0fpwTWnRNmX3BQm6Mly1ilWd5wL+JTiopJzQ2cK7a6",
-	"YHJs/nfmrbs0QNgEIWxevLsLcfulhXM7/ZnfP3HxN5ZpmOm0qvrgZpJRzfIZ1S1qzqlme5qvWJ8Q0oTn",
-	"EyjfUcTEIzVNlKYa32clSIcvCc00vwIAKlorlidnvTk6eEAwcFY3WhqubwAnP1kwQ7YANoD/HO59Ozu7",
-	"PUxPjmMskSantRYqowWTfcyu6M0MaJXy0momXigetWXiiFDEp0NDHQ4PdRgbCgSamlVMNgNuBG1cYPdw",
-	"+tqgHA+2Ploky4TMx+jCfAyju1GGjsZXhGvCFSmFRtlZErqgvNxPxqilOSMRoBh1fMcKfsXk+qMjzTYQ",
-	"vyypJhcsoysGeh4tCVtRXrwk57/VrGb5OalLzQurAIornjNJKMoQRbhO4UFJzhUr9XlKaJmT89zMyPLz",
-	"lJxfiLrMYBghyTkgqYD9ys/hXGiNKVklpFavyPmc8gLeuIaR7WBrsqBXjNTVK3Kec5VRmftXuCbXVJFr",
-	"rpe5pNcluWBzIQG3Zc7LBWDRsaNZU5ImAG+SJnZ0/MlCCvzmwUzSxEAD77ppI0wMaK4KsV5Zod4mF1pV",
-	"Y7QCcu0uTSpZw6xwLGm2UtvptB4qKiVdJ0gqBaP27Jk04AfzQX+sDt05C8QO7wGPE6DDzAf2W81UBEFO",
-	"uZ8OqLMYPlYsQ+lCb96Y75wmaP886mMFYW0JjDktFOueoh+1qAhD2nPwOUuIVhXRS+p5tuBKszxg1wsh",
-	"CkbLHt6ahcYxdcUzBnpW5IwrOCv1zJ1HPfq7zxnIbioumdrqGziT6tHtaVby0bx/lwaKXR/+DppCHTBc",
-	"uJ++td7WQjbj9aOH3kmEygiJJAWaluLKsDorOcv9wEMcD6O+FQseOSFyfOiX2xf8r9+++Up5y0hIUomi",
-	"sNJqcKN4OVMsE2WuAhwGByOMMYO/5RUtNr/a2o3IkYCymUklSpKJcs7lShH78xWTfG5VVu8L6MEcvjWr",
-	"JY9SbfelGYpepgeQ1psZhT4ChfbHnBcFy8mUkzPcoLRFcD3AN4EZ3ZuhjRimTaSiQfHY4X0vtuBB0hVb",
-	"cBaYo9UskaCO0BhjWcH/T0ErLSpAUteE7iNtAGJUbgYh7pD/tob60EadjYFjbK0+PIOM0aF8yjVQORxr",
-	"QOtckUKUC6dQaOsXQ14NSCxgq23EI8LcyMcNWmJ7J0VpuFMUhTmF5rzMzZYXQEfESbJxLvDidFuCDWGP",
-	"SlNViOtZLq7Le0hWbyZ32MBS06hNjCcoKAVMKbqYcN5Yznfvx5bdDBwsl5dXtOD5TFo+SJO6pDVoxBqk",
-	"hdEfhbzgeY5qein0bC7q0iiZ5bzgmUbbcA1a3EwLMSuoRGdgXaq6Ao0YB4EnK1quZxbBMzSBEmMKzXBY",
-	"XnK1xJfrkl5RXtCLgqGLRTNZ0iKK6e8pL2rJ/srLPFwXikPjPUgTBM39ofmKiVrjz7hgpanUM68kq7XS",
-	"bBWfy3lw+/oxGskzq05uoaNOU6yddjzFlu9q1PB7Xhej33107210AigtqmqKF8BqO0bNdm6ADppiVNpS",
-	"i/t4bln6G7HWvAm6JS2KC5pdzmpZ9AXUB5YxfsUUoUTxRcly8v7nj5+MaUYJECioyZJpyVkOZqAlVdU7",
-	"f55/EyGbTJRZLSUrs3XXyO8ISmAJIkpGvFeAyLpEtUWUGUvxWSVFxpQiFZNEFUJbIIxz4PjFyZgbI5Mi",
-	"IqQ/1EYmN4ZCaY6Pz59eE0dDnfUenYydhGnCyisuRenMSprnHIanxfvWxva+6xHGkpZ5wSKxnpUA0F7+",
-	"VtMCiA4VKm4Wo0QtM0aozJbOh9V1us7O7D/AybR/9r9fDvwedTyZuMeU8Iaz8ng5s/s3br65LQnoBzdc",
-	"Gc+DZDRXYM8BUci6BGqxY8fsuDS5ZKyaXVO5GlYf3uQFI/ap0xloQI30QlwZLcLSGAGBoFok+M3J85a/",
-	"ai9KhQWfs2ydFWy2FOJyVN94617/Ed829nLnLGnx1mHXJTfBwXcf8SqZIbIJjgn3In6l5XpWiYJn6/EP",
-	"tVy/N6+CbEaDK7J3JqSiHMk4+eFlmyIBL5IrKjmcr8p5BBTwDmAAoxpTPBhhDCf0XxwdHnZcFnCi899q",
-	"Zl/QsmawEsTH6Cz41gc2T+784d0mYLvlz04ODzeQYdxtGjmynKDxAKZBfNPtYezoAtL8wOYMOLXjsdqx",
-	"3AlwfdL3Dr1xUqlzdoIU1CzTtZwms07DD+7SBwQpJkV/06Ra66UoZ1dMKqtl9cYDobeOmxi4SXBQV/VF",
-	"gZokOnMzCu5UkqMPL+7issNusbBYyKMDfdpGuAN9NBbSR32oh63yk+c49OrkeVRHbXICIhSgNVtVuo8+",
-	"fL8RGoqgTsxyogSZU5mCArISSpPjuM14H8qYG8U9usvOFHiMeBiSyWw7ulxOUOqDZIylVe6nmdLNh86S",
-	"jlGXBzvwIBq4Ur+v02grgLFHCCa6QK4p1wp9epQsYd/RSSWFWKWGNHi5IJVkFZXWU3PRpqDU/ACvoQLb",
-	"vAIs6baXrBi1D82agHvnvKRFPOJhZ07SxI2eNLQywg19Sz8YQ9VZxlgeRksGR/uOwYzODIz4HWlpRZHF",
-	"htonHzWrFGACsgeExADUXDNJrMyoaHZJF3BIl7lTuzKxWtEyR91qsyBvvGlOPEwXFxdUsZlXY7tBeMkW",
-	"XGm5tgvSwuw+5sF0bAHMixqxBZrJZplkOSs1p4XaZBYEE5y8ePHsJDJo15SzEAcTkIt1VPXx2s6K3oTT",
-	"PjuOsI7bjtax3gdvBAMtJemwf3QDybAbvZVOlIvsksk5L6Jb+J1/ajxtklUFzRzXUuXOTaC890iNRDFd",
-	"d12rR4fPv3nx9UncwHvgDnbQf/yieanB/6Kq48f+D+8/k5XIWREIGZQ5ouys4eR5bHKeSbGiqws6bpC9",
-	"8++6oK9yOAP0eYwGxBZXNzpsP0RTR4fHzx9MUn2lqksi3k0HRp2QxLpnwNFBS8JuaKZJRXW2dE/225b0",
-	"s19/3f/Xo8O/Hx39/ej470fP/n70/N/+9ddf978c7n17dnuUPrv7t3+PqrGDpoxPsrHhpfAAMWYvVfZP",
-	"Khc1IFq1zJYRfRuSSY6Ov74bUa5PnvfRqTSrpgd5je2vWTW+U51Dv7Ntg6f5m7yzXr5azADzdG9+dnv8",
-	"PL5G/BQs0qKOOzQvnAY5TXPZzhnS13BWQ07rxnnSA/E+itwIL4A8sQxtWMG+ieQnIY1khRbGStQl8Mtc",
-	"yFBTebZ/dJik8L8j879j879n5n/xE1g6i3GTVXOxJjlfMGXCl45BQcylRDENzzXm4sgrhiABl/xcFmuX",
-	"9LfZfplKbEjJPTDVkhWFkbn2lNwnFa9QJjbilfBSaVoUwLFqn7yXAoYmlxj5cc9sPg0+AVVKLtSXwzOj",
-	"frIbLakyvx29PMPhF1LUldoPppmFJ71Rh430CH/3ebx4LjYTxXStxYh4vscZjziaeDiaFY44E0DQhm6D",
-	"PcyWe3Yf+XbJy2kcBbSAUZcuMeEIG0moG6xBAgLU8yppnchpUl/NLD3Ac2HcZs0P6+bfcRKI6/EbEkfv",
-	"Y8q6DK/xoGmYyHaXJpioFrWAXXCxx2zfsYznLG9z/FcQFBfZZVzbuE+SzFRjGjDJ8tnFejivJ3gHo3IT",
-	"h5ZiPGbVbOQHYSJXdZVvvX0+cXcaaDHrvDWE21e7hj6Wmu0NaKe1T53soGBVUcbyaHjLY7kMTbXCFpqL",
-	"/2Y0lS4cfjN47yW74uy6D+EkRtgRZU8g2fvR3pZ0FH4wJfLgiyWiSeezDh06QptOiSMpaMF6h3Jm/C4G",
-	"59qz43aM8NkGVqdF8fM8efllO8SfpYEHxCbed9FkIBtZligGdDCAT6Ffx78MxhH8TLIlLReMLCQtIfVX",
-	"XJdMqiWvMLGSXTGoPZszaRzP3i+TQ1hCaUk15iT0ygUa3HQCXz34XtOiMHEcq6OWTAKc4pKZhGIbv4Ok",
-	"H7PqlDAKiVTkvBM5PSdeFyW81CIIoe4TUc6M78fa1hkm13XijtarBd/ZKAqBWJkyadXoUzReX8AOxWem",
-	"xGOfAJ6FXjLp/WTtOBaVkHViQTf+ztR7017By1y60UFJxEyihY0B5AKTXO1ewcCi1pkw3p82DYvSZoqM",
-	"cGMn2HOXwpeBT3v7b9GPea9PMZp4vy/rsgRCu8+3SA73+7LOXAR8m29jWQHvIoGuWo2nh0A5WEsEq61S",
-	"1m0F0MjBiIC05jiLLsGVKm3SRLuOZmYYBKYgfxO8NAJmor7KVVXQDeff8HE85WT0CPJK2WS1L5ZFzfOk",
-	"A3LvWBsJexgMx3UjI3qn735TMrZx692ww+AAcgZP0vsoIB0IcIjY9COVVnubKq3emzy/mBcR06ScNw6P",
-	"R6ZrWZIrWtRsn5xDZeA5yaiUnClyjj+fvyLnWSHqvOLZZcGax+BGPXlOznOq6fk+ObXDKsJKTJM+v/0V",
-	"TfNfk5fky/7+/llKfk0ur91Pt/v7+3d3533pDuO1yPBiraMsgvNYyehObVgBpvN7gKMnNq4MvrvZW4g9",
-	"+xi+3f9Ar9/ZBM3ubvn5Yjv2oUkrfLixOg+SGLdJdJmo0yrrq9um9KUf8B9K0cA5g0L6JtjespcQiDgm",
-	"g2ydbuQIbGljxnR1j+KarhW5ZAx8Ta/ffw7yoGTzGSg1akkly0ldQbDsPKvqGVZlz1a8KLg6T9GTZ7TV",
-	"3udVUStydEIyIZnaJ+/YSsj18FS0KMR1M9cKX/fTXbTnmotaEiAJ1R0qbdLFj8gP/E+oMLl4/zfmFwSB",
-	"61cdvHBFLk29wgVbC9Tw+izXxYG1D2xSzrfHnbys4xfRBIOqfsjnXdy0B3nx9fE3J89bo3yzYZR7ft9N",
-	"2G5W1Bo5TrVNBljfU0+zSzGftwPBc35jbDoruvzfN4YX+UA2dc7gkI1lV4WpVTbTql/hWtbucITsPKum",
-	"R3jt1D4hvMyKGtMEjDdWqnY669GEqlx6M+uBPZgF1oe1e3CHgMc242OQT92VxkMxhRKkZsF/ZzlhN5Vk",
-	"CoRWtOaooEo3BkhX6TM+P3iHiMzmhDIC1qTWLCelwFN4eGBZl5vVSRzamG55OAVUp+Y1m65i4nSY2s/z",
-	"OE7g4cbltCYbrG5nN+GypgEHv/8uylZm1edPr8eT2nGHg+/b82+ilvfRlLygRU0fSe8lU6zUJg19heXA",
-	"djBIzQHhH91o/9JkldbBmLtzeVS7bebYtOZ8Q73EVmUP91VZti99iBYJB/qGHzG6btMSZSda2hSHYDv/",
-	"dnvPdzz9dRvHs4HAdBqIUPfWa/Cq8/gnn9iNHlqCGWYY4J98GWLrUCqHs4SM5vP29D//7+u3P3/+bkYq",
-	"yeb8xpSFYAwm3x8vLwDL6vjZt3HTynXc2YWcsEkTm6REk3qxRa73uGCwww7j/pNNb5oQ+jQf/IejiX8M",
-	"pgqIeBK7mbfvw3aImM/4Zh89D+WkDSy0pMcvTvpk+FZcM5lRxciS3ZCPP57uHb84sVkLHdZw2SknA9kp",
-	"TXpbb13Kz75xYeatHnWan6Orwik/V8670Z61MiwWV2RsdRFaf1rIbdLOt1sN0IWDb6NvE9/6ROWC6SEc",
-	"pH5NY9gY9FFtC7ziv7MZ+FtUi5d4qTFH1avsL56dfPP14bc2n3Rq8YZfVzBNdGn1xYprrLQbXBkvq3oL",
-	"2eicYpHcjw1dPHpBVJxzFOSh+nBfAjUJZBhsVJibIWMQ4ecPVOomWIftKoRHKT0YQ5ItL753UcIje9sq",
-	"Klk5YmjZGI8zuKgmqqLXJctNfaco2SRLyyadTU/fEGNwCaFd8RnU50IMtVoaTQth5VqxYm70mlJAUefC",
-	"g248TaNQOH09n82H2oSCTRean4ghb1I7YKZbvpZoH6ElDdDjphKRnrUSbFnaVI14xusoHa0dG+L67xvW",
-	"aTM/u8lYpQezKgOneU78u6nZ3CBynYm6yIlikqO/pLvPQ+76KVlrYaeAja0V0kRLmjFwrG0oTY6t0i8M",
-	"2xe24uCScjWlnwWuZHMjh4AOXt72y2Qsv8fLWtIko2XGiqESl4F2cffLirvisazWdxxzZy/W5Lygv6+R",
-	"Mkzbj/Mp+Wuds+KisX2QVwF+m3hhv5vOuhNFG/q2ajUQmv2AjexY7urQnx36gmoxJ7Virwg1QPO5BbRW",
-	"20RvB6O2E6VIu2dLN2mpW1Pcw61kNFsyODeKtTlB/BATRPKGXpGWXuIdsqJ8APAY58NwSlK071R7kT+X",
-	"sDby7SHJ6RpyeFZc2+I3s2Q8Eno05RXWr7/++qQdhrBe5+EK81YW8ZbthHCMQXzEo9ybHQhUYUHFuXnh",
-	"HNfedAqii4Zkm/weYIJJRzCicAvN1Lec3KiamkEHsdAXj76Dyaa2PS3LKcIMtsjHWXxoZbgGXugKQiq0",
-	"HSVN8ZxFl83e900x41S6jXhdMprbxIX7N9VYMb0UrVzs958/RVETbZxyeoEVJIx8/vD2lQ0sIgp8IL8U",
-	"5IJRCViAfRk//2AeD1ezytH0xM8qlkNDr6im0nV92UnLwenJM21c/XlV6bURpj9w/WN9YfuFmriN6c/G",
-	"clJJvqIQ9s1z2e7k0cyw4HpZX8wK17gvNhHKryyDQhVlBNiSXjHTn9X0uOGlIV0Dzf5DssDVDDMaI6Kl",
-	"oBo+J62MR2UOEduasnV8jHSfbGVXd3KCgr3uoCiAcPRQaRli45VkG7NlfgmbSv+hGj777iVbZd52ErvO",
-	"0piiT4sCCxJgaH9uzE0tYYsKyPVSuPajlJiEqf1W96lJsNhiioc3ofYjTjpCp2HM4Pks3d2J+9g5iyPJ",
-	"ig0JDGlc905lH9Rr2mQXnFWYbA2cPz2dukM2MQUhZwXT7VSs4KxSLKsl12uIGa5sBgYecL7rPcov85Mf",
-	"YKk1loAqE/of6JFI1fJCUJl/pciFFNeKSWI/8FV+9ugAEb7Hy31it8GKeJvgjARvhDvXZFUrjZ2kgQN/",
-	"lhz6K5pjFUJbLvfCT+4vNciEuOSsuVNgNvtRKL3nbbaZW0xDURX/K1ubfv68nAs8HrmGTUve0t/Xr+Ez",
-	"cvr+TZC59TI5AsSIipW04snL5Nn+4f4zEzBYInoPro4OjG2wl4ncdcM0pAeEh1lMUAabfNRU6rCprSEw",
-	"pvSfhOkas5NbCyINT+/axGwbHLVuTjg+PHoMCGK3J7jbLEw/ieslkyzshmubWQLNsJWx1G2ST3xWvwx/",
-	"X0PDBsnLL2dpouoVKC1uCwglwYbZlp7GoHr99g1+393UA9871G1tR2Ka3sJECVGiPKQlOY+2/DwPRGZz",
-	"3w90GqWlumZSkXPf2fPcVUhAj1SsmzBjmXIEY/zRqmJUKt+Ab4vOpW3qhCU8FXG2ettOIs7Dx4HAzBEj",
-	"0l88WRrEKY3tNXZLju9x3yPUaK4EMHcWuC1LientSoSz8/M4rd76Zst3AKQ1Ftu7/QPrSaJHxbfpGBuX",
-	"BYURFPfDrMdl08Y3RCQ1JQj4CxwUyoYl/FVgAxpS88pB62qeu7MRjB/Y7epeObb1POnAKXJqxv/D7J4j",
-	"zx1to10eodjlCWQq3HfkFFCvvlvbcZQBDnJWrh9tL75j5foPsxFWOuxmGz6wea06u+CRHVTUHtziMTQs",
-	"aGxN7Zv2nWiPhKR+Ke8ArrDo8cFI8v202tetmdFViqe3qLU92QGLXG8vf2K3wHkxFNmKA3N5zPZEH59o",
-	"UA7hLJv2dXcKZeRKrYGNtYVNS149eHf/ImyVp7c53ZU6xkO1x8ueGIptR86ygpfssffjOzPNpg15Hu3X",
-	"UOA9PLsSGCE3eLSsWCAfBnopKXLBgEXQvmW5qZHFa1+MFmysxnNn/kLZlQ/5KC15Bm9qge2Gmx2DEXww",
-	"CPtUs77q+wPT79hjyqV3UaH9Gg8zwrERnF7vRANqNcc3uo/r/XXdYFov2RoR7BxbRMz9Zlm7WR2YnAO7",
-	"Z+7OkI5Jyxflz7WeRGofjV9X1LZQx85DjCEPmm5WMCpZ/nAl+7bxZHw5u2up3H92ndDaHgxDHSuas06s",
-	"BLBXClP77VHUBI2iZx546D6ZV3rCvtPQGgtMrC2nyGpz7Dl2q6YpUWGzJjzZv16z1WMp8F2PSiBzn+dd",
-	"2gUbKO088DieP/QG27Gw7NkjMmcTl4zwKARfYS24QLOlu2BTr8fWpWTQDCGHo4QpZSdJScmumdKm5ii5",
-	"GxL6Jrz8KbjIddcGeySK/cTepNZNgQPHPmLtFbZwwNRgU+sI9/yh6F8yyR68bwYOjBMEW+XaVpqsg07I",
-	"yLFFV00wmxzqzkMC9gNSR7PBY0LWvL+L4xzGwcM0yIFDkjXAv/LpBxktIUZi6NhmxUW03HtdQDwqFyxC",
-	"2zGHqKIxFOtTjHW3LXVqpO3b0SiVtlUIbescl8zSGdBfK17YPxcafSeJo2j6rcn9SwTGUpIfXY5PiKo8",
-	"pihvx8hGxHlAM7sQ6W31yrILWdE1oRnonVjvXNrA5iZp/kvncuRdS/RejOyJ5Xl4RXFUmF83L+xIZIcS",
-	"+bps2tOZTXpFqgHZAEzthXazwQe3/t8d4b1hMeSCZWIFvSW8CeMuzkGZItGAckcI6ptOC90nb7TCPF/T",
-	"OsjnSKYocVqN8fH+I9/PKKcaZNUKHXTWnIXE0QW2K0ptLOJ6yTOMxeVc2XhCX3h9h4tsE2eLQo6fhkIQ",
-	"DttjoC5zAJ8+3HYyqwspJTVNQlS9wjO/Ln1b+NxCMEY36aDrfQMWD/8R+ezn0Ob2d9Ar10dyO7dH+wJ5",
-	"dHhQnS1juhGI0z+muHzCbZSIhnyH22kQGzLDK9xQ6ytY0TGhCEEQdXBLq+ruwJSYYXuc7V1gHVoYt1hP",
-	"q2rUTwbwnNr7lR8jwtm9jfnJA5wOgBjFfGCqLtCj7y+Xfii5vKOXzN3a/JXyNYXk2uaqKbICBsZXFvwK",
-	"7xx3l1SoLSjJ3+18cOv+uTHA+X1YavJIyPZzDDCnA9SfyCaPxyH/Xri/S5+Mi8ZfdQhohyXut5kHvkrw",
-	"D7u+IakSFEE+klyJVIY+seIeK/SMkP2pL06DN1EbwOpR0wvz4QFiGB4dEzA+dvk0w2Pyum1B70jqqz7D",
-	"baZQ7Ge/h9cLqINb/P9GGRPcMTDi6v1RFHkrB93keDQ3R7hbOwnGujlITVCibHFORZUaMsQhRhvcjR1x",
-	"FYSOgpN4w6HGTfCYFnqArwGJeWEePliFoeCmwcFSIipTf1CsfTzbZ9g4tCdpoulC+fseVHL2+II2uPFq",
-	"ivyMUedBIRbDXq9T22WD5URpyeiKMKAmXzTVIT1MyJNcwz/JRUHLS4hoM2snHr3w5OhC26zUkjNoO4dX",
-	"qCuiLnkVfBkxJD8iHM3K3wL8I8zzwTRrtLPZtLiScLhigVHtUu6AbYaYBJcwyB39ev9NHNJzpP2Vscpe",
-	"FIZIFhUrBxl8CEKzU3EQ7YU/vRjOdrx6s1fmfX5tyld5SRGgrpu1x6g/sWvY3b2coX+S5aS1n38uNfgw",
-	"MEX64foljgpxQ5TySImUGOejuXL4Lx9//ikGAJwNAOY/DGs/XPcJFJRO2Q200Q4Vb9MLEvFnr9jKpFCB",
-	"/zrwdZsDy1ZJmLcx7IFtHvHiyOZCPej2a/O98be+AECkvLF3lm5ke7PzeLATBoaDl1v+Nk2cfZijZMbu",
-	"wVC71966d/M9sU3YvVBp4Oxt7loDU8Uenohze4mz2sHBrESB+X0NLeKMRkbCvAaKuiyYUjYH1l1O2mPj",
-	"KUx1IM2cj8dc73npHLfBnXXNrUiwPpihdrf9WPK1mR8mn9vDjUEDY0UHL6OjOMAG5L8YnDkW5CWppFhI",
-	"QJtLmAz4BE5Ql0zDdZ8t7c688ZcJ/5MLQAG39sOu1NII9WsRkL1TrPw9plaJvTfx3+L/x42Y5LERvxHd",
-	"DzcLm4MpZCXL+vl/nQow7fRvX4EzmFX0JnjvSfJohwKpISAPjh6AshxgwJWsMy4JFtMSdwuRCSm8Ggq3",
-	"PI5wN7aHvVQEZaoH1R+VBkxq78U1/WFRqJsHXLklxMNwShB/Z6cETRcIGbsG4wEoqV46EwfDhK4qroGk",
-	"L85N7LOTDvoIIr13784Te6XGc4LDhNQHkipOhvFAu+OmDP7VPQLH7Vzh5o8J6UBb5vjuKifoF66XuaTX",
-	"nZR3xwN1iRXBiJjkCYRrk+u/pYRtYRvWzMr8CZzOPYCHfMkfEKKnrph4Au7xHUpC6kHjDv4BKY9YP/Gq",
-	"nYIEP2Fig7FNXaXzhr0OLk0ZPEnf2XceNevb3+sSwa0DYKe5R18pl6yWmru+ggTSBx2OkxBuCq9GBBjk",
-	"opi1TxRe8MEuNO+VKSszsGJ2R8HoFWt8CgA8HNVNZtAuxFgk79FevPSAtMfBnIiPTDf39zzSkd+/IOiJ",
-	"7Th3ydGmEqCH546ZZgWOYJqWIf2TPrXdt4BwkOu+Gg1rt9rgDwqpj/6tbenwtcnNnJ7j/5hBn9YtAyNZ",
-	"mR4xJlxocvVoZa5rngc3ADzsJLKzNEO2rA7scwIT4uUP6Pdq7MfgdoFHFqtBF/RhErHv/GMTSNNcfow8",
-	"zHLBiMIcpd3ElM38OKKJgZkO5+ZGoqaOE0sLWqTg+snv0PiMWXEGvsdKLAhvSXjqlAKzsKEmIQhTbjd9",
-	"d9nAZrxXaMbdcIVuNqQmvPYzE+W84JmO7vMkhj24Nf/YqAmZjNNgZ8dLNeGD+2pCMZId8gcOAXX4RPu+",
-	"o/0+tQN5/vXlQY/BwuOC1Em5zVmt5sqEJ+D48IKGJ1bgnmT7P7CqwKLtgMvN0F+NkEGto4r1P/dkVyJY",
-	"+xFNkr3ZqM3suZ3kPfA3jETTYmBJWLHlN9nV8RlfL3X3gpoyXuKyHLTA4BuQki17w9bwsXCal6P/YZf0",
-	"yDtnptm4fd5VZ5CzgxpBRgtCJ3LVEwrXEVpp7th8VKUtvLPlkYRG5CKUpxYb4Soj1GeeN7UgD6Q427OY",
-	"2ovfg17HYax9gbROzH000P3XOHlM9HzFlZrgRMTs1YNb+N/G4CleNnL/3E8Y/39G6iciaqh+G5/tJucT",
-	"xpqY8vn4YgkWPUkoheR2YAr8niAmEYA3KMwQFkvl/2XEYfP+bOXjbsIRZmWEEnM3BaoiwWU02wiIbZNw",
-	"75Nji2HizKbZZhR7ORZrzM+jOboqRK23T8QFzP8PSMFtydn/lhm4O8+7fSsWhnSGk277qbZ/VJEqmbKI",
-	"2HSQm+q4xxR0/ja2oWJOBGAXQUHTCIUSf82O4QGXCPjEO9Vt0OS6Un85g4G67ZqYvHJA4eUIyQGM8f8H",
-	"AA==",
+	"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",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,

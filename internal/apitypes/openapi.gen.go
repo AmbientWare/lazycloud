@@ -28,6 +28,273 @@ func (e AppState) Valid() bool {
 	}
 }
 
+// Defines values for AwsAuthorizationError.
+const (
+	AccountMismatch       AwsAuthorizationError = "account_mismatch"
+	AssumeRoleDenied      AwsAuthorizationError = "assume_role_denied"
+	ExternalIdNotEnforced AwsAuthorizationError = "external_id_not_enforced"
+	PermissionDrift       AwsAuthorizationError = "permission_drift"
+	StackDrift            AwsAuthorizationError = "stack_drift"
+	UpstreamUnavailable   AwsAuthorizationError = "upstream_unavailable"
+)
+
+// Valid indicates whether the value is a known member of the AwsAuthorizationError enum.
+func (e AwsAuthorizationError) Valid() bool {
+	switch e {
+	case AccountMismatch:
+		return true
+	case AssumeRoleDenied:
+		return true
+	case ExternalIdNotEnforced:
+		return true
+	case PermissionDrift:
+		return true
+	case StackDrift:
+		return true
+	case UpstreamUnavailable:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AwsAuthorizationGenerationAuthorizationMode.
+const (
+	ExistingRole AwsAuthorizationGenerationAuthorizationMode = "existing_role"
+	ManagedStack AwsAuthorizationGenerationAuthorizationMode = "managed_stack"
+)
+
+// Valid indicates whether the value is a known member of the AwsAuthorizationGenerationAuthorizationMode enum.
+func (e AwsAuthorizationGenerationAuthorizationMode) Valid() bool {
+	switch e {
+	case ExistingRole:
+		return true
+	case ManagedStack:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AwsAuthorizationPhase.
+const (
+	AwsAuthorizationPhaseAwaitingAuthorization AwsAuthorizationPhase = "awaiting_authorization"
+	AwsAuthorizationPhaseDegraded              AwsAuthorizationPhase = "degraded"
+	AwsAuthorizationPhaseReady                 AwsAuthorizationPhase = "ready"
+	AwsAuthorizationPhaseRetired               AwsAuthorizationPhase = "retired"
+	AwsAuthorizationPhaseRetiring              AwsAuthorizationPhase = "retiring"
+	AwsAuthorizationPhaseValidating            AwsAuthorizationPhase = "validating"
+)
+
+// Valid indicates whether the value is a known member of the AwsAuthorizationPhase enum.
+func (e AwsAuthorizationPhase) Valid() bool {
+	switch e {
+	case AwsAuthorizationPhaseAwaitingAuthorization:
+		return true
+	case AwsAuthorizationPhaseDegraded:
+		return true
+	case AwsAuthorizationPhaseReady:
+		return true
+	case AwsAuthorizationPhaseRetired:
+		return true
+	case AwsAuthorizationPhaseRetiring:
+		return true
+	case AwsAuthorizationPhaseValidating:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AwsConnectionAction.
+const (
+	Authorize       AwsConnectionAction = "authorize"
+	CancelReconnect AwsConnectionAction = "cancel_reconnect"
+	Reconnect       AwsConnectionAction = "reconnect"
+	Remove          AwsConnectionAction = "remove"
+	Retry           AwsConnectionAction = "retry"
+	Validate        AwsConnectionAction = "validate"
+)
+
+// Valid indicates whether the value is a known member of the AwsConnectionAction enum.
+func (e AwsConnectionAction) Valid() bool {
+	switch e {
+	case Authorize:
+		return true
+	case CancelReconnect:
+		return true
+	case Reconnect:
+		return true
+	case Remove:
+		return true
+	case Retry:
+		return true
+	case Validate:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AwsConnectionPhase.
+const (
+	AwsConnectionPhaseActionRequired        AwsConnectionPhase = "action_required"
+	AwsConnectionPhaseAwaitingAuthorization AwsConnectionPhase = "awaiting_authorization"
+	AwsConnectionPhaseDegraded              AwsConnectionPhase = "degraded"
+	AwsConnectionPhaseDisconnectDraining    AwsConnectionPhase = "disconnect_draining"
+	AwsConnectionPhaseReady                 AwsConnectionPhase = "ready"
+	AwsConnectionPhaseReconnectPending      AwsConnectionPhase = "reconnect_pending"
+	AwsConnectionPhaseRetiringAuthorization AwsConnectionPhase = "retiring_authorization"
+	AwsConnectionPhaseRevoking              AwsConnectionPhase = "revoking"
+	AwsConnectionPhaseValidating            AwsConnectionPhase = "validating"
+	AwsConnectionPhaseVerifyingRevocation   AwsConnectionPhase = "verifying_revocation"
+)
+
+// Valid indicates whether the value is a known member of the AwsConnectionPhase enum.
+func (e AwsConnectionPhase) Valid() bool {
+	switch e {
+	case AwsConnectionPhaseActionRequired:
+		return true
+	case AwsConnectionPhaseAwaitingAuthorization:
+		return true
+	case AwsConnectionPhaseDegraded:
+		return true
+	case AwsConnectionPhaseDisconnectDraining:
+		return true
+	case AwsConnectionPhaseReady:
+		return true
+	case AwsConnectionPhaseReconnectPending:
+		return true
+	case AwsConnectionPhaseRetiringAuthorization:
+		return true
+	case AwsConnectionPhaseRevoking:
+		return true
+	case AwsConnectionPhaseValidating:
+		return true
+	case AwsConnectionPhaseVerifyingRevocation:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AwsStackActionRequestCapabilities.
+const (
+	CAPABILITYNAMEDIAM AwsStackActionRequestCapabilities = "CAPABILITY_NAMED_IAM"
+)
+
+// Valid indicates whether the value is a known member of the AwsStackActionRequestCapabilities enum.
+func (e AwsStackActionRequestCapabilities) Valid() bool {
+	switch e {
+	case CAPABILITYNAMEDIAM:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AwsStackActionRequestOnFailure.
+const (
+	DELETE AwsStackActionRequestOnFailure = "DELETE"
+)
+
+// Valid indicates whether the value is a known member of the AwsStackActionRequestOnFailure enum.
+func (e AwsStackActionRequestOnFailure) Valid() bool {
+	switch e {
+	case DELETE:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CapacityState.
+const (
+	CapacityStateAvailable  CapacityState = "available"
+	CapacityStateCordoned   CapacityState = "cordoned"
+	CapacityStateDraining   CapacityState = "draining"
+	CapacityStatePreempting CapacityState = "preempting"
+)
+
+// Valid indicates whether the value is a known member of the CapacityState enum.
+func (e CapacityState) Valid() bool {
+	switch e {
+	case CapacityStateAvailable:
+		return true
+	case CapacityStateCordoned:
+		return true
+	case CapacityStateDraining:
+		return true
+	case CapacityStatePreempting:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ComputeInstanceMarket.
+const (
+	OnDemand ComputeInstanceMarket = "on_demand"
+	Spot     ComputeInstanceMarket = "spot"
+)
+
+// Valid indicates whether the value is a known member of the ComputeInstanceMarket enum.
+func (e ComputeInstanceMarket) Valid() bool {
+	switch e {
+	case OnDemand:
+		return true
+	case Spot:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ComputeInstanceProvider.
+const (
+	ComputeInstanceProviderAws ComputeInstanceProvider = "aws"
+)
+
+// Valid indicates whether the value is a known member of the ComputeInstanceProvider enum.
+func (e ComputeInstanceProvider) Valid() bool {
+	switch e {
+	case ComputeInstanceProviderAws:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ComputeSummaryCostCurrency.
+const (
+	USD ComputeSummaryCostCurrency = "USD"
+)
+
+// Valid indicates whether the value is a known member of the ComputeSummaryCostCurrency enum.
+func (e ComputeSummaryCostCurrency) Valid() bool {
+	switch e {
+	case USD:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ComputeWorkloadKind.
+const (
+	ComputeWorkloadKindFunction ComputeWorkloadKind = "function"
+)
+
+// Valid indicates whether the value is a known member of the ComputeWorkloadKind enum.
+func (e ComputeWorkloadKind) Valid() bool {
+	switch e {
+	case ComputeWorkloadKindFunction:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for DeliveryState.
 const (
 	DeliveryStateBounced    DeliveryState = "bounced"
@@ -199,6 +466,45 @@ func (e FunctionState) Valid() bool {
 	case FunctionStateActive:
 		return true
 	case FunctionStateStopped:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GpuType.
+const (
+	A10040 GpuType = "A100-40"
+	A10080 GpuType = "A100-80"
+	A10G   GpuType = "A10G"
+	Any    GpuType = "any"
+	H100   GpuType = "H100"
+	H200   GpuType = "H200"
+	L4     GpuType = "L4"
+	L40S   GpuType = "L40S"
+	T4     GpuType = "T4"
+)
+
+// Valid indicates whether the value is a known member of the GpuType enum.
+func (e GpuType) Valid() bool {
+	switch e {
+	case A10040:
+		return true
+	case A10080:
+		return true
+	case A10G:
+		return true
+	case Any:
+		return true
+	case H100:
+		return true
+	case H200:
+		return true
+	case L4:
+		return true
+	case L40S:
+		return true
+	case T4:
 		return true
 	default:
 		return false
@@ -385,6 +691,126 @@ func (e LogEntryStream) Valid() bool {
 	}
 }
 
+// Defines values for MachineProvider.
+const (
+	Agent MachineProvider = "agent"
+)
+
+// Valid indicates whether the value is a known member of the MachineProvider enum.
+func (e MachineProvider) Valid() bool {
+	switch e {
+	case Agent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MachineFailure.
+const (
+	AgentDownloadFailed    MachineFailure = "agent_download_failed"
+	AgentEnrollmentFailed  MachineFailure = "agent_enrollment_failed"
+	BootstrapTimedOut      MachineFailure = "bootstrap_timed_out"
+	HostPreflightFailed    MachineFailure = "host_preflight_failed"
+	MachineRecordDeleted   MachineFailure = "machine_record_deleted"
+	NetworkJoinFailed      MachineFailure = "network_join_failed"
+	ProviderIdentityFailed MachineFailure = "provider_identity_failed"
+	ProviderStopped        MachineFailure = "provider_stopped"
+	ProviderTerminated     MachineFailure = "provider_terminated"
+	RuntimeInstallFailed   MachineFailure = "runtime_install_failed"
+	ServiceLost            MachineFailure = "service_lost"
+	Unknown                MachineFailure = "unknown"
+	WorkerImagePullFailed  MachineFailure = "worker_image_pull_failed"
+	WorkerReadinessFailed  MachineFailure = "worker_readiness_failed"
+	WorkerStartFailed      MachineFailure = "worker_start_failed"
+)
+
+// Valid indicates whether the value is a known member of the MachineFailure enum.
+func (e MachineFailure) Valid() bool {
+	switch e {
+	case AgentDownloadFailed:
+		return true
+	case AgentEnrollmentFailed:
+		return true
+	case BootstrapTimedOut:
+		return true
+	case HostPreflightFailed:
+		return true
+	case MachineRecordDeleted:
+		return true
+	case NetworkJoinFailed:
+		return true
+	case ProviderIdentityFailed:
+		return true
+	case ProviderStopped:
+		return true
+	case ProviderTerminated:
+		return true
+	case RuntimeInstallFailed:
+		return true
+	case ServiceLost:
+		return true
+	case Unknown:
+		return true
+	case WorkerImagePullFailed:
+		return true
+	case WorkerReadinessFailed:
+		return true
+	case WorkerStartFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MachineLifecycle.
+const (
+	MachineLifecycleBooting      MachineLifecycle = "booting"
+	MachineLifecycleDeleted      MachineLifecycle = "deleted"
+	MachineLifecycleDraining     MachineLifecycle = "draining"
+	MachineLifecycleFailed       MachineLifecycle = "failed"
+	MachineLifecycleJoining      MachineLifecycle = "joining"
+	MachineLifecycleProvisioning MachineLifecycle = "provisioning"
+	MachineLifecycleReady        MachineLifecycle = "ready"
+	MachineLifecycleRequested    MachineLifecycle = "requested"
+	MachineLifecycleResuming     MachineLifecycle = "resuming"
+	MachineLifecycleStopped      MachineLifecycle = "stopped"
+	MachineLifecycleStopping     MachineLifecycle = "stopping"
+	MachineLifecycleTerminating  MachineLifecycle = "terminating"
+)
+
+// Valid indicates whether the value is a known member of the MachineLifecycle enum.
+func (e MachineLifecycle) Valid() bool {
+	switch e {
+	case MachineLifecycleBooting:
+		return true
+	case MachineLifecycleDeleted:
+		return true
+	case MachineLifecycleDraining:
+		return true
+	case MachineLifecycleFailed:
+		return true
+	case MachineLifecycleJoining:
+		return true
+	case MachineLifecycleProvisioning:
+		return true
+	case MachineLifecycleReady:
+		return true
+	case MachineLifecycleRequested:
+		return true
+	case MachineLifecycleResuming:
+		return true
+	case MachineLifecycleStopped:
+		return true
+	case MachineLifecycleStopping:
+		return true
+	case MachineLifecycleTerminating:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for PayloadEncoding.
 const (
 	Cloudpickle PayloadEncoding = "cloudpickle"
@@ -397,6 +823,54 @@ func (e PayloadEncoding) Valid() bool {
 	case Cloudpickle:
 		return true
 	case Json:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PreflightCheckSeverity.
+const (
+	PreflightCheckSeverityError   PreflightCheckSeverity = "error"
+	PreflightCheckSeverityInfo    PreflightCheckSeverity = "info"
+	PreflightCheckSeverityWarning PreflightCheckSeverity = "warning"
+)
+
+// Valid indicates whether the value is a known member of the PreflightCheckSeverity enum.
+func (e PreflightCheckSeverity) Valid() bool {
+	switch e {
+	case PreflightCheckSeverityError:
+		return true
+	case PreflightCheckSeverityInfo:
+		return true
+	case PreflightCheckSeverityWarning:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for Region.
+const (
+	ApSoutheast Region = "ap-southeast"
+	EuCentral   Region = "eu-central"
+	EuNorth     Region = "eu-north"
+	UsEast      Region = "us-east"
+	UsWest      Region = "us-west"
+)
+
+// Valid indicates whether the value is a known member of the Region enum.
+func (e Region) Valid() bool {
+	switch e {
+	case ApSoutheast:
+		return true
+	case EuCentral:
+		return true
+	case EuNorth:
+		return true
+	case UsEast:
+		return true
+	case UsWest:
 		return true
 	default:
 		return false
@@ -496,6 +970,21 @@ func (e UploadTargetMethod) Valid() bool {
 	}
 }
 
+// Defines values for WorkspaceRequestCloud.
+const (
+	WorkspaceRequestCloudAws WorkspaceRequestCloud = "aws"
+)
+
+// Valid indicates whether the value is a known member of the WorkspaceRequestCloud enum.
+func (e WorkspaceRequestCloud) Valid() bool {
+	switch e {
+	case WorkspaceRequestCloudAws:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for WorkspaceRole.
 const (
 	WorkspaceRoleAdministrator WorkspaceRole = "administrator"
@@ -560,6 +1049,238 @@ type Autoscaler struct {
 	MaxContainers     *int `json:"max_containers,omitempty"`
 	MinContainers     *int `json:"min_containers,omitempty"`
 	TasksPerContainer *int `json:"tasks_per_container,omitempty"`
+}
+
+// AwsAuthorizationError defines model for AwsAuthorizationError.
+type AwsAuthorizationError string
+
+// AwsAuthorizationGeneration defines model for AwsAuthorizationGeneration.
+type AwsAuthorizationGeneration struct {
+	AuthorizationMode       AwsAuthorizationGenerationAuthorizationMode `json:"authorization_mode"`
+	CreatedAt               time.Time                                   `json:"created_at"`
+	ErrorCode               *AwsAuthorizationError                      `json:"error_code,omitempty"`
+	ErrorMessage            *string                                     `json:"error_message,omitempty"`
+	Generation              int                                         `json:"generation"`
+	LastValidatedAt         *time.Time                                  `json:"last_validated_at,omitempty"`
+	LastValidationStartedAt *time.Time                                  `json:"last_validation_started_at,omitempty"`
+	ManagedAuthorization    *struct {
+		Generation      int     `json:"generation"`
+		Region          string  `json:"region"`
+		StackId         *string `json:"stack_id,omitempty"`
+		StackName       string  `json:"stack_name"`
+		TemplateSha256  string  `json:"template_sha256"`
+		TemplateVersion string  `json:"template_version"`
+	} `json:"managed_authorization,omitempty"`
+	Phase     AwsAuthorizationPhase `json:"phase"`
+	UpdatedAt time.Time             `json:"updated_at"`
+}
+
+// AwsAuthorizationGenerationAuthorizationMode defines model for AwsAuthorizationGeneration.AuthorizationMode.
+type AwsAuthorizationGenerationAuthorizationMode string
+
+// AwsAuthorizationPhase defines model for AwsAuthorizationPhase.
+type AwsAuthorizationPhase string
+
+// AwsConnection defines model for AwsConnection.
+type AwsConnection struct {
+	// AccountId The 12-digit AWS account id.
+	AccountId                 string                      `json:"account_id"`
+	ActiveAuthorization       *AwsAuthorizationGeneration `json:"active_authorization,omitempty"`
+	AvailableActions          []AwsConnectionAction       `json:"available_actions"`
+	CanManageExistingCapacity bool                        `json:"can_manage_existing_capacity"`
+	CreatedAt                 time.Time                   `json:"created_at"`
+	CustomerAction            *AwsCustomerAction          `json:"customer_action,omitempty"`
+	Detail                    string                      `json:"detail"`
+
+	// HostsWorkloads New workloads can be placed in the account.
+	HostsWorkloads        bool                        `json:"hosts_workloads"`
+	Id                    openapi_types.UUID          `json:"id"`
+	NextRetryAt           *time.Time                  `json:"next_retry_at,omitempty"`
+	PendingAuthorization  *AwsAuthorizationGeneration `json:"pending_authorization,omitempty"`
+	Phase                 AwsConnectionPhase          `json:"phase"`
+	RetiringAuthorization *AwsAuthorizationGeneration `json:"retiring_authorization,omitempty"`
+	Revision              int                         `json:"revision"`
+	UpdatedAt             time.Time                   `json:"updated_at"`
+}
+
+// AwsConnectionAction defines model for AwsConnectionAction.
+type AwsConnectionAction string
+
+// AwsConnectionAuthorization defines model for AwsConnectionAuthorization.
+type AwsConnectionAuthorization struct {
+	Authorization struct {
+		ExternalId *string `json:"external_id,omitempty"`
+
+		// Stack A CloudFormation CreateStack request the customer submits with their own credentials.
+		Stack *AwsStackAction `json:"stack,omitempty"`
+	} `json:"authorization"`
+	Connection AwsConnection `json:"connection"`
+}
+
+// AwsConnectionEnvelope defines model for AwsConnectionEnvelope.
+type AwsConnectionEnvelope struct {
+	Connection *AwsConnection `json:"connection,omitempty"`
+}
+
+// AwsConnectionPhase defines model for AwsConnectionPhase.
+type AwsConnectionPhase string
+
+// AwsConnectionRequest defines model for AwsConnectionRequest.
+type AwsConnectionRequest struct {
+	AccountId string `json:"account_id"`
+
+	// ExternalId The external ID an existing role already requires.
+	ExternalId *string `json:"external_id,omitempty"`
+
+	// Networks Per-region VPC, subnets and security group for an existing role.
+	Networks *map[string]AwsNetwork `json:"networks,omitempty"`
+
+	// RoleArn An existing role the platform assumes; it must require the returned external ID.
+	RoleArn *string `json:"role_arn,omitempty"`
+}
+
+// AwsCustomerAction defines model for AwsCustomerAction.
+type AwsCustomerAction struct {
+	Label string `json:"label"`
+
+	// Stack A CloudFormation CreateStack request the customer submits with their own credentials.
+	Stack *AwsStackAction `json:"stack,omitempty"`
+	Url   *string         `json:"url,omitempty"`
+}
+
+// AwsNetwork defines model for AwsNetwork.
+type AwsNetwork struct {
+	SecurityGroupId string   `json:"security_group_id"`
+	SubnetIds       []string `json:"subnet_ids"`
+	VpcId           string   `json:"vpc_id"`
+}
+
+// AwsReconnectRequest defines model for AwsReconnectRequest.
+type AwsReconnectRequest struct {
+	RoleArn *string `json:"role_arn,omitempty"`
+}
+
+// AwsStackAction A CloudFormation CreateStack request the customer submits with their own credentials.
+type AwsStackAction struct {
+	AccountId string `json:"account_id"`
+	Region    string `json:"region"`
+	Request   struct {
+		Capabilities []AwsStackActionRequestCapabilities `json:"Capabilities"`
+		OnFailure    AwsStackActionRequestOnFailure      `json:"OnFailure"`
+		Parameters   []AwsStackParameter                 `json:"Parameters"`
+		StackName    string                              `json:"StackName"`
+		TemplateBody string                              `json:"TemplateBody"`
+	} `json:"request"`
+	TemplateSha256 string `json:"template_sha256"`
+}
+
+// AwsStackActionRequestCapabilities defines model for AwsStackAction.Request.Capabilities.
+type AwsStackActionRequestCapabilities string
+
+// AwsStackActionRequestOnFailure defines model for AwsStackAction.Request.OnFailure.
+type AwsStackActionRequestOnFailure string
+
+// AwsStackParameter defines model for AwsStackParameter.
+type AwsStackParameter struct {
+	ParameterKey   string `json:"ParameterKey"`
+	ParameterValue string `json:"ParameterValue"`
+}
+
+// CapacityState defines model for CapacityState.
+type CapacityState string
+
+// ComputeInstance defines model for ComputeInstance.
+type ComputeInstance struct {
+	AvailabilityZone string `json:"availability_zone"`
+
+	// BootedTemplateVersion The agent release the instance runs.
+	BootedTemplateVersion string                 `json:"booted_template_version"`
+	CapacityReason        string                 `json:"capacity_reason"`
+	CapacityState         CapacityState          `json:"capacity_state"`
+	Connected             bool                   `json:"connected"`
+	CpuMillicores         int64                  `json:"cpu_millicores"`
+	CreatedAt             time.Time              `json:"created_at"`
+	Gpu                   *string                `json:"gpu,omitempty"`
+	GpuCount              int                    `json:"gpu_count"`
+	Id                    openapi_types.UUID     `json:"id"`
+	InstanceId            string                 `json:"instance_id"`
+	InstanceType          string                 `json:"instance_type"`
+	LaunchAttempt         int                    `json:"launch_attempt"`
+	LaunchedAt            *time.Time             `json:"launched_at,omitempty"`
+	Lifecycle             MachineLifecycle       `json:"lifecycle"`
+	LifecycleAt           time.Time              `json:"lifecycle_at"`
+	LifecycleFailure      *MachineFailure        `json:"lifecycle_failure,omitempty"`
+	LifecycleMessage      string                 `json:"lifecycle_message"`
+	Market                *ComputeInstanceMarket `json:"market,omitempty"`
+	MemoryMb              int64                  `json:"memory_mb"`
+
+	// Placement connection:<id>
+	Placement string                  `json:"placement"`
+	Provider  ComputeInstanceProvider `json:"provider"`
+	Region    string                  `json:"region"`
+}
+
+// ComputeInstanceMarket defines model for ComputeInstance.Market.
+type ComputeInstanceMarket string
+
+// ComputeInstanceProvider defines model for ComputeInstance.Provider.
+type ComputeInstanceProvider string
+
+// ComputeInstancePage defines model for ComputeInstancePage.
+type ComputeInstancePage struct {
+	Instances  []ComputeInstance `json:"instances"`
+	NextCursor *string           `json:"next_cursor,omitempty"`
+}
+
+// ComputeSummary defines model for ComputeSummary.
+type ComputeSummary struct {
+	// Connection The connected account the workspace lives in; absent on platform compute.
+	Connection *struct {
+		AccountId string             `json:"account_id"`
+		Phase     AwsConnectionPhase `json:"phase"`
+	} `json:"connection,omitempty"`
+	Cost struct {
+		Currency     ComputeSummaryCostCurrency `json:"currency"`
+		DailyMicros  *int64                     `json:"daily_micros,omitempty"`
+		Estimated    bool                       `json:"estimated"`
+		HourlyMicros *int64                     `json:"hourly_micros,omitempty"`
+	} `json:"cost"`
+	Instances struct {
+		Degraded int `json:"degraded"`
+		Pending  int `json:"pending"`
+		Ready    int `json:"ready"`
+		Total    int `json:"total"`
+	} `json:"instances"`
+	WorkloadCount int `json:"workload_count"`
+}
+
+// ComputeSummaryCostCurrency defines model for ComputeSummary.Cost.Currency.
+type ComputeSummaryCostCurrency string
+
+// ComputeWorkload defines model for ComputeWorkload.
+type ComputeWorkload struct {
+	App           string `json:"app"`
+	CpuMillicores int64  `json:"cpu_millicores"`
+
+	// DeploymentId The workload id.
+	DeploymentId openapi_types.UUID  `json:"deployment_id"`
+	Gpu          []GpuType           `json:"gpu"`
+	GpuCount     int                 `json:"gpu_count"`
+	Kind         ComputeWorkloadKind `json:"kind"`
+
+	// Machine The machine the workload is pinned to; empty when unpinned.
+	Machine  string `json:"machine"`
+	MemoryMb int64  `json:"memory_mb"`
+	Name     string `json:"name"`
+}
+
+// ComputeWorkloadKind defines model for ComputeWorkload.Kind.
+type ComputeWorkloadKind string
+
+// ComputeWorkloadPage defines model for ComputeWorkloadPage.
+type ComputeWorkloadPage struct {
+	NextCursor *string           `json:"next_cursor,omitempty"`
+	Workloads  []ComputeWorkload `json:"workloads"`
 }
 
 // CreatedToken defines model for CreatedToken.
@@ -692,6 +1413,9 @@ type FunctionSpec struct {
 	MaxPendingTasks *int            `json:"max_pending_tasks,omitempty"`
 	Name            WorkloadName    `json:"name"`
 
+	// Placement Where a workload's containers may run.
+	Placement *Placement `json:"placement,omitempty"`
+
 	// Resources Reservations the container always keeps. CPU above the reservation is shared up to `cpu_limit_millis`, by default the reservation plus 16 cores. Memory above the reservation is allowed up to `memory_limit_mib`, by default four times the reservation, at least 1 GiB and at most 8 GiB above it; the container is killed beyond it.
 	Resources   Resources    `json:"resources"`
 	RetryPolicy *RetryPolicy `json:"retry_policy,omitempty"`
@@ -701,6 +1425,9 @@ type FunctionSpec struct {
 	Source         SourceRef     `json:"source"`
 	TimeoutSeconds *int          `json:"timeout_seconds,omitempty"`
 }
+
+// GpuType A GPU model, or any for whatever model has capacity. A100 is not a model: name A100-40 or A100-80.
+type GpuType string
 
 // HookReferences defines model for HookReferences.
 type HookReferences = []string
@@ -892,6 +1619,84 @@ type LogEntry struct {
 // LogEntryStream defines model for LogEntry.Stream.
 type LogEntryStream string
 
+// Machine defines model for Machine.
+type Machine struct {
+	AgentVersion   string        `json:"agent_version"`
+	CapacityReason string        `json:"capacity_reason"`
+	CapacityState  CapacityState `json:"capacity_state"`
+
+	// Connected The agent's session is open and reported within the liveness timeout.
+	Connected bool `json:"connected"`
+
+	// Cpu Offered CPU in millicores.
+	Cpu              int64              `json:"cpu"`
+	CreatedAt        time.Time          `json:"created_at"`
+	Gpu              string             `json:"gpu"`
+	GpuCount         int                `json:"gpu_count"`
+	Id               openapi_types.UUID `json:"id"`
+	LastSeenAt       *time.Time         `json:"last_seen_at,omitempty"`
+	Lifecycle        MachineLifecycle   `json:"lifecycle"`
+	LifecycleAt      time.Time          `json:"lifecycle_at"`
+	LifecycleFailure *MachineFailure    `json:"lifecycle_failure,omitempty"`
+	LifecycleMessage string             `json:"lifecycle_message"`
+
+	// Memory Offered memory in MiB.
+	Memory int64  `json:"memory"`
+	Name   string `json:"name"`
+
+	// Placement machine:<id>
+	Placement       string           `json:"placement"`
+	PreflightChecks []PreflightCheck `json:"preflight_checks"`
+	Provider        MachineProvider  `json:"provider"`
+	Remediation     []string         `json:"remediation"`
+	Schedulable     bool             `json:"schedulable"`
+	UpdatedAt       time.Time        `json:"updated_at"`
+
+	// Workspaces Names of the workspaces the machine serves.
+	Workspaces []string `json:"workspaces"`
+}
+
+// MachineProvider defines model for Machine.Provider.
+type MachineProvider string
+
+// MachineFailure defines model for MachineFailure.
+type MachineFailure string
+
+// MachineJoinCommand defines model for MachineJoinCommand.
+type MachineJoinCommand struct {
+	// Command A shell command that installs the agent and joins the host.
+	Command   string    `json:"command"`
+	ExpiresAt time.Time `json:"expires_at"`
+	Machine   Machine   `json:"machine"`
+}
+
+// MachineJoinRequest defines model for MachineJoinRequest.
+type MachineJoinRequest struct {
+	// Gpu GPU models the machine contributes; the agent reports what it finds.
+	Gpu *[]string `json:"gpu,omitempty"`
+
+	// Name The name workloads pin to with machine=; unique in the account.
+	Name       string `json:"name"`
+	TtlSeconds *int   `json:"ttl_seconds,omitempty"`
+	Workspaces []Name `json:"workspaces"`
+}
+
+// MachineLifecycle defines model for MachineLifecycle.
+type MachineLifecycle string
+
+// MachinePage defines model for MachinePage.
+type MachinePage struct {
+	Machines []Machine `json:"machines"`
+
+	// NextCursor Present when more machines follow.
+	NextCursor *string `json:"next_cursor,omitempty"`
+}
+
+// MachineUpdate defines model for MachineUpdate.
+type MachineUpdate struct {
+	Workspaces []Name `json:"workspaces"`
+}
+
 // Me defines model for Me.
 type Me struct {
 	User       User        `json:"user"`
@@ -932,6 +1737,36 @@ type Payload struct {
 // PayloadEncoding defines model for Payload.Encoding.
 type PayloadEncoding string
 
+// Placement Where a workload's containers may run.
+type Placement struct {
+	// AvailabilityZone An AWS availability zone id, such as use2-az1, or name, such as us-east-2a.
+	AvailabilityZone *string `json:"availability_zone,omitempty"`
+
+	// Machine A joined machine of the workspace the workload must run on.
+	Machine *string `json:"machine,omitempty"`
+
+	// Preemptible Allow capacity the provider can reclaim.
+	Preemptible *bool `json:"preemptible,omitempty"`
+
+	// Region A product region. Only us-east (us-east-2, then us-east-1) and us-west (us-west-1, then us-west-2) have capacity; the others are accepted and wait for capacity that never comes.
+	Region *Region `json:"region,omitempty"`
+}
+
+// PreflightCheck defines model for PreflightCheck.
+type PreflightCheck struct {
+	Message     string                 `json:"message"`
+	Name        string                 `json:"name"`
+	Ok          bool                   `json:"ok"`
+	Remediation string                 `json:"remediation"`
+	Severity    PreflightCheckSeverity `json:"severity"`
+}
+
+// PreflightCheckSeverity defines model for PreflightCheck.Severity.
+type PreflightCheckSeverity string
+
+// Region A product region. Only us-east (us-east-2, then us-east-1) and us-west (us-west-1, then us-west-2) have capacity; the others are accepted and wait for capacity that never comes.
+type Region string
+
 // Release defines model for Release.
 type Release struct {
 	CreatedAt time.Time          `json:"created_at"`
@@ -945,6 +1780,12 @@ type Release struct {
 type Resources struct {
 	CpuLimitMillis *int `json:"cpu_limit_millis,omitempty"`
 	CpuMillis      int  `json:"cpu_millis"`
+
+	// Gpu GPU models in order of preference; any last takes whatever has capacity. Without gpu_count one card is reserved.
+	Gpu *[]GpuType `json:"gpu,omitempty"`
+
+	// GpuCount GPUs per container; needs gpu.
+	GpuCount       *int `json:"gpu_count,omitempty"`
 	MemoryLimitMib *int `json:"memory_limit_mib,omitempty"`
 	MemoryMib      int  `json:"memory_mib"`
 }
@@ -1208,8 +2049,13 @@ type WorkspaceList struct {
 
 // WorkspaceRequest defines model for WorkspaceRequest.
 type WorkspaceRequest struct {
-	Name Name `json:"name"`
+	// Cloud aws creates the workspace in the caller's connected AWS account, which must be ready; without it the workspace runs on LazyCloud. The location never changes.
+	Cloud *WorkspaceRequestCloud `json:"cloud,omitempty"`
+	Name  Name                   `json:"name"`
 }
+
+// WorkspaceRequestCloud aws creates the workspace in the caller's connected AWS account, which must be ready; without it the workspace runs on LazyCloud. The location never changes.
+type WorkspaceRequestCloud string
 
 // WorkspaceRole defines model for WorkspaceRole.
 type WorkspaceRole string
@@ -1253,6 +2099,20 @@ type UserCodePath = string
 // WorkspacePath defines model for WorkspacePath.
 type WorkspacePath = Name
 
+// ListComputeInstancesParams defines parameters for ListComputeInstances.
+type ListComputeInstancesParams struct {
+	// Cursor The next_cursor of the previous page.
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+	Limit  *Limit  `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// ListMachinesParams defines parameters for ListMachines.
+type ListMachinesParams struct {
+	// Cursor The next_cursor of the previous page.
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+	Limit  *int    `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
 // ListTokensParams defines parameters for ListTokens.
 type ListTokensParams struct {
 	// IncludeDevice Include tokens minted by `lazycloud login`.
@@ -1269,6 +2129,13 @@ type ListWorkspacesParams struct {
 
 	// Cursor The `next_cursor` of the previous page.
 	Cursor *Name `form:"cursor,omitempty" json:"cursor,omitempty"`
+}
+
+// ListComputeWorkloadsParams defines parameters for ListComputeWorkloads.
+type ListComputeWorkloadsParams struct {
+	// Cursor The next_cursor of the previous page.
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+	Limit  *Limit  `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
 // GetImageBuildParams defines parameters for GetImageBuild.
@@ -1290,6 +2157,13 @@ type StreamImageBuildLogsParams struct {
 type BuildImageParams struct {
 	// Force Build again even when the image is ready.
 	Force *bool `form:"force,omitempty" json:"force,omitempty"`
+}
+
+// ListWorkspaceMachinesParams defines parameters for ListWorkspaceMachines.
+type ListWorkspaceMachinesParams struct {
+	// Cursor The next_cursor of the previous page.
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+	Limit  *Limit  `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
 // ListSchedulesParams defines parameters for ListSchedules.
@@ -1321,11 +2195,23 @@ type StreamTaskLogsParams struct {
 	Follow *bool `form:"follow,omitempty" json:"follow,omitempty"`
 }
 
+// ConnectAwsJSONRequestBody defines body for ConnectAws for application/json ContentType.
+type ConnectAwsJSONRequestBody = AwsConnectionRequest
+
+// ReconnectAwsJSONRequestBody defines body for ReconnectAws for application/json ContentType.
+type ReconnectAwsJSONRequestBody = AwsReconnectRequest
+
 // StartDeviceLoginJSONRequestBody defines body for StartDeviceLogin for application/json ContentType.
 type StartDeviceLoginJSONRequestBody = DeviceLoginRequest
 
 // PollDeviceLoginJSONRequestBody defines body for PollDeviceLogin for application/json ContentType.
 type PollDeviceLoginJSONRequestBody = DeviceTokenRequest
+
+// CreateMachineJoinCommandJSONRequestBody defines body for CreateMachineJoinCommand for application/json ContentType.
+type CreateMachineJoinCommandJSONRequestBody = MachineJoinRequest
+
+// UpdateMachineJSONRequestBody defines body for UpdateMachine for application/json ContentType.
+type UpdateMachineJSONRequestBody = MachineUpdate
 
 // CreateTokenJSONRequestBody defines body for CreateToken for application/json ContentType.
 type CreateTokenJSONRequestBody = TokenCreateRequest

@@ -799,6 +799,258 @@ paths:
               schema: { type: string, format: binary }
         default: { $ref: "#/components/responses/Error" }
 
+  # Compute: workspace capacity, the account's AWS connection and joined
+  # machines. Agent installs (/install/agent, /install/agent/{os}/{arch} and
+  # /install/agent/{version}/{os}/{arch}) are unauthenticated downloads
+  # served outside this document.
+
+  /v1/workspaces/{workspace}/compute:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+    get:
+      operationId: getComputeSummary
+      tags: [compute]
+      summary: Where the workspace runs and how much capacity serves it
+      responses:
+        "200":
+          description: The workspace's compute
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ComputeSummary" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/compute/workloads:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+    get:
+      operationId: listComputeWorkloads
+      tags: [compute]
+      summary: Deployed workloads with their sizes and machine pins
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: One page of workloads ordered by app and name
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ComputeWorkloadPage" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/machines:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+    get:
+      operationId: listWorkspaceMachines
+      tags: [compute]
+      summary: Joined machines that serve the workspace
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: One page of machines ordered by name
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MachinePage" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/compute/instances:
+    get:
+      operationId: listComputeInstances
+      tags: [compute]
+      summary: Instances running in the account's connected AWS account
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: One page of instances, newest first; empty without a connection
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ComputeInstancePage" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/aws-connection:
+    get:
+      operationId: getAwsConnection
+      tags: [compute]
+      summary: The account's AWS connection
+      responses:
+        "200":
+          description: The connection, or null without one
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AwsConnectionEnvelope" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: connectAws
+      tags: [compute]
+      summary: Connect an AWS account to back the workspaces the account owns
+      description: >-
+        Without a role the response carries the CloudFormation stack the
+        customer submits with `lazycloud cloud authorize`. With an existing
+        role it carries the external ID the role must require. Repeating an
+        unfinished setup for the same account returns it again.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AwsConnectionRequest" }
+      responses:
+        "201":
+          description: The connection and the authorization to complete
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AwsConnectionAuthorization" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: disconnectAws
+      tags: [compute]
+      summary: Disconnect the AWS account
+      description: >-
+        Refused while a workspace lives in the account. An unfinished setup is
+        removed at once; a connected account drains its instances, then the
+        platform deletes the stack and verifies the role is gone.
+      responses:
+        "202":
+          description: The connection while removal runs, or null once removed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AwsConnectionEnvelope" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/aws-connection/validate:
+    post:
+      operationId: validateAwsConnection
+      tags: [compute]
+      summary: Check the pending or active authorization now
+      description: >-
+        A failed check is not an error: the authorization carries its
+        error_code and error_message.
+      responses:
+        "200":
+          description: The connection after the check
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AwsConnection" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/aws-connection/reconnect:
+    post:
+      operationId: reconnectAws
+      tags: [compute]
+      summary: Start a replacement authorization while the current one keeps serving
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AwsReconnectRequest" }
+      responses:
+        "200":
+          description: The connection and the replacement to complete
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AwsConnectionAuthorization" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: cancelAwsReconnect
+      tags: [compute]
+      summary: Cancel a pending replacement authorization
+      responses:
+        "200":
+          description: The connection
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AwsConnection" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/aws-connection/retry:
+    post:
+      operationId: retryAwsConnection
+      tags: [compute]
+      summary: Retry the step the connection is waiting on
+      responses:
+        "200":
+          description: The connection
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AwsConnection" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/machines:
+    get:
+      operationId: listMachines
+      tags: [compute]
+      summary: Machines the account joined
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 100 }
+      responses:
+        "200":
+          description: One page of machines ordered by name
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MachinePage" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/machines/join-command:
+    post:
+      operationId: createMachineJoinCommand
+      tags: [compute]
+      summary: The command that joins a host to the account as a named machine
+      description: >-
+        Creates the machine, or reuses one that never joined, and mints a
+        single-use join token that expires after ttl_seconds. Every workspace
+        must be owned by the caller.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MachineJoinRequest" }
+      responses:
+        "201":
+          description: The command to run on the host
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MachineJoinCommand" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/machines/{machine}:
+    parameters:
+      - name: machine
+        in: path
+        required: true
+        description: The machine's name or id.
+        schema: { type: string, minLength: 1, maxLength: 64 }
+    patch:
+      operationId: updateMachine
+      tags: [compute]
+      summary: Change the workspaces a machine serves
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MachineUpdate" }
+      responses:
+        "200":
+          description: The machine
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Machine" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: removeMachine
+      tags: [compute]
+      summary: Remove a machine and revoke its host credential
+      description: >-
+        Its containers stop and their running tasks retry elsewhere; an agent
+        still running on the host stops. Removing a removed machine succeeds.
+      responses:
+        "204": { description: Removed }
+        default: { $ref: "#/components/responses/Error" }
+
 components:
   securitySchemes:
     bearer:
@@ -986,6 +1238,13 @@ components:
       required: [name]
       properties:
         name: { $ref: "#/components/schemas/Name" }
+        cloud:
+          description: >-
+            aws creates the workspace in the caller's connected AWS account,
+            which must be ready; without it the workspace runs on LazyCloud.
+            The location never changes.
+          type: string
+          enum: [aws]
 
     TokenStatus:
       type: string
@@ -1350,6 +1609,8 @@ components:
           default: false
         lifecycle_hooks:
           $ref: "#/components/schemas/LifecycleHooks"
+        placement:
+          $ref: "#/components/schemas/Placement"
 
     SourceRef:
       type: object
@@ -1399,6 +1660,19 @@ components:
           type: integer
           minimum: 128
           maximum: 1572864
+        gpu:
+          description: >-
+            GPU models in order of preference; any last takes whatever has
+            capacity. Without gpu_count one card is reserved.
+          type: array
+          maxItems: 9
+          uniqueItems: true
+          items: { $ref: "#/components/schemas/GpuType" }
+        gpu_count:
+          description: GPUs per container; needs gpu.
+          type: integer
+          minimum: 0
+          maximum: 8
 
     RetryPolicy:
       type: object
@@ -1840,3 +2114,446 @@ components:
           description: One line of build output without its trailing newline.
           type: string
         time: { type: string, format: date-time }
+
+    # Compute
+
+    GpuType:
+      description: >-
+        A GPU model, or any for whatever model has capacity. A100 is not a
+        model: name A100-40 or A100-80.
+      type: string
+      enum: [T4, A10G, L4, L40S, A100-40, A100-80, H100, H200, any]
+
+    Region:
+      description: >-
+        A product region. Only us-east (us-east-2, then us-east-1) and
+        us-west (us-west-1, then us-west-2) have capacity; the others are
+        accepted and wait for capacity that never comes.
+      type: string
+      enum: [us-east, us-west, eu-central, eu-north, ap-southeast]
+
+    Placement:
+      description: Where a workload's containers may run.
+      type: object
+      properties:
+        machine:
+          description: A joined machine of the workspace the workload must run on.
+          type: string
+          pattern: "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+        region: { $ref: "#/components/schemas/Region" }
+        availability_zone:
+          description: An AWS availability zone id, such as use2-az1, or name, such as us-east-2a.
+          type: string
+          pattern: "^[A-Za-z0-9._:-]{1,128}$"
+        preemptible:
+          description: Allow capacity the provider can reclaim.
+          type: boolean
+          default: true
+
+    MachineLifecycle:
+      type: string
+      enum: [requested, provisioning, booting, joining, ready, draining, stopping, stopped, resuming, terminating, deleted, failed]
+
+    MachineFailure:
+      type: string
+      enum:
+        - agent_download_failed
+        - runtime_install_failed
+        - network_join_failed
+        - provider_identity_failed
+        - agent_enrollment_failed
+        - worker_image_pull_failed
+        - worker_start_failed
+        - worker_readiness_failed
+        - bootstrap_timed_out
+        - host_preflight_failed
+        - service_lost
+        - machine_record_deleted
+        - provider_stopped
+        - provider_terminated
+        - unknown
+
+    CapacityState:
+      type: string
+      enum: [available, draining, preempting, cordoned]
+
+    PreflightCheck:
+      type: object
+      required: [name, ok, message, severity, remediation]
+      properties:
+        name: { type: string }
+        ok: { type: boolean }
+        message: { type: string }
+        severity: { type: string, enum: [info, warning, error] }
+        remediation: { type: string }
+
+    Machine:
+      type: object
+      required: [id, name, workspaces, placement, provider, lifecycle, lifecycle_message, lifecycle_at,
+                 cpu, memory, gpu, gpu_count, connected, schedulable, capacity_state, capacity_reason,
+                 preflight_checks, remediation, agent_version, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        workspaces:
+          description: Names of the workspaces the machine serves.
+          type: array
+          items: { type: string }
+        placement:
+          description: machine:<id>
+          type: string
+        provider: { type: string, enum: [agent] }
+        lifecycle: { $ref: "#/components/schemas/MachineLifecycle" }
+        lifecycle_message: { type: string }
+        lifecycle_failure: { $ref: "#/components/schemas/MachineFailure" }
+        lifecycle_at: { type: string, format: date-time }
+        cpu:
+          description: Offered CPU in millicores.
+          type: integer
+          format: int64
+        memory:
+          description: Offered memory in MiB.
+          type: integer
+          format: int64
+        gpu: { type: string }
+        gpu_count: { type: integer }
+        connected:
+          description: The agent's session is open and reported within the liveness timeout.
+          type: boolean
+        schedulable: { type: boolean }
+        capacity_state: { $ref: "#/components/schemas/CapacityState" }
+        capacity_reason: { type: string }
+        preflight_checks:
+          type: array
+          items: { $ref: "#/components/schemas/PreflightCheck" }
+        remediation:
+          type: array
+          items: { type: string }
+        last_seen_at: { type: string, format: date-time }
+        agent_version: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    MachinePage:
+      type: object
+      required: [machines]
+      properties:
+        machines:
+          type: array
+          items: { $ref: "#/components/schemas/Machine" }
+        next_cursor:
+          description: Present when more machines follow.
+          type: string
+
+    MachineJoinRequest:
+      type: object
+      required: [name, workspaces]
+      properties:
+        name:
+          description: The name workloads pin to with machine=; unique in the account.
+          type: string
+          pattern: "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+        workspaces:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items: { $ref: "#/components/schemas/Name" }
+        gpu:
+          description: GPU models the machine contributes; the agent reports what it finds.
+          type: array
+          maxItems: 8
+          items: { type: string, maxLength: 32 }
+        ttl_seconds:
+          type: integer
+          minimum: 60
+          maximum: 86400
+          default: 1800
+
+    MachineJoinCommand:
+      type: object
+      required: [command, expires_at, machine]
+      properties:
+        command:
+          description: A shell command that installs the agent and joins the host.
+          type: string
+        expires_at: { type: string, format: date-time }
+        machine: { $ref: "#/components/schemas/Machine" }
+
+    MachineUpdate:
+      type: object
+      required: [workspaces]
+      properties:
+        workspaces:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items: { $ref: "#/components/schemas/Name" }
+
+    ComputeInstance:
+      type: object
+      required: [id, placement, provider, region, availability_zone, instance_id, instance_type, lifecycle,
+                 lifecycle_message, lifecycle_at, connected, capacity_state, capacity_reason, gpu_count,
+                 cpu_millicores, memory_mb, launch_attempt, booted_template_version, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        placement:
+          description: connection:<id>
+          type: string
+        provider: { type: string, enum: [aws] }
+        region: { type: string }
+        availability_zone: { type: string }
+        instance_id: { type: string }
+        instance_type: { type: string }
+        market: { type: string, enum: [spot, on_demand] }
+        lifecycle: { $ref: "#/components/schemas/MachineLifecycle" }
+        lifecycle_message: { type: string }
+        lifecycle_failure: { $ref: "#/components/schemas/MachineFailure" }
+        lifecycle_at: { type: string, format: date-time }
+        connected: { type: boolean }
+        capacity_state: { $ref: "#/components/schemas/CapacityState" }
+        capacity_reason: { type: string }
+        gpu: { type: string }
+        gpu_count: { type: integer }
+        cpu_millicores: { type: integer, format: int64 }
+        memory_mb: { type: integer, format: int64 }
+        launch_attempt: { type: integer }
+        booted_template_version:
+          description: The agent release the instance runs.
+          type: string
+        launched_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+
+    ComputeInstancePage:
+      type: object
+      required: [instances]
+      properties:
+        instances:
+          type: array
+          items: { $ref: "#/components/schemas/ComputeInstance" }
+        next_cursor:
+          type: string
+
+    ComputeSummary:
+      type: object
+      required: [instances, cost, workload_count]
+      properties:
+        connection:
+          description: The connected account the workspace lives in; absent on platform compute.
+          type: object
+          required: [account_id, phase]
+          properties:
+            account_id: { type: string }
+            phase: { $ref: "#/components/schemas/AwsConnectionPhase" }
+        instances:
+          type: object
+          required: [total, ready, pending, degraded]
+          properties:
+            total: { type: integer }
+            ready: { type: integer }
+            pending: { type: integer }
+            degraded: { type: integer }
+        cost:
+          type: object
+          required: [currency, estimated]
+          properties:
+            hourly_micros: { type: integer, format: int64 }
+            daily_micros: { type: integer, format: int64 }
+            currency: { type: string, enum: [USD] }
+            estimated: { type: boolean }
+        workload_count: { type: integer }
+
+    ComputeWorkload:
+      type: object
+      required: [deployment_id, app, name, kind, machine, cpu_millicores, memory_mb, gpu, gpu_count]
+      properties:
+        deployment_id:
+          description: The workload id.
+          type: string
+          format: uuid
+        app: { type: string }
+        name: { type: string }
+        kind: { type: string, enum: [function] }
+        machine:
+          description: The machine the workload is pinned to; empty when unpinned.
+          type: string
+        cpu_millicores: { type: integer, format: int64 }
+        memory_mb: { type: integer, format: int64 }
+        gpu:
+          type: array
+          items: { $ref: "#/components/schemas/GpuType" }
+        gpu_count: { type: integer }
+
+    ComputeWorkloadPage:
+      type: object
+      required: [workloads]
+      properties:
+        workloads:
+          type: array
+          items: { $ref: "#/components/schemas/ComputeWorkload" }
+        next_cursor:
+          type: string
+
+    AwsConnectionPhase:
+      type: string
+      enum: [awaiting_authorization, validating, ready, degraded, reconnect_pending, retiring_authorization,
+             disconnect_draining, revoking, verifying_revocation, action_required]
+
+    AwsConnectionAction:
+      type: string
+      enum: [authorize, validate, reconnect, cancel_reconnect, remove, retry]
+
+    AwsAuthorizationPhase:
+      type: string
+      enum: [awaiting_authorization, validating, ready, degraded, retiring, retired]
+
+    AwsAuthorizationError:
+      type: string
+      enum: [assume_role_denied, external_id_not_enforced, account_mismatch, permission_drift, stack_drift,
+             upstream_unavailable]
+
+    AwsAuthorizationGeneration:
+      type: object
+      required: [generation, authorization_mode, phase, created_at, updated_at]
+      properties:
+        generation: { type: integer }
+        authorization_mode: { type: string, enum: [managed_stack, existing_role] }
+        managed_authorization:
+          type: object
+          required: [stack_name, region, generation, template_version, template_sha256]
+          properties:
+            stack_name: { type: string }
+            region: { type: string }
+            generation: { type: integer }
+            stack_id: { type: string }
+            template_version: { type: string }
+            template_sha256: { type: string }
+        phase: { $ref: "#/components/schemas/AwsAuthorizationPhase" }
+        last_validation_started_at: { type: string, format: date-time }
+        last_validated_at: { type: string, format: date-time }
+        error_code: { $ref: "#/components/schemas/AwsAuthorizationError" }
+        error_message: { type: string, maxLength: 512 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    AwsStackParameter:
+      type: object
+      required: [ParameterKey, ParameterValue]
+      properties:
+        ParameterKey: { type: string }
+        ParameterValue: { type: string }
+
+    AwsStackAction:
+      description: A CloudFormation CreateStack request the customer submits with their own credentials.
+      type: object
+      required: [account_id, region, template_sha256, request]
+      properties:
+        account_id: { type: string }
+        region: { type: string }
+        template_sha256: { type: string }
+        request:
+          type: object
+          required: [StackName, TemplateBody, Parameters, Capabilities, OnFailure]
+          properties:
+            StackName: { type: string }
+            TemplateBody: { type: string, maxLength: 51200 }
+            Parameters:
+              type: array
+              items: { $ref: "#/components/schemas/AwsStackParameter" }
+            Capabilities:
+              type: array
+              items: { type: string, enum: [CAPABILITY_NAMED_IAM] }
+            OnFailure: { type: string, enum: [DELETE] }
+
+    AwsCustomerAction:
+      type: object
+      required: [label]
+      properties:
+        url: { type: string }
+        stack: { $ref: "#/components/schemas/AwsStackAction" }
+        label: { type: string }
+
+    AwsConnection:
+      type: object
+      required: [id, account_id, phase, revision, hosts_workloads, can_manage_existing_capacity,
+                 available_actions, detail, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        account_id:
+          description: The 12-digit AWS account id.
+          type: string
+        phase: { $ref: "#/components/schemas/AwsConnectionPhase" }
+        revision: { type: integer }
+        hosts_workloads:
+          description: New workloads can be placed in the account.
+          type: boolean
+        can_manage_existing_capacity: { type: boolean }
+        available_actions:
+          type: array
+          items: { $ref: "#/components/schemas/AwsConnectionAction" }
+        detail: { type: string }
+        customer_action: { $ref: "#/components/schemas/AwsCustomerAction" }
+        next_retry_at: { type: string, format: date-time }
+        active_authorization: { $ref: "#/components/schemas/AwsAuthorizationGeneration" }
+        pending_authorization: { $ref: "#/components/schemas/AwsAuthorizationGeneration" }
+        retiring_authorization: { $ref: "#/components/schemas/AwsAuthorizationGeneration" }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    AwsConnectionEnvelope:
+      type: object
+      properties:
+        connection: { $ref: "#/components/schemas/AwsConnection" }
+
+    AwsNetwork:
+      type: object
+      required: [vpc_id, subnet_ids, security_group_id]
+      additionalProperties: false
+      properties:
+        vpc_id: { type: string, minLength: 1, maxLength: 128 }
+        subnet_ids:
+          type: array
+          minItems: 2
+          uniqueItems: true
+          items: { type: string, minLength: 1, maxLength: 128 }
+        security_group_id: { type: string, minLength: 1, maxLength: 128 }
+
+    AwsConnectionRequest:
+      type: object
+      required: [account_id]
+      additionalProperties: false
+      properties:
+        account_id:
+          type: string
+          pattern: "^[0-9]{12}$"
+        role_arn:
+          description: An existing role the platform assumes; it must require the returned external ID.
+          type: string
+          pattern: "^arn:(aws|aws-us-gov|aws-cn):iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]{1,512}$"
+        networks:
+          description: Per-region VPC, subnets and security group for an existing role.
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/AwsNetwork" }
+        external_id:
+          description: The external ID an existing role already requires.
+          type: string
+          minLength: 16
+          maxLength: 1224
+
+    AwsReconnectRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        role_arn:
+          type: string
+          pattern: "^arn:(aws|aws-us-gov|aws-cn):iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]{1,512}$"
+
+    AwsConnectionAuthorization:
+      type: object
+      required: [connection, authorization]
+      properties:
+        connection: { $ref: "#/components/schemas/AwsConnection" }
+        authorization:
+          type: object
+          properties:
+            stack: { $ref: "#/components/schemas/AwsStackAction" }
+            external_id: { type: string }
