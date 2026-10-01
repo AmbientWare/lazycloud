@@ -147,6 +147,19 @@ create table billing_balances (
 create index billing_balances_due on billing_balances (user_id) where due;
 create index billing_balances_recheck on billing_balances (recheck_at);
 create index billing_balances_live on billing_balances (user_id) where live_containers > 0;
+create index billing_balances_unfunded on billing_balances (user_id) where balance_nanos - accrued_nanos <= 0;
+
+-- An account without credit that stores data: its data is kept, free of
+-- charges, for 30 days from started_at and then deleted. Credit that
+-- restores a positive balance ends the period. message_id is the warning
+-- email, withdrawn if still unsent when the period ends.
+create table unfunded_periods (
+    user_id uuid primary key references billing_accounts (user_id) on delete cascade,
+    started_at timestamptz not null default now(),
+    message_id uuid references email_outbox (id) on delete set null
+);
+
+create index unfunded_periods_started on unfunded_periods (started_at);
 
 -- A plan change, inserted before Stripe is called so its id keys the call.
 -- One per account is open at a time.
