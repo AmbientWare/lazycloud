@@ -21,12 +21,14 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/feature/ec2/imds"
 	"github.com/moby/moby/client"
+	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/AmbientWare/lazycloud/internal/diskengine"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 // Paths inside every workload container.
@@ -108,6 +110,11 @@ type Config struct {
 	Executable string
 	Version    string
 	Logger     *slog.Logger
+	// Telemetry traces calls to the server and attempts; nil traces
+	// nothing.
+	Telemetry *telemetry.Telemetry
+	// MetricsInterval paces container metric samples; zero means 5 s.
+	MetricsInterval time.Duration
 }
 
 // Agent owns one host's connection and containers.
@@ -148,6 +155,8 @@ type Agent struct {
 	ctx  context.Context
 	// restart ends Run with a cause, as after installing an update.
 	restart func(error)
+
+	metrics agentMetrics
 
 	mu         sync.Mutex
 	containers map[string]*container
@@ -254,6 +263,11 @@ func Run(ctx context.Context, cfg Config) error {
 	if !a.diskQuota {
 		a.log.Warn("docker storage here cannot limit container disk; disk limits are not enforced")
 	}
+	var registerer prometheus.Registerer
+	if cfg.Telemetry != nil {
+		registerer = cfg.Telemetry.Registry
+	}
+	a.metrics = newAgentMetrics(a, registerer)
 	// Owned goroutines stop with ctx, so it ends before shutdown waits for them.
 	defer func() {
 		cancel(nil)
@@ -276,6 +290,7 @@ func Run(ctx context.Context, cfg Config) error {
 		a.goOwned(a.watchInterruptions)
 	}
 	a.goOwned(a.pruneExited)
+	a.goOwned(a.sampleUsage)
 	a.goOwned(a.releaseLoop)
 	err = a.sessions(ctx)
 	if errors.Is(err, ErrCredentialRevoked) {
@@ -424,6 +439,9 @@ func dialServer(cfg Config, token string) (*grpc.ClientConn, error) {
 	options := []grpc.DialOption{
 		grpc.WithTransportCredentials(transport),
 		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(maxMessageBytes), grpc.MaxCallSendMsgSize(maxMessageBytes)),
+	}
+	if t := cfg.Telemetry; t != nil {
+		options = append(options, t.GRPCDialOption())
 	}
 	if token != "" {
 		options = append(options, grpc.WithPerRPCCredentials(hostToken(token)))

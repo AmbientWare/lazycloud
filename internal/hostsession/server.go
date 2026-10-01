@@ -26,8 +26,10 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/images"
+	"github.com/AmbientWare/lazycloud/internal/observability"
 	"github.com/AmbientWare/lazycloud/internal/secrets"
 	"github.com/AmbientWare/lazycloud/internal/storage"
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 const (
@@ -52,6 +54,9 @@ type Config struct {
 	Secrets *secrets.Secrets
 	// ContainerAPI serves container API requests; see api.NewContainerHandler.
 	ContainerAPI http.Handler
+	// Observability stores container metrics and start stages; nil drops
+	// them.
+	Observability *observability.Observability
 }
 
 // Server implements hostproto.HostService.
@@ -125,6 +130,8 @@ func (s *Server) authenticate(ctx context.Context) (context.Context, error) {
 	if err != nil {
 		return nil, s.grpcError(ctx, err)
 	}
+	// Logs of the host's calls carry its id.
+	ctx = telemetry.With(ctx, slog.String(telemetry.KeyHost, host.String()))
 	return context.WithValue(ctx, hostKey{}, host), nil
 }
 
@@ -222,6 +229,13 @@ func (s *Server) ClaimTasks(ctx context.Context, req *hostproto.ClaimTasksReques
 	if err != nil {
 		return nil, s.grpcError(ctx, err)
 	}
+	if s.config.Observability != nil && len(claimed) > 0 {
+		started := make([]execution.TaskID, len(claimed))
+		for n, c := range claimed {
+			started[n] = c.Task
+		}
+		s.config.Observability.TasksStarted(started)
+	}
 	out := &hostproto.ClaimTasksResponse{Tasks: make([]*hostproto.ClaimedTask, len(claimed))}
 	for n, c := range claimed {
 		out.Tasks[n] = &hostproto.ClaimedTask{
@@ -233,6 +247,7 @@ func (s *Server) ClaimTasks(ctx context.Context, req *hostproto.ClaimTasksReques
 			Deadline:      timestamppb.New(c.Deadline),
 			RootTaskId:    c.Root.String(),
 			MaxAttempts:   int32(c.MaxAttempts), //nolint:gosec // Attempts are capped at 100.
+			Traceparent:   c.TraceParent,
 		}
 		if c.Parent != nil {
 			out.Tasks[n].ParentTaskId = c.Parent.String()
@@ -256,6 +271,7 @@ func (s *Server) CompleteTask(ctx context.Context, req *hostproto.CompleteTaskRe
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, "attempt_id is not a UUID")
 	}
+	ctx = telemetry.With(ctx, slog.String(telemetry.KeyContainer, container.String()), slog.String(telemetry.KeyAttempt, attempt.String()))
 	outcome := execution.AttemptOutcome{Attempt: execution.AttemptID(attempt)}
 	switch o := req.GetOutcome().(type) {
 	case *hostproto.CompleteTaskRequest_Success:

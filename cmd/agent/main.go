@@ -23,6 +23,7 @@ import (
 	"syscall"
 
 	"github.com/AmbientWare/lazycloud/internal/agent"
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 // Exit statuses the service unit acts on.
@@ -49,8 +50,12 @@ Run "lazycloud-agent join -h" for the flags.
 `
 
 func main() {
-	logger := slog.New(slog.NewTextHandler(os.Stderr, nil)).With("component", "agent")
-	os.Exit(run(os.Args[1:], logger))
+	format, err := telemetry.LogFormatFromEnv(telemetry.LogText)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "agent:", err)
+		os.Exit(exitUsage)
+	}
+	os.Exit(run(os.Args[1:], telemetry.NewLogger(os.Stderr, format, "agent")))
 }
 
 func run(args []string, logger *slog.Logger) int {
@@ -91,9 +96,27 @@ func run(args []string, logger *slog.Logger) int {
 }
 
 func join(cfg agent.Config) int {
+	telemetryConfig, err := telemetry.ConfigFromEnv("agent", cfg.Version)
+	if err != nil {
+		cfg.Logger.Error("invalid configuration", "error", err)
+		return exitUsage
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
-	err := agent.Run(ctx, cfg)
+	tel, err := telemetry.New(ctx, telemetryConfig)
+	if err != nil {
+		cfg.Logger.Error("telemetry failed", "error", err)
+		return 1
+	}
+	defer func() { _ = tel.Shutdown(context.WithoutCancel(ctx)) }()
+	cfg.Telemetry = tel
+	metricsDone := make(chan error, 1)
+	go func() { metricsDone <- tel.ServeMetrics(ctx, cfg.Logger) }()
+	err = agent.Run(ctx, cfg)
+	stop()
+	if metricsErr := <-metricsDone; metricsErr != nil {
+		cfg.Logger.Error("metrics listener failed", "error", metricsErr)
+	}
 	switch {
 	case err == nil:
 		return 0

@@ -98,6 +98,9 @@ func (s *Server) Session(stream grpc.BidiStreamingServer[hostproto.HostMessage, 
 	if err != nil {
 		return s.grpcError(ctx, err)
 	}
+	for _, c := range hello.GetContainers() {
+		s.recordStartup(ctx, host, c)
+	}
 	if err := sess.sendActions(actions); err != nil {
 		return err
 	}
@@ -179,7 +182,10 @@ func (sess *session) handle(ctx context.Context, msg *hostproto.HostMessage) err
 		if err != nil {
 			return sess.server.grpcError(ctx, err)
 		}
+		sess.server.recordStartup(ctx, sess.host, body.Container)
 		return sess.sendActions(actions)
+	case *hostproto.HostMessage_Metrics:
+		sess.server.offerMetrics(sess.host, body.Metrics)
 	case *hostproto.HostMessage_Interruption:
 		at := time.Now()
 		if body.Interruption.GetReclaimAt() != nil {

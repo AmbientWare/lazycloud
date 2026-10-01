@@ -8,13 +8,18 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 const (
@@ -86,6 +91,22 @@ type container struct {
 	// gpus are the UUIDs of the devices the container holds, guarded by the
 	// agent's mutex.
 	gpus []string
+	// startup holds the finished start stages; created is when the
+	// container process started, which begins the runtime stage.
+	startup []*hostproto.StartupStage
+	created time.Time
+	// traces holds, per running attempt, its start and the trace of the
+	// request that submitted it.
+	traces map[string]attemptTrace
+
+	// usage is where the sampler reads the container's use, once known.
+	usage atomic.Pointer[usageSource]
+}
+
+type attemptTrace struct {
+	task        string
+	traceparent string
+	started     time.Time
 }
 
 func (a *Agent) newContainer(id, handler string, slots int, phase hostproto.ContainerPhase) *container {
@@ -99,6 +120,7 @@ func (a *Agent) newContainer(id, handler string, slots int, phase hostproto.Cont
 		phase:      phase,
 		running:    make(map[string]struct{}),
 		completing: make(map[string]struct{}),
+		traces:     make(map[string]attemptTrace),
 		cancelled:  cancelledAttempts{at: make(map[string]time.Time)},
 		slotFree:   make(chan struct{}, 1),
 		gone:       make(chan struct{}),
@@ -147,6 +169,7 @@ func (c *container) snapshot() *hostproto.ContainerReport {
 		Exit:            c.exit,
 		ObservedAt:      timestamppb.Now(),
 		RunningAttempts: running,
+		Startup:         slices.Clone(c.startup),
 	}
 }
 
@@ -242,6 +265,19 @@ func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer)
 	if err := c.a.createAndStart(ctx, c, spec, runtime, binds, workspaces, gpus); err != nil {
 		return err
 	}
+	created := time.Now()
+	c.mu.Lock()
+	c.created = created
+	c.startup = append(c.startup,
+		&hostproto.StartupStage{Kind: hostproto.StartupStageKind_STARTUP_STAGE_KIND_IMAGE,
+			StartedAt: timestamppb.New(began), FinishedAt: timestamppb.New(imageReady), Cached: !pulled},
+		&hostproto.StartupStage{Kind: hostproto.StartupStageKind_STARTUP_STAGE_KIND_SOURCE,
+			StartedAt: timestamppb.New(imageReady), FinishedAt: timestamppb.New(sourceReady)},
+		&hostproto.StartupStage{Kind: hostproto.StartupStageKind_STARTUP_STAGE_KIND_CREATE,
+			StartedAt: timestamppb.New(sourceReady), FinishedAt: timestamppb.New(created)},
+	)
+	c.mu.Unlock()
+	c.watchUsage(ctx)
 	c.log.Info("container started",
 		"image_pulled", pulled,
 		"image_ms", imageReady.Sub(began).Milliseconds(),
@@ -514,6 +550,10 @@ func (c *container) onReady(ready *hostproto.SlotsReady) {
 	c.running = running
 	changed := c.phase != hostproto.ContainerPhase_CONTAINER_PHASE_READY
 	c.phase = hostproto.ContainerPhase_CONTAINER_PHASE_READY
+	if changed && !c.created.IsZero() {
+		c.startup = append(c.startup, &hostproto.StartupStage{Kind: hostproto.StartupStageKind_STARTUP_STAGE_KIND_RUNTIME,
+			StartedAt: timestamppb.New(c.created), FinishedAt: timestamppb.New(now)})
+	}
 	startClaims := !c.claiming && !c.stopping
 	c.claiming = c.claiming || startClaims
 	c.mu.Unlock()
@@ -599,6 +639,7 @@ func (c *container) dispatch(task *hostproto.ClaimedTask) {
 		return
 	}
 	c.running[attempt] = struct{}{}
+	c.traces[attempt] = attemptTrace{task: task.GetTaskId(), traceparent: task.GetTraceparent(), started: time.Now()}
 	l := c.link
 	c.mu.Unlock()
 	l.enqueue(&hostproto.SupervisorCommand{Body: &hostproto.SupervisorCommand_Run{Run: &hostproto.RunAttempt{
@@ -622,6 +663,7 @@ func (c *container) cancelAttempt(attempt string) {
 	c.mu.Lock()
 	c.cancelled.add(attempt, time.Now())
 	delete(c.running, attempt)
+	delete(c.traces, attempt)
 	l := c.link
 	c.mu.Unlock()
 	c.signalSlotFree()
@@ -675,6 +717,8 @@ func (c *container) complete(ctx context.Context, seq uint64, finished *hostprot
 		c.log.Error("attempt finished without an outcome", "attempt_id", finished.GetAttemptId())
 		return
 	}
+	ctx, span := c.attemptSpan(ctx, finished.GetAttemptId())
+	defer span.End()
 	delay := 100 * time.Millisecond
 	for {
 		callCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), completeCallTimeout)
@@ -695,6 +739,26 @@ func (c *container) complete(ctx context.Context, seq uint64, finished *hostprot
 		sleep(ctx, delay)
 		delay = min(2*delay, maxCompleteBackoff)
 	}
+}
+
+// attemptSpan records the attempt as a span from its dispatch, in the trace
+// of the request that submitted it, so the completion call and the server's
+// handling of it join that trace.
+func (c *container) attemptSpan(ctx context.Context, attempt string) (context.Context, trace.Span) {
+	c.mu.Lock()
+	t, ok := c.traces[attempt]
+	delete(c.traces, attempt)
+	c.mu.Unlock()
+	if !ok || c.a.cfg.Telemetry == nil {
+		return ctx, noop.Span{}
+	}
+	ctx = telemetry.WithTraceParent(ctx, t.traceparent)
+	return c.a.cfg.Telemetry.Tracer().Start(ctx, "attempt", trace.WithTimestamp(t.started), trace.WithAttributes(
+		attribute.String("lazycloud."+telemetry.KeyTask, t.task),
+		attribute.String("lazycloud."+telemetry.KeyAttempt, attempt),
+		attribute.String("lazycloud."+telemetry.KeyContainer, c.id),
+		attribute.String("lazycloud."+telemetry.KeyHost, c.a.identity.HostID),
+	))
 }
 
 // cancelledAttempts remembers recent cancels, oldest first.

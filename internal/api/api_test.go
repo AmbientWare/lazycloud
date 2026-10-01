@@ -31,6 +31,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/identity/identitytest"
 	"github.com/AmbientWare/lazycloud/internal/images"
 	"github.com/AmbientWare/lazycloud/internal/notifications"
+	"github.com/AmbientWare/lazycloud/internal/observability"
 	"github.com/AmbientWare/lazycloud/internal/storage"
 	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
 )
@@ -58,13 +59,33 @@ type env struct {
 
 func newEnv(t *testing.T) *env {
 	t.Helper()
+	return newEnvWith(t, observability.DefaultChangesConfig())
+}
+
+// newEnvWith is newEnv with the change hub's limits.
+func newEnvWith(t *testing.T, changesConfig observability.ChangesConfig) *env {
+	t.Helper()
 	ctx := t.Context()
 	pool := dbtest.New(t)
 	listener := database.NewListener(pool, slog.New(slog.DiscardHandler), database.ChannelTask, database.ChannelClaim, database.ChannelLogs)
 	runCtx, stop := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	wg.Go(func() { _ = listener.Run(runCtx) })
+	changes := observability.NewChanges(pool, changesConfig, nil, slog.New(slog.DiscardHandler))
+	probe, _, err := changes.Subscribe(identity.WorkspaceID{}, "test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wg.Go(func() { _ = changes.Run(runCtx) })
 	t.Cleanup(func() { stop(); wg.Wait() })
+	// The hub resets every subscriber once it listens; streams opened
+	// after that see every later change.
+	select {
+	case <-probe.Reset():
+		probe.Close()
+	case <-time.After(10 * time.Second):
+		t.Fatal("the change hub did not start listening")
+	}
 
 	gh := identitytest.NewGitHub(t, dashboardURL+identity.GitHubCallbackPath)
 	id := identity.NewIdentity(pool, identity.Config{PublicURL: dashboardURL, GitHub: identity.GitHubConfig{
@@ -77,7 +98,8 @@ func newEnv(t *testing.T) *env {
 	handler, err := api.NewHandler(api.Owners{
 		Identity: id, Control: control.NewControl(pool), Storage: storage.NewStorage(pool, storagetest.Config()),
 		Execution: e, Notifications: notifications.NewNotifications(pool, nil, logger), Listener: listener,
-		Images:  images.NewImages(pool, e, images.Config{Registry: "registry.example.com", Repository: "lazycloud"}),
+		Images:        images.NewImages(pool, e, images.Config{Registry: "registry.example.com", Repository: "lazycloud"}),
+		Observability: observability.NewObservability(pool, observability.Config{}, logger), Changes: changes,
 		Compute: comp,
 	}, api.Config{PublicURL: dashboardURL, ResendWebhookSecret: webhookSecret, ClientReleaseVersion: "9.9.9", AgentDistDir: dist}, logger)
 	if err != nil {

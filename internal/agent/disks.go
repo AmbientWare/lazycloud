@@ -76,7 +76,7 @@ func (a *Agent) diskStore(workspace string) (diskengine.Store, error) {
 		return diskengine.Store{}, err
 	}
 	return diskengine.Store{
-		Endpoint: loc.Endpoint, Region: loc.Region, Bucket: loc.Bucket, ForcePathStyle: true,
+		Endpoint: loc.Endpoint, Region: loc.Region, Bucket: loc.Bucket, ForcePathStyle: loc.Endpoint != "",
 		Credentials: func(context.Context) (diskengine.Credentials, error) {
 			c, err := a.volumes.credentials(workspace)
 			if err != nil {

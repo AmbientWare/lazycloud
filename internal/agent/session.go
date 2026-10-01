@@ -77,6 +77,7 @@ func (a *Agent) runSession(ctx context.Context) error {
 		a.mu.Unlock()
 	}()
 
+	a.metrics.sessions.Inc()
 	hello, exited := a.hello()
 	if err := stream.Send(hello); err != nil {
 		return fmt.Errorf("send hello: %w", err)
@@ -180,6 +181,21 @@ func (a *Agent) report(m *hostproto.HostMessage) {
 	default:
 		a.log.Warn("session queue is full; reconnecting")
 		out.cancel()
+	}
+}
+
+// reportMetrics queues a metrics message only while the session queue is
+// at most half full, so samples never crowd out reports and acks.
+func (a *Agent) reportMetrics(m *hostproto.HostMessage) {
+	a.mu.Lock()
+	out := a.session
+	a.mu.Unlock()
+	if out == nil || len(out.ch) > cap(out.ch)/2 {
+		return
+	}
+	select {
+	case out.ch <- m:
+	default:
 	}
 }
 
