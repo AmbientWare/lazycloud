@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import select
 import signal
@@ -10,33 +11,14 @@ from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
 from types import FrameType
 from typing import Protocol
-from urllib.parse import urlsplit, urlunsplit
 
-from shared.http.shells import ShellConnectPlanResponse
-from shared.shell_protocol import (
-    SHELL_DEFAULT_TERM,
-    SHELL_FRAME_HEADER_SIZE,
-    SHELL_FRAME_MAX_PAYLOAD_BYTES,
-    ShellAuthRequest,
-    ShellFrameDecoder,
-    ShellFrameType,
-    ShellResizeRequest,
-    encode_shell_frame,
-)
-
-from lazycloud.control import workspace_path
+# The server's default when a client names no terminal type.
+SHELL_DEFAULT_TERM = "xterm-256color"
+_MAX_MESSAGE_BYTES = 16 * 1024 * 1024
 
 
 class ShellConnectionError(RuntimeError):
     pass
-
-
-class ShellCredentials(Protocol):
-    @property
-    def username(self) -> str: ...
-
-    @property
-    def password(self) -> str: ...
 
 
 class ShellWebSocket(Protocol):
@@ -169,90 +151,59 @@ class LocalShellTerminal:
 
 
 @dataclass(slots=True)
-class _ServerState:
-    ready: bool = False
-    exit_code: int | None = None
-
-
-@dataclass(slots=True)
 class InteractiveShell:
+    """Bridges the local terminal to a container shell over the API's WebSocket.
+
+    Binary messages carry terminal bytes both ways. The client sends a text
+    `{"type": "resize"}` when the window changes; the server sends a text
+    `{"type": "exit", "code": N}` when the shell ends, or `{"type": "error"}`.
+    """
+
     connector: ShellWebSocketConnector = field(default_factory=lambda: _connect_websocket)
     terminal: ShellTerminal = field(default_factory=LocalShellTerminal)
     poll_interval_seconds: float = 0.025
     on_attached: Callable[[], None] | None = None
-    """Runs once, when the shell is ready or before its first output, whichever is first."""
+    """Runs once, when the shell's socket opens and before any output."""
 
     def run(
         self,
         *,
-        endpoint: str,
-        workspace: str,
+        url: Callable[[int, int, str], str],
         token: str | None,
-        credentials: ShellCredentials,
-        plan: ShellConnectPlanResponse,
         open_timeout_seconds: float,
         check_health: Callable[[], None] | None = None,
     ) -> int:
-        from websockets.exceptions import ConnectionClosed
+        """Run the shell at `url(cols, rows, term)` until it exits; returns its exit code."""
+        from websockets.exceptions import ConnectionClosed, InvalidStatus
 
         if not token:
             msg = "an authenticated profile token is required to open a shell"
             raise ShellConnectionError(msg)
-        url = workspace_path(shell_websocket_url(endpoint, plan.route_path), workspace)
-        max_message_bytes = max(
-            plan.buffer_size_bytes,
-            SHELL_FRAME_HEADER_SIZE + SHELL_FRAME_MAX_PAYLOAD_BYTES,
-        )
+        columns, rows = self.terminal.size()
         try:
             with self.connector(
-                url,
+                url(columns, rows, self.terminal.term),
                 token=token,
                 open_timeout_seconds=open_timeout_seconds,
-                max_message_bytes=max_message_bytes,
+                max_message_bytes=_MAX_MESSAGE_BYTES,
             ) as websocket:
-                self._wait_for_proxy(websocket, open_timeout_seconds)
-                columns, rows = self.terminal.size()
-                auth = ShellAuthRequest(
-                    username=credentials.username,
-                    password=credentials.password,
-                    term=self.terminal.term,
-                    cols=columns,
-                    rows=rows,
-                )
-                websocket.send(
-                    encode_shell_frame(
-                        ShellFrameType.Auth.value,
-                        auth.model_dump_json().encode("utf-8"),
-                    )
-                )
-                return self._bridge(websocket, open_timeout_seconds, check_health)
+                self._attached()
+                return self._bridge(websocket, check_health)
         except ShellConnectionError:
             raise
+        except InvalidStatus as exc:
+            raise ShellConnectionError(f"shell connection failed: {_refusal(exc)}") from exc
         except ConnectionClosed as exc:
-            reason = exc.rcvd.reason if exc.rcvd is not None else "connection lost"
-            msg = f"shell connection closed before the process exited: {reason}"
+            reason = exc.rcvd.reason if exc.rcvd is not None and exc.rcvd.reason else None
+            msg = (
+                f"shell connection closed before the process exited: {reason or 'connection lost'}"
+            )
             raise ShellConnectionError(msg) from exc
         except OSError as exc:
             raise ShellConnectionError(f"shell connection failed: {exc}") from exc
 
-    def _wait_for_proxy(self, websocket: ShellWebSocket, timeout_seconds: float) -> None:
-        preface = websocket.recv(timeout=timeout_seconds)
-        if not isinstance(preface, str) or preface != "OK":
-            msg = "shell proxy did not confirm the backend connection"
-            raise ShellConnectionError(msg)
-
-    def _bridge(
-        self,
-        websocket: ShellWebSocket,
-        ready_timeout_seconds: float,
-        check_health: Callable[[], None] | None,
-    ) -> int:
-        decoder = ShellFrameDecoder()
+    def _bridge(self, websocket: ShellWebSocket, check_health: Callable[[], None] | None) -> int:
         state = _ServerState()
-        self._receive_until_ready(websocket, decoder, state, ready_timeout_seconds)
-        if state.exit_code is not None:
-            return state.exit_code
-
         input_open = True
         with self.terminal.activate():
             while state.exit_code is None:
@@ -262,105 +213,71 @@ class InteractiveShell:
                 if signal_exit_code is not None:
                     return signal_exit_code
                 if self.terminal.take_resize():
-                    self._send_resize(websocket)
+                    columns, rows = self.terminal.size()
+                    websocket.send(json.dumps({"type": "resize", "cols": columns, "rows": rows}))
                 if input_open:
                     data = self.terminal.read(self.poll_interval_seconds)
                     if data == b"":
                         input_open = False
                     elif data:
-                        websocket.send(encode_shell_frame(ShellFrameType.Data.value, data))
-                self._receive_available(websocket, decoder, state)
+                        websocket.send(data)
+                else:
+                    time.sleep(self.poll_interval_seconds)
+                self._receive_available(websocket, state)
         return state.exit_code
 
-    def _receive_until_ready(
-        self,
-        websocket: ShellWebSocket,
-        decoder: ShellFrameDecoder,
-        state: _ServerState,
-        timeout_seconds: float,
-    ) -> None:
-        while not state.ready and state.exit_code is None:
-            try:
-                message = websocket.recv(timeout=timeout_seconds)
-            except TimeoutError as exc:
-                raise ShellConnectionError("shell authentication timed out") from exc
-            self._consume_message(message, decoder, state)
-
-    def _receive_available(
-        self,
-        websocket: ShellWebSocket,
-        decoder: ShellFrameDecoder,
-        state: _ServerState,
-    ) -> None:
+    def _receive_available(self, websocket: ShellWebSocket, state: _ServerState) -> None:
         while state.exit_code is None:
             try:
                 message = websocket.recv(timeout=0)
             except TimeoutError:
                 return
-            self._consume_message(message, decoder, state)
-
-    def _consume_message(
-        self,
-        message: str | bytes,
-        decoder: ShellFrameDecoder,
-        state: _ServerState,
-    ) -> None:
-        if isinstance(message, str):
-            msg = "shell backend sent an unexpected text message"
-            raise ShellConnectionError(msg)
-        for frame in decoder.feed(message):
-            if frame.frame_type in {ShellFrameType.Ready.value, ShellFrameType.Data.value}:
-                self._attached()
-            if frame.frame_type == ShellFrameType.Ready.value:
-                state.ready = True
-            elif frame.frame_type == ShellFrameType.Data.value:
-                self.terminal.write(frame.payload)
-            elif frame.frame_type == ShellFrameType.Error.value:
-                detail = frame.payload.decode("utf-8", errors="replace") or "shell error"
-                raise ShellConnectionError(detail)
-            elif frame.frame_type == ShellFrameType.Exit.value:
-                state.exit_code = _exit_code(frame.payload)
-            else:
-                msg = f"shell backend sent unknown frame type {frame.frame_type!r}"
-                raise ShellConnectionError(msg)
+            if isinstance(message, bytes):
+                self.terminal.write(message)
+                continue
+            state.exit_code = _control_message(message)
 
     def _attached(self) -> None:
         attached, self.on_attached = self.on_attached, None
         if attached is not None:
             attached()
 
-    def _send_resize(self, websocket: ShellWebSocket) -> None:
-        columns, rows = self.terminal.size()
-        resize = ShellResizeRequest(cols=columns, rows=rows)
-        websocket.send(
-            encode_shell_frame(
-                ShellFrameType.Resize.value,
-                resize.model_dump_json().encode("utf-8"),
-            )
-        )
+
+@dataclass(slots=True)
+class _ServerState:
+    exit_code: int | None = None
 
 
-def shell_websocket_url(endpoint: str, route_path: str) -> str:
-    raw = f"{endpoint.rstrip('/')}/{route_path.lstrip('/')}/ws"
-    parsed = urlsplit(raw)
-    if parsed.scheme == "http":
-        scheme = "ws"
-    elif parsed.scheme == "https":
-        scheme = "wss"
-    else:
-        msg = f"unsupported control endpoint scheme: {parsed.scheme or '<missing>'}"
-        raise ShellConnectionError(msg)
-    return urlunsplit((scheme, parsed.netloc, parsed.path, parsed.query, parsed.fragment))
-
-
-def _exit_code(payload: bytes) -> int:
+def _control_message(text: str) -> int:
+    """The exit code a server text message carries; an error message raises."""
     try:
-        value = int(payload.decode("utf-8"))
-    except (UnicodeDecodeError, ValueError) as exc:
-        raise ShellConnectionError("shell backend sent an invalid exit code") from exc
-    if not 0 <= value <= 255:
+        message = json.loads(text)
+    except ValueError as exc:
+        raise ShellConnectionError("shell backend sent an invalid text message") from exc
+    kind = message.get("type") if isinstance(message, dict) else None
+    if kind == "error":
+        raise ShellConnectionError(str(message.get("message") or "shell error"))
+    if kind != "exit":
+        raise ShellConnectionError(f"shell backend sent an unknown message type {kind!r}")
+    code = message.get("code")
+    if isinstance(code, bool) or not isinstance(code, int):
+        raise ShellConnectionError("shell backend sent an invalid exit code")
+    if not 0 <= code <= 255:
         raise ShellConnectionError("shell backend exit code is outside the valid range")
-    return value
+    return code
+
+
+def _refusal(exc: Exception) -> str:
+    """The API's error message from a refused WebSocket handshake."""
+    response = getattr(exc, "response", None)
+    status = getattr(response, "status_code", None)
+    try:
+        message = json.loads(getattr(response, "body", b"") or b"").get("message")
+    except (ValueError, AttributeError):
+        message = None
+    if message:
+        return str(message)
+    return f"HTTP {status}" if status else str(exc)
 
 
 @contextmanager
@@ -385,11 +302,11 @@ def _connect_websocket(
 
 
 __all__ = [
+    "SHELL_DEFAULT_TERM",
     "InteractiveShell",
     "LocalShellTerminal",
     "ShellConnectionError",
     "ShellTerminal",
     "ShellWebSocket",
     "ShellWebSocketConnector",
-    "shell_websocket_url",
 ]

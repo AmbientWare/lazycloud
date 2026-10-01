@@ -77,7 +77,7 @@ class WorkloadsClient:
         return self.api._send(Instance, "POST", self._path("instances"), body=request)
 
     def connect(self, container_id: UUID, *, wait_seconds: int = 0) -> Instance:
-        """The container once it is ready; `unavailable` while it starts, `conflict` once stopped."""
+        """The ready container; `unavailable` while it starts, `conflict` once stopped."""
         return self.api._send(
             Instance,
             "POST",
@@ -99,9 +99,7 @@ class WorkloadsClient:
         )
 
     def lifecycle(self, container_id: UUID) -> ContainerLifecycle:
-        return self.api._send(
-            ContainerLifecycle, "GET", self._container(container_id, "lifecycle")
-        )
+        return self.api._send(ContainerLifecycle, "GET", self._container(container_id, "lifecycle"))
 
     # Processes
 
@@ -180,9 +178,7 @@ class WorkloadsClient:
             FileMatches, "POST", self._container(container_id, "files", "find"), body=request
         )
 
-    def replace_in_files(
-        self, container_id: UUID, request: ReplaceInFilesRequest
-    ) -> ReplacedFiles:
+    def replace_in_files(self, container_id: UUID, request: ReplaceInFilesRequest) -> ReplacedFiles:
         return self.api._send(
             ReplacedFiles,
             "POST",

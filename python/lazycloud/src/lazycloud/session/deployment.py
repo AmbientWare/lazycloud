@@ -444,9 +444,7 @@ def _runtime_done(step: TerminalStep, name: str, release: Release) -> None:
     step.done(f"{name} · {str(release.id)[:8]}")
 
 
-def _source_placement(
-    function: Workload, root: Path
-) -> tuple[str | None, tuple[str, ...] | None]:
+def _source_placement(function: Workload, root: Path) -> tuple[str | None, tuple[str, ...] | None]:
     """The handler reference inside the archive and the archive's module prefix.
 
     A pod has no handler and gets the source root as its workspace. A sandbox

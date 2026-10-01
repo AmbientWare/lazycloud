@@ -11,7 +11,15 @@ from uuid import UUID
 
 import cloudpickle
 from pydantic import JsonValue
-from shared.api import Encoding, LogEntry, Payload, TaskInput, TaskPendingProgress, TaskStatus
+from shared.api import (
+    ContainerLogEntry,
+    Encoding,
+    LogEntry,
+    Payload,
+    TaskInput,
+    TaskPendingProgress,
+    TaskStatus,
+)
 from shared.api import Task as TaskView
 from shared.task_context import current_task_id
 
@@ -340,9 +348,12 @@ def parent_task_id() -> UUID | None:
         return None
 
 
+EntryT = TypeVar("EntryT", LogEntry, ContainerLogEntry)
+
+
 def follow_log_stream(
-    open_stream: Callable[[int], Iterator[LogEntry]],
-) -> Iterator[LogEntry]:
+    open_stream: Callable[[int], Iterator[EntryT]],
+) -> Iterator[EntryT]:
     """Yield a followed log stream, reopening after the last entry when it drops.
 
     `open_stream` receives the id of the last delivered entry, 0 at first.
