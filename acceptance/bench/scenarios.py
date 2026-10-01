@@ -318,6 +318,15 @@ def backlog(n: str, tag: str) -> None:
     )
 
 
+def submit(n: str) -> None:
+    """Queue n `hold` tasks and exit without waiting, for EXPLAIN at a backlog."""
+    import benchapp
+
+    start = time.perf_counter()
+    calls = benchapp.hold.spawn_map([(i,) for i in range(int(n))])
+    print(json.dumps({"submitted": len(calls), "seconds": round(time.perf_counter() - start, 2)}))
+
+
 def fairness(t0: str, released: str) -> None:
     """Backlog age and workspace interleaving of the tasks created since t0."""
     rows = tasks_since(float(t0))
@@ -492,7 +501,7 @@ SCENARIOS = {
     "map": map_,
     "map-server": map_server,
     "backlog": backlog,
-    "fairness": fairness,
+    "fairness": fairness, "submit": submit,
     "endpoint-warm": endpoint_warm,
     "endpoint-cold": endpoint_cold,
     "endpoint-sse": endpoint_sse,
