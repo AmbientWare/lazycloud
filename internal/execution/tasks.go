@@ -177,13 +177,27 @@ const logBatch = 500
 // StreamLogs passes the task's log entries after the cursor to emit in
 // batches. Without follow it ends once the stored entries are drained. With
 // follow it waits for more until the task is terminal and drained, or ctx
-// ends. It returns ErrNotFound before emitting anything for an unknown task.
-func (e *Execution) StreamLogs(ctx context.Context, listener *database.Listener, workspace identity.WorkspaceID, id TaskID, after int64, follow bool, emit func([]LogEntry) error) error {
+// ends, and emits an empty batch whenever heartbeat passes without one, so
+// the transport can show the stream is alive. It returns ErrNotFound before
+// emitting anything for an unknown task.
+func (e *Execution) StreamLogs(ctx context.Context, listener *database.Listener, workspace identity.WorkspaceID, id TaskID, after int64, follow bool, heartbeat time.Duration, emit func([]LogEntry) error) error {
 	var wake <-chan struct{}
+	var idle *time.Timer
 	if follow {
 		var cancel func()
 		wake, cancel = listener.Subscribe(database.ChannelTask, id.String())
 		defer cancel()
+		idle = time.NewTimer(heartbeat)
+		defer idle.Stop()
+	}
+	send := func(batch []LogEntry) error {
+		if err := emit(batch); err != nil {
+			return err
+		}
+		if idle != nil {
+			idle.Reset(heartbeat)
+		}
+		return nil
 	}
 	for {
 		// Read the status before the entries: entries a terminal task wrote
@@ -205,7 +219,7 @@ func (e *Execution) StreamLogs(ctx context.Context, listener *database.Listener,
 				for n, row := range rows {
 					batch[n] = LogEntry{ID: row.ID, Attempt: int(row.Attempt), Stream: LogStream(row.Stream), Data: row.Data, Time: row.LoggedAt}
 				}
-				if err := emit(batch); err != nil {
+				if err := send(batch); err != nil {
 					return err
 				}
 				after = rows[len(rows)-1].ID
@@ -219,6 +233,10 @@ func (e *Execution) StreamLogs(ctx context.Context, listener *database.Listener,
 		}
 		select {
 		case <-wake:
+		case <-idle.C:
+			if err := send(nil); err != nil {
+				return err
+			}
 		case <-ctx.Done():
 			return nil
 		}

@@ -1,6 +1,7 @@
 package execution
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -106,7 +107,7 @@ func TestFollowLogsEndsWhenTaskFinishes(t *testing.T) {
 	got := make(chan []LogEntry, 16)
 	done := make(chan error, 1)
 	go func() {
-		done <- e.StreamLogs(t.Context(), l, f.workspace, tasks[0].ID, 0, true, func(batch []LogEntry) error {
+		done <- e.StreamLogs(t.Context(), l, f.workspace, tasks[0].ID, 0, true, time.Hour, func(batch []LogEntry) error {
 			got <- batch
 			return nil
 		})
@@ -151,5 +152,40 @@ func TestFollowLogsEndsWhenTaskFinishes(t *testing.T) {
 	}
 	if lines != 3 {
 		t.Fatalf("%d stored lines, want 3", lines)
+	}
+}
+
+func TestFollowLogsHeartbeatsWhileIdle(t *testing.T) {
+	pool := dbtest.New(t)
+	e := NewExecution(pool)
+	l := listen(t, pool)
+	f := deployedFunction(t, pool, `{"max_pending_tasks": 10}`)
+	tasks := submit(t, e, f, 1)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	beats := make(chan int, 16)
+	done := make(chan error, 1)
+	go func() {
+		done <- e.StreamLogs(ctx, l, f.workspace, tasks[0].ID, 0, true, 50*time.Millisecond, func(batch []LogEntry) error {
+			select {
+			case beats <- len(batch):
+			default:
+			}
+			return nil
+		})
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+	for range 3 {
+		select {
+		case n := <-beats:
+			if n != 0 {
+				t.Fatalf("batch of %d entries, want an empty heartbeat", n)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("an idle followed stream sent no heartbeat")
+		}
 	}
 }

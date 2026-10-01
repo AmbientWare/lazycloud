@@ -136,6 +136,10 @@ paths:
     get:
       operationId: streamTaskLogs
       summary: Log lines after a cursor, one JSON LogEntry per line
+      description: >-
+        A followed stream writes a blank line after 15 seconds without
+        entries, so clients can apply a read timeout. Clients skip blank
+        lines.
       parameters:
         - name: after
           in: query
