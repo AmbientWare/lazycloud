@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
@@ -37,7 +38,13 @@ func TestWorkspaceDeletion(t *testing.T) {
 		execution: exec, images: images.NewImages(pool, exec, images.Config{}), storage: store, logger: logger,
 	}
 
-	if _, err := ident.CreateUser(ctx, "admin@example.com", true); err != nil {
+	adminUser, err := ident.CreateUser(ctx, "admin@example.com", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A waived account is held to Business limits, which allow several
+	// workspaces.
+	if _, err := billing.NewBilling(pool, billing.Config{}, logger).SetComplimentary(ctx, uuid.UUID(adminUser), true); err != nil {
 		t.Fatal(err)
 	}
 	keep, err := ident.CreateWorkspace(ctx, "keep", "admin@example.com")
@@ -148,7 +155,13 @@ func TestWorkspaceDeletionWithImageBuilds(t *testing.T) {
 		execution: exec, images: images.NewImages(pool, exec, images.Config{}),
 		storage: storage.NewStorage(pool, storagetest.Config()), logger: logger,
 	}
-	if _, err := ident.CreateUser(ctx, "admin@example.com", true); err != nil {
+	adminUser, err := ident.CreateUser(ctx, "admin@example.com", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A waived account is held to Business limits, which allow several
+	// workspaces.
+	if _, err := billing.NewBilling(pool, billing.Config{}, logger).SetComplimentary(ctx, uuid.UUID(adminUser), true); err != nil {
 		t.Fatal(err)
 	}
 	doomed, err := ident.CreateWorkspace(ctx, "doomed", "admin@example.com")

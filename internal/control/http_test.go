@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/billing"
 )
 
 // The reference minted these labels (shared/deployment_subdomains.py) for
@@ -118,9 +119,22 @@ func TestDeployCustomDomainNeedsAnOwnerRegistrationAndOneDeployment(t *testing.T
 	}
 
 	if _, err := pool.Exec(t.Context(), `
-with u as (insert into users (email) values ('owner@acme.com') returning id),
-     m as (insert into workspace_members (workspace_id, user_id, role) select $1, id, 'owner' from u)
-insert into custom_domains (user_id, hostname, phase) select id, $2, 'awaiting_verification' from u`, uuid.UUID(ws), domain); err != nil {
+insert into custom_domains (user_id, hostname, phase)
+select user_id, $2, 'awaiting_verification' from workspace_members where workspace_id = $1 and role = 'owner'`, uuid.UUID(ws), domain); err != nil {
+		t.Fatal(err)
+	}
+	// Serving a custom domain needs the owner's plan to include them.
+	if _, err := pool.Exec(t.Context(), `update billing_accounts set complimentary_since = null`); err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.Deploy(t.Context(), ws, "reports", apitypes.DeploymentRequest{Functions: []apitypes.FunctionSpec{spec}})
+	var payment *billing.PaymentRequiredError
+	if !errors.As(err, &payment) {
+		t.Fatalf("deploy a custom domain on the Free plan: %v; want PaymentRequiredError", err)
+	}
+	if _, err := pool.Exec(t.Context(), `
+update billing_accounts set terms_version = 'team-v3'
+where user_id = (select user_id from workspace_members where workspace_id = $1 and role = 'owner')`, uuid.UUID(ws)); err != nil {
 		t.Fatal(err)
 	}
 	deploy(t, c, ws, false, spec)

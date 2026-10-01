@@ -23,6 +23,7 @@ func workspace(t *testing.T, pool *pgxpool.Pool) identity.WorkspaceID {
 	if err := pool.QueryRow(t.Context(), "insert into workspaces (name) values ('ws') returning id").Scan(&id); err != nil {
 		t.Fatal(err)
 	}
+	dbtest.OwnWorkspaces(t, pool)
 	return identity.WorkspaceID(id)
 }
 

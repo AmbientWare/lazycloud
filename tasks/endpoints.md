@@ -124,6 +124,10 @@ SaaS, and the edge routes only verified ones.
   require a token too.
 - Records and the output containers wrote are kept seven days, pruned in
   batches by every edge.
+- Billing: registering a custom domain needs the account's plan to include
+  them, and a deploy that serves one needs the workspace owner's; each
+  batch of request records carries its response bytes to billing as egress
+  per workload and quarter-hour, in the same transaction.
 
 ## Handed off
 
@@ -132,15 +136,12 @@ SaaS, and the edge routes only verified ones.
 
 ## Gaps
 
-- The Team/Business plan gate on custom domains needs billing.
 - The dashboard's view of request records and logs is the web packet's; the
   API and CLI serve them now.
 - Relays are verified with two edges in one process; the Helm
   chart binds the relay to the pod IP (IPv4), advertises it, exposes it
   through no Service and admits only server pods to it, unverified on a
   cluster.
-- Billing's hand-offs (AdmitCustomDomain on domain create, RecordEgress per
-  workspace) wait for billing #424.
 - gVisor needs `--host-uds` for the supervisor's HTTP socket; only runc is
   verified.
 - The reference docs say a domain may be a subdomain of a registered name;

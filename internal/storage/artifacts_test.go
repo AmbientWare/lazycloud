@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -47,8 +48,10 @@ func TestArtifactLifecycle(t *testing.T) {
 	if report.State != apitypes.Stored || report.ExpiresAt == nil || report.App == nil || *report.App != "app" {
 		t.Fatalf("stored artifact: %+v", report)
 	}
-	if got := report.ExpiresAt.Sub(*report.StoredAt); got != FreeArtifactRetention {
-		t.Fatalf("retention %v, want the Free plan's %v", got, FreeArtifactRetention)
+	// The fixture's owner is waived, which keeps artifacts as long as
+	// Business does.
+	if got, want := report.ExpiresAt.Sub(*report.StoredAt), 90*24*time.Hour; got != want {
+		t.Fatalf("retention %v, want %v", got, want)
 	}
 	// Completing again is idempotent.
 	if again, err := s.CompleteArtifact(ctx, f.ws, report.Id, nil); err != nil || again.Id != report.Id {

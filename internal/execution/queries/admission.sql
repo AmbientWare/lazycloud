@@ -16,6 +16,10 @@ for update of w;
 -- name: CountQueuedTasks :one
 select count(*) from tasks where workload_id = @workload_id and status = 'queued';
 
+-- name: CountLiveReleaseContainers :one
+-- Work for a release without live containers needs one started.
+select count(*)::int from containers where release_id = @release_id::uuid and state <> 'stopped';
+
 -- name: LockUpstreamTasks :many
 -- FOR SHARE holds each upstream's status until the submit commits, so an
 -- upstream either finished before and is read here, or finishes after and

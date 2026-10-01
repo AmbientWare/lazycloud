@@ -108,7 +108,7 @@ func (q *Queries) ReleaseOfVersion(ctx context.Context, arg ReleaseOfVersionPara
 const releaseRoute = `-- name: ReleaseRoute :one
 select rel.id as release_id, rel.version, rel.spec,
        w.id as workload_id, w.kind, w.name, w.desired_state, (w.active_release_id is not distinct from rel.id)::bool as active,
-       a.name as app_name, a.state as app_state, a.workspace_id, ws.name as workspace_name,
+       a.id as app_id, a.name as app_name, a.state as app_state, a.workspace_id, ws.name as workspace_name,
        coalesce(p.stopped_at is null and p.lease_expires_at > now() and (p.deadline_at is null or p.deadline_at > now()), false)::bool as preview_live,
        -- Whether the workload's active release requires a token; every host
        -- of every release follows it, so going private closes old URLs.
@@ -131,6 +131,7 @@ type ReleaseRouteRow struct {
 	Name             string
 	DesiredState     string
 	Active           bool
+	AppID            uuid.UUID
 	AppName          string
 	AppState         string
 	WorkspaceID      uuid.UUID
@@ -153,6 +154,7 @@ func (q *Queries) ReleaseRoute(ctx context.Context, id uuid.UUID) (ReleaseRouteR
 		&i.Name,
 		&i.DesiredState,
 		&i.Active,
+		&i.AppID,
 		&i.AppName,
 		&i.AppState,
 		&i.WorkspaceID,
@@ -167,7 +169,7 @@ const routes = `-- name: Routes :many
 select r.workload_id, r.subdomain, r.hostname,
        coalesce(d.phase = 'ready', false)::bool as hostname_ready,
        w.kind, w.name, w.desired_state,
-       a.name as app_name, a.state as app_state, a.workspace_id, ws.name as workspace_name,
+       a.id as app_id, a.name as app_name, a.state as app_state, a.workspace_id, ws.name as workspace_name,
        rel.id as release_id, rel.version, rel.spec
 from http_routes r
 join workloads w on w.id = r.workload_id
@@ -190,6 +192,7 @@ type RoutesRow struct {
 	Kind          string
 	Name          string
 	DesiredState  string
+	AppID         uuid.UUID
 	AppName       string
 	AppState      string
 	WorkspaceID   uuid.UUID
@@ -218,6 +221,7 @@ func (q *Queries) Routes(ctx context.Context) ([]RoutesRow, error) {
 			&i.Kind,
 			&i.Name,
 			&i.DesiredState,
+			&i.AppID,
 			&i.AppName,
 			&i.AppState,
 			&i.WorkspaceID,

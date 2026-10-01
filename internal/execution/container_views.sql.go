@@ -234,6 +234,40 @@ func (q *Queries) ListLiveContainers(ctx context.Context, arg ListLiveContainers
 	return items, nil
 }
 
+const liveFunctionContainers = `-- name: LiveFunctionContainers :many
+select id from containers
+where workspace_id = $1 and state <> 'stopped' and state in ('pending', 'starting', 'ready')
+  and release_id is not null
+order by id
+limit $2
+`
+
+type LiveFunctionContainersParams struct {
+	WorkspaceID uuid.UUID
+	RowLimit    int32
+}
+
+// Containers that still run or will; draining ones are already stopping.
+func (q *Queries) LiveFunctionContainers(ctx context.Context, arg LiveFunctionContainersParams) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, liveFunctionContainers, arg.WorkspaceID, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lockContainerInWorkspace = `-- name: LockContainerInWorkspace :one
 select id, state, host_id, release_id::uuid as release_id from containers
 where id = $1 and workspace_id = $2 and release_id is not null

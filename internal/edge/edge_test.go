@@ -17,6 +17,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 
+	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
@@ -369,16 +370,63 @@ func TestQueuedRecordsAreWrittenAtShutdown(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
 	go func() { e.writeRequests(ctx); close(done) }()
+	var app uuid.UUID
+	if err := pool.QueryRow(t.Context(), `select app_id from workloads where id = $1`, wl).Scan(&app); err != nil {
+		t.Fatal(err)
+	}
 	for range 3 {
-		e.queueRecord(requestRecord{id: uuid.New(), workspace: ws, workload: wl, release: rel, method: "GET", path: "/", status: 200, started: time.Now()})
+		e.queueRecord(requestRecord{
+			id: uuid.New(), workspace: ws, app: app, workload: wl, release: rel, method: "GET", path: "/", status: 200,
+			started: time.Now(), responseBytes: 1000,
+		})
 	}
 	cancel()
 	<-done
+	// The responses' bytes reach billing as the workspace's egress, with
+	// the records.
 	var n int
-	if err := pool.QueryRow(t.Context(), `select count(*) from http_requests`).Scan(&n); err != nil {
+	var egress int64
+	if err := pool.QueryRow(t.Context(), `select (select count(*) from http_requests), (select coalesce(sum(bytes), 0) from egress_quarters where workspace_id = $1 and workload_id = $2)`,
+		ws, wl).Scan(&n, &egress); err != nil {
 		t.Fatal(err)
 	}
-	if n != 3 {
-		t.Fatalf("%d records written at shutdown; want 3", n)
+	if n != 3 || egress != 3000 {
+		t.Fatalf("%d records and %d egress bytes written at shutdown; want 3 and 3000", n, egress)
 	}
+}
+
+// Registering a custom domain needs a plan that includes them; the provider
+// is never asked otherwise.
+func TestDomainRegistrationFollowsThePlan(t *testing.T) {
+	pool := dbtest.New(t)
+	logger := slog.New(slog.DiscardHandler)
+	provider := &countingProvider{}
+	e, err := NewEdge(pool, identity.NewIdentity(pool, identity.Config{PublicURL: "http://127.0.0.1"}),
+		execution.NewExecution(pool), database.NewListener(pool, logger), Config{URL: "http://lazycloud.localhost:8082", Domains: provider}, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(t.Context(), `insert into workspaces (name) values ('ws')`); err != nil {
+		t.Fatal(err)
+	}
+	dbtest.OwnWorkspaces(t, pool)
+	var user uuid.UUID
+	if err := pool.QueryRow(t.Context(), `update billing_accounts set complimentary_since = null returning user_id`).Scan(&user); err != nil {
+		t.Fatal(err)
+	}
+	var payment *billing.PaymentRequiredError
+	if _, err := e.RegisterDomain(t.Context(), identity.UserID(user), "shop.example.com"); !errors.As(err, &payment) || provider.created != 0 {
+		t.Fatalf("register on the Free plan: %v, %d provider calls; want PaymentRequiredError and none", err, provider.created)
+	}
+}
+
+// countingProvider counts hostnames it was asked to create and refuses them.
+type countingProvider struct {
+	Provider
+	created int
+}
+
+func (p *countingProvider) CreateHostname(context.Context, string) (ProviderHostname, error) {
+	p.created++
+	return ProviderHostname{}, errors.New("not reached in this test")
 }

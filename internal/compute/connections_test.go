@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
@@ -196,6 +197,18 @@ func current(t *testing.T, o owners, account identity.UserID) *compute.Connectio
 		t.Fatal(err)
 	}
 	return conn
+}
+
+func TestConnectingAWSNeedsThePlanThatIncludesIt(t *testing.T) {
+	o, _, _ := connectionFleet(t)
+	free := identity.UserID(scan[uuid.UUID](t, o.pool, "insert into users (email) values ('free@example.com') returning id"))
+	var unpaid *billing.PaymentRequiredError
+	if _, err := o.compute.Connect(t.Context(), free, compute.ConnectRequest{AWSAccountID: "111111111111"}); !errors.As(err, &unpaid) {
+		t.Fatalf("a Free account connected AWS: %v", err)
+	}
+	if n := scan[int](t, o.pool, "select count(*)::int from cloud_connections"); n != 0 {
+		t.Fatalf("%d connections recorded", n)
+	}
 }
 
 func TestConnectChecksItsRequestAndRepeatsAnUnfinishedSetup(t *testing.T) {

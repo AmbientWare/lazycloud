@@ -15,24 +15,22 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
-const (
-	// FreeArtifactRetention is how long artifacts are kept on the Free plan.
-	// Billing owns plans; until it supplies a workspace's plan every
-	// workspace keeps artifacts this long.
-	FreeArtifactRetention = 24 * time.Hour
-	// artifactPartBytes is the part size of artifact uploads; smaller
-	// artifacts upload with one plain PUT.
-	artifactPartBytes = 64 << 20
-)
+// artifactPartBytes is the part size of artifact uploads; smaller artifacts
+// upload with one plain PUT.
+const artifactPartBytes = 64 << 20
 
-// ArtifactRetention is how long a workspace's new artifacts are kept. It is
-// the seam where billing's plan decides Team (30 days) and Business (90
-// days) retention.
-func (s *Storage) ArtifactRetention(context.Context, identity.WorkspaceID) time.Duration {
-	return FreeArtifactRetention
+// ArtifactRetention is how long a workspace's new artifacts are kept: its
+// owner's plan decides, one day on Free, 30 on Team and 90 on Business.
+func (s *Storage) ArtifactRetention(ctx context.Context, workspace identity.WorkspaceID) (time.Duration, error) {
+	retention, err := billing.Retention(ctx, s.pool, uuid.UUID(workspace))
+	if err != nil {
+		return 0, fmt.Errorf("read artifact retention: %w", err)
+	}
+	return retention, nil
 }
 
 func artifactKey(workspace identity.WorkspaceID, id uuid.UUID) string {
@@ -58,6 +56,10 @@ func (s *Storage) CreateArtifact(ctx context.Context, workspace identity.Workspa
 	}
 	if err != nil {
 		return apitypes.ArtifactUpload{}, fmt.Errorf("read artifact task: %w", err)
+	}
+	retention, err := s.ArtifactRetention(ctx, workspace)
+	if err != nil {
+		return apitypes.ArtifactUpload{}, err
 	}
 	contentType := "application/octet-stream"
 	if req.ContentType != nil {
@@ -93,7 +95,7 @@ func (s *Storage) CreateArtifact(ctx context.Context, workspace identity.Workspa
 	row, err := s.queries.InsertArtifact(ctx, InsertArtifactParams{
 		ID: id, WorkspaceID: uuid.UUID(workspace), TaskID: &req.TaskId, AppID: &task.AppID, AppName: &task.AppName,
 		Filename: req.Filename, ContentType: contentType, SizeBytes: req.SizeBytes, UploadID: upload.UploadId,
-		RetentionSeconds: int64(s.ArtifactRetention(ctx, workspace).Seconds()),
+		RetentionSeconds: int64(retention.Seconds()),
 	})
 	if err != nil {
 		if upload.UploadId != nil {
@@ -222,8 +224,12 @@ func (s *Storage) ArtifactSummary(ctx context.Context, workspace identity.Worksp
 	if err != nil {
 		return apitypes.ArtifactSummary{}, fmt.Errorf("summarize artifacts: %w", err)
 	}
+	retention, err := s.ArtifactRetention(ctx, workspace)
+	if err != nil {
+		return apitypes.ArtifactSummary{}, err
+	}
 	return apitypes.ArtifactSummary{
-		Count: row.Count, SizeBytes: row.SizeBytes, RetentionSeconds: int64(s.ArtifactRetention(ctx, workspace).Seconds()),
+		Count: row.Count, SizeBytes: row.SizeBytes, RetentionSeconds: int64(retention.Seconds()),
 	}, nil
 }
 

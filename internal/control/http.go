@@ -9,6 +9,10 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
+
+	"github.com/AmbientWare/lazycloud/internal/billing"
+
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 
@@ -142,9 +146,12 @@ func Subdomain(workspace uuid.UUID, app, name string, kind apitypes.WorkloadKind
 // claimWorkloadRoute records the subdomain and custom hostname the workload answers
 // on, in the deploy transaction. A custom hostname must be registered by an
 // owner of the workspace.
-func claimWorkloadRoute(ctx context.Context, q *Queries, workspace, workload uuid.UUID, app string, spec apitypes.FunctionSpec) error {
+func claimWorkloadRoute(ctx context.Context, tx pgx.Tx, q *Queries, workspace, workload uuid.UUID, app string, spec apitypes.FunctionSpec) error {
 	var hostname *string
 	if spec.Http != nil && spec.Http.Domain != nil {
+		if err := billing.AdmitCustomDomain(ctx, tx, workspace); err != nil {
+			return fmt.Errorf("function %s: %w", spec.Name, err)
+		}
 		registered, err := q.OwnerRegisteredDomain(ctx, OwnerRegisteredDomainParams{WorkspaceID: workspace, Hostname: *spec.Http.Domain})
 		if err != nil {
 			return fmt.Errorf("read domain registration: %w", err)

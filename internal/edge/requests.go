@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/AmbientWare/lazycloud/internal/billing"
+
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
@@ -43,7 +45,7 @@ const (
 
 // requestRecord is one finished request.
 type requestRecord struct {
-	id, workspace, workload, release uuid.UUID
+	id, workspace, app, workload, release uuid.UUID
 	// container is the last container offered the request, or nil.
 	container                   uuid.UUID
 	method, path                string
@@ -107,7 +109,7 @@ func (e *Edge) serveRecorded(w http.ResponseWriter, r *http.Request, t target, s
 		path = path[:maxPathLength]
 	}
 	rec := requestRecord{
-		id: id, workspace: uuid.UUID(t.workload.workspace), workload: t.workload.id, release: t.release.id,
+		id: id, workspace: uuid.UUID(t.workload.workspace), app: t.workload.appID, workload: t.workload.id, release: t.release.id,
 		method: r.Method, path: path, started: time.Now(),
 	}
 	rw := &recordingWriter{ResponseWriter: w}
@@ -252,8 +254,21 @@ func (e *Edge) insertRequests(ctx context.Context, batch []requestRecord) error 
 		p.RequestBytes = append(p.RequestBytes, rec.requestBytes)
 		p.ResponseBytes = append(p.ResponseBytes, rec.responseBytes)
 	}
-	if err := e.queries.InsertRequests(ctx, p); err != nil {
-		return fmt.Errorf("insert request records: %w", err)
+	// The records and the egress they carry commit together, so a batch
+	// written again after a failure never counts its bytes twice.
+	err := pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
+		if err := e.queries.WithTx(tx).InsertRequests(ctx, p); err != nil {
+			return fmt.Errorf("insert request records: %w", err)
+		}
+		for _, egress := range egressOf(batch) {
+			if err := billing.RecordEgress(ctx, tx, egress); err != nil {
+				return err //nolint:wrapcheck // billing names the failure
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("write request records: %w", err)
 	}
 	return nil
 }
@@ -300,6 +315,30 @@ func requestOut(row ListRequestsRow) apitypes.HttpRequest {
 	if row.Version != nil {
 		v := int(*row.Version)
 		out.Version = &v
+	}
+	return out
+}
+
+// egressOf totals the bytes the batch's responses sent per workload and
+// metering period.
+func egressOf(batch []requestRecord) []billing.Egress {
+	type key struct {
+		workspace, app, workload uuid.UUID
+		period                   time.Time
+	}
+	totals := map[key]int64{}
+	var order []key
+	for _, rec := range batch {
+		k := key{rec.workspace, rec.app, rec.workload, rec.started.UTC().Truncate(billing.MeteringPeriod)}
+		if _, seen := totals[k]; !seen {
+			order = append(order, k)
+		}
+		totals[k] += rec.responseBytes
+	}
+	out := make([]billing.Egress, 0, len(order))
+	for _, k := range order {
+		app, workload := k.app, k.workload
+		out = append(out, billing.Egress{Workspace: k.workspace, App: &app, Workload: &workload, Bytes: totals[k], At: k.period})
 	}
 	return out
 }

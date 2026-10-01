@@ -39,6 +39,14 @@ select r.id as release_id,
        coalesce((r.spec -> 'http' ->> 'workers')::int, (r.spec ->> 'concurrency')::int, 1)::int as slots,
        (r.spec -> 'resources' ->> 'cpu_millis')::bigint as cpu_millis,
        ((r.spec -> 'resources' ->> 'memory_mib')::bigint * 1048576)::bigint as memory_bytes,
+       -- What billing prices and admits, as planning reads it for functions.
+       greatest(coalesce((r.spec -> 'resources' ->> 'gpu_count')::int, 0),
+                case when jsonb_array_length(coalesce(r.spec -> 'resources' -> 'gpu', '[]'::jsonb)) > 0 then 1 else 0 end)::int
+           as gpu_count,
+       coalesce(array(select jsonb_array_elements_text(r.spec -> 'resources' -> 'gpu')), '{}')::text[] as gpu_models,
+       coalesce((r.spec -> 'placement' ->> 'preemptible')::boolean, true)::bool as preemptible,
+       (coalesce(r.spec -> 'placement' ->> 'region', '') <> ''
+        or coalesce(r.spec -> 'placement' ->> 'availability_zone', '') <> '')::bool as pinned,
        demand.current::int as demand,
        demand.peak::int as peak,
        coalesce(p.stopped_at is null and p.lease_expires_at > now() and (p.deadline_at is null or p.deadline_at > now()), false)::bool as preview_live,

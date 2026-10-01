@@ -20,6 +20,7 @@ type workload struct {
 	id            uuid.UUID
 	workspace     identity.WorkspaceID
 	workspaceName string
+	appID         uuid.UUID
 	app, name     string
 	kind          apitypes.WorkloadKind
 	// accepting is false while the workload is stopped or its app paused.
@@ -133,7 +134,7 @@ func (e *Edge) loadRoutes(ctx context.Context) (*routeTable, error) {
 	for _, row := range rows {
 		w := &workload{
 			id: row.WorkloadID, workspace: identity.WorkspaceID(row.WorkspaceID), workspaceName: row.WorkspaceName,
-			app: row.AppName, name: row.Name, kind: apitypes.WorkloadKind(row.Kind),
+			appID: row.AppID, app: row.AppName, name: row.Name, kind: apitypes.WorkloadKind(row.Kind),
 			accepting: row.DesiredState == "active" && row.AppState == "active",
 			subdomain: row.Subdomain,
 		}
@@ -305,7 +306,7 @@ func (e *Edge) readID(ctx context.Context, id uuid.UUID) (target, error) {
 	}
 	w := &workload{
 		id: row.WorkloadID, workspace: identity.WorkspaceID(row.WorkspaceID), workspaceName: row.WorkspaceName,
-		app: row.AppName, name: row.Name, kind: apitypes.WorkloadKind(row.Kind),
+		appID: row.AppID, app: row.AppName, name: row.Name, kind: apitypes.WorkloadKind(row.Kind),
 		accepting: row.DesiredState == "active" && row.AppState == "active",
 	}
 	switch {

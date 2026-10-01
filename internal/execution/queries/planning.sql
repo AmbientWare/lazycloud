@@ -49,6 +49,16 @@ select r.id as release_id,
        coalesce((r.spec ->> 'keep_warm_seconds')::int, 10)::int as keep_warm_seconds,
        (r.spec -> 'resources' ->> 'cpu_millis')::bigint as cpu_millis,
        ((r.spec -> 'resources' ->> 'memory_mib')::bigint * 1048576)::bigint as memory_bytes,
+       -- What billing prices and admits: the cards each container holds (a
+       -- GPU list without a count holds one), and whether placement is
+       -- preemptible and pinned to a region or zone.
+       greatest(coalesce((r.spec -> 'resources' ->> 'gpu_count')::int, 0),
+                case when jsonb_array_length(coalesce(r.spec -> 'resources' -> 'gpu', '[]'::jsonb)) > 0 then 1 else 0 end)::int
+           as gpu_count,
+       coalesce(array(select jsonb_array_elements_text(r.spec -> 'resources' -> 'gpu')), '{}')::text[] as gpu_models,
+       coalesce((r.spec -> 'placement' ->> 'preemptible')::boolean, true)::bool as preemptible,
+       (coalesce(r.spec -> 'placement' ->> 'region', '') <> ''
+        or coalesce(r.spec -> 'placement' ->> 'availability_zone', '') <> '')::bool as pinned,
        q.available::int as queued_available,
        run.running::int as running,
        c.pending::int as pending,
@@ -77,8 +87,9 @@ cross join lateral (
 order by r.id;
 
 -- name: CreatePendingContainers :many
-insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes)
-select @workspace_id, @release_id::uuid, 'pending', @slots, @cpu_millis, @memory_bytes
+-- Placement records the GPU model and whose machine a container got.
+insert into containers (workspace_id, release_id, state, slots, cpu_millis, memory_bytes, gpu_count, rate_class)
+select @workspace_id, @release_id::uuid, 'pending', @slots, @cpu_millis, @memory_bytes, @gpu_count, @rate_class
 from generate_series(1, @count::int)
 returning id;
 

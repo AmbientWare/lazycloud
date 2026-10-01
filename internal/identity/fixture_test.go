@@ -1,10 +1,14 @@
 package identity
 
 import (
+	"io"
+	"log/slog"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
 	"github.com/AmbientWare/lazycloud/internal/identity/identitytest"
 )
@@ -42,7 +46,18 @@ func (f *fixture) signIn(account gitHubAccount) Principal {
 	if err != nil {
 		f.t.Fatal(err)
 	}
+	f.unlimited(p.User)
 	return p
+}
+
+// unlimited waives the account's billing, which gives it Business limits,
+// so these tests are not held to plan limits; billing tests those.
+func (f *fixture) unlimited(user UserID) {
+	f.t.Helper()
+	b := billing.NewBilling(f.pool, billing.Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if _, err := b.SetComplimentary(f.t.Context(), uuid.UUID(user), true); err != nil {
+		f.t.Fatal(err)
+	}
 }
 
 func (f *fixture) sessionToken(account gitHubAccount, code string) string {
@@ -63,9 +78,11 @@ func (f *fixture) sessionToken(account gitHubAccount, code string) string {
 // unrestricted token principal for it.
 func (f *fixture) account(email string, admin bool) Principal {
 	f.t.Helper()
-	if _, err := f.id.CreateUser(f.t.Context(), email, admin); err != nil {
+	user, err := f.id.CreateUser(f.t.Context(), email, admin)
+	if err != nil {
 		f.t.Fatal(err)
 	}
+	f.unlimited(user)
 	return f.tokenPrincipal(email, "")
 }
 

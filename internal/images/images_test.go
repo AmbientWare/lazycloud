@@ -111,6 +111,7 @@ func (f fixture) workspace(t *testing.T, name string) identity.WorkspaceID {
 	if err := f.pool.QueryRow(t.Context(), "insert into workspaces (name) values ($1) returning id", name).Scan(&id); err != nil {
 		t.Fatal(err)
 	}
+	dbtest.OwnWorkspaces(t, f.pool)
 	return identity.WorkspaceID(id)
 }
 

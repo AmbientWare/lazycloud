@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/AmbientWare/lazycloud/internal/billing"
+
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
@@ -216,12 +218,33 @@ func (e *Execution) planServing(ctx context.Context, tx pgx.Tx, row ServingRelea
 		if count <= 0 {
 			return nil
 		}
+		models := make([]billing.GPUType, len(row.GpuModels))
+		for n, m := range row.GpuModels {
+			models[n] = billing.GPUType(m)
+		}
+		grant, err := billing.Admit(ctx, tx, billing.Request{
+			Workspace: row.WorkspaceID, Start: count, GPUs: int(row.GpuCount), GPUModels: models, Pinned: row.Pinned,
+		})
+		var refused *billing.PaymentRequiredError
+		if errors.As(err, &refused) {
+			// The account cannot pay; requests wait and time out until it
+			// can.
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("admit containers: %w", err)
+		}
+		if count = grant.Start; count == 0 {
+			return nil
+		}
 		created, err := q.CreatePendingContainers(ctx, CreatePendingContainersParams{
 			WorkspaceID: row.WorkspaceID,
 			ReleaseID:   row.ReleaseID,
 			Slots:       row.Slots,
 			CpuMillis:   row.CpuMillis,
 			MemoryBytes: row.MemoryBytes,
+			GpuCount:    row.GpuCount,
+			RateClass:   string(billing.RateClassFor(row.Pinned, row.Preemptible)),
 			Count:       int32(count), //nolint:gosec // Bounded by max_containers.
 		})
 		if err != nil {

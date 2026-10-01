@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/AmbientWare/lazycloud/internal/billing"
+
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -107,6 +109,11 @@ func (e *Edge) RegisterDomain(ctx context.Context, user identity.UserID, value s
 	provider, err := e.provider()
 	if err != nil {
 		return apitypes.Domain{}, err
+	}
+	if err := pgx.BeginFunc(ctx, e.pool, func(tx pgx.Tx) error {
+		return billing.AdmitAccountCustomDomain(ctx, tx, uuid.UUID(user))
+	}); err != nil {
+		return apitypes.Domain{}, fmt.Errorf("admit the domain: %w", err)
 	}
 	// The provider call is a network round trip and holds no lock.
 	state, err := provider.CreateHostname(ctx, hostname)

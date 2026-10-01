@@ -280,7 +280,7 @@ func (c *Control) deployFunction(ctx context.Context, tx pgx.Tx, q *Queries, wor
 	if err != nil {
 		return apitypes.Release{}, fmt.Errorf("upsert workload %s: %w", f.spec.Name, err)
 	}
-	if err := claimWorkloadRoute(ctx, q, workspace, workload.ID, appName, f.spec); err != nil {
+	if err := claimWorkloadRoute(ctx, tx, q, workspace, workload.ID, appName, f.spec); err != nil {
 		return apitypes.Release{}, err
 	}
 	if err := schedules.Apply(ctx, tx, workload.ID, f.spec.Cron); err != nil {

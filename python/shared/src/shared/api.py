@@ -21,6 +21,8 @@ class ErrorCode(str, Enum):
     task_not_finished = "task_not_finished"
     unavailable = "unavailable"
     internal = "internal"
+    payment_required = "payment_required"
+    limit_reached = "limit_reached"
 
 
 class Name(RootModel[str]):
@@ -2058,6 +2060,356 @@ class FleetNodePage(BaseModel):
     observed_at: AwareDatetime
 
 
+class PlanId(str, Enum):
+    free = "free"
+    team = "team"
+    business = "business"
+
+
+class TermsVersion(str, Enum):
+    free_v2 = "free-v2"
+    team_v3 = "team-v3"
+    business_v2 = "business-v2"
+
+
+class BillingOwner(str, Enum):
+    platform_fleet = "platform_fleet"
+    connected_cloud = "connected_cloud"
+    self_hosted = "self_hosted"
+
+
+class RateClass(str, Enum):
+    auto = "auto"
+    pinned = "pinned"
+    non_preemptible = "non_preemptible"
+    pinned_non_preemptible = "pinned_non_preemptible"
+
+
+class PlanEntitlements(BaseModel):
+    max_concurrent_cpu_containers: int
+    max_concurrent_gpus: int
+    gpu_types: Annotated[list[str], Field(description="The GPU models the account may ask for.")]
+    max_workspaces: Annotated[int | None, Field(description="Absent when unlimited.")] = None
+    max_members: Annotated[
+        int | None,
+        Field(
+            description="People in the account's workspaces, owner included; absent if unlimited."
+        ),
+    ] = None
+    connected_cloud: bool
+    custom_domains: bool
+    self_hosted: bool
+    retention_days: Annotated[int, Field(description="Log and artifact retention.")]
+    region_selection: bool
+    max_workspace_disk_gib: Annotated[
+        int, Field(description="Declared disk size one workspace may hold; 0 is no disks.")
+    ]
+
+
+class PublishedPlan(BaseModel):
+    id: PlanId
+    terms_version: TermsVersion
+    name: str
+    summary: str
+    monthly_nanos: int
+    included_nanos: Annotated[int, Field(description="Usage credit each month.")]
+    entitlements: PlanEntitlements
+    terms: list[str]
+
+
+class ShapeRate(BaseModel):
+    billing_owner: BillingOwner
+    nanos_per_container_hour: int
+    nanos_per_cpu_core_hour: int
+    nanos_per_memory_gib_hour: int
+
+
+class CardRates(BaseModel):
+    platform_fleet: int
+    connected_cloud: int
+    self_hosted: int
+
+
+class ComputeRate(BaseModel):
+    billing_owner: BillingOwner
+    gpu_type: Annotated[str | None, Field(description="Absent for containers without a GPU.")] = (
+        None
+    )
+    nanos_per_container_hour: int
+    nanos_per_cpu_core_hour: int
+    nanos_per_memory_gib_hour: int
+    nanos_per_gpu_card_hour: int
+
+
+class PlacementRate(BaseModel):
+    rate_class: RateClass
+    effective_at: AwareDatetime
+    pinned: bool
+    preemptible: bool
+    name: str
+    cpu_memory_multiplier: float
+    gpu_multiplier: float
+    compute_rates: list[ComputeRate]
+
+
+class TrialTerms(BaseModel):
+    amount_nanos: int
+    duration_days: int
+    one_time: bool
+
+
+class NoPaymentMethodTerms(BaseModel):
+    max_concurrent_cpu_containers: int
+    max_concurrent_gpus: int
+    gpu_types: list[str]
+
+
+class PlatformRate(BaseModel):
+    nanos_per_egress_gib: int
+    nanos_per_volume_gib_month: int
+    storage_month_seconds: int
+
+
+class DiskRate(BaseModel):
+    nanos_per_stored_gib_month: int
+    nanos_per_attached_gib_month: int
+
+
+class CreditPurchaseTerms(BaseModel):
+    minimum_cents: int
+    maximum_cents: int
+
+
+class BillingStatus(str, Enum):
+    active = "active"
+    past_due = "past_due"
+
+
+class BillingPlan(BaseModel):
+    id: PlanId
+    name: str
+    terms_version: TermsVersion
+    monthly_nanos: int
+    included_nanos: int
+    scheduled_terms_version: TermsVersion | None = None
+    scheduled_change_at: AwareDatetime | None = None
+    period_started_at: Annotated[
+        AwareDatetime | None,
+        Field(description="The subscription's billing period; absent on Free."),
+    ] = None
+    period_ended_at: AwareDatetime | None = None
+
+
+class EntitlementUsage(BaseModel):
+    concurrent_cpu_containers: int
+    concurrent_gpus: int
+    workspaces: int
+    members: int
+    connected_clouds: int
+    custom_domains: int
+
+
+class UsageBudget(BaseModel):
+    month_started_at: AwareDatetime
+    month_ended_at: AwareDatetime
+    limit_nanos: Annotated[
+        int | None, Field(description="Absent without a monthly usage limit.")
+    ] = None
+    spent_nanos: int
+    available_nanos: int | None = None
+
+
+class BillingPreferences(BaseModel):
+    monthly_usage_limit_nanos: Annotated[
+        int | None,
+        Field(
+            description="Stops new work once reached; resets monthly, UTC. Absent for none.",
+            ge=0,
+            le=9007199254740991,
+        ),
+    ] = None
+    reload_enabled: bool
+    reload_threshold_cents: Annotated[int, Field(ge=0, le=100000)]
+    reload_amount_cents: Annotated[int, Field(ge=500, le=100000)]
+
+
+class ReloadPauseReason(str, Enum):
+    declined = "declined"
+    action_required = "action_required"
+
+
+class AutomaticReload(BaseModel):
+    paused_purchase_id: UUID | None = None
+    pause_reason: ReloadPauseReason | None = None
+    pending_purchase_id: UUID | None = None
+    month_started_at: AwareDatetime
+    month_ended_at: AwareDatetime
+    monthly_payment_committed_cents: int
+
+
+class BillingAccount(BaseModel):
+    status: BillingStatus
+    currency: str
+    plan: BillingPlan
+    portal_available: Annotated[
+        bool,
+        Field(description="Stripe holds a customer for the account, so invoices can be shown."),
+    ]
+    payment_method_on_file: bool
+    complimentary_since: Annotated[
+        AwareDatetime | None,
+        Field(description="When an administrator waived the account's usage charges."),
+    ] = None
+    entitlements: PlanEntitlements
+    usage: EntitlementUsage
+    balance_nanos: Annotated[
+        int,
+        Field(description="Prepaid credit left; negative is usage the next credit covers first."),
+    ]
+    usage_budget: UsageBudget
+    preferences: BillingPreferences
+    automatic_reload: AutomaticReload
+    plan_change_pending: Annotated[
+        bool, Field(description="A plan change is waiting on Stripe's answer.")
+    ]
+
+
+class PlanChangeRequest(BaseModel):
+    plan: PlanId
+    terms_version: TermsVersion
+
+
+class HostedSessionRequest(BaseModel):
+    return_url: Annotated[
+        str,
+        Field(
+            description="A dashboard page; other origins are refused.",
+            max_length=2048,
+            min_length=1,
+        ),
+    ]
+    cancel_url: Annotated[
+        str | None,
+        Field(
+            description="Where to return on abandoning the page; defaults to return_url.",
+            max_length=2048,
+        ),
+    ] = None
+
+
+class HostedSession(BaseModel):
+    url: str
+
+
+class CreditPurchaseRequest(BaseModel):
+    request_key: UUID
+    amount_cents: Annotated[int, Field(ge=500, le=100000)]
+    return_url: Annotated[str, Field(max_length=2048, min_length=1)]
+    cancel_url: Annotated[str | None, Field(max_length=2048)] = None
+
+
+class CreditPaymentStatus(str, Enum):
+    pending = "pending"
+    action_required = "action_required"
+    succeeded = "succeeded"
+    declined = "declined"
+    cancelled = "cancelled"
+
+
+class Kind(str, Enum):
+    manual = "manual"
+    automatic = "automatic"
+
+
+class CreditPurchase(BaseModel):
+    id: UUID
+    kind: Kind
+    amount_nanos: int
+    status: CreditPaymentStatus
+    checkout_url: Annotated[
+        str | None, Field(description="Stripe Checkout, while the purchase is pending.")
+    ] = None
+    funded_at: AwareDatetime | None = None
+    reversed_nanos: Annotated[int, Field(description="Refunded or disputed credit taken back.")]
+    created_at: AwareDatetime
+
+
+class ComplimentaryRequest(BaseModel):
+    complimentary: bool
+
+
+class UsageCostGroup(str, Enum):
+    app = "app"
+    workload = "workload"
+    task = "task"
+
+
+class UsageCostCategory(str, Enum):
+    image_build = "image-build"
+    disk = "disk"
+    unattributed = "unattributed"
+
+
+class UsageCostBucket(str, Enum):
+    hour = "hour"
+    day = "day"
+
+
+class BilledDimension(str, Enum):
+    compute_runtime = "compute_runtime"
+    network_egress = "network_egress"
+    volume_storage = "volume_storage"
+    disk = "disk"
+
+
+class UsageCostComponentKind(str, Enum):
+    container_time = "container_time"
+    cpu = "cpu"
+    memory = "memory"
+    gpu = "gpu"
+    volume_storage = "volume_storage"
+    disk = "disk"
+    egress = "egress"
+
+
+class UsageCostComponent(BaseModel):
+    dimension: BilledDimension
+    component: UsageCostComponentKind
+    quantity: float
+    cost_nanos: int
+
+
+class UsageCostRow(BaseModel):
+    workspace_id: UUID
+    workspace_name: str | None = None
+    app_id: UUID | None = None
+    app_name: str | None = None
+    workload_id: UUID | None = None
+    workload_name: str | None = None
+    workload_kind: str | None = None
+    task_id: UUID | None = None
+    disk_id: UUID | None = None
+    disk_name: Annotated[str | None, Field(description="Absent when the disk was deleted.")] = None
+    category: UsageCostCategory | None = None
+    cost_nanos: int
+    components: list[UsageCostComponent]
+
+
+class UsageCostPage(BaseModel):
+    start: AwareDatetime
+    end: AwareDatetime
+    currency: str
+    group_by: UsageCostGroup
+    cost_nanos: Annotated[int, Field(description="The whole window's cost, not the page's.")]
+    rows: list[UsageCostRow]
+    next_cursor: Annotated[str | None, Field(description="Present when more rows follow.")] = None
+
+
+class UsageCostDimension(BaseModel):
+    dimension: BilledDimension
+    cost_nanos: int
+
+
 class Error(BaseModel):
     code: ErrorCode
     message: str
@@ -2334,6 +2686,71 @@ class ComputeSummary(BaseModel):
     instances: Instances
     cost: Cost
     workload_count: int
+
+
+class GpuRate(BaseModel):
+    gpu_type: str
+    nanos_per_card_hour: CardRates
+
+
+class PricingCatalog(BaseModel):
+    trial: TrialTerms
+    pricing_version: str
+    metered_rates_effective_at: AwareDatetime
+    currency: str
+    connected_cloud_management_fee_percent: int
+    no_payment_method: NoPaymentMethodTerms
+    plans: list[PublishedPlan]
+    shape_rates: Annotated[
+        list[ShapeRate],
+        Field(description="Automatic placement rates for containers without a GPU."),
+    ]
+    gpu_rates: list[GpuRate]
+    platform_rate: PlatformRate
+    disk_rate: DiskRate | None = None
+    placement_rates: list[PlacementRate]
+    credit_purchase: CreditPurchaseTerms
+
+
+class BillingAccountAdmin(BaseModel):
+    user: User
+    plan: PlanId | None = None
+    status: BillingStatus | None = None
+    payment_method_on_file: bool
+    complimentary_since: AwareDatetime | None = None
+    recent_cost_nanos: Annotated[
+        int, Field(description="Usage cost since recent_cost_since, waived or not.")
+    ]
+    recent_cost_since: AwareDatetime
+
+
+class BillingAccountAdminPage(BaseModel):
+    accounts: list[BillingAccountAdmin]
+    next_cursor: Annotated[str | None, Field(description="Present when more accounts follow.")] = (
+        None
+    )
+
+
+class UsageCostInterval(BaseModel):
+    started_at: AwareDatetime
+    ended_at: AwareDatetime
+    cost_nanos: int
+    dimensions: Annotated[
+        list[UsageCostDimension],
+        Field(description="Only the invoice lines metered in the interval."),
+    ]
+
+
+class UsageCostSeries(BaseModel):
+    start: AwareDatetime
+    end: AwareDatetime
+    currency: str
+    bucket: UsageCostBucket
+    cost_nanos: int
+    subscription_credit_nanos: Annotated[
+        int, Field(description="Usage in the window that subscription credit covered.")
+    ]
+    intervals: list[UsageCostInterval]
 
 
 class Me(BaseModel):
