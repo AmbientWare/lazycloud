@@ -263,15 +263,16 @@ func TestStopContainerLosesItsAttemptsForRetry(t *testing.T) {
 	if page, err := e.ListContainers(t.Context(), f.workspace, ContainerFilter{App: &other}, 10, ""); err != nil || len(page.Containers) != 0 {
 		t.Fatalf("another app's containers %+v %v", page.Containers, err)
 	}
-	fn, otherFn := "summarize", "other"
-	if page, err := e.ListContainers(t.Context(), f.workspace, ContainerFilter{App: &app, Function: &fn}, 10, ""); err != nil || len(page.Containers) != 1 {
-		t.Fatalf("function containers %+v %v", page.Containers, err)
+	var workload uuid.UUID
+	if err := pool.QueryRow(t.Context(), `select workload_id from releases where id = $1`, f.release).Scan(&workload); err != nil {
+		t.Fatal(err)
 	}
-	if page, err := e.ListContainers(t.Context(), f.workspace, ContainerFilter{App: &app, Function: &otherFn}, 10, ""); err != nil || len(page.Containers) != 0 {
-		t.Fatalf("another function's containers %+v %v", page.Containers, err)
+	otherWorkload := uuid.New()
+	if page, err := e.ListContainers(t.Context(), f.workspace, ContainerFilter{Workload: &workload}, 10, ""); err != nil || len(page.Containers) != 1 {
+		t.Fatalf("workload containers %+v %v", page.Containers, err)
 	}
-	if _, err := e.ListContainers(t.Context(), f.workspace, ContainerFilter{Function: &fn}, 10, ""); !errors.Is(err, ErrInvalidFilter) {
-		t.Fatalf("function without app error %v", err)
+	if page, err := e.ListContainers(t.Context(), f.workspace, ContainerFilter{Workload: &otherWorkload}, 10, ""); err != nil || len(page.Containers) != 0 {
+		t.Fatalf("another workload's containers %+v %v", page.Containers, err)
 	}
 	// A container shows the image its release runs.
 	exec(t, pool, `update releases set spec = spec || '{"image": {"python_version": "3.12", "reference": "registry.example/fn@sha256:ab"}}'`)
