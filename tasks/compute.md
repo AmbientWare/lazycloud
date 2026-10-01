@@ -89,6 +89,20 @@ aws` and `cloud authorize` put the same fleet in a customer account.
   creates the connection role, the node role and instance profile, a VPC and
   public subnets.
 
+### Host connection transport
+
+- Agents dial the server with TLS and verify its certificate against the
+  system roots, plus a PEM bundle from `--server-ca`. `--server-plaintext`
+  is accepted only for a loopback server; any other address is refused with
+  `ErrPlaintextRemote`, so host tokens and workload data never cross a
+  network in the clear. Every agent connection to the server goes through
+  one dial function, which the endpoints data connection should reuse.
+- The server terminates TLS itself with `-grpc-tls-cert` and
+  `-grpc-tls-key`, or serves plaintext behind an ingress that terminates
+  TLS. Join commands and EC2 user data add `--server-plaintext` only when
+  the server has no certificate and its agent address is loopback.
+  `TestAgentDialsTheServerWithVerifiedTLS` runs against a real TLS listener.
+
 ### Interruptions and updates
 
 - The agent polls IMDSv2 `spot/instance-action` and reports `Interruption`
