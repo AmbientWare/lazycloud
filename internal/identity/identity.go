@@ -190,9 +190,9 @@ func NewIdentity(pool *pgxpool.Pool, cfg Config) *Identity {
 const TokenPrefix = "lc_"
 
 // DisplayPrefix is the part of a token kept to tell tokens apart: the marker
-// and four characters of its 43, too few to help guess the rest.
+// and three characters of its 43, as the dashboard shows it.
 func DisplayPrefix(token string) string {
-	return token[:len(TokenPrefix)+4]
+	return token[:len(TokenPrefix)+3]
 }
 
 // NewToken returns a fresh credential and the digest to store. Tokens carry

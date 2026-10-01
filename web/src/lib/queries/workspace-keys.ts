@@ -128,13 +128,15 @@ export const workspaceQueryKeys = {
       ] as const,
   },
   sandboxes: {
-    root: (workspaceId: string) => [...workspaceRoot(workspaceId), "sandboxes"] as const,
-    list: (workspaceId: string, limit: number, appId: string | null) =>
-      [...workspaceRoot(workspaceId), "sandboxes", "list", { limit, appId }] as const,
-    processes: (workspaceId: string, containerId: string) =>
-      [...workspaceRoot(workspaceId), "sandboxes", "processes", containerId] as const,
-    urls: (workspaceId: string, containerId: string) =>
-      [...workspaceRoot(workspaceId), "sandboxes", "urls", containerId] as const,
+    // Under the container lists, so the container changes that refresh those refresh these.
+    list: (workspace: string, app: string, limit: number) =>
+      [...workspaceRoot(workspace), "containers", "list", "sandboxes", { app, limit }] as const,
+    stats: (workspace: string, app: string) =>
+      [...workspaceRoot(workspace), "containers", "list", "sandbox-stats", { app }] as const,
+    processes: (workspace: string, containerId: string) =>
+      [...workspaceRoot(workspace), "sandboxes", "processes", containerId] as const,
+    ports: (workspace: string, containerId: string) =>
+      [...workspaceRoot(workspace), "sandboxes", "ports", containerId] as const,
   },
   compute: {
     summary: (workspaceId: string) =>

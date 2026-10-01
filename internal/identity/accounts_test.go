@@ -352,7 +352,7 @@ func TestAccountTokens(t *testing.T) {
 		t.Fatalf("second page %+v", second)
 	}
 	// A listed token shows the prefix it was issued with, and no more of it.
-	if first.Tokens[0].Prefix != DisplayPrefix(secrets["c"]) || len(first.Tokens[0].Prefix) != len(TokenPrefix)+4 {
+	if first.Tokens[0].Prefix != DisplayPrefix(secrets["c"]) || len(first.Tokens[0].Prefix) != len(TokenPrefix)+3 {
 		t.Fatalf("listed prefix %q", first.Tokens[0].Prefix)
 	}
 	if first.Tokens[1].ExpiresAt == nil || time.Until(*first.Tokens[1].ExpiresAt) < week-time.Minute {

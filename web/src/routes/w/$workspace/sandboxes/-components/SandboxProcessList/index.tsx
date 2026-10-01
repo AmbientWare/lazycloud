@@ -25,12 +25,12 @@ export function SandboxProcessList({
 }) {
   const { workspace } = useWorkspace();
   const queryClient = useQueryClient();
-  const query = useQuery(sandboxProcessesQueryOptions(workspace.id, containerId));
+  const query = useQuery(sandboxProcessesQueryOptions(workspace.name, containerId));
   const kill = useMutation({
-    ...killSandboxProcessMutationOptions(workspace.id, containerId),
+    ...killSandboxProcessMutationOptions(workspace.name, containerId),
     onSuccess: () =>
       queryClient.invalidateQueries({
-        queryKey: workspaceQueryKeys.sandboxes.processes(workspace.id, containerId),
+        queryKey: workspaceQueryKeys.sandboxes.processes(workspace.name, containerId),
       }),
   });
 
@@ -61,19 +61,19 @@ export function SandboxProcessList({
           </div>
         ) : query.isError ? (
           <PanelError message={query.error.message} />
-        ) : query.data.processes.length === 0 ? (
+        ) : query.data.length === 0 ? (
           <PanelEmpty message="No processes" className="p-4" />
         ) : (
-          query.data.processes.map((process) => (
+          query.data.map((process) => (
             <div
-              key={process.pid}
+              key={process.process_id}
               className="grid min-h-9 grid-cols-[4rem_1fr_2rem] items-center px-3 text-xs"
             >
               <span className="mono tabular-nums text-muted-foreground">{process.pid}</span>
               <span className="mono truncate text-foreground" title={process.command}>
                 {process.command}
               </span>
-              {writable && process.pid > 1 ? (
+              {writable && process.running ? (
                 <Button
                   type="button"
                   variant="ghost"
@@ -82,9 +82,9 @@ export function SandboxProcessList({
                   aria-label={`Stop process ${process.pid}`}
                   title="Stop process"
                   disabled={kill.isPending}
-                  onClick={() => kill.mutate(process.pid)}
+                  onClick={() => kill.mutate(process.process_id)}
                 >
-                  {kill.isPending && kill.variables === process.pid ? (
+                  {kill.isPending && kill.variables === process.process_id ? (
                     <Loader2 className="animate-spin" />
                   ) : (
                     <Square className="fill-current" />

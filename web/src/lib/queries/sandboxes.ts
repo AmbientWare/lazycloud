@@ -1,110 +1,108 @@
 import { mutationOptions, queryOptions } from "@tanstack/react-query";
 
-import { apiRequest, postJson, withWorkspace } from "@/lib/api/client";
-import {
-  podCreateImageSchema,
-  podEmptyMutationSchema,
-  podMemorySnapshotSchema,
-  podProcessListSchema,
-  podUrlsSchema,
-  sandboxListSchema,
-} from "@/lib/api/schemas";
+import { api, ok } from "@/lib/api/client";
 
 import { workspaceLiveQueryMeta, workspaceQueryKeys } from "./workspace-keys";
 
-export function sandboxesQueryOptions(
-  workspaceId: string,
-  options: { limit?: number; appId?: string } = {},
-) {
-  const params = new URLSearchParams({ limit: String(options.limit ?? 50) });
-  if (options.appId) params.set("app_id", options.appId);
+/** How many of an app's newest sandboxes its page lists. */
+const APP_SANDBOX_LIMIT = 50;
+
+export function sandboxesQueryOptions(workspace: string, app: string) {
   return queryOptions({
-    queryKey: workspaceQueryKeys.sandboxes.list(
-      workspaceId,
-      options.limit ?? 50,
-      options.appId ?? null,
-    ),
-    queryFn: () =>
-      apiRequest(
-        withWorkspace(`/api/v1/stubs/sandboxes?${params.toString()}`, workspaceId),
-        sandboxListSchema,
+    queryKey: workspaceQueryKeys.sandboxes.list(workspace, app, APP_SANDBOX_LIMIT),
+    queryFn: async ({ signal }) => {
+      const page = await ok(
+        api.GET("/v1/workspaces/{workspace}/sandboxes", {
+          params: { path: { workspace }, query: { app, limit: APP_SANDBOX_LIMIT } },
+          signal,
+        }),
+      );
+      return page.sandboxes;
+    },
+    meta: workspaceLiveQueryMeta(true),
+  });
+}
+
+export function sandboxStatsQueryOptions(workspace: string, app: string) {
+  return queryOptions({
+    queryKey: workspaceQueryKeys.sandboxes.stats(workspace, app),
+    queryFn: ({ signal }) =>
+      ok(
+        api.GET("/v1/workspaces/{workspace}/sandboxes/stats", {
+          params: { path: { workspace }, query: { app } },
+          signal,
+        }),
       ),
     meta: workspaceLiveQueryMeta(true),
   });
 }
 
-export function sandboxProcessesQueryOptions(workspaceId: string, containerId: string) {
+/** Processes publish no changes, so the list polls while it is shown. */
+export function sandboxProcessesQueryOptions(workspace: string, containerId: string) {
   return queryOptions({
-    queryKey: workspaceQueryKeys.sandboxes.processes(workspaceId, containerId),
-    queryFn: () =>
-      apiRequest(
-        withWorkspace(`/api/v1/pods/${encodeURIComponent(containerId)}/processes`, workspaceId),
-        podProcessListSchema,
-      ),
+    queryKey: workspaceQueryKeys.sandboxes.processes(workspace, containerId),
+    queryFn: async ({ signal }) => {
+      const list = await ok(
+        api.GET("/v1/workspaces/{workspace}/containers/{container}/processes", {
+          params: { path: { workspace, container: containerId } },
+          signal,
+        }),
+      );
+      return list.processes;
+    },
     refetchInterval: 5_000,
   });
 }
 
-export function sandboxUrlsQueryOptions(
-  workspaceId: string,
-  containerId: string,
-  enabled: boolean,
-) {
+/** A port exposed from inside the sandbox publishes no change, so the list polls. */
+export function sandboxPortsQueryOptions(workspace: string, containerId: string, enabled: boolean) {
   return queryOptions({
-    queryKey: workspaceQueryKeys.sandboxes.urls(workspaceId, containerId),
-    queryFn: () =>
-      apiRequest(
-        withWorkspace(`/api/v1/pods/${encodeURIComponent(containerId)}/urls`, workspaceId),
-        podUrlsSchema,
-      ),
+    queryKey: workspaceQueryKeys.sandboxes.ports(workspace, containerId),
+    queryFn: async ({ signal }) => {
+      const list = await ok(
+        api.GET("/v1/workspaces/{workspace}/containers/{container}/ports", {
+          params: { path: { workspace, container: containerId } },
+          signal,
+        }),
+      );
+      return list.ports;
+    },
     enabled,
     refetchInterval: enabled ? 10_000 : false,
   });
 }
 
-export function killSandboxProcessMutationOptions(workspaceId: string, containerId: string) {
+export function killSandboxProcessMutationOptions(workspace: string, containerId: string) {
   return mutationOptions({
-    mutationFn: (pid: number) =>
-      postJson(
-        withWorkspace(`/api/v1/pods/${encodeURIComponent(containerId)}/kill`, workspaceId),
-        podEmptyMutationSchema,
-        { pid },
+    mutationFn: (process: string) =>
+      ok(
+        api.POST("/v1/workspaces/{workspace}/containers/{container}/processes/{process}/kill", {
+          params: { path: { workspace, container: containerId, process } },
+          body: {},
+        }),
       ),
   });
 }
 
-export function createSandboxImageMutationOptions(
-  workspaceId: string,
-  containerId: string,
-  stubId: string,
-) {
+export function createSandboxImageMutationOptions(workspace: string, containerId: string) {
   return mutationOptions({
     mutationFn: () =>
-      postJson(
-        withWorkspace(
-          `/api/v1/pods/${encodeURIComponent(containerId)}/create-image-from-filesystem`,
-          workspaceId,
-        ),
-        podCreateImageSchema,
-        { stub_id: stubId },
+      ok(
+        api.POST("/v1/workspaces/{workspace}/containers/{container}/filesystem-images", {
+          params: { path: { workspace, container: containerId } },
+        }),
       ),
   });
 }
 
-export function snapshotSandboxMemoryMutationOptions(
-  workspaceId: string,
-  containerId: string,
-  stubId: string,
-) {
+export function snapshotSandboxMemoryMutationOptions(workspace: string, containerId: string) {
   return mutationOptions({
     mutationFn: () =>
-      postJson(
-        withWorkspace(
-          `/api/v1/pods/${encodeURIComponent(containerId)}/snapshot-memory`,
-          workspaceId,
-        ),
-        podMemorySnapshotSchema,
-        { stub_id: stubId },
+      ok(
+        api.POST("/v1/workspaces/{workspace}/containers/{container}/snapshots", {
+          params: { path: { workspace, container: containerId } },
+          body: {},
+        }),
       ),
   });
 }

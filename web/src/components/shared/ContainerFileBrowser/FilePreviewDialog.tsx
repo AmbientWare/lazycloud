@@ -11,8 +11,7 @@ import {
 } from "@/components/shared/FilePreview";
 import { PanelError } from "@/components/shared/PanelError";
 import { Button } from "@/components/ui/button";
-import type { PodFileInfo } from "@/lib/api/schemas";
-import { base64ToBytes } from "@/lib/files";
+import type { Schemas } from "@/lib/api/client";
 import { formatBytes, relativeTime } from "@/lib/format";
 import {
   CONTAINER_FILE_IMAGE_PREVIEW_BYTES,
@@ -32,17 +31,17 @@ import {
 /** How many leading bytes a file that is not text or an image shows. */
 const HEX_PREVIEW_BYTES = 512;
 
-export type PreviewTarget = { path: string; file: PodFileInfo };
+export type PreviewTarget = { path: string; file: Schemas["ContainerFile"] };
 
 /** A container file in the shared preview dialog, drawn as an image, text, or its first bytes. */
 export function ContainerFilePreviewDialog({
-  workspaceId,
+  workspace,
   containerId,
   target,
   onClose,
   returnFocus,
 }: {
-  workspaceId: string;
+  workspace: string;
   containerId: string;
   target: PreviewTarget;
   onClose: () => void;
@@ -53,7 +52,7 @@ export function ContainerFilePreviewDialog({
     imageMimeForName(file.name) !== undefined && file.size <= CONTAINER_FILE_IMAGE_PREVIEW_BYTES;
   const query = useQuery(
     containerFilePreviewQueryOptions(
-      workspaceId,
+      workspace,
       containerId,
       path,
       drawable ? CONTAINER_FILE_IMAGE_PREVIEW_BYTES : CONTAINER_FILE_PREVIEW_BYTES,
@@ -61,18 +60,14 @@ export function ContainerFilePreviewDialog({
   );
   const read = useMemo(() => {
     if (!query.data) return undefined;
-    const bytes = base64ToBytes(query.data.value_base64);
-    return {
-      bytes,
-      truncated: query.data.truncated,
-      contents: describeFileContents(file.name, bytes, !query.data.truncated),
-    };
+    const { bytes, truncated } = query.data;
+    return { bytes, truncated, contents: describeFileContents(file.name, bytes, !truncated) };
   }, [query.data, file.name]);
   const image = useDecodedImage(read?.contents, read?.bytes);
   const contents: FileContents | undefined =
     image.failed && read ? { kind: "binary", label: read.contents.label } : read?.contents;
   const download = useMutation({
-    mutationFn: () => saveContainerFile(workspaceId, containerId, path, file.name),
+    mutationFn: () => saveContainerFile(workspace, containerId, path, file.name),
   });
 
   const description = [
