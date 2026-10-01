@@ -200,7 +200,11 @@ func (c *container) prepare(ctx context.Context, spec *hostproto.StartContainer)
 	c.mu.Lock()
 	c.link = l
 	c.mu.Unlock()
-	if err := c.a.createAndStart(ctx, c, spec, runtime); err != nil {
+	binds, workspaces, err := c.a.volumes.binds(ctx, c.id, spec.GetVolumes())
+	if err != nil {
+		return err
+	}
+	if err := c.a.createAndStart(ctx, c, spec, runtime, binds, workspaces); err != nil {
 		return err
 	}
 	c.log.Info("container started",
@@ -316,6 +320,7 @@ func (c *container) cleanup(ctx context.Context) {
 	}
 	c.cleaned = true
 	c.mu.Unlock()
+	c.a.volumes.release(c.id)
 	if err := c.a.removeContainer(ctx, c.dockerName()); err != nil {
 		c.log.Warn("removing docker container failed", "error", err)
 	}

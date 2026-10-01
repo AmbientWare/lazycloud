@@ -18,6 +18,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
+	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
 const (
@@ -35,6 +36,8 @@ type session struct {
 	// sent holds the ids of derived commands this session already sent, so
 	// each is sent once per session. It keeps only ids still derived.
 	sent map[string]bool
+	// grants holds the expiry of the storage grant sent per workspace.
+	grants map[identity.WorkspaceID]time.Time
 }
 
 // Session serves a host's control stream. Hello opens a session epoch and
@@ -71,7 +74,7 @@ func (s *Server) Session(stream grpc.BidiStreamingServer[hostproto.HostMessage, 
 	if err != nil {
 		return s.grpcError(ctx, err)
 	}
-	sess := &session{server: s, stream: stream, host: host, sent: map[string]bool{}}
+	sess := &session{server: s, stream: stream, host: host, sent: map[string]bool{}, grants: map[identity.WorkspaceID]time.Time{}}
 	actions, err := s.execution.ReconcileHost(ctx, host, reports)
 	if err != nil {
 		return s.grpcError(ctx, err)
@@ -177,6 +180,11 @@ func (sess *session) sync(ctx context.Context) error {
 		if err != nil {
 			return sess.server.grpcError(ctx, err)
 		}
+		if usesWorkspaceBucket(msg.GetStart()) {
+			if err := sess.ensureGrant(ctx, start.Workspace); err != nil {
+				return err
+			}
+		}
 		if err := sess.send(msg); err != nil {
 			return err
 		}
@@ -200,7 +208,7 @@ func (sess *session) sync(ctx context.Context) error {
 		}
 	}
 	sess.sent = derived
-	return nil
+	return sess.refreshGrants(ctx)
 }
 
 // sendActions sends the commands a report implied. They are not derived
@@ -237,6 +245,14 @@ func (s *Server) startMessage(ctx context.Context, id string, start execution.St
 	if start.Spec.Environment != nil {
 		env = *start.Spec.Environment
 	}
+	volumes, err := s.volumeMounts(ctx, start)
+	if err != nil {
+		return nil, err
+	}
+	var diskLimit int64
+	if start.Spec.Resources.DiskMib != nil {
+		diskLimit = int64(*start.Spec.Resources.DiskMib) << 20
+	}
 	return &hostproto.ServerMessage{CommandId: id, Body: &hostproto.ServerMessage_Start{Start: &hostproto.StartContainer{
 		ContainerId:   start.Container.String(),
 		Image:         strings.ReplaceAll(s.config.ImageTemplate, "{version}", version),
@@ -245,12 +261,14 @@ func (s *Server) startMessage(ctx context.Context, id string, start execution.St
 		Resources: &hostproto.Resources{
 			CpuMillis: start.CPUMillis, MemoryBytes: start.MemoryBytes,
 			CpuLimitMillis: start.CPULimitMillis, MemoryLimitBytes: start.MemoryLimitBytes,
+			DiskLimitBytes: diskLimit,
 		},
 		Function: &hostproto.FunctionWorkload{
 			Handler: start.Spec.Handler,
 			Slots:   int32(start.Slots), //nolint:gosec // The schema caps concurrency at 256.
 		},
 		Environment: env,
+		Volumes:     volumes,
 	}}}, nil
 }
 

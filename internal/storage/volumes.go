@@ -511,3 +511,33 @@ func (s *Storage) AbortVolumeUpload(ctx context.Context, workspace identity.Work
 	}
 	return s.abortMultipart(ctx, bucket, prefix+rel, req.UploadId)
 }
+
+// reservedMountRoots are container paths the host runtime owns.
+var reservedMountRoots = [...]string{"/opt/lazycloud", "/run/lazycloud", "/workspace", "/proc", "/sys", "/dev"} //nolint:gochecknoglobals // A constant table.
+
+// ValidateVolumes checks a workload's volume specs: unique names and mount
+// paths, none on a path the runtime owns. Cloud buckets are refused until
+// workspace secrets can supply their keys.
+func ValidateVolumes(specs []apitypes.VolumeMountSpec) error {
+	names := map[string]bool{}
+	paths := map[string]bool{}
+	for _, spec := range specs {
+		if spec.CloudBucket != nil {
+			return invalid("cloud bucket %s: mounting a cloud bucket needs workspace secrets for its keys, which this platform does not provide yet", spec.Name)
+		}
+		target := MountPath(spec)
+		if names[spec.Name] || paths[target] {
+			return invalid("volume %s at %s: each volume and mount path may appear once", spec.Name, target)
+		}
+		names[spec.Name], paths[target] = true, true
+		if target == "/" {
+			return invalid("volume %s cannot mount at /", spec.Name)
+		}
+		for _, root := range reservedMountRoots {
+			if target == root || strings.HasPrefix(target, root+"/") {
+				return invalid("volume %s cannot mount under %s", spec.Name, root)
+			}
+		}
+	}
+	return nil
+}

@@ -100,6 +100,11 @@ func Resolve(spec apitypes.FunctionSpec) (apitypes.FunctionSpec, error) {
 		}
 	}
 	out.Environment = &env
+	if spec.Volumes != nil {
+		if err := storage.ValidateVolumes(*spec.Volumes); err != nil {
+			return out, &InvalidSpecError{Function: spec.Name, Reason: err.Error()}
+		}
+	}
 	return out, nil
 }
 

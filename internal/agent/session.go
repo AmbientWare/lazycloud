@@ -174,6 +174,10 @@ func (a *Agent) handle(command *hostproto.ServerMessage) {
 		if c := a.lookup(body.Cancel.GetContainerId()); c != nil {
 			c.cancelAttempt(body.Cancel.GetAttemptId())
 		}
+	case *hostproto.ServerMessage_StorageGrant:
+		if err := a.volumes.grant(body.StorageGrant); err != nil {
+			a.log.Error("storing a storage grant failed", "workspace_id", body.StorageGrant.GetWorkspaceId(), "error", err)
+		}
 	default:
 		a.log.Warn("ignoring unknown command", "command_id", command.GetCommandId())
 	}

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	cerrdefs "github.com/containerd/errdefs"
@@ -32,7 +33,7 @@ const (
 // pidsLimit bounds processes per container.
 const pidsLimit = 4096
 
-func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostproto.StartContainer, runtime string) error {
+func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostproto.StartContainer, runtime string, binds []mount.Mount, workspaces []string) error {
 	env := make([]string, 0, len(spec.GetEnvironment())+4)
 	for _, key := range slices.Sorted(maps.Keys(spec.GetEnvironment())) {
 		env = append(env, key+"="+spec.GetEnvironment()[key])
@@ -51,6 +52,9 @@ func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostprot
 	labels[labelHost] = a.identity.HostID
 	labels[labelHandler] = c.handler
 	labels[labelSlots] = strconv.Itoa(c.slots)
+	if len(workspaces) > 0 {
+		labels[labelWorkspaces] = strings.Join(workspaces, ",")
+	}
 
 	limit := int64(pidsLimit)
 	resources := spec.GetResources()
@@ -67,13 +71,14 @@ func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostprot
 		},
 		HostConfig: &containertypes.HostConfig{
 			Runtime: a.cfg.OCIRuntime,
-			Mounts: []mount.Mount{
+			Mounts: append([]mount.Mount{
 				{Type: mount.TypeBind, Source: runtime, Target: containerRuntimeDir, ReadOnly: true},
 				{Type: mount.TypeBind, Source: a.cfg.SupervisorPath, Target: containerSupervisor, ReadOnly: true},
 				{Type: mount.TypeBind, Source: c.workspaceDir(), Target: containerWorkspace},
 				{Type: mount.TypeBind, Source: c.linkDir(), Target: containerLinkDir},
-			},
-			Resources: containerResources(resources, a.capacity, limit),
+			}, binds...),
+			Resources:  containerResources(resources, a.capacity, limit),
+			StorageOpt: a.diskLimit(resources),
 		},
 	}
 	_, err := a.docker.ContainerCreate(ctx, options)
@@ -145,7 +150,11 @@ func (a *Agent) adopt(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("list containers: %w", err)
 	}
+	a.volumes.adopt(list.Items)
 	for _, summary := range list.Items {
+		if summary.Labels[labelKind] == kindMount {
+			continue
+		}
 		id := summary.Labels[labelContainer]
 		if _, err := uuid.Parse(id); err != nil {
 			continue

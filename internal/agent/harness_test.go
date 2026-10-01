@@ -224,6 +224,7 @@ type env struct {
 	stateDir string
 	docker   *client.Client
 	source   *hostproto.Source
+	geesefs  string
 }
 
 func newEnv(t *testing.T) *env {
@@ -295,6 +296,8 @@ func (e *env) startAgent() *runningAgent {
 		RuntimeDir:     runtimeDir,
 		SupervisorPath: supervisorBinary,
 		OCIRuntime:     "runc",
+		GeeseFSPath:    e.geesefs,
+		MountImage:     DefaultMountImage,
 		Capacity:       &hostproto.Capacity{CpuMillis: 4000, MemoryBytes: 8 << 30},
 		Labels:         map[string]string{"lazycloud.agent": e.id},
 		Version:        "test",

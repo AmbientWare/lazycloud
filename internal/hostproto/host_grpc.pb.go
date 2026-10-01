@@ -19,11 +19,15 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	HostService_Enroll_FullMethodName       = "/lazycloud.host.v1.HostService/Enroll"
-	HostService_Session_FullMethodName      = "/lazycloud.host.v1.HostService/Session"
-	HostService_ClaimTasks_FullMethodName   = "/lazycloud.host.v1.HostService/ClaimTasks"
-	HostService_CompleteTask_FullMethodName = "/lazycloud.host.v1.HostService/CompleteTask"
-	HostService_AppendLogs_FullMethodName   = "/lazycloud.host.v1.HostService/AppendLogs"
+	HostService_Enroll_FullMethodName               = "/lazycloud.host.v1.HostService/Enroll"
+	HostService_Session_FullMethodName              = "/lazycloud.host.v1.HostService/Session"
+	HostService_ClaimTasks_FullMethodName           = "/lazycloud.host.v1.HostService/ClaimTasks"
+	HostService_CompleteTask_FullMethodName         = "/lazycloud.host.v1.HostService/CompleteTask"
+	HostService_AppendLogs_FullMethodName           = "/lazycloud.host.v1.HostService/AppendLogs"
+	HostService_AcquireDisk_FullMethodName          = "/lazycloud.host.v1.HostService/AcquireDisk"
+	HostService_RecordDiskGeneration_FullMethodName = "/lazycloud.host.v1.HostService/RecordDiskGeneration"
+	HostService_RecordDiskCollection_FullMethodName = "/lazycloud.host.v1.HostService/RecordDiskCollection"
+	HostService_ReleaseDisk_FullMethodName          = "/lazycloud.host.v1.HostService/ReleaseDisk"
 )
 
 // HostServiceClient is the client API for HostService service.
@@ -49,6 +53,16 @@ type HostServiceClient interface {
 	CompleteTask(ctx context.Context, in *CompleteTaskRequest, opts ...grpc.CallOption) (*CompleteTaskResponse, error)
 	// AppendLogs stores output lines in order per attempt.
 	AppendLogs(ctx context.Context, in *AppendLogsRequest, opts ...grpc.CallOption) (*AppendLogsResponse, error)
+	// AcquireDisk takes the lease on a disk the container's release declares.
+	// ABORTED means another container still holds it; the host retries.
+	AcquireDisk(ctx context.Context, in *AcquireDiskRequest, opts ...grpc.CallOption) (*AcquireDiskResponse, error)
+	// RecordDiskGeneration records an uploaded generation under the lease. A
+	// stale lease returns FAILED_PRECONDITION.
+	RecordDiskGeneration(ctx context.Context, in *RecordDiskGenerationRequest, opts ...grpc.CallOption) (*RecordDiskGenerationResponse, error)
+	// RecordDiskCollection records the bytes a collection removed.
+	RecordDiskCollection(ctx context.Context, in *RecordDiskCollectionRequest, opts ...grpc.CallOption) (*RecordDiskCollectionResponse, error)
+	// ReleaseDisk ends the lease after the final publish.
+	ReleaseDisk(ctx context.Context, in *ReleaseDiskRequest, opts ...grpc.CallOption) (*ReleaseDiskResponse, error)
 }
 
 type hostServiceClient struct {
@@ -112,6 +126,46 @@ func (c *hostServiceClient) AppendLogs(ctx context.Context, in *AppendLogsReques
 	return out, nil
 }
 
+func (c *hostServiceClient) AcquireDisk(ctx context.Context, in *AcquireDiskRequest, opts ...grpc.CallOption) (*AcquireDiskResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AcquireDiskResponse)
+	err := c.cc.Invoke(ctx, HostService_AcquireDisk_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *hostServiceClient) RecordDiskGeneration(ctx context.Context, in *RecordDiskGenerationRequest, opts ...grpc.CallOption) (*RecordDiskGenerationResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RecordDiskGenerationResponse)
+	err := c.cc.Invoke(ctx, HostService_RecordDiskGeneration_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *hostServiceClient) RecordDiskCollection(ctx context.Context, in *RecordDiskCollectionRequest, opts ...grpc.CallOption) (*RecordDiskCollectionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RecordDiskCollectionResponse)
+	err := c.cc.Invoke(ctx, HostService_RecordDiskCollection_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *hostServiceClient) ReleaseDisk(ctx context.Context, in *ReleaseDiskRequest, opts ...grpc.CallOption) (*ReleaseDiskResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReleaseDiskResponse)
+	err := c.cc.Invoke(ctx, HostService_ReleaseDisk_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // HostServiceServer is the server API for HostService service.
 // All implementations must embed UnimplementedHostServiceServer
 // for forward compatibility.
@@ -135,6 +189,16 @@ type HostServiceServer interface {
 	CompleteTask(context.Context, *CompleteTaskRequest) (*CompleteTaskResponse, error)
 	// AppendLogs stores output lines in order per attempt.
 	AppendLogs(context.Context, *AppendLogsRequest) (*AppendLogsResponse, error)
+	// AcquireDisk takes the lease on a disk the container's release declares.
+	// ABORTED means another container still holds it; the host retries.
+	AcquireDisk(context.Context, *AcquireDiskRequest) (*AcquireDiskResponse, error)
+	// RecordDiskGeneration records an uploaded generation under the lease. A
+	// stale lease returns FAILED_PRECONDITION.
+	RecordDiskGeneration(context.Context, *RecordDiskGenerationRequest) (*RecordDiskGenerationResponse, error)
+	// RecordDiskCollection records the bytes a collection removed.
+	RecordDiskCollection(context.Context, *RecordDiskCollectionRequest) (*RecordDiskCollectionResponse, error)
+	// ReleaseDisk ends the lease after the final publish.
+	ReleaseDisk(context.Context, *ReleaseDiskRequest) (*ReleaseDiskResponse, error)
 	mustEmbedUnimplementedHostServiceServer()
 }
 
@@ -159,6 +223,18 @@ func (UnimplementedHostServiceServer) CompleteTask(context.Context, *CompleteTas
 }
 func (UnimplementedHostServiceServer) AppendLogs(context.Context, *AppendLogsRequest) (*AppendLogsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AppendLogs not implemented")
+}
+func (UnimplementedHostServiceServer) AcquireDisk(context.Context, *AcquireDiskRequest) (*AcquireDiskResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AcquireDisk not implemented")
+}
+func (UnimplementedHostServiceServer) RecordDiskGeneration(context.Context, *RecordDiskGenerationRequest) (*RecordDiskGenerationResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RecordDiskGeneration not implemented")
+}
+func (UnimplementedHostServiceServer) RecordDiskCollection(context.Context, *RecordDiskCollectionRequest) (*RecordDiskCollectionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RecordDiskCollection not implemented")
+}
+func (UnimplementedHostServiceServer) ReleaseDisk(context.Context, *ReleaseDiskRequest) (*ReleaseDiskResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReleaseDisk not implemented")
 }
 func (UnimplementedHostServiceServer) mustEmbedUnimplementedHostServiceServer() {}
 func (UnimplementedHostServiceServer) testEmbeddedByValue()                     {}
@@ -260,6 +336,78 @@ func _HostService_AppendLogs_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _HostService_AcquireDisk_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AcquireDiskRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HostServiceServer).AcquireDisk(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HostService_AcquireDisk_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HostServiceServer).AcquireDisk(ctx, req.(*AcquireDiskRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _HostService_RecordDiskGeneration_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RecordDiskGenerationRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HostServiceServer).RecordDiskGeneration(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HostService_RecordDiskGeneration_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HostServiceServer).RecordDiskGeneration(ctx, req.(*RecordDiskGenerationRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _HostService_RecordDiskCollection_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RecordDiskCollectionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HostServiceServer).RecordDiskCollection(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HostService_RecordDiskCollection_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HostServiceServer).RecordDiskCollection(ctx, req.(*RecordDiskCollectionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _HostService_ReleaseDisk_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReleaseDiskRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HostServiceServer).ReleaseDisk(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HostService_ReleaseDisk_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HostServiceServer).ReleaseDisk(ctx, req.(*ReleaseDiskRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // HostService_ServiceDesc is the grpc.ServiceDesc for HostService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -282,6 +430,22 @@ var HostService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "AppendLogs",
 			Handler:    _HostService_AppendLogs_Handler,
+		},
+		{
+			MethodName: "AcquireDisk",
+			Handler:    _HostService_AcquireDisk_Handler,
+		},
+		{
+			MethodName: "RecordDiskGeneration",
+			Handler:    _HostService_RecordDiskGeneration_Handler,
+		},
+		{
+			MethodName: "RecordDiskCollection",
+			Handler:    _HostService_RecordDiskCollection_Handler,
+		},
+		{
+			MethodName: "ReleaseDisk",
+			Handler:    _HostService_ReleaseDisk_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

@@ -61,6 +61,11 @@ type Config struct {
 	// OCIRuntime is the Docker runtime name, runc locally and runsc in
 	// production.
 	OCIRuntime string
+	// GeeseFSPath is the pinned GeeseFS binary that mounts workspace volume
+	// buckets; empty means the host mounts no volumes.
+	GeeseFSPath string
+	// MountImage is the image volume mount containers run GeeseFS in.
+	MountImage string
 	// Capacity is what the host offers; nil detects it.
 	Capacity *hostproto.Capacity
 	// Labels are added to every container the agent creates.
@@ -79,6 +84,9 @@ type Agent struct {
 	bootID   string
 	sources  *sourceCache
 	images   *imageCache
+	volumes  *volumes
+	// diskQuota is whether Docker enforces writable layer limits here.
+	diskQuota bool
 	// host carries claims, completions and logs on a connection separate from
 	// the session, so large payloads never delay commands.
 	host    hostproto.HostServiceClient
@@ -158,6 +166,13 @@ func Run(ctx context.Context, cfg Config) error {
 		ctx:        ctx,
 		containers: make(map[string]*container),
 	}
+	a.volumes = newVolumes(a)
+	if a.diskQuota, err = detectDiskQuota(ctx, docker); err != nil {
+		return err
+	}
+	if !a.diskQuota {
+		a.log.Warn("docker storage here cannot limit container disk; disk limits are not enforced")
+	}
 	defer a.shutdown()
 	if err := a.adopt(ctx); err != nil {
 		return err
@@ -217,6 +232,7 @@ func (a *Agent) pruneExited(ctx context.Context) {
 			}
 		}
 		a.mu.Unlock()
+		a.volumes.pruneIdle(ctx)
 	}
 }
 
