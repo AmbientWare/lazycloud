@@ -74,7 +74,8 @@ export async function invokeFunctionTask(
 /**
  * Call an endpoint at its path on this origin, which the session cookie
  * authenticates. `path` is the endpoint's invoke path from its describe read
- * with the request's route appended. A GET or HEAD carries no body.
+ * with the request's route appended. A GET or HEAD carries no body, so an
+ * object payload becomes its query string, as the endpoint reads it.
  */
 export async function invokeHttp(
   path: string,
@@ -83,7 +84,7 @@ export async function invokeHttp(
 ): Promise<InvokeResult> {
   const startedAt = performance.now();
   const bodiless = method === "GET" || method === "HEAD";
-  const response = await fetch(path, {
+  const response = await fetch(bodiless ? withQuery(path, body) : path, {
     method,
     headers: bodiless ? undefined : { "Content-Type": "application/json" },
     body: bodiless ? undefined : JSON.stringify(body),
@@ -103,6 +104,17 @@ export async function invokeHttp(
     json,
     taskId: null,
   };
+}
+
+function withQuery(path: string, body: JsonValue): string {
+  if (body === null || typeof body !== "object" || Array.isArray(body)) return path;
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(body)) {
+    if (value === null || value === undefined) continue;
+    query.set(key, typeof value === "string" ? value : JSON.stringify(value));
+  }
+  const text = query.toString();
+  return text ? `${path}${path.includes("?") ? "&" : "?"}${text}` : path;
 }
 
 /** The body's `args` and `kwargs` when it names them; otherwise the body is the keyword arguments. */
