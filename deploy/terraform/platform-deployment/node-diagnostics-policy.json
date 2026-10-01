@@ -1,0 +1,40 @@
+{
+  "Statement": [
+    {
+      "Action": [
+        "ssm:DescribeAssociation",
+        "ssm:DescribeDocument",
+        "ssm:GetDocument",
+        "ssm:GetManifest",
+        "ssm:ListAssociations",
+        "ssm:ListInstanceAssociations",
+        "ssm:PutComplianceItems",
+        "ssm:PutInventory",
+        "ssm:UpdateAssociationStatus",
+        "ssm:UpdateInstanceAssociationStatus",
+        "ssm:UpdateInstanceInformation"
+      ],
+      "Effect": "Allow",
+      "Resource": "*",
+      "Sid": "SystemsManagerAgent"
+    },
+    {
+      "Action": [
+        "ec2messages:AcknowledgeMessage",
+        "ec2messages:DeleteMessage",
+        "ec2messages:FailMessage",
+        "ec2messages:GetEndpoint",
+        "ec2messages:GetMessages",
+        "ec2messages:SendReply",
+        "ssmmessages:CreateControlChannel",
+        "ssmmessages:CreateDataChannel",
+        "ssmmessages:OpenControlChannel",
+        "ssmmessages:OpenDataChannel"
+      ],
+      "Effect": "Allow",
+      "Resource": "*",
+      "Sid": "SystemsManagerChannels"
+    }
+  ],
+  "Version": "2012-10-17"
+}

@@ -1,0 +1,16 @@
+account_id      = "your-cloudflare-account-id"
+zone_id         = "your-zone-id"
+public_hostname = "lazycloud.dev"
+environment     = "production"
+# Copy the real hostname from the server-hosts LoadBalancer Service once the
+# chart created it.
+host_connection_endpoint = "provisioned-nlb-hostname-required"
+# The reference platform's connection-gateway LoadBalancer Service.
+connection_gateway_endpoint = "provisioned-nlb-hostname-required"
+# Copy the real hostname of the server-tcp LoadBalancer Service.
+tcp_ingress_endpoint = "provisioned-tcp-nlb-hostname-required"
+
+# Both default to false. Turn them on only after importing the existing tunnel
+# and records and reviewing a plan that shows nothing else in the zone moves.
+confirm_zone_records   = true
+manage_fallback_origin = false
