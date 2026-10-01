@@ -11,9 +11,5 @@ order by t.id
 limit @row_limit;
 
 -- name: LiveWorkspaceContainers :one
-select count(*)::int
-from apps a
-join workloads w on w.app_id = a.id
-join releases r on r.workload_id = w.id
-join containers c on c.release_id = r.id
-where a.workspace_id = @workspace_id and c.state <> 'stopped';
+-- Workload and image build containers alike.
+select count(*)::int from containers where workspace_id = @workspace_id and state <> 'stopped';

@@ -12,14 +12,10 @@ import (
 )
 
 const liveWorkspaceContainers = `-- name: LiveWorkspaceContainers :one
-select count(*)::int
-from apps a
-join workloads w on w.app_id = a.id
-join releases r on r.workload_id = w.id
-join containers c on c.release_id = r.id
-where a.workspace_id = $1 and c.state <> 'stopped'
+select count(*)::int from containers where workspace_id = $1 and state <> 'stopped'
 `
 
+// Workload and image build containers alike.
 func (q *Queries) LiveWorkspaceContainers(ctx context.Context, workspaceID uuid.UUID) (int32, error) {
 	row := q.db.QueryRow(ctx, liveWorkspaceContainers, workspaceID)
 	var column_1 int32
