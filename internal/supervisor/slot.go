@@ -38,6 +38,9 @@ type slot struct {
 	proc      *runnerProcess
 	attempt   string
 	cancelled bool
+	// shared is set for a slot that runs attempts on a thread of a runner
+	// process the slots share; its output arrives as frames.
+	shared bool
 }
 
 // runnerProcess is one runner process and the resources it owns.
@@ -65,7 +68,7 @@ func (sl *slot) run(ctx context.Context, cfg *hostproto.Configure, runs <-chan *
 			sl.sup.loadFailed(&hostproto.RunnerError{Type: "RunnerStartError", Message: err.Error()})
 			return ErrLoadFailed
 		}
-		restart, err := sl.serve(ctx, p, cfg.GetHandler(), runs)
+		restart, err := sl.serve(ctx, p, cfg, runs)
 		sl.stop(p)
 		if !restart || sl.sup.isDraining() {
 			return err
@@ -76,10 +79,10 @@ func (sl *slot) run(ctx context.Context, cfg *hostproto.Configure, runs <-chan *
 
 // serve loads the handler and runs attempts until the runner must restart
 // (restart), the slot drained (nil) or the supervisor stops.
-func (sl *slot) serve(ctx context.Context, p *runnerProcess, handler string, runs <-chan *hostproto.RunAttempt) (bool, error) {
+func (sl *slot) serve(ctx context.Context, p *runnerProcess, cfg *hostproto.Configure, runs <-chan *hostproto.RunAttempt) (bool, error) {
 	stop := context.AfterFunc(ctx, p.terminate)
 	defer stop()
-	if loadErr := p.load(handler); loadErr != nil {
+	if loadErr := p.load(cfg, 1); loadErr != nil {
 		if ctx.Err() != nil {
 			return false, fmt.Errorf("load handler: %w", ctx.Err())
 		}
@@ -115,16 +118,11 @@ func (sl *slot) serve(ctx context.Context, p *runnerProcess, handler string, run
 
 // invoke runs one attempt and reports whether the runner can take another.
 func (sl *slot) invoke(p *runnerProcess, run *hostproto.RunAttempt) bool {
-	encoding, err := runnerEncoding(run.GetInputEncoding())
+	invoke, err := invokeFrame(run)
 	if err != nil {
 		return sl.finish(crashed(run.GetAttemptId(), "InvalidInput", err.Error()))
 	}
-	err = p.send(runnerproto.Invoke{
-		Type:          runnerproto.InvokeTypeInvoke,
-		TaskId:        run.GetTaskId(),
-		AttemptId:     run.GetAttemptId(),
-		InputEncoding: encoding,
-	}, run.GetInput())
+	err = p.send(invoke, run.GetInput())
 	var frame runnerproto.Frame
 	if err == nil {
 		frame, err = p.read()
@@ -155,10 +153,38 @@ func (sl *slot) finish(finished *hostproto.AttemptFinished) bool {
 	cancelled := sl.cancelled
 	sl.attempt, sl.cancelled = "", false
 	if !cancelled {
+		if e := finished.GetFailure().GetError(); e != nil {
+			e.Message, e.Traceback = sl.sup.redact.all(e.GetMessage()), sl.sup.redact.all(e.GetTraceback())
+		}
 		sl.sup.out.push(finishedMessage(finished))
 	}
 	return !cancelled
 }
+
+// invokeFrame is the runner's invoke header for run.
+func invokeFrame(run *hostproto.RunAttempt) (runnerproto.Invoke, error) {
+	encoding, err := runnerEncoding(run.GetInputEncoding())
+	if err != nil {
+		return runnerproto.Invoke{}, err
+	}
+	invoke := runnerproto.Invoke{
+		Type:          runnerproto.InvokeTypeInvoke,
+		TaskId:        run.GetTaskId(),
+		AttemptId:     run.GetAttemptId(),
+		InputEncoding: encoding,
+		AttemptNumber: ptr(max(int(run.GetAttemptNumber()), 1)),
+		MaxAttempts:   ptr(max(int(run.GetMaxAttempts()), 1)),
+	}
+	if root := run.GetRootTaskId(); root != "" {
+		invoke.RootTaskId = &root
+	}
+	if parent := run.GetParentTaskId(); parent != "" {
+		invoke.ParentTaskId = &parent
+	}
+	return invoke, nil
+}
+
+func ptr[T any](v T) *T { return &v }
 
 // start launches a runner in its own process group with a socket as fd 3.
 func (sl *slot) start(ctx context.Context, cfg *hostproto.Configure) (_ *runnerProcess, err error) {
@@ -311,9 +337,13 @@ func closedAsRunnerClosed(err error) error {
 	return err
 }
 
-// load sends the handler and waits for the runner to import it.
-func (p *runnerProcess) load(handler string) *hostproto.RunnerError {
-	err := p.send(runnerproto.Load{Type: runnerproto.LoadTypeLoad, ProtocolVersion: runnerproto.N1, Handler: handler}, nil)
+// load sends the handler and waits for the runner to import it and run its
+// on_start hooks. concurrency above 1 makes it run attempts on threads.
+func (p *runnerProcess) load(cfg *hostproto.Configure, concurrency int) *hostproto.RunnerError {
+	err := p.send(runnerproto.Load{
+		Type: runnerproto.LoadTypeLoad, ProtocolVersion: runnerproto.N1, Handler: cfg.GetHandler(),
+		Concurrency: &concurrency, Hooks: hooksFrame(cfg.GetHooks()),
+	}, nil)
 	var frame runnerproto.Frame
 	if err == nil {
 		frame, err = p.read()
@@ -327,7 +357,7 @@ func (p *runnerProcess) load(handler string) *hostproto.RunnerError {
 			if err = frame.Decode(&failed); err == nil {
 				return runnerError(failed.Error)
 			}
-		case runnerproto.FrameLoad, runnerproto.FrameInvoke, runnerproto.FrameSucceeded, runnerproto.FrameFailed:
+		case runnerproto.FrameLoad, runnerproto.FrameInvoke, runnerproto.FrameSucceeded, runnerproto.FrameFailed, runnerproto.FrameOutput:
 			err = fmt.Errorf("unexpected %q frame while loading", frame.Type)
 		default:
 			err = fmt.Errorf("unknown %q frame while loading", frame.Type)
@@ -374,7 +404,7 @@ func attemptOutcome(attempt string, frame runnerproto.Frame) (*hostproto.Attempt
 				Exception: frame.Payload,
 			},
 		}}, nil
-	case runnerproto.FrameLoad, runnerproto.FrameLoaded, runnerproto.FrameLoadFailed, runnerproto.FrameInvoke:
+	case runnerproto.FrameLoad, runnerproto.FrameLoaded, runnerproto.FrameLoadFailed, runnerproto.FrameInvoke, runnerproto.FrameOutput:
 		return nil, fmt.Errorf("unexpected %q frame during an attempt", frame.Type)
 	}
 	return nil, fmt.Errorf("unknown %q frame during an attempt", frame.Type)
@@ -384,6 +414,19 @@ func crashed(attempt, errorType, message string) *hostproto.AttemptFinished {
 	return &hostproto.AttemptFinished{AttemptId: attempt, Outcome: &hostproto.AttemptFinished_Failure{
 		Failure: &hostproto.TaskFailure{Kind: hostproto.AttemptFailureKind_ATTEMPT_FAILURE_KIND_CRASHED, Error: &hostproto.RunnerError{Type: errorType, Message: message}},
 	}}
+}
+
+func hooksFrame(h *hostproto.LifecycleHooks) *runnerproto.LifecycleHooks {
+	refs := func(r []string) *runnerproto.HookReferences {
+		if len(r) == 0 {
+			return nil
+		}
+		return &r
+	}
+	return &runnerproto.LifecycleHooks{
+		OnStart: refs(h.GetOnStart()), OnRunning: refs(h.GetOnRunning()), OnSuccess: refs(h.GetOnSuccess()),
+		OnError: refs(h.GetOnError()), OnRetry: refs(h.GetOnRetry()), OnFailure: refs(h.GetOnFailure()), OnFinish: refs(h.GetOnFinish()),
+	}
 }
 
 func runnerError(e runnerproto.RunnerError) *hostproto.RunnerError {

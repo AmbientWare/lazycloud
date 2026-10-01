@@ -29,6 +29,10 @@ const (
 	containerWorkspace  = "/workspace"
 	containerLinkDir    = "/run/lazycloud"
 	linkSocketName      = "agent.sock"
+	// containerAPIDir is a tmpfs in which the supervisor creates the
+	// container API socket.
+	containerAPIDir    = "/run/lazycloud-api"
+	containerAPISocket = containerAPIDir + "/api.sock"
 )
 
 // maxSocketPath is the longest Unix socket path Linux accepts.

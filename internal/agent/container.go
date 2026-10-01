@@ -44,7 +44,12 @@ type container struct {
 	dir     string
 	handler string
 	slots   int
+	// runtime is how the supervisor runs the slots: in one process, with
+	// which hooks, and which environment variables hold secrets.
+	runtime containerRuntime
 	logs    *logBatcher
+	// apiCalls bounds container API calls in flight.
+	apiCalls chan struct{}
 
 	// work covers preparation, claims and log delivery; claims stop earlier
 	// when the container begins stopping.
@@ -88,6 +93,7 @@ func (a *Agent) newContainer(id, handler string, slots int, phase hostproto.Cont
 		cancelled:  cancelledAttempts{at: make(map[string]time.Time)},
 		slotFree:   make(chan struct{}, 1),
 		gone:       make(chan struct{}),
+		apiCalls:   make(chan struct{}, maxContainerAPICalls),
 	}
 	c.work, c.cancelWork = context.WithCancel(a.ctx)
 	c.claims, c.cancelClaims = context.WithCancel(c.work)
@@ -111,6 +117,9 @@ func (c *container) configure() *hostproto.Configure {
 		Slots:            int32(c.slots), //nolint:gosec // slots come from an int32
 		RunnerCommand:    []string{"python3", "-m", "runner"},
 		WorkingDirectory: containerWorkspace,
+		InProcess:        c.runtime.InProcess,
+		Hooks:            c.runtime.Hooks,
+		SecretEnv:        c.runtime.SecretEnv,
 	}
 }
 
@@ -539,6 +548,10 @@ func (c *container) dispatch(task *hostproto.ClaimedTask) {
 		InputEncoding: task.GetInputEncoding(),
 		Input:         task.GetInput(),
 		Deadline:      task.GetDeadline(),
+		AttemptNumber: task.GetAttemptNumber(),
+		MaxAttempts:   task.GetMaxAttempts(),
+		RootTaskId:    task.GetRootTaskId(),
+		ParentTaskId:  task.GetParentTaskId(),
 	}}})
 }
 
