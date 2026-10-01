@@ -110,6 +110,8 @@ type hostSpec struct {
 	Zone       string
 	ZoneID     string
 	InstanceID string
+	// Unenrolled hosts have no token and have never reported.
+	Unenrolled bool
 }
 
 func newHost(t *testing.T, pool *pgxpool.Pool, h hostSpec) compute.HostID {
@@ -138,10 +140,11 @@ func newHost(t *testing.T, pool *pgxpool.Pool, h hostSpec) compute.HostID {
 	return compute.HostID(scan[uuid.UUID](t, pool, `
 insert into hosts (name, token_hash, state, last_seen_at, kind, provider, phase, cpu_millis, memory_bytes, gpu_type, gpu_count,
                    market, region, availability_zone, availability_zone_id, instance_id, launched_at)
-values ('h', sha256(random()::text::bytea), 'online', now(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+values ('h', case when $13 then null else sha256(random()::text::bytea) end,
+        case when $13 then 'offline' else 'online' end, case when $13 then null else now() end, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
         case when $12::text is null then null else now() end)
 returning id`, string(kind), string(provider), string(phase), h.CPU, h.Memory, h.GPUType, h.GPUCount, market,
-		h.Region, h.Zone, h.ZoneID, instance))
+		h.Region, h.Zone, h.ZoneID, instance, h.Unenrolled))
 }
 
 // work is a running attempt of a task on a ready container.
