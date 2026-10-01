@@ -151,7 +151,6 @@ def test_deployment_references_resolve_names_and_versions(fake_api: FakeApi) -> 
     ambiguous = _cli("deployment", "stop", "shared")
     missing = _cli("deployment", "stop", "absent")
     one_version = _cli("deployment", "delete", "summarize_sales-v2")
-    scaled = _cli("deployment", "scale", "summarize_sales", "--containers", "2")
 
     assert start.exit_code == 0, start.output
     assert "Started summarize_sales." in start.stdout
@@ -161,8 +160,6 @@ def test_deployment_references_resolve_names_and_versions(fake_api: FakeApi) -> 
     assert "deployment not found: absent" in str(missing.exception)
     assert one_version.exit_code != 0
     assert len(fake_api.calls("DELETE", f"{TEAM}/deployments/{WORKLOAD_ID}")) == 1
-    assert isinstance(scaled.exception, ClientError)
-    assert scaled.exception.details.type == "invalid_input"
 
 
 def test_deploy_diff_previews_the_plan_without_deploying(

@@ -14,6 +14,7 @@ from uuid import UUID
 
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
+from watchdog.observers.api import BaseObserver
 
 from lazycloud.clients.workloads import WorkloadsClient
 from lazycloud.exceptions import SdkError
@@ -67,12 +68,21 @@ class ContainerWorkspaceSyncer:
         self._detail(f"Synced {len(snapshot)} files")
 
     def start(self) -> None:
-        """Follow later changes in a background thread until `stop`."""
+        """Follow later changes in a background thread until `stop`.
+
+        The watch is in place when this returns, so no later change is missed.
+        """
         if self._thread is not None:
             return
         if self._snapshot is None:
             self._snapshot = _snapshot(self.root)
-        self._thread = threading.Thread(target=self._run, name="workspace-sync", daemon=True)
+        changes = _Changes()
+        observer = Observer()
+        observer.schedule(changes, str(self.root), recursive=True)
+        observer.start()
+        self._thread = threading.Thread(
+            target=self._run, args=(observer, changes), name="workspace-sync", daemon=True
+        )
         self._thread.start()
 
     def stop(self) -> None:
@@ -84,12 +94,8 @@ class ContainerWorkspaceSyncer:
         if self._failure is not None:
             raise WorkspaceSyncError(f"directory sync failed: {self._failure}") from self._failure
 
-    def _run(self) -> None:
-        changes = _Changes()
-        observer = Observer()
+    def _run(self, observer: BaseObserver, changes: _Changes) -> None:
         try:
-            observer.schedule(changes, str(self.root), recursive=True)
-            observer.start()
             while not self._stop_event.is_set():
                 if not changes.ready.wait(0.5):
                     continue
@@ -109,8 +115,7 @@ class ContainerWorkspaceSyncer:
             self._failure = exc
         finally:
             observer.stop()
-            if observer.ident is not None:
-                observer.join()
+            observer.join()
 
     def _apply(self, changed: list[str], removed: list[str]) -> None:
         container = UUID(self.container_id)

@@ -143,6 +143,9 @@ class Deployment:
         return str(release) if release is not None else ""
 
     def invoke_url(self, *, port: int | None = None, url_type: str | None = None) -> str:
+        """Where the pod or HTTP workload answers; only its first port has a URL."""
+        if port is None and url_type is None and self.deployment.url:
+            return self.deployment.url
         raise UnsupportedFeatureError(f"deployment {self.name}", ["invoke_url"])
 
     def submit(

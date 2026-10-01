@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Annotated
 
 import typer
-from shared.deployments import PodRole
+from shared.api import PodRole, Resources
 from shared.ssh import SSH_HOST_LIST_LIMIT
 from typer._click import Command, Context
 from typer.core import TyperGroup
@@ -18,7 +18,7 @@ from lazycloud.cli.components.output import (
     table,
     write_stream,
 )
-from lazycloud.cli.control import resource_client, ssh_client
+from lazycloud.cli.control import workloads
 from lazycloud.cli.ssh import AppOption, WorkspaceOption, ssh_connection
 from lazycloud.session.agent_login import login_agent
 from lazycloud.session.ssh import run_ssh
@@ -72,20 +72,20 @@ def list_devboxes(
     ] = "",
 ) -> None:
     """List deployed devboxes without starting them."""
-    page = ssh_client(workspace=workspace).hosts(
-        app=app, role=PodRole.Devbox, limit=limit, cursor=cursor
+    page = workloads(workspace=workspace).ssh_hosts(
+        app=app, role=PodRole.devbox, limit=limit, cursor=cursor or None
     )
     emit(
         ctx,
-        payload=page,
+        payload=page.model_dump(mode="json"),
         view=table(
             "devboxes",
             ["name", "app"],
-            [[host.pod, host.app] for host in page.data],
+            [[host.pod, host.app] for host in page.hosts],
         ),
     )
-    if page.next and not json_output_enabled(ctx):
-        write_stream(f"Next page: --cursor {page.next}\n")
+    if page.next_cursor and not json_output_enabled(ctx):
+        write_stream(f"Next page: --cursor {page.next_cursor}\n")
 
 
 @_named_devbox.command("login")
@@ -104,7 +104,7 @@ def login(
         )
     elif harness is AgentHarness.OpenCode:
         write_stream("Choose your provider and its browser login method.\n")
-    with ssh_connection(_name(ctx), app=app, workspace=workspace, role=PodRole.Devbox) as (
+    with ssh_connection(_name(ctx), app=app, workspace=workspace, role=PodRole.devbox) as (
         access,
         host,
     ):
@@ -121,7 +121,7 @@ def ssh(
     """Open a shell. Arguments after -- go to ssh."""
     if json_output_enabled(ctx):
         raise ClientError("SSH does not support --json")
-    with ssh_connection(_name(ctx), app=app, workspace=workspace, role=PodRole.Devbox) as (
+    with ssh_connection(_name(ctx), app=app, workspace=workspace, role=PodRole.devbox) as (
         access,
         host,
     ):
@@ -137,29 +137,44 @@ def status(
 ) -> None:
     """Show live state and resources without starting the devbox."""
     name = _name(ctx)
-    matches = ssh_client(workspace=workspace).hosts(app=app, pod=name, role=PodRole.Devbox, limit=2)
-    if not matches.data:
+    client = workloads(workspace=workspace)
+    matches = client.ssh_hosts(app=app, pod=name, role=PodRole.devbox, limit=2)
+    if not matches.hosts:
         raise ClientError(f"devbox not found: {name}")
-    if len(matches.data) > 1 or matches.next:
+    if len(matches.hosts) > 1 or matches.next_cursor:
         raise ClientError(f"Several apps have a devbox named {name}; select one with --app")
-    host = matches.data[0]
-    detail = resource_client(workspace=workspace).deployment(host.deployment_id)
-    box = detail.devbox
-    if box is None:
-        raise ClientError(f"{name!r} is no longer a devbox; check devbox list")
-    resources = detail.spec.resources.model_dump(mode="json")
+    host = matches.hosts[0]
+    box = client.devbox(host.deployment_id)
+    resources = client.api.get_function(
+        client.workspace, host.app, name
+    ).active_release.spec.resources
     emit(
         ctx,
-        payload=detail,
+        payload=box.model_dump(mode="json"),
         view=result_card(
             {
                 "phase": box.phase.value,
-                "cpu": resources["cpu"],
-                "memory": resources["memory"],
-                "disk": humanize_bytes(box.disk.size_bytes) if box.disk else resources["disk"],
+                "cpu": _cores(resources),
+                "memory": _mebibytes(resources.memory_mib),
+                "disk": (
+                    humanize_bytes(box.disk.size_bytes)
+                    if box.disk
+                    else _mebibytes(resources.disk_mib)
+                    if resources.disk_mib
+                    else None
+                ),
                 "connections": box.open_connections,
             },
-            title=f"{matches.workspace}/{host.app}/{name}",
-            message=box.phase_reason,
+            title=f"{client.workspace}/{host.app}/{name}",
+            message=box.phase_reason or "",
         ),
     )
+
+
+def _cores(resources: Resources) -> float | int:
+    cores = resources.cpu_millis / 1000
+    return int(cores) if cores.is_integer() else cores
+
+
+def _mebibytes(value: int) -> str:
+    return f"{value // 1024}Gi" if value % 1024 == 0 else f"{value}Mi"

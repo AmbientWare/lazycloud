@@ -214,17 +214,30 @@ class InteractiveShell:
                     return signal_exit_code
                 if self.terminal.take_resize():
                     columns, rows = self.terminal.size()
-                    websocket.send(json.dumps({"type": "resize", "cols": columns, "rows": rows}))
+                    message = json.dumps({"type": "resize", "cols": columns, "rows": rows})
+                    self._send(websocket, message, state)
                 if input_open:
                     data = self.terminal.read(self.poll_interval_seconds)
                     if data == b"":
                         input_open = False
                     elif data:
-                        websocket.send(data)
+                        self._send(websocket, data, state)
                 else:
                     time.sleep(self.poll_interval_seconds)
                 self._receive_available(websocket, state)
         return state.exit_code
+
+    def _send(self, websocket: ShellWebSocket, message: str | bytes, state: _ServerState) -> None:
+        from websockets.exceptions import ConnectionClosed
+
+        try:
+            websocket.send(message)
+        except ConnectionClosed:
+            # The server may close right after its exit or error message; read
+            # what it sent before reporting the closed connection.
+            self._receive_available(websocket, state)
+            if state.exit_code is None:
+                raise
 
     def _receive_available(self, websocket: ShellWebSocket, state: _ServerState) -> None:
         while state.exit_code is None:
