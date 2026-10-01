@@ -550,7 +550,7 @@ type DeploymentPage struct {
 type DeploymentPlan struct {
 	App AppName `json:"app"`
 
-	// Items Listed workloads by kind and name, then deployed workloads the request omits.
+	// Items Listed workloads by kind and name, then omitted deployed ones.
 	Items []DeploymentPlanItem `json:"items"`
 	Prune bool                 `json:"prune"`
 }
@@ -577,6 +577,7 @@ type DeploymentPlanRequest struct {
 
 // DeploymentRequest defines model for DeploymentRequest.
 type DeploymentRequest struct {
+	// Functions At least one, unless prune deletes every deployed function.
 	Functions []FunctionSpec `json:"functions"`
 
 	// Prune Delete every function of the app that is not listed.
@@ -610,7 +611,7 @@ type FunctionState string
 type FunctionSpec struct {
 	Autoscaler *Autoscaler `json:"autoscaler,omitempty"`
 
-	// ClientContract The handler's call signature as the SDK describes it, for typed clients that `lazycloud app export` generates. Opaque to the platform.
+	// ClientContract The signature `lazycloud app export` types clients from.
 	ClientContract *json.RawMessage `json:"client_contract,omitempty"`
 
 	// Concurrency Tasks one container runs at once, one process per slot.
@@ -768,7 +769,7 @@ type SubmitTasksRequest struct {
 	// ParentTaskId The task that submits these, which becomes their parent.
 	ParentTaskId *openapi_types.UUID `json:"parent_task_id,omitempty"`
 
-	// ReleaseId Run on this release of the function instead of the active one, such as one from prepareFunctionRelease.
+	// ReleaseId Run on this release, such as a prepared one, instead of the active one.
 	ReleaseId *openapi_types.UUID `json:"release_id,omitempty"`
 }
 

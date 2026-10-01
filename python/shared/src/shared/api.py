@@ -361,9 +361,7 @@ class FunctionSpec(BaseModel):
     environment: dict[str, str] | None = None
     client_contract: Annotated[
         dict[str, Any] | None,
-        Field(
-            description="The handler's call signature as the SDK describes it, for typed clients that `lazycloud app export` generates. Opaque to the platform."
-        ),
+        Field(description="The signature `lazycloud app export` types clients from."),
     ] = None
 
 
@@ -392,7 +390,7 @@ class SubmitTasksRequest(BaseModel):
     release_id: Annotated[
         UUID | None,
         Field(
-            description="Run on this release of the function instead of the active one, such as one from prepareFunctionRelease."
+            description="Run on this release, such as a prepared one, instead of the active one."
         ),
     ] = None
     parent_task_id: Annotated[
@@ -427,14 +425,18 @@ class DeploymentPlan(BaseModel):
     prune: bool
     items: Annotated[
         list[DeploymentPlanItem],
-        Field(
-            description="Listed workloads by kind and name, then deployed workloads the request omits."
-        ),
+        Field(description="Listed workloads by kind and name, then omitted deployed ones."),
     ]
 
 
 class DeploymentRequest(BaseModel):
-    functions: Annotated[list[FunctionSpec], Field(max_length=200, min_length=1)]
+    functions: Annotated[
+        list[FunctionSpec],
+        Field(
+            description="At least one, unless prune deletes every deployed function.",
+            max_length=200,
+        ),
+    ]
     prune: Annotated[
         bool, Field(description="Delete every function of the app that is not listed.")
     ] = False

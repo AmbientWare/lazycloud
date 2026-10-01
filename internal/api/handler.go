@@ -145,7 +145,7 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, invalidSpec.Error())
 	case errors.As(err, &sourceMissing):
 		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, sourceMissing.Error())
-	case errors.Is(err, storage.ErrInvalidDigest), errors.Is(err, errInvalidRequest):
+	case errors.Is(err, storage.ErrInvalidDigest), errors.Is(err, errInvalidRequest), errors.Is(err, control.ErrNothingToDeploy):
 		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, err.Error())
 	case errors.As(err, &tooLarge), errors.Is(err, execution.ErrPayloadTooLarge):
 		writeJSONError(w, http.StatusRequestEntityTooLarge, apitypes.PayloadTooLarge, "the request or a payload in it is too large")

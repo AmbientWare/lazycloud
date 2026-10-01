@@ -25,6 +25,10 @@ import (
 // ErrNotFound means the app or function does not exist.
 var ErrNotFound = errors.New("not found")
 
+// ErrNothingToDeploy rejects a deploy that lists no function and does not
+// prune.
+var ErrNothingToDeploy = errors.New("a deploy needs at least one function unless it prunes")
+
 // InvalidSpecError rejects a function definition the schema cannot express.
 type InvalidSpecError struct {
 	Function string
@@ -174,6 +178,9 @@ func requireSources(ctx context.Context, q *Queries, workspace identity.Workspac
 // version, which becomes active in the same commit; an identical spec keeps
 // the active release. With prune, unlisted deployed functions are deleted.
 func (c *Control) Deploy(ctx context.Context, workspace identity.WorkspaceID, app string, req apitypes.DeploymentRequest) (apitypes.Deployment, error) {
+	if len(req.Functions) == 0 && (req.Prune == nil || !*req.Prune) {
+		return apitypes.Deployment{}, ErrNothingToDeploy
+	}
 	functions := make([]resolvedFunction, len(req.Functions))
 	seen := map[string]bool{}
 	for n, spec := range req.Functions {

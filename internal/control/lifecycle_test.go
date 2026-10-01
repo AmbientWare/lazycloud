@@ -187,3 +187,16 @@ func TestPrepareReleaseReusesMatchingDefinitions(t *testing.T) {
 		t.Fatal("prepare accepted a spec named for another function")
 	}
 }
+
+func TestPruneWithoutFunctionsDeletesTheDeployedOnes(t *testing.T) {
+	pool, ws := fixture(t)
+	c := NewControl(pool)
+	deploy(t, c, ws, false, function("a"), function("b"))
+	if _, err := c.Deploy(t.Context(), ws, "reports", apitypes.DeploymentRequest{}); !errors.Is(err, ErrNothingToDeploy) {
+		t.Fatalf("empty deploy without prune %v", err)
+	}
+	pruned := deploy(t, c, ws, true)
+	if len(pruned.Pruned) != 2 || pruned.RemovedVersions != 2 || pruned.App.Workloads != 0 {
+		t.Fatalf("empty pruning deploy %+v", pruned)
+	}
+}

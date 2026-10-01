@@ -97,7 +97,7 @@ class FunctionHandle:
             msg = f"submitting one task returned {len(response.tasks)}"
             raise ClientHandleError(msg)
         task = Task(str(response.tasks[0].id), self.workspace, client)
-        view = task.wait()
+        view = task.wait_view()
         if view.status is not TaskStatus.succeeded:
             # Raises the remote exception, a typed failure or the cancellation.
             return task.outcome(view)
