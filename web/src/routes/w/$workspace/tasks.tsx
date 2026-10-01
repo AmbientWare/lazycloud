@@ -34,11 +34,9 @@ const TASK_STATUSES: readonly Schemas["TaskStatus"][] = [
 ];
 
 /** Every task runs a function; endpoint and ASGI requests are listed on their workload. */
-const TASK_KINDS = ["function"] as const;
 
 type TasksSearch = {
   status?: Schemas["TaskStatus"];
-  kind?: (typeof TASK_KINDS)[number];
   /** App and workload by name; a version narrows the workload. */
   app?: string;
   workload?: string;
@@ -48,7 +46,6 @@ type TasksSearch = {
 export const Route = createFileRoute("/w/$workspace/tasks")({
   validateSearch: (search: Record<string, unknown>): TasksSearch => ({
     status: pickOption(search.status, TASK_STATUSES),
-    kind: pickOption(search.kind, TASK_KINDS),
     app: typeof search.app === "string" && search.app ? search.app : undefined,
     workload: typeof search.workload === "string" && search.workload ? search.workload : undefined,
     version:
@@ -134,13 +131,6 @@ function TasksPage() {
                 options={TASK_STATUSES}
                 allLabel="All statuses"
                 onChange={(status) => setSearch({ status })}
-              />
-              <FilterSelect
-                label="Type"
-                value={search.kind}
-                options={TASK_KINDS}
-                allLabel="All types"
-                onChange={(kind) => setSearch({ kind })}
               />
               <FilterSelect
                 label="App"

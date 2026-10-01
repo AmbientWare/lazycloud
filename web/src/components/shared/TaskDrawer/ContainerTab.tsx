@@ -80,9 +80,7 @@ function ContainerDetails({
   const facts = [
     { label: "Container ID", value: <CopyId value={container.id} className="-ml-1.5" /> },
     { label: "Image", value: container.image || "None", mono: true },
-    { label: "Worker", value: "None", mono: true },
     { label: "Machine", value: lifecycle.data?.host || "None", mono: true },
-    { label: "Working directory", value: "Default", mono: true },
     { label: "Exit code", value: "None", mono: true },
     {
       label: "Created",
