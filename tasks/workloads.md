@@ -216,7 +216,8 @@ server, scheduler and agent from this branch, images cached:
 
 - Pod page: `GET .../containers?deployment=&live=` (instances: state,
   `ready_at`/`stopped_at` for uptime, `host`, `gpu_count`, `kind`,
-  `purpose`), `POST .../deployments/{d}/scale`, `GET .../deployments/{d}`
+  `purpose`, `expires_at` for an instance with a timeout),
+  `POST .../deployments/{d}/scale`, `GET .../deployments/{d}`
   (`role`, `scaling`, `url`), the container drawer's
   `GET .../containers/{c}`, `GET .../containers/{c}/metrics`.
 - Devbox page: `GET .../deployments/{d}/devbox` (phase, reason,

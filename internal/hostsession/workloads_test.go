@@ -90,3 +90,26 @@ func TestFilesystemImagesMustLandInTheWorkspaceRepository(t *testing.T) {
 		}
 	}
 }
+
+// A pod is ready once its first port answers; a sandbox's ports are for
+// what runs in it later, so its start names none to wait for.
+func TestSandboxesDoNotWaitForTheirPorts(t *testing.T) {
+	for _, c := range []struct {
+		kind  string
+		ports int
+	}{{"sandbox", 0}, {"pod", 1}} {
+		t.Run(c.kind, func(t *testing.T) {
+			h := start(t)
+			host, ctx := h.enroll()
+			_, container := h.startingContainerWith(host, `{"name": "box", "image": {"python_version": "3.12"},
+			  "pod": {"kind": "`+c.kind+`", "command": ["sleep", "infinity"], "ports": {"http": 8000}}}`)
+			if _, err := h.pool.Exec(t.Context(), "update workloads set kind = $1", c.kind); err != nil {
+				t.Fatal(err)
+			}
+			pod := receive(t, open(t, ctx, h.client)).GetStart().GetPod()
+			if pod == nil || len(pod.GetPorts()) != c.ports {
+				t.Fatalf("%s start of %s waits for ports %v", c.kind, container, pod.GetPorts())
+			}
+		})
+	}
+}

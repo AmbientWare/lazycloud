@@ -4,7 +4,8 @@ select c.id, a.name as app_name, w.name as function_name, r.id as release_id, r.
        c.stop_reason, c.exit_message, c.slots, c.cpu_millis, c.memory_bytes,
        c.created_at, c.ready_at, c.stopped_at,
        (select count(*) from attempts at where at.container_id = c.id and at.state = 'running')::int as running,
-       w.kind, c.purpose, c.exit_code, c.gpu_count, h.name as host_name
+       w.kind, c.purpose, c.exit_code, c.gpu_count, h.name as host_name,
+       c.keep_warm_seconds, c.active_until
 from containers c
 join releases r on r.id = c.release_id
 join workloads w on w.id = r.workload_id
@@ -23,7 +24,8 @@ select c.id, a.name as app_name, w.name as function_name, r.id as release_id, r.
        c.stop_reason, c.exit_message, c.slots, c.cpu_millis, c.memory_bytes,
        c.created_at, c.ready_at, c.stopped_at,
        (select count(*) from attempts at where at.container_id = c.id and at.state = 'running')::int as running,
-       w.kind, c.purpose, c.exit_code, c.gpu_count, h.name as host_name
+       w.kind, c.purpose, c.exit_code, c.gpu_count, h.name as host_name,
+       c.keep_warm_seconds, c.active_until
 from containers c
 join releases r on r.id = c.release_id
 join workloads w on w.id = r.workload_id
@@ -41,7 +43,8 @@ select c.id, a.name as app_name, w.name as function_name, r.id as release_id, r.
        c.stop_reason, c.exit_message, c.slots, c.cpu_millis, c.memory_bytes,
        c.created_at, c.ready_at, c.stopped_at,
        (select count(*) from attempts at where at.container_id = c.id and at.state = 'running')::int as running,
-       w.kind, c.purpose, c.exit_code, c.gpu_count, h.name as host_name
+       w.kind, c.purpose, c.exit_code, c.gpu_count, h.name as host_name,
+       c.keep_warm_seconds, c.active_until
 from containers c
 join releases r on r.id = c.release_id
 join workloads w on w.id = r.workload_id

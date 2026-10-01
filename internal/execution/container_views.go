@@ -39,6 +39,9 @@ type Container struct {
 	GPUCount     int
 	// Host is the name of the host the container was placed on.
 	Host *string
+	// ExpiresAt is when an instance with a timeout stops unless it is used
+	// again.
+	ExpiresAt *time.Time
 }
 
 // ContainerPage is one page of containers, newest first.
@@ -113,6 +116,9 @@ func containerFrom(row ContainerViewRow) Container {
 	if row.StopReason != nil {
 		r := StopReason(*row.StopReason)
 		c.StopReason = &r
+	}
+	if row.KeepWarmSeconds != nil {
+		c.ExpiresAt = row.ActiveUntil
 	}
 	return c
 }

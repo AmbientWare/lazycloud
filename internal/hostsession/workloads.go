@@ -39,8 +39,12 @@ func (s *Server) podWorkload(ctx context.Context, start execution.StartCommand) 
 	}
 	out.Devbox = p.Kind == apitypes.PodKindDevbox
 	out.Idle = out.Devbox && len(out.Command) == 0
-	for _, port := range execution.PodPorts(spec) {
-		out.Ports = append(out.Ports, int32(port)) //nolint:gosec // The schema bounds ports.
+	// A pod is ready once its first port answers. A sandbox is ready once
+	// its command started: its ports are for what runs in it later.
+	if p.Kind != apitypes.PodKindSandbox {
+		for _, port := range execution.PodPorts(spec) {
+			out.Ports = append(out.Ports, int32(port)) //nolint:gosec // The schema bounds ports.
+		}
 	}
 	if h := p.HealthCheck; h != nil && h.Port != nil {
 		out.Health = &hostproto.HealthCheck{Path: h.Path, Port: int32(*h.Port)} //nolint:gosec // The schema bounds ports.

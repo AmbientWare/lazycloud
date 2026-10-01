@@ -115,8 +115,14 @@ func TestInstancesStopOnceIdleAndConnectionsKeepThemUp(t *testing.T) {
 		t.Fatalf("instance = %+v", inst)
 	}
 	readyOnHost(t, pool, e, inst.ID)
-
-	// Planning never counts or drains an instance.
+	// The container listing shows when the instance expires.
+	view, err := e.GetContainer(t.Context(), f.workspace, inst.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.ExpiresAt == nil || time.Until(*view.ExpiresAt) <= 0 || time.Until(*view.ExpiresAt) > time.Minute {
+		t.Fatalf("instance with a 60s timeout expires at %v", view.ExpiresAt)
+	}
 	if _, err := e.PlanPods(t.Context(), logger); err != nil {
 		t.Fatal(err)
 	}

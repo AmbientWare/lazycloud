@@ -351,7 +351,7 @@ func containerOut(c execution.Container) apitypes.Container {
 		State: apitypes.ContainerState(c.State), ExitMessage: c.ExitMessage, Slots: c.Slots, RunningTasks: c.RunningTasks,
 		CpuMillis: c.CPUMillis, MemoryMib: c.MemoryBytes >> 20,
 		CreatedAt: c.CreatedAt, ReadyAt: c.ReadyAt, StoppedAt: c.StoppedAt,
-		Kind: &c.Kind, ExitCode: c.ExitCode, Host: c.Host, GpuCount: &c.GPUCount,
+		Kind: &c.Kind, ExitCode: c.ExitCode, Host: c.Host, GpuCount: &c.GPUCount, ExpiresAt: c.ExpiresAt,
 	}
 	purpose := apitypes.ContainerPurpose(c.Purpose)
 	out.Purpose = &purpose
