@@ -29,3 +29,11 @@ where id = @id
   and state = 'starting'
   and assigned_at < now() - make_interval(secs => @timeout_seconds::float8)
 for update;
+
+-- name: LockLiveContainersOnHost :many
+-- Locks the host's live containers in id order before host loss touches any
+-- task, keeping the container, task, attempt lock order across containers.
+select id from containers
+where host_id = @host_id and state <> 'stopped'
+order by id
+for update;

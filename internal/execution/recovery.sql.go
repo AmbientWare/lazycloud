@@ -12,6 +12,35 @@ import (
 	"github.com/google/uuid"
 )
 
+const lockLiveContainersOnHost = `-- name: LockLiveContainersOnHost :many
+select id from containers
+where host_id = $1 and state <> 'stopped'
+order by id
+for update
+`
+
+// Locks the host's live containers in id order before host loss touches any
+// task, keeping the container, task, attempt lock order across containers.
+func (q *Queries) LockLiveContainersOnHost(ctx context.Context, hostID *uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, lockLiveContainersOnHost, hostID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lockStuckStartingContainer = `-- name: LockStuckStartingContainer :execrows
 select id from containers
 where id = $1

@@ -1,5 +1,5 @@
 -- name: LockTaskForAttempt :one
--- Lock order everywhere in execution: task, then attempt, then container.
+-- Lock order everywhere in execution: container, then task, then attempt.
 select t.id, t.status, t.attempt_count, t.max_attempts, t.release_id,
        t.current_attempt_id, r.spec
 from tasks t
