@@ -84,7 +84,7 @@ const omittedRunningAttempts = `-- name: OmittedRunningAttempts :many
 select id from attempts
 where container_id = $1
   and state = 'running'
-  and started_at < $2
+  and started_at < $2::timestamptz - interval '60 seconds'
   and not (id = any($3::uuid[]))
 order by id
 `
@@ -95,8 +95,10 @@ type OmittedRunningAttemptsParams struct {
 	Reported    []uuid.UUID
 }
 
-// Running attempts on the container that started before the host's report
-// yet are missing from it: the host never received or already lost them.
+// Running attempts on the container that the host's report omits: the host
+// never received them or already lost them. A claim committed within a
+// minute of the report may still be on its way to the host (the agent's
+// claim call times out after 30 s), so only older attempts count.
 func (q *Queries) OmittedRunningAttempts(ctx context.Context, arg OmittedRunningAttemptsParams) ([]uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, omittedRunningAttempts, arg.ContainerID, arg.ObservedAt, arg.Reported)
 	if err != nil {

@@ -192,8 +192,17 @@ func TestReadyReportLosesOmittedAttempts(t *testing.T) {
 		}
 	}
 
+	// A claim response may still be in flight right after the claim commits.
 	if _, err := e.ApplyReport(t.Context(), host, ContainerReport{
 		Container: container, Phase: ReportReady, Running: []AttemptID{kept.Attempt}, ObservedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if status(t, pool, omitted.Task) != TaskRunning {
+		t.Fatal("an attempt claimed moments before the report must keep running")
+	}
+	if _, err := e.ApplyReport(t.Context(), host, ContainerReport{
+		Container: container, Phase: ReportReady, Running: []AttemptID{kept.Attempt}, ObservedAt: time.Now().Add(2 * time.Minute),
 	}); err != nil {
 		t.Fatal(err)
 	}
