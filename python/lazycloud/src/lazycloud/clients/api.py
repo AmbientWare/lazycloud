@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TypeVar, overload
+from typing import Literal, TypeVar, overload
 from urllib.parse import quote
 from uuid import UUID
 
@@ -159,8 +159,10 @@ class ApiClient:
     def get_workspace(self, name: str) -> Workspace:
         return self._send(Workspace, "GET", _path("v1", "workspaces", name))
 
-    def create_workspace(self, name: str) -> Workspace:
-        return self._send(Workspace, "POST", "/v1/workspaces", body=WorkspaceRequest(name=name))
+    def create_workspace(self, name: str, *, cloud: Literal["aws"] | None = None) -> Workspace:
+        """Create a workspace on LazyCloud, or in the connected AWS account with `cloud`."""
+        request = WorkspaceRequest(name=name, cloud=cloud) if cloud else WorkspaceRequest(name=name)
+        return self._send(Workspace, "POST", "/v1/workspaces", body=request)
 
     def rename_workspace(self, name: str, new_name: str) -> Workspace:
         return self._send(

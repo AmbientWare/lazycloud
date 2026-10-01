@@ -10,7 +10,6 @@ from shared.containers import ContainerStatus
 from shared.http.compute import (
     ContainerResponse,
     ContainerWithAppPageResponse,
-    MachineListResponse,
     UnitListResponse,
     WorkerListResponse,
 )
@@ -109,12 +108,6 @@ class ResourceControlClient:
             self.channel.post(
                 self._path(f"/api/v1/containers/{url_path_segment(container_id)}/stop")
             ),
-        )
-
-    def list_machines(self) -> MachineListResponse:
-        return _validate_response(
-            MachineListResponse,
-            self.channel.get(self._path("/api/v1/machines")),
         )
 
     def list_units(self) -> UnitListResponse:
