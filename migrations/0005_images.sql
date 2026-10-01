@@ -26,14 +26,15 @@ create table workspace_images (
 );
 
 -- One build per image may be building; a concurrent request joins it.
--- registry_auth holds the Docker auth entries for private base images and is
--- cleared when the build ends. context names the source archive the build
--- reads, stored in context_workspace_id.
+-- workspace_id started the build: its containers count against that
+-- workspace, and the context archive the build reads is stored there.
+-- registry_auth holds the logins for private base images and is cleared when
+-- the build ends.
 create table image_builds (
     id uuid primary key default uuidv7(),
     image_digest bytea not null references images (digest) on delete cascade,
     state text not null check (state in ('building', 'succeeded', 'failed')),
-    context_workspace_id uuid references workspaces (id) on delete set null,
+    workspace_id uuid not null references workspaces (id) on delete cascade,
     context_sha256 bytea check (length(context_sha256) = 32),
     registry_auth jsonb,
     failure text,
