@@ -226,6 +226,13 @@ func (s *Server) ClaimTasks(ctx context.Context, req *hostproto.ClaimTasksReques
 	if err != nil {
 		return nil, s.grpcError(ctx, err)
 	}
+	if s.config.Observability != nil && len(claimed) > 0 {
+		started := make([]execution.TaskID, len(claimed))
+		for n, c := range claimed {
+			started[n] = c.Task
+		}
+		s.config.Observability.TasksStarted(started)
+	}
 	out := &hostproto.ClaimTasksResponse{Tasks: make([]*hostproto.ClaimedTask, len(claimed))}
 	for n, c := range claimed {
 		out.Tasks[n] = &hostproto.ClaimedTask{

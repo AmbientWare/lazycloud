@@ -234,6 +234,7 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, tel *te
 	g.Go(func() error { return listener.Run(gctx) })
 	g.Go(func() error { return changes.Run(gctx) })
 	g.Go(func() error { return obs.RunIngest(gctx) })
+	g.Go(func() error { return obs.RunStartedPublisher(gctx) })
 	g.Go(func() error { return tel.ServeMetrics(gctx, logger) })
 	g.Go(func() error { return ident.RunTokenUse(gctx, logger) })
 	g.Go(func() error {

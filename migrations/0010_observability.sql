@@ -153,9 +153,30 @@ begin
     return null;
 end $$;
 
+-- A claim moves tasks to running in a transaction that sends no other
+-- notification, and a notifying transaction holds PostgreSQL's global
+-- notification lock through its commit, WAL flush included. Publishing
+-- here would serialize every claim, so running transitions are left out:
+-- the server publishes them coalesced, outside the claim (see
+-- observability.Started).
 create function observe_updated_tasks() returns trigger
 language plpgsql as $$
 begin
+    if (select count(*) from new_rows n join old_rows o on o.id = n.id
+        where o.status <> n.status and n.status <> 'running') > 24 then
+        perform publish_changes(c.workspace_id, c.items) from (
+            select g.workspace_id, jsonb_agg(jsonb_build_object(
+                'topic', 'tasks', 'change', 'updated', 'app_id', w.app_id, 'deployment_id', g.workload_id,
+                'count', g.tasks)) as items
+            from (select n.workspace_id, n.workload_id, count(*) as tasks
+                  from new_rows n join old_rows o on o.id = n.id
+                  where o.status <> n.status and n.status <> 'running'
+                  group by 1, 2) g
+            join workloads w on w.id = g.workload_id
+            group by g.workspace_id
+        ) c;
+        return null;
+    end if;
     perform publish_changes(c.workspace_id, c.items) from (
         select n.workspace_id, jsonb_agg(jsonb_strip_nulls(jsonb_build_object(
             'topic', 'tasks', 'change', 'updated', 'resource_id', n.id, 'task_id', n.id,
@@ -164,7 +185,7 @@ begin
         from new_rows n
         join old_rows o on o.id = n.id
         join workloads w on w.id = n.workload_id
-        where o.status <> n.status
+        where o.status <> n.status and n.status <> 'running'
         group by n.workspace_id
     ) c;
     return null;
@@ -194,6 +215,21 @@ end $$;
 create function observe_updated_containers() returns trigger
 language plpgsql as $$
 begin
+    if (select count(*) from new_rows n join old_rows o on o.id = n.id where o.state <> n.state) > 24 then
+        perform publish_changes(c.workspace_id, c.items) from (
+            select g.workspace_id, jsonb_agg(jsonb_build_object(
+                'topic', 'containers', 'change', 'updated', 'app_id', w.app_id, 'deployment_id', w.id,
+                'count', g.containers)) as items
+            from (select n.workspace_id, n.release_id, count(*) as containers
+                  from new_rows n join old_rows o on o.id = n.id
+                  where o.state <> n.state
+                  group by 1, 2) g
+            join releases r on r.id = g.release_id
+            join workloads w on w.id = r.workload_id
+            group by g.workspace_id
+        ) c;
+        return null;
+    end if;
     perform publish_changes(c.workspace_id, c.items) from (
         select n.workspace_id, jsonb_agg(jsonb_build_object(
             'topic', 'containers', 'change', 'updated', 'resource_id', n.id, 'container_id', n.id,

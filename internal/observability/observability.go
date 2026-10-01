@@ -53,6 +53,7 @@ type Observability struct {
 	limits  LimitSource
 	logger  *slog.Logger
 	ingest  ingestQueue
+	started *startedQueue
 }
 
 // Config wires the owner's optional parts.
@@ -68,7 +69,7 @@ type Config struct {
 func NewObservability(pool *pgxpool.Pool, cfg Config, logger *slog.Logger) *Observability {
 	return &Observability{
 		pool: pool, queries: New(pool), limits: cfg.Limits, logger: logger,
-		ingest: newIngestQueue(cfg.Registerer),
+		ingest: newIngestQueue(cfg.Registerer), started: newStartedQueue(cfg.Registerer),
 	}
 }
 

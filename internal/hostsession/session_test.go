@@ -91,6 +91,7 @@ func start(t *testing.T) *harness {
 	var wg sync.WaitGroup
 	wg.Go(func() { _ = listener.Run(runCtx) })
 	wg.Go(func() { _ = obs.RunIngest(runCtx) })
+	wg.Go(func() { _ = obs.RunStartedPublisher(runCtx) })
 	wg.Go(func() { _ = g.Serve(lis) })
 	conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
