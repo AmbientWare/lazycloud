@@ -23,13 +23,26 @@ request ids, trace over OTLP when an endpoint is set, and serve `/metrics`.
   that would exceed the 8000-byte limit sends grouped changes with a count.
   Other owners publish their resources by calling `publish_changes` from
   their own triggers. Each server holds one LISTEN connection, a ring of the
-  last 16,384 events and up to 20,000 streams with 256 queued events each. A
-  stream that falls behind, a lost database connection and a Last-Event-ID
-  the ring no longer holds all end in a `reset` event: the client reloads. A
-  stream ends after 10 minutes so the reconnect authorizes again. PostgreSQL
+  last 4,096 events (32 MiB at worst, frames shared by every subscriber),
+  up to 20,000 streams and 32 per user or container, with 256 queued events
+  each. A stream that falls behind, a lost database connection and a
+  Last-Event-ID the ring no longer holds all end in a `reset` event: the
+  client reloads. An idle listener runs a bounded `select 1` every 30 s, so
+  a half-open connection is found and its streams reset. A stream ends
+  after 10 minutes so the reconnect authorizes again. PostgreSQL
   queues notifications in commit order for every listener, so an event id
   names the same position on every server. Rolled-back writes publish
-  nothing. The triggers observe; they decide nothing.
+  nothing. The triggers observe; they decide nothing. Statements of more
+  than 24 changed rows are grouped before any item is built.
+- Running transitions stay out of the triggers. A claim sends no other
+  notification, and a notifying transaction holds PostgreSQL's global
+  notification lock through its commit and WAL flush, so publishing there
+  cut 128 concurrent claimers on durable PostgreSQL from about 6,500 to
+  1,150-2,000 claims/s. The host session hands claimed task ids to
+  `Observability.TasksStarted`; one statement per 100 ms window publishes
+  them with their current status, in a transaction of its own. A server
+  that dies inside a window loses those hints; the dashboard's periodic
+  reload covers them.
 - Container metrics. The agent finds each container's cgroup v2 directory
   from its init process once, then every 5 s reads `cpu.stat`, `memory.stat`
   (anon plus file_mapped, as the reference), `memory.swap.current`,
@@ -38,7 +51,9 @@ request ids, trace over OTLP when an endpoint is set, and serve `/metrics`.
   goes over the session, only while its queue is at most half full. The
   server hands it to a bounded ingest queue (dropped when full, counted on
   `/metrics`) that writes every host's samples in one statement per second,
-  keeping only samples from the host the container is assigned to.
+  keeping only samples from the host the container is assigned to and not
+  older than the rollup watermark (a share lock on the watermark row waits
+  out a rollup in progress, so no sample is stored behind it).
   Samples stay an hour. The scheduler folds finished minutes into
   `container_metric_minutes` under a row lock, at most ten minutes per pass,
   and keeps those seven days; deletion never removes an unfolded sample.
@@ -54,13 +69,16 @@ request ids, trace over OTLP when an endpoint is set, and serve `/metrics`.
   bounded by uuidv7 values built from the range, so they read the rows in
   the range and not the history. CPU and memory allocation comes from
   container lifetimes (assignment to stop) found through the live partial
-  index and a new stopped-at index.
+  index and a new stopped-at index. Aggregate ranges span at most 31 days
+  and container metric ranges 7 days; longer ones are `invalid_request`.
 - Plan limits are the billing packet's: `observability.LimitSource`. Until
   billing wires one, `/v1/me/metrics` reports usage and leaves `limits` out.
 - Tracing. `internal/telemetry` builds each binary's tracer provider (no-op
   without `LAZYCLOUD_OTLP_ENDPOINT`), W3C propagation over HTTP and gRPC, a
   correlated slog handler and a Prometheus registry. HTTP spans and metrics
-  carry the OpenAPI operation id, not the path. Submit stores the request's
+  carry the OpenAPI operation id, not the path. The API is a public
+  endpoint: a caller's traceparent becomes a link, so callers decide
+  neither sampling nor parentage. Submit stores the request's
   traceparent on the task; the claim returns it, and the agent records the
   attempt as a span in that trace around its `CompleteTask` call.
 
@@ -152,7 +170,8 @@ One host, 24 CPUs, PostgreSQL 18 in Docker.
 | Memory per stream (client and server together) | 53 KiB |
 | Database cost of the stream | one LISTEN connection per server; one NOTIFY per statement, whatever the subscriber count |
 | Change trigger cost on submit | 1 task: p50 0.52 ms vs 0.37 ms without; 2,000 tasks: 85 vs 84 ms |
-| Ingest, 1,000 containers on 20 hosts, one 5 s tick | one statement, mean 19.7 ms, worst 50 ms over an hour; 437 WAL bytes per sample |
+| Claims, 16 hosts x 8 claimers, 10,000 queued tasks, durable PostgreSQL (fsync on) | publishing running in the trigger: 1,155-2,002 claims/s; coalesced: 5,315-6,541; trigger off: 4,939-6,073 |
+| Ingest, 1,000 containers on 20 hosts, one 5 s tick | one statement, mean 21 ms, worst 48 ms over an hour; 437 WAL bytes per sample |
 | Samples kept for 1,000 containers | 139 MiB for the hour of 5 s samples |
 | Rollup of ten minutes for 1,000 containers | 190 ms per pass |
 | Agent sampling of one container | 156 µs; 0.8 ms per pass for 3 containers on the stack |
