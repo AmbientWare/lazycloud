@@ -26,15 +26,18 @@ where a.workspace_id = $1
   and w.desired_state <> 'deleted'
   and ($2::text is null or a.name = $2::text)
   and ($3::text is null or w.name = $3::text)
-  and (a.name, w.name) > ($4::text, $5::text)
+  and ($4::text is null
+       or strpos(a.name, $4::text) > 0 or strpos(lower(w.name), $4::text) > 0)
+  and (a.name, w.name) > ($5::text, $6::text)
 order by a.name, w.name
-limit $6
+limit $7
 `
 
 type ListDeploymentsParams struct {
 	WorkspaceID uuid.UUID
 	App         *string
 	Name        *string
+	Search      *string
 	AfterApp    string
 	AfterName   string
 	MaxRows     int32
@@ -61,6 +64,7 @@ func (q *Queries) ListDeployments(ctx context.Context, arg ListDeploymentsParams
 		arg.WorkspaceID,
 		arg.App,
 		arg.Name,
+		arg.Search,
 		arg.AfterApp,
 		arg.AfterName,
 		arg.MaxRows,

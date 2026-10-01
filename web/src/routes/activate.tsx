@@ -8,9 +8,9 @@ import { LiveRelativeTime } from "@/components/shared/LiveTime";
 import { PreShellScreen } from "@/components/shared/PreShellScreen";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { useSession } from "@/components/shared/AuthGate/session";
-import { ApiError } from "@/lib/api/client";
-import type { DeviceCode } from "@/lib/api/schemas";
+import { accountName, useSession } from "@/components/shared/AuthGate/session";
+import { ApiError, type Schemas } from "@/lib/api/client";
+
 import {
   approveDeviceCodeMutationOptions,
   denyDeviceCodeMutationOptions,
@@ -121,7 +121,7 @@ function DeviceCodeDecision({
   deviceCode,
 }: {
   userCode: string;
-  deviceCode: DeviceCode;
+  deviceCode: Schemas["DeviceCode"];
 }) {
   const { user } = useSession();
   const queryClient = useQueryClient();
@@ -136,7 +136,7 @@ function DeviceCodeDecision({
   if (approve.isSuccess) {
     return (
       <Outcome tone="positive" title="CLI connected">
-        The CLI is signed in as <span className="font-medium">{user.display_name}</span> and can
+        The CLI is signed in as <span className="font-medium">{accountName(user)}</span> and can
         access your workspaces. Return to your terminal.
       </Outcome>
     );
@@ -184,7 +184,7 @@ function DeviceCodeDecision({
       ) : null}
 
       <p className="text-sm text-muted-foreground">
-        This signs the CLI in as <span className="font-medium">{user.display_name}</span> with
+        This signs the CLI in as <span className="font-medium">{accountName(user)}</span> with
         access to your workspaces. The CLI chooses its active workspace.
       </p>
 

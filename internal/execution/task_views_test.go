@@ -126,6 +126,16 @@ func TestListTasksPagesNewestFirstWithFilters(t *testing.T) {
 		}
 	}
 	name, wildcard := "SUMMAR", "%"
+	one, two := 1, 2
+	if page, err := e.ListTasks(t.Context(), f.workspace, TaskFilter{App: &app, Function: &fn, Version: &one}, 10, ""); err != nil || len(page.Tasks) != 5 {
+		t.Fatalf("version 1 tasks %d %v, want all five", len(page.Tasks), err)
+	}
+	if page, err := e.ListTasks(t.Context(), f.workspace, TaskFilter{App: &app, Function: &fn, Version: &two}, 10, ""); err != nil || len(page.Tasks) != 0 {
+		t.Fatalf("version 2 tasks %d %v, want none", len(page.Tasks), err)
+	}
+	if _, err := e.ListTasks(t.Context(), f.workspace, TaskFilter{App: &app, Version: &one}, 10, ""); !errors.Is(err, ErrInvalidFilter) {
+		t.Fatalf("version without function error %v", err)
+	}
 	if page, err := e.ListTasks(t.Context(), f.workspace, TaskFilter{Search: &name}, 10, ""); err != nil || len(page.Tasks) != 5 {
 		t.Fatalf("function search %d %v, want all five", len(page.Tasks), err)
 	}
@@ -252,6 +262,16 @@ func TestStopContainerLosesItsAttemptsForRetry(t *testing.T) {
 	}
 	if page, err := e.ListContainers(t.Context(), f.workspace, ContainerFilter{App: &other}, 10, ""); err != nil || len(page.Containers) != 0 {
 		t.Fatalf("another app's containers %+v %v", page.Containers, err)
+	}
+	fn, otherFn := "summarize", "other"
+	if page, err := e.ListContainers(t.Context(), f.workspace, ContainerFilter{App: &app, Function: &fn}, 10, ""); err != nil || len(page.Containers) != 1 {
+		t.Fatalf("function containers %+v %v", page.Containers, err)
+	}
+	if page, err := e.ListContainers(t.Context(), f.workspace, ContainerFilter{App: &app, Function: &otherFn}, 10, ""); err != nil || len(page.Containers) != 0 {
+		t.Fatalf("another function's containers %+v %v", page.Containers, err)
+	}
+	if _, err := e.ListContainers(t.Context(), f.workspace, ContainerFilter{Function: &fn}, 10, ""); !errors.Is(err, ErrInvalidFilter) {
+		t.Fatalf("function without app error %v", err)
 	}
 	// A container shows the image its release runs.
 	exec(t, pool, `update releases set spec = spec || '{"image": {"python_version": "3.12", "reference": "registry.example/fn@sha256:ab"}}'`)

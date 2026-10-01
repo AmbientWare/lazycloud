@@ -387,18 +387,6 @@ class SecretValueUpdate(BaseModel):
     value: Annotated[str, Field(max_length=65536)]
 
 
-class Secret(BaseModel):
-    name: Annotated[
-        str,
-        Field(
-            description="An environment variable name; the LAZYCLOUD_ prefix is reserved.",
-            pattern="^[A-Za-z_][A-Za-z0-9_]{0,239}$",
-        ),
-    ]
-    created_at: AwareDatetime
-    updated_at: AwareDatetime
-
-
 class SecretValue(BaseModel):
     name: Annotated[
         str,
@@ -410,13 +398,6 @@ class SecretValue(BaseModel):
     value: str
     created_at: AwareDatetime
     updated_at: AwareDatetime
-
-
-class SecretPage(BaseModel):
-    secrets: list[Secret]
-    next_cursor: Annotated[str | None, Field(description="Present when more secrets follow.")] = (
-        None
-    )
 
 
 class Schedule(BaseModel):
@@ -669,6 +650,9 @@ class Disk(BaseModel):
     status: DiskStatus
     holder_container_id: Annotated[
         UUID | None, Field(description="The container holding the disk while attached or saving.")
+    ] = None
+    holder: Annotated[
+        WorkloadRef | None, Field(description="The workload whose container holds the disk.")
     ] = None
     created_at: AwareDatetime
     updated_at: AwareDatetime
@@ -2576,6 +2560,28 @@ class LifecycleHooks(BaseModel):
     on_retry: Annotated[list[HookReference] | None, Field(max_length=16)] = None
     on_failure: Annotated[list[HookReference] | None, Field(max_length=16)] = None
     on_finish: Annotated[list[HookReference] | None, Field(max_length=16)] = None
+
+
+class Secret(BaseModel):
+    name: Annotated[
+        str,
+        Field(
+            description="An environment variable name; the LAZYCLOUD_ prefix is reserved.",
+            pattern="^[A-Za-z_][A-Za-z0-9_]{0,239}$",
+        ),
+    ]
+    created_at: AwareDatetime
+    updated_at: AwareDatetime
+    used_by: Annotated[
+        list[WorkloadRef], Field(description="Workloads whose active release receives the secret.")
+    ]
+
+
+class SecretPage(BaseModel):
+    secrets: list[Secret]
+    next_cursor: Annotated[str | None, Field(description="Present when more secrets follow.")] = (
+        None
+    )
 
 
 class VolumeMountSpec(BaseModel):

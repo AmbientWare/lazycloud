@@ -48,6 +48,8 @@ export const workspaceQueryKeys = {
     activity: (workspace: string, app: string) =>
       [...workspaceRoot(workspace), "apps", "activity", app] as const,
   },
+  search: (workspaceName: string, group: "apps" | "deployments" | "tasks", term: string) =>
+    [...workspaceRoot(workspaceName), "search", group, term] as const,
   members: (workspaceId: string) => [...workspaceRoot(workspaceId), "members"] as const,
   invitations: (workspaceId: string) => [...workspaceRoot(workspaceId), "invitations"] as const,
   deployments: {
@@ -241,7 +243,7 @@ export const accountQueryKeys = {
   billing: () => [...accountRoot, "billing"] as const,
   metrics: {
     root: () => [...accountRoot, "metrics"] as const,
-    containerCounts: () => [...accountRoot, "metrics", "container-counts"] as const,
+    summary: () => [...accountRoot, "metrics", "summary"] as const,
     activity: (scope: AccountActivityKeyParts) =>
       [...accountRoot, "metrics", "activity", scope] as const,
   },

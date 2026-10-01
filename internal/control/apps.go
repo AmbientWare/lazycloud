@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -25,6 +26,22 @@ const (
 	AppDeleted AppState = "deleted"
 )
 
+// AppFilter narrows an app listing.
+type AppFilter struct {
+	State *AppState
+	// Search matches part of the app name.
+	Search *string
+}
+
+// lowered is a search term in the lowercase the names are compared in.
+func lowered(term *string) *string {
+	if term == nil {
+		return nil
+	}
+	l := strings.ToLower(*term)
+	return &l
+}
+
 // AppPage is one page of apps by name.
 type AppPage struct {
 	Apps []apitypes.App
@@ -32,13 +49,13 @@ type AppPage struct {
 	Next string
 }
 
-// ListApps returns live apps with a deployed workload by name, optionally
-// only those in state, starting after the cursor.
-func (c *Control) ListApps(ctx context.Context, workspace identity.WorkspaceID, state *AppState, limit int, cursor string) (AppPage, error) {
+// ListApps returns live apps with a deployed workload by name, narrowed by
+// the filter, starting after the cursor.
+func (c *Control) ListApps(ctx context.Context, workspace identity.WorkspaceID, filter AppFilter, limit int, cursor string) (AppPage, error) {
 	size := pageSize(limit)
-	params := ListAppsParams{WorkspaceID: uuid.UUID(workspace), After: cursor, MaxRows: size + 1}
-	if state != nil {
-		s := string(*state)
+	params := ListAppsParams{WorkspaceID: uuid.UUID(workspace), Search: lowered(filter.Search), After: cursor, MaxRows: size + 1}
+	if filter.State != nil {
+		s := string(*filter.State)
 		params.State = &s
 	}
 	rows, err := c.queries.ListApps(ctx, params)

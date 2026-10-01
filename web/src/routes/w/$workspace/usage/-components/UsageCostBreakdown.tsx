@@ -5,9 +5,8 @@ import { InfiniteScrollBoundary } from "@/components/shared/InfiniteScrollBounda
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { PanelError } from "@/components/shared/PanelError";
 import { RowsSkeleton } from "@/components/shared/RowsSkeleton";
-import type { UsageCostRow } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 import { formatCostNanos } from "@/lib/money";
-import { selectInfiniteList } from "@/lib/queries/infinite-list";
 import {
   accountCostsQueryOptions,
   type UsageCostWindow,
@@ -15,6 +14,8 @@ import {
 } from "@/lib/queries/usage";
 import { CostComponents } from "./CostComponents";
 import { UsageRows } from "./UsageRows";
+
+type UsageCostRow = Schemas["UsageCostRow"];
 
 export function UsageCostBreakdown({
   window,
@@ -24,8 +25,10 @@ export function UsageCostBreakdown({
   caption: string;
 }) {
   const costs = useInfiniteQuery(accountCostsQueryOptions(window, { groupBy: "app" }));
-  const { items: rows, nextCursor } = selectInfiniteList(costs.data, costs.hasNextPage, rowKey);
-  const currency = costs.data?.pages[0]?.currency ?? "USD";
+  const pages = costs.data?.pages ?? [];
+  const rows = pages.flatMap((page) => page.rows);
+  const nextCursor = costs.hasNextPage ? pages.at(-1)?.next_cursor : undefined;
+  const currency = pages[0]?.currency ?? "USD";
   if (costs.isPending) return <RowsSkeleton rows={5} height="h-10" />;
   if (costs.isError && !costs.isFetchNextPageError)
     return <PanelError message={costs.error.message} />;
@@ -58,12 +61,7 @@ export function UsageCostBreakdown({
           title="Usage without an app"
           window={window}
           currency={currency}
-          scope={{
-            groupBy: "task",
-            appId: "",
-            workspaceId: row.workspace_id,
-            category: "unattributed",
-          }}
+          scope={{ groupBy: "task", workspaceId: row.workspace_id, category: "unattributed" }}
         />
       ))}
       {disks.map((row) => (
@@ -148,5 +146,5 @@ function UsageGroup({
 }
 
 function rowKey(row: UsageCostRow): string {
-  return `${row.workspace_id}|${row.app_id}|${row.category}|${row.disk_id}`;
+  return [row.workspace_id, row.app_id, row.category, row.disk_id].join("|");
 }

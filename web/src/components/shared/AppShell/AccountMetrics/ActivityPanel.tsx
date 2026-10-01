@@ -24,12 +24,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import type {
-  AccountActivity,
-  AccountActivityMeasure,
-  AccountActivitySeries,
-  AccountActivityUnit,
-} from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 import { exactTime, shareLabel } from "@/lib/format";
 import {
   accountActivityQueryOptions,
@@ -54,6 +49,11 @@ import {
   unitAxisLabels,
   windowSummary,
 } from "./units";
+
+type AccountActivity = Schemas["AccountActivity"];
+type AccountActivityMeasure = Schemas["ActivityMeasure"];
+type AccountActivitySeries = Schemas["AccountActivitySeries"];
+type AccountActivityUnit = Schemas["ActivityUnit"];
 
 const RANGES: AccountActivityRange[] = ["6h", "24h", "7d"];
 

@@ -3395,6 +3395,8 @@ export interface components {
             created_at: string;
             /** Format: date-time */
             updated_at: string;
+            /** @description Workloads whose active release receives the secret. */
+            used_by: components["schemas"]["WorkloadRef"][];
         };
         SecretValue: {
             name: components["schemas"]["SecretName"];
@@ -3623,6 +3625,8 @@ export interface components {
              * @description The container holding the disk while attached or saving.
              */
             holder_container_id?: string;
+            /** @description The workload whose container holds the disk. */
+            holder?: components["schemas"]["WorkloadRef"];
             /** Format: date-time */
             created_at: string;
             /** Format: date-time */
@@ -6283,6 +6287,8 @@ export interface operations {
             query?: {
                 /** @description Only apps in this state. Omitted lists active and paused apps. */
                 state?: components["schemas"]["LiveAppState"];
+                /** @description Part of the app name. */
+                search?: string;
                 limit?: components["parameters"]["PageLimit"];
                 /** @description The next_cursor of the previous page. */
                 cursor?: components["parameters"]["Cursor"];
@@ -6469,6 +6475,8 @@ export interface operations {
             query?: {
                 app?: components["schemas"]["AppName"];
                 name?: components["schemas"]["WorkloadName"];
+                /** @description Part of the app or workload name. */
+                search?: string;
                 limit?: components["parameters"]["PageLimit"];
                 /** @description The next_cursor of the previous page. */
                 cursor?: components["parameters"]["Cursor"];
@@ -6664,6 +6672,8 @@ export interface operations {
                 /** @description Requires `app`. */
                 function?: components["schemas"]["WorkloadName"];
                 status?: components["schemas"]["TaskStatus"];
+                /** @description A deployed version of `function`; requires it. */
+                version?: number;
                 /** @description Only tasks no other task spawned. */
                 root_only?: boolean;
                 /** @description A task id prefix or part of a function name. */
@@ -6750,6 +6760,8 @@ export interface operations {
                 live?: boolean;
                 /** @description Only the containers of this app's workloads. */
                 app?: components["schemas"]["AppName"];
+                /** @description Only the containers of this workload of `app`; requires it. */
+                function?: components["schemas"]["WorkloadName"];
                 limit?: components["parameters"]["PageLimit"];
                 /** @description The next_cursor of the previous page. */
                 cursor?: components["parameters"]["Cursor"];

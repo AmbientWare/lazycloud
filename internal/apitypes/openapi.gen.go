@@ -3087,6 +3087,9 @@ type Disk struct {
 	// Generation The newest published generation; 0 before the first.
 	Generation int64 `json:"generation"`
 
+	// Holder The workload whose container holds the disk.
+	Holder *WorkloadRef `json:"holder,omitempty"`
+
 	// HolderContainerId The container holding the disk while attached or saving.
 	HolderContainerId *openapi_types.UUID `json:"holder_container_id,omitempty"`
 	Id                openapi_types.UUID  `json:"id"`
@@ -4215,6 +4218,9 @@ type Secret struct {
 	// Name An environment variable name; the LAZYCLOUD_ prefix is reserved.
 	Name      SecretName `json:"name"`
 	UpdatedAt time.Time  `json:"updated_at"`
+
+	// UsedBy Workloads whose active release receives the secret.
+	UsedBy []WorkloadRef `json:"used_by"`
 }
 
 // SecretCreate defines model for SecretCreate.
@@ -5082,7 +5088,10 @@ type ListWorkspacesParams struct {
 type ListAppsParams struct {
 	// State Only apps in this state. Omitted lists active and paused apps.
 	State *LiveAppState `form:"state,omitempty" json:"state,omitempty"`
-	Limit *PageLimit    `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Search Part of the app name.
+	Search *string    `form:"search,omitempty" json:"search,omitempty"`
+	Limit  *PageLimit `form:"limit,omitempty" json:"limit,omitempty"`
 
 	// Cursor The next_cursor of the previous page.
 	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
@@ -5163,8 +5172,11 @@ type ListContainersParams struct {
 	Live *bool `form:"live,omitempty" json:"live,omitempty"`
 
 	// App Only the containers of this app's workloads.
-	App   *AppName   `form:"app,omitempty" json:"app,omitempty"`
-	Limit *PageLimit `form:"limit,omitempty" json:"limit,omitempty"`
+	App *AppName `form:"app,omitempty" json:"app,omitempty"`
+
+	// Function Only the containers of this workload of `app`; requires it.
+	Function *WorkloadName `form:"function,omitempty" json:"function,omitempty"`
+	Limit    *PageLimit    `form:"limit,omitempty" json:"limit,omitempty"`
 
 	// Cursor The next_cursor of the previous page.
 	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
@@ -5194,9 +5206,12 @@ type GetContainerMetricsParams struct {
 
 // ListDeploymentsParams defines parameters for ListDeployments.
 type ListDeploymentsParams struct {
-	App   *AppName      `form:"app,omitempty" json:"app,omitempty"`
-	Name  *WorkloadName `form:"name,omitempty" json:"name,omitempty"`
-	Limit *PageLimit    `form:"limit,omitempty" json:"limit,omitempty"`
+	App  *AppName      `form:"app,omitempty" json:"app,omitempty"`
+	Name *WorkloadName `form:"name,omitempty" json:"name,omitempty"`
+
+	// Search Part of the app or workload name.
+	Search *string    `form:"search,omitempty" json:"search,omitempty"`
+	Limit  *PageLimit `form:"limit,omitempty" json:"limit,omitempty"`
 
 	// Cursor The next_cursor of the previous page.
 	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
@@ -5366,6 +5381,9 @@ type ListTasksParams struct {
 	// Function Requires `app`.
 	Function *WorkloadName `form:"function,omitempty" json:"function,omitempty"`
 	Status   *TaskStatus   `form:"status,omitempty" json:"status,omitempty"`
+
+	// Version A deployed version of `function`; requires it.
+	Version *int `form:"version,omitempty" json:"version,omitempty"`
 
 	// RootOnly Only tasks no other task spawned.
 	RootOnly *bool `form:"root_only,omitempty" json:"root_only,omitempty"`

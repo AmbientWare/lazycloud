@@ -1,11 +1,11 @@
 import { createContext, useContext } from "react";
 
-import type { Workspace } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 import type { EventStreamStatus } from "@/hooks/useEventStream";
 
 export type WorkspaceContextValue = {
-  workspace: Workspace;
-  workspaces: Workspace[];
+  workspace: Schemas["Workspace"];
+  workspaces: Schemas["Workspace"][];
 };
 
 export const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);

@@ -11,7 +11,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import type { Workspace } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 
 import { useWorkspaceRenameController } from "./controller";
 
@@ -20,7 +20,7 @@ export function WorkspaceRenameDialog({
   workspace,
   onClose,
 }: {
-  workspace: Workspace;
+  workspace: Schemas["Workspace"];
   onClose: () => void;
 }) {
   const navigate = useNavigate();

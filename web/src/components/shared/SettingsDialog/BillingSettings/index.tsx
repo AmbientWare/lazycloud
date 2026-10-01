@@ -4,7 +4,7 @@ import { LiveRelativeTime } from "@/components/shared/LiveTime";
 import { Panel } from "@/components/shared/Panel";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { BillingSummary } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 import { formatCostNanos } from "@/lib/money";
 
 import { useBillingSettingsController } from "./controller";
@@ -47,8 +47,6 @@ export function BillingSettings({
                 <p className="text-sm text-muted-foreground">
                   Usage on this account is tracked but not billed.
                 </p>
-              ) : !summary.plan ? (
-                <p className="text-sm text-muted-foreground">Choose a plan to start workloads.</p>
               ) : null}
               <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
                 {complimentary ? null : <SubscriptionTerms summary={summary} />}
@@ -120,16 +118,8 @@ export function BillingSettings({
   );
 }
 
-function SubscriptionTerms({ summary }: { summary: BillingSummary }) {
+function SubscriptionTerms({ summary }: { summary: Schemas["BillingAccount"] }) {
   const plan = summary.plan;
-  if (!plan) return null;
-  if (plan.terms_version === null || plan.monthly_nanos === null || plan.included_nanos === null) {
-    return (
-      <p className="text-sm text-warning">
-        Verifying your subscription. Plan changes are unavailable until verification finishes.
-      </p>
-    );
-  }
   return (
     <div className="space-y-1 text-sm">
       <p>

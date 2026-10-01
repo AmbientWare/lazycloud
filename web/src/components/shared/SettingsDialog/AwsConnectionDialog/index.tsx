@@ -30,7 +30,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import type { AwsConnection } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 
 import { useAwsConnectionController } from "./controller";
 import {
@@ -39,6 +39,8 @@ import {
   awsConnectionPresentation,
   awsRemovalConfirmation,
 } from "./lifecycle";
+
+type AwsConnection = Schemas["AwsConnection"];
 
 const AWS_CONNECT_FORM_ID = "aws-connect-form";
 

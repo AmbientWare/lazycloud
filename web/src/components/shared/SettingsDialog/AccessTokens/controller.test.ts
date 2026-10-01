@@ -5,7 +5,6 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { Schemas } from "@/lib/api/client";
-import type { TokenListResponse } from "@/lib/api/schemas";
 import { tokensQueryOptions } from "@/lib/queries/tokens";
 
 import { useAccessTokensController } from "./controller";
@@ -13,7 +12,7 @@ import { useAccessTokensController } from "./controller";
 describe("access tokens controller", () => {
   it("mints once and keeps the issued secret out of the query cache", async () => {
     const existing = token({ id: "existing", name: "existing" });
-    const created = token({ id: "created", name: "ci-deploy" });
+    const created = token({ id: "created", name: "ci-deploy", prefix: "lc_9zzo" });
     const createResponse = deferred<Response>();
     let createRequests = 0;
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
@@ -44,7 +43,7 @@ describe("access tokens controller", () => {
     expect(result.current.issued).toEqual({
       secret: "lc_9zzone-time-value",
       name: "ci-deploy",
-      prefix: "lc_9zz",
+      prefix: "lc_9zzo",
     });
     expect(ids(cachedTokens(queryClient))).toEqual(["created", "existing"]);
     expect(serializedQueryState(queryClient)).not.toContain("lc_9zzone-time-value");
@@ -100,10 +99,10 @@ function ids(tokens: readonly { id: string }[]): string[] {
 }
 
 function cachedTokens(queryClient: QueryClient): { id: string }[] {
-  const cache = queryClient.getQueryData<InfiniteData<TokenListResponse, string>>(
+  const cache = queryClient.getQueryData<InfiniteData<Schemas["TokenList"]>>(
     tokensQueryOptions(false).queryKey,
   );
-  return (cache?.pages ?? []).flatMap((page) => page.data);
+  return (cache?.pages ?? []).flatMap((page) => page.tokens);
 }
 
 function serializedQueryState(queryClient: QueryClient): string {
@@ -121,6 +120,7 @@ function token(overrides: Partial<Schemas["Token"]> = {}): Schemas["Token"] {
     id: "token-1",
     name: "dashboard",
     device: false,
+    prefix: "lc_tok1",
     status: "active",
     created_at: "2026-07-21T12:00:00Z",
     ...overrides,
