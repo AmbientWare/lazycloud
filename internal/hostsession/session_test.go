@@ -16,6 +16,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/database"
@@ -168,7 +169,7 @@ func TestSessionReconcilesAndResendsAfterReconnect(t *testing.T) {
 
 	sessionCtx, closeSession := context.WithCancel(ctx)
 	stream := open(t, sessionCtx, h.client, &hostproto.ContainerReport{
-		ContainerId: unknown, Phase: hostproto.ContainerPhase_CONTAINER_PHASE_READY,
+		ContainerId: unknown, Phase: hostproto.ContainerPhase_CONTAINER_PHASE_READY, ObservedAt: timestamppb.Now(),
 	})
 	stop := receive(t, stream)
 	if stop.GetStop().GetContainerId() != unknown {
@@ -210,7 +211,7 @@ func TestReadyContainerClaimsCompletesAndReceivesCancels(t *testing.T) {
 	stream := open(t, ctx, h.client)
 	receive(t, stream) // start
 	if err := stream.Send(&hostproto.HostMessage{Body: &hostproto.HostMessage_Container{Container: &hostproto.ContainerReport{
-		ContainerId: container.String(), Phase: hostproto.ContainerPhase_CONTAINER_PHASE_READY,
+		ContainerId: container.String(), Phase: hostproto.ContainerPhase_CONTAINER_PHASE_READY, ObservedAt: timestamppb.Now(),
 	}}}); err != nil {
 		t.Fatal(err)
 	}

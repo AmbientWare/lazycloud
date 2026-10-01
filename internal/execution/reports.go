@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -34,6 +35,9 @@ type ContainerReport struct {
 	Exit *ContainerExit
 	// Running lists the attempts the container's slots are running.
 	Running []AttemptID
+	// ObservedAt is when the host took the report. A ready report loses
+	// running attempts that started before it and are missing from Running.
+	ObservedAt time.Time
 }
 
 // ReportActions are commands the host must receive because of what it
@@ -50,7 +54,9 @@ func (a *ReportActions) merge(b ReportActions) {
 }
 
 // ApplyReport applies one container report from host. Ready moves a starting
-// container to ready and resets its release's start failures. Exited stops
+// container to ready, resets its release's start failures and wakes waiting
+// claims. A ready report lists every attempt the container's slots run, so
+// running attempts it omits that started before it are lost. Exited stops
 // the container. A container the host runs but durable state does not assign
 // to it, or has stopped, must stop.
 func (e *Execution) ApplyReport(ctx context.Context, host compute.HostID, report ContainerReport) (ReportActions, error) {
@@ -88,6 +94,14 @@ func (e *Execution) ApplyReport(ctx context.Context, host compute.HostID, report
 				if err := database.Notify(ctx, tx, database.ChannelExecution, row.ReleaseID.String()); err != nil {
 					return err
 				}
+				// Claims that arrived while the container was starting
+				// wait on the release's claim channel.
+				if err := database.Notify(ctx, tx, database.ChannelClaim, row.ReleaseID.String()); err != nil {
+					return err
+				}
+			}
+			if err := e.loseOmittedAttempts(ctx, tx, report); err != nil {
+				return err
 			}
 		case ReportExited:
 			exit := ContainerExit{Reason: StopCrashed}
@@ -107,6 +121,32 @@ func (e *Execution) ApplyReport(ctx context.Context, host compute.HostID, report
 		return ReportActions{}, fmt.Errorf("apply report of container %s: %w", report.Container, err)
 	}
 	return actions, nil
+}
+
+// loseOmittedAttempts finishes as lost the running attempts on the reported
+// container that started before the report but are missing from it, so the
+// retry policy applies. The caller holds the container lock.
+func (e *Execution) loseOmittedAttempts(ctx context.Context, tx pgx.Tx, report ContainerReport) error {
+	reported := make([]uuid.UUID, len(report.Running))
+	for n, a := range report.Running {
+		reported[n] = uuid.UUID(a)
+	}
+	omitted, err := e.queries.WithTx(tx).OmittedRunningAttempts(ctx, OmittedRunningAttemptsParams{
+		ContainerID: uuid.UUID(report.Container), ObservedAt: report.ObservedAt, Reported: reported,
+	})
+	if err != nil {
+		return fmt.Errorf("list omitted attempts: %w", err)
+	}
+	for _, attempt := range omitted {
+		err := e.finishAttempt(ctx, tx, nil, AttemptOutcome{
+			Attempt: AttemptID(attempt), State: AttemptLost,
+			Failure: &Failure{Kind: FailureLost, Message: "the host no longer runs the attempt"},
+		})
+		if err != nil {
+			return fmt.Errorf("lose attempt %s: %w", attempt, err)
+		}
+	}
+	return nil
 }
 
 // endedAttempts returns the reported running attempts whose durable attempt
@@ -144,7 +184,9 @@ func endedAttempts(ctx context.Context, q *Queries, container ContainerID, runni
 }
 
 // ReconcileHost applies the container list of a host's Hello. Reported
-// containers are applied as reports. Ready or draining containers assigned
+// containers are applied as reports, so a ready one loses the running
+// attempts it omits. An adopted container reports starting until its slots
+// restate their attempts, so its attempts keep running. Ready or draining containers assigned
 // to the host that it did not report are gone, so they stop as crashed and
 // their attempts are lost. Starting containers it did not report get their
 // start command again from HostCommands.

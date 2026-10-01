@@ -2,6 +2,7 @@ package execution
 
 import (
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -158,5 +159,52 @@ values ($1, $2, 'ready', $3, 1, 1000, 1 << 28) returning id`, uuid.UUID(f.worksp
 	}
 	if stateOf(t, e, adopted) != ContainerReady || stateOf(t, e, exited) != ContainerStopped {
 		t.Fatalf("adopted %s, exited %s; want ready and stopped", stateOf(t, e, adopted), stateOf(t, e, exited))
+	}
+}
+
+// A ready report lists every attempt the container's slots run. Running
+// attempts it omits that started before it are lost and retried; an adopted
+// container's starting report and attempts claimed after the report keep
+// running.
+func TestReadyReportLosesOmittedAttempts(t *testing.T) {
+	pool := dbtest.New(t)
+	e := NewExecution(pool)
+	l := listen(t, pool)
+	f := deployedFunction(t, pool, `{"max_pending_tasks": 10, "retry_policy": {"max_attempts": 2}}`)
+	submit(t, e, f, 2)
+	host, container := placedContainer(t, pool, f, ContainerReady, 2)
+	beforeClaim := time.Now().Add(-time.Second)
+	claimed, err := e.ClaimTasks(t.Context(), l, host, container, 2, 0)
+	if err != nil || len(claimed) != 2 {
+		t.Fatalf("claimed %d: %v", len(claimed), err)
+	}
+	kept, omitted := claimed[0], claimed[1]
+
+	for _, report := range []ContainerReport{
+		{Container: container, Phase: ReportStarting, ObservedAt: time.Now()},
+		{Container: container, Phase: ReportReady, ObservedAt: beforeClaim},
+	} {
+		if _, err := e.ReconcileHost(t.Context(), host, []ContainerReport{report}); err != nil {
+			t.Fatal(err)
+		}
+		if status(t, pool, kept.Task) != TaskRunning || status(t, pool, omitted.Task) != TaskRunning {
+			t.Fatalf("after a %s report observed at %v the tasks must keep running", report.Phase, report.ObservedAt)
+		}
+	}
+
+	if _, err := e.ApplyReport(t.Context(), host, ContainerReport{
+		Container: container, Phase: ReportReady, Running: []AttemptID{kept.Attempt}, ObservedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var attemptState string
+	if err := pool.QueryRow(t.Context(), "select state from attempts where id = $1", uuid.UUID(omitted.Attempt)).Scan(&attemptState); err != nil {
+		t.Fatal(err)
+	}
+	if attemptState != string(AttemptLost) || status(t, pool, omitted.Task) != TaskQueued {
+		t.Fatalf("omitted attempt %s, task %s; want lost and queued for a retry", attemptState, status(t, pool, omitted.Task))
+	}
+	if status(t, pool, kept.Task) != TaskRunning {
+		t.Fatal("the reported attempt must keep running")
 	}
 }

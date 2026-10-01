@@ -275,7 +275,10 @@ func reportIn(c *hostproto.ContainerReport) (execution.ContainerReport, error) {
 	if err != nil {
 		return execution.ContainerReport{}, err
 	}
-	report := execution.ContainerReport{Container: container}
+	if c.GetObservedAt() == nil {
+		return execution.ContainerReport{}, status.Error(codes.InvalidArgument, "a container report needs observed_at")
+	}
+	report := execution.ContainerReport{Container: container, ObservedAt: c.GetObservedAt().AsTime()}
 	switch c.GetPhase() {
 	case hostproto.ContainerPhase_CONTAINER_PHASE_PREPARING:
 		report.Phase = execution.ReportPreparing
