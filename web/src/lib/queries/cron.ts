@@ -15,7 +15,7 @@ export function cronJobsQueryOptions(workspaceId: string) {
     queryFn: async ({ client }): Promise<{ cron_jobs: CronJob[] }> => {
       const workspace = workspaceName(workspaceId);
       const [workloads, schedules] = await Promise.all([
-        workloadDirectory(client, workspaceId),
+        workloadDirectory(client, workspaceId, { fresh: true }),
         ok(
           api.GET("/v1/workspaces/{workspace}/schedules", {
             params: { path: { workspace }, query: { limit: 100 } },

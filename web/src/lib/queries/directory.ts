@@ -9,7 +9,13 @@ import { workspaceQueryKeys } from "./workspace-keys";
  * Lookups the query layer needs to give components the reference's IDs: the
  * API names apps and workloads where the dashboard's views carry IDs. Each is
  * one cached read of the workspace's live apps or deployed workloads.
+ *
+ * A lookup reuses the cached read until it is invalidated. A list built from
+ * a directory passes `fresh`, so it reads the API every time it refetches and
+ * leaves the new read in the cache for the lookups.
  */
+
+type DirectoryRead = { fresh?: boolean };
 
 export type AppDirectory = {
   byId: Map<string, Schemas["App"]>;
@@ -35,8 +41,13 @@ async function allPages<T>(
   return items;
 }
 
-export function appDirectory(client: QueryClient, workspaceId: string): Promise<AppDirectory> {
-  return client.ensureQueryData({
+export function appDirectory(
+  client: QueryClient,
+  workspaceId: string,
+  { fresh = false }: DirectoryRead = {},
+): Promise<AppDirectory> {
+  return client.fetchQuery({
+    staleTime: fresh ? 0 : Infinity,
     queryKey: [...workspaceQueryKeys.apps.root(workspaceId), "directory"],
     queryFn: async () => {
       const workspace = workspaceName(workspaceId);
@@ -73,8 +84,10 @@ export async function appById(
 export function workloadDirectory(
   client: QueryClient,
   workspaceId: string,
+  { fresh = false }: DirectoryRead = {},
 ): Promise<WorkloadDirectory> {
-  return client.ensureQueryData({
+  return client.fetchQuery({
+    staleTime: fresh ? 0 : Infinity,
     queryKey: [...workspaceQueryKeys.deployments.root(workspaceId), "directory"],
     queryFn: async () => {
       const workspace = workspaceName(workspaceId);
