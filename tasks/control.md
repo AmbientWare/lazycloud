@@ -128,4 +128,7 @@ Gaps: calls from inside a container need the workload-runtime container API
 for credentials; endpoint invoke URLs, `serve`, ASGI export and container
 checkpoints belong to other packets. A status filter on the task listing
 reads the workspace's recent index and filters, which grows with history
-between matches.
+between matches. Log readers order lines by (writer xid, id) and hold back
+lines newer than the oldest running writing transaction, so a long-running
+write transaction anywhere in the cluster delays log delivery until it ends;
+reads without follow wait at most 2 s for it.
