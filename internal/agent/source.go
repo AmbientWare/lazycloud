@@ -192,8 +192,13 @@ type imageCache struct {
 	group  singleflight.Group
 }
 
-// ensure makes image present and reports whether it had to be pulled.
-func (c *imageCache) ensure(ctx context.Context, image string) (bool, error) {
+// ensure makes image present and reports whether it had to be pulled. auth
+// and platform go to the pull only; nothing stores the credentials.
+func (c *imageCache) ensure(ctx context.Context, image string, auth *hostproto.RegistryAuth, platform string) (bool, error) {
+	options, err := pullOptions(auth, platform)
+	if err != nil {
+		return false, err
+	}
 	for {
 		pulled, err, _ := c.group.Do(image, func() (any, error) {
 			if _, err := c.docker.ImageInspect(ctx, image); err == nil {
@@ -201,7 +206,7 @@ func (c *imageCache) ensure(ctx context.Context, image string) (bool, error) {
 			} else if !cerrdefs.IsNotFound(err) {
 				return false, fmt.Errorf("inspect image %s: %w", image, err)
 			}
-			response, err := c.docker.ImagePull(ctx, image, client.ImagePullOptions{})
+			response, err := c.docker.ImagePull(ctx, image, options)
 			if err != nil {
 				return false, fmt.Errorf("pull image %s: %w", image, err)
 			}

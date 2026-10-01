@@ -33,7 +33,7 @@ type AssignContainersParams struct {
 type AssignContainersRow struct {
 	ID        uuid.UUID
 	HostID    *uuid.UUID
-	ReleaseID uuid.UUID
+	ReleaseID *uuid.UUID
 }
 
 // The state check loses to a planner that stopped the container meanwhile.
@@ -83,7 +83,7 @@ type PendingContainersParams struct {
 type PendingContainersRow struct {
 	ID          uuid.UUID
 	WorkspaceID uuid.UUID
-	ReleaseID   uuid.UUID
+	ReleaseID   *uuid.UUID
 	CpuMillis   int64
 	MemoryBytes int64
 }
