@@ -192,6 +192,5 @@ SDK environment; export it. Then `lazycloud secret create E2E_TOKEN s3cr3t`,
 dev@lazycloud.local`, and run the acceptance test with
 `LAZYCLOUD_TEST_ENDPOINT`, `LAZYCLOUD_TEST_TOKEN` and
 `LAZYCLOUD_TEST_WORKSPACE` set to the exported values:
-`uv run --group dev pytest -x -s python/tests/acceptance`. The second
-workspace must not include the token's user for the trespass check, so
-create its owner with `create-user` first.
+`uv run --group dev pytest -x -s python/tests/acceptance`. The container
+must fail to reach `other` even though the dev user is an administrator.
