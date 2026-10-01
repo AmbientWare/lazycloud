@@ -18,7 +18,7 @@ func launchFleet(t *testing.T, f compute.Fleet) (owners, *awsEmulator, compute.A
 	t.Helper()
 	emulator := newAWS(t)
 	o := newOwners(t, fleetConfig(emulator.fleet(f)))
-	return o, emulator, publish(t, o.compute, "1.0.0")
+	return o, emulator, publish(t, o.compute)
 }
 
 // launched answers RunInstances with a new instance in the subnet's zone.
@@ -164,7 +164,9 @@ func TestLaunchErrorsRetryWithTheSameClientTokenUntilBounded(t *testing.T) {
 	alice := newUser(t, o.pool, "alice@example.com")
 	dev := newWorkspace(t, o.pool, "dev", alice)
 	host := requestedHost(t, o, dev, `{}`)
-	expireLeases := func() { run(t, o.pool, "update hosts set launch_lease_until = now() - interval '1 second' where launch_lease_until is not null") }
+	expireLeases := func() {
+		run(t, o.pool, "update hosts set launch_lease_until = now() - interval '1 second' where launch_lease_until is not null")
+	}
 
 	launch(t, o)
 	if phase, _ := hostPhase(t, o.pool, host); phase != string(compute.PhaseRequested) {

@@ -16,16 +16,16 @@ func machineConfig() compute.Config {
 
 var machineCapacity = compute.Capacity{CPUMillis: 8000, MemoryBytes: 16 * gib} //nolint:gochecknoglobals // Test constant.
 
-// joinMachine mints a join command for name and enrolls a host with it,
+// joinMachine mints a join command for gpu-1 and enrolls a host with it,
 // then opens its first session.
-func joinMachine(t *testing.T, o owners, account identity.UserID, name string, workspaces ...uuid.UUID) (compute.HostID, string) {
+func joinMachine(t *testing.T, o owners, account identity.UserID, workspaces ...uuid.UUID) (compute.HostID, string) {
 	t.Helper()
 	ctx := t.Context()
-	cmd, err := o.compute.CreateMachineJoin(ctx, compute.MachineJoin{Account: account, Name: name, Workspaces: workspaces})
+	cmd, err := o.compute.CreateMachineJoin(ctx, compute.MachineJoin{Account: account, Name: "gpu-1", Workspaces: workspaces})
 	if err != nil {
 		t.Fatal(err)
 	}
-	host, token, err := o.compute.Enroll(ctx, joinToken(t, cmd), compute.HostReport{Hostname: name, Capacity: machineCapacity})
+	host, token, err := o.compute.Enroll(ctx, joinToken(t, cmd), compute.HostReport{Hostname: "gpu-1", Capacity: machineCapacity})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,14 +35,15 @@ func joinMachine(t *testing.T, o owners, account identity.UserID, name string, w
 	return host, token
 }
 
-func machineNamed(t *testing.T, o owners, account identity.UserID, name string) *compute.Machine {
+// gpu1 is the account's machine gpu-1, or nil.
+func gpu1(t *testing.T, o owners, account identity.UserID) *compute.Machine {
 	t.Helper()
 	machines, err := o.compute.AccountMachines(t.Context(), account, "", 100)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, m := range machines {
-		if m.Name == name {
+		if m.Name == "gpu-1" {
 			return &m
 		}
 	}
@@ -60,7 +61,7 @@ func TestMachineJoinEnrollsOnceUnderAnUnambiguousName(t *testing.T) {
 	if _, err := o.compute.CreateMachineJoin(ctx, join); !errors.As(err, &unavailable) {
 		t.Fatalf("join without a published agent release: %v, want UnavailableError", err)
 	}
-	publish(t, o.compute, "1.0.0")
+	publish(t, o.compute)
 
 	first, err := o.compute.CreateMachineJoin(ctx, join)
 	if err != nil {
@@ -83,13 +84,13 @@ func TestMachineJoinEnrollsOnceUnderAnUnambiguousName(t *testing.T) {
 	if host != first.Machine.ID {
 		t.Fatalf("enrolled host %s, want the machine %s", host, first.Machine.ID)
 	}
-	if m := machineNamed(t, o, alice, "gpu-1"); m == nil || m.Phase != compute.PhaseJoining {
+	if m := gpu1(t, o, alice); m == nil || m.Phase != compute.PhaseJoining {
 		t.Fatalf("enrolled machine %+v, want joining", m)
 	}
 	if _, err := o.compute.OpenSession(ctx, host, compute.SessionOpen{BootID: "boot", Capacity: machineCapacity}); err != nil {
 		t.Fatal(err)
 	}
-	if m := machineNamed(t, o, alice, "gpu-1"); m == nil || m.Phase != compute.PhaseReady || !m.Schedulable() {
+	if m := gpu1(t, o, alice); m == nil || m.Phase != compute.PhaseReady || !m.Schedulable() {
 		t.Fatalf("machine after its first session %+v, want ready and schedulable", m)
 	}
 	if got, err := o.compute.AuthenticateHost(ctx, token); err != nil || got != host {
@@ -110,7 +111,7 @@ func TestMachineFailingAPreflightCheckNeverTakesWork(t *testing.T) {
 	o := newOwners(t, machineConfig())
 	alice := newUser(t, o.pool, "alice@example.com")
 	dev := newWorkspace(t, o.pool, "dev", alice)
-	publish(t, o.compute, "1.0.0")
+	publish(t, o.compute)
 	cmd, err := o.compute.CreateMachineJoin(ctx, compute.MachineJoin{Account: alice, Name: "gpu-1", Workspaces: []uuid.UUID{dev}})
 	if err != nil {
 		t.Fatal(err)
@@ -128,7 +129,7 @@ func TestMachineFailingAPreflightCheckNeverTakesWork(t *testing.T) {
 	if _, err := o.compute.OpenSession(ctx, host, compute.SessionOpen{BootID: "boot", Capacity: machineCapacity}); err != nil {
 		t.Fatal(err)
 	}
-	m := machineNamed(t, o, alice, "gpu-1")
+	m := gpu1(t, o, alice)
 	if m == nil || m.Phase != compute.PhaseFailed || m.Failure == nil || *m.Failure != compute.FailurePreflight ||
 		m.PhaseMessage != "Docker is not running" || len(m.Remediation()) != 1 {
 		t.Fatalf("machine %+v, want failed host_preflight_failed naming the error check", m)
@@ -156,8 +157,8 @@ func TestPinnedWorkRunsOnlyOnItsMachineAndUnpinnedWorkNever(t *testing.T) {
 	o := newOwners(t, machineConfig())
 	alice := newUser(t, o.pool, "alice@example.com")
 	dev, prod := newWorkspace(t, o.pool, "dev", alice), newWorkspace(t, o.pool, "prod", alice)
-	publish(t, o.compute, "1.0.0")
-	machine, _ := joinMachine(t, o, alice, "gpu-1", dev)
+	publish(t, o.compute)
+	machine, _ := joinMachine(t, o, alice, dev)
 	platform := newHost(t, o.pool, hostSpec{CPU: 1000, Memory: 2 * gib})
 
 	pinned := pendingContainer(t, o.pool, dev, newRelease(t, o.pool, dev, `{"placement": {"machine": "gpu-1"}}`), 1000, gib)
@@ -188,8 +189,8 @@ func TestMachineKeepsWorkspacesWhoseDeploymentsPinIt(t *testing.T) {
 	o := newOwners(t, machineConfig())
 	alice := newUser(t, o.pool, "alice@example.com")
 	dev, prod, lab := newWorkspace(t, o.pool, "dev", alice), newWorkspace(t, o.pool, "prod", alice), newWorkspace(t, o.pool, "lab", alice)
-	publish(t, o.compute, "1.0.0")
-	joinMachine(t, o, alice, "gpu-1", dev, prod)
+	publish(t, o.compute)
+	joinMachine(t, o, alice, dev, prod)
 	newRelease(t, o.pool, dev, `{"placement": {"machine": "gpu-1"}}`)
 
 	var conflict *compute.ConflictError
@@ -210,8 +211,8 @@ func TestRemovingAMachineStopsItsWorkAndRevokesItsCredential(t *testing.T) {
 	o := newOwners(t, machineConfig())
 	alice := newUser(t, o.pool, "alice@example.com")
 	dev := newWorkspace(t, o.pool, "dev", alice)
-	publish(t, o.compute, "1.0.0")
-	host, token := joinMachine(t, o, alice, "gpu-1", dev)
+	publish(t, o.compute)
+	host, token := joinMachine(t, o, alice, dev)
 	release := newRelease(t, o.pool, dev, `{"placement": {"machine": "gpu-1"}}`)
 	w := runningAttempt(t, o.pool, dev, release, host)
 
@@ -225,7 +226,7 @@ func TestRemovingAMachineStopsItsWorkAndRevokesItsCredential(t *testing.T) {
 	if _, err := o.compute.OpenSession(ctx, host, compute.SessionOpen{BootID: "boot", Capacity: machineCapacity}); !errors.Is(err, compute.ErrUnknownHost) {
 		t.Fatalf("removed machine's session: %v, want ErrUnknownHost", err)
 	}
-	if m := machineNamed(t, o, alice, "gpu-1"); m != nil {
+	if m := gpu1(t, o, alice); m != nil {
 		t.Fatalf("removed machine still listed: %+v", m)
 	}
 	if err := o.compute.RemoveMachine(ctx, alice, host.String()); err != nil {
@@ -235,7 +236,7 @@ func TestRemovingAMachineStopsItsWorkAndRevokesItsCredential(t *testing.T) {
 		t.Fatalf("removed machine is %s, want deleted", phase)
 	}
 	// The name is free again.
-	if again, _ := joinMachine(t, o, alice, "gpu-1", dev); again == host {
+	if again, _ := joinMachine(t, o, alice, dev); again == host {
 		t.Fatal("a new join reused the removed machine")
 	}
 }

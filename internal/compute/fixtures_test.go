@@ -213,9 +213,10 @@ func place(t *testing.T, o owners) int {
 	return result.Assigned
 }
 
-func publish(t *testing.T, c *compute.Compute, version string) compute.AgentRelease {
+// publish makes agent 1.0.0 the target release.
+func publish(t *testing.T, c *compute.Compute) compute.AgentRelease {
 	t.Helper()
-	release := compute.AgentRelease{Version: version, SHA256: map[string]string{
+	release := compute.AgentRelease{Version: "1.0.0", SHA256: map[string]string{
 		"amd64": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
 		"arm64": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
 	}}

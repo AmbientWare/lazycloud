@@ -71,7 +71,7 @@ func TestCPUWorkStaysOffFleetGPUInstancesButRunsOnGPUMachines(t *testing.T) {
 	alice := newUser(t, o.pool, "alice@example.com")
 	dev := newWorkspace(t, o.pool, "dev", alice)
 	newHost(t, o.pool, hostSpec{Provider: compute.ProviderAWS, CPU: 16000, Memory: 64 * gib, GPUType: "L4", GPUCount: 1})
-	publish(t, o.compute, "1.0.0")
+	publish(t, o.compute)
 	cmd, err := o.compute.CreateMachineJoin(t.Context(), compute.MachineJoin{Account: alice, Name: "gpu-box", Workspaces: []uuid.UUID{dev}})
 	if err != nil {
 		t.Fatal(err)
