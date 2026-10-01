@@ -70,7 +70,7 @@ linters:
               desc: host runtime uses the host protocol
             - pkg: github.com/AmbientWare/lazycloud/internal/hostsession
               desc: host runtime uses the host protocol
-            - pkg: github.com/AmbientWare/lazycloud/internal/api
+            - pkg: github.com/AmbientWare/lazycloud/internal/api$
               desc: host runtime uses the host protocol
             - pkg: github.com/AmbientWare/lazycloud/internal/edge
               desc: host runtime uses the host protocol
