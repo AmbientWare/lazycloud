@@ -90,7 +90,11 @@ func NewHandler(owners Owners, cfg Config, logger *slog.Logger) (http.Handler, e
 	mux.HandleFunc("POST /webhooks/stripe", s.receiveStripeWebhook)
 	s.installRoutes(mux)
 	mux.Handle("/", s.authenticate(ops))
-	return s.recommendClient(s.limitBody(mux)), nil
+	// Workload routes stream past the API's body limit.
+	outer := http.NewServeMux()
+	s.workloadRoutes(outer)
+	outer.Handle("/", s.limitBody(mux))
+	return s.recommendClient(outer), nil
 }
 
 // NewContainerHandler serves the same operations to container API requests.
