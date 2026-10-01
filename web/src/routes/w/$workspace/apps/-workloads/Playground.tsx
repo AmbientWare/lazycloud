@@ -16,7 +16,7 @@ import {
   invokeHttp,
   type InvokeResult,
 } from "@/lib/api/invoke";
-import type { JsonValue } from "@/lib/api/schemas";
+import type { JsonValue } from "@/lib/json";
 import type { Workload } from "@/lib/queries/deployments";
 import { failureText, taskQueryOptions } from "@/lib/queries/tasks";
 

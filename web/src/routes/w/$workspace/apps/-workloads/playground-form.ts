@@ -1,7 +1,7 @@
 import { z } from "zod";
 
-import type { JsonValue } from "@/lib/api/schemas";
-import { jsonValueSchema } from "@/lib/api/schemas/json";
+import type { JsonValue } from "@/lib/json";
+import { jsonValueSchema } from "@/lib/json";
 
 /** Workload kinds the playground can invoke with a JSON payload. */
 export const PLAYGROUND_KINDS = new Set(["function", "endpoint"]);

@@ -1,10 +1,4 @@
 import { formatDistanceStrict, parseISO } from "date-fns";
-import {
-  resourceLimit,
-  resourceRequest,
-  type CpuRequest,
-  type MemoryRequest,
-} from "@/lib/api/schemas/resources";
 
 export type RowValue = string | number | boolean | null | undefined;
 
@@ -135,4 +129,26 @@ export function resourceAllocation(
   const limit = resourceLimit(value);
   if (limit == null) return `${request}${suffix}`;
   return `${request}${suffix} (limit ${limit}${suffix})`;
+}
+
+/**
+ * A resource a workload states as a reservation, or as a `[reserve, limit]` pair.
+ *
+ */
+export type CpuRequest = number | [number, number];
+export type MemoryRequest = string | number | [string | number, string | number];
+
+/** The reservation half, which is what capacity is sized against. */
+export function resourceRequest(
+  value: CpuRequest | MemoryRequest | null | undefined,
+): string | number | null {
+  if (value == null) return null;
+  return Array.isArray(value) ? value[0] : value;
+}
+
+/** The ceiling half, present only when its author named one. */
+export function resourceLimit(
+  value: CpuRequest | MemoryRequest | null | undefined,
+): string | number | null {
+  return Array.isArray(value) ? value[1] : null;
 }

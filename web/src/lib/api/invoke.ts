@@ -1,5 +1,5 @@
 import { api, type Schemas } from "@/lib/api/client";
-import type { JsonValue } from "@/lib/api/schemas";
+import type { JsonValue } from "@/lib/json";
 
 /**
  * Honest result of a playground call: the real HTTP status and body, plus the
