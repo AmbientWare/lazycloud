@@ -514,12 +514,11 @@ components:
           minimum: 1
           maximum: 256
           default: 1
+        # Defaults: 10, 0 for a scheduled function, and -1 whenever
+        # autoscaler.min_containers is above zero. -1 leaves idle containers
+        # above the minimum to the planner, which stops them at once.
         keep_warm_seconds:
-          description: >-
-            Idle time before a container above the minimum stops; -1 keeps a
-            started container until demand ends with a new release. The
-            default is 10, 0 for a scheduled function and -1 whenever
-            autoscaler.min_containers is above zero.
+          description: Idle seconds before a container above the minimum stops.
           type: integer
           minimum: -1
           maximum: 86400
@@ -533,12 +532,11 @@ components:
         environment:
           type: object
           additionalProperties: { type: string }
+        # Five cron fields, an alias such as @hourly, or `every N` minutes
+        # (m, at most 59), hours (h, at most 23) or days (d, at most 31).
+        # Deploy stores the normalized expression.
         cron:
-          description: >-
-            Run the function on this schedule, in UTC: five cron fields, an
-            alias such as @hourly, or `every N` minutes (m, at most 59),
-            hours (h, at most 23) or days (d, at most 31). Deploy stores the
-            normalized expression.
+          description: Run the function on this UTC schedule.
           type: string
           minLength: 1
           maxLength: 160
@@ -548,10 +546,9 @@ components:
           maxItems: 100
           uniqueItems: true
           items: { $ref: "#/components/schemas/SecretName" }
+        # http or https, with a host and without credentials or a fragment.
         callback_url:
-          description: >-
-            Receives a signed POST when a task is retried or finishes: http or
-            https, with a host and without credentials or a fragment.
+          description: Receives a signed POST when a task is retried or finishes.
           type: string
           maxLength: 2048
         in_process:

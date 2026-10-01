@@ -30,9 +30,13 @@ func resolveRuntime(spec apitypes.FunctionSpec, out *apitypes.FunctionSpec) erro
 		normalized := cron.String()
 		out.Cron = &normalized
 	}
+	warmFloor := out.Autoscaler != nil && out.Autoscaler.MinContainers != nil && *out.Autoscaler.MinContainers > 0
+	if spec.KeepWarmSeconds != nil && *spec.KeepWarmSeconds < 0 && !warmFloor {
+		return &InvalidSpecError{Function: spec.Name, Reason: "keep_warm=-1 is only supported for functions with a warm floor (autoscaler.min_containers above zero)"}
+	}
 	keepWarm := defaultKeepWarmSeconds
 	switch {
-	case out.Autoscaler != nil && out.Autoscaler.MinContainers != nil && *out.Autoscaler.MinContainers > 0:
+	case warmFloor:
 		keepWarm = plannerKeepWarmSeconds
 	case spec.KeepWarmSeconds != nil:
 		keepWarm = *spec.KeepWarmSeconds

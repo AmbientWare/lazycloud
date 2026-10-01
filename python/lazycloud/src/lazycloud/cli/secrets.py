@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Annotated
 
 import typer
-from shared.http.secrets import SecretWireRecord
+from shared.api import Secret
 
 from lazycloud._terminal.cards import notice_card, result_card
 from lazycloud._terminal.formatting import timestamp
@@ -15,11 +15,17 @@ from lazycloud.cli.components.output import (
     print_payload,
     table,
 )
-from lazycloud.cli.control import secret_client
+from lazycloud.clients.api import ApiClient
+from lazycloud.control import api_client, require_workspace, resolve_control_client_config
 
 MASKED_SECRET_VALUE = "********"
 
 secret_app = typer.Typer(help="Manage secrets.")
+
+
+def _session(workspace: str | None) -> tuple[ApiClient, str]:
+    config = resolve_control_client_config(workspace=workspace)
+    return api_client(config), require_workspace(config)
 
 
 @secret_app.command("list", help="List secret names and update times.")
@@ -27,17 +33,19 @@ def secret_list(
     ctx: typer.Context,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
-    response = secret_client(workspace=workspace).list()
+    client, selected = _session(workspace)
+    secrets: list[Secret] = []
+    cursor: str | None = None
+    while True:
+        page = client.list_secrets(selected, cursor=cursor, limit=1000)
+        secrets.extend(page.secrets)
+        if not page.next_cursor:
+            break
+        cursor = page.next_cursor
     if json_output_enabled(ctx):
-        print_payload(ctx, [_secret_payload(item) for item in response.secrets])
+        print_payload(ctx, [_secret_payload(item) for item in secrets])
         return
-    rows = [
-        [
-            item.name,
-            timestamp(item.updated_at),
-        ]
-        for item in response.secrets
-    ]
+    rows = [[item.name, timestamp(item.updated_at)] for item in secrets]
     console.print(table("Secrets", ["name", "updated"], rows))
 
 
@@ -48,11 +56,12 @@ def secret_create(
     value: str,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
-    response = secret_client(workspace=workspace).create(name, value)
+    client, selected = _session(workspace)
+    secret = client.create_secret(selected, name, value)
     emit(
         ctx,
-        payload={"id": response.id, "name": response.name},
-        view=notice_card(f"Created {response.name}.", tone="success"),
+        payload={"id": secret.name, "name": secret.name},
+        view=notice_card(f"Created {secret.name}.", tone="success"),
     )
 
 
@@ -63,7 +72,8 @@ def secret_modify(
     value: str,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
-    secret_client(workspace=workspace).update(name, value)
+    client, selected = _session(workspace)
+    client.update_secret(selected, name, value)
     emit(
         ctx,
         payload={"name": name, "updated": True},
@@ -77,7 +87,8 @@ def secret_delete(
     name: str,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
-    secret_client(workspace=workspace).delete(name)
+    client, selected = _session(workspace)
+    client.delete_secret(selected, name)
     emit(
         ctx,
         payload={"name": name, "deleted": True},
@@ -95,28 +106,36 @@ def secret_show(
     ] = False,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
-    response = secret_client(workspace=workspace).get(name)
-    if response.secret is None:
-        raise typer.BadParameter(f"secret not found: {name}")
-    payload = _secret_payload(response.secret, reveal=reveal)
+    client, selected = _session(workspace)
+    # The value is fetched only when asked for, so a masked show never
+    # transfers it.
+    if reveal:
+        revealed = client.get_secret_value(selected, name)
+        secret = Secret(
+            name=revealed.name, created_at=revealed.created_at, updated_at=revealed.updated_at
+        )
+        payload = _secret_payload(secret, value=revealed.value)
+    else:
+        secret = client.get_secret(selected, name)
+        payload = _secret_payload(secret)
     emit(
         ctx,
         payload=payload,
         view=result_card(
             json_default(
                 {
-                    "name": response.secret.name,
+                    "name": secret.name,
                     "value": payload["value"],
-                    "updated": timestamp(response.secret.updated_at),
+                    "updated": timestamp(secret.updated_at),
                 }
             ),
         ),
     )
 
 
-def _secret_payload(record: SecretWireRecord, *, reveal: bool = False) -> dict[str, object]:
-    payload = record.model_dump(mode="json")
-    payload["value"] = record.value if reveal else MASKED_SECRET_VALUE
+def _secret_payload(secret: Secret, *, value: str = MASKED_SECRET_VALUE) -> dict[str, object]:
+    payload: dict[str, object] = secret.model_dump(mode="json")
+    payload["value"] = value
     return payload
 
 

@@ -323,13 +323,13 @@ type FunctionState string
 type FunctionSpec struct {
 	Autoscaler *Autoscaler `json:"autoscaler,omitempty"`
 
-	// CallbackUrl Receives a signed POST when a task is retried or finishes: http or https, with a host and without credentials or a fragment.
+	// CallbackUrl Receives a signed POST when a task is retried or finishes.
 	CallbackUrl *string `json:"callback_url,omitempty"`
 
 	// Concurrency Tasks one container runs at once, one process per slot.
 	Concurrency *int `json:"concurrency,omitempty"`
 
-	// Cron Run the function on this schedule, in UTC: five cron fields, an alias such as @hourly, or `every N` minutes (m, at most 59), hours (h, at most 23) or days (d, at most 31). Deploy stores the normalized expression.
+	// Cron Run the function on this UTC schedule.
 	Cron        *string            `json:"cron,omitempty"`
 	Environment *map[string]string `json:"environment,omitempty"`
 
@@ -340,7 +340,7 @@ type FunctionSpec struct {
 	// InProcess Run the concurrency slots as threads of one runner process.
 	InProcess *bool `json:"in_process,omitempty"`
 
-	// KeepWarmSeconds Idle time before a container above the minimum stops; -1 keeps a started container until demand ends with a new release. The default is 10, 0 for a scheduled function and -1 whenever autoscaler.min_containers is above zero.
+	// KeepWarmSeconds Idle seconds before a container above the minimum stops.
 	KeepWarmSeconds *int `json:"keep_warm_seconds,omitempty"`
 
 	// LifecycleHooks Callables the runner invokes with a context object, each a `module:qualname` reference into the source. on_start runs once per runner process after the handler loads, and its failure is a load error. The others run in the container around each attempt, in order; their failures are logged and do not change the outcome.
