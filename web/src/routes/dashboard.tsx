@@ -19,7 +19,6 @@ function DashboardEntry() {
   const { workspaces } = useSession();
   const lastWorkspaceName = useWorkspaceSelection((state) => state.lastWorkspaceName);
   const remembered = workspaces.find((item) => item.name === lastWorkspaceName);
-  const target =
-    remembered ?? workspaces.find((item) => item.state === "active") ?? workspaces[0];
+  const target = remembered ?? workspaces.find((item) => item.state === "active") ?? workspaces[0];
   return <Navigate to="/w/$workspace" params={{ workspace: target.name }} replace />;
 }

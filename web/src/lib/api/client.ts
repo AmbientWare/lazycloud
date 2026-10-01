@@ -28,7 +28,13 @@ export class ApiError extends Error {
  * browser session cookie authenticates them, and the browser's own Origin
  * header is what lets a cookie-authenticated mutation through.
  */
-export const api = createClient<paths>({ credentials: "same-origin" });
+export const api = createClient<paths>({
+  baseUrl: typeof window === "undefined" ? "" : window.location.origin,
+  credentials: "same-origin",
+  // Resolved per request rather than captured at import, so the page's fetch,
+  // including a test's stand-in, is the one that runs.
+  fetch: (request) => globalThis.fetch(request),
+});
 
 type Outcome = { data?: unknown; error?: unknown; response: Response };
 

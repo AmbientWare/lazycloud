@@ -94,11 +94,11 @@ export function ArtifactRow({
 
   const source = (
     <>
-      {artifact.app_id ? (
+      {artifact.app_name ? (
         <Link
           className="interactive-link max-w-full truncate"
-          to="/w/$workspace/apps/$appId"
-          params={{ workspace: workspaceName, appId: artifact.app_id }}
+          to="/w/$workspace/apps/$app"
+          params={{ workspace: workspaceName, app: artifact.app_name }}
         >
           {artifact.app_name || "App"}
         </Link>

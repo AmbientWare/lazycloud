@@ -1,14 +1,18 @@
 import { formatDistanceStrict, parseISO } from "date-fns";
-import {
-  resourceLimit,
-  resourceRequest,
-  type CpuRequest,
-  type MemoryRequest,
-} from "@/lib/api/schemas/resources";
 
-import { isKnownTaskStatus, isTerminalTaskStatus } from "@/lib/api/schemas/tasks";
-
+import type { Schemas } from "@/lib/api/client";
 import type { RowValue } from "@/lib/api/resources";
+
+const TERMINAL_TASK_STATUSES: ReadonlySet<string> = new Set<Schemas["TaskStatus"]>([
+  "succeeded",
+  "failed",
+  "cancelled",
+]);
+
+/** A task that has stopped for good: it neither runs nor waits to run again. */
+export function isTerminalTaskStatus(status: Schemas["TaskStatus"]): boolean {
+  return TERMINAL_TASK_STATUSES.has(status);
+}
 
 export function displayValue(value: RowValue): string {
   if (value === null || value === undefined || value === "") return "None";
@@ -79,6 +83,7 @@ export function statusTone(value: RowValue): StatusTone {
       "deployed",
       "true",
       "running",
+      "succeeded",
       "complete",
       "completed",
       "success",
@@ -88,9 +93,16 @@ export function statusTone(value: RowValue): StatusTone {
     return "success";
   }
   if (
-    ["pending", "queued", "starting", "retrying", "retry", "building", "warning"].includes(
-      normalized,
-    )
+    [
+      "pending",
+      "queued",
+      "starting",
+      "draining",
+      "retrying",
+      "retry",
+      "building",
+      "warning",
+    ].includes(normalized)
   ) {
     return "warning";
   }
@@ -112,11 +124,17 @@ export type TaskActivityBand = "succeeded" | "inFlight" | "failed" | "other";
  * status this build does not know lands in `other` for the same reason.
  */
 export function taskActivityBand(status: string): TaskActivityBand {
-  const normalized = status.toLowerCase();
-  if (!isKnownTaskStatus(normalized)) return "other";
-  if (!isTerminalTaskStatus(normalized)) return "inFlight";
-  if (statusTone(normalized) === "danger") return "failed";
-  return normalized === "complete" ? "succeeded" : "other";
+  switch (status) {
+    case "succeeded":
+      return "succeeded";
+    case "failed":
+      return "failed";
+    case "queued":
+    case "running":
+      return "inFlight";
+    default:
+      return "other";
+  }
 }
 
 export function formatDuration(milliseconds: number): string {
@@ -175,54 +193,36 @@ function isTimestamp(value: string): boolean {
   return /^\d{4}-\d{2}-\d{2}T/.test(value);
 }
 
-/**
- * Why a container stopped, in the words its owner needs.
- *
- * Mirrors `StopContainerReason.describe` in `shared/container_requests.py`, and
- * changes with it. UNKNOWN is absent on purpose: it is the column default, so
- * it also means the reason has not arrived, and a container still running
- * would otherwise be handed a cause.
- */
-const STOP_REASONS: Record<string, string | undefined> = {
-  TTL: "It reached its time limit",
-  USER: "It was stopped from this account",
-  SCHEDULER: "The platform moved the work",
-  PREEMPTED: "Its machine was reclaimed",
-  ADMIN: "The platform stopped it",
-  UNFUNDED: "The account has no payment method on file",
-  MEMORY_EVICTED:
-    "The machine ran out of memory and this container was using the most above its request",
-  DISK_FULL: "One of its disks ran out of space to save its changes",
-  DISK_UNAVAILABLE: "One of its disks could not be read from workspace storage",
+/** Why a container stopped, in the words its owner needs. */
+const STOP_REASONS: Record<Schemas["StopReason"], string> = {
+  stopped: "It was stopped",
+  load_error: "Its handler failed to load",
+  start_failed: "It failed to start",
+  crashed: "Its process exited unexpectedly",
+  out_of_memory: "It ran out of memory",
+  host_lost: "Its machine stopped responding",
 };
 
 /**
- * The label for a terminal container's stop reason, or null when there is
- * nothing truthful to say — still running, or a reason this build does not
- * know, which renders nothing rather than a raw wire value.
+ * The label for a stopped container's reason, or null when there is nothing
+ * truthful to say: it has not stopped, or the reason is one this build does
+ * not know, which renders nothing rather than a raw wire value.
  */
-export function stopReasonLabel(
-  terminationReason: string | undefined,
-  status: string,
-): string | null {
-  if (status === "running" || status === "pending") return null;
-  return (terminationReason && STOP_REASONS[terminationReason]) || null;
+export function stopReasonLabel(reason: string | undefined, state: string): string | null {
+  if (state !== "stopped" || !reason) return null;
+  return STOP_REASONS[reason as Schemas["StopReason"]] ?? null;
 }
 
-/**
- * A resource a workload stated, with its ceiling when the author named one.
- *
- * The pair form is what a container may grow into, so hiding the second figure
- * would show a workload as smaller than it is allowed to become.
- */
-export function resourceAllocation(
-  value: CpuRequest | MemoryRequest | null | undefined,
-  unit = "",
-): string {
-  const request = resourceRequest(value);
-  if (request == null) return "Default";
-  const suffix = unit ? ` ${unit}` : "";
-  const limit = resourceLimit(value);
-  if (limit == null) return `${request}${suffix}`;
-  return `${request}${suffix} (limit ${limit}${suffix})`;
+/** A CPU reservation in millicores as vCPUs, with the burst ceiling when it differs. */
+export function cpuAllocation(millis: number, limitMillis?: number): string {
+  const vcpus = (value: number) => `${Number((value / 1000).toFixed(3))} vCPU`;
+  return limitMillis && limitMillis !== millis
+    ? `${vcpus(millis)} (limit ${vcpus(limitMillis)})`
+    : vcpus(millis);
+}
+
+/** A memory reservation in MiB, with the ceiling when it differs. */
+export function memoryAllocation(mib: number, limitMib?: number): string {
+  const bytes = (value: number) => formatBytes(value * 1024 * 1024);
+  return limitMib && limitMib !== mib ? `${bytes(mib)} (limit ${bytes(limitMib)})` : bytes(mib);
 }

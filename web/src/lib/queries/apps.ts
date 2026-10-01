@@ -1,170 +1,86 @@
-import { queryOptions, type QueryClient } from "@tanstack/react-query";
-import { z } from "zod";
+import { infiniteQueryOptions, queryOptions, type QueryClient } from "@tanstack/react-query";
 
-import { apiRequest, postJson, withWorkspace } from "@/lib/api/client";
-import {
-  appSummaryListSchema,
-  appSchema,
-  deploymentSchema,
-  deploymentManifestSchema,
-  deploymentUrlSchema,
-} from "@/lib/api/schemas";
+import { api, ok, type Schemas } from "@/lib/api/client";
 
-import { workspaceLiveQueryMeta, workspaceQueryKeys } from "./workspace-keys";
+import { LIVE_LIST_MAX_PAGES, nextPageCursor, selectPages } from "./infinite-list";
+import { workspaceQueryKeys } from "./workspace-keys";
 
-export function appQueryOptions(workspaceId: string, appId: string) {
-  return queryOptions({
-    queryKey: workspaceQueryKeys.apps.detail(workspaceId, appId),
-    queryFn: () => apiRequest(withWorkspace(`/api/v1/apps/${appId}`, workspaceId), appSchema),
-    meta: workspaceLiveQueryMeta(true),
+export type App = Schemas["App"];
+
+const APP_PAGE_SIZE = 100;
+
+/** Active and paused apps of the workspace, by name. */
+export function appsQueryOptions(workspace: string) {
+  return infiniteQueryOptions({
+    queryKey: workspaceQueryKeys.apps.summaries(workspace),
+    initialPageParam: "",
+    queryFn: ({ pageParam }) =>
+      ok(
+        api.GET("/v1/workspaces/{workspace}/apps", {
+          params: {
+            path: { workspace },
+            query: { limit: APP_PAGE_SIZE, cursor: pageParam || undefined },
+          },
+        }),
+      ),
+    getNextPageParam: nextPageCursor,
+    maxPages: LIVE_LIST_MAX_PAGES,
   });
 }
 
-export function appSummariesQueryOptions(workspaceId: string) {
+export function selectApps(
+  data: { pages: readonly Schemas["AppPage"][] } | undefined,
+  hasNextPage: boolean | undefined,
+) {
+  return selectPages(
+    data,
+    (page) => page.apps,
+    hasNextPage,
+    (app) => app.id,
+  );
+}
+
+/** One app by its id or name. */
+export function appQueryOptions(workspace: string, app: string) {
   return queryOptions({
-    queryKey: workspaceQueryKeys.apps.summaries(workspaceId),
+    queryKey: workspaceQueryKeys.apps.detail(workspace, app),
     queryFn: () =>
-      apiRequest(withWorkspace("/api/v1/apps/summaries", workspaceId), appSummaryListSchema),
-    meta: workspaceLiveQueryMeta(true),
+      ok(
+        api.GET("/v1/workspaces/{workspace}/apps/{app}", { params: { path: { workspace, app } } }),
+      ),
   });
 }
 
-export function invalidateAppLists(queryClient: QueryClient, workspaceId: string) {
+export function invalidateAppLists(queryClient: QueryClient, workspace: string) {
   return Promise.all(
     [
-      workspaceQueryKeys.apps.summaries(workspaceId),
-      workspaceQueryKeys.deployments.root(workspaceId),
-      workspaceQueryKeys.containers.root(workspaceId),
+      workspaceQueryKeys.apps.root(workspace),
+      workspaceQueryKeys.deployments.root(workspace),
+      workspaceQueryKeys.containers.root(workspace),
+      workspaceQueryKeys.tasks.lists(workspace),
     ].map((queryKey) => queryClient.invalidateQueries({ queryKey })),
   );
 }
 
-export function pauseAppMutationOptions(workspaceId: string, appId: string) {
+const appPath = (workspace: string, app: string) => ({ params: { path: { workspace, app } } });
+
+export function pauseAppMutationOptions(workspace: string, app: string) {
   return {
     mutationFn: () =>
-      postJson(
-        withWorkspace(`/api/v1/apps/${encodeURIComponent(appId)}/pause`, workspaceId),
-        appSchema,
-      ),
+      ok(api.POST("/v1/workspaces/{workspace}/apps/{app}/pause", appPath(workspace, app))),
   };
 }
 
-export function resumeAppMutationOptions(workspaceId: string, appId: string) {
+export function resumeAppMutationOptions(workspace: string, app: string) {
   return {
     mutationFn: () =>
-      postJson(
-        withWorkspace(`/api/v1/apps/${encodeURIComponent(appId)}/resume`, workspaceId),
-        appSchema,
-      ),
+      ok(api.POST("/v1/workspaces/{workspace}/apps/{app}/resume", appPath(workspace, app))),
   };
 }
 
-const noContentSchema = z.null();
-
-export function deleteAppMutationOptions(workspaceId: string, appId: string) {
+export function deleteAppMutationOptions(workspace: string, app: string) {
   return {
     mutationFn: () =>
-      apiRequest(
-        withWorkspace(`/api/v1/apps/${encodeURIComponent(appId)}`, workspaceId),
-        noContentSchema,
-        { method: "DELETE" },
-      ),
+      ok(api.DELETE("/v1/workspaces/{workspace}/apps/{app}", appPath(workspace, app))),
   };
-}
-
-export function deleteWorkloadMutationOptions(workspaceId: string, deploymentIds: string[]) {
-  return {
-    mutationFn: async () => {
-      for (const deploymentId of deploymentIds) {
-        await apiRequest(
-          withWorkspace(`/api/v1/deployments/${encodeURIComponent(deploymentId)}`, workspaceId),
-          noContentSchema,
-          { method: "DELETE" },
-        );
-      }
-      return null;
-    },
-  };
-}
-
-export function startDeploymentMutationOptions(workspaceId: string, deploymentId: string) {
-  return {
-    mutationFn: () =>
-      postJson(
-        withWorkspace(`/api/v1/deployments/${encodeURIComponent(deploymentId)}/start`, workspaceId),
-        deploymentSchema,
-      ),
-  };
-}
-
-export function stopDeploymentMutationOptions(workspaceId: string, deploymentId: string) {
-  return {
-    mutationFn: () =>
-      postJson(
-        withWorkspace(`/api/v1/deployments/${encodeURIComponent(deploymentId)}/stop`, workspaceId),
-        deploymentSchema,
-      ),
-  };
-}
-
-export function scaleDeploymentMutationOptions(
-  workspaceId: string,
-  deploymentId: string,
-  replicas: number,
-) {
-  return {
-    mutationFn: () =>
-      postJson(
-        withWorkspace(`/api/v1/deployments/${encodeURIComponent(deploymentId)}/scale`, workspaceId),
-        deploymentSchema,
-        { replicas },
-      ),
-  };
-}
-
-export function deleteDeploymentMutationOptions(workspaceId: string, deploymentId: string) {
-  return {
-    mutationFn: () =>
-      apiRequest(
-        withWorkspace(`/api/v1/deployments/${encodeURIComponent(deploymentId)}`, workspaceId),
-        noContentSchema,
-        { method: "DELETE" },
-      ),
-  };
-}
-
-/**
- * Invoke manifest for one deployment: invoke URL built against this origin,
- * recorded input schema, and the callable contract.
- */
-export function deploymentManifestQueryOptions(workspaceId: string, deploymentId: string) {
-  return queryOptions({
-    queryKey: workspaceQueryKeys.apps.deploymentManifest(workspaceId, deploymentId),
-    queryFn: () => {
-      const externalUrl = encodeURIComponent(window.location.origin);
-      return apiRequest(
-        withWorkspace(
-          `/api/v1/deployments/${deploymentId}/manifest?external_url=${externalUrl}`,
-          workspaceId,
-        ),
-        deploymentManifestSchema,
-      );
-    },
-  });
-}
-
-export function deploymentUrlQueryOptions(workspaceId: string, deploymentId: string) {
-  return queryOptions({
-    queryKey: workspaceQueryKeys.apps.deploymentUrl(workspaceId, deploymentId),
-    queryFn: () => {
-      const externalUrl = encodeURIComponent(window.location.origin);
-      return apiRequest(
-        withWorkspace(
-          `/api/v1/deployments/${deploymentId}/url?external_url=${externalUrl}`,
-          workspaceId,
-        ),
-        deploymentUrlSchema,
-      );
-    },
-  });
 }

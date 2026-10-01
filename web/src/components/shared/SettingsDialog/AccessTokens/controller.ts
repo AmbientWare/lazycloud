@@ -74,7 +74,7 @@ const IDLE: ControllerState = {
 export function useAccessTokensController(showDeviceTokens: boolean): AccessTokensController {
   const queryClient = useQueryClient();
   const query = useInfiniteQuery(tokensQueryOptions(showDeviceTokens));
-  const list = selectTokenList(query.data, query.hasNextPage);
+  const list = selectTokenList(query.data as TokenPages | undefined, query.hasNextPage);
   const [state, setState] = useState<ControllerState>(IDLE);
   // One command at a time, so a double submit cannot mint two credentials and a
   // confirm cannot race the request it is confirming.

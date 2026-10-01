@@ -2,11 +2,11 @@ import { useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { ChevronRight } from "lucide-react";
 
+import { InfiniteScrollBoundary } from "@/components/shared/InfiniteScrollBoundary";
 import { LiveRelativeTime } from "@/components/shared/LiveTime";
 import { Panel } from "@/components/shared/Panel";
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { RowsSkeleton } from "@/components/shared/RowsSkeleton";
-import { InfiniteScrollBoundary } from "@/components/shared/InfiniteScrollBoundary";
 import { StatusChip } from "@/components/shared/StatusChip";
 import { StubKindIcon } from "@/components/shared/StubKindIcon";
 import {
@@ -16,16 +16,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { Container, Deployment } from "@/lib/api/schemas";
 import { formatKind } from "@/lib/format";
+import { isRunningContainer, type Container } from "@/lib/queries/containers";
+import type { DeployedWorkload } from "@/lib/queries/deployments";
 
-import { groupDeploymentsByWorkload } from "../-workloads/grouping";
 import { WorkloadRowActions } from "./WorkloadRowActions";
 
 export function AppWorkloadsSection({
-  workspaceId,
-  workspaceName,
-  appId,
+  workspace,
+  app,
   deployments,
   containers,
   pending,
@@ -34,12 +33,10 @@ export function AppWorkloadsSection({
   loadingMore,
   loadMoreError,
   onLoadMore,
-  continuationLabel,
 }: {
-  workspaceId: string;
-  workspaceName: string;
-  appId: string;
-  deployments: Deployment[] | undefined;
+  workspace: string;
+  app: string;
+  deployments: DeployedWorkload[] | undefined;
   containers: Container[] | undefined;
   pending: boolean;
   error: string | undefined;
@@ -47,22 +44,23 @@ export function AppWorkloadsSection({
   loadingMore: boolean;
   loadMoreError: boolean;
   onLoadMore: () => void;
-  continuationLabel: string;
 }) {
   const [kind, setKind] = useState<string>();
-  const groups = groupDeploymentsByWorkload(deployments, appId);
+  const workloads = [...(deployments ?? [])].sort((left, right) =>
+    deployedAt(right).localeCompare(deployedAt(left)),
+  );
   // The kinds this app actually deploys, not the kinds one could. A filter
   // offering a kind nothing here has is an option whose only outcome is an
   // empty list.
-  const kindsPresent = [...new Set(groups.map((group) => group.kind))].sort();
-  const rows = kind ? groups.filter((group) => group.kind === kind) : groups;
+  const kindsPresent = [...new Set(workloads.map((workload) => workload.kind))].sort();
+  const rows = kind ? workloads.filter((workload) => workload.kind === kind) : workloads;
   const continuation = (
     <InfiniteScrollBoundary
       nextCursor={nextCursor}
       loading={loadingMore}
       error={loadMoreError}
       onLoadMore={onLoadMore}
-      resourceLabel={continuationLabel}
+      resourceLabel="workloads"
     />
   );
 
@@ -102,7 +100,7 @@ export function AppWorkloadsSection({
           <div className="flex min-h-48 items-center justify-center px-4 text-sm text-destructive">
             {error}
           </div>
-        ) : groups.length === 0 ? (
+        ) : workloads.length === 0 ? (
           <PanelEmpty message="No deployed workloads for this app" className="min-h-48" />
         ) : rows.length === 0 ? (
           <div>
@@ -123,62 +121,60 @@ export function AppWorkloadsSection({
               <span />
             </div>
             <div className="divide-y divide-border/80">
-              {rows.map((group) => {
-                const groupContainers = (containers ?? []).filter(
-                  (container) => container.stub_id && group.stubIds.includes(container.stub_id),
-                );
-                const running = groupContainers.filter(
-                  (container) => container.status === "running",
+              {rows.map((workload) => {
+                const running = (containers ?? []).filter(
+                  (container) =>
+                    container.function === workload.name && isRunningContainer(container),
                 ).length;
+                const active = workload.state === "active" && workload.app_state !== "paused";
+                const status = active ? "deployed" : workload.state;
                 return (
                   <Link
-                    key={JSON.stringify([group.kind, group.name])}
-                    to="/w/$workspace/apps/$appId/workloads/$kind/$name"
-                    params={{ workspace: workspaceName, appId, kind: group.kind, name: group.name }}
+                    key={workload.id}
+                    to="/w/$workspace/apps/$app/workloads/$kind/$name"
+                    params={{ workspace, app, kind: workload.kind, name: workload.name }}
                     className="interactive-row group grid min-w-0 gap-x-2 gap-y-2 px-3 py-3 xl:grid-cols-[minmax(8rem,1fr)_4.5rem_6rem_5.75rem_6.25rem_1rem] xl:items-center"
                   >
                     <span className="flex min-w-0 items-center gap-2.5">
-                      <StubKindIcon kind={group.kind} className="size-3.5" />
+                      <StubKindIcon kind={workload.kind} className="size-3.5" />
                       <span className="min-w-0">
                         <span className="mono block truncate text-sm font-medium text-foreground">
-                          {group.name}
+                          {workload.name}
                         </span>
                         <span className="block text-[11px] text-muted-foreground">
-                          {group.latest.role === "devbox" ? "Devbox" : formatKind(group.kind)}
+                          {formatKind(workload.kind)}
                         </span>
                       </span>
                     </span>
 
                     <span className="hidden text-xs xl:block">
-                      <span className="mono block text-foreground">v{group.latest.version}</span>
+                      <span className="mono block text-foreground">
+                        {workload.version ? `v${workload.version}` : "-"}
+                      </span>
                     </span>
                     <span className="hidden text-xs xl:block">
                       <span className="mono block text-foreground">{running} running</span>
                     </span>
                     <span className="hidden xl:block">
-                      <StatusChip
-                        status={group.active ? "deployed" : "inactive"}
-                        live={group.active}
-                      />
+                      <StatusChip status={status} live={active} />
                     </span>
                     <LiveRelativeTime
-                      value={group.latest.created_at}
+                      value={deployedAt(workload)}
                       className="hidden text-xs text-muted-foreground xl:block"
                     />
 
                     <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground xl:hidden">
-                      <span className="mono text-foreground">v{group.latest.version}</span>
+                      <span className="mono text-foreground">
+                        {workload.version ? `v${workload.version}` : "-"}
+                      </span>
                       <span aria-hidden="true">·</span>
                       <span>{running} running</span>
                       <span aria-hidden="true">·</span>
-                      <LiveRelativeTime value={group.latest.created_at} />
-                      <StatusChip
-                        status={group.active ? "deployed" : "inactive"}
-                        live={group.active}
-                      />
+                      <LiveRelativeTime value={deployedAt(workload)} />
+                      <StatusChip status={status} live={active} />
                     </span>
                     <span className="flex items-center justify-end gap-1">
-                      <WorkloadRowActions group={group} workspaceId={workspaceId} appId={appId} />
+                      <WorkloadRowActions workload={workload} workspace={workspace} />
                       <ChevronRight
                         className="interactive-row-indicator hidden size-3.5 text-muted-foreground transition-colors xl:block"
                         aria-hidden="true"
@@ -194,4 +190,8 @@ export function AppWorkloadsSection({
       </Panel>
     </div>
   );
+}
+
+function deployedAt(workload: DeployedWorkload): string {
+  return workload.deployed_at ?? workload.created_at;
 }

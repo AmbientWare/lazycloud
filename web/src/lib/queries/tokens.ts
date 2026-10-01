@@ -41,7 +41,12 @@ export function tokensQueryOptions(includeDevice: boolean) {
 }
 
 export function selectTokenList(data: TokenPages | undefined, hasNextPage: boolean | undefined) {
-  return selectPages(data, (page) => page.tokens, hasNextPage, (token) => token.id);
+  return selectPages(
+    data,
+    (page) => page.tokens,
+    hasNextPage,
+    (token) => token.id,
+  );
 }
 
 export function createToken(input: CreateTokenInput): Promise<Schemas["CreatedToken"]> {

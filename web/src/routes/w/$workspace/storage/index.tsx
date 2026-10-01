@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { Plus } from "lucide-react";
 
@@ -16,7 +16,7 @@ import { Artifacts } from "@/components/shared/Artifacts";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { collectionResources } from "@/lib/api/resources";
 import { countLabel } from "@/lib/format";
-import { secretsQueryOptions, volumesQueryOptions } from "@/lib/queries/storage";
+import { secretsQueryOptions, selectSecrets, volumesQueryOptions } from "@/lib/queries/storage";
 import { useWorkspace } from "@/lib/workspace-context";
 
 const STORAGE_TABS = [
@@ -46,8 +46,8 @@ export const Route = createFileRoute("/w/$workspace/storage/")({
 
 function StoragePage() {
   const { workspace } = useWorkspace();
-  const volumes = useQuery(volumesQueryOptions(workspace.id));
-  const secrets = useQuery(secretsQueryOptions(workspace.id));
+  const volumes = useQuery(volumesQueryOptions(workspace.name));
+  const secrets = useInfiniteQuery(secretsQueryOptions(workspace.name));
   const search = Route.useSearch();
   const navigate = Route.useNavigate();
   const [creating, setCreating] = useState<Exclude<StorageTab, "artifacts" | "disks"> | null>(null);
@@ -69,7 +69,9 @@ function StoragePage() {
           <PageFacts
             items={[
               volumes.data ? countLabel(volumes.data.volumes.length, "volume") : null,
-              secrets.data ? countLabel(secrets.data.secrets.length, "secret") : null,
+              secrets.data
+                ? countLabel(selectSecrets(secrets.data, false).items.length, "secret")
+                : null,
             ]}
           />
         ) : null
@@ -119,7 +121,7 @@ function StoragePage() {
             className="min-h-0 flex-1 overflow-y-auto lg:overflow-hidden"
           >
             <VolumesTab
-              workspaceId={workspace.id}
+              workspaceId={workspace.name}
               workspaceName={workspace.name}
               creating={creating === "volumes"}
               onCreatingChange={(open) => setCreating(open ? "volumes" : null)}
@@ -127,8 +129,8 @@ function StoragePage() {
           </TabsContent>
           <TabsContent value="disks" className="min-h-0 flex-1 overflow-hidden">
             <DisksTab
-              key={workspace.id}
-              workspaceId={workspace.id}
+              key={workspace.name}
+              workspaceId={workspace.name}
               workspaceName={workspace.name}
             />
           </TabsContent>
@@ -137,7 +139,7 @@ function StoragePage() {
             className="min-h-0 flex-1 overflow-y-auto lg:overflow-hidden"
           >
             <SecretsTab
-              workspaceId={workspace.id}
+              workspaceId={workspace.name}
               workspaceName={workspace.name}
               creating={creating === "secrets"}
               onCreatingChange={(open) => setCreating(open ? "secrets" : null)}
@@ -150,9 +152,9 @@ function StoragePage() {
               className="min-h-0 flex-1 overflow-y-auto lg:overflow-hidden"
             >
               <CollectionAccordion
-                key={`${workspace.id}:${config.key}`}
+                key={`${workspace.name}:${config.key}`}
                 config={config}
-                workspaceId={workspace.id}
+                workspaceId={workspace.name}
                 creating={creating === config.key}
                 onCreatingChange={(open) =>
                   setCreating(open ? (config.key === "queues" ? "queues" : "maps") : null)
@@ -161,7 +163,7 @@ function StoragePage() {
             </TabsContent>
           ))}
           <TabsContent value="artifacts" className="min-h-0 flex-1 overflow-hidden">
-            <Artifacts key={workspace.id} workspaceId={workspace.id} />
+            <Artifacts key={workspace.name} workspaceId={workspace.name} />
           </TabsContent>
         </Tabs>
       </section>

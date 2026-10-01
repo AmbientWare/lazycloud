@@ -9,7 +9,6 @@ import { useSession } from "@/components/shared/AuthGate/session";
 import { PreShellScreen } from "@/components/shared/PreShellScreen";
 import { WorkspaceDeletionProvider } from "@/components/shared/WorkspaceDeletion";
 import { useWorkspaceDeletion } from "@/components/shared/WorkspaceDeletion/context";
-import { WorkspaceLiveUpdatesProvider } from "@/components/shared/WorkspaceLiveUpdates";
 import { Button } from "@/components/ui/button";
 import type { Schemas } from "@/lib/api/client";
 import { WorkspaceContext, type WorkspaceContextValue } from "@/lib/workspace-context";
@@ -57,12 +56,7 @@ function WorkspaceLayout() {
         <WorkspaceDeletionRecovery workspace={workspace} />
       ) : (
         <WorkspaceContext.Provider value={contextValue}>
-          <WorkspaceLiveUpdatesProvider
-            key={contextValue.workspace.id}
-            workspace={contextValue.workspace.name}
-          >
-            <AppShell />
-          </WorkspaceLiveUpdatesProvider>
+          <AppShell key={contextValue.workspace.id} />
         </WorkspaceContext.Provider>
       )}
     </WorkspaceDeletionProvider>

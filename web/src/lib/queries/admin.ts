@@ -1,6 +1,6 @@
 import { infiniteQueryOptions } from "@tanstack/react-query";
 
-import { apiRequest } from "@/lib/api/client";
+import { apiRequest } from "@/lib/api/unserved";
 import {
   billingAccountAdminListSchema,
   billingAccountAdminSchema,

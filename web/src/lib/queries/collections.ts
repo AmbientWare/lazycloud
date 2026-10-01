@@ -6,7 +6,7 @@ import {
 } from "@tanstack/react-query";
 import { z } from "zod";
 
-import { apiRequest, postJson, withWorkspace } from "@/lib/api/client";
+import { apiRequest, postJson, withWorkspace } from "@/lib/api/unserved";
 import {
   encodedValueSchema,
   mapCountSchema,

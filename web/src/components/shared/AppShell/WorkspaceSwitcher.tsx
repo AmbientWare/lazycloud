@@ -102,9 +102,7 @@ export function WorkspaceSwitcher({
                 >
                   <span className="min-w-0 flex-1 truncate">{item.name}</span>
                   {item.state === "active" ? null : (
-                    <span className="shrink-0 text-[11px] text-muted-foreground">
-                      {item.state}
-                    </span>
+                    <span className="shrink-0 text-[11px] text-muted-foreground">{item.state}</span>
                   )}
                   {item.id === workspace.id ? (
                     <Check className="text-brand" aria-label="Selected" />

@@ -1,7 +1,7 @@
 import { LiveRelativeTime } from "@/components/shared/LiveTime";
 import { PageFacts } from "@/components/shared/WorkspacePage/PageFacts";
-import type { Deployment } from "@/lib/api/schemas";
 import { countLabel } from "@/lib/format";
+import type { DeployedWorkload } from "@/lib/queries/deployments";
 
 /**
  * What an app is, under its name.
@@ -15,7 +15,7 @@ export function AppDetailFacts({
   workloadCount,
   activeWorkloads,
 }: {
-  latestDeployment: Deployment | undefined;
+  latestDeployment: DeployedWorkload | undefined;
   workloadCount: number;
   activeWorkloads: number;
 }) {
@@ -26,7 +26,8 @@ export function AppDetailFacts({
         countLabel(activeWorkloads, "active version"),
         latestDeployment ? (
           <span>
-            Last deployed <LiveRelativeTime value={latestDeployment.created_at} />
+            Last deployed{" "}
+            <LiveRelativeTime value={latestDeployment.deployed_at ?? latestDeployment.created_at} />
           </span>
         ) : (
           "No deployments yet"

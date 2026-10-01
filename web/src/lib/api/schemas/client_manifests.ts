@@ -2,8 +2,10 @@ import { z } from "zod";
 
 import { jsonValueSchema } from "./json";
 
-// Synced to python/shared/src/shared/http/client_manifests.py
-// Includes the callable contract used by the playground and call examples.
+// The callable contract the SDK records in a function's `client_contract`
+// (python/shared/src/shared/http/client_manifests.py). The public API carries
+// it as an open object, so the dashboard checks its shape here before the
+// playground and call examples read it.
 
 const clientParameterSchema = z
   .object({
@@ -38,34 +40,7 @@ const clientOperationSchema = z
   );
 export type ClientOperation = z.infer<typeof clientOperationSchema>;
 
-const clientContractSchema = z.object({
+export const clientContractSchema = z.object({
   operation: clientOperationSchema,
 });
 export type ClientContract = z.infer<typeof clientContractSchema>;
-
-/** One field of the SDK `Schema` metadata dict (`{"fields": {name: {type}}}`). */
-const manifestSchemaFieldSchema = z.object({
-  type: z.string().default(""),
-});
-export type ManifestSchemaField = z.infer<typeof manifestSchemaFieldSchema>;
-
-const manifestSchemaSchema = z.object({
-  fields: z.record(manifestSchemaFieldSchema).default({}),
-});
-export type ManifestSchema = z.infer<typeof manifestSchemaSchema>;
-
-export const deploymentManifestSchema = z.object({
-  app: z.string(),
-  name: z.string(),
-  kind: z.string(),
-  stub_id: z.string(),
-  deployment_id: z.string(),
-  deployment_version: z.number(),
-  invoke_url: z.string(),
-  invoke_path: z.string(),
-  timeout_seconds: z.number().int().nonnegative().nullable().default(null),
-  methods: z.array(z.string()).default([]),
-  inputs: manifestSchemaSchema.default({ fields: {} }),
-  client_contract: clientContractSchema.nullish(),
-});
-export type DeploymentManifest = z.infer<typeof deploymentManifestSchema>;

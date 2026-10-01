@@ -1,5 +1,5 @@
 import { queryOptions } from "@tanstack/react-query";
-import { apiRequest, postJson, withWorkspace } from "@/lib/api/client";
+import { apiRequest, postJson, withWorkspace } from "@/lib/api/unserved";
 import {
   awsConnectionAuthorizationSchema,
   awsConnectionEnvelopeSchema,
@@ -11,7 +11,7 @@ import {
   unitMachineListSchema,
   type AwsConnection,
 } from "@/lib/api/schemas";
-import { accountQueryKeys, workspaceLiveQueryMeta, workspaceQueryKeys } from "./workspace-keys";
+import { accountQueryKeys, workspaceQueryKeys } from "./workspace-keys";
 
 /**
  * The account's capacity announces every transition it makes, but only to the
@@ -32,7 +32,6 @@ export function machinesQueryOptions() {
     queryKey: accountQueryKeys.compute.machines(),
     queryFn: () => apiRequest("/api/v1/machines/self-hosted?limit=250", unitMachineListSchema),
     refetchInterval: ACCOUNT_CAPACITY_POLL_INTERVAL_MS,
-    meta: workspaceLiveQueryMeta(true),
   });
 }
 
@@ -43,7 +42,6 @@ export function connectionMachinesQueryOptions(enabled = true) {
     enabled,
     queryFn: () => apiRequest("/api/v1/compute/instances", connectionMachineListSchema),
     refetchInterval: ACCOUNT_CAPACITY_POLL_INTERVAL_MS,
-    meta: workspaceLiveQueryMeta(true),
   });
 }
 
@@ -54,7 +52,6 @@ export function computeSummaryQueryOptions(workspaceId: string) {
     queryFn: () =>
       apiRequest(withWorkspace("/api/v1/compute/summary", workspaceId), computeSummarySchema),
     refetchInterval: ACCOUNT_CAPACITY_POLL_INTERVAL_MS,
-    meta: workspaceLiveQueryMeta(true),
   });
 }
 
@@ -64,7 +61,6 @@ export function awsConnectionQueryOptions(enabled = true) {
     enabled,
     queryFn: getAwsConnection,
     refetchInterval: ACCOUNT_CAPACITY_POLL_INTERVAL_MS,
-    meta: workspaceLiveQueryMeta(true),
   });
 }
 

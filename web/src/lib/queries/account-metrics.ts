@@ -1,13 +1,13 @@
 import { queryOptions } from "@tanstack/react-query";
 
-import { apiRequest } from "@/lib/api/client";
+import { apiRequest } from "@/lib/api/unserved";
 import {
   accountActivitySchema,
   accountContainerCountsSchema,
   type AccountActivityMeasure,
 } from "@/lib/api/schemas";
 
-import { accountQueryKeys, workspaceLiveQueryMeta } from "./workspace-keys";
+import { accountQueryKeys } from "./workspace-keys";
 
 /**
  * What this account is holding right now, by live container status.
@@ -21,7 +21,6 @@ export function accountContainerCountsQueryOptions() {
   return queryOptions({
     queryKey: accountQueryKeys.metrics.containerCounts(),
     queryFn: () => apiRequest("/api/v1/metrics/account/containers", accountContainerCountsSchema),
-    meta: workspaceLiveQueryMeta(true),
   });
 }
 
@@ -76,6 +75,5 @@ export function accountActivityQueryOptions(options: {
       );
     },
     staleTime: 30_000,
-    meta: workspaceLiveQueryMeta(true),
   });
 }

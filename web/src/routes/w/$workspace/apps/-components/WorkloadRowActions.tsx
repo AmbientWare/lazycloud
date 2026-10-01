@@ -18,49 +18,26 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { deleteWorkloadMutationOptions } from "@/lib/queries/apps";
-import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
-import { countLabel } from "@/lib/format";
+import { invalidateAppLists } from "@/lib/queries/apps";
+import { deleteDeployment, type DeployedWorkload } from "@/lib/queries/deployments";
 
-import type { WorkloadGroup } from "../-workloads/grouping";
-
-/** Deletes every version of one workload from the app's workload list. */
+/** Deletes one workload, every version of it, from the app's workload list. */
 export function WorkloadRowActions({
-  group,
-  workspaceId,
-  appId,
+  workload,
+  workspace,
 }: {
-  group: WorkloadGroup;
-  workspaceId: string;
-  appId: string;
+  workload: DeployedWorkload;
+  workspace: string;
 }) {
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const queryClient = useQueryClient();
-  const deletable = group.deployments.filter((deployment) => deployment.actions.can_delete);
   const remove = useMutation({
-    ...deleteWorkloadMutationOptions(
-      workspaceId,
-      deletable.map((deployment) => deployment.id),
-    ),
+    mutationFn: () => deleteDeployment(workspace, workload.id),
     onSuccess: async () => {
       setConfirmingDelete(false);
-      await Promise.all([
-        queryClient.invalidateQueries({
-          queryKey: workspaceQueryKeys.deployments.root(workspaceId),
-        }),
-        queryClient.invalidateQueries({
-          queryKey: workspaceQueryKeys.apps.detail(workspaceId, appId),
-        }),
-        queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.apps.summaries(workspaceId) }),
-        queryClient.invalidateQueries({
-          queryKey: workspaceQueryKeys.containers.root(workspaceId),
-        }),
-      ]);
+      await invalidateAppLists(queryClient, workspace);
     },
   });
-  if (deletable.length === 0) {
-    return null;
-  }
   // The row itself is a link; the menu must not follow it.
   const stop = (event: MouseEvent) => {
     event.preventDefault();
@@ -75,7 +52,7 @@ export function WorkloadRowActions({
             variant="ghost"
             size="icon"
             className="size-7"
-            aria-label={`Open actions for ${group.name}`}
+            aria-label={`Open actions for ${workload.name}`}
             title="Workload actions"
             onClick={stop}
           >
@@ -92,10 +69,10 @@ export function WorkloadRowActions({
       <AlertDialog open={confirmingDelete} onOpenChange={setConfirmingDelete}>
         <AlertDialogContent onClick={stop}>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete {group.name}?</AlertDialogTitle>
+            <AlertDialogTitle>Delete {workload.name}?</AlertDialogTitle>
             <AlertDialogDescription>
-              This stops its containers and deletes {countLabel(deletable.length, "version")} of
-              this workload. The app stays.
+              This cancels its queued and running tasks, stops its containers and deletes every
+              version of this workload. The app stays.
             </AlertDialogDescription>
           </AlertDialogHeader>
           {remove.error ? <p className="text-sm text-destructive">{remove.error.message}</p> : null}

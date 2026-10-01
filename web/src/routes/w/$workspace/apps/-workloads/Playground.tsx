@@ -1,93 +1,52 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { ArrowUpRight, Loader2, Play } from "lucide-react";
 
-import { PanelError } from "@/components/shared/PanelError";
 import { ContentTransition } from "@/components/shared/ContentTransition";
-import { ResultBody } from "@/components/shared/TaskDrawer/ResultBody";
+import { PanelError } from "@/components/shared/PanelError";
 import { StatusChip } from "@/components/shared/StatusChip";
+import { ResultBody } from "@/components/shared/TaskDrawer/ResultBody";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { invokeDeployment, invokeFunctionTask, type InvokeResult } from "@/lib/api/invoke";
-import type { DeploymentManifest, JsonValue } from "@/lib/api/schemas";
-import { deploymentManifestQueryOptions } from "@/lib/queries/apps";
-import { taskQueryOptions } from "@/lib/queries/tasks";
+import type { JsonValue } from "@/lib/api/schemas/json";
+import { submitJsonTask, taskQueryOptions, taskResultQueryOptions } from "@/lib/queries/tasks";
 
 import {
   buildBody,
   exampleBody,
   playgroundFields,
-  playgroundPythonOnlyReason,
-  returnsPythonValue,
+  pythonOnlyReason,
+  type DeploymentManifest,
   type PlaygroundField,
 } from "./playground-form";
 
 /**
- * In-UI invoke for a deployed function or endpoint. The form is built
- * from the deployment's recorded callable contract; flat primitive schemas get typed inputs, anything
- * richer gets a raw JSON editor. Invoke fires the real invoke URL with the
- * session bearer token, except for a function returning a Python object,
- * which is invoked through the function API so the task stores the result.
+ * In-UI invoke for a deployed function. The form is built from the callable
+ * contract the deploy recorded; flat primitive parameters get typed inputs,
+ * anything richer gets a raw JSON editor. Invoke admits a task with JSON
+ * arguments against the active release, as an HTTP call would.
  */
 export function Playground({
-  workspaceId,
-  workspaceName,
-  appId,
-  workloadName,
-  workloadKind,
-  deploymentId,
+  workspace,
+  resource,
 }: {
-  workspaceId: string;
-  workspaceName: string;
-  appId: string;
-  workloadName: string;
-  workloadKind: string;
-  deploymentId: string;
+  workspace: string;
+  resource: DeploymentManifest;
 }) {
-  const manifest = useQuery(deploymentManifestQueryOptions(workspaceId, deploymentId));
-
-  if (manifest.isPending) {
-    return (
-      <div className="space-y-3 p-4" aria-hidden="true">
-        <Skeleton className="h-8 w-full" />
-        <Skeleton className="h-24 w-full" />
-      </div>
-    );
-  }
-  if (manifest.isError) {
-    return <PanelError message={manifest.error.message} />;
-  }
-  const pythonRequired = playgroundPythonOnlyReason(manifest.data);
+  const pythonRequired = pythonOnlyReason(resource);
   if (pythonRequired) {
     return <p className="p-4 text-sm text-muted-foreground">{pythonRequired}</p>;
   }
-  return (
-    <PlaygroundForm
-      manifest={manifest.data}
-      workspaceId={workspaceId}
-      workspaceName={workspaceName}
-      appId={appId}
-      workloadName={workloadName}
-      workloadKind={workloadKind}
-    />
-  );
+  return <PlaygroundForm manifest={resource} workspace={workspace} />;
 }
 
 function PlaygroundForm({
   manifest,
-  workspaceId,
-  workspaceName,
-  appId,
-  workloadName,
-  workloadKind,
+  workspace,
 }: {
   manifest: DeploymentManifest;
-  workspaceId: string;
-  workspaceName: string;
-  appId: string;
-  workloadName: string;
-  workloadKind: string;
+  workspace: string;
 }) {
   const fields = useMemo(() => playgroundFields(manifest), [manifest]);
   const seeded = useMemo(() => JSON.stringify(exampleBody(manifest), null, 2), [manifest]);
@@ -95,14 +54,9 @@ function PlaygroundForm({
   const [rawText, setRawText] = useState(seeded);
   const [inputError, setInputError] = useState<string | null>(null);
 
-  const pythonResult = manifest.kind === "function" && returnsPythonValue(manifest);
   const invoke = useMutation({
-    // Same-origin: the published hostname is a different origin to the dashboard,
-    // and a deployed resource owes the dashboard no CORS permission.
     mutationFn: (body: JsonValue) =>
-      pythonResult
-        ? invokeFunctionTask(workspaceId, manifest.stub_id, body)
-        : invokeDeployment(manifest.invoke_path, body),
+      submitJsonTask(workspace, manifest.app, manifest.name, invocationArguments(body)),
   });
 
   type BodyResult = { ok: true; body: JsonValue } | { ok: false; message: string };
@@ -169,18 +123,33 @@ function PlaygroundForm({
           </Button>
           {inputError ? <span className="text-xs text-destructive">{inputError}</span> : null}
         </div>
-        <InvokeOutcome
-          result={invoke.data}
-          error={invoke.isError ? invoke.error : null}
-          workspaceId={workspaceId}
-          workspaceName={workspaceName}
-          appId={appId}
-          workloadName={workloadName}
-          workloadKind={workloadKind}
-        />
+        {invoke.isError ? (
+          <div className="text-xs text-destructive">{invoke.error.message}</div>
+        ) : invoke.data ? (
+          <TaskInvokeOutcome taskId={invoke.data.id} manifest={manifest} workspace={workspace} />
+        ) : null}
       </div>
     </div>
   );
+}
+
+/**
+ * The arguments a JSON body stands for: its `args` and `kwargs` when it names
+ * them, otherwise the body is the keyword arguments, as with an HTTP invoke.
+ */
+function invocationArguments(body: JsonValue): {
+  args: JsonValue[];
+  kwargs: Record<string, JsonValue>;
+} {
+  if (body === null || typeof body !== "object" || Array.isArray(body)) {
+    return { args: [], kwargs: {} };
+  }
+  const { args, kwargs, ...rest } = body;
+  if (args === undefined && kwargs === undefined) return { args: [], kwargs: rest };
+  return {
+    args: Array.isArray(args) ? args : [],
+    kwargs: kwargs !== null && typeof kwargs === "object" && !Array.isArray(kwargs) ? kwargs : {},
+  };
 }
 
 function FieldInput({
@@ -227,100 +196,37 @@ function FieldInput({
   );
 }
 
-function InvokeOutcome({
-  result,
-  error,
-  workspaceId,
-  workspaceName,
-  appId,
-  workloadName,
-  workloadKind,
-}: {
-  result: InvokeResult | undefined;
-  error: Error | null;
-  workspaceId: string;
-  workspaceName: string;
-  appId: string;
-  workloadName: string;
-  workloadKind: string;
-}) {
-  if (error) {
-    return <div className="text-xs text-destructive">{error.message}</div>;
-  }
-  if (!result) return null;
-
-  const meta = (
-    <span className="text-[11px] text-muted-foreground">
-      HTTP {result.status} · {Math.round(result.durationMs)}ms
-    </span>
-  );
-
-  if (result.ok && result.taskId) {
-    return (
-      <TaskInvokeOutcome
-        taskId={result.taskId}
-        meta={meta}
-        workspaceId={workspaceId}
-        workspaceName={workspaceName}
-        appId={appId}
-        workloadName={workloadName}
-        workloadKind={workloadKind}
-      />
-    );
-  }
-
-  return <DirectInvokeOutcome result={result} meta={meta} />;
-}
-
-function DirectInvokeOutcome({ result, meta }: { result: InvokeResult; meta: ReactNode }) {
-  const response = result.json !== undefined ? result.json : result.bodyText || null;
-  return (
-    <section className="overflow-hidden rounded-md border border-border bg-muted/20">
-      <div className="flex min-h-10 flex-wrap items-center gap-2 border-b border-border px-3 py-2">
-        {meta}
-        <StatusChip status={result.ok ? "complete" : "failed"} />
-      </div>
-      <ResultBody
-        error={result.ok ? null : result.bodyText || "Request failed"}
-        result={result.ok ? response : null}
-      />
-    </section>
-  );
-}
-
 function TaskInvokeOutcome({
   taskId,
-  meta,
-  workspaceId,
-  workspaceName,
-  appId,
-  workloadName,
-  workloadKind,
+  manifest,
+  workspace,
 }: {
   taskId: string;
-  meta: ReactNode;
-  workspaceId: string;
-  workspaceName: string;
-  appId: string;
-  workloadName: string;
-  workloadKind: string;
+  manifest: DeploymentManifest;
+  workspace: string;
 }) {
-  const task = useQuery(taskQueryOptions(workspaceId, taskId));
+  const task = useQuery(taskQueryOptions(workspace, taskId));
+  const result = useQuery(
+    taskResultQueryOptions(workspace, taskId, task.data?.status === "succeeded"),
+  );
+  const finished =
+    task.data &&
+    (task.data.failure || task.data.status === "cancelled" || task.data.status === "succeeded");
 
   return (
     <section className="overflow-hidden rounded-md border border-border bg-muted/20">
       <div className="flex min-h-10 flex-wrap items-center gap-2 border-b border-border px-3 py-2">
-        {meta}
+        <span className="mono text-[11px] text-muted-foreground">{taskId.slice(0, 8)}</span>
         {task.data ? (
           <StatusChip status={task.data.status} live={task.data.status === "running"} />
         ) : null}
         <Link
-          to="/w/$workspace/apps/$appId/workloads/$kind/$name/tasks/$taskId"
+          to="/w/$workspace/apps/$app/workloads/$kind/$name/tasks/$taskId"
           params={{
-            workspace: workspaceName,
-            appId,
-            kind: workloadKind,
-            name: workloadName,
+            workspace,
+            app: manifest.app,
+            kind: manifest.kind,
+            name: manifest.name,
             taskId,
           }}
           className="ml-auto flex items-center gap-1 text-xs font-medium text-brand hover:underline"
@@ -330,19 +236,19 @@ function TaskInvokeOutcome({
         </Link>
       </div>
       <ContentTransition pending={task.isPending}>
-        {task.isPending ? (
+        {task.isPending || (task.data?.status === "succeeded" && result.isPending) ? (
           <div className="space-y-2 p-3" aria-label="Loading task result">
             <Skeleton className="h-3 w-24" />
             <Skeleton className="h-16 w-full" />
           </div>
         ) : task.isError ? (
           <PanelError message={task.error.message} />
-        ) : task.data.error || (task.data.result !== null && task.data.result !== undefined) ? (
-          <ResultBody error={task.data.error} result={task.data.result} />
+        ) : result.isError ? (
+          <PanelError message={result.error.message} />
+        ) : finished ? (
+          <ResultBody failure={task.data.failure} payload={result.data} />
         ) : (
-          <p className="p-3 text-xs text-muted-foreground">
-            {task.data.status === "complete" ? "The task returned no result." : "Result pending."}
-          </p>
+          <p className="p-3 text-xs text-muted-foreground">Result pending.</p>
         )}
       </ContentTransition>
     </section>

@@ -1,7 +1,9 @@
 import { mutationOptions, queryOptions } from "@tanstack/react-query";
 
-import { apiRequest, postJson, withWorkspace } from "@/lib/api/client";
+import { apiRequest, postJson, withWorkspace } from "@/lib/api/unserved";
 import {
+  containerDetailSchema,
+  containerSchema,
   podCreateImageSchema,
   podEmptyMutationSchema,
   podMemorySnapshotSchema,
@@ -10,7 +12,7 @@ import {
   sandboxListSchema,
 } from "@/lib/api/schemas";
 
-import { workspaceLiveQueryMeta, workspaceQueryKeys } from "./workspace-keys";
+import { workspaceQueryKeys } from "./workspace-keys";
 
 export function sandboxesQueryOptions(
   workspaceId: string,
@@ -29,7 +31,29 @@ export function sandboxesQueryOptions(
         withWorkspace(`/api/v1/stubs/sandboxes?${params.toString()}`, workspaceId),
         sandboxListSchema,
       ),
-    meta: workspaceLiveQueryMeta(true),
+  });
+}
+
+/** A sandbox container with its image, command, ports and lineage. */
+export function sandboxContainerQueryOptions(workspace: string, containerId: string) {
+  return queryOptions({
+    queryKey: workspaceQueryKeys.sandboxes.container(workspace, containerId),
+    queryFn: () =>
+      apiRequest(
+        withWorkspace(`/api/v1/containers/${containerId}`, workspace),
+        containerDetailSchema,
+      ),
+  });
+}
+
+export function stopSandboxMutationOptions(workspace: string, containerId: string) {
+  return mutationOptions({
+    mutationFn: () =>
+      postJson(
+        withWorkspace(`/api/v1/containers/${encodeURIComponent(containerId)}/stop`, workspace),
+        containerSchema,
+        {},
+      ),
   });
 }
 

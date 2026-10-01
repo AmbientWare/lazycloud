@@ -1,5 +1,4 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
-import { useInfiniteQuery } from "@tanstack/react-query";
 import { Download, Pause, Play, Search } from "lucide-react";
 
 import { ApiErrorNotice } from "@/components/shared/ApiErrorNotice";
@@ -7,75 +6,46 @@ import { CopyButton } from "@/components/shared/CopyButton";
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useEventStream } from "@/hooks/useEventStream";
-import { logRecordSchema, type LogRecord } from "@/lib/api/schemas";
-import { withWorkspace } from "@/lib/api/client";
-import { downloadBlob } from "@/lib/files";
 import {
-  logHistoryQueryOptions,
-  logScopeParams,
-  selectLogHistory,
+  LOG_TAIL,
+  useLogStream,
+  type LogEntry,
   type LogScope,
-} from "@/lib/queries/logs";
+  type LogStreamStatus,
+} from "@/hooks/useLogStream";
+import { downloadBlob } from "@/lib/files";
 import { cn } from "@/lib/utils";
 
 const MAX_RENDERED_LINES = 1_000;
-const MAX_LIVE_RECORDS = 2_000;
 
 export function LogViewer({
-  workspaceId,
+  workspace,
   scope,
   className,
 }: {
-  workspaceId: string;
+  workspace: string;
   scope: LogScope;
   className?: string;
 }) {
   const [follow, setFollow] = useState(true);
   const [filter, setFilter] = useState("");
-  const [liveRecords, setLiveRecords] = useState<LogRecord[]>([]);
   const scrollRef = useRef<HTMLDivElement | null>(null);
-
-  const history = useInfiniteQuery(logHistoryQueryOptions(workspaceId, scope));
-  const historyList = useMemo(
-    () => selectLogHistory(history.data, history.hasNextPage),
-    [history.data, history.hasNextPage],
-  );
-
-  const streamParams = logScopeParams(scope);
-  streamParams.set("follow", "true");
-  streamParams.set("limit", "200");
-  const streamUrl = withWorkspace(`/api/v1/logs/stream?${streamParams.toString()}`, workspaceId);
-
-  const streamStatus = useEventStream(follow ? streamUrl : null, {
-    enabled: follow,
-    onEvent: (event) => {
-      const parsed = parseLogEvent(event.data);
-      if (!parsed) return;
-      setLiveRecords((previous) => {
-        if (previous.some((record) => recordKey(record) === recordKey(parsed))) return previous;
-        const next = [...previous, parsed];
-        return next.length > MAX_LIVE_RECORDS ? next.slice(-MAX_LIVE_RECORDS) : next;
-      });
-    },
-  });
-
-  const records = useMemo(() => {
-    return mergeLogRecords(historyList.items, liveRecords);
-  }, [historyList.items, liveRecords]);
+  const { entries, status, error } = useLogStream(workspace, scope, follow);
 
   const visible = useMemo(() => {
     const needle = filter.trim().toLowerCase();
     const filtered = needle
-      ? records.filter((record) => logSearchText(record).includes(needle))
-      : records;
+      ? entries.filter((entry) => logSearchText(entry).includes(needle))
+      : entries;
     return filtered.slice(-MAX_RENDERED_LINES);
-  }, [filter, records]);
+  }, [filter, entries]);
 
   useLayoutEffect(() => {
     const node = scrollRef.current;
     if (follow && node) node.scrollTop = node.scrollHeight;
   }, [follow, visible]);
+
+  const loading = entries.length === 0 && status === "connecting";
 
   return (
     <div className={cn("flex min-h-0 flex-col", className)}>
@@ -101,37 +71,37 @@ export function LogViewer({
         {follow ? (
           <span
             className="flex items-center gap-1.5 text-[11px] text-muted-foreground"
-            data-stream-stale={streamStatus === "reconnecting" ? "" : undefined}
+            data-stream-stale={status === "reconnecting" ? "" : undefined}
           >
             <span
               className={cn(
                 "size-1.5 rounded-full",
-                streamStatus === "open"
+                status === "open"
                   ? "pulse-live bg-positive"
-                  : streamStatus === "reconnecting"
+                  : status === "reconnecting"
                     ? "bg-warning"
                     : "bg-muted-foreground/50",
               )}
               aria-hidden="true"
             />
-            {streamStatusLabel(streamStatus)}
+            {streamStatusLabel(status)}
           </span>
         ) : null}
         <CopyButton
-          value={() => formatLogRecords(visible)}
+          value={() => formatLogEntries(visible)}
           label="visible logs"
           disabled={visible.length === 0}
         />
-        {records.length > MAX_RENDERED_LINES && !filter ? (
+        {entries.length >= LOG_TAIL && !filter ? (
           <span className="text-[11px] text-muted-foreground">Latest 1,000 lines</span>
         ) : null}
         <Button
           variant="ghost"
           size="icon"
-          disabled={records.length === 0}
+          disabled={entries.length === 0}
           aria-label="Download loaded logs"
           title="Download loaded logs"
-          onClick={() => downloadLogs(records)}
+          onClick={() => downloadLogs(entries)}
         >
           <Download className="size-3.5" />
         </Button>
@@ -141,38 +111,14 @@ export function LogViewer({
         data-log-scroll=""
         className="min-h-0 flex-1 overflow-auto bg-background/60"
       >
-        {!history.isPending &&
-        (!history.isError || history.isFetchNextPageError) &&
-        historyList.nextCursor ? (
-          <div className="flex justify-center border-b border-border/60 p-2">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              disabled={history.isFetchingNextPage}
-              onClick={() => void history.fetchNextPage()}
-            >
-              {history.isFetchNextPageError
-                ? "Retry loading older logs"
-                : history.isFetchingNextPage
-                  ? "Loading older logs"
-                  : "Load older logs"}
-            </Button>
-          </div>
-        ) : null}
-        {history.isPending ? (
+        {loading ? (
           <div className="space-y-1.5 p-2" aria-hidden="true">
             {[80, 60, 90, 45, 70].map((width, index) => (
               <Skeleton key={index} className="h-4" style={{ width: `${width}%` }} />
             ))}
           </div>
-        ) : history.isError && !history.isFetchNextPageError ? (
-          <ApiErrorNotice
-            error={history.error}
-            title="Logs could not be loaded"
-            onRetry={() => void history.refetch()}
-            retrying={history.isFetching}
-          />
+        ) : status === "error" && entries.length === 0 ? (
+          <ApiErrorNotice error={error} title="Logs could not be loaded" />
         ) : visible.length === 0 ? (
           <PanelEmpty message="No log lines" className="h-32" />
         ) : (
@@ -181,11 +127,11 @@ export function LogViewer({
             role="list"
             aria-label="Log output"
           >
-            {visible.map((record, index) => (
+            {visible.map((entry, index) => (
               <LogLine
-                key={recordKey(record)}
-                record={record}
-                showDate={index === 0 || logDateKey(record) !== logDateKey(visible[index - 1])}
+                key={entry.id}
+                entry={entry}
+                showDate={index === 0 || logDateKey(entry) !== logDateKey(visible[index - 1])}
               />
             ))}
           </div>
@@ -195,25 +141,24 @@ export function LogViewer({
   );
 }
 
-function streamStatusLabel(status: ReturnType<typeof useEventStream>): string {
+function streamStatusLabel(status: LogStreamStatus): string {
   if (status === "open") return "Live";
   if (status === "reconnecting") return "Reconnecting · loaded logs";
   if (status === "connecting") return "Connecting";
   if (status === "error") return "Disconnected";
-  return status === "closed" ? "Closed" : "Paused";
+  return "Closed";
 }
 
-function LogLine({ record, showDate }: { record: LogRecord; showDate: boolean }) {
-  const stream = record.stream.trim().toLowerCase();
-  const showStream = Boolean(stream && stream !== "stdout");
-  const stderr = stream === "stderr";
-  const system = stream === "system";
+function LogLine({ entry, showDate }: { entry: LogEntry; showDate: boolean }) {
+  const showStream = entry.stream !== "stdout";
+  const stderr = entry.stream === "stderr";
+  const system = entry.stream === "system";
 
   return (
     <div role="listitem">
       {showDate ? (
         <div className="flex items-center gap-2 px-3 py-1.5 text-[10px] text-muted-foreground">
-          <span className="shrink-0">{formatLogDate(record.timestamp)}</span>
+          <span className="shrink-0">{formatLogDate(entry.time)}</span>
           <span className="h-px min-w-4 flex-1 bg-border/70" aria-hidden="true" />
         </div>
       ) : null}
@@ -225,12 +170,12 @@ function LogLine({ record, showDate }: { record: LogRecord; showDate: boolean })
         )}
       >
         <time
-          dateTime={record.timestamp}
-          title={record.timestamp}
-          aria-label={`Log timestamp ${record.timestamp}`}
+          dateTime={entry.time}
+          title={entry.time}
+          aria-label={`Log timestamp ${entry.time}`}
           className="shrink-0 tabular-nums text-muted-foreground"
         >
-          {formatLogClock(record.timestamp)}
+          {formatLogClock(entry.time)}
         </time>
         <span className="min-w-0">
           {showStream ? (
@@ -241,10 +186,10 @@ function LogLine({ record, showDate }: { record: LogRecord; showDate: boolean })
                 system && "text-brand",
               )}
             >
-              {stream}
+              {entry.stream}
             </span>
           ) : null}
-          <span>{record.message}</span>
+          <span>{entry.data}</span>
         </span>
       </div>
     </div>
@@ -253,8 +198,7 @@ function LogLine({ record, showDate }: { record: LogRecord; showDate: boolean })
 
 function formatLogClock(timestamp: string): string {
   const parsed = new Date(timestamp);
-  if (!Number.isNaN(parsed.getTime())) return parsed.toISOString().slice(11, 19);
-  return timestamp.includes("T") ? timestamp.split("T", 2)[1].slice(0, 8) : timestamp;
+  return Number.isNaN(parsed.getTime()) ? timestamp : parsed.toISOString().slice(11, 19);
 }
 
 function formatLogDate(timestamp: string): string {
@@ -268,79 +212,27 @@ function formatLogDate(timestamp: string): string {
   }).format(parsed);
 }
 
-function logDateKey(record: LogRecord | undefined): string {
-  if (!record) return "";
-  const parsed = new Date(record.timestamp);
+function logDateKey(entry: LogEntry | undefined): string {
+  if (!entry) return "";
+  const parsed = new Date(entry.time);
   return Number.isNaN(parsed.getTime())
-    ? record.timestamp.split("T", 1)[0]
+    ? entry.time.split("T", 1)[0]
     : parsed.toISOString().slice(0, 10);
 }
 
-function logSearchText(record: LogRecord): string {
-  return [
-    record.timestamp,
-    record.stream,
-    record.message,
-    record.app_id,
-    record.stub_id,
-    record.task_id,
-    record.container_id,
-  ]
-    .join(" ")
-    .toLowerCase();
+function logSearchText(entry: LogEntry): string {
+  return [entry.time, entry.stream, entry.data, entry.task_id].join(" ").toLowerCase();
 }
 
-function parseLogEvent(data: string): LogRecord | null {
-  try {
-    const parsed = logRecordSchema.safeParse(JSON.parse(data));
-    return parsed.success ? parsed.data : null;
-  } catch {
-    return null;
-  }
-}
-
-function mergeLogRecords(history: LogRecord[], live: LogRecord[]): LogRecord[] {
-  const seen = new Set<string>();
-  const merged: LogRecord[] = [];
-  for (const record of [...history, ...live]) {
-    const key = recordKey(record);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    merged.push(record);
-  }
-  merged.sort(compareLogRecords);
-  return merged;
-}
-
-function recordKey(record: LogRecord): string {
-  return record.id || `${record.timestamp}-${record.seq_num}-${record.message}`;
-}
-
-function compareLogRecords(a: LogRecord, b: LogRecord): number {
-  if (a.timestamp !== b.timestamp) return a.timestamp.localeCompare(b.timestamp);
-  return a.seq_num - b.seq_num;
-}
-
-function formatLogRecords(records: LogRecord[]): string {
-  return records
-    .map((record) => {
-      const context = [
-        record.stream,
-        record.app_id,
-        record.stub_id,
-        record.task_id,
-        record.container_id,
-      ]
-        .filter(Boolean)
-        .join(" ");
-      return `${record.timestamp}${context ? ` ${context}` : ""} ${record.message}`;
-    })
+function formatLogEntries(entries: LogEntry[]): string {
+  return entries
+    .map((entry) => `${entry.time} ${entry.stream} ${entry.task_id} ${entry.data}`)
     .join("\n");
 }
 
-function downloadLogs(records: LogRecord[]): void {
+function downloadLogs(entries: LogEntry[]): void {
   downloadBlob(
     "task-logs.txt",
-    new Blob([formatLogRecords(records)], { type: "text/plain;charset=utf-8" }),
+    new Blob([formatLogEntries(entries)], { type: "text/plain;charset=utf-8" }),
   );
 }

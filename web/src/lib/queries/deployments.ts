@@ -1,128 +1,129 @@
 import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
 
-import { apiRequest, postJson, withWorkspace } from "@/lib/api/client";
-import {
-  deploymentListSchema,
-  devboxSchema,
-  type Deployment,
-  type DevboxPhase,
-} from "@/lib/api/schemas";
+import { api, ok, type Schemas } from "@/lib/api/client";
 
-import {
-  LIVE_LIST_MAX_PAGES,
-  nextListCursor,
-  selectInfiniteList,
-  type InfiniteListQueryData,
-} from "./infinite-list";
-import { workspaceLiveQueryMeta, workspaceQueryKeys } from "./workspace-keys";
+import { LIVE_LIST_MAX_PAGES, nextPageCursor, selectPages } from "./infinite-list";
+import { workspaceQueryKeys } from "./workspace-keys";
+
+export type DeployedWorkload = Schemas["DeployedWorkload"];
 
 export type DeploymentListOptions = {
-  appId?: string;
+  app?: string;
   name?: string;
-  kind?: string;
   limit?: number;
 };
 
-export function deploymentsInfiniteQueryOptions(
-  workspaceId: string,
-  options: DeploymentListOptions = {},
-) {
+/** Deployed workloads, one row per workload with its active version. */
+export function deploymentsQueryOptions(workspace: string, options: DeploymentListOptions = {}) {
+  const limit = options.limit ?? 100;
   return infiniteQueryOptions({
-    queryKey: workspaceQueryKeys.deployments.list(workspaceId, {
-      limit: options.limit ?? 100,
-      appId: options.appId ?? null,
+    queryKey: workspaceQueryKeys.deployments.list(workspace, {
+      limit,
+      app: options.app ?? null,
       name: options.name ?? null,
-      kind: options.kind ?? null,
     }),
     initialPageParam: "",
-    queryFn: ({ pageParam }) => {
-      const params = deploymentListParams(options, pageParam);
-      return apiRequest(
-        withWorkspace(`/api/v1/deployments?${params.toString()}`, workspaceId),
-        deploymentListSchema,
-      );
-    },
-    getNextPageParam: nextListCursor,
+    queryFn: ({ pageParam }) =>
+      ok(
+        api.GET("/v1/workspaces/{workspace}/deployments", {
+          params: {
+            path: { workspace },
+            query: { app: options.app, name: options.name, limit, cursor: pageParam || undefined },
+          },
+        }),
+      ),
+    getNextPageParam: nextPageCursor,
     maxPages: LIVE_LIST_MAX_PAGES,
-    meta: workspaceLiveQueryMeta(true),
   });
 }
 
-/**
- * A devbox's status, from the endpoint cheap enough to poll.
- *
- * Connections and the idle deadline change without a workspace event, so it
- * refreshes on an interval: quickly while the devbox is changing state or the
- * caller is waiting for a change it asked for, slowly once it has settled, and
- * not at all while the tab is hidden.
- */
-export function devboxQueryOptions(
-  workspaceId: string,
-  deploymentId: string,
-  { awaitingChange = false }: { awaitingChange?: boolean } = {},
-) {
-  return queryOptions({
-    queryKey: workspaceQueryKeys.deployments.devbox(workspaceId, deploymentId),
-    queryFn: () =>
-      apiRequest(
-        withWorkspace(
-          `/api/v1/deployments/${encodeURIComponent(deploymentId)}/devbox`,
-          workspaceId,
-        ),
-        devboxSchema,
-      ),
-    refetchInterval: (query) =>
-      !awaitingChange && query.state.data && SETTLED_PHASES.has(query.state.data.phase)
-        ? SETTLED_REFRESH_MS
-        : CHANGING_REFRESH_MS,
-    meta: workspaceLiveQueryMeta(false),
-  });
-}
-
-/** Ask a stopped devbox to start; the server answers with its status without waiting. */
-export function startDevboxMutationOptions(workspaceId: string, deploymentId: string) {
-  return {
-    mutationFn: () =>
-      postJson(
-        withWorkspace(
-          `/api/v1/deployments/${encodeURIComponent(deploymentId)}/devbox/start`,
-          workspaceId,
-        ),
-        devboxSchema,
-      ),
-  };
-}
-
-/** Stop a devbox's container now; its deployment stays on. */
-export function stopDevboxMutationOptions(workspaceId: string, deploymentId: string) {
-  return {
-    mutationFn: () =>
-      postJson(
-        withWorkspace(
-          `/api/v1/deployments/${encodeURIComponent(deploymentId)}/devbox/stop`,
-          workspaceId,
-        ),
-        devboxSchema,
-      ),
-  };
-}
-
-const SETTLED_PHASES = new Set<DevboxPhase>(["running", "stopped", "failed"]);
-const SETTLED_REFRESH_MS = 15_000;
-const CHANGING_REFRESH_MS = 3_000;
-
-export function selectDeploymentList(
-  data: InfiniteListQueryData<Deployment> | undefined,
+export function selectDeployments(
+  data: { pages: readonly Schemas["DeploymentPage"][] } | undefined,
   hasNextPage: boolean | undefined,
 ) {
-  return selectInfiniteList(data, hasNextPage, (deployment) => deployment.id);
+  return selectPages(
+    data,
+    (page) => page.deployments,
+    hasNextPage,
+    (item) => item.id,
+  );
 }
 
-function deploymentListParams(options: DeploymentListOptions, cursor: string): URLSearchParams {
-  const params = new URLSearchParams({ limit: String(options.limit ?? 100) });
-  if (cursor) params.set("cursor", cursor);
-  if (options.appId) params.set("app_id", options.appId);
-  if (options.name) params.set("name", options.name);
-  if (options.kind) params.set("kind", options.kind);
-  return params;
+/** A deployed function with its active release and schedule. */
+export function functionQueryOptions(workspace: string, app: string, name: string) {
+  return queryOptions({
+    queryKey: workspaceQueryKeys.workloads.detail(workspace, app, name),
+    queryFn: () =>
+      ok(
+        api.GET("/v1/workspaces/{workspace}/apps/{app}/functions/{function}", {
+          params: { path: { workspace, app, function: name } },
+        }),
+      ),
+  });
+}
+
+/** Deployed versions of a workload, newest first. */
+export function versionsQueryOptions(workspace: string, deployment: string) {
+  return infiniteQueryOptions({
+    queryKey: workspaceQueryKeys.deployments.versions(workspace, deployment),
+    initialPageParam: "",
+    queryFn: ({ pageParam }) =>
+      ok(
+        api.GET("/v1/workspaces/{workspace}/deployments/{deployment}/versions", {
+          params: {
+            path: { workspace, deployment },
+            query: { limit: 100, cursor: pageParam || undefined },
+          },
+        }),
+      ),
+    getNextPageParam: nextPageCursor,
+  });
+}
+
+export function selectVersions(
+  data: { pages: readonly Schemas["VersionPage"][] } | undefined,
+  hasNextPage: boolean | undefined,
+) {
+  return selectPages(
+    data,
+    (page) => page.versions,
+    hasNextPage,
+    (item) => item.release_id,
+  );
+}
+
+const deploymentPath = (workspace: string, deployment: string) => ({
+  params: { path: { workspace, deployment } },
+});
+
+/** Start the workload, optionally making an earlier version active first. */
+export function startDeployment(
+  workspace: string,
+  deployment: string,
+  version?: number,
+): Promise<DeployedWorkload> {
+  return ok(
+    api.POST("/v1/workspaces/{workspace}/deployments/{deployment}/start", {
+      ...deploymentPath(workspace, deployment),
+      body: version === undefined ? {} : { version },
+    }),
+  );
+}
+
+export function stopDeployment(workspace: string, deployment: string): Promise<DeployedWorkload> {
+  return ok(
+    api.POST(
+      "/v1/workspaces/{workspace}/deployments/{deployment}/stop",
+      deploymentPath(workspace, deployment),
+    ),
+  );
+}
+
+export function deleteDeployment(workspace: string, deployment: string): Promise<DeployedWorkload> {
+  return ok(
+    api.DELETE(
+      "/v1/workspaces/{workspace}/deployments/{deployment}",
+      deploymentPath(workspace, deployment),
+    ),
+  );
 }

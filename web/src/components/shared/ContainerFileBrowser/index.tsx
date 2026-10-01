@@ -64,17 +64,17 @@ export function ContainerFileBrowser({
   const columns = writable
     ? "grid-cols-[minmax(0,1fr)_4.5rem_7rem_3.75rem]"
     : "grid-cols-[minmax(0,1fr)_4.5rem_7rem_1.75rem]";
-  const query = useQuery(containerFilesQueryOptions(workspace.id, containerId, path));
+  const query = useQuery(containerFilesQueryOptions(workspace.name, containerId, path));
   const invalidateFiles = () =>
     queryClient.invalidateQueries({
-      queryKey: workspaceQueryKeys.containers.files(workspace.id, containerId),
+      queryKey: workspaceQueryKeys.containers.files(workspace.name, containerId),
     });
   const upload = useMutation({
-    ...uploadContainerFileMutationOptions(workspace.id, containerId),
+    ...uploadContainerFileMutationOptions(workspace.name, containerId),
     onSuccess: invalidateFiles,
   });
   const remove = useMutation({
-    ...deleteContainerFileMutationOptions(workspace.id, containerId),
+    ...deleteContainerFileMutationOptions(workspace.name, containerId),
     onSuccess: async () => {
       setDeleteTarget(null);
       await invalidateFiles();
@@ -90,7 +90,7 @@ export function ContainerFileBrowser({
     const target = joinPath(path, file.name);
     setDownloadError(null);
     try {
-      await saveContainerFile(workspace.id, containerId, target, file.name);
+      await saveContainerFile(workspace.name, containerId, target, file.name);
     } catch (error) {
       setDownloadError(error instanceof Error ? error.message : "Failed to download file");
     }
@@ -282,7 +282,7 @@ export function ContainerFileBrowser({
       {preview ? (
         <ContainerFilePreviewDialog
           key={preview.path}
-          workspaceId={workspace.id}
+          workspaceId={workspace.name}
           containerId={containerId}
           target={preview}
           onClose={() => setPreview(null)}

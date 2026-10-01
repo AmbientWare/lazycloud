@@ -1,4 +1,5 @@
-import type { ContainerLifecycleMetric } from "@/lib/api/schemas";
+/** A span in which the container was being prepared: created until ready. */
+export type PreparationWindow = { start_time: string; end_time: string };
 
 export type ExecutionPhase = {
   kind: "queued" | "startup" | "execution";
@@ -39,7 +40,7 @@ export function executionPhaseDomain(task: PhaseInput, nowMs: number): Execution
  */
 export function executionPhases(
   task: PhaseInput,
-  lifecycle: ContainerLifecycleMetric[],
+  lifecycle: readonly PreparationWindow[],
   nowMs: number,
   timelineDomain?: ExecutionPhaseDomain,
 ): ExecutionPhase[] {
@@ -96,6 +97,19 @@ function phase(
   endMs: number,
 ): Omit<ExecutionPhase, "leftPct" | "widthPct"> {
   return { kind, label, startMs, endMs, durationMs: endMs - startMs };
+}
+
+/**
+ * The container's preparation, from its creation until it was ready, for a
+ * task whose container started for it. A reused container falls outside the
+ * task's window and is ignored by `executionPhases`.
+ */
+export function preparationWindows(
+  container: { created_at: string; ready_at?: string } | undefined,
+): PreparationWindow[] {
+  return container?.ready_at
+    ? [{ start_time: container.created_at, end_time: container.ready_at }]
+    : [];
 }
 
 function parseMs(value: string | null | undefined): number | null {

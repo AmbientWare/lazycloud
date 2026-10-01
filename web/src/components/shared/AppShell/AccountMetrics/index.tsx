@@ -9,7 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ContentTransition } from "@/components/shared/ContentTransition";
 import { shareLabel } from "@/lib/format";
 import { billingSummaryQueryOptions } from "@/lib/queries/billing";
-import { taskMetricsQueryOptions } from "@/lib/queries/tasks";
+import { taskMetricsQueryOptions } from "@/lib/queries/metrics";
 import { accountContainerCountsQueryOptions } from "@/lib/queries/account-metrics";
 import { useWorkspace } from "@/lib/workspace-context";
 import { cn } from "@/lib/utils";
@@ -72,7 +72,7 @@ function ReadingStrip() {
   const { workspace } = useWorkspace();
   const held = useQuery(accountContainerCountsQueryOptions());
   const billing = useQuery(billingSummaryQueryOptions());
-  const tasks = useQuery(taskMetricsQueryOptions(workspace.id, TASK_METRICS_HOURS));
+  const tasks = useQuery(taskMetricsQueryOptions(workspace.name, TASK_METRICS_HOURS));
 
   const entitlements = billing.data?.entitlements;
   const usage = billing.data?.usage;

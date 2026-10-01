@@ -8,11 +8,12 @@ import { SecretsTab } from "./SecretsTab";
 
 const secret = {
   name: "API_KEY",
-  value: "********",
   created_at: "2026-09-07T00:00:00Z",
   updated_at: "2026-09-07T00:00:00Z",
-  workloads: [],
 };
+
+const page = (secrets: (typeof secret)[]) => ({ pages: [{ secrets }], pageParams: [""] });
+const revealed = (value: string) => Response.json({ ...secret, value });
 
 beforeEach(() => vi.useFakeTimers());
 
@@ -23,11 +24,11 @@ it("keeps a pending reveal masked during deletion and allows a fresh reveal afte
   });
   vi.stubGlobal("fetch", () => response);
   const client = testQueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
-  client.setQueryData(workspaceQueryKeys.storage.secrets("workspace-1"), { secrets: [secret] });
+  client.setQueryData(workspaceQueryKeys.storage.secrets("workspace"), page([secret]));
   render(
     <QueryClientProvider client={client}>
       <SecretsTab
-        workspaceId="workspace-1"
+        workspaceId="workspace"
         workspaceName="workspace"
         creating={false}
         onCreatingChange={() => {}}
@@ -38,7 +39,7 @@ it("keeps a pending reveal masked during deletion and allows a fresh reveal afte
   fireEvent.click(screen.getByRole("button", { name: "Reveal secret API_KEY" }));
   fireEvent.click(screen.getByRole("button", { name: "Delete secret API_KEY" }));
   await act(async () => {
-    resolveReveal?.(Response.json({ secret: { name: secret.name, value: "test-only-old-value" } }));
+    resolveReveal?.(revealed("test-only-old-value"));
   });
   expect(screen.queryByText("test-only-old-value")).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Reveal secret API_KEY" })).toBeDisabled();
@@ -56,15 +57,15 @@ it("keeps a pending reveal masked during deletion and allows a fresh reveal afte
   fireEvent.click(screen.getByRole("button", { name: "Keep" }));
   expect(screen.getByRole("button", { name: "Reveal secret API_KEY" })).toBeDisabled();
   await act(async () => {
-    finishDelete?.(Response.json({ detail: "Deletion failed" }, { status: 503 }));
+    finishDelete?.(
+      Response.json({ code: "unavailable", message: "Deletion failed" }, { status: 503 }),
+    );
     await vi.advanceTimersByTimeAsync(1);
   });
   expect(screen.getByText("Deletion failed")).toBeVisible();
   expect(screen.getByRole("button", { name: "Keep" })).toBeEnabled();
   fireEvent.click(screen.getByRole("button", { name: "Keep" }));
-  response = Promise.resolve(
-    Response.json({ secret: { name: secret.name, value: "test-only-current-value" } }),
-  );
+  response = Promise.resolve(revealed("test-only-current-value"));
   await act(async () =>
     fireEvent.click(screen.getByRole("button", { name: "Reveal secret API_KEY" })),
   );
@@ -74,17 +75,15 @@ it("keeps a pending reveal masked during deletion and allows a fresh reveal afte
 });
 
 it("clears revealed values on rotation and ignores responses for the previous version", async () => {
-  let response = Promise.resolve(
-    Response.json({ secret: { name: secret.name, value: "test-only-old-value" } }),
-  );
+  let response = Promise.resolve(revealed("test-only-old-value"));
   vi.stubGlobal("fetch", () => response);
   const client = testQueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
-  const queryKey = workspaceQueryKeys.storage.secrets("workspace-1");
-  client.setQueryData(queryKey, { secrets: [secret] });
+  const queryKey = workspaceQueryKeys.storage.secrets("workspace");
+  client.setQueryData(queryKey, page([secret]));
   render(
     <QueryClientProvider client={client}>
       <SecretsTab
-        workspaceId="workspace-1"
+        workspaceId="workspace"
         workspaceName="workspace"
         creating={false}
         onCreatingChange={() => {}}
@@ -97,9 +96,7 @@ it("clears revealed values on rotation and ignores responses for the previous ve
   );
   expect(screen.getByText("test-only-old-value")).toBeVisible();
   await act(async () => {
-    client.setQueryData(queryKey, {
-      secrets: [{ ...secret, updated_at: "2026-09-07T00:01:00Z" }],
-    });
+    client.setQueryData(queryKey, page([{ ...secret, updated_at: "2026-09-07T00:01:00Z" }]));
     await vi.advanceTimersByTimeAsync(1);
   });
   expect(screen.queryByText("test-only-old-value")).not.toBeInTheDocument();
@@ -110,15 +107,11 @@ it("clears revealed values on rotation and ignores responses for the previous ve
   });
   fireEvent.click(screen.getByRole("button", { name: "Reveal secret API_KEY" }));
   await act(async () => {
-    client.setQueryData(queryKey, {
-      secrets: [{ ...secret, updated_at: "2026-09-07T00:02:00Z" }],
-    });
+    client.setQueryData(queryKey, page([{ ...secret, updated_at: "2026-09-07T00:02:00Z" }]));
     await vi.advanceTimersByTimeAsync(1);
   });
   await act(async () => {
-    resolveReveal?.(
-      Response.json({ secret: { name: secret.name, value: "test-only-stale-value" } }),
-    );
+    resolveReveal?.(revealed("test-only-stale-value"));
   });
   expect(screen.queryByText("test-only-stale-value")).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Reveal secret API_KEY" })).toBeEnabled();

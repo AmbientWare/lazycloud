@@ -1,4 +1,17 @@
-import type { CallGraphNode } from "@/lib/api/schemas";
+/** One task of a call graph and the tasks it spawned. */
+export type CallGraphNode = {
+  task_id: string;
+  container_id: string | null;
+  parent_task_id: string;
+  root_task_id: string;
+  status: string;
+  name: string;
+  function_name: string;
+  created_at: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  children: CallGraphNode[];
+};
 
 export type TimelineRow = {
   node: CallGraphNode;
@@ -119,16 +132,13 @@ export function elapsedLabel(milliseconds: number): string {
 
 export function statusColor(status: string): string {
   switch (status) {
-    case "complete":
+    case "succeeded":
       return "var(--positive)";
     case "running":
       return "var(--positive)";
-    case "retry":
-    case "pending":
+    case "queued":
       return "var(--warning)";
     case "failed":
-    case "timeout":
-    case "expired":
       return "var(--destructive)";
     case "cancelled":
       return "var(--muted-foreground)";

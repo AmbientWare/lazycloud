@@ -1,7 +1,37 @@
-import type { DeploymentManifest, JsonValue } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
+import { clientContractSchema, type ClientContract } from "@/lib/api/schemas/client_manifests";
+import type { JsonValue } from "@/lib/api/schemas/json";
 
 /** Deployment kinds the playground can invoke with a JSON payload. */
 export const PLAYGROUND_KINDS = new Set(["function", "endpoint"]);
+
+/** What the playground and call examples know about one deployed workload. */
+export type DeploymentManifest = {
+  app: string;
+  name: string;
+  /** Endpoint and ASGI manifests arrive with the endpoints API. */
+  kind: "function" | "endpoint" | "asgi";
+  handler: string;
+  timeout_seconds: number | null;
+  /** The HTTP invoke URL, once the platform serves one for the workload. */
+  invoke_url: string | null;
+  client_contract: ClientContract | null;
+};
+
+/** The manifest of a deployed function, from its active release. */
+export function functionManifest(fn: Schemas["Function"]): DeploymentManifest {
+  const spec = fn.active_release.spec;
+  const contract = clientContractSchema.safeParse(spec.client_contract);
+  return {
+    app: fn.app,
+    name: fn.name,
+    kind: "function",
+    handler: spec.handler,
+    timeout_seconds: spec.timeout_seconds ?? null,
+    invoke_url: null,
+    client_contract: contract.success ? contract.data : null,
+  };
+}
 
 const PRIMITIVE_TYPES = ["string", "integer", "number", "boolean"] as const;
 type PrimitiveType = (typeof PRIMITIVE_TYPES)[number];
@@ -13,20 +43,6 @@ export function pythonOnlyReason(manifest: DeploymentManifest): string | null {
   const reasons = parameterPythonReasons(manifest);
   if (operation.return_python_type) reasons.push(`return: ${operation.return_python_type}`);
   return reasons.length ? `Use the Python SDK. ${reasons.join("; ")}.` : null;
-}
-
-/**
- * Why the playground cannot build a call. Only the arguments matter here: a
- * Python-only return is requested as a stored Python result and shown from
- * the task, the same way `lazycloud run` shows it.
- */
-export function playgroundPythonOnlyReason(manifest: DeploymentManifest): string | null {
-  const reasons = parameterPythonReasons(manifest);
-  return reasons.length ? `Use the Python SDK. ${reasons.join("; ")}.` : null;
-}
-
-export function returnsPythonValue(manifest: DeploymentManifest): boolean {
-  return Boolean(manifest.client_contract?.operation.return_python_type);
 }
 
 function parameterPythonReasons(manifest: DeploymentManifest): string[] {
@@ -55,44 +71,30 @@ function primitiveType(value: string | undefined): PrimitiveType | null {
 }
 
 /**
- * Typed per-field inputs are only offered when the recorded schema is a flat
- * object of primitives; anything richer (arrays, objects, files, unknown
- * shapes) falls back to the raw JSON editor instead of a fake form.
- *
- * The callable contract is preferred; the SDK `inputs` Schema metadata is the fallback.
+ * Typed per-field inputs are only offered when the recorded contract is a flat
+ * list of primitives; anything richer (arrays, objects, files, unknown shapes)
+ * falls back to the raw JSON editor instead of a fake form.
  */
 export function playgroundFields(manifest: DeploymentManifest): PlaygroundField[] | null {
   const contract = manifest.client_contract;
-  if (contract) {
-    const parameters = contract.operation.parameters.filter(
-      (parameter) => !["var_positional", "var_keyword"].includes(parameter.parameter_kind),
-    );
-    if (parameters.length === 0) return [];
-    const fields: PlaygroundField[] = [];
-    for (const parameter of parameters) {
-      const rawType = parameter.json_schema?.type;
-      const type = primitiveType(typeof rawType === "string" ? rawType : undefined);
-      if (!type) return null;
-      fields.push({
-        name: parameter.name,
-        type,
-        required: parameter.required,
-        defaultText:
-          parameter.default === null || parameter.default === undefined
-            ? ""
-            : JSON.stringify(parameter.default),
-      });
-    }
-    return fields;
-  }
-
-  const entries = Object.entries(manifest.inputs.fields);
-  if (entries.length === 0) return null;
+  if (!contract) return null;
+  const parameters = contract.operation.parameters.filter(
+    (parameter) => !["var_positional", "var_keyword"].includes(parameter.parameter_kind),
+  );
   const fields: PlaygroundField[] = [];
-  for (const [name, field] of entries) {
-    const type = primitiveType(field.type);
+  for (const parameter of parameters) {
+    const rawType = parameter.json_schema?.type;
+    const type = primitiveType(typeof rawType === "string" ? rawType : undefined);
     if (!type) return null;
-    fields.push({ name, type, required: true, defaultText: "" });
+    fields.push({
+      name: parameter.name,
+      type,
+      required: parameter.required,
+      defaultText:
+        parameter.default === null || parameter.default === undefined
+          ? ""
+          : JSON.stringify(parameter.default),
+    });
   }
   return fields;
 }
@@ -116,10 +118,6 @@ export function exampleBody(manifest: DeploymentManifest): Record<string, JsonVa
         typeof parameter.json_schema?.type === "string" ? parameter.json_schema.type : "";
       body[parameter.name] = placeholderValue(type);
     }
-    return body;
-  }
-  for (const [name, field] of Object.entries(manifest.inputs.fields)) {
-    body[name] = placeholderValue(field.type);
   }
   return body;
 }

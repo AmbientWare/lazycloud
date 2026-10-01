@@ -134,7 +134,13 @@ function TokenTable({
   );
 }
 
-function TokenRow({ token, controller }: { token: Schemas["Token"]; controller: AccessTokensController }) {
+function TokenRow({
+  token,
+  controller,
+}: {
+  token: Schemas["Token"];
+  controller: AccessTokensController;
+}) {
   const active = token.status === "active";
   const owned = controller.actionTokenId === token.id;
   const confirming =
@@ -200,7 +206,7 @@ function TokenTime({
   fallback,
 }: {
   label: string;
-  value: string | null;
+  value: string | undefined;
   fallback: string;
 }) {
   return (

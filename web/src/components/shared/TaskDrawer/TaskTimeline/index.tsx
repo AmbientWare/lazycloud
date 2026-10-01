@@ -4,54 +4,42 @@ import { Link, type LinkProps } from "@tanstack/react-router";
 
 import { useLiveNow } from "@/hooks/use-live-now";
 import { ContentTransition } from "@/components/shared/ContentTransition";
-import { PanelError } from "@/components/shared/PanelError";
 import { Skeleton } from "@/components/ui/skeleton";
-import { flattenCallGraph, statusColor, timelineDomain, type TimelineRow } from "./timeline";
-import { LifecycleStrip } from "./LifecycleStrip";
-import { executionPhases } from "./phases";
-import { useWorkspaceLiveUpdates } from "@/lib/workspace-context";
-import {
-  isTerminalTaskStatus,
-  type CallGraphNode,
-  type ContainerLifecycleMetric,
-  type Task,
-} from "@/lib/api/schemas";
-import { callGraphLifecycleQueryOptions } from "@/lib/queries/events";
-import { formatDuration } from "@/lib/format";
-import { callGraphQueryOptions } from "@/lib/queries/tasks";
+import { formatDuration, isTerminalTaskStatus } from "@/lib/format";
+import { containerQueryOptions } from "@/lib/queries/containers";
+import type { Task } from "@/lib/queries/tasks";
 import { cn } from "@/lib/utils";
 
-/** Parent and child tasks aligned on one elapsed-time axis. */
+import { LifecycleStrip } from "./LifecycleStrip";
+import { executionPhases, preparationWindows, type PreparationWindow } from "./phases";
+import { statusColor, timelineDomain, type CallGraphNode, type TimelineRow } from "./timeline";
+
+/**
+ * The task on an elapsed-time axis. The public API lists no tasks by call
+ * graph yet, so the trace shows the task itself; spawned children join it once
+ * the API can list a root's descendants.
+ */
 export function TaskTimeline({
-  workspaceId,
+  workspace,
   taskLink,
   task,
 }: {
-  workspaceId: string;
+  workspace: string;
   taskLink: (taskId: string) => Pick<LinkProps, "to" | "params" | "search">;
   task: Task;
 }) {
-  const rootId = task.root_task_id || task.id;
-  const graph = useQuery(callGraphQueryOptions(workspaceId, rootId));
-  const rows = useMemo<TimelineRow[]>(() => {
-    const flattened = flattenCallGraph(graph.data?.nodes ?? []);
-    return flattened.length > 0
-      ? flattened
-      : [{ node: taskAsNode(task), depth: 0, ancestorContinues: [], isLastSibling: true }];
-  }, [graph.data, task]);
-  const live = rows.some((row) => !isTerminalTaskStatus(row.node.status));
-  const containerIds = rows.flatMap(({ node }) => (node.container_id ? [node.container_id] : []));
-  const summaries = useQuery({
-    ...callGraphLifecycleQueryOptions(workspaceId, rootId, containerIds, live),
-    enabled: !graph.isPending && containerIds.length > 0,
+  const container = useQuery({
+    ...containerQueryOptions(workspace, task.container_id ?? ""),
+    enabled: Boolean(task.container_id),
   });
-  const lifecycleByContainer = new Map(
-    summaries.data?.items.map((item) => [item.container_id, item.lifecycle]),
+  const rows = useMemo<TimelineRow[]>(
+    () => [{ node: taskAsNode(task), depth: 0, ancestorContinues: [], isLastSibling: true }],
+    [task],
   );
+  const live = !isTerminalTaskStatus(task.status);
   const nowMs = useLiveNow(live);
-  const { status: streamStatus } = useWorkspaceLiveUpdates();
   const domain = timelineDomain(rows, nowMs);
-  if (graph.isPending || (containerIds.length > 0 && summaries.isPending)) {
+  if (task.container_id && container.isPending) {
     return (
       <ContentTransition pending className="space-y-3 p-4">
         <Skeleton className="h-4 w-24" />
@@ -60,8 +48,7 @@ export function TaskTimeline({
       </ContentTransition>
     );
   }
-  if (graph.isError && !graph.data) return <PanelError message={graph.error.message} />;
-  if (summaries.isError && !summaries.data) return <PanelError message={summaries.error.message} />;
+  const lifecycle = preparationWindows(container.data);
   if (!domain) {
     return <div className="p-3 text-sm text-muted-foreground">Not scheduled yet</div>;
   }
@@ -73,11 +60,6 @@ export function TaskTimeline({
           {rows.length === 1 ? "1 call" : `${rows.length} calls`} ·{" "}
           {formatDuration(domain.endMs - domain.startMs)} total
         </span>
-        {live && streamStatus !== "open" ? (
-          <span className="text-warning" data-stream-stale="">
-            {streamStatus === "reconnecting" ? "Reconnecting" : "Connecting"}
-          </span>
-        ) : null}
       </div>
       <div className="divide-y divide-border/60">
         {rows.map((row) => (
@@ -88,7 +70,7 @@ export function TaskTimeline({
             taskLink={taskLink}
             domain={domain}
             nowMs={nowMs}
-            lifecycle={lifecycleByContainer.get(row.node.container_id ?? "") ?? []}
+            lifecycle={lifecycle}
           />
         ))}
       </div>
@@ -109,7 +91,7 @@ function TimelineBarRow({
   taskLink: (taskId: string) => Pick<LinkProps, "to" | "params" | "search">;
   domain: NonNullable<ReturnType<typeof timelineDomain>>;
   nowMs: number;
-  lifecycle: ContainerLifecycleMetric[];
+  lifecycle: readonly PreparationWindow[];
 }) {
   const { node, depth, ancestorContinues, isLastSibling } = row;
   const phases = executionPhases(node, lifecycle, nowMs, domain);
@@ -196,14 +178,13 @@ function taskAsNode(task: Task): CallGraphNode {
     task_id: task.id,
     container_id: task.container_id ?? null,
     parent_task_id: task.parent_task_id ?? "",
-    root_task_id: task.root_task_id ?? task.id,
+    root_task_id: task.root_task_id,
     status: task.status,
-    name: task.name,
-    function_name: "",
+    name: task.function,
+    function_name: task.function,
     created_at: task.created_at,
     started_at: task.started_at ?? null,
     finished_at: task.finished_at ?? null,
-    dependencies: [],
     children: [],
   };
 }

@@ -1,7 +1,7 @@
 import { queryOptions } from "@tanstack/react-query";
 import { z } from "zod";
 
-import { apiRequest, postJson } from "@/lib/api/client";
+import { apiRequest, postJson } from "@/lib/api/unserved";
 import {
   customDomainListSchema,
   customDomainSchema,

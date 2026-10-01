@@ -11,7 +11,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import type { UnitMachine, Workspace } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
+import type { UnitMachine } from "@/lib/api/schemas";
 import { updateMachineWorkspaces } from "@/lib/queries/compute";
 import { accountQueryKeys } from "@/lib/queries/workspace-keys";
 import { useWorkspace } from "@/lib/workspace-context";
@@ -26,7 +27,7 @@ export function WorkspaceChecklist({
   onChange,
   disabled = false,
 }: {
-  workspaces: Workspace[];
+  workspaces: Schemas["Workspace"][];
   selected: ReadonlySet<string>;
   onChange: (next: Set<string>) => void;
   disabled?: boolean;

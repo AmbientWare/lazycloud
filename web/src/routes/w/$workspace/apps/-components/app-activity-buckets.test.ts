@@ -9,7 +9,7 @@ describe("appRunActivity", () => {
         {
           timestamp: "2026-07-10T11:15:00Z",
           count: 4,
-          status_counts: { complete: 3, failed: 1 },
+          status_counts: { succeeded: 3, failed: 1 },
         },
         {
           timestamp: "2026-07-10T12:00:00Z",
@@ -49,11 +49,10 @@ describe("appRunActivity", () => {
           timestamp: "2026-08-24T22:00:00.000Z",
           count: 9,
           status_counts: {
-            pending: 3,
+            queued: 4,
             running: 1,
-            retry: 1,
-            complete: 1,
-            timeout: 1,
+            succeeded: 1,
+            failed: 1,
             cancelled: 1,
             reticulating: 1,
           },
@@ -78,11 +77,10 @@ describe("appRunActivityFromSeries", () => {
           timestamp: "2026-08-24T22:00:00.000Z",
           count: 9,
           status_counts: {
-            pending: 3,
+            queued: 4,
             running: 1,
-            retry: 1,
-            complete: 1,
-            timeout: 1,
+            succeeded: 1,
+            failed: 1,
             cancelled: 1,
             reticulating: 1,
           },

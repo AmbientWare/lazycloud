@@ -1,83 +1,96 @@
 import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
 import { z } from "zod";
 
-import { apiRequest, postJson, withWorkspace } from "@/lib/api/client";
+import { api, ok, type Schemas } from "@/lib/api/client";
+import { apiRequest, postJson, withWorkspace } from "@/lib/api/unserved";
 import { fileBase64 } from "@/lib/files";
 import {
   diskListSchema,
-  secretMaskedListSchema,
-  secretMaskedSchema,
-  secretRevealResponseSchema,
   volumePathListSchema,
   volumeListSchema,
   volumeSchema,
   type Disk,
-  type SecretMasked,
   type Volume,
 } from "@/lib/api/schemas";
 import {
   nextListCursor,
+  nextPageCursor,
   selectInfiniteList,
+  selectPages,
   type InfiniteListQueryData,
 } from "@/lib/queries/infinite-list";
 
-import { workspaceLiveQueryMeta, workspaceQueryKeys } from "./workspace-keys";
+import { workspaceQueryKeys } from "./workspace-keys";
 
 // --- Secrets (collection reads stay masked; cleartext is fetched only on demand) ---
 
-export function secretsQueryOptions(workspaceId: string) {
-  return queryOptions({
-    queryKey: workspaceQueryKeys.storage.secrets(workspaceId),
-    queryFn: () =>
-      apiRequest(withWorkspace("/api/v1/secrets", workspaceId), secretMaskedListSchema),
-    meta: workspaceLiveQueryMeta(true),
+export type Secret = Schemas["Secret"];
+
+export function secretsQueryOptions(workspace: string) {
+  return infiniteQueryOptions({
+    queryKey: workspaceQueryKeys.storage.secrets(workspace),
+    initialPageParam: "",
+    queryFn: ({ pageParam }) =>
+      ok(
+        api.GET("/v1/workspaces/{workspace}/secrets", {
+          params: { path: { workspace }, query: { limit: 100, cursor: pageParam || undefined } },
+        }),
+      ),
+    getNextPageParam: nextPageCursor,
   });
 }
 
-const createSecretResponseSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-});
-
-export function createSecret(
-  workspaceId: string,
-  name: string,
-  value: string,
-): Promise<{ id: string; name: string }> {
-  return postJson(withWorkspace("/api/v1/secrets", workspaceId), createSecretResponseSchema, {
-    name,
-    value,
-  });
+export function selectSecrets(
+  data: { pages: readonly Schemas["SecretPage"][] } | undefined,
+  hasNextPage: boolean | undefined,
+) {
+  return selectPages(
+    data,
+    (page) => page.secrets,
+    hasNextPage,
+    (secret) => secret.name,
+  );
 }
 
+/** Create a secret; an existing name is a conflict. */
+export function createSecret(workspace: string, name: string, value: string): Promise<Secret> {
+  return ok(
+    api.POST("/v1/workspaces/{workspace}/secrets", {
+      params: { path: { workspace } },
+      body: { name, value },
+    }),
+  );
+}
+
+/** Replace an existing secret's value. */
 export function updateSecretValue(
-  workspaceId: string,
-  name: string,
+  workspace: string,
+  secret: string,
   value: string,
-): Promise<SecretMasked> {
-  return postJson(
-    withWorkspace(`/api/v1/secrets/${encodeURIComponent(name)}`, workspaceId),
-    secretMaskedSchema,
-    { value },
+): Promise<Secret> {
+  return ok(
+    api.PATCH("/v1/workspaces/{workspace}/secrets/{secret}", {
+      params: { path: { workspace, secret } },
+      body: { value },
+    }),
   );
 }
 
-export async function revealSecretValue(workspaceId: string, name: string): Promise<string> {
-  const response = await apiRequest(
-    withWorkspace(`/api/v1/secrets/${encodeURIComponent(name)}`, workspaceId),
-    secretRevealResponseSchema,
+/** The only read that returns a value; the caller keeps it in memory only while shown. */
+export async function revealSecretValue(workspace: string, secret: string): Promise<string> {
+  const revealed = await ok(
+    api.GET("/v1/workspaces/{workspace}/secrets/{secret}/value", {
+      params: { path: { workspace, secret } },
+    }),
   );
-  if (!response.secret) throw new Error("Secret not found");
-  return response.secret.value;
+  return revealed.value;
 }
 
-const emptyResponseSchema = z.object({}).passthrough();
-
-export function deleteSecret(workspaceId: string, name: string): Promise<unknown> {
-  return apiRequest(
-    withWorkspace(`/api/v1/secrets/${encodeURIComponent(name)}`, workspaceId),
-    emptyResponseSchema,
-    { method: "DELETE" },
+export function deleteSecret(workspace: string, secret: string): Promise<void> {
+  return ok(
+    api.DELETE("/v1/workspaces/{workspace}/secrets/{secret}", {
+      params: { path: { workspace, secret } },
+    }),
   );
 }
 
@@ -98,7 +111,6 @@ export function disksQueryOptions(workspaceId: string) {
       );
     },
     getNextPageParam: nextListCursor,
-    meta: workspaceLiveQueryMeta(true),
   });
 }
 
@@ -123,7 +135,6 @@ export function volumesQueryOptions(workspaceId: string) {
   return queryOptions({
     queryKey: workspaceQueryKeys.storage.volumes(workspaceId),
     queryFn: () => apiRequest(withWorkspace("/api/v1/volumes", workspaceId), volumeListSchema),
-    meta: workspaceLiveQueryMeta(true),
   });
 }
 

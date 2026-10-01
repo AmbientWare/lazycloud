@@ -25,12 +25,12 @@ export function SandboxProcessList({
 }) {
   const { workspace } = useWorkspace();
   const queryClient = useQueryClient();
-  const query = useQuery(sandboxProcessesQueryOptions(workspace.id, containerId));
+  const query = useQuery(sandboxProcessesQueryOptions(workspace.name, containerId));
   const kill = useMutation({
-    ...killSandboxProcessMutationOptions(workspace.id, containerId),
+    ...killSandboxProcessMutationOptions(workspace.name, containerId),
     onSuccess: () =>
       queryClient.invalidateQueries({
-        queryKey: workspaceQueryKeys.sandboxes.processes(workspace.id, containerId),
+        queryKey: workspaceQueryKeys.sandboxes.processes(workspace.name, containerId),
       }),
   });
 

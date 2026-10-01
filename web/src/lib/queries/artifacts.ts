@@ -2,7 +2,7 @@ import { queryOptions, infiniteQueryOptions } from "@tanstack/react-query";
 import { z } from "zod";
 import { artifactStorageSummarySchema } from "@/lib/api/schemas/artifacts";
 
-import { apiBlob, apiRequest, withWorkspace } from "@/lib/api/client";
+import { apiBlob, apiRequest, withWorkspace } from "@/lib/api/unserved";
 import { artifactListSchema } from "@/lib/api/schemas";
 
 import { workspaceQueryKeys } from "./workspace-keys";

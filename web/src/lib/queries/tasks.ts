@@ -1,192 +1,151 @@
 import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
-import { LIVE_LIST_MAX_PAGES } from "./infinite-list";
 
-import { apiRequest, postJson, withWorkspace } from "@/lib/api/client";
-import {
-  callGraphSchema,
-  taskMetricsSummarySchema,
-  taskPageSchema,
-  taskSchema,
-  taskTimeWindowBucketListSchema,
-  type Task,
-  type TaskSummary,
-} from "@/lib/api/schemas";
+import { api, ok, type Schemas } from "@/lib/api/client";
+import { isTerminalTaskStatus } from "@/lib/format";
 
-import { selectInfiniteList, type InfiniteListQueryData } from "./infinite-list";
-import {
-  workspaceLiveQueryMeta,
-  workspaceQueryKeys,
-  type TaskListKeyParts,
-} from "./workspace-keys";
+import { LIVE_LIST_MAX_PAGES, nextPageCursor, selectPages } from "./infinite-list";
+import { workspaceQueryKeys } from "./workspace-keys";
 
-/** Re-submit a finished task with the same payload as a new task. */
-export function rerunTask(workspaceId: string, taskId: string): Promise<Task> {
-  return postJson(withWorkspace(`/api/v1/tasks/${taskId}/rerun`, workspaceId), taskSchema);
-}
+export type Task = Schemas["Task"];
+export type TaskStatus = Schemas["TaskStatus"];
 
 export type TaskListOptions = {
   limit?: number;
-  status?: string;
-  deploymentId?: string;
-  appId?: string;
-  stubIds?: string[];
-  kind?: string;
-  createdAfter?: string;
-  createdBefore?: string;
-  createdWithinSeconds?: number;
-  search?: string;
-  rootOnly?: boolean;
-  live?: boolean;
+  app?: string;
+  /** Requires `app`. */
+  function?: string;
+  status?: TaskStatus;
 };
 
-export function tasksQueryOptions(workspaceId: string, options: TaskListOptions = {}) {
-  const params = taskListParams(options);
+function listQuery(workspace: string, options: TaskListOptions, cursor: string) {
+  return ok(
+    api.GET("/v1/workspaces/{workspace}/tasks", {
+      params: {
+        path: { workspace },
+        query: {
+          app: options.app,
+          function: options.app ? options.function : undefined,
+          status: options.status,
+          limit: options.limit ?? 50,
+          cursor: cursor || undefined,
+        },
+      },
+    }),
+  );
+}
 
-  return queryOptions({
-    queryKey: taskListKey(workspaceId, options, "page"),
-    queryFn: () =>
-      apiRequest(withWorkspace(`/api/v1/tasks?${params.toString()}`, workspaceId), taskPageSchema),
-    meta: workspaceLiveQueryMeta(true, options.live !== false),
+function listKey(workspace: string, options: TaskListOptions, mode: "page" | "infinite") {
+  return workspaceQueryKeys.tasks.list(workspace, {
+    mode,
+    limit: options.limit ?? 50,
+    app: options.app ?? null,
+    function: options.function ?? null,
+    status: options.status ?? null,
   });
 }
 
-export function tasksInfiniteQueryOptions(workspaceId: string, options: TaskListOptions = {}) {
+/** The newest tasks, one page. */
+export function tasksQueryOptions(workspace: string, options: TaskListOptions = {}) {
+  return queryOptions({
+    queryKey: listKey(workspace, options, "page"),
+    queryFn: () => listQuery(workspace, options, ""),
+  });
+}
+
+/** Tasks newest first, a page at a time. */
+export function tasksInfiniteQueryOptions(workspace: string, options: TaskListOptions = {}) {
   return infiniteQueryOptions({
-    queryKey: taskListKey(workspaceId, options, "infinite"),
+    queryKey: listKey(workspace, options, "infinite"),
     initialPageParam: "",
-    queryFn: ({ pageParam }) => {
-      const params = taskListParams(options, pageParam);
-      return apiRequest(
-        withWorkspace(`/api/v1/tasks?${params.toString()}`, workspaceId),
-        taskPageSchema,
-      );
-    },
-    getNextPageParam: (page) => page.next || undefined,
+    queryFn: ({ pageParam }) => listQuery(workspace, options, pageParam),
+    getNextPageParam: nextPageCursor,
     maxPages: LIVE_LIST_MAX_PAGES,
-    meta: workspaceLiveQueryMeta(true, options.live !== false),
   });
 }
 
 export function selectTaskList(
-  data: InfiniteListQueryData<TaskSummary> | undefined,
+  data: { pages: readonly Schemas["TaskPage"][] } | undefined,
   hasNextPage: boolean | undefined,
 ) {
-  return selectInfiniteList(data, hasNextPage, (task) => task.id);
+  return selectPages(
+    data,
+    (page) => page.tasks,
+    hasNextPage,
+    (task) => task.id,
+  );
 }
 
-function taskListParams(options: TaskListOptions, cursor = ""): URLSearchParams {
-  const params = new URLSearchParams();
-  params.set("limit", String(options.limit ?? 50));
-  if (cursor) params.set("cursor", cursor);
-  if (options.status) params.set("status", options.status);
-  if (options.deploymentId) params.set("deployment_id", options.deploymentId);
-  if (options.appId) params.set("app_id", options.appId);
-  for (const stubId of options.stubIds ?? []) params.append("stub_id", stubId);
-  if (options.kind) params.set("kind", options.kind);
-  if (options.createdAfter) params.set("created_after", options.createdAfter);
-  if (options.createdBefore) params.set("created_before", options.createdBefore);
-  if (options.createdWithinSeconds) {
-    params.set("created_within_seconds", String(options.createdWithinSeconds));
-  }
-  if (options.search) params.set("q", options.search);
-  if (options.rootOnly) params.set("root_only", "true");
-  return params;
-}
+/** How long a read of a running task waits for it to finish. */
+const FINISH_WAIT_SECONDS = 25;
+/** How soon a queued task is read again to see it start. */
+const QUEUED_REFRESH_MS = 2_000;
 
-function taskListKey(
-  workspaceId: string,
-  options: TaskListOptions,
-  mode: TaskListKeyParts["mode"],
-) {
-  const parts: TaskListKeyParts = {
-    mode,
-    limit: options.limit ?? 50,
-    status: options.status ?? null,
-    deploymentId: options.deploymentId ?? null,
-    appId: options.appId ?? null,
-    stubIds: options.stubIds?.join(",") ?? null,
-    kind: options.kind ?? null,
-    createdAfter: options.createdAfter ?? null,
-    createdBefore: options.createdBefore ?? null,
-    createdWithinSeconds: options.createdWithinSeconds ?? null,
-    search: options.search ?? null,
-    rootOnly: options.rootOnly ?? false,
-  };
-  return workspaceQueryKeys.tasks.list(workspaceId, parts);
-}
-
-export function taskQueryOptions(workspaceId: string, taskId: string) {
+/**
+ * One task, kept current while it is open. A running task is read with the
+ * API's wait, which answers as soon as it finishes; a queued task is read
+ * again shortly, because the wait only ends on a finish and a start is what
+ * the drawer is showing next.
+ */
+export function taskQueryOptions(workspace: string, task: string) {
   return queryOptions({
-    queryKey: workspaceQueryKeys.tasks.detail(workspaceId, taskId),
-    queryFn: () => apiRequest(withWorkspace(`/api/v1/tasks/${taskId}`, workspaceId), taskSchema),
-    // Rate-limited drawer reads preserve their explicit Retry-After recovery
-    // instead of being retried by an unrelated workspace reconnect.
+    queryKey: workspaceQueryKeys.tasks.detail(workspace, task),
+    queryFn: ({ client, queryKey, signal }) => {
+      const known = client.getQueryData<Task>(queryKey);
+      const wait = known?.status === "running" ? FINISH_WAIT_SECONDS : 0;
+      return ok(
+        api.GET("/v1/workspaces/{workspace}/tasks/{task}", {
+          params: { path: { workspace, task }, query: { wait_seconds: wait } },
+          signal,
+        }),
+      );
+    },
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      if (!status || isTerminalTaskStatus(status)) return false;
+      return status === "running" ? 1_000 : QUEUED_REFRESH_MS;
+    },
     retry: false,
-    meta: workspaceLiveQueryMeta(true, true, false),
   });
 }
 
-export function callGraphQueryOptions(workspaceId: string, taskId: string) {
+/** The value a succeeded task returned. */
+export function taskResultQueryOptions(workspace: string, task: string, enabled: boolean) {
   return queryOptions({
-    queryKey: workspaceQueryKeys.tasks.callGraph(workspaceId, taskId),
+    queryKey: workspaceQueryKeys.tasks.result(workspace, task),
     queryFn: () =>
-      apiRequest(withWorkspace(`/api/v1/tasks/${taskId}/call-graph`, workspaceId), callGraphSchema),
-    meta: workspaceLiveQueryMeta(true),
+      ok(
+        api.GET("/v1/workspaces/{workspace}/tasks/{task}/result", {
+          params: { path: { workspace, task } },
+        }),
+      ),
+    enabled,
+    staleTime: Infinity,
   });
 }
 
-export function taskMetricsQueryOptions(workspaceId: string, hours = 24, appId?: string) {
-  return queryOptions({
-    queryKey: workspaceQueryKeys.tasks.metrics(workspaceId, hours, appId ?? null),
-    queryFn: () => {
-      const endedAt = Math.floor(Date.now() / 1000);
-      const startedAt = endedAt - hours * 3600;
-      const appParam = appId ? `&app_id=${encodeURIComponent(appId)}` : "";
-      return apiRequest(
-        withWorkspace(
-          `/api/v1/tasks/metrics?started_at=${startedAt}&ended_at=${endedAt}${appParam}`,
-          workspaceId,
-        ),
-        taskMetricsSummarySchema,
-      );
-    },
-    meta: workspaceLiveQueryMeta(true),
-  });
+const taskPath = (workspace: string, task: string) => ({ params: { path: { workspace, task } } });
+
+export function cancelTask(workspace: string, task: string): Promise<Task> {
+  return ok(api.POST("/v1/workspaces/{workspace}/tasks/{task}/cancel", taskPath(workspace, task)));
 }
 
-/** Buckets the activity chart renders; it slices to this and discards the rest. */
-const BUCKETS_DRAWN = 24;
+/** Submit the task's input again, as a new task on the release it ran on. */
+export function rerunTask(workspace: string, task: string): Promise<Task> {
+  return ok(api.POST("/v1/workspaces/{workspace}/tasks/{task}/rerun", taskPath(workspace, task)));
+}
 
-export function taskBucketsQueryOptions(
-  workspaceId: string,
-  windowSeconds = 3600,
-  scope: { appId?: string; stubId?: string } = {},
-) {
-  return queryOptions({
-    queryKey: workspaceQueryKeys.tasks.buckets(
-      workspaceId,
-      windowSeconds,
-      scope.appId ?? null,
-      scope.stubId ?? null,
-    ),
-    queryFn: () => {
-      // The span is computed per fetch and deliberately left out of the query
-      // key: in the key every refetch would be a new key and nothing would ever
-      // be served from cache. Asking for the buckets the chart draws is the
-      // point of sending it at all, since without a span the server reads the
-      // workspace's whole task history to answer for one day of it.
-      const endedAt = Math.floor(Date.now() / 1000);
-      const params = new URLSearchParams();
-      params.set("window_seconds", String(windowSeconds));
-      params.set("started_at", String(endedAt - windowSeconds * BUCKETS_DRAWN));
-      params.set("ended_at", String(endedAt));
-      if (scope.appId) params.set("app_id", scope.appId);
-      if (scope.stubId) params.set("stub_id", scope.stubId);
-      return apiRequest(
-        withWorkspace(`/api/v1/tasks/aggregate-by-time-window?${params.toString()}`, workspaceId),
-        taskTimeWindowBucketListSchema,
-      );
-    },
-    meta: workspaceLiveQueryMeta(true),
-  });
+/** Admit one task with JSON arguments against the function's active release. */
+export async function submitJsonTask(
+  workspace: string,
+  app: string,
+  name: string,
+  args: { args: unknown[]; kwargs: Record<string, unknown> },
+): Promise<Task> {
+  const response = await ok(
+    api.POST("/v1/workspaces/{workspace}/apps/{app}/functions/{function}/tasks", {
+      params: { path: { workspace, app, function: name } },
+      body: { inputs: [{ encoding: "json", value: args }] },
+    }),
+  );
+  return response.tasks[0];
 }

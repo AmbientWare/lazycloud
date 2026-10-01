@@ -1,29 +1,26 @@
 import { describe, expect, it } from "vitest";
 
-import type { DeploymentManifest } from "@/lib/api/schemas";
-import { deploymentManifestSchema } from "@/lib/api/schemas/client_manifests";
-
 import {
   buildBody,
   curlSnippet,
   playgroundFields,
-  playgroundPythonOnlyReason,
   pythonOnlyReason,
-  returnsPythonValue,
+  type DeploymentManifest,
 } from "./playground-form";
 
-it("keeps a Python result off HTTP but lets the playground invoke it", () => {
-  const resource = deploymentManifestSchema.parse({
-    ...manifest(),
+it("sends a function with a Python return to the SDK", () => {
+  const resource = manifest({
     client_contract: {
-      operation: { name: "remote", return_schema: null, return_python_type: "numpy.ndarray" },
+      operation: {
+        name: "remote",
+        parameters: [],
+        return_schema: null,
+        return_python_type: "numpy.ndarray",
+      },
     },
   });
-  expect(pythonOnlyReason(resource)).not.toBeNull();
-  expect(playgroundPythonOnlyReason(resource)).toBeNull();
-  expect(returnsPythonValue(resource)).toBe(true);
+  expect(pythonOnlyReason(resource)).toBe("Use the Python SDK. return: numpy.ndarray.");
   expect(pythonOnlyReason(manifest())).toBeNull();
-  expect(returnsPythonValue(manifest())).toBe(false);
 });
 
 function manifest(overrides: Partial<DeploymentManifest> = {}): DeploymentManifest {
@@ -31,14 +28,9 @@ function manifest(overrides: Partial<DeploymentManifest> = {}): DeploymentManife
     app: "demo",
     name: "square",
     kind: "function",
-    stub_id: "stub-1",
-    deployment_id: "deployment-1",
-    deployment_version: 1,
+    handler: "demo:square",
     timeout_seconds: null,
-    invoke_url: "https://square-a1b2c3d4.lazycloud.dev",
-    invoke_path: "/api/v1/functions/square/latest",
-    methods: [],
-    inputs: { fields: {} },
+    invoke_url: null,
     client_contract: null,
     ...overrides,
   };

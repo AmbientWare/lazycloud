@@ -1,4 +1,4 @@
-import { postJson, withWorkspace } from "@/lib/api/client";
+import { postJson, withWorkspace } from "@/lib/api/unserved";
 import { shellSessionSchema, type ShellSession } from "@/lib/api/schemas";
 
 /**

@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Eye, EyeOff, KeyRound, Loader2, Pencil, Trash2 } from "lucide-react";
 
 import { CopyButton } from "@/components/shared/CopyButton";
+import { InfiniteScrollBoundary } from "@/components/shared/InfiniteScrollBoundary";
 import { LiveRelativeTime } from "@/components/shared/LiveTime";
 import { PanelError } from "@/components/shared/PanelError";
 import { PanelEmpty } from "@/components/shared/PanelEmpty";
@@ -14,11 +15,11 @@ import {
   deleteSecret,
   revealSecretValue,
   secretsQueryOptions,
+  selectSecrets,
   updateSecretValue,
+  type Secret,
 } from "@/lib/queries/storage";
 import { workspaceQueryKeys } from "@/lib/queries/workspace-keys";
-import type { SecretMasked } from "@/lib/api/schemas";
-import { ResourceWorkloadLinks } from "./ResourceWorkloadLinks";
 
 /**
  * Collection reads stay masked. Cleartext is fetched only after an explicit
@@ -35,7 +36,8 @@ export function SecretsTab({
   creating: boolean;
   onCreatingChange: (open: boolean) => void;
 }) {
-  const query = useQuery(secretsQueryOptions(workspaceId));
+  const query = useInfiniteQuery(secretsQueryOptions(workspaceName));
+  const secrets = selectSecrets(query.data, query.hasNextPage);
   const [editing, setEditing] = useState<string | null>(null);
 
   return (
@@ -65,10 +67,10 @@ export function SecretsTab({
           <SecretsSkeleton />
         ) : query.isError ? (
           <PanelError message={query.error.message} />
-        ) : query.data.secrets.length === 0 && !creating ? (
+        ) : secrets.items.length === 0 && !creating ? (
           <PanelEmpty message="No secrets. Create one to inject into a workload." className="p-6" />
         ) : (
-          query.data.secrets.map((secret) =>
+          secrets.items.map((secret) =>
             editing === secret.name ? (
               <SecretForm
                 key={secret.name}
@@ -87,13 +89,19 @@ export function SecretsTab({
                   secret.updated_at,
                 ])}
                 workspaceId={workspaceId}
-                workspaceName={workspaceName}
                 secret={secret}
                 onEdit={() => setEditing(secret.name)}
               />
             ),
           )
         )}
+        <InfiniteScrollBoundary
+          nextCursor={secrets.nextCursor}
+          loading={query.isFetchingNextPage}
+          error={query.isFetchNextPageError}
+          onLoadMore={() => void query.fetchNextPage()}
+          resourceLabel="secrets"
+        />
       </div>
     </ContentTransition>
   );
@@ -121,13 +129,11 @@ function SecretsSkeleton() {
 
 function SecretRow({
   workspaceId,
-  workspaceName,
   secret,
   onEdit,
 }: {
   workspaceId: string;
-  workspaceName: string;
-  secret: SecretMasked;
+  secret: Secret;
   onEdit: () => void;
 }) {
   const queryClient = useQueryClient();
@@ -192,11 +198,9 @@ function SecretRow({
           </span>
         </div>
         <p className="mt-1 pl-5.5 text-[11px] text-muted-foreground">
-          Rotated <LiveRelativeTime value={secret.updated_at ?? secret.created_at ?? undefined} />
+          Rotated <LiveRelativeTime value={secret.updated_at} />
         </p>
-        <div className="mt-1 pl-5.5">
-          <ResourceWorkloadLinks workspaceName={workspaceName} workloads={secret.workloads} />
-        </div>
+        <div className="mt-1 pl-5.5"></div>
       </div>
 
       <div className="col-span-2 flex h-9 min-w-0 items-center rounded-md border border-input bg-background/70 pl-3 shadow-xs transition-colors focus-within:border-ring sm:col-span-1">

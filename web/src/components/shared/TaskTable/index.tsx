@@ -16,8 +16,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import type { TaskSummary } from "@/lib/api/schemas";
 import { startupBetween } from "@/lib/format";
+import type { Task } from "@/lib/queries/tasks";
 import { cn } from "@/lib/utils";
 import { useWorkspace } from "@/lib/workspace-context";
 
@@ -31,7 +31,7 @@ export function TaskTable({
   className,
   continuation,
 }: {
-  tasks: TaskSummary[] | undefined;
+  tasks: Task[] | undefined;
   /** Builds the drawer route for a task; keeps the drawer nested in the page context. */
   taskLink: (taskId: string) => Pick<LinkProps, "to" | "params" | "search">;
   showApp?: boolean;
@@ -73,7 +73,6 @@ export function TaskTable({
             </TableHeader>
             <TableBody>
               {rows.map((task) => {
-                const kind = task.workload?.kind;
                 return (
                   <TableRow key={task.id}>
                     <TableCell className="max-w-[280px]">
@@ -82,51 +81,42 @@ export function TaskTable({
                         className="interactive-link flex min-w-0 items-center gap-2 font-medium text-foreground"
                       >
                         <span className="truncate" title={task.id}>
-                          {task.name}
+                          {task.function}
                         </span>
                       </Link>
                     </TableCell>
                     {showWorkload ? (
                       <TableCell className="max-w-[220px]">
-                        {task.workload ? (
-                          <span className="flex min-w-0 items-center gap-2">
-                            <StubKindIcon kind={kind ?? "function"} className="size-3 shrink-0" />
-                            <Link
-                              to="/w/$workspace/apps/$appId/workloads/$kind/$name"
-                              params={{
-                                workspace: workspace.name,
-                                appId: task.app_id ?? "",
-                                kind: task.workload.kind,
-                                name: task.workload.name,
-                              }}
-                              disabled={!task.app_id}
-                              className="interactive-link min-w-0 truncate text-xs text-foreground disabled:pointer-events-none"
-                            >
-                              {task.workload.name}
-                            </Link>
-                            <span className="shrink-0 text-[11px] text-muted-foreground">
-                              {kind}
-                              {task.deployment ? ` · v${task.deployment.version}` : ""}
-                            </span>
+                        <span className="flex min-w-0 items-center gap-2">
+                          <StubKindIcon kind="function" className="size-3 shrink-0" />
+                          <Link
+                            to="/w/$workspace/apps/$app/workloads/$kind/$name"
+                            params={{
+                              workspace: workspace.name,
+                              app: task.app,
+                              kind: "function",
+                              name: task.function,
+                            }}
+                            className="interactive-link min-w-0 truncate text-xs text-foreground"
+                          >
+                            {task.function}
+                          </Link>
+                          <span className="shrink-0 text-[11px] text-muted-foreground">
+                            function
+                            {task.version ? ` · v${task.version}` : ""}
                           </span>
-                        ) : (
-                          <span className="text-xs text-muted-foreground">—</span>
-                        )}
+                        </span>
                       </TableCell>
                     ) : null}
                     {showApp ? (
                       <TableCell className="max-w-[160px] truncate text-xs text-muted-foreground">
-                        {task.app && task.app_id ? (
-                          <Link
-                            to="/w/$workspace/apps/$appId"
-                            params={{ workspace: workspace.name, appId: task.app_id }}
-                            className="interactive-link"
-                          >
-                            {task.app.name}
-                          </Link>
-                        ) : (
-                          "—"
-                        )}
+                        <Link
+                          to="/w/$workspace/apps/$app"
+                          params={{ workspace: workspace.name, app: task.app }}
+                          className="interactive-link"
+                        >
+                          {task.app}
+                        </Link>
                       </TableCell>
                     ) : null}
                     <TableCell>
