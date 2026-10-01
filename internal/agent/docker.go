@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	cerrdefs "github.com/containerd/errdefs"
@@ -36,7 +37,7 @@ const (
 // pidsLimit bounds processes per container.
 const pidsLimit = 4096
 
-func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostproto.StartContainer, runtime string) error {
+func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostproto.StartContainer, runtime string, binds []mount.Mount, workspaces []string) error {
 	env := make([]string, 0, len(spec.GetEnvironment())+len(spec.GetSecrets())+8)
 	for _, key := range slices.Sorted(maps.Keys(spec.GetEnvironment())) {
 		env = append(env, key+"="+spec.GetEnvironment()[key])
@@ -66,6 +67,9 @@ func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostprot
 	labels[labelHost] = a.identity.HostID
 	labels[labelHandler] = c.handler
 	labels[labelSlots] = strconv.Itoa(c.slots)
+	if len(workspaces) > 0 {
+		labels[labelWorkspaces] = strings.Join(workspaces, ",")
+	}
 	labels[labelRuntime] = string(runtimeLabel)
 
 	limit := int64(pidsLimit)
@@ -83,15 +87,16 @@ func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostprot
 		},
 		HostConfig: &containertypes.HostConfig{
 			Runtime: a.cfg.OCIRuntime,
-			Mounts: []mount.Mount{
+			Mounts: append([]mount.Mount{
 				{Type: mount.TypeBind, Source: runtime, Target: containerRuntimeDir, ReadOnly: true},
 				{Type: mount.TypeBind, Source: a.cfg.SupervisorPath, Target: containerSupervisor, ReadOnly: true},
 				{Type: mount.TypeBind, Source: c.workspaceDir(), Target: containerWorkspace},
 				{Type: mount.TypeBind, Source: c.linkDir(), Target: containerLinkDir},
 				// Any container user may create the API socket here.
 				{Type: mount.TypeTmpfs, Target: containerAPIDir, TmpfsOptions: &mount.TmpfsOptions{SizeBytes: 1 << 20, Mode: 0o1777}},
-			},
-			Resources: containerResources(resources, a.capacity, limit),
+			}, binds...),
+			Resources:  containerResources(resources, a.capacity, limit),
+			StorageOpt: a.diskLimit(resources),
 		},
 	}
 	_, err = a.docker.ContainerCreate(ctx, options)
@@ -163,7 +168,11 @@ func (a *Agent) adopt(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("list containers: %w", err)
 	}
+	a.volumes.adopt(list.Items)
 	for _, summary := range list.Items {
+		if kind := summary.Labels[labelKind]; kind == kindMount || kind == kindBucket {
+			continue
+		}
 		id := summary.Labels[labelContainer]
 		if _, err := uuid.Parse(id); err != nil {
 			continue
@@ -179,6 +188,14 @@ func (a *Agent) adopt(ctx context.Context) error {
 				return err
 			}
 			c.link, c.started = l, true
+			disks, err := a.loadLeases(c.id)
+			if err != nil {
+				c.log.Error("reading disk leases failed", "error", err)
+			}
+			c.disks.disks = disks
+			if len(disks) > 0 {
+				a.goOwned(func(context.Context) { c.publishLoop(c.work) }) //nolint:contextcheck // Publishing lasts as long as the container's work.
+			}
 			l.serve()
 			a.track(c)
 			a.goOwned(c.watch)

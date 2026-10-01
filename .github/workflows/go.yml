@@ -44,6 +44,8 @@ jobs:
         run: |
           docker compose up -d --wait object-store
           docker compose run --rm object-store-bootstrap
+      - name: GeeseFS for volume mount tests
+        run: deploy/local/fetch-geesefs.sh
       - name: Generated code is current
         run: |
           go generate ./...

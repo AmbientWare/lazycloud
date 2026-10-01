@@ -1,49 +1,30 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any
 
-from shared.http.collections import (
-    SimpleQueueEmptyResponse,
-    SimpleQueuePeekResponse,
-    SimpleQueuePopResponse,
-    SimpleQueuePutResponse,
-    SimpleQueueSizeResponse,
-)
-
+from lazycloud.clients.storage import StorageClient
 from lazycloud.control import (
-    ControlClientConfig,
     ResourceControlBinding,
     resolve_control_client_config,
+    storage_client,
 )
 from lazycloud.values import decode_value, encode_value
 
 
-class QueueClient(Protocol):
-    def put(self, name: str, value: bytes) -> SimpleQueuePutResponse: ...
-
-    def pop(self, name: str) -> SimpleQueuePopResponse: ...
-
-    def peek(self, name: str) -> SimpleQueuePeekResponse: ...
-
-    def empty(self, name: str) -> SimpleQueueEmptyResponse: ...
-
-    def size(self, name: str) -> SimpleQueueSizeResponse: ...
-
-    def delete(self, name: str) -> None: ...
-
-
 @dataclass(slots=True)
-class Queue(ResourceControlBinding[QueueClient]):
+class Queue(ResourceControlBinding[StorageClient]):
+    """A first-in, first-out queue of Python values, created on the first put."""
+
     name: str
     workspace: str | None = None
-    client: QueueClient | None = field(default=None, init=False, repr=False)
+    client: StorageClient | None = field(default=None, init=False, repr=False)
     endpoint: str | None = field(default=None, init=False, repr=False)
     token: str | None = field(default=None, init=False, repr=False)
     timeout_seconds: float = field(default=10.0, init=False, repr=False)
 
     @property
-    def control_client(self) -> QueueClient:
+    def control_client(self) -> StorageClient:
         if self.client is None:
             config = resolve_control_client_config(
                 workspace=self.workspace,
@@ -51,47 +32,31 @@ class Queue(ResourceControlBinding[QueueClient]):
                 token=self.token,
                 timeout_seconds=self.timeout_seconds,
             )
-            self.client = _default_queue_client(config)
+            self.client = storage_client(config)
         return self.client
 
     def __len__(self) -> int:
-        return self.control_client.size(self.name).size
+        return self.control_client.get_queue(self.name).size
 
     def put(self, value: Any) -> bool:
-        self.control_client.put(self.name, encode_value(value))
+        self.control_client.put_queue_messages(self.name, [encode_value(value)])
         return True
 
     def pop(self) -> Any:
-        response = self.control_client.pop(self.name)
-        return _deserialize_queue_value(response.bytes_value())
+        """Remove and return the oldest value; None when the queue is empty."""
+        message = self.control_client.pop_queue_message(self.name).message
+        return None if message is None else decode_value(message)
 
     def peek(self) -> Any:
-        response = self.control_client.peek(self.name)
-        return _deserialize_queue_value(response.bytes_value())
+        """The oldest value without removing it; None when the queue is empty."""
+        message = self.control_client.peek_queue_message(self.name).message
+        return None if message is None else decode_value(message)
 
     def empty(self) -> bool:
-        return self.control_client.empty(self.name).empty
+        return len(self) == 0
 
     def delete(self) -> None:
-        self.control_client.delete(self.name)
+        self.control_client.delete_queue(self.name)
 
 
-def _default_queue_client(config: ControlClientConfig) -> QueueClient:
-    from lazycloud.clients.simplequeue.control import SimpleQueueControlClient
-
-    return SimpleQueueControlClient.from_endpoint(
-        config.endpoint,
-        token=config.token,
-        timeout_seconds=config.timeout_seconds,
-        workspace=config.workspace,
-    )
-
-
-def _deserialize_queue_value(value: bytes) -> Any:
-    return decode_value(value)
-
-
-__all__ = [
-    "Queue",
-    "QueueClient",
-]
+__all__ = ["Queue"]
