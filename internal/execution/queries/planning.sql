@@ -12,9 +12,11 @@ with candidates as (
     select w.active_release_id
     from workloads w
     join apps a on a.id = w.app_id
+    join workspaces ws on ws.id = a.workspace_id
     join releases r on r.id = w.active_release_id
     where w.desired_state = 'active'
       and a.state = 'active'
+      and ws.state = 'active'
       and w.active_release_id > @after_id
       and coalesce((r.spec -> 'autoscaler' ->> 'min_containers')::int, 0) > 0
 ),
@@ -31,8 +33,10 @@ batch as (
 )
 select r.id as release_id,
        a.workspace_id,
-       (w.active_release_id is not distinct from r.id and w.desired_state = 'active' and a.state = 'active')::bool as active,
-       (w.desired_state = 'stopped' or a.state = 'paused')::bool as stopping,
+       (w.active_release_id is not distinct from r.id and w.desired_state = 'active' and a.state = 'active'
+        and ws.state = 'active')::bool as active,
+       -- A deleting workspace winds down like a paused app.
+       (w.desired_state = 'stopped' or a.state = 'paused' or ws.state = 'deleting')::bool as stopping,
        coalesce((r.spec -> 'autoscaler' ->> 'min_containers')::int, 0)::int as min_containers,
        coalesce((r.spec -> 'autoscaler' ->> 'max_containers')::int, 1)::int as max_containers,
        coalesce((r.spec -> 'autoscaler' ->> 'tasks_per_container')::int, 1)::int as tasks_per_container,
@@ -50,6 +54,7 @@ from batch
 join releases r on r.id = batch.release_id
 join workloads w on w.id = r.workload_id
 join apps a on a.id = w.app_id
+join workspaces ws on ws.id = a.workspace_id
 cross join lateral (
     select count(*) filter (where t.available_at <= now()) as available
     from tasks t where t.release_id = r.id and t.status = 'queued'

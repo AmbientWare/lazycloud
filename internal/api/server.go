@@ -8,8 +8,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/identity"
@@ -20,6 +18,7 @@ import (
 // invokes one owner and maps its result.
 type Server struct {
 	owners Owners
+	cfg    Config
 	logger *slog.Logger
 }
 
@@ -31,26 +30,6 @@ func (s *Server) workspace(ctx context.Context, name string) (identity.Workspace
 		return identity.Workspace{}, identity.ErrUnauthenticated
 	}
 	return s.owners.Identity.AuthorizeWorkspace(ctx, p, name)
-}
-
-// GetMe returns the caller and the workspaces its token reaches.
-func (s *Server) GetMe(ctx context.Context, _ GetMeRequestObject) (GetMeResponseObject, error) {
-	p, ok := principalFrom(ctx)
-	if !ok {
-		return nil, identity.ErrUnauthenticated
-	}
-	workspaces, err := s.owners.Identity.Workspaces(ctx, p)
-	if err != nil {
-		return nil, err
-	}
-	me := GetMe200JSONResponse{
-		User:       apitypes.User{Id: uuid.UUID(p.User), Email: p.Email},
-		Workspaces: make([]apitypes.Workspace, len(workspaces)),
-	}
-	for n, ws := range workspaces {
-		me.Workspaces[n] = apitypes.Workspace{Id: uuid.UUID(ws.ID), Name: ws.Name}
-	}
-	return me, nil
 }
 
 // CreateSourceUpload registers a source archive or returns where to upload it.

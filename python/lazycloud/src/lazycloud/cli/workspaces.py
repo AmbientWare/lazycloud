@@ -3,19 +3,22 @@ from __future__ import annotations
 from typing import Annotated
 
 import typer
-from shared.aws_connections import AwsAccountConnectionPhase
-from shared.http.errors import HttpApiError, HttpTransportError
-from shared.identity import WorkspaceStatus
+from shared.api import WorkspaceState
 
 from lazycloud._terminal.cards import notice_card
 from lazycloud._terminal.streams import console
 from lazycloud.cli.components.errors import ClientError
 from lazycloud.cli.components.output import emit, json_output_enabled, print_payload, table
 from lazycloud.cli.components.prompts import confirm_destructive
-from lazycloud.cli.control import compute_client, workspace_client
+from lazycloud.clients.api import ApiClient, ApiConnectionError, ApiError
 from lazycloud.config import ClientProfile, ConfigError, get_profile, set_profile, settings
+from lazycloud.control import api_client, resolve_control_client_config
 
 workspace_app = typer.Typer(help="Manage workspaces.")
+
+
+def workspace_client() -> ApiClient:
+    return api_client(resolve_control_client_config())
 
 
 def _save_workspace(profile: ClientProfile, name: str) -> None:
@@ -27,20 +30,16 @@ def _save_workspace(profile: ClientProfile, name: str) -> None:
     )
 
 
-def _connection_for_cloud(cloud: str | None) -> str | None:
+def _require_cloud_supported(cloud: str | None) -> None:
     if cloud is None:
-        return None
+        return
     if cloud != "aws":
         raise ClientError(f"unsupported cloud {cloud!r}; connected clouds: aws")
-    connection = compute_client().current_connection()
-    if connection is None:
-        raise ClientError("no AWS account is connected; run `lazycloud cloud connect aws` first")
-    if connection.phase is not AwsAccountConnectionPhase.Ready:
-        raise ClientError(
-            f"the connected AWS account is {connection.phase.value}; "
-            "a workspace can be created there once `lazycloud cloud status` reports ready"
-        )
-    return connection.id
+    raise ClientError(
+        "no AWS account is connected; run `lazycloud cloud connect aws` first",
+        type="cloud_not_connected",
+        title="No connected cloud",
+    )
 
 
 def _require_profile_workspace() -> None:
@@ -53,6 +52,18 @@ def _require_profile_workspace() -> None:
         title="Workspace set by environment",
         hint="Unset LAZYCLOUD_WORKSPACE before changing the profile workspace.",
     )
+
+
+def _current_workspace(profile: ClientProfile) -> str:
+    name = profile.workspace.strip()
+    if not name:
+        raise ClientError(
+            "No workspace is selected.",
+            type="workspace_not_selected",
+            title="No workspace",
+            hint="Run `lazycloud workspace use NAME` first.",
+        )
+    return name
 
 
 def _selection_error(
@@ -71,15 +82,20 @@ def _selection_error(
 
 @workspace_app.command("list", help="List accessible workspaces.")
 def workspace_list(ctx: typer.Context) -> None:
-    client = workspace_client()
-    response = client.list()
+    with workspace_client() as client:
+        workspaces = client.list_workspaces()
     if json_output_enabled(ctx):
-        print_payload(ctx, response.model_dump(mode="json"))
+        print_payload(ctx, {"workspaces": [ws.model_dump(mode="json") for ws in workspaces]})
         return
-    current = client.current()
+    current = get_profile().workspace
     rows = [
-        [workspace.name, "yes" if workspace.id == current.id else ""]
-        for workspace in sorted(response.workspaces, key=lambda item: item.name)
+        [
+            workspace.name
+            if workspace.state is WorkspaceState.active
+            else f"{workspace.name} ({workspace.state.value})",
+            "yes" if workspace.name == current else "",
+        ]
+        for workspace in sorted(workspaces, key=lambda item: item.name)
     ]
     console.print(table("Workspaces", ["name", "current"], rows))
 
@@ -103,8 +119,10 @@ def workspace_create(
     ] = None,
 ) -> None:
     _require_profile_workspace()
+    _require_cloud_supported(cloud)
     profile = get_profile()
-    workspace = workspace_client().create(name, connection_id=_connection_for_cloud(cloud))
+    with workspace_client() as client:
+        workspace = client.create_workspace(name)
     try:
         _save_workspace(profile, workspace.name)
     except (ConfigError, OSError) as exc:
@@ -128,7 +146,8 @@ def workspace_create(
 def workspace_use(ctx: typer.Context, name: str) -> None:
     _require_profile_workspace()
     profile = get_profile()
-    workspaces = workspace_client().list().workspaces
+    with workspace_client() as client:
+        workspaces = client.list_workspaces()
     workspace = next((item for item in workspaces if item.name == name), None)
     if workspace is None:
         raise ClientError(
@@ -160,7 +179,8 @@ def workspace_use(ctx: typer.Context, name: str) -> None:
 def workspace_rename(ctx: typer.Context, name: str) -> None:
     _require_profile_workspace()
     profile = get_profile()
-    workspace = workspace_client().rename(name)
+    with workspace_client() as client:
+        workspace = client.rename_workspace(_current_workspace(profile), name)
     try:
         _save_workspace(profile, workspace.name)
     except (ConfigError, OSError) as exc:
@@ -190,9 +210,8 @@ def workspace_delete(
     yes: Annotated[bool, typer.Option("--yes", "-y", help="Skip confirmation.")] = False,
 ) -> None:
     profile = get_profile()
-    client = workspace_client()
-    current = client.current()
-    if current.name == name:
+    current = profile.workspace
+    if current == name:
         _require_profile_workspace()
     confirm_destructive(
         ctx,
@@ -204,37 +223,44 @@ def workspace_delete(
         confirmation_label="Workspace name",
         yes=yes,
     )
-    client.delete(name)
-    fallback = ""
-    if current.name == name:
-        recovery_workspace = "default"
-        try:
-            remaining = sorted(
-                (
-                    item
-                    for item in client.list().workspaces
-                    if item.status is WorkspaceStatus.Active
-                ),
-                key=lambda item: item.name,
-            )
-            workspace = next((item for item in remaining if item.name == "default"), None)
-            workspace = workspace or (remaining[0] if remaining else None)
-            if workspace is None:
-                raise ValueError("no active workspace remains")
-            fallback = workspace.name
-            recovery_workspace = fallback
-            _save_workspace(profile, fallback)
-        except (ConfigError, HttpApiError, HttpTransportError, OSError, ValueError) as exc:
-            raise _selection_error(
-                title="Workspace deleted",
-                message=f"Deleted {name}, but the CLI could not select a remaining workspace",
-                workspace=recovery_workspace,
-            ) from exc
+    with workspace_client() as client:
+        deleted = client.delete_workspace(name)
+        fallback = ""
+        if current == name:
+            recovery_workspace = "default"
+            try:
+                remaining = sorted(
+                    (
+                        item
+                        for item in client.list_workspaces()
+                        if item.state is WorkspaceState.active and item.name != name
+                    ),
+                    key=lambda item: item.name,
+                )
+                workspace = next((item for item in remaining if item.name == "default"), None)
+                workspace = workspace or (remaining[0] if remaining else None)
+                if workspace is None:
+                    raise ValueError("no active workspace remains")
+                fallback = workspace.name
+                recovery_workspace = fallback
+                _save_workspace(profile, fallback)
+            except (ConfigError, ApiError, ApiConnectionError, OSError, ValueError) as exc:
+                raise _selection_error(
+                    title="Workspace deleted",
+                    message=f"Deleted {name}, but the CLI could not select a remaining workspace",
+                    workspace=recovery_workspace,
+                ) from exc
     emit(
         ctx,
-        payload={"name": name, "deleted": True, "current": fallback or current.name},
+        payload={
+            "name": name,
+            "deleted": True,
+            "state": deleted.state.value,
+            "current": fallback or current,
+        },
         view=notice_card(
-            f"Deleted {name}." + (f" Using {fallback}." if fallback else ""),
+            f"Deleted {name}; its data is removed in the background."
+            + (f" Using {fallback}." if fallback else ""),
             tone="success",
         ),
     )
@@ -242,6 +268,7 @@ def workspace_delete(
 
 __all__ = [
     "workspace_app",
+    "workspace_client",
     "workspace_create",
     "workspace_delete",
     "workspace_list",

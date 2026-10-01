@@ -116,7 +116,7 @@ func startPlatform(t *testing.T) *platform {
 		t: t, pool: pool, control: control.NewControl(pool), storage: storage.NewStorage(pool, storagetest.Config()),
 		execution: execution.NewExecution(pool),
 	}
-	ident := identity.NewIdentity(pool)
+	ident := identity.NewIdentity(pool, identity.Config{PublicURL: "http://127.0.0.1"})
 	if _, err := ident.CreateUser(ctx, "dev@lazycloud.test", false); err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +162,7 @@ func startPlatform(t *testing.T) *platform {
 	apiHandler, err := api.NewHandler(api.Owners{
 		Identity: ident, Control: p.control, Storage: p.storage, Execution: p.execution, Images: im,
 		Listener: listener, Edge: p.edge,
-	}, logger)
+	}, api.Config{PublicURL: "http://127.0.0.1"}, logger)
 	if err != nil {
 		t.Fatal(err)
 	}

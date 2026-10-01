@@ -34,6 +34,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/hostsession"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/images"
+	"github.com/AmbientWare/lazycloud/internal/notifications"
 	"github.com/AmbientWare/lazycloud/internal/storage"
 )
 
@@ -99,6 +100,8 @@ type serveConfig struct {
 	grpcAddr      string
 	objectStore   storage.Config
 	imageTemplate string
+	identity      identity.Config
+	api           api.Config
 	images        images.Config
 	edgeAddr      string
 	edgeURL       string
@@ -116,6 +119,9 @@ func serve(ctx context.Context, args []string) error {
 	fs.StringVar(&cfg.objectStore.Bucket, "object-store-bucket", env("LAZYCLOUD_OBJECT_STORE_BUCKET", ""), "bucket for source archives (LAZYCLOUD_OBJECT_STORE_BUCKET)")
 	fs.StringVar(&cfg.objectStore.AccessKeyID, "object-store-access-key-id", env("LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID", ""), "object store access key id (LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID)")
 	fs.StringVar(&cfg.imageTemplate, "image-template", env("LAZYCLOUD_IMAGE_TEMPLATE", "docker.io/library/python:{version}-slim"), "container image per Python version (LAZYCLOUD_IMAGE_TEMPLATE)")
+	fs.StringVar(&cfg.identity.PublicURL, "public-url", env("LAZYCLOUD_PUBLIC_URL", "http://127.0.0.1:8080"), "dashboard origin for sign-in, device login and invitation links (LAZYCLOUD_PUBLIC_URL)")
+	fs.StringVar(&cfg.identity.GitHub.ClientID, "github-client-id", env("LAZYCLOUD_GITHUB_CLIENT_ID", ""), "GitHub App client id for dashboard sign-in (LAZYCLOUD_GITHUB_CLIENT_ID)")
+	fs.StringVar(&cfg.api.ClientReleaseVersion, "client-release-version", env("LAZYCLOUD_CLIENT_RELEASE_VERSION", ""), "CLI version older clients are told to update to (LAZYCLOUD_CLIENT_RELEASE_VERSION)")
 	fs.StringVar(&cfg.images.Registry, "image-registry", env("LAZYCLOUD_IMAGE_REGISTRY", ""), "registry host[:port] that builds publish to (LAZYCLOUD_IMAGE_REGISTRY)")
 	fs.StringVar(&cfg.images.Repository, "image-repository", env("LAZYCLOUD_IMAGE_REPOSITORY", "lazycloud"), "path under the registry for images and build cache (LAZYCLOUD_IMAGE_REPOSITORY)")
 	fs.BoolVar(&cfg.images.Insecure, "image-registry-insecure", env("LAZYCLOUD_IMAGE_REGISTRY_INSECURE", "") == "true", "the image registry speaks plain HTTP (LAZYCLOUD_IMAGE_REGISTRY_INSECURE)")
@@ -132,7 +138,10 @@ func serve(ctx context.Context, args []string) error {
 	if user := os.Getenv("LAZYCLOUD_IMAGE_REGISTRY_USERNAME"); user != "" {
 		cfg.images.Auth = &images.Auth{Username: user, Password: os.Getenv("LAZYCLOUD_IMAGE_REGISTRY_PASSWORD")}
 	}
-	// The secrets stay out of the process arguments.
+	// Secrets stay out of the process arguments.
+	cfg.identity.GitHub.ClientSecret = os.Getenv("LAZYCLOUD_GITHUB_CLIENT_SECRET")
+	cfg.api.ResendWebhookSecret = os.Getenv("LAZYCLOUD_RESEND_WEBHOOK_SECRET")
+	cfg.api.PublicURL = cfg.identity.PublicURL
 	cfg.cloudflare.token = os.Getenv("LAZYCLOUD_CLOUDFLARE_API_TOKEN")
 	cfg.objectStore.SecretAccessKey = os.Getenv("LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY")
 	if cfg.objectStore.Endpoint == "" || cfg.objectStore.Region == "" || cfg.objectStore.Bucket == "" ||
@@ -154,7 +163,10 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, logger 
 	store := storage.NewStorage(pool, cfg.objectStore)
 	exec := execution.NewExecution(pool)
 	im := images.NewImages(pool, exec, cfg.images, nil)
-	ident := identity.NewIdentity(pool)
+	ident := identity.NewIdentity(pool, cfg.identity)
+	if cfg.identity.GitHub.ClientID == "" || cfg.identity.GitHub.ClientSecret == "" {
+		logger.WarnContext(ctx, "dashboard sign-in is unavailable: set LAZYCLOUD_GITHUB_CLIENT_ID and LAZYCLOUD_GITHUB_CLIENT_SECRET")
+	}
 	edgeConfig := edge.Config{URL: cfg.edgeURL}
 	if cfg.cloudflare.zone != "" && cfg.cloudflare.token != "" {
 		edgeConfig.Domains = edge.NewCloudflare(edge.CloudflareAPI, cfg.cloudflare.zone, cfg.cloudflare.token)
@@ -165,8 +177,9 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, logger 
 	}
 	handler, err := api.NewHandler(api.Owners{
 		Identity: ident, Control: control.NewControl(pool), Storage: store,
-		Execution: exec, Images: im, Listener: listener, Edge: edges,
-	}, logger)
+		Execution: exec, Images: im, Notifications: notifications.NewNotifications(pool, nil, logger), Listener: listener,
+		Edge: edges,
+	}, cfg.api, logger)
 	if err != nil {
 		return err
 	}
@@ -200,6 +213,7 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, logger 
 
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error { return listener.Run(gctx) })
+	g.Go(func() error { return ident.RunTokenUse(gctx, logger) })
 	g.Go(func() error { return edges.Run(gctx) })
 	g.Go(func() error {
 		if err := edgeServer.Serve(edgeListener); !errors.Is(err, http.ErrServerClosed) {
