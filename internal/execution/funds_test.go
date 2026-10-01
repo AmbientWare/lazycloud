@@ -100,6 +100,24 @@ select ws.id, rel.id, 'pending', 1, 1000, 1 << 29 from ws, rel, generate_series(
 	}
 }
 
+func TestStopUnfundedStopsEveryRunningContainerAndSkipsDraining(t *testing.T) {
+	pool := dbtest.New(t)
+	e := NewExecution(pool)
+	f := newRelease(t, pool, `{}`)
+	host := newHost(t, pool)
+	exec(t, pool, `insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
+		select $1, $2, 'ready', $3, 1, 1000, 1 << 29, now(), now() from generate_series(1, 150)`, f.workspace, f.release, host)
+	exec(t, pool, `insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at, ready_at)
+		values ($1, $2, 'draining', $3, 1, 1000, 1 << 29, now(), now())`, f.workspace, f.release, host)
+	stopped, err := e.StopUnfunded(t.Context(), identity.WorkspaceID(f.workspace), "the account's credit ran out")
+	if err != nil || stopped != 150 {
+		t.Fatalf("stopped %d: %v", stopped, err)
+	}
+	if states := containerStates(t, pool, f.release); states[ContainerReady] != 0 || states[ContainerDraining] != 151 {
+		t.Fatalf("states %v", states)
+	}
+}
+
 func TestUnfundedAccountsStopTheirContainers(t *testing.T) {
 	pool := dbtest.New(t)
 	e := NewExecution(pool)
