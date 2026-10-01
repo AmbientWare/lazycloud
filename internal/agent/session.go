@@ -162,6 +162,21 @@ func (a *Agent) report(m *hostproto.HostMessage) {
 	}
 }
 
+// reportMetrics queues a metrics message only while the session queue is
+// at most half full, so samples never crowd out reports and acks.
+func (a *Agent) reportMetrics(m *hostproto.HostMessage) {
+	a.mu.Lock()
+	out := a.session
+	a.mu.Unlock()
+	if out == nil || len(out.ch) > cap(out.ch)/2 {
+		return
+	}
+	select {
+	case out.ch <- m:
+	default:
+	}
+}
+
 // handle dispatches a command without waiting on containers, so commands
 // are never delayed by container work.
 func (a *Agent) handle(command *hostproto.ServerMessage) {

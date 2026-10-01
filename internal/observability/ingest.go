@@ -223,7 +223,7 @@ func (o *Observability) RollUp(ctx context.Context) (RollupResult, error) {
 		if !window.ToTs.After(window.FromTs) {
 			return nil
 		}
-		folded, err := q.FoldMinutes(ctx, FoldMinutesParams{FromTs: window.FromTs, ToTs: window.ToTs})
+		folded, err := q.FoldMinutes(ctx, FoldMinutesParams(window))
 		if err != nil {
 			return fmt.Errorf("fold minutes: %w", err)
 		}

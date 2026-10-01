@@ -180,6 +180,7 @@ func (a *Agent) adopt(ctx context.Context) error {
 			}
 			c.link, c.started = l, true
 			l.serve()
+			c.watchUsage(ctx)
 			a.track(c)
 			a.goOwned(c.watch)
 			continue

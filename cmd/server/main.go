@@ -34,9 +34,11 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/images"
 	"github.com/AmbientWare/lazycloud/internal/notifications"
+	"github.com/AmbientWare/lazycloud/internal/observability"
 	"github.com/AmbientWare/lazycloud/internal/schedules"
 	"github.com/AmbientWare/lazycloud/internal/secrets"
 	"github.com/AmbientWare/lazycloud/internal/storage"
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 const shutdownGrace = 10 * time.Second
@@ -147,16 +149,34 @@ func serve(ctx context.Context, args []string) error {
 	if cfg.secretsKey == "" {
 		return errors.New("the secrets key file is required: set LAZYCLOUD_SECRETS_KEY_FILE or -secrets-key-file")
 	}
-	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	format, err := telemetry.LogFormatFromEnv(telemetry.LogText)
+	if err != nil {
+		return err
+	}
+	logger := telemetry.NewLogger(os.Stderr, format, "server")
+	telemetryConfig, err := telemetry.ConfigFromEnv("server", "")
+	if err != nil {
+		return err
+	}
+	tel, err := telemetry.New(ctx, telemetryConfig)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tel.Shutdown(context.WithoutCancel(ctx)) }()
 	return withPool(ctx, cfg.databaseURL, func(pool *pgxpool.Pool) error {
 		if err := database.Migrate(ctx, pool); err != nil {
 			return err
 		}
-		return serveWith(ctx, pool, cfg, logger)
+		return serveWith(ctx, pool, cfg, tel, logger)
 	})
 }
 
-func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, logger *slog.Logger) error {
+func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, tel *telemetry.Telemetry, logger *slog.Logger) error {
+	tel.RegisterPool(pool)
+	// Billing supplies plan limits once it lands; until then account
+	// metrics leave them out.
+	obs := observability.NewObservability(pool, observability.Config{Registerer: tel.Registry}, logger)
+	changes := observability.NewChanges(pool, observability.DefaultChangesConfig(), tel.Registry, logger)
 	listener := database.NewListener(pool, logger, database.ChannelHost, database.ChannelTask, database.ChannelClaim,
 		database.ChannelLogs, database.ChannelImageBuild, database.ChannelImageBuildLog)
 	store := storage.NewStorage(pool, cfg.objectStore)
@@ -175,6 +195,7 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, logger 
 		Identity: ident, Control: control.NewControl(pool), Storage: store,
 		Execution: exec, Images: im, Notifications: notifications.NewNotifications(pool, nil, logger),
 		Secrets: vault, Schedules: schedules.NewSchedules(pool, exec), Listener: listener,
+		Observability: obs, Changes: changes,
 	}
 	handler, err := api.NewHandler(owners, cfg.api, logger)
 	if err != nil {
@@ -186,11 +207,11 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, logger 
 	}
 	hosts := hostsession.NewServer(compute.NewCompute(pool), exec, store, im, listener, hostsession.Config{
 		ImageTemplate: cfg.imageTemplate, TouchInterval: 10 * time.Second,
-		Secrets: vault, ContainerAPI: containerAPI,
+		Secrets: vault, ContainerAPI: containerAPI, Observability: obs,
 	}, logger)
-	grpcServer := grpc.NewServer(hosts.ServerOptions()...)
+	grpcServer := grpc.NewServer(append(hosts.ServerOptions(), tel.GRPCServerOption())...)
 	hostproto.RegisterHostServiceServer(grpcServer, hosts)
-	httpServer := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+	httpServer := &http.Server{Handler: tel.HTTPHandler(handler, tel.NewHTTPMetrics()), ReadHeaderTimeout: 10 * time.Second}
 
 	var lc net.ListenConfig
 	httpListener, err := lc.Listen(ctx, "tcp", cfg.httpAddr)
@@ -206,6 +227,9 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, logger 
 
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error { return listener.Run(gctx) })
+	g.Go(func() error { return changes.Run(gctx) })
+	g.Go(func() error { return obs.RunIngest(gctx) })
+	g.Go(func() error { return tel.ServeMetrics(gctx, logger) })
 	g.Go(func() error { return ident.RunTokenUse(gctx, logger) })
 	g.Go(func() error {
 		if err := httpServer.Serve(httpListener); !errors.Is(err, http.ErrServerClosed) {

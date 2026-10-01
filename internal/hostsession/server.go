@@ -26,6 +26,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/images"
+	"github.com/AmbientWare/lazycloud/internal/observability"
 	"github.com/AmbientWare/lazycloud/internal/secrets"
 	"github.com/AmbientWare/lazycloud/internal/storage"
 )
@@ -52,6 +53,9 @@ type Config struct {
 	Secrets *secrets.Secrets
 	// ContainerAPI serves container API requests; see api.NewContainerHandler.
 	ContainerAPI http.Handler
+	// Observability stores container metrics and start stages; nil drops
+	// them.
+	Observability *observability.Observability
 }
 
 // Server implements hostproto.HostService.
@@ -230,6 +234,7 @@ func (s *Server) ClaimTasks(ctx context.Context, req *hostproto.ClaimTasksReques
 			Deadline:      timestamppb.New(c.Deadline),
 			RootTaskId:    c.Root.String(),
 			MaxAttempts:   int32(c.MaxAttempts), //nolint:gosec // Attempts are capped at 100.
+			Traceparent:   c.TraceParent,
 		}
 		if c.Parent != nil {
 			out.Tasks[n].ParentTaskId = c.Parent.String()

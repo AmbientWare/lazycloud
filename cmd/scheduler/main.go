@@ -23,9 +23,11 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/images"
 	"github.com/AmbientWare/lazycloud/internal/notifications"
+	"github.com/AmbientWare/lazycloud/internal/observability"
 	"github.com/AmbientWare/lazycloud/internal/schedules"
 	"github.com/AmbientWare/lazycloud/internal/scheduling"
 	"github.com/AmbientWare/lazycloud/internal/secrets"
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 const (
@@ -43,10 +45,18 @@ const (
 	contendedRetry = 100 * time.Millisecond
 	// purgeInterval paces deletion of finished callbacks.
 	purgeInterval = time.Minute
+	// rollupTick paces folding container metric samples into minute
+	// points; a pass that is behind reruns at once.
+	rollupTick = 30 * time.Second
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	format, err := telemetry.LogFormatFromEnv(telemetry.LogJSON)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "scheduler:", err)
+		os.Exit(2)
+	}
+	logger := telemetry.NewLogger(os.Stderr, format, "scheduler")
 	if err := run(logger); err != nil {
 		logger.Error("scheduler stopped", "error", err)
 		os.Exit(1)
@@ -54,6 +64,10 @@ func main() {
 }
 
 func run(logger *slog.Logger) error {
+	telemetryConfig, err := telemetry.ConfigFromEnv("scheduler", "")
+	if err != nil {
+		return err
+	}
 	url := os.Getenv("LAZYCLOUD_DATABASE_URL")
 	if url == "" {
 		return errors.New("LAZYCLOUD_DATABASE_URL is required")
@@ -69,6 +83,15 @@ func run(logger *slog.Logger) error {
 	if err := database.Migrate(ctx, pool); err != nil {
 		return fmt.Errorf("migrate: %w", err)
 	}
+
+	tel, err := telemetry.New(ctx, telemetryConfig)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tel.Shutdown(context.WithoutCancel(ctx)) }()
+	tel.RegisterPool(pool)
+	timed := newPassTimer(tel)
+	obs := observability.NewObservability(pool, observability.Config{}, logger)
 
 	exec := execution.NewExecution(pool)
 	sched := scheduling.NewScheduling(pool, logger)
@@ -105,8 +128,19 @@ func run(logger *slog.Logger) error {
 
 	group, ctx := errgroup.WithContext(ctx)
 	group.Go(func() error { return listener.Run(ctx) })
+	group.Go(func() error { return tel.ServeMetrics(ctx, logger) })
 	group.Go(func() error {
-		return loop(ctx, tick, planWake, nil, func(ctx context.Context) bool {
+		return loop(ctx, rollupTick, nil, nil, timed("metrics_rollup", func(ctx context.Context) bool {
+			result, err := obs.RollUp(ctx)
+			if err != nil {
+				logger.ErrorContext(ctx, "metrics rollup pass", "error", err)
+			}
+			// Behind reruns the pass at once, like a contended lock.
+			return result.Behind
+		}))
+	})
+	group.Go(func() error {
+		return loop(ctx, tick, planWake, nil, timed("plan", func(ctx context.Context) bool {
 			result, err := exec.Plan(ctx, logger)
 			if err != nil {
 				logger.ErrorContext(ctx, "planning pass", "error", err)
@@ -118,19 +152,19 @@ func run(logger *slog.Logger) error {
 				}
 			}
 			return result.Skipped
-		})
+		}))
 	})
 	group.Go(func() error {
-		return loop(ctx, tick, placeWake, placeNow, func(ctx context.Context) bool {
+		return loop(ctx, tick, placeWake, placeNow, timed("place", func(ctx context.Context) bool {
 			result, err := sched.Place(ctx)
 			if err != nil {
 				logger.ErrorContext(ctx, "placement pass", "error", err)
 			}
 			return result.Skipped
-		})
+		}))
 	})
 	group.Go(func() error {
-		return loop(ctx, tick, nil, nil, func(ctx context.Context) bool {
+		return loop(ctx, tick, nil, nil, timed("deadlines", func(ctx context.Context) bool {
 			if _, err := exec.TimeOutAttempts(ctx, logger); err != nil {
 				logger.ErrorContext(ctx, "attempt deadline pass", "error", err)
 			}
@@ -138,19 +172,19 @@ func run(logger *slog.Logger) error {
 				logger.ErrorContext(ctx, "start deadline pass", "error", err)
 			}
 			return false
-		})
+		}))
 	})
 	group.Go(func() error {
-		return loop(ctx, tick, nil, nil, func(ctx context.Context) bool {
+		return loop(ctx, tick, nil, nil, timed("schedules", func(ctx context.Context) bool {
 			if _, err := crons.Fire(ctx, logger); err != nil {
 				logger.ErrorContext(ctx, "schedule pass", "error", err)
 			}
 			return false
-		})
+		}))
 	})
 	group.Go(func() error {
 		lastPurge := time.Now()
-		return loop(ctx, tick, nil, nil, func(ctx context.Context) bool {
+		return loop(ctx, tick, nil, nil, timed("callbacks", func(ctx context.Context) bool {
 			if _, err := deliverer.Deliver(ctx); err != nil {
 				logger.ErrorContext(ctx, "callback pass", "error", err)
 			}
@@ -161,23 +195,23 @@ func run(logger *slog.Logger) error {
 				}
 			}
 			return false
-		})
+		}))
 	})
 	group.Go(func() error {
-		return loop(ctx, hostLossTick, nil, nil, func(ctx context.Context) bool {
+		return loop(ctx, hostLossTick, nil, nil, timed("host_loss", func(ctx context.Context) bool {
 			if _, err := exec.ReleaseLostHosts(ctx, logger); err != nil {
 				logger.ErrorContext(ctx, "host loss pass", "error", err)
 			}
 			return false
-		})
+		}))
 	})
 	group.Go(func() error {
-		return loop(ctx, buildRecoveryTick, buildWake, nil, func(ctx context.Context) bool {
+		return loop(ctx, buildRecoveryTick, buildWake, nil, timed("build_recovery", func(ctx context.Context) bool {
 			if _, err := im.Recover(ctx, logger); err != nil {
 				logger.ErrorContext(ctx, "image build recovery pass", "error", err)
 			}
 			return false
-		})
+		}))
 	})
 	accounts.start(ctx, group)
 	logger.Info("scheduler started")

@@ -36,7 +36,9 @@ type ChangesConfig struct {
 }
 
 // DefaultChangesConfig keeps about a minute of a busy cluster's changes.
-var DefaultChangesConfig = ChangesConfig{Retained: 16384, Buffer: 256, MaxSubscribers: 20000}
+func DefaultChangesConfig() ChangesConfig {
+	return ChangesConfig{Retained: 16384, Buffer: 256, MaxSubscribers: 20000}
+}
 
 // ErrTooManySubscribers means the server holds MaxSubscribers streams.
 var ErrTooManySubscribers = errors.New("too many open change streams")
@@ -80,6 +82,8 @@ type Changes struct {
 	index map[int64]uint64
 	subs  map[identity.WorkspaceID]map[*Subscription]struct{}
 	count int
+	// done is closed when Run returns, which ends every stream.
+	done chan struct{}
 }
 
 type changeMetrics struct {
@@ -117,12 +121,33 @@ func NewChanges(pool *pgxpool.Pool, cfg ChangesConfig, registerer prometheus.Reg
 		ring:  make([]ChangeEvent, cfg.Retained),
 		index: make(map[int64]uint64, cfg.Retained),
 		subs:  map[identity.WorkspaceID]map[*Subscription]struct{}{},
+		done:  make(chan struct{}),
 	}
+}
+
+// Done is closed once the hub stops, so streams end with the server.
+func (c *Changes) Done() <-chan struct{} { return c.done }
+
+// Latest is the newest retained event's seq; false when none is retained.
+func (c *Changes) Latest() (int64, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.latestLocked()
+}
+
+func (c *Changes) latestLocked() (int64, bool) {
+	size := uint64(len(c.ring))
+	if c.next == 0 || size == 0 {
+		return 0, false
+	}
+	latest := c.ring[(c.next-1)%size]
+	return latest.Seq, latest.Frame != nil
 }
 
 // Run listens until ctx ends, reconnecting after failures. Every reconnect
 // is a gap: retained events are dropped and subscribers reset.
 func (c *Changes) Run(ctx context.Context) error {
+	defer close(c.done)
 	for {
 		err := c.listen(ctx)
 		c.gap()
@@ -203,7 +228,11 @@ func (c *Changes) Publish(e ChangeEvent) {
 		c.next++
 	}
 	for sub := range c.subs[e.Workspace] {
-		sub.offer(e, &c.metrics)
+		select {
+		case sub.events <- e:
+		default:
+			sub.markReset(ResetBehind, &c.metrics)
+		}
 	}
 	c.metrics.fanout.Observe(time.Since(began).Seconds())
 }
@@ -217,10 +246,22 @@ func (c *Changes) gap() {
 	clear(c.index)
 	for _, set := range c.subs {
 		for sub := range set {
-			sub.markReset(&c.metrics)
+			sub.markReset(ResetMissed, &c.metrics)
 		}
 	}
 }
+
+// ResetReason says why a subscriber must reload.
+type ResetReason string
+
+const (
+	// ResetBehind: the subscriber read too slowly and events were dropped.
+	ResetBehind ResetReason = "behind"
+	// ResetMissed: the hub lost its connection and may have missed events.
+	ResetMissed ResetReason = "missed"
+	// ResetUnknownCursor: the requested event is no longer retained.
+	ResetUnknownCursor ResetReason = "unknown_cursor"
+)
 
 // Subscription is one open change stream.
 type Subscription struct {
@@ -231,21 +272,15 @@ type Subscription struct {
 	wake chan struct{}
 
 	mu    sync.Mutex
-	reset bool
+	reset ResetReason
 }
 
-func (s *Subscription) offer(e ChangeEvent, m *changeMetrics) {
-	select {
-	case s.events <- e:
-	default:
-		s.markReset(m)
-	}
-}
-
-func (s *Subscription) markReset(m *changeMetrics) {
+func (s *Subscription) markReset(reason ResetReason, m *changeMetrics) {
 	s.mu.Lock()
-	already := s.reset
-	s.reset = true
+	already := s.reset != ""
+	if !already || reason == ResetMissed {
+		s.reset = reason
+	}
 	s.mu.Unlock()
 	if !already {
 		m.resets.Inc()
@@ -262,14 +297,15 @@ func (s *Subscription) Events() <-chan ChangeEvent { return s.events }
 // Reset receives a value when the subscriber missed events.
 func (s *Subscription) Reset() <-chan struct{} { return s.wake }
 
-// TakeReset reports whether the subscriber missed events since the last
-// call, and drains the events already queued, which the reset covers.
-func (s *Subscription) TakeReset() bool {
+// TakeReset reports why the subscriber missed events since the last call,
+// or "" when it did not, and drains the events already queued, which the
+// reset covers.
+func (s *Subscription) TakeReset() ResetReason {
 	s.mu.Lock()
 	reset := s.reset
-	s.reset = false
+	s.reset = ""
 	s.mu.Unlock()
-	if reset {
+	if reset != "" {
 		for {
 			select {
 			case <-s.events:
@@ -333,12 +369,8 @@ func (c *Changes) Subscribe(ws identity.WorkspaceID, after *int64) (*Subscriptio
 	c.metrics.subscribers.Inc()
 
 	var resume Resume
+	resume.Latest, _ = c.latestLocked()
 	size := uint64(len(c.ring))
-	if c.next > 0 && size > 0 {
-		if latest := c.ring[(c.next-1)%size]; latest.Frame != nil {
-			resume.Latest = latest.Seq
-		}
-	}
 	if after == nil {
 		return sub, resume, nil
 	}
