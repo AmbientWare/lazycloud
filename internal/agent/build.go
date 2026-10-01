@@ -282,8 +282,11 @@ func (a *Agent) createBuilder(ctx context.Context, c *container, spec *hostproto
 			// Rootless BuildKit creates user namespaces and mounts procfs for
 			// each step's sandbox. The builder runs with runc: gVisor does not
 			// run it yet.
-			SecurityOpt: []string{"seccomp=unconfined", "apparmor=unconfined", "systempaths=unconfined"},
-			NetworkMode: containertypes.NetworkMode(a.cfg.BuildNetwork),
+			SecurityOpt: []string{"seccomp=unconfined", "apparmor=unconfined"},
+			// Empty, not nil: Docker's systempaths=unconfined.
+			MaskedPaths:   []string{},
+			ReadonlyPaths: []string{},
+			NetworkMode:   containertypes.NetworkMode(a.cfg.BuildNetwork),
 			Mounts: []mount.Mount{
 				{Type: mount.TypeBind, Source: filepath.Join(c.dir, "context"), Target: buildContextDir, ReadOnly: true},
 				{Type: mount.TypeBind, Source: filepath.Join(c.dir, "dockerfile"), Target: buildDockerfileDir, ReadOnly: true},

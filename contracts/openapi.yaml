@@ -840,7 +840,6 @@ components:
     ImageBuildStatus:
       type: string
       enum: [building, succeeded, failed]
-      x-enum-varnames: [ImageBuildBuilding, ImageBuildSucceeded, ImageBuildFailed]
 
     ImageBuildPhase:
       description: >-
@@ -849,7 +848,6 @@ components:
         final.
       type: string
       enum: [queued, starting, building, finished]
-      x-enum-varnames: [ImageBuildQueued, ImageBuildStarting, ImageBuildRunning, ImageBuildFinished]
 
     ImageBuild:
       type: object

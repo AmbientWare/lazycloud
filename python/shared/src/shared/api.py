@@ -231,16 +231,16 @@ class Image(BaseModel):
 
 
 class ImageBuildStatus(str, Enum):
-    ImageBuildBuilding = "building"
-    ImageBuildSucceeded = "succeeded"
-    ImageBuildFailed = "failed"
+    building = "building"
+    succeeded = "succeeded"
+    failed = "failed"
 
 
 class ImageBuildPhase(str, Enum):
-    ImageBuildQueued = "queued"
-    ImageBuildStarting = "starting"
-    ImageBuildRunning = "building"
-    ImageBuildFinished = "finished"
+    queued = "queued"
+    starting = "starting"
+    building = "building"
+    finished = "finished"
 
 
 class ImageBuild(BaseModel):

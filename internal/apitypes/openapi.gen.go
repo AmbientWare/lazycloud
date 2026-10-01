@@ -141,22 +141,22 @@ func (e ImageArchitecture) Valid() bool {
 
 // Defines values for ImageBuildPhase.
 const (
-	ImageBuildFinished ImageBuildPhase = "finished"
-	ImageBuildQueued   ImageBuildPhase = "queued"
-	ImageBuildRunning  ImageBuildPhase = "building"
-	ImageBuildStarting ImageBuildPhase = "starting"
+	ImageBuildPhaseBuilding ImageBuildPhase = "building"
+	ImageBuildPhaseFinished ImageBuildPhase = "finished"
+	ImageBuildPhaseQueued   ImageBuildPhase = "queued"
+	ImageBuildPhaseStarting ImageBuildPhase = "starting"
 )
 
 // Valid indicates whether the value is a known member of the ImageBuildPhase enum.
 func (e ImageBuildPhase) Valid() bool {
 	switch e {
-	case ImageBuildFinished:
+	case ImageBuildPhaseBuilding:
 		return true
-	case ImageBuildQueued:
+	case ImageBuildPhaseFinished:
 		return true
-	case ImageBuildRunning:
+	case ImageBuildPhaseQueued:
 		return true
-	case ImageBuildStarting:
+	case ImageBuildPhaseStarting:
 		return true
 	default:
 		return false
@@ -165,19 +165,19 @@ func (e ImageBuildPhase) Valid() bool {
 
 // Defines values for ImageBuildStatus.
 const (
-	ImageBuildBuilding  ImageBuildStatus = "building"
-	ImageBuildFailed    ImageBuildStatus = "failed"
-	ImageBuildSucceeded ImageBuildStatus = "succeeded"
+	ImageBuildStatusBuilding  ImageBuildStatus = "building"
+	ImageBuildStatusFailed    ImageBuildStatus = "failed"
+	ImageBuildStatusSucceeded ImageBuildStatus = "succeeded"
 )
 
 // Valid indicates whether the value is a known member of the ImageBuildStatus enum.
 func (e ImageBuildStatus) Valid() bool {
 	switch e {
-	case ImageBuildBuilding:
+	case ImageBuildStatusBuilding:
 		return true
-	case ImageBuildFailed:
+	case ImageBuildStatusFailed:
 		return true
-	case ImageBuildSucceeded:
+	case ImageBuildStatusSucceeded:
 		return true
 	default:
 		return false
@@ -321,25 +321,25 @@ func (e RetryPolicyBackoff) Valid() bool {
 
 // Defines values for TaskStatus.
 const (
-	Cancelled TaskStatus = "cancelled"
-	Failed    TaskStatus = "failed"
-	Queued    TaskStatus = "queued"
-	Running   TaskStatus = "running"
-	Succeeded TaskStatus = "succeeded"
+	TaskStatusCancelled TaskStatus = "cancelled"
+	TaskStatusFailed    TaskStatus = "failed"
+	TaskStatusQueued    TaskStatus = "queued"
+	TaskStatusRunning   TaskStatus = "running"
+	TaskStatusSucceeded TaskStatus = "succeeded"
 )
 
 // Valid indicates whether the value is a known member of the TaskStatus enum.
 func (e TaskStatus) Valid() bool {
 	switch e {
-	case Cancelled:
+	case TaskStatusCancelled:
 		return true
-	case Failed:
+	case TaskStatusFailed:
 		return true
-	case Queued:
+	case TaskStatusQueued:
 		return true
-	case Running:
+	case TaskStatusRunning:
 		return true
-	case Succeeded:
+	case TaskStatusSucceeded:
 		return true
 	default:
 		return false
