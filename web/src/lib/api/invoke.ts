@@ -42,8 +42,8 @@ export async function invokeFunction(
   const startedAt = performance.now();
   return invokeResult(
     startedAt,
-    await api.POST("/v1/workspaces/{workspace}/apps/{app}/functions/{function}/invoke", {
-      params: { path: { workspace, app, function: name } },
+    await api.POST("/v1/workspaces/{workspace}/apps/{app}/workloads/function/{name}/invoke", {
+      params: { path: { workspace, app, name } },
       body: body as Schemas["InvocationBody"],
     }),
   );
@@ -61,9 +61,9 @@ export async function invokeFunctionTask(
 ): Promise<InvokeResult> {
   const startedAt = performance.now();
   const { response, data, error } = await api.POST(
-    "/v1/workspaces/{workspace}/apps/{app}/functions/{function}/tasks",
+    "/v1/workspaces/{workspace}/apps/{app}/workloads/function/{name}/tasks",
     {
-      params: { path: { workspace, app, function: name } },
+      params: { path: { workspace, app, name } },
       body: { inputs: [{ encoding: "json", value: invocationArguments(body) }] },
     },
   );

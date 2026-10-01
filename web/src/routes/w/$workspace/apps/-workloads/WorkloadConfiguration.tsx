@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import type { Schemas } from "@/lib/api/client";
 import { formatDuration, resourceAllocation } from "@/lib/format";
 
-export function WorkloadConfiguration({ spec }: { spec: Schemas["FunctionSpec"] }) {
+export function WorkloadConfiguration({ spec }: { spec: Schemas["WorkloadSpec"] }) {
   const { resources, placement } = spec;
   const gpu = resources.gpu ?? [];
   const gpuCount = resources.gpu_count ?? 0;

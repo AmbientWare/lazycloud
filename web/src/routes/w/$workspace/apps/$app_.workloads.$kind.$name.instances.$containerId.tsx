@@ -1,6 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 
 import { RouteErrorFallback } from "@/components/shared/ErrorBoundary";
+import type { Schemas } from "@/lib/api/client";
 import { useWorkspace } from "@/lib/workspace-context";
 
 import { PodInstanceDrawer } from "./-workloads/PodInstanceDrawer";
@@ -22,7 +23,7 @@ function PodInstanceDrawerRoute() {
       workspace={workspace.name}
       app={app}
       workloadName={name}
-      workloadKind={kind}
+      workloadKind={kind as Schemas["WorkloadKind"]}
       containerId={containerId}
       onClose={() => {
         void navigate({

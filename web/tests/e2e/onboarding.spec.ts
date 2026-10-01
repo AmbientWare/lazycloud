@@ -11,7 +11,7 @@ const firstApp: Schemas["App"] = {
   created_at: "2026-01-02T10:00:00Z",
 };
 
-const firstWorkload: Schemas["DeployedWorkload"] = {
+const firstWorkload: Schemas["Workload"] = {
   id: "stub-1",
   app: "quickstart",
   app_state: "active",
@@ -60,8 +60,8 @@ test("empty workspace guides the quickstart and flips to the grid live", async (
   await page.route(workspaceRoute("apps"), async (route) => {
     await route.fulfill({ json: { apps: published ? [firstApp] : [] } });
   });
-  await page.route(workspaceRoute("deployments"), async (route) => {
-    await route.fulfill({ json: { deployments: published ? [firstWorkload] : [] } });
+  await page.route(workspaceRoute("workloads"), async (route) => {
+    await route.fulfill({ json: { workloads: published ? [firstWorkload] : [] } });
   });
   await page.route(workspaceRoute("containers"), async (route) => {
     await route.fulfill({ json: { containers: [] } });

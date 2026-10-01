@@ -17,7 +17,6 @@ import {
   type InvokeResult,
 } from "@/lib/api/invoke";
 import type { JsonValue } from "@/lib/json";
-import type { Workload } from "@/lib/queries/deployments";
 import { failureText, taskQueryOptions } from "@/lib/queries/tasks";
 
 import {
@@ -39,25 +38,31 @@ import {
  * so the task stores the result. An endpoint is called at its path on this
  * origin, which the session authenticates.
  */
-export function Playground({ workspace, workload }: { workspace: string; workload: Workload }) {
+export function Playground({
+  workspace,
+  detail,
+}: {
+  workspace: string;
+  detail: Schemas["WorkloadDetail"];
+}) {
   const contract = useMemo(
-    () => clientContract(workload.release.spec.client_contract),
-    [workload.release.spec.client_contract],
+    () => clientContract(detail.release.spec.client_contract),
+    [detail.release.spec.client_contract],
   );
   const pythonRequired = playgroundPythonOnlyReason(contract);
   if (pythonRequired) {
     return <p className="p-4 text-sm text-muted-foreground">{pythonRequired}</p>;
   }
-  return <PlaygroundForm workspace={workspace} workload={workload} contract={contract} />;
+  return <PlaygroundForm workspace={workspace} detail={detail} contract={contract} />;
 }
 
 function PlaygroundForm({
   workspace,
-  workload,
+  detail,
   contract,
 }: {
   workspace: string;
-  workload: Workload;
+  detail: Schemas["WorkloadDetail"];
   contract: ClientContract | null;
 }) {
   const fields = useMemo(() => playgroundFields(contract), [contract]);
@@ -66,7 +71,7 @@ function PlaygroundForm({
   const [rawText, setRawText] = useState(seeded);
   const [inputError, setInputError] = useState<string | null>(null);
 
-  const { deployment, http, release } = workload;
+  const { workload, http, release } = detail;
   const invoke = useMutation({
     mutationFn: (body: JsonValue) => {
       if (http) {
@@ -76,8 +81,8 @@ function PlaygroundForm({
         return invokeHttp(http.invoke_path + route, method, body);
       }
       return returnsPythonValue(contract)
-        ? invokeFunctionTask(workspace, deployment.app, deployment.name, body)
-        : invokeFunction(workspace, deployment.app, deployment.name, body);
+        ? invokeFunctionTask(workspace, workload.app, workload.name, body)
+        : invokeFunction(workspace, workload.app, workload.name, body);
     },
   });
 
@@ -149,7 +154,7 @@ function PlaygroundForm({
           result={invoke.data}
           error={invoke.isError ? invoke.error : null}
           workspace={workspace}
-          deployment={deployment}
+          workload={workload}
         />
       </div>
     </div>
@@ -204,12 +209,12 @@ function InvokeOutcome({
   result,
   error,
   workspace,
-  deployment,
+  workload,
 }: {
   result: InvokeResult | undefined;
   error: Error | null;
   workspace: string;
-  deployment: Schemas["DeployedWorkload"];
+  workload: Schemas["Workload"];
 }) {
   if (error) {
     return <div className="text-xs text-destructive">{error.message}</div>;
@@ -228,7 +233,7 @@ function InvokeOutcome({
         taskId={result.taskId}
         meta={meta}
         workspace={workspace}
-        deployment={deployment}
+        workload={workload}
       />
     );
   }
@@ -256,12 +261,12 @@ function TaskInvokeOutcome({
   taskId,
   meta,
   workspace,
-  deployment,
+  workload,
 }: {
   taskId: string;
   meta: ReactNode;
   workspace: string;
-  deployment: Schemas["DeployedWorkload"];
+  workload: Schemas["Workload"];
 }) {
   const task = useQuery(taskQueryOptions(workspace, taskId));
 
@@ -276,9 +281,9 @@ function TaskInvokeOutcome({
           to="/w/$workspace/apps/$app/workloads/$kind/$name/tasks/$taskId"
           params={{
             workspace,
-            app: deployment.app,
-            kind: deployment.kind,
-            name: deployment.name,
+            app: workload.app,
+            kind: workload.kind,
+            name: workload.name,
             taskId,
           }}
           className="ml-auto flex items-center gap-1 text-xs font-medium text-brand hover:underline"

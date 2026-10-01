@@ -22,7 +22,7 @@ import {
   taskMetricsQueryOptions,
   tasksInfiniteQueryOptions,
 } from "@/lib/queries/tasks";
-import { deploymentsQueryOptions } from "@/lib/queries/deployments";
+import { workloadsQueryOptions } from "@/lib/queries/deployments";
 import { useWorkspace } from "@/lib/workspace-context";
 
 const TASK_STATUSES: readonly Schemas["TaskStatus"][] = [
@@ -84,7 +84,7 @@ function TasksPage() {
   const apps = useQuery(appsQueryOptions(workspace.name));
   // The API narrows to a function within an app, so workloads are offered once an app is.
   const workloads = useQuery({
-    ...deploymentsQueryOptions(workspace.name, search.app),
+    ...workloadsQueryOptions(workspace.name, search.app),
     enabled: Boolean(search.app),
   });
   const appNames = (apps.data ?? []).map((app) => app.name);

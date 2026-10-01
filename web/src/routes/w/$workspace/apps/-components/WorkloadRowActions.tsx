@@ -20,20 +20,20 @@ import {
 } from "@/components/ui/dropdown-menu";
 import type { Schemas } from "@/lib/api/client";
 import { invalidateAppLists } from "@/lib/queries/apps";
-import { deleteDeploymentMutationOptions } from "@/lib/queries/deployments";
+import { deleteWorkloadMutationOptions } from "@/lib/queries/deployments";
 
 /** Deletes one workload, with every version of it, from the app's workload list. */
 export function WorkloadRowActions({
   workload,
   workspace,
 }: {
-  workload: Schemas["DeployedWorkload"];
+  workload: Schemas["Workload"];
   workspace: string;
 }) {
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const queryClient = useQueryClient();
   const remove = useMutation({
-    ...deleteDeploymentMutationOptions(workspace, workload.id),
+    ...deleteWorkloadMutationOptions(workspace, workload),
     onSuccess: async () => {
       setConfirmingDelete(false);
       await invalidateAppLists(queryClient, workspace);

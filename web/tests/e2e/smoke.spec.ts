@@ -11,7 +11,7 @@ const app: Schemas["App"] = {
   created_at: "2026-01-01T09:00:00Z",
 };
 
-const workload: Schemas["DeployedWorkload"] = {
+const workload: Schemas["Workload"] = {
   id: "stub-1",
   app: "square_app",
   app_state: "active",
@@ -84,8 +84,8 @@ async function mockControlPlane(page: Page) {
   await page.route(workspaceRoute("apps"), async (route) => {
     await route.fulfill({ json: { apps: [app] } satisfies Schemas["AppPage"] });
   });
-  await page.route(workspaceRoute("deployments"), async (route) => {
-    await route.fulfill({ json: { deployments: [workload] } satisfies Schemas["DeploymentPage"] });
+  await page.route(workspaceRoute("workloads"), async (route) => {
+    await route.fulfill({ json: { workloads: [workload] } satisfies Schemas["WorkloadPage"] });
   });
   await page.route(workspaceRoute("containers"), async (route) => {
     await route.fulfill({ json: { containers: [] } satisfies Schemas["ContainerPage"] });

@@ -4,7 +4,7 @@ import { createFileRoute, Outlet } from "@tanstack/react-router";
 import { RouteErrorFallback } from "@/components/shared/ErrorBoundary";
 import { PanelError } from "@/components/shared/PanelError";
 import { appActivityQueryOptions, appQueryOptions } from "@/lib/queries/apps";
-import { deployedAt, deploymentsQueryOptions, workloadRunning } from "@/lib/queries/deployments";
+import { deployedAt, workloadsQueryOptions, workloadRunning } from "@/lib/queries/deployments";
 import { sandboxesQueryOptions, sandboxStatsQueryOptions } from "@/lib/queries/sandboxes";
 import { tasksQueryOptions } from "@/lib/queries/tasks";
 import { useWorkspace } from "@/lib/workspace-context";
@@ -28,7 +28,7 @@ function AppDetailPage() {
   const { app } = Route.useParams();
   const { workspace } = useWorkspace();
   const appRecord = useQuery(appQueryOptions(workspace.name, app));
-  const workloads = useQuery(deploymentsQueryOptions(workspace.name, app));
+  const workloads = useQuery(workloadsQueryOptions(workspace.name, app));
   const activity = useQuery(appActivityQueryOptions(workspace.name, app));
   const tasks = useQuery(tasksQueryOptions(workspace.name, { app, root_only: true }, 15));
   const sandboxes = useQuery(sandboxesQueryOptions(workspace.name, app));

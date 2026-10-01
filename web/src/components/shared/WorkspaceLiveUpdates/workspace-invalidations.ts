@@ -32,7 +32,7 @@ export function workspaceInvalidationTargets(
       return [{ queryKey: keys.apps.root(workspace) }];
     case "deployments":
       return [
-        { queryKey: keys.deployments.root(workspace) },
+        { queryKey: keys.workloads.root(workspace) },
         { queryKey: keys.apps.root(workspace) },
       ];
     case "tasks":

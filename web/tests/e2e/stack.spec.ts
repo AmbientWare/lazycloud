@@ -195,7 +195,7 @@ test("the playground calls an endpoint, and an ASGI app answers the session on t
   const asgi = await page.evaluate(async (path) => {
     const response = await fetch(path);
     return { status: response.status, body: (await response.json()) as unknown };
-  }, `/v1/workspaces/${workspace}/apps/${app}/asgi/service/invoke/service/ping`);
+  }, `/v1/workspaces/${workspace}/apps/${app}/workloads/asgi/service/invoke/service/ping`);
   expect(asgi).toEqual({ status: 200, body: { status: "ok", path: "/service/ping" } });
   expect(failures).toEqual([]);
 });

@@ -8,43 +8,24 @@ import {
   selectInfiniteList,
   type InfiniteListQueryData,
 } from "./infinite-list";
-import { workspaceLiveQueryMeta, workspaceQueryKeys } from "./workspace-keys";
+import { workspaceLiveQueryMeta, workspaceQueryKeys, type WorkloadRef } from "./workspace-keys";
 
-export type ContainerFilter = {
-  /** Only the containers of this app's workloads. */
-  app?: string;
-  /** Only this workload's containers; requires `app`. */
-  function?: string;
-  /** Only the containers of this workload's releases. */
-  deployment?: string;
-  /** Only containers that have not stopped. */
-  live?: boolean;
-  enabled?: boolean;
-};
-
-export function containersQueryOptions(workspace: string, filter: ContainerFilter = {}) {
-  const live = filter.live ?? false;
+/** The containers of the workload's releases, newest first; `live` keeps those not stopped. */
+export function containersQueryOptions(
+  workspace: string,
+  workload: WorkloadRef,
+  { live = false, enabled }: { live?: boolean; enabled?: boolean } = {},
+) {
+  const { app, kind, name } = workload;
   return infiniteQueryOptions({
-    queryKey: workspaceQueryKeys.containers.list(workspace, {
-      app: filter.app ?? null,
-      function: filter.function ?? null,
-      deployment: filter.deployment ?? null,
-      live,
-    }),
+    queryKey: workspaceQueryKeys.containers.list(workspace, workload, live),
     initialPageParam: "",
     queryFn: async ({ pageParam, signal }) => {
       const page = await ok(
-        api.GET("/v1/workspaces/{workspace}/containers", {
+        api.GET("/v1/workspaces/{workspace}/apps/{app}/workloads/{kind}/{name}/containers", {
           params: {
-            path: { workspace },
-            query: {
-              app: filter.app,
-              function: filter.app ? filter.function : undefined,
-              deployment: filter.deployment,
-              live,
-              limit: 100,
-              cursor: pageParam || undefined,
-            },
+            path: { workspace, app, kind, name },
+            query: { live, limit: 100, cursor: pageParam || undefined },
           },
           signal,
         }),
@@ -53,7 +34,7 @@ export function containersQueryOptions(workspace: string, filter: ContainerFilte
     },
     getNextPageParam: nextListCursor,
     maxPages: LIVE_LIST_MAX_PAGES,
-    enabled: filter.enabled,
+    enabled,
     meta: workspaceLiveQueryMeta(true),
   });
 }
