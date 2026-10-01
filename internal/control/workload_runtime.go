@@ -31,7 +31,8 @@ func resolveRuntime(spec apitypes.FunctionSpec, out *apitypes.FunctionSpec) erro
 		out.Cron = &normalized
 	}
 	warmFloor := out.Autoscaler != nil && out.Autoscaler.MinContainers != nil && *out.Autoscaler.MinContainers > 0
-	if spec.KeepWarmSeconds != nil && *spec.KeepWarmSeconds < 0 && !warmFloor {
+	// A pod's keep-warm, -1 included, is resolvePod's.
+	if spec.KeepWarmSeconds != nil && *spec.KeepWarmSeconds < 0 && !warmFloor && spec.Pod == nil {
 		return &InvalidSpecError{Function: spec.Name, Reason: "keep_warm=-1 is only supported for functions with a warm floor (autoscaler.min_containers above zero)"}
 	}
 	keepWarm := defaultKeepWarmSeconds
