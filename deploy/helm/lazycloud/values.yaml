@@ -25,8 +25,9 @@ externalSecrets:
   data: {}
 
 # Non-secret settings shared by the server, scheduler and migrations, as
-# LAZYCLOUD_* environment variables. The chart sets the listen addresses, the
-# master key path and the drain delay itself.
+# LAZYCLOUD_* environment variables. The chart sets the listen addresses
+# (API 8080, hosts 8081, probes 8090, metrics 9090), the master key path and
+# the drain delay itself.
 config: {}
 
 # Ingress to the release's pods is denied except from these sources.
@@ -39,6 +40,9 @@ networkPolicy:
   hostCIDRs: []
   # Node CIDRs the kubelet probes the health ports from.
   nodeCIDRs: []
+  # NetworkPolicy peers that scrape /metrics, such as the Prometheus
+  # namespace.
+  metricsFrom: []
 
 serviceAccounts:
   # Names match the EKS Pod Identity associations that grant AWS access.
@@ -65,11 +69,10 @@ server:
   replicas: 2
   # Extra settings for the server alone.
   config: {}
-  # Secret keys the server reads.
+  # Secret keys the server reads. S3 access comes from the Pod Identity role
+  # through the AWS default credential chain, so no object store key is here.
   secretKeys:
     - LAZYCLOUD_DATABASE_URL
-    - LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID
-    - LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY
     - LAZYCLOUD_GITHUB_CLIENT_SECRET
     - LAZYCLOUD_RESEND_WEBHOOK_SECRET
   # On SIGTERM the server reports not ready and keeps serving this long so
@@ -96,8 +99,6 @@ scheduler:
   config: {}
   secretKeys:
     - LAZYCLOUD_DATABASE_URL
-    - LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID
-    - LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY
     - LAZYCLOUD_RESEND_API_KEY
   terminationGracePeriodSeconds: 30
   resources:

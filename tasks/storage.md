@@ -226,7 +226,12 @@ API. All 9 pass; the offline suite passes too.
 - AWS grants (STS) and AWS bucket creation are untested; only Garage was
   available. The server role must allow object access on the workspace
   buckets and `sts:AssumeRole` on `LAZYCLOUD_WORKSPACE_BUCKET_ROLE_ARN`.
-  GeeseFS under the narrowed session policy is untested on AWS.
+  GeeseFS under the narrowed session policy is untested on AWS. Without
+  `LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID` and `_SECRET_ACCESS_KEY` the server
+  and scheduler use the AWS default credential chain (Pod Identity, IRSA,
+  instance metadata); an empty endpoint means AWS S3 with virtual-hosted
+  addressing. Resolution is unit-tested against the environment and a Pod
+  Identity endpoint, not against AWS.
 - Dashboard pages come with the web packet; their APIs are here.
 - Retention by plan waits for billing.
 

@@ -15,6 +15,7 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 	"github.com/AmbientWare/lazycloud/internal/storage/storagetest"
+	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
 // After shutdown starts the server reports draining on /readyz and keeps
@@ -46,9 +47,13 @@ func TestServeDrainsOnShutdown(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
+	tel, err := telemetry.New(t.Context(), telemetry.Config{Service: "server"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	done := make(chan error, 1)
 	go func() {
-		done <- serveWith(ctx, pool, cfg, slog.New(slog.DiscardHandler), ls)
+		done <- serveWith(ctx, pool, cfg, tel, slog.New(slog.DiscardHandler), ls)
 	}()
 
 	waitFor(t, probes+"/readyz", http.StatusOK)

@@ -37,12 +37,16 @@ spec:
           env:
             - name: LAZYCLOUD_HEALTH_ADDR
               value: "0.0.0.0:8090"
+            - name: LAZYCLOUD_METRICS_ADDR
+              value: "0.0.0.0:9090"
             - name: LAZYCLOUD_SECRETS_KEY_FILE
               value: /run/lazycloud/secrets/secrets.key
             {{- include "lazycloud.env" (list . "scheduler") | trim | nindent 12 }}
           ports:
             - name: health
               containerPort: 8090
+            - name: metrics
+              containerPort: 9090
           volumeMounts:
             {{- include "lazycloud.masterKeyMount" . | nindent 12 }}
           # Ready once every loop finished a pass; live while none stalled.

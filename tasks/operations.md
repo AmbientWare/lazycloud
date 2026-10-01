@@ -160,9 +160,13 @@ already renders the reference chart through Helm.
   Secrets Manager as hooks weighted before the migration Job (secrets-reader
   service account with an IRSA role, SecretStore, ExternalSecret with
   `creationPolicy: Orphan` so recreating the hook never deletes the Secret).
+- S3 access uses the Pod Identity role through the AWS default credential
+  chain (#423), so no object store key is a default secret key.
+- Probes listen on 8090 and `/metrics` on 9090; no Service exposes either.
 - NetworkPolicy (on by default): ingress to every release pod is denied
   except `networkPolicy.ingressFrom` peers to the API port, `hostCIDRs` to
-  the host port and `nodeCIDRs` to the health ports. Rendering fails without
+  the host port, `nodeCIDRs` to the health ports and `metricsFrom` peers to
+  the metrics ports. Rendering fails without
   `nodeCIDRs`, because the kubelet could not probe the pods.
 - Isolation: the chart lives at `deploy/helm`, not `deploy/chart`, which the
   production Argo Application reads from the `prod` branch. There is no Argo
@@ -236,9 +240,6 @@ Reused from the reference rather than duplicated:
 - Host connection: agents speak plaintext gRPC to the server, so
   `server-hosts` must stay cluster-internal. Exposing it needs agent TLS
   (compute packet) and an NLB.
-- Object store credentials: the server and scheduler require a static key
-  pair (`LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID`/`_SECRET_ACCESS_KEY`). On EKS
-  they should use the Pod Identity role (storage packet).
 - Database: LISTEN/NOTIFY and session advisory locks need a direct
   PostgreSQL URL, not the reference's PgBouncer transaction pool. pgxpool
   sizes itself from the node's CPU count; bound it with `pool_max_conns` in

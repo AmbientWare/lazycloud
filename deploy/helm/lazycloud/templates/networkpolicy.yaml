@@ -1,8 +1,9 @@
 {{- if .Values.networkPolicy.enabled }}
 {{/*
 Ingress is denied to every pod of the release except what is listed: the
-ingress connector to the API port, agent hosts to the host port and the
-kubelet's node addresses to the probe ports. An empty list admits nobody;
+ingress connector to the API port, agent hosts to the host port, the
+kubelet's node addresses to the probe ports and scrapers to the metrics
+ports. An empty list admits nobody;
 a rule with no peers would admit everyone, so none is rendered.
 */}}
 {{- $np := .Values.networkPolicy }}
@@ -55,6 +56,12 @@ spec:
       ports:
         - port: health
     {{- end }}
+    {{- with $np.metricsFrom }}
+    - from:
+        {{- toYaml . | nindent 8 }}
+      ports:
+        - port: metrics
+    {{- end }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -75,5 +82,11 @@ spec:
         {{- end }}
       ports:
         - port: health
+    {{- end }}
+    {{- with $np.metricsFrom }}
+    - from:
+        {{- toYaml . | nindent 8 }}
+      ports:
+        - port: metrics
     {{- end }}
 {{- end }}

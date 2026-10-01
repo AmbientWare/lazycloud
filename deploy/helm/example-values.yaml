@@ -11,8 +11,6 @@ externalSecrets:
   readerRoleArn: arn:aws:iam::000000000000:role/example-secrets-reader
   data:
     LAZYCLOUD_DATABASE_URL: { document: example/platform, property: LAZYCLOUD_DATABASE_URL }
-    LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID: { document: example/platform, property: LAZYCLOUD_OBJECT_STORE_ACCESS_KEY_ID }
-    LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY: { document: example/platform, property: LAZYCLOUD_OBJECT_STORE_SECRET_ACCESS_KEY }
     LAZYCLOUD_GITHUB_CLIENT_SECRET: { document: example/operator, property: LAZYCLOUD_GITHUB_CLIENT_SECRET }
     LAZYCLOUD_RESEND_WEBHOOK_SECRET: { document: example/operator, property: LAZYCLOUD_RESEND_WEBHOOK_SECRET }
     LAZYCLOUD_RESEND_API_KEY: { document: example/operator, property: LAZYCLOUD_RESEND_API_KEY }
@@ -25,9 +23,13 @@ networkPolicy:
         matchLabels: { kubernetes.io/metadata.name: example-ingress }
   hostCIDRs: [10.20.0.0/16]
   nodeCIDRs: [10.0.0.0/16]
+  metricsFrom:
+    - namespaceSelector:
+        matchLabels: { kubernetes.io/metadata.name: example-monitoring }
 
+# No object store endpoint or keys: AWS S3 through the Pod Identity role.
 config:
-  LAZYCLOUD_OBJECT_STORE_ENDPOINT: https://s3.us-east-1.amazonaws.com
+  LAZYCLOUD_LOG_FORMAT: json
   LAZYCLOUD_OBJECT_STORE_REGION: us-east-1
   LAZYCLOUD_OBJECT_STORE_BUCKET: example-objects
   LAZYCLOUD_WORKSPACE_BUCKET_PROVIDER: aws

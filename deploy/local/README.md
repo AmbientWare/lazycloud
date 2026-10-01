@@ -7,3 +7,8 @@ and the development key. Both steps are idempotent.
 
 Owner tests use `docker compose -f compose.test.yaml up -d --wait`, a disposable
 PostgreSQL on 127.0.0.1:15442.
+
+Each binary serves Prometheus metrics at `/metrics` on `LAZYCLOUD_METRICS_ADDR`
+when it is set, and exports traces over OTLP/gRPC to `LAZYCLOUD_OTLP_ENDPOINT`
+(`LAZYCLOUD_OTLP_INSECURE=true` for a local collector). Both are off by
+default. `LAZYCLOUD_LOG_FORMAT` picks `text` or `json` logs.

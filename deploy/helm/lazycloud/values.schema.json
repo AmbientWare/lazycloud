@@ -61,12 +61,13 @@
     "config": { "$ref": "#/definitions/settings" },
     "networkPolicy": {
       "type": "object",
-      "required": ["enabled", "ingressFrom", "hostCIDRs", "nodeCIDRs"],
+      "required": ["enabled", "ingressFrom", "hostCIDRs", "nodeCIDRs", "metricsFrom"],
       "properties": {
         "enabled": { "type": "boolean" },
         "ingressFrom": { "type": "array", "items": { "type": "object" } },
         "hostCIDRs": { "type": "array", "items": { "type": "string" } },
-        "nodeCIDRs": { "type": "array", "items": { "type": "string" } }
+        "nodeCIDRs": { "type": "array", "items": { "type": "string" } },
+        "metricsFrom": { "type": "array", "items": { "type": "object" } }
       }
     },
     "server": {

@@ -43,6 +43,8 @@ spec:
               value: "0.0.0.0:8081"
             - name: LAZYCLOUD_HEALTH_ADDR
               value: "0.0.0.0:8090"
+            - name: LAZYCLOUD_METRICS_ADDR
+              value: "0.0.0.0:9090"
             - name: LAZYCLOUD_SECRETS_KEY_FILE
               value: /run/lazycloud/secrets/secrets.key
             - name: LAZYCLOUD_DRAIN_DELAY
@@ -53,9 +55,11 @@ spec:
               containerPort: 8080
             - name: hosts
               containerPort: 8081
-            # Probes only; no Service exposes it.
+            # Probes and scraping only; no Service exposes them.
             - name: health
               containerPort: 8090
+            - name: metrics
+              containerPort: 9090
           volumeMounts:
             {{- include "lazycloud.masterKeyMount" . | nindent 12 }}
           startupProbe:

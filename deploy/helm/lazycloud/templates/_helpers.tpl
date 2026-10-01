@@ -12,7 +12,7 @@
 
 {{/* Settings the chart owns; values may not set them. */}}
 {{- define "lazycloud.ownedKeys" -}}
-{{- list "LAZYCLOUD_HTTP_ADDR" "LAZYCLOUD_GRPC_ADDR" "LAZYCLOUD_HEALTH_ADDR" "LAZYCLOUD_SECRETS_KEY_FILE" "LAZYCLOUD_DRAIN_DELAY" | toJson -}}
+{{- list "LAZYCLOUD_HTTP_ADDR" "LAZYCLOUD_GRPC_ADDR" "LAZYCLOUD_HEALTH_ADDR" "LAZYCLOUD_METRICS_ADDR" "LAZYCLOUD_SECRETS_KEY_FILE" "LAZYCLOUD_DRAIN_DELAY" | toJson -}}
 {{- end -}}
 
 {{/*

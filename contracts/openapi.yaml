@@ -1912,6 +1912,253 @@ paths:
               schema: { type: string, format: binary }
         default: { $ref: "#/components/responses/Error" }
 
+  # Observability: the change stream, container metrics and lifecycle, task
+  # timelines and call graphs, workload performance and account metrics.
+
+  /v1/workspaces/{workspace}/changes/stream:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+    get:
+      operationId: streamChanges
+      tags: [observability]
+      summary: Committed changes to the workspace's resources as server-sent events
+      description: >-
+        Each `change` event's data is a ChangeEvent and its id is the event's
+        seq. A reconnect that sends the last id in Last-Event-ID receives the
+        events that followed it, or a `reset` event (data ChangeReset) when
+        the server no longer holds them or the client fell behind; the client
+        then reloads what it shows. A comment line arrives every 15 seconds
+        without events. The server ends a stream after 10 minutes; clients
+        reconnect with Last-Event-ID.
+      parameters:
+        - name: Last-Event-ID
+          in: header
+          description: The id of the last event the client received.
+          schema: { type: string, pattern: "^[0-9]{1,19}$" }
+      responses:
+        "200":
+          description: A text/event-stream of change and reset events
+          content:
+            text/event-stream:
+              schema: { type: string, format: binary }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/containers/{container}/metrics:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/ContainerPath"
+    get:
+      operationId: getContainerMetrics
+      tags: [observability]
+      summary: CPU, memory, network, disk and GPU use of a container over time
+      description: >-
+        Hosts sample every 5 seconds. Samples are kept for an hour and as
+        per-minute points for seven days, so a step under 60 seconds reads
+        only the last hour. The default range is the container's last hour of
+        life, and a range spans at most 7 days; at most 1,000 points are
+        returned, and the step grows to fit.
+      parameters:
+        - $ref: "#/components/parameters/RangeStart"
+        - $ref: "#/components/parameters/RangeEnd"
+        - name: step_seconds
+          in: query
+          description: Seconds per point; defaults to the finest step the range allows.
+          schema: { type: integer, minimum: 5, maximum: 86400 }
+      responses:
+        "200":
+          description: The container's metrics
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ContainerMetrics" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/containers/{container}/lifecycle:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/ContainerPath"
+    get:
+      operationId: getContainerLifecycle
+      tags: [observability]
+      summary: How long the container waited for placement and each start stage, and how it stopped
+      responses:
+        "200":
+          description: The container's lifecycle
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ContainerLifecycle" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/containers/lifecycles:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+    post:
+      operationId: listContainerLifecycles
+      tags: [observability]
+      summary: The lifecycles of up to 200 containers, such as those of a call graph
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ContainerLifecyclesRequest" }
+      responses:
+        "200":
+          description: The lifecycles of the listed containers in the workspace; unknown ids are left out
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ContainerLifecycleList" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/tasks/{task}/timeline:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/TaskPath"
+    get:
+      operationId: getTaskTimeline
+      tags: [observability]
+      summary: The task's submission, attempts, retries and outcome in order
+      responses:
+        "200":
+          description: The task's timeline
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TaskTimeline" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/tasks/{task}/call-graph:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/TaskPath"
+    get:
+      operationId: getTaskCallGraph
+      tags: [observability]
+      summary: Every task of the task's call graph, from its root
+      responses:
+        "200":
+          description: The call graph
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TaskCallGraph" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/deployments/{deployment}/performance:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+      - $ref: "#/components/parameters/DeploymentPath"
+    get:
+      operationId: getDeploymentPerformance
+      tags: [observability]
+      summary: Run time percentiles, outcomes and cold starts per time bucket
+      description: >-
+        Tasks fall in the bucket they were submitted in; a duration is from
+        start to finish of a finished task. A cold start is a container started
+        for the deployment. The default range is the last 24 hours.
+      parameters:
+        - $ref: "#/components/parameters/WindowSeconds"
+        - $ref: "#/components/parameters/RangeStart"
+        - $ref: "#/components/parameters/RangeEnd"
+      responses:
+        "200":
+          description: Buckets that saw tasks or cold starts, oldest first
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeploymentPerformance" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/metrics/tasks:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+    get:
+      operationId: getTaskMetrics
+      tags: [observability]
+      summary: Task outcomes, failure rate, run time and startup percentiles over a range
+      description: >-
+        Tasks submitted in the range count. The default range is the last 24
+        hours; a range spans at most 31 days.
+      parameters:
+        - $ref: "#/components/parameters/RangeStart"
+        - $ref: "#/components/parameters/RangeEnd"
+        - name: app
+          in: query
+          schema: { $ref: "#/components/schemas/AppName" }
+        - name: function
+          in: query
+          description: Requires `app`.
+          schema: { $ref: "#/components/schemas/WorkloadName" }
+      responses:
+        "200":
+          description: The metrics
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TaskMetrics" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/workspaces/{workspace}/metrics/activity:
+    parameters:
+      - $ref: "#/components/parameters/WorkspacePath"
+    get:
+      operationId: getTaskActivity
+      tags: [observability]
+      summary: Tasks submitted per time bucket and status, one series per app or, with `app`, per function
+      description: >-
+        Buckets are dense and aligned to multiples of window_seconds since the
+        epoch. The default range is the last 24 buckets.
+      parameters:
+        - $ref: "#/components/parameters/WindowSeconds"
+        - $ref: "#/components/parameters/RangeStart"
+        - $ref: "#/components/parameters/RangeEnd"
+        - name: app
+          in: query
+          schema: { $ref: "#/components/schemas/AppName" }
+      responses:
+        "200":
+          description: The activity
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TaskActivity" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/me/metrics:
+    get:
+      operationId: getAccountMetrics
+      tags: [observability]
+      summary: Live containers across the caller's workspaces and concurrency against plan limits
+      responses:
+        "200":
+          description: The account's metrics
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AccountMetrics" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/me/activity:
+    get:
+      operationId: getAccountActivity
+      tags: [observability]
+      summary: Container or task starts, or allocated CPU, memory or GPUs, per app over time across the caller's workspaces
+      description: >-
+        Starts count containers or tasks created per bucket. Allocations are
+        the average cores, GiB or GPUs reserved by live containers over each
+        bucket, and over the range for each series' total. Series are sorted
+        by total; past `limit` they fold into one `other` series. The default
+        range is the last 24 buckets.
+      parameters:
+        - name: measure
+          in: query
+          schema: { $ref: "#/components/schemas/ActivityMeasure" }
+        - $ref: "#/components/parameters/WindowSeconds"
+        - $ref: "#/components/parameters/RangeStart"
+        - $ref: "#/components/parameters/RangeEnd"
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 20, default: 5 }
+      responses:
+        "200":
+          description: The activity
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AccountActivity" }
+        default: { $ref: "#/components/responses/Error" }
+
 components:
   securitySchemes:
     bearer:
@@ -2026,6 +2273,22 @@ components:
       description: Start with only the last this many stored entries.
       schema: { type: integer, minimum: 1, maximum: 1000 }
 
+    # Observability parameters.
+    RangeStart:
+      name: start
+      in: query
+      description: The start of the range, inclusive.
+      schema: { type: string, format: date-time }
+    RangeEnd:
+      name: end
+      in: query
+      description: The end of the range, exclusive; defaults to now.
+      schema: { type: string, format: date-time }
+    WindowSeconds:
+      name: window_seconds
+      in: query
+      description: Seconds per bucket. A range holds at most 500 buckets and 31 days.
+      schema: { type: integer, minimum: 60, maximum: 604800, default: 3600 }
     VolumePath:
       name: volume
       in: path
@@ -3925,3 +4188,429 @@ components:
           description: One line of build output without its trailing newline.
           type: string
         time: { type: string, format: date-time }
+
+    # Observability
+
+    ChangeTopic:
+      type: string
+      enum: [apps, deployments, tasks, containers, storage.secrets]
+
+    ChangeKind:
+      type: string
+      enum: [created, updated, deleted]
+
+    ChangeEvent:
+      description: >-
+        The changes one statement committed in the workspace. A statement
+        that changed many resources sends them grouped, with a count and no
+        resource_id.
+      type: object
+      required: [seq, workspace_id, occurred_at, changes]
+      properties:
+        seq: { type: integer, format: int64 }
+        workspace_id: { type: string, format: uuid }
+        occurred_at: { type: string, format: date-time }
+        changes:
+          type: array
+          items: { $ref: "#/components/schemas/ResourceChange" }
+
+    ResourceChange:
+      type: object
+      required: [topic, change]
+      properties:
+        topic: { $ref: "#/components/schemas/ChangeTopic" }
+        change: { $ref: "#/components/schemas/ChangeKind" }
+        resource_id:
+          description: The resource's id, or a secret's name.
+          type: string
+        app_id: { type: string, format: uuid }
+        deployment_id: { type: string, format: uuid }
+        task_id: { type: string, format: uuid }
+        root_task_id: { type: string, format: uuid }
+        container_id: { type: string, format: uuid }
+        status:
+          description: The resource's state after the change.
+          type: string
+        count:
+          description: How many resources a grouped change covers.
+          type: integer
+
+    ChangeResetReason:
+      type: string
+      enum: [behind, missed, unknown_cursor]
+      description: >-
+        behind: the client read too slowly and events were dropped. missed:
+        the server lost its database connection and may have missed changes.
+        unknown_cursor: Last-Event-ID is older than the events the server
+        holds.
+
+    ChangeReset:
+      type: object
+      required: [reason]
+      properties:
+        reason: { $ref: "#/components/schemas/ChangeResetReason" }
+
+    ContainerMetrics:
+      type: object
+      required: [container_id, cpu_total_millicores, memory_total_bytes, step_seconds, points]
+      properties:
+        container_id: { type: string, format: uuid }
+        cpu_total_millicores:
+          description: The container's CPU reservation.
+          type: integer
+          format: int64
+        memory_total_bytes:
+          description: The container's memory reservation.
+          type: integer
+          format: int64
+        step_seconds: { type: integer }
+        points:
+          type: array
+          items: { $ref: "#/components/schemas/ContainerMetricPoint" }
+
+    ContainerMetricPoint:
+      description: >-
+        Use over the step that starts at timestamp. Counters are the bytes
+        moved in interval_ms, the sampled time the point covers; memory and
+        GPU memory are the peak.
+      type: object
+      required: [timestamp, interval_ms, cpu_millicores, memory_rss_bytes, memory_swap_bytes,
+        network_recv_bytes, network_sent_bytes, disk_read_bytes, disk_write_bytes]
+      properties:
+        timestamp: { type: string, format: date-time }
+        interval_ms: { type: integer, format: int64 }
+        cpu_millicores:
+          description: Average CPU use over the interval.
+          type: number
+          format: double
+        memory_rss_bytes: { type: integer, format: int64 }
+        memory_swap_bytes: { type: integer, format: int64 }
+        network_recv_bytes: { type: integer, format: int64 }
+        network_sent_bytes: { type: integer, format: int64 }
+        disk_read_bytes: { type: integer, format: int64 }
+        disk_write_bytes: { type: integer, format: int64 }
+        gpu_utilization_pct:
+          description: Average over the container's GPUs; absent without one.
+          type: number
+          format: double
+        gpu_memory_used_bytes: { type: integer, format: int64 }
+        gpu_memory_total_bytes: { type: integer, format: int64 }
+        gpu_type: { type: string }
+
+    LifecycleStageKind:
+      type: string
+      enum: [placement, image, source, create, runtime, draining]
+      description: >-
+        placement: waiting for a host. image: pulling the image, or finding
+        it on the host. source: fetching the source. create: starting the
+        container process. runtime: loading the handler. draining: from the
+        stop request until the container stopped.
+
+    LifecycleStage:
+      type: object
+      required: [stage, started_at]
+      properties:
+        stage: { $ref: "#/components/schemas/LifecycleStageKind" }
+        started_at: { type: string, format: date-time }
+        finished_at:
+          description: Absent while the stage runs.
+          type: string
+          format: date-time
+        duration_ms:
+          description: Until finished_at, or until now while the stage runs.
+          type: integer
+          format: int64
+        cached:
+          description: For image, the image was already on the host.
+          type: boolean
+
+    ContainerLifecycle:
+      type: object
+      required: [container_id, state, created_at, stages]
+      properties:
+        container_id: { type: string, format: uuid }
+        app: { $ref: "#/components/schemas/AppName" }
+        function: { $ref: "#/components/schemas/WorkloadName" }
+        state: { $ref: "#/components/schemas/ContainerState" }
+        stop_reason: { $ref: "#/components/schemas/StopReason" }
+        exit_message: { type: string }
+        host:
+          description: The name of the host the container was placed on.
+          type: string
+        created_at: { type: string, format: date-time }
+        assigned_at: { type: string, format: date-time }
+        ready_at: { type: string, format: date-time }
+        stopped_at: { type: string, format: date-time }
+        stages:
+          description: In the order they began.
+          type: array
+          items: { $ref: "#/components/schemas/LifecycleStage" }
+
+    ContainerLifecyclesRequest:
+      type: object
+      required: [container_ids]
+      properties:
+        container_ids:
+          type: array
+          minItems: 1
+          maxItems: 200
+          items: { type: string, format: uuid }
+
+    ContainerLifecycleList:
+      type: object
+      required: [lifecycles]
+      properties:
+        lifecycles:
+          type: array
+          items: { $ref: "#/components/schemas/ContainerLifecycle" }
+
+    AttemptOutcome:
+      type: string
+      enum: [running, succeeded, failed, timed_out, cancelled, lost]
+
+    TaskEventKind:
+      type: string
+      enum: [submitted, attempt_started, attempt_finished, retry_scheduled, finished]
+
+    TaskEvent:
+      type: object
+      required: [kind, at]
+      properties:
+        kind: { $ref: "#/components/schemas/TaskEventKind" }
+        at: { type: string, format: date-time }
+        attempt:
+          description: The attempt number, for attempt and retry events.
+          type: integer
+        attempt_id: { type: string, format: uuid }
+        container_id: { type: string, format: uuid }
+        outcome: { $ref: "#/components/schemas/AttemptOutcome" }
+        due_at:
+          description: For retry_scheduled, when the next attempt may start.
+          type: string
+          format: date-time
+        status:
+          description: For finished, the task's final status.
+          allOf: [{ $ref: "#/components/schemas/TaskStatus" }]
+
+    TaskTimeline:
+      type: object
+      required: [task_id, status, events]
+      properties:
+        task_id: { type: string, format: uuid }
+        status: { $ref: "#/components/schemas/TaskStatus" }
+        events:
+          type: array
+          items: { $ref: "#/components/schemas/TaskEvent" }
+
+    CallGraphNode:
+      type: object
+      required: [task_id, app, function, status, created_at, depends_on]
+      properties:
+        task_id: { type: string, format: uuid }
+        parent_task_id: { type: string, format: uuid }
+        app: { $ref: "#/components/schemas/AppName" }
+        function: { $ref: "#/components/schemas/WorkloadName" }
+        status: { $ref: "#/components/schemas/TaskStatus" }
+        container_id:
+          description: The container of the latest attempt.
+          type: string
+          format: uuid
+        created_at: { type: string, format: date-time }
+        started_at: { type: string, format: date-time }
+        finished_at: { type: string, format: date-time }
+        depends_on:
+          description: Upstream tasks whose results this task's input uses.
+          type: array
+          items: { type: string, format: uuid }
+
+    TaskCallGraph:
+      type: object
+      required: [root_task_id, nodes, truncated]
+      properties:
+        root_task_id: { type: string, format: uuid }
+        nodes:
+          description: Every task of the graph, oldest first; parents precede their children.
+          type: array
+          items: { $ref: "#/components/schemas/CallGraphNode" }
+        truncated:
+          description: The graph holds more than the 2,000 tasks returned.
+          type: boolean
+
+    TaskStatusCounts:
+      type: object
+      required: [queued, running, succeeded, failed, cancelled]
+      properties:
+        queued: { type: integer }
+        running: { type: integer }
+        succeeded: { type: integer }
+        failed: { type: integer }
+        cancelled: { type: integer }
+
+    PerformanceBucket:
+      type: object
+      required: [timestamp, count, cold_starts, status_counts]
+      properties:
+        timestamp: { type: string, format: date-time }
+        count:
+          description: Finished tasks with a run time.
+          type: integer
+        p50_ms: { type: number, format: double }
+        p95_ms: { type: number, format: double }
+        cold_starts: { type: integer }
+        status_counts: { $ref: "#/components/schemas/TaskStatusCounts" }
+
+    DeploymentPerformance:
+      type: object
+      required: [deployment_id, window_seconds, start, end, buckets]
+      properties:
+        deployment_id: { type: string, format: uuid }
+        window_seconds: { type: integer }
+        start: { type: string, format: date-time }
+        end: { type: string, format: date-time }
+        buckets:
+          type: array
+          items: { $ref: "#/components/schemas/PerformanceBucket" }
+
+    TaskMetrics:
+      type: object
+      required: [start, end, total, status_counts, failure_rate]
+      properties:
+        start: { type: string, format: date-time }
+        end: { type: string, format: date-time }
+        total: { type: integer }
+        status_counts: { $ref: "#/components/schemas/TaskStatusCounts" }
+        failure_rate:
+          description: Failed tasks over all tasks; 0 without tasks.
+          type: number
+          format: double
+        average_runtime_ms: { type: number, format: double }
+        runtime_ms_p50: { type: number, format: double }
+        runtime_ms_p95: { type: number, format: double }
+        runtime_ms_p99: { type: number, format: double }
+        startup_ms_p50:
+          description: From submission to the start of the first attempt.
+          type: number
+          format: double
+        startup_ms_p95: { type: number, format: double }
+
+    ActivityBucket:
+      type: object
+      required: [timestamp, status_counts]
+      properties:
+        timestamp: { type: string, format: date-time }
+        status_counts: { $ref: "#/components/schemas/TaskStatusCounts" }
+
+    ActivitySeries:
+      type: object
+      required: [app, total, buckets]
+      properties:
+        app: { $ref: "#/components/schemas/AppName" }
+        app_id: { type: string, format: uuid }
+        function:
+          description: Set when the activity was asked for one app.
+          allOf: [{ $ref: "#/components/schemas/WorkloadName" }]
+        total: { type: integer }
+        buckets:
+          type: array
+          items: { $ref: "#/components/schemas/ActivityBucket" }
+
+    TaskActivity:
+      type: object
+      required: [window_seconds, start, end, series]
+      properties:
+        window_seconds: { type: integer }
+        start: { type: string, format: date-time }
+        end: { type: string, format: date-time }
+        series:
+          description: Series with tasks in the range, most tasks first.
+          type: array
+          items: { $ref: "#/components/schemas/ActivitySeries" }
+
+    ContainerCounts:
+      type: object
+      required: [pending, running]
+      properties:
+        pending:
+          description: Waiting for a host or starting.
+          type: integer
+        running:
+          description: Ready or draining.
+          type: integer
+
+    ConcurrencyLimits:
+      type: object
+      required: [max_cpu_containers, max_gpus]
+      properties:
+        max_cpu_containers: { type: integer }
+        max_gpus: { type: integer }
+
+    Concurrency:
+      description: Live containers in the workspaces the caller owns, which plan limits apply to.
+      type: object
+      required: [cpu_containers, gpus]
+      properties:
+        cpu_containers: { type: integer }
+        gpus: { type: integer }
+        limits:
+          description: Absent while the account's plan limits are unknown.
+          allOf: [{ $ref: "#/components/schemas/ConcurrencyLimits" }]
+
+    AccountMetrics:
+      type: object
+      required: [containers, concurrency]
+      properties:
+        containers:
+          description: Live containers in every workspace the caller is a member of.
+          allOf: [{ $ref: "#/components/schemas/ContainerCounts" }]
+        concurrency: { $ref: "#/components/schemas/Concurrency" }
+
+    ActivityMeasure:
+      type: string
+      enum: [containers, tasks, cpu, memory, gpu]
+      default: containers
+
+    ActivityUnit:
+      type: string
+      enum: [starts, cores, gibibytes, gpus]
+
+    ActivitySeriesKind:
+      description: other folds the series past the limit; unassigned holds containers of no app, such as image builds.
+      type: string
+      enum: [app, unassigned, other]
+
+    ActivityPoint:
+      type: object
+      required: [timestamp, value]
+      properties:
+        timestamp: { type: string, format: date-time }
+        value: { type: number, format: double }
+
+    AccountActivitySeries:
+      type: object
+      required: [kind, total, buckets]
+      properties:
+        kind: { $ref: "#/components/schemas/ActivitySeriesKind" }
+        workspace: { $ref: "#/components/schemas/Name" }
+        app: { $ref: "#/components/schemas/AppName" }
+        app_id: { type: string, format: uuid }
+        total:
+          description: Starts in the range, or the average allocation over it.
+          type: number
+          format: double
+        buckets:
+          type: array
+          items: { $ref: "#/components/schemas/ActivityPoint" }
+
+    AccountActivity:
+      type: object
+      required: [measure, unit, window_seconds, start, end, total, series]
+      properties:
+        measure: { $ref: "#/components/schemas/ActivityMeasure" }
+        unit: { $ref: "#/components/schemas/ActivityUnit" }
+        window_seconds: { type: integer }
+        start: { type: string, format: date-time }
+        end: { type: string, format: date-time }
+        total: { type: number, format: double }
+        series:
+          type: array
+          items: { $ref: "#/components/schemas/AccountActivitySeries" }
