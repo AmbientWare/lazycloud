@@ -23,7 +23,7 @@ import (
 
 const (
 	// maxTCPConnections bounds the TCP connections one edge relays at once.
-	maxTCPConnections = 1024
+	maxTCPConnections   = 1024
 	tcpHandshakeTimeout = 10 * time.Second
 )
 

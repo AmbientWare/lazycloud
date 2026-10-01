@@ -107,7 +107,7 @@ func (sess *session) syncWorkloads(ctx context.Context, commands execution.HostC
 		if r := snap.Ready; r != nil {
 			msg.Ready = &hostproto.ReadinessProbe{
 				Path: *r.ReadinessPath, Port: int32(*r.ReadinessPort), //nolint:gosec // The schema bounds ports.
-				TimeoutSeconds: int32(valueOr(r.ReadinessTimeoutSeconds, 600)), //nolint:gosec // The schema bounds timeouts.
+				TimeoutSeconds:  int32(valueOr(r.ReadinessTimeoutSeconds, 600)), //nolint:gosec // The schema bounds timeouts.
 				IntervalSeconds: valueOr(r.ReadinessIntervalSeconds, 1),
 			}
 		}

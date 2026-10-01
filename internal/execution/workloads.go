@@ -477,7 +477,7 @@ type ContainerRoute struct {
 	// WorkspaceName is what authorizing a caller needs.
 	WorkspaceName string
 	Workload      uuid.UUID
-	Kind      apitypes.WorkloadKind
+	Kind          apitypes.WorkloadKind
 	// Accepting is false once the workload is stopped or its app paused.
 	Accepting bool
 	Ports     []int
