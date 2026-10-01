@@ -2494,6 +2494,7 @@ components:
           items: { type: string, format: uuid }
 
     QueueInfo:
+      description: In a list, statistics count at most 100,001 messages.
       type: object
       required: [name, size]
       properties:
@@ -2529,6 +2530,7 @@ components:
         message: { type: string, format: byte }
 
     MapInfo:
+      description: In a list, statistics count at most 100,001 live keys.
       type: object
       required: [name, count, size_bytes, expiring_count]
       properties:

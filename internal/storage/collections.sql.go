@@ -196,8 +196,11 @@ cross join lateral (
            coalesce(sum(length(e.data)), 0)::bigint as size_bytes,
            count(e.expires_at)::bigint as expiring_count,
            min(e.expires_at) as next_expiry_at
-    from map_entries e
-    where e.map_id = m.id and (e.expires_at is null or e.expires_at > now())
+    from (
+        select data, expires_at from map_entries e
+        where e.map_id = m.id and (e.expires_at is null or e.expires_at > now())
+        limit 100001
+    ) e
 ) s
 where m.workspace_id = $1 and m.name > $2::text and s.count > 0
 order by m.name
@@ -218,6 +221,7 @@ type ListMapsRow struct {
 	NextExpiryAt  interface{}
 }
 
+// A listing counts at most 100,001 live entries per map.
 func (q *Queries) ListMaps(ctx context.Context, arg ListMapsParams) ([]ListMapsRow, error) {
 	rows, err := q.db.Query(ctx, listMaps, arg.WorkspaceID, arg.After, arg.MaxRows)
 	if err != nil {
@@ -249,7 +253,7 @@ select q.name, s.size, s.oldest
 from queues q
 cross join lateral (
     select count(*)::bigint as size, min(m.created_at) as oldest
-    from queue_messages m where m.queue_id = q.id
+    from (select created_at from queue_messages m where m.queue_id = q.id order by m.id limit 100001) m
 ) s
 where q.workspace_id = $1 and q.name > $2::text
 order by q.name
@@ -268,6 +272,8 @@ type ListQueuesRow struct {
 	Oldest interface{}
 }
 
+// A listing counts at most 100,001 messages per queue, so one huge
+// queue does not slow every page.
 func (q *Queries) ListQueues(ctx context.Context, arg ListQueuesParams) ([]ListQueuesRow, error) {
 	rows, err := q.db.Query(ctx, listQueues, arg.WorkspaceID, arg.After, arg.MaxRows)
 	if err != nil {

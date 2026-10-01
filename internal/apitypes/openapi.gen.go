@@ -1096,7 +1096,7 @@ type MapEntryWrite struct {
 	Revision  string     `json:"revision"`
 }
 
-// MapInfo defines model for MapInfo.
+// MapInfo In a list, statistics count at most 100,001 live keys.
 type MapInfo struct {
 	Count         int64 `json:"count"`
 	ExpiringCount int64 `json:"expiring_count"`
@@ -1221,7 +1221,7 @@ type PutQueueMessagesRequest struct {
 	Messages [][]byte `json:"messages"`
 }
 
-// QueueInfo defines model for QueueInfo.
+// QueueInfo In a list, statistics count at most 100,001 messages.
 type QueueInfo struct {
 	// Name A queue or map name; any characters except control characters.
 	Name            CollectionName `json:"name"`

@@ -108,6 +108,28 @@ func TestQueuePopWaitsForPut(t *testing.T) {
 		t.Fatalf("the put woke the pop after %v", r.after)
 	}
 
+	// A waiter keeps waiting by name across a delete and a new queue of
+	// the same name.
+	go func() {
+		m, found, err := f.storage.PopQueueMessage(ctx, listener, f.ws, "wake", 10*time.Second)
+		done <- popped{m, found, err, 0}
+	}()
+	time.Sleep(300 * time.Millisecond)
+	if err := f.storage.DeleteQueue(ctx, f.ws, "wake"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.storage.PutQueueMessages(ctx, f.ws, "wake", [][]byte{[]byte(`"again"`)}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case r := <-done:
+		if r.err != nil || !r.found || string(r.m) != `"again"` {
+			t.Fatalf("pop across a recreated queue: %q found=%v err=%v", r.m, r.found, r.err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the put into the recreated queue did not wake the pop")
+	}
+
 	began = time.Now()
 	_, found, err := f.storage.PopQueueMessage(ctx, listener, f.ws, "wake", time.Second)
 	if err != nil || found || time.Since(began) < time.Second {

@@ -69,7 +69,7 @@ func (s *Storage) PutQueueMessages(ctx context.Context, workspace identity.Works
 			if err := s.queries.WithTx(tx).InsertQueueMessages(ctx, InsertQueueMessagesParams{QueueID: id, Messages: messages}); err != nil {
 				return fmt.Errorf("insert messages: %w", err)
 			}
-			return database.Notify(ctx, tx, ChannelQueue, id.String())
+			return database.Notify(ctx, tx, ChannelQueue, queueWake(workspace, name))
 		})
 		if isForeignKeyViolation(err) && attempt == 0 {
 			continue
@@ -107,27 +107,21 @@ func (s *Storage) GetQueue(ctx context.Context, workspace identity.WorkspaceID, 
 func (s *Storage) PopQueueMessage(ctx context.Context, listener *database.Listener, workspace identity.WorkspaceID, name string, wait time.Duration) (message []byte, found bool, err error) {
 	deadline := time.Now().Add(wait)
 	for {
-		id, err := s.queueID(ctx, workspace, name, wait > 0)
-		if errors.Is(err, ErrNotFound) {
-			return nil, false, nil
-		}
-		if err != nil {
-			return nil, false, err
-		}
 		var woken <-chan struct{}
 		unsubscribe := func() {}
 		if wait > 0 {
-			// Subscribe before reading so a put after the read wakes us.
-			woken, unsubscribe = listener.Subscribe(ChannelQueue, id.String())
+			// Subscribe by name before reading, so a put after the read
+			// wakes us even into a queue deleted and created again.
+			woken, unsubscribe = listener.Subscribe(ChannelQueue, queueWake(workspace, name))
 		}
-		data, err := s.queries.PopQueueMessage(ctx, id)
+		data, err := s.popOnce(ctx, workspace, name)
 		if err == nil {
 			unsubscribe()
 			return data, true, nil
 		}
-		if !errors.Is(err, pgx.ErrNoRows) {
+		if !errors.Is(err, ErrNotFound) {
 			unsubscribe()
-			return nil, false, fmt.Errorf("pop queue message: %w", err)
+			return nil, false, err
 		}
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
@@ -146,6 +140,27 @@ func (s *Storage) PopQueueMessage(ctx context.Context, listener *database.Listen
 		timer.Stop()
 		unsubscribe()
 	}
+}
+
+// queueWake is the NOTIFY payload of a queue: its workspace and name.
+func queueWake(workspace identity.WorkspaceID, name string) string {
+	return workspace.String() + ":" + name
+}
+
+// popOnce pops the oldest message; ErrNotFound means none is there.
+func (s *Storage) popOnce(ctx context.Context, workspace identity.WorkspaceID, name string) ([]byte, error) {
+	id, err := s.queueID(ctx, workspace, name, false)
+	if err != nil {
+		return nil, err
+	}
+	data, err := s.queries.PopQueueMessage(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("pop queue message: %w", err)
+	}
+	return data, nil
 }
 
 // PeekQueueMessage returns the oldest message without removing it.

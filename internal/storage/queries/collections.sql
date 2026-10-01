@@ -33,9 +33,11 @@ from queue_messages where queue_id = @queue_id;
 -- name: ListQueues :many
 select q.name, s.size, s.oldest
 from queues q
+-- A listing counts at most 100,001 messages per queue, so one huge
+-- queue does not slow every page.
 cross join lateral (
     select count(*)::bigint as size, min(m.created_at) as oldest
-    from queue_messages m where m.queue_id = q.id
+    from (select created_at from queue_messages m where m.queue_id = q.id order by m.id limit 100001) m
 ) s
 where q.workspace_id = @workspace_id and q.name > @after::text
 order by q.name
@@ -102,13 +104,17 @@ where map_id = @map_id and (expires_at is null or expires_at > now());
 -- name: ListMaps :many
 select m.name, s.count, s.size_bytes, s.expiring_count, s.next_expiry_at
 from maps m
+-- A listing counts at most 100,001 live entries per map.
 cross join lateral (
     select count(*)::bigint as count,
            coalesce(sum(length(e.data)), 0)::bigint as size_bytes,
            count(e.expires_at)::bigint as expiring_count,
            min(e.expires_at) as next_expiry_at
-    from map_entries e
-    where e.map_id = m.id and (e.expires_at is null or e.expires_at > now())
+    from (
+        select data, expires_at from map_entries e
+        where e.map_id = m.id and (e.expires_at is null or e.expires_at > now())
+        limit 100001
+    ) e
 ) s
 where m.workspace_id = @workspace_id and m.name > @after::text and s.count > 0
 order by m.name
