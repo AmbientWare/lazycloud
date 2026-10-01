@@ -1,7 +1,10 @@
 # Local services
 
 `docker compose up -d --wait postgres object-store` starts PostgreSQL on
-127.0.0.1:25432 and Garage's S3 API on 127.0.0.1:23900.
+127.0.0.1:25432 and Garage's S3 API on 127.0.0.1:23900 and on the Docker
+bridge gateway (`LAZYCLOUD_DOCKER_BRIDGE_IP`, 172.17.0.1 by default). The
+platform presigns URLs for the gateway address, which workload containers can
+reach.
 `docker compose run --rm object-store-bootstrap` creates the `lazycloud` bucket
 and the development key. Both steps are idempotent.
 
