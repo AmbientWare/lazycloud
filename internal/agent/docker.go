@@ -170,7 +170,7 @@ func (a *Agent) adopt(ctx context.Context) error {
 	}
 	a.volumes.adopt(list.Items)
 	for _, summary := range list.Items {
-		if summary.Labels[labelKind] == kindMount {
+		if kind := summary.Labels[labelKind]; kind == kindMount || kind == kindBucket {
 			continue
 		}
 		id := summary.Labels[labelContainer]

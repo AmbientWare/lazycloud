@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
@@ -83,6 +84,52 @@ func TestStartSendsAWorkspaceGrantFirst(t *testing.T) {
 	if err := store.DeleteVolume(t.Context(), ws, "data"); !errors.As(err, &inUse) {
 		t.Fatalf("delete of a mounted volume: %v", err)
 	}
+}
+
+// TestCloudBucketKeysComeFromWorkspaceSecrets: a cloud bucket's start
+// carries the keys its secrets hold, and a missing secret fails the start.
+func TestCloudBucketKeysComeFromWorkspaceSecrets(t *testing.T) {
+	h := start(t)
+	host, ctx := h.enroll()
+	spec := `{"handler": "reports:summarize", "image": {"python_version": "3.12"},
+		"volumes": [{"name": "models", "mount_path": "/models", "read_only": true,
+		  "cloud_bucket": {"bucket": "user-models", "prefix": "v1/", "region": "us-east-2",
+		    "access_key_secret": "AWS_KEY", "secret_key_secret": "AWS_SECRET"}}]}`
+	ws, container := h.startingWith(host, spec)
+	if _, err := h.secrets.Create(t.Context(), ws, "AWS_KEY", "AKIAEXAMPLE"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.secrets.Create(t.Context(), ws, "AWS_SECRET", "secret-value"); err != nil {
+		t.Fatal(err)
+	}
+	stream := open(t, ctx, h.client)
+	start := receive(t, stream).GetStart()
+	bucket := start.GetVolumes()[0].GetCloudBucket()
+	if start.GetContainerId() != container.String() || bucket.GetBucket() != "user-models" || bucket.GetPrefix() != "v1/" ||
+		bucket.GetAccessKeyId() != "AKIAEXAMPLE" || bucket.GetSecretAccessKey() != "secret-value" || !start.GetVolumes()[0].GetReadOnly() {
+		t.Fatalf("start %v", start)
+	}
+	if _, err := h.pool.Exec(t.Context(), `update containers set state = 'stopped', stop_reason = 'stopped' where id = $1`, container); err != nil {
+		t.Fatal(err)
+	}
+
+	// Without its secret the bucket's container fails to start.
+	_, missing := h.startingWith(host, strings.ReplaceAll(spec, "AWS_SECRET", "ABSENT"))
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		var state, reason string
+		if err := h.pool.QueryRow(t.Context(), `select state, coalesce(stop_reason, '') from containers where id = $1`, missing).Scan(&state, &reason); err != nil {
+			t.Fatal(err)
+		}
+		if state == "stopped" {
+			if reason != "start_failed" {
+				t.Fatalf("container without its bucket secret stopped as %s", reason)
+			}
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("a container without its bucket secret was not failed")
 }
 
 func TestDiskLeaseOverTheHostConnection(t *testing.T) {

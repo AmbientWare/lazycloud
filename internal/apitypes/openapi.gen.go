@@ -690,8 +690,8 @@ type Autoscaler struct {
 // CloudBucketSpec defines model for CloudBucketSpec.
 type CloudBucketSpec struct {
 	// AccessKeySecret The workspace secret holding the access key id.
-	AccessKeySecret *string `json:"access_key_secret,omitempty"`
-	Bucket          string  `json:"bucket"`
+	AccessKeySecret *SecretName `json:"access_key_secret,omitempty"`
+	Bucket          string      `json:"bucket"`
 
 	// Endpoint An S3-compatible endpoint URL; AWS S3 when absent.
 	Endpoint       *string `json:"endpoint,omitempty"`
@@ -702,7 +702,7 @@ type CloudBucketSpec struct {
 	Region *string `json:"region,omitempty"`
 
 	// SecretKeySecret The workspace secret holding the secret access key.
-	SecretKeySecret *string `json:"secret_key_secret,omitempty"`
+	SecretKeySecret *SecretName `json:"secret_key_secret,omitempty"`
 }
 
 // CollectionName A queue or map name; any characters except control characters.

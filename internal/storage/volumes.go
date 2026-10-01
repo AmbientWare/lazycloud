@@ -521,14 +521,20 @@ func (s *Storage) AbortVolumeUpload(ctx context.Context, workspace identity.Work
 var reservedMountRoots = [...]string{"/opt/lazycloud", "/run/lazycloud", "/workspace", "/proc", "/sys", "/dev"} //nolint:gochecknoglobals // A constant table.
 
 // ValidateVolumes checks a workload's volume specs: unique names and mount
-// paths, none on a path the runtime owns. Cloud buckets are refused until
-// workspace secrets can supply their keys.
+// paths, none on a path the runtime owns, and cloud buckets that name the
+// workspace secrets holding both keys. Hosts have no ambient credentials of
+// their own to mount a bucket with.
 func ValidateVolumes(specs []apitypes.VolumeMountSpec) error {
 	names := map[string]bool{}
 	paths := map[string]bool{}
 	for _, spec := range specs {
-		if spec.CloudBucket != nil {
-			return invalid("cloud bucket %s: mounting a cloud bucket needs workspace secrets for its keys, which this platform does not provide yet", spec.Name)
+		if b := spec.CloudBucket; b != nil {
+			if b.AccessKeySecret == nil || *b.AccessKeySecret == "" || b.SecretKeySecret == nil || *b.SecretKeySecret == "" {
+				return invalid("cloud bucket %s: name the workspace secrets holding its access key and secret key", spec.Name)
+			}
+			if b.Prefix != nil && *b.Prefix != "" && !strings.HasSuffix(*b.Prefix, "/") {
+				return invalid("cloud bucket %s: prefix %q must end with /", spec.Name, *b.Prefix)
+			}
 		}
 		target := MountPath(spec)
 		if names[spec.Name] || paths[target] {

@@ -36,6 +36,7 @@ const (
 	labelWorkspace  = "lazycloud.workspace-id"
 	labelWorkspaces = "lazycloud.workspaces"
 	kindMount       = "volume-mount"
+	kindBucket      = "bucket-mount"
 	// grantWait bounds how long a start waits for a workspace's first grant.
 	grantWait = time.Minute
 	// mountWait bounds how long a new mount takes to appear.
@@ -68,14 +69,16 @@ type volumes struct {
 	idleSince map[string]time.Time
 	// starting serializes starting and stopping each workspace's mount.
 	starting map[string]*sync.Mutex
-	// stopping marks mounts the agent itself is stopping.
+	// stopping marks mounts the agent itself is stopping, by name.
 	stopping map[string]bool
+	// buckets are each container's cloud bucket mounts, by name.
+	buckets map[string][]string
 }
 
 func newVolumes(a *Agent) *volumes {
 	return &volumes{
 		a: a, granted: map[string]chan struct{}{}, users: map[string]map[string]struct{}{},
-		idleSince: map[string]time.Time{}, starting: map[string]*sync.Mutex{}, stopping: map[string]bool{},
+		idleSince: map[string]time.Time{}, starting: map[string]*sync.Mutex{}, stopping: map[string]bool{}, buckets: map[string][]string{},
 	}
 }
 
@@ -103,7 +106,9 @@ type processCredentials struct {
 	AccessKeyID     string `json:"AccessKeyId"`
 	SecretAccessKey string `json:"SecretAccessKey"`
 	SessionToken    string `json:"SessionToken,omitempty"`
-	Expiration      string `json:"Expiration"`
+	// Expiration is absent for keys that do not expire, such as a cloud
+	// bucket's own.
+	Expiration string `json:"Expiration,omitempty"`
 }
 
 // grant stores a workspace's credentials where its mount reads them.
@@ -193,17 +198,25 @@ func (v *volumes) binds(ctx context.Context, container string, specs []*hostprot
 	if len(specs) > 0 && v.a.cfg.GeeseFSPath == "" {
 		return nil, nil, errNoVolumeSupport
 	}
-	for _, spec := range specs {
+	for n, spec := range specs {
+		if !filepath.IsAbs(spec.GetMountPath()) {
+			return nil, nil, fmt.Errorf("volume mount path %q is not absolute", spec.GetMountPath())
+		}
+		if spec.GetCloudBucket() != nil {
+			bind, err := v.bucketBind(ctx, container, n, spec)
+			if err != nil {
+				return nil, nil, err
+			}
+			binds = append(binds, bind)
+			continue
+		}
 		volume := spec.GetVolume()
 		if volume == nil {
-			return nil, nil, fmt.Errorf("volume at %s: only platform volumes mount on this host", spec.GetMountPath())
+			return nil, nil, fmt.Errorf("volume at %s names no source", spec.GetMountPath())
 		}
 		workspace, prefix := volume.GetWorkspaceId(), volume.GetPrefix()
 		if !isUUID(workspace) || !isUUID(volume.GetVolumeId()) || prefix != "volumes/"+volume.GetVolumeId()+"/" {
 			return nil, nil, fmt.Errorf("volume at %s has an invalid location", spec.GetMountPath())
-		}
-		if !filepath.IsAbs(spec.GetMountPath()) {
-			return nil, nil, fmt.Errorf("volume mount path %q is not absolute", spec.GetMountPath())
 		}
 		root, err := v.ensureMount(ctx, workspace, container)
 		if err != nil {
@@ -237,7 +250,7 @@ func (v *volumes) ensureMount(ctx context.Context, workspace, container string) 
 	// A running mount container is never replaced, since live workloads bind
 	// to its mount; a new one only replaces a container that has exited.
 	root := filepath.Join(v.mountDir(), workspace)
-	if !v.mounterRunning(ctx, workspace) {
+	if !v.mountRunning(ctx, mounterName(workspace)) {
 		if err := v.startMounter(ctx, workspace); err != nil {
 			v.release(container)
 			return "", err
@@ -245,9 +258,9 @@ func (v *volumes) ensureMount(ctx context.Context, workspace, container string) 
 	}
 	deadline := time.Now().Add(mountWait)
 	for !mounted(root) {
-		if !v.mounterRunning(ctx, workspace) {
+		if !v.mountRunning(ctx, mounterName(workspace)) {
 			v.release(container)
-			return "", fmt.Errorf("the volume mount for workspace %s exited: %s", workspace, v.mounterLogs(ctx, workspace))
+			return "", fmt.Errorf("the volume mount for workspace %s exited: %s", workspace, v.mounterLogs(ctx, mounterName(workspace)))
 		}
 		if time.Now().After(deadline) || !sleep(ctx, 100*time.Millisecond) {
 			v.release(container)
@@ -303,13 +316,13 @@ func mounted(path string) bool {
 	return self.Dev != parent.Dev
 }
 
-func (v *volumes) mounterRunning(ctx context.Context, workspace string) bool {
-	inspect, err := v.a.docker.ContainerInspect(ctx, mounterName(workspace), client.ContainerInspectOptions{})
+func (v *volumes) mountRunning(ctx context.Context, name string) bool {
+	inspect, err := v.a.docker.ContainerInspect(ctx, name, client.ContainerInspectOptions{})
 	return err == nil && inspect.Container.State != nil && inspect.Container.State.Running
 }
 
-func (v *volumes) mounterLogs(ctx context.Context, workspace string) string {
-	logs, err := v.a.docker.ContainerLogs(ctx, mounterName(workspace), client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true, Tail: "5"})
+func (v *volumes) mounterLogs(ctx context.Context, name string) string {
+	logs, err := v.a.docker.ContainerLogs(ctx, name, client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true, Tail: "5"})
 	if err != nil {
 		return err.Error()
 	}
@@ -327,34 +340,69 @@ func (v *volumes) startMounter(ctx context.Context, workspace string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := v.a.images.ensure(ctx, v.a.cfg.MountImage, nil, ""); err != nil {
+	id, err := v.runMount(ctx, mountSpec{
+		name: mounterName(workspace), dir: workspace, creds: v.storageDir(workspace),
+		source: grant.Bucket + ":volumes/", endpoint: grant.Endpoint, region: grant.Region, pathStyle: true,
+		labels: map[string]string{labelKind: kindMount, labelWorkspace: workspace},
+	})
+	if err != nil {
 		return err
 	}
-	if err := v.a.removeContainer(ctx, mounterName(workspace)); err != nil {
-		return err
+	v.a.goOwned(func(ctx context.Context) {
+		v.watch(ctx, mounterName(workspace), id, func() []string { return v.usersOf(workspace) })
+	})
+	return nil
+}
+
+// mountSpec is one GeeseFS mount container.
+type mountSpec struct {
+	// name is the Docker name; dir the mount's directory under the mount
+	// directory; creds holds its credential_process files.
+	name, dir, creds string
+	// source is bucket:prefix.
+	source, endpoint, region string
+	pathStyle, readOnly      bool
+	labels                   map[string]string
+}
+
+// runMount starts a GeeseFS mount container and returns its id.
+func (v *volumes) runMount(ctx context.Context, m mountSpec) (string, error) {
+	if _, err := v.a.images.ensure(ctx, v.a.cfg.MountImage, nil, ""); err != nil {
+		return "", err
+	}
+	if err := v.a.removeContainer(ctx, m.name); err != nil {
+		return "", err
 	}
 	// Only the agent (and root, which Docker runs as) may walk into the
 	// mounts; workloads reach their own volume through a bind.
 	if err := os.MkdirAll(v.mountDir(), 0o700); err != nil {
-		return fmt.Errorf("create mount directory: %w", err)
+		return "", fmt.Errorf("create mount directory: %w", err)
 	}
 	if err := os.Chmod(v.mountDir(), 0o700); err != nil { //nolint:gosec // A directory needs its search bit.
-		return fmt.Errorf("restrict mount directory: %w", err)
+		return "", fmt.Errorf("restrict mount directory: %w", err)
 	}
 	uid, gid := "0", "0"
 	if os.Geteuid() != 0 {
 		uid, gid = strconv.Itoa(os.Geteuid()), strconv.Itoa(os.Getegid())
 	}
-	target := "/mnt/" + workspace
+	target := "/mnt/" + m.dir
 	args := []string{
 		"-f", "-o", "allow_other", "--uid", uid, "--gid", gid, "--dir-mode", "0777", "--file-mode", "0666",
-		"--endpoint", grant.Endpoint, "--fsync-on-close", "--stat-cache-ttl", "1s",
-		"--memory-limit", strconv.Itoa(geesefsMemoryMiB), "--no-preload-dir",
+		"--fsync-on-close", "--stat-cache-ttl", "1s", "--memory-limit", strconv.Itoa(geesefsMemoryMiB), "--no-preload-dir",
 	}
-	if grant.Region != "" {
-		args = append(args, "--region", grant.Region)
+	if m.endpoint != "" {
+		args = append(args, "--endpoint", m.endpoint)
 	}
-	args = append(args, grant.Bucket+":volumes/", target)
+	if m.region != "" {
+		args = append(args, "--region", m.region)
+	}
+	if !m.pathStyle {
+		args = append(args, "--subdomain")
+	}
+	if m.readOnly {
+		args = append(args, "-o", "ro")
+	}
+	args = append(args, m.source, target)
 	quoted := make([]string, len(args))
 	for n, arg := range args {
 		quoted[n] = "'" + strings.ReplaceAll(arg, "'", `'\''`) + "'"
@@ -375,10 +423,11 @@ exit 1`, target, strings.Join(quoted, " "))
 	if labels == nil {
 		labels = map[string]string{}
 	}
-	labels[labelHost], labels[labelKind], labels[labelWorkspace] = v.a.identity.HostID, kindMount, workspace
-	mounterPids := int64(mounterPidsLimit)
+	maps.Copy(labels, m.labels)
+	labels[labelHost] = v.a.identity.HostID
+	pids := int64(mounterPidsLimit)
 	created, err := v.a.docker.ContainerCreate(ctx, client.ContainerCreateOptions{
-		Name: mounterName(workspace),
+		Name: m.name,
 		Config: &containertypes.Config{
 			Image:      v.a.cfg.MountImage,
 			Entrypoint: []string{"/bin/sh", "-c", script},
@@ -392,11 +441,11 @@ exit 1`, target, strings.Join(quoted, " "))
 			Resources: containertypes.Resources{
 				Devices:   []containertypes.DeviceMapping{{PathOnHost: "/dev/fuse", PathInContainer: "/dev/fuse", CgroupPermissions: "rwm"}},
 				Memory:    mounterMemoryBytes,
-				PidsLimit: &mounterPids,
+				PidsLimit: &pids,
 			},
 			Mounts: []mount.Mount{
 				{Type: mount.TypeBind, Source: v.a.cfg.GeeseFSPath, Target: "/opt/lazycloud/bin/geesefs", ReadOnly: true},
-				{Type: mount.TypeBind, Source: v.storageDir(workspace), Target: "/creds", ReadOnly: true},
+				{Type: mount.TypeBind, Source: m.creds, Target: "/creds", ReadOnly: true},
 				{
 					Type: mount.TypeBind, Source: v.mountDir(), Target: "/mnt",
 					BindOptions: &mount.BindOptions{Propagation: mount.PropagationRShared},
@@ -405,23 +454,31 @@ exit 1`, target, strings.Join(quoted, " "))
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("create volume mount container: %w", err)
+		return "", fmt.Errorf("create volume mount container: %w", err)
 	}
 	v.mu.Lock()
-	delete(v.stopping, workspace)
+	delete(v.stopping, m.name)
 	v.mu.Unlock()
-	if _, err := v.a.docker.ContainerStart(ctx, mounterName(workspace), client.ContainerStartOptions{}); err != nil {
-		return fmt.Errorf("start volume mount container: %w", err)
+	if _, err := v.a.docker.ContainerStart(ctx, m.name, client.ContainerStartOptions{}); err != nil {
+		return "", fmt.Errorf("start volume mount container: %w", err)
 	}
-	id := created.ID
-	v.a.goOwned(func(ctx context.Context) { v.watch(ctx, workspace, id) })
-	return nil
+	return created.ID, nil
 }
 
-// watch waits for a mount container to exit. Unless the agent stopped it,
-// the mount under every user is dead, so their containers stop and report
-// the exit rather than run on with a broken volume.
-func (v *volumes) watch(ctx context.Context, workspace, id string) {
+func (v *volumes) usersOf(workspace string) []string {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	users := make([]string, 0, len(v.users[workspace]))
+	for user := range v.users[workspace] {
+		users = append(users, user)
+	}
+	return users
+}
+
+// watch waits for the mount container name to exit. Unless the agent stopped
+// it, the mount under every user is dead, so their containers stop and
+// report the exit rather than run on with a broken volume.
+func (v *volumes) watch(ctx context.Context, name, id string, users func() []string) {
 	wait := v.a.docker.ContainerWait(ctx, id, client.ContainerWaitOptions{Condition: containertypes.WaitConditionNotRunning})
 	select {
 	case <-ctx.Done():
@@ -430,38 +487,40 @@ func (v *volumes) watch(ctx context.Context, workspace, id string) {
 	case err := <-wait.Error:
 		if !cerrdefs.IsNotFound(err) {
 			if ctx.Err() == nil {
-				v.a.log.Warn("watching a volume mount failed", "workspace", workspace, "error", err)
+				v.a.log.Warn("watching a volume mount failed", "mount", name, "error", err)
 			}
 			return
 		}
 	}
 	v.mu.Lock()
-	deliberate := v.stopping[workspace]
-	users := make([]string, 0, len(v.users[workspace]))
-	for user := range v.users[workspace] {
-		users = append(users, user)
-	}
+	deliberate := v.stopping[name]
 	v.mu.Unlock()
 	if deliberate {
 		return
 	}
-	v.a.log.Error("volume mount exited; stopping its containers", "workspace", workspace, "containers", len(users), "logs", v.mounterLogs(ctx, workspace))
-	for _, user := range users {
+	affected := users()
+	v.a.log.Error("volume mount exited; stopping its containers", "mount", name, "containers", len(affected), "logs", v.mounterLogs(ctx, name))
+	for _, user := range affected {
 		if c := v.a.lookup(user); c != nil {
-			c.failVolume(ctx, "the volume mount for workspace "+workspace+" exited")
+			c.failVolume(ctx, "the volume mount "+name+" exited")
 		}
 	}
 }
 
 // stopMounter stops a workspace mount; its script unmounts on SIGTERM.
 func (v *volumes) stopMounter(ctx context.Context, workspace string) error {
+	return v.stopMount(ctx, mounterName(workspace))
+}
+
+// stopMount stops a mount container; its script unmounts on SIGTERM.
+func (v *volumes) stopMount(ctx context.Context, name string) error {
 	v.mu.Lock()
-	v.stopping[workspace] = true
+	v.stopping[name] = true
 	v.mu.Unlock()
-	if err := v.a.stopDocker(ctx, mounterName(workspace), stopKillSeconds); err != nil {
+	if err := v.a.stopDocker(ctx, name, stopKillSeconds); err != nil {
 		return err
 	}
-	return v.a.removeContainer(ctx, mounterName(workspace))
+	return v.a.removeContainer(ctx, name)
 }
 
 // adopt restores mount users from the workload containers a previous agent
@@ -473,9 +532,17 @@ func (v *volumes) adopt(summaries []containertypes.Summary) {
 		if s.State != containertypes.StateRunning {
 			continue
 		}
+		if s.Labels[labelKind] == kindBucket {
+			container, name, id := s.Labels[labelContainer], s.Names[0][1:], s.ID
+			v.buckets[container] = append(v.buckets[container], name)
+			v.a.goOwned(func(ctx context.Context) { v.watch(ctx, name, id, func() []string { return []string{container} }) })
+			continue
+		}
 		if s.Labels[labelKind] == kindMount {
 			workspace, id := s.Labels[labelWorkspace], s.ID
-			v.a.goOwned(func(ctx context.Context) { v.watch(ctx, workspace, id) })
+			v.a.goOwned(func(ctx context.Context) {
+				v.watch(ctx, mounterName(workspace), id, func() []string { return v.usersOf(workspace) })
+			})
 			continue
 		}
 		if s.Labels[labelWorkspaces] == "" {

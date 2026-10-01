@@ -37,12 +37,18 @@ func (s *Server) volumeMounts(ctx context.Context, start execution.StartCommand)
 				VolumeId: m.Volume.String(), WorkspaceId: start.Workspace.String(), Prefix: m.Prefix,
 			}}
 		} else {
-			// Validation refuses cloud buckets until workspace secrets can
-			// supply their keys.
+			// The keys come from the workspace secrets the bucket names; a
+			// missing one fails the start like a missing release secret.
 			b := m.CloudBucket
+			access, secret := deref(b.AccessKeySecret), deref(b.SecretKeySecret)
+			keys, err := s.config.Secrets.Resolve(ctx, start.Workspace, []string{access, secret})
+			if err != nil {
+				return nil, err
+			}
 			mount.Source = &hostproto.VolumeMount_CloudBucket{CloudBucket: &hostproto.CloudBucket{
 				Bucket: b.Bucket, Prefix: deref(b.Prefix), Region: deref(b.Region), Endpoint: deref(b.Endpoint),
 				ForcePathStyle: b.ForcePathStyle != nil && *b.ForcePathStyle,
+				AccessKeyId:    keys[access], SecretAccessKey: keys[secret],
 			}}
 		}
 		out[n] = mount

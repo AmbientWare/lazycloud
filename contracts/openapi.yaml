@@ -2429,12 +2429,10 @@ components:
           default: false
         access_key_secret:
           description: The workspace secret holding the access key id.
-          type: string
-          maxLength: 255
+          allOf: [{ $ref: "#/components/schemas/SecretName" }]
         secret_key_secret:
           description: The workspace secret holding the secret access key.
-          type: string
-          maxLength: 255
+          allOf: [{ $ref: "#/components/schemas/SecretName" }]
 
     Volume:
       type: object

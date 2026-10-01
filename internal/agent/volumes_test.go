@@ -150,12 +150,69 @@ func TestVolumesMountThroughWorkspaceBucket(t *testing.T) {
 	})
 }
 
+// TestCloudBucketMountsWithItsKeys mounts a user's bucket with keys from the
+// start and removes the mount and its keys when the container goes.
+func TestCloudBucketMountsWithItsKeys(t *testing.T) {
+	geesefs := testGeeseFS(t)
+	e := newEnv(t)
+	t.Cleanup(e.stopMounts)
+	e.geesefs = geesefs
+	e.startAgent()
+	s := e.session()
+	prefix := "test-buckets/" + uuid.NewString() + "/"
+	store := s3.New(s3.Options{
+		Region: "garage", BaseEndpoint: aws.String(testEndpoint()), UsePathStyle: true,
+		Credentials: credentials.NewStaticCredentialsProvider(testAccessKey, testSecretKey, ""),
+	})
+	if _, err := store.PutObject(t.Context(), &s3.PutObjectInput{
+		Bucket: aws.String(testBucket), Key: aws.String(prefix + "weights.txt"), Body: strings.NewReader("from the bucket"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = store.DeleteObject(context.Background(), &s3.DeleteObjectInput{Bucket: aws.String(testBucket), Key: aws.String(prefix + "weights.txt")})
+	})
+
+	start := e.startCommand("app:handle", 1)
+	start.GetStart().Source = serveSource(t, "testdata/volumes")
+	start.GetStart().Volumes = []*hostproto.VolumeMount{{
+		MountPath: "/models", ReadOnly: true,
+		Source: &hostproto.VolumeMount_CloudBucket{CloudBucket: &hostproto.CloudBucket{
+			Bucket: testBucket, Prefix: prefix, Region: "garage", Endpoint: testEndpoint(), ForcePathStyle: true,
+			AccessKeyId: testAccessKey, SecretAccessKey: testSecretKey,
+		}},
+	}}
+	id := start.GetStart().GetContainerId()
+	s.send(t, start)
+	s.phase(t, id, ready)
+	attempt := e.task(id, `{"args": ["read", "/models/weights.txt"]}`)
+	if got := result(t, e.completion(attempt)); got != `"from the bucket"` {
+		t.Fatalf("read: %s", got)
+	}
+	attempt = e.task(id, `{"args": ["env", ""]}`)
+	if got := result(t, e.completion(attempt)); got != "[]" {
+		t.Fatalf("the container sees credentials: %s", got)
+	}
+
+	s.send(t, stopCommand(id, 1))
+	s.phase(t, id, exited)
+	keys := filepath.Join(e.stateDir, "storage", "buckets", bucketMountName(id, 0))
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(keys); os.IsNotExist(err) {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatal("the bucket's keys outlived its container")
+}
+
 // stopMounts stops this test's mount containers so GeeseFS unmounts before
 // the state directory is removed.
 func (e *env) stopMounts() {
 	ctx := context.Background()
 	list, err := e.docker.ContainerList(ctx, client.ContainerListOptions{All: true, Filters: client.Filters{}.
-		Add("label", "lazycloud.agent="+e.id).Add("label", labelKind+"="+kindMount)})
+		Add("label", "lazycloud.agent="+e.id).Add("label", labelKind)})
 	if err != nil {
 		e.t.Errorf("list mount containers: %v", err)
 		return

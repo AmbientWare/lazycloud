@@ -347,6 +347,7 @@ func (c *container) cleanup(ctx context.Context) {
 	c.cleaned = true
 	c.mu.Unlock()
 	c.a.volumes.release(c.id)
+	c.a.volumes.releaseBuckets(ctx, c.id)
 	if err := c.a.removeContainer(ctx, c.dockerName()); err != nil {
 		c.log.Warn("removing docker container failed", "error", err)
 	}

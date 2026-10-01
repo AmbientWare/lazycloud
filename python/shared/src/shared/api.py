@@ -479,11 +479,17 @@ class CloudBucketSpec(BaseModel):
     force_path_style: bool = False
     access_key_secret: Annotated[
         str | None,
-        Field(description="The workspace secret holding the access key id.", max_length=255),
+        Field(
+            description="The workspace secret holding the access key id.",
+            pattern="^[A-Za-z_][A-Za-z0-9_]{0,239}$",
+        ),
     ] = None
     secret_key_secret: Annotated[
         str | None,
-        Field(description="The workspace secret holding the secret access key.", max_length=255),
+        Field(
+            description="The workspace secret holding the secret access key.",
+            pattern="^[A-Za-z_][A-Za-z0-9_]{0,239}$",
+        ),
     ] = None
 
 
