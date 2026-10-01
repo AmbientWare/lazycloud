@@ -34,21 +34,54 @@ type Cron struct {
 // String is the normalized expression stored on releases and shown to users.
 func (c Cron) String() string { return c.expression }
 
-var (
-	intervalPattern = regexp.MustCompile(`^every\s+([1-9][0-9]*)([mhd])$`)
-	intervalLimits  = map[string]int{"m": 59, "h": 23, "d": 31}
-	aliases         = map[string]string{
-		"@annually": "0 0 1 1 *",
-		"@yearly":   "0 0 1 1 *",
-		"@monthly":  "0 0 1 * *",
-		"@weekly":   "0 0 * * 0",
-		"@daily":    "0 0 * * *",
-		"@midnight": "0 0 * * *",
-		"@hourly":   "0 * * * *",
+var intervalPattern = regexp.MustCompile(`^every\s+([1-9][0-9]*)([mhd])$`) //nolint:gochecknoglobals // compiled once
+
+// alias expands a lowercase @alias.
+func alias(name string) (string, bool) {
+	switch name {
+	case "@annually", "@yearly":
+		return "0 0 1 1 *", true
+	case "@monthly":
+		return "0 0 1 * *", true
+	case "@weekly":
+		return "0 0 * * 0", true
+	case "@daily", "@midnight":
+		return "0 0 * * *", true
+	case "@hourly":
+		return "0 * * * *", true
 	}
-	monthNames   = map[string]int{"jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6, "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12}
-	weekdayNames = map[string]int{"sun": 0, "mon": 1, "tue": 2, "wed": 3, "thu": 4, "fri": 5, "sat": 6}
-)
+	return "", false
+}
+
+// intervalLimit is the largest `every N` for a unit.
+func intervalLimit(unit string) int {
+	switch unit {
+	case "m":
+		return 59
+	case "h":
+		return 23
+	}
+	return 31
+}
+
+// monthName and weekdayName read three-letter lowercase names.
+func monthName(name string) (int, bool) {
+	n := strings.Index("janfebmaraprmayjunjulaugsepoctnovdec", name)
+	if len(name) != 3 || n < 0 || n%3 != 0 {
+		return 0, false
+	}
+	return n/3 + 1, true
+}
+
+func weekdayName(name string) (int, bool) {
+	n := strings.Index("sunmontuewedthufrisat", name)
+	if len(name) != 3 || n < 0 || n%3 != 0 {
+		return 0, false
+	}
+	return n / 3, true
+}
+
+func noNames(string) (int, bool) { return 0, false }
 
 // searchYears bounds how far Next looks for a match. A satisfiable
 // expression matches within 28 years, the period of weekdays over dates.
@@ -66,7 +99,7 @@ func ParseCron(expression string) (Cron, error) {
 	fields := normalized
 	if m := intervalPattern.FindStringSubmatch(normalized); m != nil {
 		n, err := strconv.Atoi(m[1])
-		if err != nil || n > intervalLimits[m[2]] {
+		if err != nil || n > intervalLimit(m[2]) {
 			return Cron{}, &InvalidCronError{Message: "unsupported cron interval: " + expression}
 		}
 		switch m[2] {
@@ -79,7 +112,7 @@ func ParseCron(expression string) (Cron, error) {
 		}
 		fields = normalized
 	} else if strings.HasPrefix(normalized, "@") {
-		expanded, ok := aliases[normalized]
+		expanded, ok := alias(normalized)
 		if !ok {
 			return Cron{}, &InvalidCronError{Message: "unsupported cron alias: " + normalized}
 		}
@@ -95,13 +128,13 @@ func ParseCron(expression string) (Cron, error) {
 		return Cron{}, invalid
 	}
 	c := Cron{expression: normalized}
-	if err := setRange(c.minutes[:], parts[0], 0, 59, nil); err != nil {
+	if err := setRange(c.minutes[:], parts[0], 0, 59, noNames); err != nil {
 		return Cron{}, invalid
 	}
-	if err := setRange(c.hours[:], parts[1], 0, 23, nil); err != nil {
+	if err := setRange(c.hours[:], parts[1], 0, 23, noNames); err != nil {
 		return Cron{}, invalid
 	}
-	if err := setRange(c.months[:], parts[3], 1, 12, monthNames); err != nil {
+	if err := setRange(c.months[:], parts[3], 1, 12, monthName); err != nil {
 		return Cron{}, invalid
 	}
 	var err error
@@ -133,8 +166,8 @@ var errField = errors.New("invalid cron field")
 
 // setRange marks the values a list of `*`, `n`, `a-b` and their `/step`
 // forms selects. A reversed range wraps past the field's end, as in
-// croniter. names map lowercase names to values.
-func setRange(set []bool, field string, low, high int, names map[string]int) error {
+// croniter. names reads lowercase names as values.
+func setRange(set []bool, field string, low, high int, names func(string) (int, bool)) error {
 	size := high - low + 1
 	for item := range strings.SplitSeq(field, ",") {
 		from, to, step, err := parseItem(item, low, high, names)
@@ -152,7 +185,7 @@ func setRange(set []bool, field string, low, high int, names map[string]int) err
 }
 
 // parseItem parses one list item into a range, possibly reversed, and a step.
-func parseItem(item string, low, high int, names map[string]int) (from, to, step int, err error) {
+func parseItem(item string, low, high int, names func(string) (int, bool)) (from, to, step int, err error) {
 	base, stepText, hasStep := strings.Cut(item, "/")
 	step = 1
 	if hasStep {
@@ -183,8 +216,8 @@ func parseItem(item string, low, high int, names map[string]int) (from, to, step
 	return from, from, step, nil
 }
 
-func value(text string, low, high int, names map[string]int) (int, error) {
-	if v, ok := names[text]; ok {
+func value(text string, low, high int, names func(string) (int, bool)) (int, error) {
+	if v, ok := names(text); ok {
 		return v, nil
 	}
 	v, err := strconv.Atoi(text)
@@ -213,7 +246,7 @@ func parseDays(field string) (dayMatcher, error) {
 			d.last = true
 		case strings.HasSuffix(item, "-l"):
 			// `1-l` runs to the month's last day.
-			from, err := value(strings.TrimSuffix(item, "-l"), 1, 31, nil)
+			from, err := value(strings.TrimSuffix(item, "-l"), 1, 31, noNames)
 			if err != nil {
 				return d, err
 			}
@@ -222,13 +255,13 @@ func parseDays(field string) (dayMatcher, error) {
 			}
 		case strings.HasSuffix(item, "w"):
 			// croniter accepts `15w` and fires on that day.
-			v, err := value(strings.TrimSuffix(item, "w"), 1, 31, nil)
+			v, err := value(strings.TrimSuffix(item, "w"), 1, 31, noNames)
 			if err != nil {
 				return d, err
 			}
 			d.days[v] = true
 		default:
-			if err := setRange(d.days[:], item, 1, 31, nil); err != nil {
+			if err := setRange(d.days[:], item, 1, 31, noNames); err != nil {
 				return d, err
 			}
 		}
@@ -257,7 +290,7 @@ func parseWeekdays(field string) (weekdayMatcher, error) {
 			if len(items) > 1 {
 				return w, errField
 			}
-			d, err := value(day, 0, 7, weekdayNames)
+			d, err := value(day, 0, 7, weekdayName)
 			if err != nil {
 				return w, err
 			}
@@ -269,7 +302,7 @@ func parseWeekdays(field string) (weekdayMatcher, error) {
 			continue
 		}
 		var days [8]bool
-		if err := setRange(days[:], item, 0, 7, weekdayNames); err != nil {
+		if err := setRange(days[:], item, 0, 7, weekdayName); err != nil {
 			return w, err
 		}
 		for d, set := range days {

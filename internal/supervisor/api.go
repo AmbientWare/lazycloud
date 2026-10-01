@@ -186,7 +186,9 @@ func writeStatusError(w http.ResponseWriter, err error) {
 		writeAPIError(w, http.StatusBadRequest, "invalid_request", message)
 	case codes.Unauthenticated:
 		writeAPIError(w, http.StatusUnauthorized, "unauthenticated", message)
-	default:
+	case codes.OK, codes.Canceled, codes.Unknown, codes.DeadlineExceeded, codes.NotFound, codes.AlreadyExists,
+		codes.ResourceExhausted, codes.FailedPrecondition, codes.Aborted, codes.OutOfRange, codes.Unimplemented,
+		codes.Internal, codes.Unavailable, codes.DataLoss:
 		writeAPIError(w, http.StatusServiceUnavailable, "internal", "container API unavailable: "+message)
 	}
 }

@@ -104,7 +104,7 @@ func copyRequestBody(stream grpc.BidiStreamingServer[hostproto.APIRequest, hostp
 		}
 		if len(chunk) > 0 {
 			if _, err := w.Write(chunk); err != nil {
-				return err
+				return fmt.Errorf("pass request body: %w", err)
 			}
 		}
 		msg, err := stream.Recv()

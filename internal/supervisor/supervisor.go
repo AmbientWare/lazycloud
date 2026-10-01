@@ -62,9 +62,9 @@ type Supervisor struct {
 	configure *hostproto.Configure
 	// redact is set by Configure, before any slot runs.
 	redact *redactor
-	slots     []*slot
-	loaded    map[*slot]bool
-	runs      chan *hostproto.RunAttempt
+	slots  []*slot
+	loaded map[*slot]bool
+	runs   chan *hostproto.RunAttempt
 	// queued maps attempts waiting for a slot to whether they were cancelled.
 	queued         map[string]bool
 	ready          bool

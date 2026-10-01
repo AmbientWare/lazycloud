@@ -95,7 +95,10 @@ func (s *Supervisor) serveShared(ctx context.Context, cfg *hostproto.Configure, 
 		sl.proc = nil
 		sl.outMu.Unlock()
 	}
-	return len(restart) > 0, err
+	if err != nil {
+		return false, fmt.Errorf("serve shared slots: %w", err)
+	}
+	return len(restart) > 0, nil
 }
 
 // serveThread runs attempts on the shared process until it dies (restart),
