@@ -22,7 +22,7 @@ import (
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 
-	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/apitypes" //nolint:depguard // the control API bodies are the public schemas
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 )
 
@@ -34,8 +34,9 @@ type tunnelConn struct {
 
 func (c *tunnelConn) Read(p []byte) (int, error) { return c.reader.Read(p) }
 
-// dialTunnel upgrades GET target to a tunnel, or returns the refusal.
-func (h *controlHarness) dialTunnel(target string) (*tunnelConn, *http.Response) {
+// dialTunnel upgrades GET target to a tunnel, or returns the refusal's
+// status and body.
+func (h *controlHarness) dialTunnel(target string) (*tunnelConn, int, []byte) {
 	h.t.Helper()
 	raw, err := (&net.Dialer{}).DialContext(h.t.Context(), "unix", h.socket)
 	if err != nil {
@@ -43,16 +44,18 @@ func (h *controlHarness) dialTunnel(target string) (*tunnelConn, *http.Response)
 	}
 	conn := raw.(*net.UnixConn)
 	h.t.Cleanup(func() { _ = conn.Close() })
-	fmt.Fprintf(conn, "GET %s HTTP/1.1\r\nHost: control\r\nConnection: Upgrade\r\nUpgrade: %s\r\n\r\n", target, TunnelProtocol)
+	_, _ = fmt.Fprintf(conn, "GET %s HTTP/1.1\r\nHost: control\r\nConnection: Upgrade\r\nUpgrade: %s\r\n\r\n", target, TunnelProtocol)
 	reader := bufio.NewReader(conn)
 	resp, err := http.ReadResponse(reader, nil)
 	if err != nil {
 		h.t.Fatal(err)
 	}
 	if resp.StatusCode != http.StatusSwitchingProtocols {
-		return nil, resp
+		defer func() { _ = resp.Body.Close() }()
+		body, _ := io.ReadAll(resp.Body)
+		return nil, resp.StatusCode, body
 	}
-	return &tunnelConn{UnixConn: conn, reader: reader}, resp
+	return &tunnelConn{UnixConn: conn, reader: reader}, resp.StatusCode, nil
 }
 
 func TestPortTunnelSplicesBothWaysWithHalfClose(t *testing.T) {
@@ -70,12 +73,12 @@ func TestPortTunnelSplicesBothWaysWithHalfClose(t *testing.T) {
 		defer func() { _ = conn.Close() }()
 		// Answer only after the client's half-close arrives.
 		data, _ := io.ReadAll(conn)
-		fmt.Fprintf(conn, "got %d bytes", len(data))
+		_, _ = fmt.Fprintf(conn, "got %d bytes", len(data))
 	}()
 	port := listener.Addr().(*net.TCPAddr).Port
-	conn, resp := h.dialTunnel("/ports/" + strconv.Itoa(port))
+	conn, status, _ := h.dialTunnel("/ports/" + strconv.Itoa(port))
 	if conn == nil {
-		t.Fatalf("tunnel refused: %d", resp.StatusCode)
+		t.Fatalf("tunnel refused: %d", status)
 	}
 	if _, err := conn.Write(bytes.Repeat([]byte("x"), 100000)); err != nil {
 		t.Fatal(err)
@@ -90,10 +93,10 @@ func TestPortTunnelSplicesBothWaysWithHalfClose(t *testing.T) {
 	}
 
 	_ = listener.Close()
-	_, resp = h.dialTunnel("/ports/" + strconv.Itoa(port))
+	_, status, body := h.dialTunnel("/ports/" + strconv.Itoa(port))
 	var e apitypes.Error
-	if err := json.NewDecoder(resp.Body).Decode(&e); err != nil || resp.StatusCode != http.StatusBadGateway || e.Code != apitypes.Unavailable {
-		t.Fatalf("refused port: %d %+v %v", resp.StatusCode, e, err)
+	if err := json.Unmarshal(body, &e); err != nil || status != http.StatusBadGateway || e.Code != apitypes.Unavailable {
+		t.Fatalf("refused port: %d %s %v", status, body, err)
 	}
 	h.expectError(http.MethodGet, "/ports/80", nil, http.StatusBadRequest, apitypes.InvalidRequest)
 	h.expectError(http.MethodGet, "/ports/70000", nil, http.StatusBadRequest, apitypes.InvalidRequest)
@@ -160,9 +163,9 @@ func certificate(t *testing.T, ca ssh.Signer, principals ...string) ssh.Signer {
 
 func (h *controlHarness) sshClient(keys sshKeys, user string, signer ssh.Signer) (*ssh.Client, error) {
 	h.t.Helper()
-	conn, resp := h.dialTunnel("/ssh")
+	conn, status, _ := h.dialTunnel("/ssh")
 	if conn == nil {
-		return nil, fmt.Errorf("ssh tunnel refused: %d", resp.StatusCode)
+		return nil, fmt.Errorf("ssh tunnel refused: %d", status)
 	}
 	config := &ssh.ClientConfig{
 		User: user, Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)},
@@ -187,7 +190,9 @@ func TestSSHAcceptsOnlyAuthorityCertificatesForRoot(t *testing.T) {
 		"plain key":       func() (*ssh.Client, error) { return h.sshClient(keys, "root", newSigner(t)) },
 		"other principal": func() (*ssh.Client, error) { return h.sshClient(keys, "root", certificate(t, keys.ca, "admin")) },
 		"no principal":    func() (*ssh.Client, error) { return h.sshClient(keys, "root", certificate(t, keys.ca)) },
-		"other user":      func() (*ssh.Client, error) { return h.sshClient(keys, "ubuntu", certificate(t, keys.ca, "root", "ubuntu")) },
+		"other user": func() (*ssh.Client, error) {
+			return h.sshClient(keys, "ubuntu", certificate(t, keys.ca, "root", "ubuntu"))
+		},
 		"other authority": func() (*ssh.Client, error) { return h.sshClient(keys, "root", certificate(t, newSigner(t), "root")) },
 	}
 	for name, dial := range refused {
@@ -290,7 +295,7 @@ func TestSSHSessionsExecShellSignalSFTPAndForwarding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fmt.Fprint(forwarded, "echo me")
+	_, _ = fmt.Fprint(forwarded, "echo me")
 	buf := make([]byte, 7)
 	if _, err := io.ReadFull(forwarded, buf); err != nil || string(buf) != "echo me" {
 		t.Fatalf("forwarded %q %v", buf, err)

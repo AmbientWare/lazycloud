@@ -38,13 +38,11 @@ func (s *shellClient) send(text string) {
 	}
 }
 
-// until reads until the terminal output contains want, returning the text
-// messages seen on the way.
-func (s *shellClient) until(want string) []shellMessage {
+// until reads until the terminal output contains want.
+func (s *shellClient) until(want string) {
 	s.t.Helper()
 	ctx, cancel := context.WithTimeout(s.t.Context(), 10*time.Second)
 	defer cancel()
-	var messages []shellMessage
 	for !strings.Contains(s.output.String(), want) {
 		kind, data, err := s.conn.Read(ctx)
 		if err != nil {
@@ -52,18 +50,8 @@ func (s *shellClient) until(want string) []shellMessage {
 		}
 		if kind == websocket.MessageBinary {
 			s.output.Write(data)
-			continue
-		}
-		var m shellMessage
-		if err := json.Unmarshal(data, &m); err != nil {
-			s.t.Fatal(err)
-		}
-		messages = append(messages, m)
-		if m.Type == "exit" && want == "" {
-			return messages
 		}
 	}
-	return messages
 }
 
 // exit reads to the exit message and the normal close after it.
