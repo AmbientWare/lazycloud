@@ -30,8 +30,8 @@ type Owners struct {
 	Control   *control.Control
 	Storage   *storage.Storage
 	Execution *execution.Execution
-	// Listener wakes waits on task changes. It must listen on
-	// database.ChannelTask.
+	// Listener wakes waits on task and queue changes. It must listen on
+	// database.ChannelTask and storage.ChannelQueue.
 	Listener *database.Listener
 }
 
@@ -122,6 +122,8 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		invalidSpec   *control.InvalidSpecError
 		sourceMissing *control.SourceMissingError
 		tooLarge      *http.MaxBytesError
+		storageInput  *storage.InvalidError
+		storageState  *storage.ConflictError
 	)
 	switch {
 	case errors.Is(err, identity.ErrUnauthenticated):
@@ -146,6 +148,16 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		writeJSONError(w, http.StatusConflict, apitypes.Conflict, "the function is stopped or its app is paused")
 	case errors.Is(err, execution.ErrTaskNotFinished):
 		writeJSONError(w, http.StatusConflict, apitypes.TaskNotFinished, "the task has not finished")
+	case errors.Is(err, storage.ErrNotFound):
+		writeJSONError(w, http.StatusNotFound, apitypes.NotFound, "not found")
+	case errors.As(err, &storageInput):
+		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, storageInput.Error())
+	case errors.As(err, &storageState):
+		writeJSONError(w, http.StatusConflict, apitypes.Conflict, storageState.Error())
+	case errors.Is(err, storage.ErrTooLarge):
+		writeJSONError(w, http.StatusRequestEntityTooLarge, apitypes.PayloadTooLarge, "a value is larger than 1 MiB")
+	case errors.Is(err, storage.ErrBucketsUnconfigured):
+		writeJSONError(w, http.StatusNotImplemented, apitypes.Unsupported, "this server has no workspace bucket provider")
 	default:
 		s.logger.ErrorContext(r.Context(), "request failed", "method", r.Method, "path", r.URL.Path, "error", err)
 		writeJSONError(w, http.StatusInternalServerError, apitypes.Internal, "internal error")

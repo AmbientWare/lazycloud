@@ -1,0 +1,106 @@
+-- name: WorkspaceBucket :one
+select bucket from workspace_buckets where workspace_id = @workspace_id;
+
+-- name: InsertWorkspaceBucket :exec
+insert into workspace_buckets (workspace_id, bucket) values (@workspace_id, @bucket)
+on conflict (workspace_id) do nothing;
+
+-- name: InsertVolume :exec
+insert into volumes (workspace_id, name) values (@workspace_id, @name)
+on conflict (workspace_id, name) where state = 'active' do nothing;
+
+-- name: ActiveVolume :one
+select id, name, size_bytes, size_measured_at, created_at
+from volumes
+where workspace_id = @workspace_id and name = @name and state = 'active';
+
+-- name: LockActiveVolume :one
+select id from volumes
+where workspace_id = @workspace_id and name = @name and state = 'active'
+for update;
+
+-- name: ShareActiveVolume :one
+select id from volumes
+where workspace_id = @workspace_id and name = @name and state = 'active'
+for share;
+
+-- name: ListVolumes :many
+select id, name, size_bytes, size_measured_at, created_at
+from volumes
+where workspace_id = @workspace_id and state = 'active' and name > @after::text
+order by name
+limit @max_rows;
+
+-- name: VolumeUsers :many
+-- Workloads whose active release mounts one of the named platform volumes.
+select (m.spec ->> 'name')::text as volume, a.name as app, w.kind, w.name as workload
+from apps a
+join workloads w on w.app_id = a.id
+join releases r on r.id = w.active_release_id
+cross join lateral jsonb_array_elements(coalesce(r.spec -> 'volumes', '[]'::jsonb)) as m(spec)
+where a.workspace_id = @workspace_id and w.desired_state = 'active'
+  and m.spec -> 'cloud_bucket' is null
+  and (m.spec ->> 'name') = any(@names::text[])
+order by a.name, w.kind, w.name;
+
+-- name: LiveMountOfVolume :one
+-- A container that mounts the volume and has not stopped.
+select c.id
+from volume_mounts vm
+join containers c on c.id = vm.container_id
+where vm.volume_id = @volume_id and c.state <> 'stopped'
+limit 1;
+
+-- name: MarkVolumeDeleting :exec
+update volumes set state = 'deleting', deleted_at = now() where id = @id;
+
+-- name: InsertVolumeMount :exec
+insert into volume_mounts (volume_id, container_id) values (@volume_id, @container_id)
+on conflict do nothing;
+
+-- name: DeletingVolumes :many
+select v.id, v.workspace_id, coalesce(b.bucket, '')::text as bucket
+from volumes v
+left join workspace_buckets b on b.workspace_id = v.workspace_id
+where v.state = 'deleting'
+order by v.deleted_at
+limit @max_rows
+for update of v skip locked;
+
+-- name: DeleteVolumeRow :exec
+delete from volumes where id = @id and state = 'deleting';
+
+-- name: VolumesToMeasure :many
+select v.id, b.bucket
+from volumes v
+join workspace_buckets b on b.workspace_id = v.workspace_id
+where v.state = 'active'
+  and (v.size_measured_at is null or v.size_measured_at < now() - make_interval(secs => @every_seconds::float8))
+order by v.size_measured_at nulls first
+limit @max_rows
+for update of v skip locked;
+
+-- name: RecordVolumeSize :exec
+update volumes set size_bytes = @size_bytes, size_measured_at = now() where id = @id;
+
+-- name: HostMountWorkspaces :many
+-- Workspaces whose volumes or disks a host's live containers use.
+select distinct c.workspace_id
+from containers c
+where c.host_id = @host_id and c.state <> 'stopped'
+  and (exists (select 1 from volume_mounts vm where vm.container_id = c.id)
+       or exists (select 1 from disks d where d.holder_container_id = c.id));
+
+-- name: InsertStorageGrant :exec
+insert into storage_grants (access_key_id, workspace_id, host_id, expires_at)
+values (@access_key_id, @workspace_id, @host_id, @expires_at);
+
+-- name: ExpiredStorageGrants :many
+select access_key_id from storage_grants
+where expires_at < now()
+order by expires_at
+limit @max_rows
+for update skip locked;
+
+-- name: DeleteStorageGrant :exec
+delete from storage_grants where access_key_id = @access_key_id;
