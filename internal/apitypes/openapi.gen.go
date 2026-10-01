@@ -3081,6 +3081,9 @@ type Disk struct {
 	// Generation The newest published generation; 0 before the first.
 	Generation int64 `json:"generation"`
 
+	// Holder The workload whose container holds the disk.
+	Holder *WorkloadRef `json:"holder,omitempty"`
+
 	// HolderContainerId The container holding the disk while attached or saving.
 	HolderContainerId *openapi_types.UUID `json:"holder_container_id,omitempty"`
 	Id                openapi_types.UUID  `json:"id"`
@@ -4209,6 +4212,9 @@ type Secret struct {
 	// Name An environment variable name; the LAZYCLOUD_ prefix is reserved.
 	Name      SecretName `json:"name"`
 	UpdatedAt time.Time  `json:"updated_at"`
+
+	// UsedBy Workloads whose active release receives the secret.
+	UsedBy []WorkloadRef `json:"used_by"`
 }
 
 // SecretCreate defines model for SecretCreate.
