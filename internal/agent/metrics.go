@@ -23,8 +23,8 @@ const (
 	defaultMetricsInterval = 5 * time.Second
 	// cgroupRoot is where the unified cgroup v2 hierarchy is mounted.
 	cgroupRoot = "/sys/fs/cgroup"
-	// gpuQueryTimeout bounds one nvidia-smi call.
-	gpuQueryTimeout = 2 * time.Second
+	// gpuSampleTimeout bounds one nvidia-smi call.
+	gpuSampleTimeout = 2 * time.Second
 )
 
 // usageSource is where a running container's use is read, and the counters
@@ -270,7 +270,7 @@ func readNetDev(path string) (rx, tx uint64) {
 // readGPUs reads every GPU's use through NVML's nvidia-smi, keyed by UUID.
 // A host without it returns none.
 func (a *Agent) readGPUs(ctx context.Context) map[string]*hostproto.GPUSample {
-	ctx, cancel := context.WithTimeout(ctx, gpuQueryTimeout)
+	ctx, cancel := context.WithTimeout(ctx, gpuSampleTimeout)
 	defer cancel()
 	out := map[string]*hostproto.GPUSample{}
 	data, err := exec.CommandContext(ctx, "nvidia-smi",
@@ -279,10 +279,10 @@ func (a *Agent) readGPUs(ctx context.Context) map[string]*hostproto.GPUSample {
 		a.log.Debug("reading GPU use failed", "error", err)
 		return out
 	}
-	return parseGPUs(data)
+	return parseGPUSamples(data)
 }
 
-func parseGPUs(data []byte) map[string]*hostproto.GPUSample {
+func parseGPUSamples(data []byte) map[string]*hostproto.GPUSample {
 	out := map[string]*hostproto.GPUSample{}
 	for line := range strings.SplitSeq(string(data), "\n") {
 		fields := strings.Split(line, ",")

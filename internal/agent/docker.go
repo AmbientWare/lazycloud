@@ -37,7 +37,7 @@ const (
 // pidsLimit bounds processes per container.
 const pidsLimit = 4096
 
-func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostproto.StartContainer, runtime string, binds []mount.Mount, workspaces []string) error {
+func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostproto.StartContainer, runtime string, binds []mount.Mount, workspaces []string, gpus []string) error {
 	env := make([]string, 0, len(spec.GetEnvironment())+len(spec.GetSecrets())+8)
 	for _, key := range slices.Sorted(maps.Keys(spec.GetEnvironment())) {
 		env = append(env, key+"="+spec.GetEnvironment()[key])
@@ -71,6 +71,9 @@ func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostprot
 		labels[labelWorkspaces] = strings.Join(workspaces, ",")
 	}
 	labels[labelRuntime] = string(runtimeLabel)
+	if len(gpus) > 0 {
+		labels[labelGPUs] = strings.Join(gpus, ",")
+	}
 
 	limit := int64(pidsLimit)
 	resources := spec.GetResources()
@@ -95,7 +98,7 @@ func (a *Agent) createAndStart(ctx context.Context, c *container, spec *hostprot
 				// Any container user may create the API socket here.
 				{Type: mount.TypeTmpfs, Target: containerAPIDir, TmpfsOptions: &mount.TmpfsOptions{SizeBytes: 1 << 20, Mode: 0o1777}},
 			}, binds...),
-			Resources:  containerResources(resources, a.capacity, limit),
+			Resources:  containerResources(resources, a.capacity, limit, gpus),
 			StorageOpt: a.diskLimit(resources),
 		},
 	}
@@ -188,6 +191,7 @@ func (a *Agent) adopt(ctx context.Context) error {
 				return err
 			}
 			c.link, c.started = l, true
+			c.gpus = parseGPULabel(summary.Labels[labelGPUs])
 			disks, err := a.loadLeases(c.id)
 			if err != nil {
 				c.log.Error("reading disk leases failed", "error", err)
@@ -242,7 +246,7 @@ func containerUser() string {
 // it reserved; the CPU quota is the burst ceiling, capped at the host. Memory
 // reserves the request (memory.low) and kills at the limit, with swap the size
 // of the reservation so reclaim can slow a container before the wall.
-func containerResources(r *hostproto.Resources, host *hostproto.Capacity, pids int64) containertypes.Resources {
+func containerResources(r *hostproto.Resources, host *hostproto.Capacity, pids int64, gpus []string) containertypes.Resources {
 	cpuLimit := r.GetCpuLimitMillis()
 	if cpuLimit <= 0 || cpuLimit > host.GetCpuMillis() {
 		cpuLimit = host.GetCpuMillis()
@@ -256,5 +260,6 @@ func containerResources(r *hostproto.Resources, host *hostproto.Capacity, pids i
 		Memory:            memoryLimit,
 		MemorySwap:        memoryLimit + r.GetMemoryBytes(),
 		PidsLimit:         &pids,
+		DeviceRequests:    gpuRequest(gpus),
 	}
 }

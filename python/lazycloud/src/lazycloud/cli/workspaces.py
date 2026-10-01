@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 import typer
 from shared.api import WorkspaceState
@@ -30,16 +30,12 @@ def _save_workspace(profile: ClientProfile, name: str) -> None:
     )
 
 
-def _require_cloud_supported(cloud: str | None) -> None:
+def _require_cloud_supported(cloud: str | None) -> Literal["aws"] | None:
     if cloud is None:
-        return
+        return None
     if cloud != "aws":
         raise ClientError(f"unsupported cloud {cloud!r}; connected clouds: aws")
-    raise ClientError(
-        "no AWS account is connected; run `lazycloud cloud connect aws` first",
-        type="cloud_not_connected",
-        title="No connected cloud",
-    )
+    return "aws"
 
 
 def _require_profile_workspace() -> None:
@@ -119,10 +115,10 @@ def workspace_create(
     ] = None,
 ) -> None:
     _require_profile_workspace()
-    _require_cloud_supported(cloud)
+    location = _require_cloud_supported(cloud)
     profile = get_profile()
     with workspace_client() as client:
-        workspace = client.create_workspace(name)
+        workspace = client.create_workspace(name, cloud=location)
     try:
         _save_workspace(profile, workspace.name)
     except (ConfigError, OSError) as exc:

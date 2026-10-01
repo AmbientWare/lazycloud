@@ -125,8 +125,8 @@ func TestPlacementRoundRobinsWorkspacesAndLeavesShortfallPending(t *testing.T) {
 }
 
 func TestPackChoosesTheTightestFit(t *testing.T) {
-	roomy := compute.HostCapacity{Host: compute.HostID(uuid.New()), CPUMillis: 8000, MemoryBytes: 8 * gib, FreeCPUMillis: 8000, FreeMemoryBytes: 8 * gib}
-	tight := compute.HostCapacity{Host: compute.HostID(uuid.New()), CPUMillis: 8000, MemoryBytes: 8 * gib, FreeCPUMillis: 2000, FreeMemoryBytes: 2 * gib}
+	roomy := compute.HostCapacity{Host: compute.HostID(uuid.New()), Kind: compute.KindPlatform, CPUMillis: 8000, MemoryBytes: 8 * gib, FreeCPUMillis: 8000, FreeMemoryBytes: 8 * gib}
+	tight := compute.HostCapacity{Host: compute.HostID(uuid.New()), Kind: compute.KindPlatform, CPUMillis: 8000, MemoryBytes: 8 * gib, FreeCPUMillis: 2000, FreeMemoryBytes: 2 * gib}
 	pending := []PendingContainersRow{
 		{ID: uuid.New(), CpuMillis: 2000, MemoryBytes: 2 * gib},
 		{ID: uuid.New(), CpuMillis: 2000, MemoryBytes: 2 * gib},

@@ -98,7 +98,7 @@ func (s *Scheduling) placeBatch(ctx context.Context) (placeBatchResult, error) {
 			maxCPU, maxMemory = max(maxCPU, h.FreeCPUMillis), max(maxMemory, h.FreeMemoryBytes)
 		}
 		pending, err := q.PendingContainers(ctx, PendingContainersParams{
-			MaxFreeCpuMillis: maxCPU, MaxFreeMemoryBytes: maxMemory, BatchSize: placementBatch,
+			MaxFreeCpuMillis: maxCPU, MaxFreeMemoryBytes: maxMemory, Targets: targets(hosts), BatchSize: placementBatch,
 		})
 		if err != nil {
 			return fmt.Errorf("list pending containers: %w", err)
@@ -131,18 +131,57 @@ func (s *Scheduling) placeBatch(ctx context.Context) (placeBatchResult, error) {
 	return out, nil
 }
 
-// pack assigns containers in order, each to the host it fits most tightly:
-// the host whose free CPU and memory, as fractions of its size, sum lowest
-// after placement. Filling tight hosts first keeps large holes for large
-// containers. It returns parallel container and host id slices.
+// targets are the placement targets the hosts serve, in the form
+// PendingContainers matches: platform, connection:<id> and
+// machine:<workspace>:<name>.
+func targets(hosts []compute.HostCapacity) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(t string) {
+		if !seen[t] {
+			seen[t] = true
+			out = append(out, t)
+		}
+	}
+	for _, h := range hosts {
+		switch h.Kind {
+		case compute.KindPlatform:
+			add("platform")
+		case compute.KindConnection:
+			if h.Connection != nil {
+				add("connection:" + h.Connection.String())
+			}
+		case compute.KindMachine:
+			for _, ws := range h.Workspaces {
+				add("machine:" + ws.String() + ":" + h.Name)
+			}
+		}
+	}
+	return out
+}
+
+// requirement is what a pending container needs from its host.
+func requirement(c PendingContainersRow) compute.Requirement {
+	return compute.Requirement{
+		Workspace: c.WorkspaceID, Connection: c.ConnectionID, Machine: c.Machine, Region: c.Region, Zone: c.Zone,
+		Preemptible: c.Preemptible, GPUs: c.Gpus, GPUCount: int(c.GpuCount),
+		CPUMillis: c.CpuMillis, MemoryBytes: c.MemoryBytes,
+	}
+}
+
+// pack assigns containers in order, each to the accepting host it fits most
+// tightly: the host whose free CPU and memory, as fractions of its size, sum
+// lowest after placement. Filling tight hosts first keeps large holes for
+// large containers. It returns parallel container and host id slices.
 func pack(hosts []compute.HostCapacity, pending []PendingContainersRow) (ids, hostIDs []uuid.UUID) {
 	free := make([]compute.HostCapacity, len(hosts))
 	copy(free, hosts)
 	for _, c := range pending {
+		need := requirement(c)
 		best := -1
 		var bestScore float64
 		for i, h := range free {
-			if h.CPUMillis <= 0 || h.MemoryBytes <= 0 || h.FreeCPUMillis < c.CpuMillis || h.FreeMemoryBytes < c.MemoryBytes {
+			if h.CPUMillis <= 0 || h.MemoryBytes <= 0 || !h.Fits(need) {
 				continue
 			}
 			score := float64(h.FreeCPUMillis-c.CpuMillis)/float64(h.CPUMillis) +
@@ -154,8 +193,7 @@ func pack(hosts []compute.HostCapacity, pending []PendingContainersRow) (ids, ho
 		if best < 0 {
 			continue
 		}
-		free[best].FreeCPUMillis -= c.CpuMillis
-		free[best].FreeMemoryBytes -= c.MemoryBytes
+		free[best].Reserve(need)
 		ids = append(ids, c.ID)
 		hostIDs = append(hostIDs, uuid.UUID(free[best].Host))
 	}

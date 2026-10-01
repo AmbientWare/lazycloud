@@ -1958,6 +1958,261 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/workspaces/{workspace}/compute": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+            };
+            cookie?: never;
+        };
+        /** Where the workspace runs and how much capacity serves it */
+        get: operations["getComputeSummary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/compute/workloads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+            };
+            cookie?: never;
+        };
+        /** Deployed workloads with their sizes and machine pins */
+        get: operations["listComputeWorkloads"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{workspace}/machines": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+            };
+            cookie?: never;
+        };
+        /** Joined machines that serve the workspace */
+        get: operations["listWorkspaceMachines"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/compute/instances": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Instances running in the account's connected AWS account */
+        get: operations["listComputeInstances"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/aws-connection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The account's AWS connection */
+        get: operations["getAwsConnection"];
+        put?: never;
+        /**
+         * Connect an AWS account to back the workspaces the account owns
+         * @description Without a role the response carries the CloudFormation stack the customer submits with `lazycloud cloud authorize`. With an existing role it carries the external ID the role must require. Repeating an unfinished setup for the same account returns it again.
+         */
+        post: operations["connectAws"];
+        /**
+         * Disconnect the AWS account
+         * @description Refused while a workspace lives in the account. An unfinished setup is removed at once; a connected account drains its instances, then the platform deletes the stack and verifies the role is gone.
+         */
+        delete: operations["disconnectAws"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/aws-connection/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check the pending or active authorization now
+         * @description A failed check is not an error: the authorization carries its error_code and error_message.
+         */
+        post: operations["validateAwsConnection"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/aws-connection/reconnect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start a replacement authorization while the current one keeps serving */
+        post: operations["reconnectAws"];
+        /** Cancel a pending replacement authorization */
+        delete: operations["cancelAwsReconnect"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/aws-connection/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Retry the step the connection is waiting on */
+        post: operations["retryAwsConnection"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/fleet": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The platform fleet's capacity by market and the agent release rollout
+         * @description Platform administrators only.
+         */
+        get: operations["getFleet"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/fleet/nodes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The platform's hosts with their state, capacity and load
+         * @description Platform administrators only.
+         */
+        get: operations["listFleetNodes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/machines": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Machines the account joined */
+        get: operations["listMachines"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/machines/join-command": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * The command that joins a host to the account as a named machine
+         * @description Creates the machine, or reuses one that never joined, and mints a single-use join token that expires after ttl_seconds. Every workspace must be owned by the caller.
+         */
+        post: operations["createMachineJoinCommand"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/machines/{machine}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The machine's name or id. */
+                machine: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove a machine and revoke its host credential
+         * @description Its containers stop and their running tasks retry elsewhere; an agent still running on the host stops. Removing a removed machine succeeds.
+         */
+        delete: operations["removeMachine"];
+        options?: never;
+        head?: never;
+        /** Change the workspaces a machine serves */
+        patch: operations["updateMachine"];
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -2037,6 +2292,11 @@ export interface components {
         };
         WorkspaceRequest: {
             name: components["schemas"]["Name"];
+            /**
+             * @description aws places the workspace in the caller's ready AWS connection, for good.
+             * @enum {string}
+             */
+            cloud?: "aws";
         };
         /** @enum {string} */
         TokenStatus: "active" | "expired";
@@ -2280,6 +2540,7 @@ export interface components {
              */
             in_process?: boolean;
             lifecycle_hooks?: components["schemas"]["LifecycleHooks"];
+            placement?: components["schemas"]["Placement"];
             volumes?: components["schemas"]["VolumeMountSpec"][];
             /** @description The signature `lazycloud app export` types clients from. */
             client_contract?: {
@@ -2307,6 +2568,10 @@ export interface components {
             memory_limit_mib?: number;
             /** @description Writable layer limit; enforced where Docker has project quotas. */
             disk_mib?: number;
+            /** @description GPU models by preference; any, last, takes whatever has capacity. */
+            gpu?: components["schemas"]["GpuType"][];
+            /** @description GPUs per container; a gpu list without it reserves one. */
+            gpu_count?: number;
         };
         RetryPolicy: {
             /** @description Attempts including the first. */
@@ -3444,6 +3709,384 @@ export interface components {
             /** Format: double */
             total: number;
             series: components["schemas"]["AccountActivitySeries"][];
+        };
+        /**
+         * @description A GPU model, or any for whatever model has capacity. A100 is not a model: name A100-40 or A100-80.
+         * @enum {string}
+         */
+        GpuType: "T4" | "A10G" | "L4" | "L40S" | "A100-40" | "A100-80" | "H100" | "H200" | "any";
+        /**
+         * @description A product region. Only us-east (us-east-2, then us-east-1) and us-west (us-west-1, then us-west-2) have capacity; the others are accepted and wait for capacity that never comes.
+         * @enum {string}
+         */
+        Region: "us-east" | "us-west" | "eu-central" | "eu-north" | "ap-southeast";
+        /** @description Where a workload's containers may run. */
+        Placement: {
+            /** @description A joined machine of the workspace the workload must run on. */
+            machine?: string;
+            region?: components["schemas"]["Region"];
+            /** @description An AWS zone id such as use2-az1, or a name such as us-east-2a. */
+            availability_zone?: string;
+            /**
+             * @description Allow capacity the provider can reclaim.
+             * @default true
+             */
+            preemptible?: boolean;
+        };
+        /** @enum {string} */
+        MachineLifecycle: "requested" | "provisioning" | "booting" | "joining" | "ready" | "draining" | "stopping" | "stopped" | "resuming" | "terminating" | "deleted" | "failed";
+        /** @enum {string} */
+        MachineFailure: "agent_download_failed" | "runtime_install_failed" | "network_join_failed" | "provider_identity_failed" | "agent_enrollment_failed" | "worker_image_pull_failed" | "worker_start_failed" | "worker_readiness_failed" | "bootstrap_timed_out" | "host_preflight_failed" | "service_lost" | "machine_record_deleted" | "provider_stopped" | "provider_terminated" | "unknown";
+        /** @enum {string} */
+        CapacityState: "available" | "draining" | "preempting" | "cordoned";
+        PreflightCheck: {
+            name: string;
+            ok: boolean;
+            message: string;
+            /** @enum {string} */
+            severity: "info" | "warning" | "error";
+            remediation: string;
+        };
+        Machine: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /** @description Names of the workspaces the machine serves. */
+            workspaces: string[];
+            /** @description machine:<id> */
+            placement: string;
+            /** @enum {string} */
+            provider: "agent";
+            lifecycle: components["schemas"]["MachineLifecycle"];
+            lifecycle_message: string;
+            lifecycle_failure?: components["schemas"]["MachineFailure"];
+            /** Format: date-time */
+            lifecycle_at: string;
+            /**
+             * Format: int64
+             * @description Offered CPU in millicores.
+             */
+            cpu: number;
+            /**
+             * Format: int64
+             * @description Offered memory in MiB.
+             */
+            memory: number;
+            gpu: string;
+            gpu_count: number;
+            /** @description The agent's session is open and reported within the liveness timeout. */
+            connected: boolean;
+            schedulable: boolean;
+            capacity_state: components["schemas"]["CapacityState"];
+            capacity_reason: string;
+            preflight_checks: components["schemas"]["PreflightCheck"][];
+            remediation: string[];
+            /** Format: date-time */
+            last_seen_at?: string;
+            agent_version: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        MachinePage: {
+            machines: components["schemas"]["Machine"][];
+            /** @description Present when more machines follow. */
+            next_cursor?: string;
+        };
+        MachineJoinRequest: {
+            /** @description The name workloads pin to with machine=; unique in the account. */
+            name: string;
+            workspaces: components["schemas"]["Name"][];
+            /** @description GPU models the machine contributes; the agent reports what it finds. */
+            gpu?: string[];
+            /** @default 1800 */
+            ttl_seconds?: number;
+        };
+        MachineJoinCommand: {
+            /** @description A shell command that installs the agent and joins the host. */
+            command: string;
+            /** Format: date-time */
+            expires_at: string;
+            machine: components["schemas"]["Machine"];
+        };
+        MachineUpdate: {
+            workspaces: components["schemas"]["Name"][];
+        };
+        ComputeInstance: {
+            /** Format: uuid */
+            id: string;
+            /** @description connection:<id> */
+            placement: string;
+            /** @enum {string} */
+            provider: "aws";
+            region: string;
+            availability_zone: string;
+            instance_id: string;
+            instance_type: string;
+            /** @enum {string} */
+            market?: "spot" | "on_demand";
+            lifecycle: components["schemas"]["MachineLifecycle"];
+            lifecycle_message: string;
+            lifecycle_failure?: components["schemas"]["MachineFailure"];
+            /** Format: date-time */
+            lifecycle_at: string;
+            connected: boolean;
+            capacity_state: components["schemas"]["CapacityState"];
+            capacity_reason: string;
+            gpu?: string;
+            gpu_count: number;
+            /** Format: int64 */
+            cpu_millicores: number;
+            /** Format: int64 */
+            memory_mb: number;
+            launch_attempt: number;
+            /** @description The agent release the instance runs. */
+            booted_template_version: string;
+            /** Format: date-time */
+            launched_at?: string;
+            /** Format: date-time */
+            created_at: string;
+        };
+        ComputeInstancePage: {
+            instances: components["schemas"]["ComputeInstance"][];
+            next_cursor?: string;
+        };
+        ComputeSummary: {
+            /** @description The connected account the workspace lives in; absent on platform compute. */
+            connection?: {
+                account_id: string;
+                phase: components["schemas"]["AwsConnectionPhase"];
+            };
+            instances: {
+                total: number;
+                ready: number;
+                pending: number;
+                degraded: number;
+            };
+            cost: {
+                /** Format: int64 */
+                hourly_micros?: number;
+                /** Format: int64 */
+                daily_micros?: number;
+                /** @enum {string} */
+                currency: "USD";
+                estimated: boolean;
+            };
+            workload_count: number;
+        };
+        ComputeWorkload: {
+            /**
+             * Format: uuid
+             * @description The workload id.
+             */
+            deployment_id: string;
+            app: string;
+            name: string;
+            /** @enum {string} */
+            kind: "function";
+            /** @description The machine the workload is pinned to; empty when unpinned. */
+            machine: string;
+            /** Format: int64 */
+            cpu_millicores: number;
+            /** Format: int64 */
+            memory_mb: number;
+            gpu: components["schemas"]["GpuType"][];
+            gpu_count: number;
+        };
+        ComputeWorkloadPage: {
+            workloads: components["schemas"]["ComputeWorkload"][];
+            next_cursor?: string;
+        };
+        /** @enum {string} */
+        AwsConnectionPhase: "awaiting_authorization" | "validating" | "ready" | "degraded" | "reconnect_pending" | "retiring_authorization" | "disconnect_draining" | "revoking" | "verifying_revocation" | "action_required";
+        /** @enum {string} */
+        AwsConnectionAction: "authorize" | "validate" | "reconnect" | "cancel_reconnect" | "remove" | "retry";
+        /** @enum {string} */
+        AwsAuthorizationPhase: "awaiting_authorization" | "validating" | "ready" | "degraded" | "retiring" | "retired";
+        /** @enum {string} */
+        AwsAuthorizationError: "assume_role_denied" | "external_id_not_enforced" | "account_mismatch" | "permission_drift" | "stack_drift" | "upstream_unavailable";
+        AwsAuthorizationGeneration: {
+            generation: number;
+            /** @enum {string} */
+            authorization_mode: "managed_stack" | "existing_role";
+            managed_authorization?: {
+                stack_name: string;
+                region: string;
+                generation: number;
+                stack_id?: string;
+                template_version: string;
+                template_sha256: string;
+            };
+            phase: components["schemas"]["AwsAuthorizationPhase"];
+            /** Format: date-time */
+            last_validation_started_at?: string;
+            /** Format: date-time */
+            last_validated_at?: string;
+            error_code?: components["schemas"]["AwsAuthorizationError"];
+            error_message?: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        AwsStackParameter: {
+            ParameterKey: string;
+            ParameterValue: string;
+        };
+        /** @description A CloudFormation CreateStack request the customer submits with their own credentials. */
+        AwsStackAction: {
+            account_id: string;
+            region: string;
+            template_sha256: string;
+            request: {
+                StackName: string;
+                TemplateBody: string;
+                Parameters: components["schemas"]["AwsStackParameter"][];
+                Capabilities: "CAPABILITY_NAMED_IAM"[];
+                /** @enum {string} */
+                OnFailure: "DELETE";
+            };
+        };
+        AwsCustomerAction: {
+            url?: string;
+            stack?: components["schemas"]["AwsStackAction"];
+            label: string;
+        };
+        AwsConnection: {
+            /** Format: uuid */
+            id: string;
+            /** @description The 12-digit AWS account id. */
+            account_id: string;
+            phase: components["schemas"]["AwsConnectionPhase"];
+            revision: number;
+            /** @description New workloads can be placed in the account. */
+            hosts_workloads: boolean;
+            can_manage_existing_capacity: boolean;
+            available_actions: components["schemas"]["AwsConnectionAction"][];
+            detail: string;
+            customer_action?: components["schemas"]["AwsCustomerAction"];
+            /** Format: date-time */
+            next_retry_at?: string;
+            active_authorization?: components["schemas"]["AwsAuthorizationGeneration"];
+            pending_authorization?: components["schemas"]["AwsAuthorizationGeneration"];
+            retiring_authorization?: components["schemas"]["AwsAuthorizationGeneration"];
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        AwsConnectionEnvelope: {
+            connection?: components["schemas"]["AwsConnection"];
+        };
+        AwsNetwork: {
+            vpc_id: string;
+            subnet_ids: string[];
+            security_group_id: string;
+        };
+        AwsConnectionRequest: {
+            account_id: string;
+            /** @description An existing role to assume; it must require the external ID. */
+            role_arn?: string;
+            /** @description Per-region VPC, subnets and security group for an existing role. */
+            networks?: {
+                [key: string]: components["schemas"]["AwsNetwork"];
+            };
+            /** @description The external ID an existing role already requires. */
+            external_id?: string;
+        };
+        AwsReconnectRequest: {
+            role_arn?: string;
+        };
+        AwsConnectionAuthorization: {
+            connection: components["schemas"]["AwsConnection"];
+            authorization: {
+                stack?: components["schemas"]["AwsStackAction"];
+                external_id?: string;
+            };
+        };
+        FleetCapacity: {
+            /** Format: int64 */
+            cpu_millicores: number;
+            /** Format: int64 */
+            memory_mib: number;
+            gpu_count: number;
+        };
+        /**
+         * @description A host's place in the fleet. stopped, hibernate_unverified, image_saved, preparing and stopping belong to stopped reserves, which this fleet does not keep.
+         * @enum {string}
+         */
+        FleetState: "serving" | "starting" | "draining" | "preparing" | "stopping" | "unavailable" | "failed" | "terminating" | "stopped" | "hibernate_unverified" | "image_saved";
+        FleetStateCapacity: {
+            state: components["schemas"]["FleetState"];
+            machines: number;
+            capacity: components["schemas"]["FleetCapacity"];
+            allocated: components["schemas"]["FleetCapacity"];
+        };
+        FleetMarket: {
+            preemptible: boolean;
+            /** @description Empty for CPU hosts. */
+            gpu_type: string;
+            /** @description Unreserved capacity on serving hosts. */
+            warm_free: components["schemas"]["FleetCapacity"];
+            /** @description The idle capacity the headroom floor keeps. */
+            warm_target: components["schemas"]["FleetCapacity"];
+            /** @description Always zero; the fleet keeps no stopped reserves. */
+            reserve_ready: components["schemas"]["FleetCapacity"];
+            /** @description Always zero; the fleet keeps no stopped reserves. */
+            reserve_target: components["schemas"]["FleetCapacity"];
+            /** @description Reservations of live containers on the market's hosts. */
+            allocated: components["schemas"]["FleetCapacity"];
+            states: components["schemas"]["FleetStateCapacity"][];
+            /** @description Why the market cannot grow, when it cannot. */
+            reason: string;
+        };
+        FleetSummary: {
+            /** Format: date-time */
+            observed_at: string;
+            plan?: {
+                /** Format: date-time */
+                generated_at: string;
+                /** Format: date-time */
+                expires_at: string;
+                markets: components["schemas"]["FleetMarket"][];
+            };
+            /** @description The agent release platform hosts move to. */
+            release?: {
+                version: string;
+                generation: number;
+                /** @description Every connected platform host runs the release. */
+                complete: boolean;
+                phases: {
+                    [key: string]: number;
+                };
+                pending_capacity_owners: number;
+            };
+        };
+        FleetNode: {
+            /** Format: uuid */
+            id: string;
+            /** @description Set once the host enrolled. */
+            machine_id?: string;
+            instance_id?: string;
+            /** @enum {string} */
+            provider: "agent" | "aws";
+            region: string;
+            instance_type: string;
+            preemptible: boolean;
+            gpu_type: string;
+            state: components["schemas"]["FleetState"];
+            capacity: components["schemas"]["FleetCapacity"];
+            allocated: components["schemas"]["FleetCapacity"];
+            containers: number;
+            /** @description Serving and on the target agent release. */
+            ready: boolean;
+        };
+        FleetNodePage: {
+            nodes: components["schemas"]["FleetNode"][];
+            next_cursor?: string;
+            /** Format: date-time */
+            observed_at: string;
         };
     };
     responses: {
@@ -6545,6 +7188,409 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AccountActivity"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getComputeSummary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The workspace's compute */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComputeSummary"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listComputeWorkloads: {
+        parameters: {
+            query?: {
+                /** @description The next_cursor of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of workloads ordered by app and name */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComputeWorkloadPage"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listWorkspaceMachines: {
+        parameters: {
+            query?: {
+                /** @description The next_cursor of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path: {
+                workspace: components["parameters"]["WorkspacePath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of machines ordered by name */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MachinePage"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listComputeInstances: {
+        parameters: {
+            query?: {
+                /** @description The next_cursor of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of instances, newest first; empty without a connection */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComputeInstancePage"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getAwsConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The connection, or null without one */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AwsConnectionEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    connectAws: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AwsConnectionRequest"];
+            };
+        };
+        responses: {
+            /** @description The connection and the authorization to complete */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AwsConnectionAuthorization"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    disconnectAws: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The connection while removal runs, or null once removed */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AwsConnectionEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    validateAwsConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The connection after the check */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AwsConnection"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    reconnectAws: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["AwsReconnectRequest"];
+            };
+        };
+        responses: {
+            /** @description The connection and the replacement to complete */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AwsConnectionAuthorization"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    cancelAwsReconnect: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The connection */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AwsConnection"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    retryAwsConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The connection */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AwsConnection"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getFleet: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The fleet summary */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FleetSummary"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listFleetNodes: {
+        parameters: {
+            query?: {
+                /** @description The next_cursor of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of hosts ordered by id */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FleetNodePage"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listMachines: {
+        parameters: {
+            query?: {
+                /** @description The next_cursor of the previous page. */
+                cursor?: components["parameters"]["Cursor"];
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of machines ordered by name */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MachinePage"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createMachineJoinCommand: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MachineJoinRequest"];
+            };
+        };
+        responses: {
+            /** @description The command to run on the host */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MachineJoinCommand"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    removeMachine: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The machine's name or id. */
+                machine: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    updateMachine: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The machine's name or id. */
+                machine: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MachineUpdate"];
+            };
+        };
+        responses: {
+            /** @description The machine */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Machine"];
                 };
             };
             default: components["responses"]["Error"];

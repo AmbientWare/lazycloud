@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
@@ -135,6 +136,13 @@ func (e *Execution) SubmitInTx(ctx context.Context, tx pgx.Tx, req SubmitRequest
 		var spec apitypes.FunctionSpec
 		if err := json.Unmarshal(fn.Spec, &spec); err != nil {
 			return fmt.Errorf("decode release spec: %w", err)
+		}
+		// A run pinned to a machine fails at once while the machine cannot
+		// take it; deployed calls wait for the machine.
+		if machine := compute.PinnedMachine(spec); req.Release != nil && machine != "" {
+			if err := compute.CheckMachineRuns(ctx, tx, uuid.UUID(req.Workspace), machine); err != nil {
+				return err
+			}
 		}
 		limit := 0
 		if spec.MaxPendingTasks != nil {
