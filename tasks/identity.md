@@ -128,7 +128,7 @@ TestIdentityOperationsOverHTTP, TestResendWebhook; `cmd/scheduler`
 TestWorkspaceDeletion. GitHub and Resend are httptest stubs at the provider
 boundary only (`internal/identity/identitytest`).
 
-Python (`pytest -x python`, 365 passed): test_sdk_workspace_cli.py (all on
+Python (`pytest -x python`, 356 passed after merging go-rewrite): test_sdk_workspace_cli.py (all on
 the HTTP fake API), test_sdk_platform_api.py
 test_login_without_a_token_runs_the_device_flow,
 test_device_login_reports_denied_and_expired,
