@@ -127,6 +127,9 @@ def serve(connection: Connection) -> int:
     if not isinstance(load, Load):
         raise ProtocolError("expected load as the first frame")
     hooks = hooks_from_frame(load.hooks)
+    if load.concurrency > 1:
+        # Before user code loads, so module-level loggers write through it.
+        routed_output.install()
     try:
         handler = load_handler(load.handler)
         run_startup_hooks(hooks, load.handler)
@@ -156,10 +159,9 @@ def _serve_threads(connection: Connection, attempt: _Attempts, concurrency: int)
     attempt's output as frames. Closing the socket ends the process; the
     supervisor closes it only once no attempt runs."""
 
-    routed_output.install()
-
     def send_output(attempt_id: str, stream: Stream, data: str) -> None:
-        connection.send(Output(type="output", attempt_id=attempt_id, stream=stream, data=data))
+        for chunk in routed_output.utf8_chunks(data):
+            connection.send(Output(type="output", attempt_id=attempt_id, stream=stream), chunk)
 
     def run(invoke: Invoke, payload: bytearray) -> None:
         with routed_output.attempt_output(invoke.attempt_id, send_output):

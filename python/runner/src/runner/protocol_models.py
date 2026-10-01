@@ -79,7 +79,6 @@ class Output(BaseModel):
     type: Literal["output"]
     attempt_id: str
     stream: Stream
-    data: str
 
 
 class LifecycleHooks(BaseModel):

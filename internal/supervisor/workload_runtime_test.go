@@ -215,3 +215,22 @@ func waitForSocket(t *testing.T, path string) {
 	}
 	t.Fatal("the API socket never appeared")
 }
+
+func TestInProcessOutputSurvivesLargeWritesAndSplitSecrets(t *testing.T) {
+	t.Setenv("WR_SPLIT_SECRET", "hunter2-hunter2")
+	h := startSupervisor(t)
+	c := h.accept()
+	c.configureWith(t, &hostproto.Configure{Handler: "app:handle", Slots: 2, InProcess: true, SecretEnv: []string{"WR_SPLIT_SECRET"}})
+	c.until(t, isReady)
+
+	c.run(t, "big", `{"args": ["big"]}`)
+	m, output := c.until(t, finished("big"))
+	if m.GetFinished().GetSuccess() == nil || len(output["big"]) != 2<<20+1 {
+		t.Fatalf("a 2 MiB write: %v, %d bytes of output", m, len(output["big"]))
+	}
+	c.run(t, "split", `{"args": ["split", "hunter2-hunter2"]}`)
+	_, output = c.until(t, finished("split"))
+	if output["split"] != "********\n" {
+		t.Fatalf("a secret split across frames came out as %q", output["split"])
+	}
+}

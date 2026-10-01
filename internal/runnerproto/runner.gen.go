@@ -250,10 +250,9 @@ type Loaded struct {
 // LoadedType defines model for Loaded.Type.
 type LoadedType string
 
-// Output Output an attempt wrote while the runner runs several attempts at once. Sent only for a `concurrency` above 1.
+// Output Output an attempt wrote while the runner runs several attempts at once, as the UTF-8 payload of at most 256 KiB. Sent only for a `concurrency` above 1.
 type Output struct {
 	AttemptId string       `json:"attempt_id"`
-	Data      string       `json:"data"`
 	Stream    OutputStream `json:"stream"`
 	Type      OutputType   `json:"type"`
 }

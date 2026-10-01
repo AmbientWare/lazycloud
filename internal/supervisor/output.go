@@ -102,7 +102,11 @@ func (sl *slot) emitLocked(pipe *outputPipe, data []byte, flush bool) {
 	if text == "" {
 		return
 	}
-	sl.sup.out.push(outputMessage(sl.attempt, pipe.stream, text))
+	attempt := sl.attempt
+	if sl.soleAttempt != nil {
+		attempt = sl.soleAttempt()
+	}
+	sl.sup.out.push(outputMessage(attempt, pipe.stream, text))
 }
 
 func outputMessage(attempt string, stream hostproto.LogStream, text string) *hostproto.SupervisorMessage {

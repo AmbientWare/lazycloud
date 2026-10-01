@@ -79,11 +79,27 @@ def main():
 def run(sock, handler, invoke, payload, threaded):
     call = json.loads(payload)
     if threaded:
-        write_frame(
-            sock,
-            {"type": "output", "attempt_id": invoke["attempt_id"], "stream": "stdout",
-             "data": f"thread runs {invoke['attempt_id']}\n"},
-        )
+        line = f"thread runs {invoke['attempt_id']}\n"
+        if call.get("args", [None])[0] == "big":
+            line = "x" * (2 << 20) + "\n"
+        if call.get("args", [None])[0] == "split":
+            # A value split across two frames.
+            value = call["args"][1]
+            for part in (value[:5], value[5:] + "\n"):
+                write_frame(
+                    sock,
+                    {"type": "output", "attempt_id": invoke["attempt_id"], "stream": "stdout"},
+                    part.encode(),
+                )
+            line = ""
+        # Output travels as the payload, at most 256 KiB per frame.
+        data = line.encode()
+        for start in range(0, len(data), 256 << 10):
+            write_frame(
+                sock,
+                {"type": "output", "attempt_id": invoke["attempt_id"], "stream": "stdout"},
+                data[start:start + (256 << 10)],
+            )
     try:
         result = handler(*call.get("args", []), **call.get("kwargs", {}))
     except Exception as exc:

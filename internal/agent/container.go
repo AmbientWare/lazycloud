@@ -421,8 +421,8 @@ func (c *container) onSupervisorMessage(ctx context.Context, m *hostproto.Superv
 		o := body.Output
 		if o.GetAttemptId() == "" {
 			// Output outside an attempt, such as import-time prints, belongs
-			// to no task log; a load error carries its own traceback.
-			c.log.Debug("container output", "stream", o.GetStream(), "data", o.GetData())
+			// to no task log; it stays in the agent's log for the operator.
+			c.log.Info("container output", "stream", o.GetStream(), "data", o.GetData())
 			return
 		}
 		_ = c.logs.append(ctx, &hostproto.LogLine{AttemptId: o.GetAttemptId(), Stream: o.GetStream(), Data: o.GetData(), Time: o.GetTime()})

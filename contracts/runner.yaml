@@ -159,11 +159,11 @@ components:
     Output:
       description: >-
         Output an attempt wrote while the runner runs several attempts at
-        once. Sent only for a `concurrency` above 1.
+        once, as the UTF-8 payload of at most 256 KiB. Sent only for a
+        `concurrency` above 1.
       type: object
-      required: [type, attempt_id, stream, data]
+      required: [type, attempt_id, stream]
       properties:
         type: { type: string, enum: [output] }
         attempt_id: { type: string }
         stream: { type: string, enum: [stdout, stderr] }
-        data: { type: string }

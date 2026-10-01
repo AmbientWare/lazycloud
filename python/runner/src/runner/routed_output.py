@@ -15,7 +15,7 @@ import sys
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import TextIO
+from typing import Any, TextIO
 
 from runner.protocol_models import Stream
 
@@ -24,6 +24,24 @@ SendOutput = Callable[[str, Stream, str], None]
 
 # A line longer than this is sent without waiting for its newline.
 _MAX_BUFFER = 64 << 10
+# The largest payload of one output frame.
+MAX_FRAME_BYTES = 256 << 10
+
+
+def utf8_chunks(text: str, limit: int = MAX_FRAME_BYTES) -> list[bytes]:
+    """`text` as UTF-8 in chunks of at most `limit` bytes, split between
+    characters so each chunk decodes on its own."""
+
+    data = text.encode("utf-8", "replace")
+    chunks: list[bytes] = []
+    while data:
+        cut = min(limit, len(data))
+        # Back off from a continuation byte to the start of its character.
+        while cut < len(data) and data[cut] & 0xC0 == 0x80:
+            cut -= 1
+        chunks.append(data[:cut])
+        data = data[cut:]
+    return chunks
 
 
 class _AttemptOutput:
@@ -53,12 +71,35 @@ class _AttemptOutput:
 _ATTEMPT: ContextVar[_AttemptOutput | None] = ContextVar("lazycloud_attempt_output", default=None)
 
 
+class _RoutedBuffer(io.RawIOBase):
+    """The `.buffer` of a routed stream: bytes written are its text."""
+
+    def __init__(self, text: _RoutedStream) -> None:
+        self._text = text
+
+    def writable(self) -> bool:
+        return True
+
+    def write(self, data: Any) -> int:
+        payload = bytes(data)
+        self._text.write(payload.decode("utf-8", "replace"))
+        return len(payload)
+
+    def flush(self) -> None:
+        self._text.flush()
+
+
 class _RoutedStream(io.TextIOBase):
     """A text stream that writes to the current attempt, else to `real`."""
 
     def __init__(self, real: TextIO, stream: Stream) -> None:
         self._real = real
         self._stream = stream
+        self._buffer = _RoutedBuffer(self)
+
+    @property
+    def buffer(self) -> _RoutedBuffer:
+        return self._buffer
 
     def write(self, text: str) -> int:
         target = _ATTEMPT.get()
@@ -89,7 +130,8 @@ class _RoutedStream(io.TextIOBase):
 
 
 def install() -> None:
-    """Route sys.stdout and sys.stderr through the current attempt."""
+    """Route sys.stdout and sys.stderr through the current attempt. Call it
+    before user code loads, so loggers it configures hold routed streams."""
 
     sys.stdout = _RoutedStream(sys.stdout, Stream.stdout)
     sys.stderr = _RoutedStream(sys.stderr, Stream.stderr)
@@ -108,4 +150,4 @@ def attempt_output(attempt_id: str, send: SendOutput) -> Iterator[None]:
         output.flush()
 
 
-__all__ = ["SendOutput", "attempt_output", "install"]
+__all__ = ["MAX_FRAME_BYTES", "SendOutput", "attempt_output", "install", "utf8_chunks"]

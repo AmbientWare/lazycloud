@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -36,7 +37,7 @@ type sharedProcess struct {
 func (s *Supervisor) runShared(ctx context.Context, cfg *hostproto.Configure, slots []*slot, runs <-chan *hostproto.RunAttempt) error {
 	// The process slot reads the runner's own stdout and stderr, which hold
 	// output outside any attempt.
-	process := &slot{sup: s, buf: make([]byte, readChunk)}
+	process := &slot{sup: s, buf: make([]byte, readChunk), soleAttempt: func() string { return soleAttempt(slots) }}
 	for {
 		p, err := process.start(ctx, cfg)
 		if err != nil {
@@ -168,6 +169,22 @@ func (sp *sharedProcess) call(run *hostproto.RunAttempt) (*hostproto.AttemptFini
 // to the outbox under its attempt, outcomes to the waiting slot.
 func (sp *sharedProcess) read(ctx context.Context, s *Supervisor) {
 	defer close(sp.dead)
+	// held is output per attempt and stream that may begin a secret value
+	// continued in the next frame. Only this goroutine touches it.
+	type heldKey struct {
+		attempt string
+		stream  hostproto.LogStream
+	}
+	held := map[heldKey]string{}
+	flushHeld := func(attempt string) {
+		for _, stream := range []hostproto.LogStream{hostproto.LogStream_LOG_STREAM_STDOUT, hostproto.LogStream_LOG_STREAM_STDERR} {
+			key := heldKey{attempt, stream}
+			if text := held[key]; text != "" {
+				s.out.push(outputMessage(attempt, stream, text))
+			}
+			delete(held, key)
+		}
+	}
 	for {
 		frame, err := sp.p.read()
 		if err != nil {
@@ -185,7 +202,13 @@ func (sp *sharedProcess) read(ctx context.Context, s *Supervisor) {
 			if out.Stream == runnerproto.Stderr {
 				stream = hostproto.LogStream_LOG_STREAM_STDERR
 			}
-			s.out.push(outputMessage(out.AttemptId, stream, s.redact.all(out.Data)))
+			key := heldKey{out.AttemptId, stream}
+			pending := held[key]
+			text := s.redact.stream(&pending, strings.ToValidUTF8(string(frame.Payload), "\uFFFD"), false)
+			held[key] = pending
+			if text != "" {
+				s.out.push(outputMessage(out.AttemptId, stream, text))
+			}
 			if s.out.waitOutputSpace(ctx) != nil {
 				return
 			}
@@ -204,6 +227,7 @@ func (sp *sharedProcess) read(ctx context.Context, s *Supervisor) {
 				sp.readErr = fmt.Errorf("outcome for attempt %q that is not running", header.AttemptID)
 				return
 			}
+			flushHeld(header.AttemptID)
 			reply <- frame
 		case runnerproto.FrameLoad, runnerproto.FrameLoaded, runnerproto.FrameLoadFailed, runnerproto.FrameInvoke:
 			sp.readErr = fmt.Errorf("unexpected %q frame from a shared runner", frame.Type)
@@ -213,4 +237,25 @@ func (sp *sharedProcess) read(ctx context.Context, s *Supervisor) {
 			return
 		}
 	}
+}
+
+// soleAttempt is the attempt the shared process runs when it runs exactly
+// one. Output written to the process's own stdout and stderr, as by a
+// subprocess or a C extension, belongs to it then; with several running it
+// belongs to none.
+func soleAttempt(slots []*slot) string {
+	sole := ""
+	for _, sl := range slots {
+		sl.outMu.Lock()
+		attempt, cancelled := sl.attempt, sl.cancelled
+		sl.outMu.Unlock()
+		if attempt == "" || cancelled {
+			continue
+		}
+		if sole != "" {
+			return ""
+		}
+		sole = attempt
+	}
+	return sole
 }

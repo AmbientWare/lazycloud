@@ -11,9 +11,15 @@ from typing import Any
 import pytest
 
 HOOKED = """
+import logging
 import sys
 import threading
 import time
+
+# Configured at import, before any attempt runs.
+log = logging.getLogger("hooked")
+log.addHandler(logging.StreamHandler(sys.stderr))
+log.setLevel(logging.INFO)
 
 from shared.task_context import current_root_task_id, current_task_id
 
@@ -49,6 +55,13 @@ def fail():
 
 
 barrier = threading.Barrier(2, timeout=10)
+
+
+def loud(size):
+    print("x" * size)
+    log.info("logged")
+    sys.stdout.buffer.write(b"raw bytes\\n")
+    return size
 
 
 def together(name):
@@ -166,7 +179,7 @@ def test_in_process_attempts_run_together_with_their_own_output(
     while len(results) < 2:
         header, payload = runner.receive()
         if header["type"] == "output":
-            output[header["attempt_id"]] += f"{header['stream']}:{header['data']}"
+            output[header["attempt_id"]] += f"{header['stream']}:{payload.decode()}"
         else:
             assert header["type"] == "succeeded", header
             results[header["attempt_id"]] = payload
@@ -178,3 +191,25 @@ def test_in_process_attempts_run_together_with_their_own_output(
         "b": "stdout:b waiting\nstderr:b done\n",
     }
     assert runner.close()[0] == 0
+
+
+def test_in_process_output_is_chunked_and_routed(workdir: Path, start_runner: StartRunner) -> None:
+    runner = start_runner(workdir)
+    assert _load(runner, "hooked:loud", concurrency=2) == {"type": "loaded"}
+
+    _invoke(runner, "a", [2 << 20])
+    output: dict[str, bytes] = {"stdout": b"", "stderr": b""}
+    while True:
+        header, payload = runner.receive()
+        if header["type"] != "output":
+            break
+        assert set(header) == {"type", "attempt_id", "stream"}
+        assert header["attempt_id"] == "a"
+        assert len(payload) <= 256 << 10
+        output[header["stream"]] += payload
+
+    assert header["type"] == "succeeded", header
+    assert output["stdout"] == b"x" * (2 << 20) + b"\nraw bytes\n"
+    assert output["stderr"] == b"logged\n"
+    _, stdout, stderr = runner.close()
+    assert (stdout, stderr) == ("", "")

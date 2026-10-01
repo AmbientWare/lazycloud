@@ -41,6 +41,9 @@ type slot struct {
 	// shared is set for a slot that runs attempts on a thread of a runner
 	// process the slots share; its output arrives as frames.
 	shared bool
+	// soleAttempt, set for a shared runner's process slot, names the
+	// attempt its pipe output belongs to.
+	soleAttempt func() string
 }
 
 // runnerProcess is one runner process and the resources it owns.
