@@ -4,6 +4,10 @@
 //	server [serve] [flags]      serve HTTP and gRPC (migrates first)
 //	server migrate              apply database migrations
 //	server admin <command>      create-user, create-workspace, create-token, create-join-token
+//
+// On SIGTERM the server reports not ready on /readyz, keeps serving for the
+// drain delay so load balancers stop routing to it, then ends host sessions
+// and gives open requests the shutdown grace to finish.
 package main
 
 import (
@@ -42,7 +46,13 @@ import (
 	"github.com/AmbientWare/lazycloud/internal/telemetry"
 )
 
+// shutdownGrace bounds how long open requests and RPCs may finish after the
+// listeners close. Pod termination grace must cover the drain delay plus this.
 const shutdownGrace = 10 * time.Second
+
+// version is stamped by the image build with -ldflags "-X main.version=..."
+// and logged at start.
+var version = "dev"
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -102,6 +112,7 @@ type serveConfig struct {
 	databaseURL   string
 	httpAddr      string
 	grpcAddr      string
+	healthAddr    string
 	objectStore   storage.Config
 	imageTemplate string
 	secretsKey    string
@@ -111,6 +122,9 @@ type serveConfig struct {
 	compute       compute.Config
 	grpcCert      string
 	grpcKey       string
+	// drainDelay is how long the server keeps serving after shutdown
+	// starts while /readyz reports draining.
+	drainDelay time.Duration
 }
 
 func serve(ctx context.Context, args []string) error {
@@ -119,6 +133,7 @@ func serve(ctx context.Context, args []string) error {
 	fs.StringVar(&cfg.databaseURL, "database-url", env("LAZYCLOUD_DATABASE_URL", ""), "PostgreSQL URL (LAZYCLOUD_DATABASE_URL)")
 	fs.StringVar(&cfg.httpAddr, "http-addr", env("LAZYCLOUD_HTTP_ADDR", "127.0.0.1:8080"), "public API address (LAZYCLOUD_HTTP_ADDR)")
 	fs.StringVar(&cfg.grpcAddr, "grpc-addr", env("LAZYCLOUD_GRPC_ADDR", "127.0.0.1:8081"), "host connection address (LAZYCLOUD_GRPC_ADDR)")
+	fs.StringVar(&cfg.healthAddr, "health-addr", env("LAZYCLOUD_HEALTH_ADDR", ""), "address of /healthz and /readyz, unset for none (LAZYCLOUD_HEALTH_ADDR)")
 	fs.StringVar(&cfg.objectStore.Endpoint, "object-store-endpoint", env("LAZYCLOUD_OBJECT_STORE_ENDPOINT", ""), "S3-compatible endpoint URL; empty is AWS S3 (LAZYCLOUD_OBJECT_STORE_ENDPOINT)")
 	fs.StringVar(&cfg.objectStore.Region, "object-store-region", env("LAZYCLOUD_OBJECT_STORE_REGION", ""), "object store region (LAZYCLOUD_OBJECT_STORE_REGION)")
 	fs.StringVar(&cfg.objectStore.Bucket, "object-store-bucket", env("LAZYCLOUD_OBJECT_STORE_BUCKET", ""), "bucket for source archives (LAZYCLOUD_OBJECT_STORE_BUCKET)")
@@ -140,8 +155,13 @@ func serve(ctx context.Context, args []string) error {
 	fs.StringVar(&cfg.grpcKey, "grpc-tls-key", env("LAZYCLOUD_GRPC_TLS_KEY", ""), "PEM private key for -grpc-tls-cert (LAZYCLOUD_GRPC_TLS_KEY)")
 	fs.StringVar(&cfg.compute.InstallURL, "install-url", env("LAZYCLOUD_INSTALL_URL", ""), "origin hosts download the agent from; defaults to -public-url (LAZYCLOUD_INSTALL_URL)")
 	fs.StringVar(&cfg.api.AgentDistDir, "agent-dist-dir", env("LAZYCLOUD_AGENT_DIST_DIR", ""), "agent release archives by version (LAZYCLOUD_AGENT_DIST_DIR)")
+	drainDelay := fs.String("drain-delay", env("LAZYCLOUD_DRAIN_DELAY", "0s"), "time to keep serving after SIGTERM while /readyz reports draining (LAZYCLOUD_DRAIN_DELAY)")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
+	}
+	var err error
+	if cfg.drainDelay, err = time.ParseDuration(*drainDelay); err != nil || cfg.drainDelay < 0 {
+		return fmt.Errorf("drain delay %q is not a non-negative duration", *drainDelay)
 	}
 	if cfg.compute.ServerAddress == "" {
 		cfg.compute.ServerAddress = cfg.grpcAddr
@@ -195,11 +215,42 @@ func serve(ctx context.Context, args []string) error {
 		if err := database.Migrate(ctx, pool); err != nil {
 			return err
 		}
-		return serveWith(ctx, pool, cfg, tel, logger)
+		var ls listeners
+		// The servers close them too; this covers a failed setup.
+		defer func() { ls.close() }()
+		var lc net.ListenConfig
+		var err error
+		for _, l := range []struct {
+			addr string
+			into *net.Listener
+		}{{cfg.httpAddr, &ls.http}, {cfg.grpcAddr, &ls.grpc}, {cfg.healthAddr, &ls.health}} {
+			if l.addr == "" {
+				continue
+			}
+			if *l.into, err = lc.Listen(ctx, "tcp", l.addr); err != nil {
+				return fmt.Errorf("listen on %s: %w", l.addr, err)
+			}
+		}
+		return serveWith(ctx, pool, cfg, tel, logger, ls)
 	})
 }
 
-func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, tel *telemetry.Telemetry, logger *slog.Logger) error {
+// listeners are the server's sockets; health is nil without a health
+// address.
+type listeners struct {
+	http, grpc, health net.Listener
+}
+
+func (ls listeners) close() {
+	for _, l := range []net.Listener{ls.http, ls.grpc, ls.health} {
+		if l != nil {
+			_ = l.Close()
+		}
+	}
+}
+
+// serveWith serves on the listeners until ctx ends, then drains.
+func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, tel *telemetry.Telemetry, logger *slog.Logger, ls listeners) error {
 	tel.RegisterPool(pool)
 	// Billing supplies plan limits once it lands; until then account
 	// metrics leave them out.
@@ -248,41 +299,56 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, tel *te
 	}
 	grpcServer := grpc.NewServer(grpcOptions...)
 	hostproto.RegisterHostServiceServer(grpcServer, hosts)
+	probes := &health{}
 	httpServer := &http.Server{Handler: tel.HTTPHandler(handler, tel.NewHTTPMetrics()), ReadHeaderTimeout: 10 * time.Second}
-
-	var lc net.ListenConfig
-	httpListener, err := lc.Listen(ctx, "tcp", cfg.httpAddr)
-	if err != nil {
-		return fmt.Errorf("listen on %s: %w", cfg.httpAddr, err)
-	}
-	grpcListener, err := lc.Listen(ctx, "tcp", cfg.grpcAddr)
-	if err != nil {
-		_ = httpListener.Close()
-		return fmt.Errorf("listen on %s: %w", cfg.grpcAddr, err)
-	}
-	logger.InfoContext(ctx, "serving", "http", httpListener.Addr().String(), "grpc", grpcListener.Addr().String())
+	logger.InfoContext(ctx, "serving", "version", version, "http", ls.http.Addr().String(), "grpc", ls.grpc.Addr().String())
 
 	g, gctx := errgroup.WithContext(ctx)
-	g.Go(func() error { return listener.Run(gctx) })
-	g.Go(func() error { return changes.Run(gctx) })
-	g.Go(func() error { return obs.RunIngest(gctx) })
-	g.Go(func() error { return obs.RunStartedPublisher(gctx) })
-	g.Go(func() error { return tel.ServeMetrics(gctx, logger) })
-	g.Go(func() error { return ident.RunTokenUse(gctx, logger) })
+	// Requests and RPCs still open during the drain wait on NOTIFY wake-ups,
+	// stream changes, send observations and record token use, so this work
+	// stops only after both servers have stopped.
+	background, stopBackground := context.WithCancel(context.WithoutCancel(ctx))
+	defer stopBackground()
+	g.Go(func() error { return listener.Run(background) })
+	g.Go(func() error { return changes.Run(background) })
+	g.Go(func() error { return obs.RunIngest(background) })
+	g.Go(func() error { return obs.RunStartedPublisher(background) })
+	g.Go(func() error { return tel.ServeMetrics(background, logger) })
+	g.Go(func() error { return ident.RunTokenUse(background, logger) })
 	g.Go(func() error {
-		if err := httpServer.Serve(httpListener); !errors.Is(err, http.ErrServerClosed) {
+		if err := httpServer.Serve(ls.http); !errors.Is(err, http.ErrServerClosed) {
 			return fmt.Errorf("serve http: %w", err)
 		}
 		return nil
 	})
 	g.Go(func() error {
-		if err := grpcServer.Serve(grpcListener); err != nil {
+		if err := grpcServer.Serve(ls.grpc); err != nil {
 			return fmt.Errorf("serve grpc: %w", err)
 		}
 		return nil
 	})
+	var healthServer *http.Server
+	if ls.health != nil {
+		healthServer = &http.Server{Handler: probes.handler(), ReadHeaderTimeout: 5 * time.Second}
+		g.Go(func() error {
+			if err := healthServer.Serve(ls.health); !errors.Is(err, http.ErrServerClosed) {
+				return fmt.Errorf("serve health: %w", err)
+			}
+			return nil
+		})
+	}
 	g.Go(func() error {
 		<-gctx.Done()
+		defer stopBackground()
+		if healthServer != nil {
+			defer func() { _ = healthServer.Close() }()
+		}
+		probes.draining.Store(true)
+		if cfg.drainDelay > 0 {
+			logger.Info("draining", "delay", cfg.drainDelay.String())
+			delay := time.NewTimer(cfg.drainDelay)
+			<-delay.C
+		}
 		logger.Info("shutting down")
 		// Sessions and claim long polls end at once; agents reconnect.
 		hosts.Shutdown()

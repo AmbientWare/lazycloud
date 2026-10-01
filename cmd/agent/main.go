@@ -38,8 +38,8 @@ const (
 	exitUsage   = 2
 )
 
-// releaseVersion is set by the release build with -ldflags -X.
-var releaseVersion string //nolint:gochecknoglobals // set by the linker, never at run time
+// version is stamped by release builds with -ldflags "-X main.version=...".
+var version string //nolint:gochecknoglobals // set by the linker, never at run time
 
 const usage = `usage:
   lazycloud-agent join [flags]             run the agent in the foreground
@@ -65,7 +65,7 @@ func run(args []string, logger *slog.Logger) int {
 	}
 	switch args[0] {
 	case "--version", "-version", "version":
-		fmt.Println(version())
+		fmt.Println(agentVersion())
 		return 0
 	case "-h", "--help", "help":
 		fmt.Print(usage)
@@ -149,7 +149,7 @@ func newJoinFlags(name string) *joinFlags {
 	executable, _ := os.Executable()
 	release := filepath.Dir(executable)
 	j := &joinFlags{set: flag.NewFlagSet(name, flag.ContinueOnError)}
-	j.cfg = agent.Config{Labels: map[string]string{}, Version: version(), Executable: executable, AgentRoot: os.Getenv("LAZYCLOUD_AGENT_ROOT")}
+	j.cfg = agent.Config{Labels: map[string]string{}, Version: agentVersion(), Executable: executable, AgentRoot: os.Getenv("LAZYCLOUD_AGENT_ROOT")}
 	f, cfg := j.set, &j.cfg
 	f.StringVar(&cfg.Server, "server", os.Getenv("LAZYCLOUD_SERVER"), "control plane gRPC address, host:port")
 	f.StringVar(&cfg.ServerCA, "server-ca", os.Getenv("LAZYCLOUD_SERVER_CA"), "PEM bundle trusted for the server's certificate besides the system roots")
@@ -257,9 +257,9 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
-func version() string {
-	if releaseVersion != "" {
-		return releaseVersion
+func agentVersion() string {
+	if version != "" {
+		return version
 	}
 	info, ok := debug.ReadBuildInfo()
 	if !ok {

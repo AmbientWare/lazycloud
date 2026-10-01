@@ -1,0 +1,92 @@
+{{- if .Values.networkPolicy.enabled }}
+{{/*
+Ingress is denied to every pod of the release except what is listed: the
+ingress connector to the API port, agent hosts to the host port, the
+kubelet's node addresses to the probe ports and scrapers to the metrics
+ports. An empty list admits nobody;
+a rule with no peers would admit everyone, so none is rendered.
+*/}}
+{{- $np := .Values.networkPolicy }}
+{{- if not $np.nodeCIDRs }}
+{{- fail "networkPolicy.nodeCIDRs is required: without it the kubelet cannot probe the pods" }}
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: lazycloud-default-deny
+  labels:
+    {{- include "lazycloud.labels" (list . "network-policy") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: lazycloud
+  policyTypes: [Ingress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: server
+  labels:
+    {{- include "lazycloud.labels" (list . "server") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: server
+  policyTypes: [Ingress]
+  ingress:
+    {{- with $np.ingressFrom }}
+    - from:
+        {{- toYaml . | nindent 8 }}
+      ports:
+        - port: http
+    {{- end }}
+    {{- with $np.hostCIDRs }}
+    - from:
+        {{- range . }}
+        - ipBlock: { cidr: {{ . }} }
+        {{- end }}
+      ports:
+        - port: hosts
+    {{- end }}
+    {{- with $np.nodeCIDRs }}
+    - from:
+        {{- range . }}
+        - ipBlock: { cidr: {{ . }} }
+        {{- end }}
+      ports:
+        - port: health
+    {{- end }}
+    {{- with $np.metricsFrom }}
+    - from:
+        {{- toYaml . | nindent 8 }}
+      ports:
+        - port: metrics
+    {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: scheduler
+  labels:
+    {{- include "lazycloud.labels" (list . "scheduler") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: scheduler
+  policyTypes: [Ingress]
+  ingress:
+    {{- with $np.nodeCIDRs }}
+    - from:
+        {{- range . }}
+        - ipBlock: { cidr: {{ . }} }
+        {{- end }}
+      ports:
+        - port: health
+    {{- end }}
+    {{- with $np.metricsFrom }}
+    - from:
+        {{- toYaml . | nindent 8 }}
+      ports:
+        - port: metrics
+    {{- end }}
+{{- end }}

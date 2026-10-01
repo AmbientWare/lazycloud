@@ -397,6 +397,87 @@ paths:
           description: Declined
         default: { $ref: "#/components/responses/Error" }
 
+  # Administration: platform accounts, for platform administrators using an
+  # account credential.
+
+  /v1/users:
+    get:
+      operationId: listUsers
+      tags: [admin]
+      summary: Every account, oldest first; platform administrators only
+      description: >-
+        Accounts that have never signed in are listed too. The filters
+        narrow the list on the server, so every page holds only matches.
+      parameters:
+        - name: search
+          in: query
+          description: Matches the display name, email or GitHub login, ignoring case.
+          schema: { type: string, maxLength: 200 }
+        - name: role
+          in: query
+          schema: { $ref: "#/components/schemas/PlatformRole" }
+        - name: status
+          in: query
+          schema: { $ref: "#/components/schemas/UserStatus" }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+        - name: cursor
+          in: query
+          description: The `next_cursor` of the previous page.
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: One page of accounts
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserList" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/users/{user}/role:
+    parameters:
+      - $ref: "#/components/parameters/UserPath"
+    put:
+      operationId: setUserRole
+      tags: [admin]
+      summary: Grant or withdraw platform administration; never your own
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UserRoleRequest" }
+      responses:
+        "200":
+          description: The account
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /v1/users/{user}/status:
+    parameters:
+      - $ref: "#/components/parameters/UserPath"
+    put:
+      operationId: setUserStatus
+      tags: [admin]
+      summary: Enable or disable an account; never your own
+      description: >-
+        A disabled account cannot sign in, and its tokens, browser sessions
+        and approved device logins end at once. Enabling it again restores
+        none of them. Its running work is not stopped.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UserStatusRequest" }
+      responses:
+        "200":
+          description: The account
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        default: { $ref: "#/components/responses/Error" }
+
   # Function execution
 
   /v1/workspaces/{workspace}/sources:
@@ -2416,6 +2497,11 @@ components:
       required: true
       description: The code the CLI shows, such as BCDF-GHJK, in any case.
       schema: { type: string, pattern: "^[A-Za-z]{4}-?[A-Za-z]{4}$" }
+    UserPath:
+      name: user
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
     InvitationPath:
       name: invitation
       in: path
@@ -2575,7 +2661,7 @@ components:
 
     User:
       type: object
-      required: [id, email, display_name, avatar_url, github_login, is_admin, created_at]
+      required: [id, email, display_name, avatar_url, github_login, is_admin, status, created_at]
       properties:
         id: { type: string, format: uuid }
         email:
@@ -2589,7 +2675,42 @@ components:
         is_admin:
           description: Platform administrators reach every workspace.
           type: boolean
+        status: { $ref: "#/components/schemas/UserStatus" }
         created_at: { type: string, format: date-time }
+
+    UserStatus:
+      description: A disabled account cannot sign in or authenticate.
+      type: string
+      enum: [active, disabled]
+
+    PlatformRole:
+      description: An account's standing on the platform; administrators reach every workspace.
+      type: string
+      enum: [administrator, member]
+
+    UserList:
+      type: object
+      required: [users]
+      properties:
+        users:
+          type: array
+          items: { $ref: "#/components/schemas/User" }
+        next_cursor:
+          description: Pass as `cursor` for the next page; absent after the last.
+          type: string
+          format: uuid
+
+    UserRoleRequest:
+      type: object
+      required: [role]
+      properties:
+        role: { $ref: "#/components/schemas/PlatformRole" }
+
+    UserStatusRequest:
+      type: object
+      required: [status]
+      properties:
+        status: { $ref: "#/components/schemas/UserStatus" }
 
     Workspace:
       type: object

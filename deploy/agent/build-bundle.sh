@@ -46,7 +46,7 @@ for arch in "${arch_list[@]}"; do
   stage="$work/$arch"
   mkdir -p "$stage/runtime"
   (cd "$root" && CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath \
-    -ldflags "-s -w -X main.releaseVersion=$version" -o "$stage/lazycloud-agent" ./cmd/agent)
+    -ldflags "-s -w -X main.version=$version" -o "$stage/lazycloud-agent" ./cmd/agent)
   (cd "$root" && CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -ldflags "-s -w" \
     -o "$stage/supervisor" ./cmd/supervisor)
   # shellcheck disable=SC2086 # the Python versions are separate words

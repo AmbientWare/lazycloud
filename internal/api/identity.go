@@ -424,7 +424,7 @@ func (s *Server) DeclineInvitation(ctx context.Context, req DeclineInvitationReq
 func userOut(u identity.User) apitypes.User {
 	return apitypes.User{
 		Id: uuid.UUID(u.ID), Email: u.Email, DisplayName: u.DisplayName, AvatarUrl: u.AvatarURL,
-		GithubLogin: u.GitHubLogin, IsAdmin: u.IsAdmin, CreatedAt: u.CreatedAt,
+		GithubLogin: u.GitHubLogin, IsAdmin: u.IsAdmin, Status: apitypes.UserStatus(u.Status), CreatedAt: u.CreatedAt,
 	}
 }
 
