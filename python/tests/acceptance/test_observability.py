@@ -172,9 +172,7 @@ def test_observability_end_to_end(
         "change stream: succeeded event "
         f"{max(seen_at - finished_at, 0) * 1000:.0f} ms after the result returned"
     )
-    stream.wait(
-        lambda e: e[0] == "change" and any(c["topic"] == "containers" for c in e[2]["changes"])
-    )
+    stream.wait(_container_change)
 
     # Resumption replays what followed the first event.
     resumed = Stream(first_id)
@@ -234,3 +232,8 @@ def test_observability_end_to_end(
     cpu = get(api, "/v1/me/activity", measure="cpu", window_seconds=900)
     assert cpu["unit"] == "cores" and cpu["total"] > 0
     stream.close()
+
+
+def _container_change(event: Any) -> bool:
+    changes: list[dict[str, Any]] = event[2]["changes"] if event[0] == "change" else []
+    return any(change["topic"] == "containers" for change in changes)

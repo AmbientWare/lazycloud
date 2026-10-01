@@ -1142,7 +1142,6 @@ def _device_codes(fake_api: FakeApi, outcomes: list[dict[str, object]]) -> list[
 def test_login_without_a_token_runs_the_device_flow(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], fake_api: FakeApi
 ) -> None:
-    from lazycloud.cli import identity as identity_commands
 
     monkeypatch.delenv("LAZYCLOUD_TOKEN")
     monkeypatch.delenv("LAZYCLOUD_WORKSPACE")
@@ -1155,8 +1154,8 @@ def test_login_without_a_token_runs_the_device_flow(
             {"status": "approved", "token": "lc_device-token-1", "poll_interval_seconds": 10},
         ],
     )
-    monkeypatch.setattr(identity_commands.time, "sleep", slept.append)
-    monkeypatch.setattr(identity_commands.socket, "gethostname", lambda: "laptop")
+    monkeypatch.setattr("lazycloud.cli.identity.time.sleep", slept.append)
+    monkeypatch.setattr("lazycloud.cli.identity.socket.gethostname", lambda: "laptop")
     fake_api.route("GET", "/v1/me")(lambda _: _me("analytics", owned="analytics"))
 
     result = CliRunner().invoke(build_public_cli(), ["--json", "login"])
@@ -1195,12 +1194,11 @@ def test_login_without_a_token_runs_the_device_flow(
 def test_device_login_reports_denied_and_expired(
     status: str, message: str, monkeypatch: pytest.MonkeyPatch, fake_api: FakeApi
 ) -> None:
-    from lazycloud.cli import identity as identity_commands
 
     monkeypatch.delenv("LAZYCLOUD_TOKEN")
     reset_settings_cache()
     slept = _device_codes(fake_api, [{"status": status, "poll_interval_seconds": 5}])
-    monkeypatch.setattr(identity_commands.time, "sleep", slept.append)
+    monkeypatch.setattr("lazycloud.cli.identity.time.sleep", slept.append)
 
     result = CliRunner().invoke(build_public_cli(), ["login", "--token", ""])
 
