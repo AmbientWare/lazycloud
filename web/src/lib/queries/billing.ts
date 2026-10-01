@@ -1,34 +1,91 @@
 import { queryOptions } from "@tanstack/react-query";
 
-import { apiRequest } from "@/lib/api/client";
-import {
-  billingHostedSessionResponseSchema,
-  billingSummarySchema,
-  creditPurchaseSchema,
-  creditBalanceSchema,
-  billingPreferencesSchema,
-  usageBudgetSchema,
-  automaticReloadStatusSchema,
-  type BillingPreferences,
-  type BillingPlanId,
-  type BillingTermsVersion,
-  type BillingSummary,
+import { api, ok, type Schemas } from "@/lib/api/client";
+import type {
+  AutomaticReloadStatus,
+  BillingPlanId,
+  BillingPreferences,
+  BillingSummary,
+  BillingTermsVersion,
+  CreditBalance,
+  UsageBudget,
 } from "@/lib/api/schemas";
 
+import { toPlanEntitlements } from "./pricing";
 import { accountQueryKeys } from "./workspace-keys";
+
+/**
+ * `GET /v1/billing` answers the plan, balance, spending controls and reload
+ * state together, so one cache entry holds the account and each panel selects
+ * its part. Every billing command answers the same account, which replaces it.
+ */
+export type BillingAccountState = BillingSummary & {
+  balance_nanos: number;
+  preferences: BillingPreferences;
+  usage_budget: UsageBudget;
+  automatic_reload: AutomaticReloadStatus;
+};
 
 // Provider callbacks can arrive after the hosted page redirects back.
 const BILLING_SUMMARY_POLL_INTERVAL_MS = 5_000;
 
+function toBillingAccountState(account: Schemas["BillingAccount"]): BillingAccountState {
+  const { plan, usage_budget: budget, automatic_reload: reload } = account;
+  return {
+    status: account.status,
+    currency: account.currency,
+    plan: {
+      id: plan.id,
+      name: plan.name,
+      terms_version: plan.terms_version,
+      monthly_nanos: plan.monthly_nanos,
+      included_nanos: plan.included_nanos,
+      scheduled_terms_version: plan.scheduled_terms_version ?? null,
+      scheduled_change_at: plan.scheduled_change_at ?? null,
+      period_started_at: plan.period_started_at ?? null,
+      period_ended_at: plan.period_ended_at ?? null,
+    },
+    portal_available: account.portal_available,
+    payment_method_on_file: account.payment_method_on_file,
+    entitlements: toPlanEntitlements(account.entitlements),
+    usage: account.usage,
+    complimentary_since: account.complimentary_since ?? null,
+    plan_change_pending: account.plan_change_pending,
+    balance_nanos: account.balance_nanos,
+    preferences: {
+      ...account.preferences,
+      monthly_usage_limit_nanos: account.preferences.monthly_usage_limit_nanos ?? null,
+    },
+    usage_budget: {
+      month_started_at: budget.month_started_at,
+      month_ended_at: budget.month_ended_at,
+      limit_nanos: budget.limit_nanos ?? null,
+      spent_nanos: budget.spent_nanos,
+      available_nanos: budget.available_nanos ?? null,
+    },
+    automatic_reload: {
+      paused_purchase_id: reload.paused_purchase_id ?? null,
+      pause_reason: reload.pause_reason ?? null,
+      pending_purchase_id: reload.pending_purchase_id ?? null,
+      month_started_at: reload.month_started_at,
+      month_ended_at: reload.month_ended_at,
+      monthly_payment_committed_cents: reload.monthly_payment_committed_cents,
+    },
+  };
+}
+
+async function fetchBillingAccount(): Promise<BillingAccountState> {
+  return toBillingAccountState(await ok(api.GET("/v1/billing")));
+}
+
 export function billingSummaryQueryOptions() {
   return queryOptions({
     queryKey: accountQueryKeys.billing(),
-    queryFn: () => apiRequest("/api/v1/billing/summary", billingSummarySchema),
+    queryFn: fetchBillingAccount,
     staleTime: 30_000,
     refetchInterval: (query) =>
       query.state.data?.payment_method_on_file === false ||
       query.state.data?.plan_change_pending ||
-      query.state.data?.plan?.terms_version === null ||
       Boolean(query.state.data?.plan?.scheduled_change_at)
         ? BILLING_SUMMARY_POLL_INTERVAL_MS
         : false,
@@ -37,86 +94,101 @@ export function billingSummaryQueryOptions() {
 
 export function creditBalanceQueryOptions() {
   return queryOptions({
-    queryKey: [...accountQueryKeys.billing(), "credits"],
-    queryFn: () => apiRequest("/api/v1/billing/credits", creditBalanceSchema),
+    queryKey: accountQueryKeys.billing(),
+    queryFn: fetchBillingAccount,
+    select: (account): CreditBalance => ({ ready: true, balance_nanos: account.balance_nanos }),
     refetchInterval: 5_000,
   });
 }
 
 export function billingPreferencesQueryOptions() {
   return queryOptions({
-    queryKey: [...accountQueryKeys.billing(), "preferences"],
-    queryFn: () => apiRequest("/api/v1/billing/preferences", billingPreferencesSchema),
+    queryKey: accountQueryKeys.billing(),
+    queryFn: fetchBillingAccount,
+    select: (account) => account.preferences,
   });
 }
 
 export function usageBudgetQueryOptions() {
   return queryOptions({
-    queryKey: [...accountQueryKeys.billing(), "usage-budget"],
-    queryFn: () => apiRequest("/api/v1/billing/usage-budget", usageBudgetSchema),
+    queryKey: accountQueryKeys.billing(),
+    queryFn: fetchBillingAccount,
+    select: (account) => account.usage_budget,
     refetchInterval: 5_000,
   });
 }
 
-export function saveBillingPreferences(preferences: BillingPreferences) {
-  return apiRequest("/api/v1/billing/preferences", billingPreferencesSchema, {
-    method: "PUT",
-    body: JSON.stringify(preferences),
-  });
+export async function saveBillingPreferences(
+  preferences: BillingPreferences,
+): Promise<BillingAccountState> {
+  const { monthly_usage_limit_nanos: limit, ...reload } = preferences;
+  return toBillingAccountState(
+    await ok(
+      api.PUT("/v1/billing/preferences", {
+        body: { ...reload, monthly_usage_limit_nanos: limit ?? undefined },
+      }),
+    ),
+  );
 }
 
 export function automaticReloadStatusQueryOptions() {
   return queryOptions({
-    queryKey: [...accountQueryKeys.billing(), "automatic-reload"],
-    queryFn: () => apiRequest("/api/v1/billing/automatic-reload", automaticReloadStatusSchema),
+    queryKey: accountQueryKeys.billing(),
+    queryFn: fetchBillingAccount,
+    select: (account) => account.automatic_reload,
     refetchInterval: 5_000,
   });
 }
 
-export function resumeAutomaticReload() {
-  return apiRequest("/api/v1/billing/automatic-reload/resume", automaticReloadStatusSchema, {
-    method: "POST",
-  });
+export async function resumeAutomaticReload(): Promise<BillingAccountState> {
+  return toBillingAccountState(await ok(api.POST("/v1/billing/automatic-reload/resume")));
 }
 
-async function openHostedSession(path: string): Promise<void> {
+function hostedSessionRequest() {
   const returnUrl = window.location.href;
-  const session = await apiRequest(path, billingHostedSessionResponseSchema, {
-    method: "POST",
-    body: JSON.stringify({ return_url: returnUrl, cancel_url: returnUrl }),
-  });
+  return { return_url: returnUrl, cancel_url: returnUrl };
+}
+
+export async function startCardSetup(): Promise<void> {
+  const session = await ok(
+    api.POST("/v1/billing/payment-method-sessions", { body: hostedSessionRequest() }),
+  );
   window.location.assign(session.url);
 }
 
-export function startCardSetup(): Promise<void> {
-  return openHostedSession("/api/v1/billing/card-session");
-}
-
-export function openBillingPortal(): Promise<void> {
-  return openHostedSession("/api/v1/billing/portal-session");
+export async function openBillingPortal(): Promise<void> {
+  const session = await ok(
+    api.POST("/v1/billing/portal-sessions", { body: hostedSessionRequest() }),
+  );
+  window.location.assign(session.url);
 }
 
 export async function purchaseCredit(request: { requestKey: string; amountCents: number }) {
-  const returnUrl = window.location.href;
-  const purchase = await apiRequest("/api/v1/billing/credit-purchases", creditPurchaseSchema, {
-    method: "POST",
-    body: JSON.stringify({
-      request_key: request.requestKey,
-      amount_cents: request.amountCents,
-      return_url: returnUrl,
-      cancel_url: returnUrl,
+  const purchase = await ok(
+    api.POST("/v1/billing/credit-purchases", {
+      body: {
+        request_key: request.requestKey,
+        amount_cents: request.amountCents,
+        ...hostedSessionRequest(),
+      },
     }),
-  });
+  );
   if (purchase.checkout_url) window.location.assign(purchase.checkout_url);
   return purchase;
 }
 
-export function changeBillingPlan(selection: {
+export async function changeBillingPlan(selection: {
   plan: BillingPlanId;
   terms_version: BillingTermsVersion;
-}): Promise<BillingSummary> {
-  return apiRequest("/api/v1/billing/subscription", billingSummarySchema, {
-    method: "POST",
-    body: JSON.stringify(selection),
-  });
+}): Promise<BillingAccountState> {
+  return toBillingAccountState(
+    await ok(
+      api.PUT("/v1/billing/plan", {
+        body: {
+          plan: selection.plan,
+          terms_version: selection.terms_version as Schemas["TermsVersion"],
+        },
+      }),
+    ),
+  );
 }

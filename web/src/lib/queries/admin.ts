@@ -1,14 +1,12 @@
 import { infiniteQueryOptions } from "@tanstack/react-query";
 
-import { api, apiRequest, ok, type Schemas } from "@/lib/api/client";
-import {
-  billingAccountAdminSchema,
-  billingComplimentaryRequestSchema,
-  type BillingAccountAdmin,
-  type BillingAccountAdminList,
-  type PlatformRole,
-  type User,
-  type UserStatus,
+import { api, ok, type Schemas } from "@/lib/api/client";
+import type {
+  BillingAccountAdmin,
+  BillingAccountAdminList,
+  PlatformRole,
+  User,
+  UserStatus,
 } from "@/lib/api/schemas";
 import { viewUser } from "@/lib/api/views";
 import {
@@ -18,7 +16,6 @@ import {
 } from "@/lib/queries/infinite-list";
 import { accountQueryKeys } from "@/lib/queries/workspace-keys";
 
-const ACCOUNTS = "/api/v1/billing/accounts";
 const PAGE_SIZE = 50;
 
 type AccountScope = {
@@ -35,9 +32,6 @@ const EVERY_ACCOUNT: AccountScope = { search: "", role: null, status: null };
  * Admin-only on the server, which answers a member with 403. That is an
  * authorization decision rather than a dead token, so the client keeps the
  * session and the tab shows the refusal.
- *
- * Read from the users list until billing serves its account list; until then
- * every row carries no billing standing and no recent spend.
  */
 export function billingAccountsQueryOptions(scope: AccountScope = EVERY_ACCOUNT) {
   return infiniteQueryOptions({
@@ -47,7 +41,7 @@ export function billingAccountsQueryOptions(scope: AccountScope = EVERY_ACCOUNT)
       // Narrowed by the server. The list pages, so filtering what arrived would
       // hide every match that had not been fetched yet.
       const page = await ok(
-        api.GET("/v1/users", {
+        api.GET("/v1/billing/accounts", {
           params: {
             query: {
               limit: PAGE_SIZE,
@@ -59,7 +53,7 @@ export function billingAccountsQueryOptions(scope: AccountScope = EVERY_ACCOUNT)
           },
         }),
       );
-      return { data: page.users.map(unbilledAccount), next: page.next_cursor ?? "" };
+      return { data: page.accounts.map(viewAccount), next: page.next_cursor ?? "" };
     },
     getNextPageParam: nextListCursor,
   });
@@ -84,26 +78,28 @@ export async function setUserStatus(user: string, status: UserStatus): Promise<U
   );
 }
 
-export function setComplimentary(
-  userId: string,
+export async function setComplimentary(
+  user: string,
   complimentary: boolean,
 ): Promise<BillingAccountAdmin> {
-  const request = billingComplimentaryRequestSchema.parse({ complimentary });
-  return apiRequest(
-    `${ACCOUNTS}/${encodeURIComponent(userId)}/complimentary`,
-    billingAccountAdminSchema,
-    { method: "PUT", body: JSON.stringify(request) },
+  return viewAccount(
+    await ok(
+      api.PUT("/v1/billing/accounts/{user}/complimentary", {
+        params: { path: { user } },
+        body: { complimentary },
+      }),
+    ),
   );
 }
 
-function unbilledAccount(user: Schemas["User"]): BillingAccountAdmin {
+function viewAccount(account: Schemas["BillingAccountAdmin"]): BillingAccountAdmin {
   return {
-    user: viewUser(user),
-    status: null,
-    plan: null,
-    payment_method_on_file: false,
-    complimentary_since: null,
-    recent_cost_nanos: 0,
-    recent_cost_since: user.created_at,
+    user: viewUser(account.user),
+    status: account.status ?? null,
+    plan: account.plan ?? null,
+    payment_method_on_file: account.payment_method_on_file,
+    complimentary_since: account.complimentary_since ?? null,
+    recent_cost_nanos: account.recent_cost_nanos,
+    recent_cost_since: account.recent_cost_since,
   };
 }

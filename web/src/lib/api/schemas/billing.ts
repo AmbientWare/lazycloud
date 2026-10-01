@@ -64,6 +64,7 @@ export const automaticReloadStatusSchema = z
     monthly_payment_committed_cents: z.number().int().nonnegative(),
   })
   .strict();
+export type AutomaticReloadStatus = z.infer<typeof automaticReloadStatusSchema>;
 
 export const usageBudgetSchema = z
   .object({
@@ -74,6 +75,7 @@ export const usageBudgetSchema = z
     available_nanos: z.number().int().nonnegative().nullable(),
   })
   .strict();
+export type UsageBudget = z.infer<typeof usageBudgetSchema>;
 
 export const billingAccountStatuses = ["active", "past_due"] as const;
 export type BillingAccountStatus = (typeof billingAccountStatuses)[number];
@@ -173,12 +175,5 @@ export const billingAccountAdminListSchema = z
   })
   .strict();
 export type BillingAccountAdminList = z.infer<typeof billingAccountAdminListSchema>;
-
-export const billingComplimentaryRequestSchema = z
-  .object({
-    complimentary: z.boolean(),
-  })
-  .strict();
-export type BillingComplimentaryRequest = z.infer<typeof billingComplimentaryRequestSchema>;
 
 export type { BillingPlanId } from "./pricing";

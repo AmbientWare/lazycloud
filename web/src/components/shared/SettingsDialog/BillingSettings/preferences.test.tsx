@@ -3,17 +3,13 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { expect, it, onTestFinished, vi } from "vitest";
 
+import type { Schemas } from "@/lib/api/client";
 import {
   billingPreferencesSchema,
   type BillingPreferences,
   type PricingCatalog,
 } from "@/lib/api/schemas";
-import {
-  automaticReloadStatusQueryOptions,
-  billingPreferencesQueryOptions,
-  creditBalanceQueryOptions,
-  usageBudgetQueryOptions,
-} from "@/lib/queries/billing";
+import { billingSummaryQueryOptions } from "@/lib/queries/billing";
 import { pricingCatalogQueryOptions } from "@/lib/queries/pricing";
 
 import { BillingPreferences as BillingPreferencesForm } from "./BillingPreferences";
@@ -44,11 +40,6 @@ it("saves preset and custom amounts without changing untouched settings or confu
     reload_threshold_cents: 500,
     reload_amount_cents: 500,
   };
-  client.setQueryData(billingPreferencesQueryOptions().queryKey, stored);
-  client.setQueryData(creditBalanceQueryOptions().queryKey, {
-    ready: true,
-    balance_nanos: 5_000_000_000,
-  });
   client.setQueryData<PricingCatalog>(pricingCatalogQueryOptions().queryKey, {
     pricing_version: "test",
     metered_rates_effective_at: "2026-09-01T00:00:00Z",
@@ -72,34 +63,27 @@ it("saves preset and custom amounts without changing untouched settings or confu
     },
     disk_rate: null,
   });
-  const month = {
-    month_started_at: "2026-09-01T00:00:00Z",
-    month_ended_at: "2026-10-01T00:00:00Z",
-  };
-  const status = {
-    ...month,
-    paused_purchase_id: null,
-    pause_reason: null,
-    pending_purchase_id: null,
-    monthly_payment_committed_cents: 0,
-  };
-  const budget = { ...month, limit_nanos: null, spent_nanos: 0, available_nanos: null };
-  client.setQueryData(automaticReloadStatusQueryOptions().queryKey, status);
-  client.setQueryData(usageBudgetQueryOptions().queryKey, budget);
   let resolveSave: ((response: Response) => void) | undefined;
   const response = new Promise<Response>((resolve) => {
     resolveSave = resolve;
   });
   let holdSave = true;
-  vi.stubGlobal("fetch", async (path: string, init?: RequestInit) => {
-    if (path.endsWith("/preferences") && init?.method === "PUT") {
-      stored = billingPreferencesSchema.parse(JSON.parse(String(init.body)));
-      return holdSave ? response : Response.json(stored);
+  vi.stubGlobal("fetch", async (request: Request) => {
+    const path = new URL(request.url).pathname;
+    if (path === "/v1/billing/preferences" && request.method === "PUT") {
+      const body = (await request.json()) as Schemas["BillingPreferences"];
+      stored = billingPreferencesSchema.parse({
+        ...body,
+        monthly_usage_limit_nanos: body.monthly_usage_limit_nanos ?? null,
+      });
+      return holdSave ? response : Response.json(billingAccount(stored));
     }
-    if (path.endsWith("/usage-budget")) return Response.json(budget);
-    if (path.endsWith("/automatic-reload")) return Response.json(status);
-    throw new Error(`Unexpected request: ${path}`);
+    if (path === "/v1/billing" && request.method === "GET") {
+      return Response.json(billingAccount(stored));
+    }
+    throw new Error(`Unexpected request: ${request.method} ${path}`);
   });
+  await client.fetchQuery(billingSummaryQueryOptions());
   const { rerender } = render(
     <QueryClientProvider client={client}>
       <PrepaidCredit paymentMethodOnFile />
@@ -113,7 +97,7 @@ it("saves preset and custom amounts without changing untouched settings or confu
   fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
   await waitFor(() => expect(screen.getByLabelText("Monthly usage limit, USD")).toBeDisabled());
   holdSave = false;
-  await act(async () => resolveSave?.(Response.json(stored)));
+  await act(async () => resolveSave?.(Response.json(billingAccount(stored))));
   await waitFor(() => expect(screen.getByLabelText("Monthly usage limit, USD")).toBeEnabled());
   await screen.findByText("Changes saved.");
   expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
@@ -154,3 +138,55 @@ it("saves preset and custom amounts without changing untouched settings or confu
   await screen.findByText("Changes saved.");
   expect(stored.monthly_usage_limit_nanos).toBeNull();
 });
+
+/** The account `GET /v1/billing` answers, holding the saved preferences. */
+function billingAccount(preferences: BillingPreferences): Schemas["BillingAccount"] {
+  const month = {
+    month_started_at: "2026-09-01T00:00:00Z",
+    month_ended_at: "2026-10-01T00:00:00Z",
+  };
+  return {
+    status: "active",
+    currency: "USD",
+    plan: {
+      id: "free",
+      name: "Free",
+      terms_version: "free-v2",
+      monthly_nanos: 0,
+      included_nanos: 0,
+    },
+    portal_available: true,
+    payment_method_on_file: true,
+    entitlements: {
+      max_concurrent_cpu_containers: 30,
+      max_concurrent_gpus: 5,
+      gpu_types: ["T4", "L4", "A10G"],
+      max_workspaces: 1,
+      max_members: 1,
+      connected_cloud: false,
+      custom_domains: false,
+      self_hosted: true,
+      region_selection: false,
+      retention_days: 1,
+      max_workspace_disk_gib: 0,
+    },
+    usage: {
+      concurrent_cpu_containers: 0,
+      concurrent_gpus: 0,
+      workspaces: 1,
+      members: 1,
+      connected_clouds: 0,
+      custom_domains: 0,
+    },
+    balance_nanos: 5_000_000_000,
+    usage_budget: { ...month, spent_nanos: 0 },
+    preferences: {
+      reload_enabled: preferences.reload_enabled,
+      reload_threshold_cents: preferences.reload_threshold_cents,
+      reload_amount_cents: preferences.reload_amount_cents,
+      monthly_usage_limit_nanos: preferences.monthly_usage_limit_nanos ?? undefined,
+    },
+    automatic_reload: { ...month, monthly_payment_committed_cents: 0 },
+    plan_change_pending: false,
+  };
+}

@@ -4,9 +4,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { BillingSummary, PricingCatalog } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 
 import { useBillingSettingsController } from "./controller";
+
+type Account = Schemas["BillingAccount"];
 
 describe("billing settings controller", () => {
   it("sends a cardless account to the card page and starts no plan change", async () => {
@@ -16,7 +18,7 @@ describe("billing settings controller", () => {
     // from the hosted card page must not be what authorises the charge either,
     // which is why the card is an action of its own rather than a step inside
     // the change.
-    const requests = recordRequests(summary({ payment_method_on_file: false }));
+    const requests = recordRequests(account({ payment_method_on_file: false }));
     const assign = stubNavigation();
     const { result } = await mountedController();
 
@@ -25,15 +27,15 @@ describe("billing settings controller", () => {
     act(() => result.current.choose(team!));
     await waitFor(() => expect(assign).toHaveBeenCalledWith("https://provider.example/card"));
 
-    expect(requests.posts("/api/v1/billing/subscription")).toEqual([]);
-    expect(requests.posts("/api/v1/billing/card-session")).toHaveLength(1);
+    expect(requests.planChanges()).toEqual([]);
+    expect(requests.sent("POST", "/v1/billing/payment-method-sessions")).toHaveLength(1);
   });
 
   it("asks before charging a card, and sends nothing until it is answered", async () => {
     // The move up takes an immediate prorated charge inside the request that
     // makes it. A dialog click is not consent to that, so the send waits.
-    const moved = summary({ plan: plan("team", "Team") });
-    const requests = recordRequests(summary({ payment_method_on_file: true }), moved);
+    const moved = account({ payment_method_on_file: true, plan: plan("team", "Team") });
+    const requests = recordRequests(account({ payment_method_on_file: true }), moved);
     const { result } = await mountedController();
 
     const team = result.current.offers.find((offer) => offer.id === "team");
@@ -41,18 +43,17 @@ describe("billing settings controller", () => {
     act(() => result.current.choose(team!));
 
     expect(result.current.confirmingChangeTo?.id).toBe("team");
-    expect(requests.posts("/api/v1/billing/subscription")).toEqual([]);
+    expect(requests.planChanges()).toEqual([]);
 
     act(() => result.current.confirmChange());
     await waitFor(() =>
-      expect(requests.posts("/api/v1/billing/subscription")).toEqual([
-        { plan: "team", terms_version: "team-v2" },
-      ]),
+      expect(requests.planChanges()).toEqual([{ plan: "team", terms_version: "team-v3" }]),
     );
   });
 
   it("confirms before moving down, then sends the plan that was confirmed", async () => {
-    const moved = summary({
+    const moved = account({
+      payment_method_on_file: true,
       plan: {
         ...plan("team", "Team"),
         scheduled_terms_version: "free-v2",
@@ -60,7 +61,7 @@ describe("billing settings controller", () => {
       },
     });
     const requests = recordRequests(
-      summary({ payment_method_on_file: true, plan: plan("team", "Team") }),
+      account({ payment_method_on_file: true, plan: plan("team", "Team") }),
       moved,
     );
     const { result } = await mountedController();
@@ -71,75 +72,25 @@ describe("billing settings controller", () => {
 
     // Asking is not doing: nothing has been sent yet.
     expect(result.current.confirmingChangeTo?.id).toBe("free");
-    expect(requests.posts("/api/v1/billing/subscription")).toEqual([]);
+    expect(requests.planChanges()).toEqual([]);
 
     act(() => result.current.confirmChange());
     await waitFor(() =>
-      expect(requests.posts("/api/v1/billing/subscription")).toEqual([
-        { plan: "free", terms_version: "free-v2" },
-      ]),
+      expect(requests.planChanges()).toEqual([{ plan: "free", terms_version: "free-v2" }]),
     );
     await waitFor(() =>
       expect(result.current.summary?.plan?.scheduled_terms_version).toBe("free-v2"),
     );
     expect(result.current.summary?.plan?.id).toBe("team");
-  });
 
-  it("compares verified legacy terms and can cancel a scheduled move to the new version", async () => {
-    const legacy = {
-      ...plan("team", "Team"),
-      terms_version: "team-v1" as const,
-      monthly_nanos: 100_000_000_000,
-      included_nanos: 30_000_000_000,
-    };
-    const requests = recordRequests(
-      summary({ payment_method_on_file: true, plan: legacy }),
-      summary({
-        payment_method_on_file: true,
-        plan: {
-          ...legacy,
-          scheduled_terms_version: "team-v2",
-          scheduled_change_at: "2026-09-01T00:00:00Z",
-        },
-      }),
-    );
-    const { result } = await mountedController();
-    const team = result.current.offers.find((offer) => offer.id === "team");
-    expect(team?.action).toBe("downgrade");
-    act(() => result.current.choose(team!));
-    act(() => result.current.confirmChange());
-    await waitFor(() =>
-      expect(result.current.summary?.plan?.scheduled_terms_version).toBe("team-v2"),
-    );
-    expect(result.current.summary?.plan?.monthly_nanos).toBe(100_000_000_000);
+    // Choosing the held terms again is what cancels the scheduled move.
     act(() => result.current.cancelScheduledChange());
     await waitFor(() =>
-      expect(requests.posts("/api/v1/billing/subscription")).toEqual([
-        { plan: "team", terms_version: "team-v2" },
-        { plan: "team", terms_version: "team-v1" },
+      expect(requests.planChanges()).toEqual([
+        { plan: "free", terms_version: "free-v2" },
+        { plan: "team", terms_version: "team-v3" },
       ]),
     );
-  });
-
-  it("does not offer a plan change against unverified subscription terms", async () => {
-    const requests = recordRequests(
-      summary({
-        payment_method_on_file: true,
-        plan: {
-          ...plan("team", "Team"),
-          terms_version: null,
-          monthly_nanos: null,
-          included_nanos: null,
-        },
-      }),
-    );
-    const { result } = await mountedController();
-    const free = result.current.offers.find((offer) => offer.id === "free");
-    expect(free?.action).toBe("unverified");
-    act(() => result.current.choose(free!));
-    act(() => result.current.confirmChange());
-    expect(result.current.confirmingChangeTo).toBeNull();
-    expect(requests.posts("/api/v1/billing/subscription")).toEqual([]);
   });
 });
 
@@ -160,26 +111,27 @@ function wrapper(queryClient: QueryClient) {
 }
 
 /** Every call the controller makes, with the bodies it sent. */
-function recordRequests(initial: BillingSummary, afterChange: BillingSummary = initial) {
+function recordRequests(initial: Account, afterChange: Account = initial) {
   const sent: { path: string; method: string; body: unknown }[] = [];
-  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
-    const path = new URL(String(input), "http://dashboard.example").pathname;
-    const method = init?.method ?? "GET";
-    sent.push({
-      path,
-      method,
-      body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
-    });
-    if (path === "/api/v1/billing/card-session") {
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    const request = input as Request;
+    const path = new URL(request.url).pathname;
+    const text = await request.text();
+    sent.push({ path, method: request.method, body: text ? JSON.parse(text) : undefined });
+    if (path === "/v1/billing/payment-method-sessions") {
       return jsonResponse({ url: "https://provider.example/card" }, 201);
     }
-    if (path === "/api/v1/pricing") return jsonResponse(pricingCatalog());
-    if (method === "POST") return jsonResponse(afterChange);
+    if (path === "/v1/pricing") return jsonResponse(pricingCatalog());
+    if (path === "/v1/billing/plan") return jsonResponse(afterChange);
     return jsonResponse(initial);
   });
   return {
-    posts: (path: string) =>
-      sent.filter((call) => call.path === path && call.method === "POST").map((call) => call.body),
+    sent: (method: string, path: string) =>
+      sent.filter((call) => call.path === path && call.method === method).map((call) => call.body),
+    planChanges: () =>
+      sent
+        .filter((call) => call.path === "/v1/billing/plan" && call.method === "PUT")
+        .map((call) => call.body),
   };
 }
 
@@ -194,21 +146,23 @@ function stubNavigation() {
   return assign;
 }
 
-function plan(id: "free" | "team", name: string): NonNullable<BillingSummary["plan"]> {
+function plan(id: "free" | "team", name: string): Account["plan"] {
   return {
     id,
     name,
-    terms_version: id === "free" ? "free-v2" : "team-v2",
+    terms_version: id === "free" ? "free-v2" : "team-v3",
     monthly_nanos: id === "free" ? 0 : 49_000_000_000,
     included_nanos: id === "free" ? 0 : 10_000_000_000,
-    scheduled_terms_version: null,
-    scheduled_change_at: null,
     period_started_at: "2026-08-01T00:00:00Z",
     period_ended_at: "2026-09-01T00:00:00Z",
   };
 }
 
-function summary(overrides: Partial<BillingSummary> = {}): BillingSummary {
+function account(overrides: Partial<Account> = {}): Account {
+  const month = {
+    month_started_at: "2026-08-01T00:00:00Z",
+    month_ended_at: "2026-09-01T00:00:00Z",
+  };
   return {
     status: "active",
     currency: "USD",
@@ -224,19 +178,22 @@ function summary(overrides: Partial<BillingSummary> = {}): BillingSummary {
       connected_clouds: 0,
       custom_domains: 0,
     },
-    complimentary_since: null,
+    balance_nanos: 2_000_000_000,
+    usage_budget: { ...month, spent_nanos: 0 },
+    preferences: { reload_enabled: false, reload_threshold_cents: 500, reload_amount_cents: 500 },
+    automatic_reload: { ...month, monthly_payment_committed_cents: 0 },
     plan_change_pending: false,
     ...overrides,
   };
 }
 
-function entitlements() {
+function entitlements(): Schemas["PlanEntitlements"] {
   return {
     max_concurrent_cpu_containers: 30,
     max_concurrent_gpus: 5,
     gpu_types: ["T4", "L4", "A10G"],
-    max_workspaces: 1 as const,
-    max_members: 1 as const,
+    max_workspaces: 1,
+    max_members: 1,
     connected_cloud: false,
     custom_domains: false,
     self_hosted: true,
@@ -246,7 +203,7 @@ function entitlements() {
   };
 }
 
-function pricingCatalog(): PricingCatalog {
+function pricingCatalog(): Schemas["PricingCatalog"] {
   return {
     pricing_version: "test",
     metered_rates_effective_at: "2026-09-11T00:00:00Z",
@@ -272,7 +229,7 @@ function pricingCatalog(): PricingCatalog {
       },
       {
         id: "team",
-        terms_version: "team-v2",
+        terms_version: "team-v3",
         name: "Team",
         summary: "Team plan",
         monthly_nanos: 49_000_000_000,
@@ -281,10 +238,8 @@ function pricingCatalog(): PricingCatalog {
           ...entitlements(),
           max_concurrent_cpu_containers: 1_000,
           max_concurrent_gpus: 50,
-          gpu_types: "all",
-          max_workspaces: "unlimited",
+          max_workspaces: undefined,
           max_members: 3,
-          connected_cloud: false,
           region_selection: true,
           retention_days: 30,
           custom_domains: true,
@@ -300,7 +255,6 @@ function pricingCatalog(): PricingCatalog {
       nanos_per_volume_gib_month: 50_000_000,
       storage_month_seconds: 2_592_000,
     },
-    disk_rate: null,
   };
 }
 

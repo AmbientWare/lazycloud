@@ -131,7 +131,7 @@ export const pricingCatalogSchema = z
       .object({
         amount_nanos: z.number().int().positive(),
         duration_days: z.number().int().positive(),
-        one_time: z.literal(true),
+        one_time: z.boolean(),
       })
       .strict(),
     pricing_version: z.string(),
