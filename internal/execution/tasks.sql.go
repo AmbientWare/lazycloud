@@ -29,8 +29,8 @@ cross join lateral (
       and ($1::text is null or t.status = $1::text)
       and (not $2::bool or t.parent_task_id is null)
       and ($3::text is null
-           or t.id::text like $3::text || '%'
-           or w.name ilike '%' || $3::text || '%')
+           or starts_with(t.id::text, $3::text)
+           or strpos(lower(w.name), $3::text) > 0)
       and t.id < $4
     order by t.id desc
     limit $5
@@ -38,6 +38,7 @@ cross join lateral (
 join releases r on r.id = t.release_id
 where a.workspace_id = $6 and a.id = $7
   and ($8::text is null or w.name = $8::text)
+  and ($9::int is null or r.version = $9::int)
 order by t.id desc
 limit $5
 `
@@ -51,6 +52,7 @@ type ListAppTasksParams struct {
 	WorkspaceID uuid.UUID
 	AppID       uuid.UUID
 	Function    *string
+	Version     *int32
 }
 
 type ListAppTasksRow struct {
@@ -85,6 +87,7 @@ func (q *Queries) ListAppTasks(ctx context.Context, arg ListAppTasksParams) ([]L
 		arg.WorkspaceID,
 		arg.AppID,
 		arg.Function,
+		arg.Version,
 	)
 	if err != nil {
 		return nil, err
@@ -139,8 +142,8 @@ where t.workspace_id = $1
   and ($2::text is null or t.status = $2::text)
   and (not $3::bool or t.parent_task_id is null)
   and ($4::text is null
-       or t.id::text like $4::text || '%'
-       or w.name ilike '%' || $4::text || '%')
+       or starts_with(t.id::text, $4::text)
+       or strpos(lower(w.name), $4::text) > 0)
   and t.id < $5
 order by t.id desc
 limit $6

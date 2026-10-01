@@ -8,6 +8,7 @@ from apps a
 where a.workspace_id = @workspace_id
   and a.state <> 'deleted'
   and (sqlc.narg(state)::text is null or a.state = sqlc.narg(state)::text)
+  and (sqlc.narg(search)::text is null or strpos(a.name, sqlc.narg(search)::text) > 0)
   and a.name > @after
   and exists (select 1 from workloads w
               where w.app_id = a.id and w.desired_state <> 'deleted' and w.active_release_id is not null)

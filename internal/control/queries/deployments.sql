@@ -10,6 +10,8 @@ where a.workspace_id = @workspace_id
   and w.desired_state <> 'deleted'
   and (sqlc.narg(app)::text is null or a.name = sqlc.narg(app)::text)
   and (sqlc.narg(name)::text is null or w.name = sqlc.narg(name)::text)
+  and (sqlc.narg(search)::text is null
+       or strpos(a.name, sqlc.narg(search)::text) > 0 or strpos(lower(w.name), sqlc.narg(search)::text) > 0)
   and (a.name, w.name) > (@after_app::text, @after_name::text)
 order by a.name, w.name
 limit @max_rows;

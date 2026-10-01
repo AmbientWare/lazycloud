@@ -70,16 +70,18 @@ from apps a
 where a.workspace_id = $1
   and a.state <> 'deleted'
   and ($2::text is null or a.state = $2::text)
-  and a.name > $3
+  and ($3::text is null or strpos(a.name, $3::text) > 0)
+  and a.name > $4
   and exists (select 1 from workloads w
               where w.app_id = a.id and w.desired_state <> 'deleted' and w.active_release_id is not null)
 order by a.name
-limit $4
+limit $5
 `
 
 type ListAppsParams struct {
 	WorkspaceID uuid.UUID
 	State       *string
+	Search      *string
 	After       string
 	MaxRows     int32
 }
@@ -98,6 +100,7 @@ func (q *Queries) ListApps(ctx context.Context, arg ListAppsParams) ([]ListAppsR
 	rows, err := q.db.Query(ctx, listApps,
 		arg.WorkspaceID,
 		arg.State,
+		arg.Search,
 		arg.After,
 		arg.MaxRows,
 	)

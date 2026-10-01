@@ -11,6 +11,7 @@ join workloads w on w.id = r.workload_id
 join apps a on a.id = w.app_id
 where c.workspace_id = @workspace_id
   and (sqlc.narg(app)::text is null or a.name = sqlc.narg(app)::text)
+  and (sqlc.narg(function)::text is null or w.name = sqlc.narg(function)::text)
   and c.id < @before
 order by c.id desc
 limit @max_rows;
@@ -30,6 +31,7 @@ join apps a on a.id = w.app_id
 where c.workspace_id = @workspace_id
   and c.state <> 'stopped'
   and (sqlc.narg(app)::text is null or a.name = sqlc.narg(app)::text)
+  and (sqlc.narg(function)::text is null or w.name = sqlc.narg(function)::text)
   and c.id < @before
 order by c.id desc
 limit @max_rows;

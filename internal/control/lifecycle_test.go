@@ -27,11 +27,11 @@ func TestAppPauseResumeAndDeleteFreeTheName(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	page, err := c.ListApps(t.Context(), ws, nil, 1, "")
+	page, err := c.ListApps(t.Context(), ws, AppFilter{}, 1, "")
 	if err != nil || len(page.Apps) != 1 || page.Apps[0].Name != "billing" || page.Next == "" {
 		t.Fatalf("first page %+v %v", page, err)
 	}
-	page, err = c.ListApps(t.Context(), ws, nil, 1, page.Next)
+	page, err = c.ListApps(t.Context(), ws, AppFilter{}, 1, page.Next)
 	if err != nil || len(page.Apps) != 1 || page.Apps[0].Name != "reports" || page.Next != "" || page.Apps[0].Workloads != 1 {
 		t.Fatalf("second page %+v %v", page, err)
 	}
@@ -41,8 +41,14 @@ func TestAppPauseResumeAndDeleteFreeTheName(t *testing.T) {
 		t.Fatalf("pause %+v %v", paused, err)
 	}
 	state := AppPaused
-	if page, err := c.ListApps(t.Context(), ws, &state, 10, ""); err != nil || len(page.Apps) != 1 || page.Apps[0].Name != "reports" {
+	if page, err := c.ListApps(t.Context(), ws, AppFilter{State: &state}, 10, ""); err != nil || len(page.Apps) != 1 || page.Apps[0].Name != "reports" {
 		t.Fatalf("paused apps %+v %v", page, err)
+	}
+	// Search matches part of the name on the server.
+	for term, want := range map[string]int{"ILL": 1, "port": 1, "nope": 0} {
+		if page, err := c.ListApps(t.Context(), ws, AppFilter{Search: &term}, 10, ""); err != nil || len(page.Apps) != want {
+			t.Fatalf("apps matching %q: %+v %v, want %d", term, page.Apps, err, want)
+		}
 	}
 	if resumed, err := c.ResumeApp(t.Context(), ws, first.App.Id.String()); err != nil || resumed.State != apitypes.AppStateActive {
 		t.Fatalf("resume by id %+v %v", resumed, err)
@@ -79,6 +85,15 @@ func TestDeploymentStopStartVersionsAndDelete(t *testing.T) {
 	list, err := c.ListDeployments(t.Context(), ws, DeploymentFilter{Name: &name}, 10, "")
 	if err != nil || len(list.Deployments) != 1 || *list.Deployments[0].Version != 2 {
 		t.Fatalf("deployments %+v %v", list, err)
+	}
+	// Search matches part of the workload or the app name.
+	for _, term := range []string{"MARIZ", "report"} {
+		if found, err := c.ListDeployments(t.Context(), ws, DeploymentFilter{Search: &term}, 10, ""); err != nil || len(found.Deployments) != 1 {
+			t.Fatalf("deployments matching %q: %+v %v", term, found, err)
+		}
+	}
+	if found, _ := c.ListDeployments(t.Context(), ws, DeploymentFilter{Search: &name, App: &name}, 10, ""); len(found.Deployments) != 0 {
+		t.Fatalf("search within another app %+v", found)
 	}
 	id := WorkloadID(list.Deployments[0].Id)
 
