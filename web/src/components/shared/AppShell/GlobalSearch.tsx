@@ -49,7 +49,7 @@ export function GlobalSearch({
   const { workspace } = useWorkspace();
   const router = useRouter();
   const [query, setQuery] = useState("");
-  const deferredQuery = useDeferredValue(query.trim());
+  const deferredQuery = useDeferredValue(query.trim().slice(0, 100));
   const normalizedQuery = deferredQuery.toLowerCase();
 
   // The server answers every resource match; only the fixed destinations below are

@@ -22,7 +22,7 @@ const workspace: Schemas["Workspace"] = {
   created_at: "2026-07-21T10:00:00Z",
 };
 
-it("asks the server for matching workloads and tasks", async () => {
+it("asks the server for matching apps, workloads and tasks", async () => {
   // cmdk measures its list; jsdom has no layout to observe.
   vi.stubGlobal(
     "ResizeObserver",
@@ -37,11 +37,8 @@ it("asks the server for matching workloads and tasks", async () => {
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
     const url = new URL((input as Request).url);
     requests.push(url);
-    if (url.pathname.endsWith("/apps/greet")) {
-      return Response.json({ code: "not_found", message: "no app" }, { status: 404 });
-    }
     if (url.pathname.endsWith("/deployments")) {
-      const named = url.searchParams.get("name") === "greet";
+      const named = url.searchParams.get("search") === "greet";
       return Response.json({
         deployments: named
           ? [
@@ -88,8 +85,10 @@ it("asks the server for matching workloads and tasks", async () => {
 
   expect(await screen.findByText("Function")).toBeVisible();
   expect(await screen.findByText(/^Running · 4f1c2d3e$/)).toBeVisible();
-  expect(requests.some((url) => url.searchParams.get("search") === "greet")).toBe(true);
-  expect(requests.some((url) => url.searchParams.get("name") === "greet")).toBe(true);
+  const searched = requests
+    .filter((url) => url.searchParams.get("search") === "greet")
+    .map((url) => url.pathname.split("/").at(-1));
+  expect([...new Set(searched)].sort()).toEqual(["apps", "deployments", "tasks"]);
 });
 
 function task(id: string): Schemas["Task"] {
