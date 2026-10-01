@@ -243,6 +243,14 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	a.goOwned(a.pruneExited)
 	err = a.sessions(ctx)
+	if errors.Is(err, ErrCredentialRevoked) {
+		// The machine was removed: nothing it runs belongs to anyone now.
+		cleanup, done := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+		defer done()
+		if rmErr := a.removeHostContainers(cleanup); rmErr != nil {
+			a.log.Error("remove containers of a revoked host", "error", rmErr)
+		}
+	}
 	if cause := context.Cause(ctx); cause != nil && !errors.Is(cause, context.Canceled) {
 		return fmt.Errorf("agent stopped: %w", cause)
 	}
