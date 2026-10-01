@@ -89,6 +89,8 @@ const (
 	StopCrashed     StopReason = "crashed"
 	StopOutOfMemory StopReason = "out_of_memory"
 	StopHostLost    StopReason = "host_lost"
+	// StopExited means a pod's command ended on its own.
+	StopExited StopReason = "exited"
 )
 
 // FailureKind classifies a failed attempt or task.

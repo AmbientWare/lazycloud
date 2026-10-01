@@ -128,6 +128,10 @@ SaaS, and the edge routes only verified ones.
   them, and a deploy that serves one needs the workspace owner's; each
   batch of request records carries its response bytes to billing as egress
   per workload and quarter-hour, in the same transaction.
+- A cold endpoint, ASGI or realtime request asks billing first: a refused
+  account gets 402 with billing's reason, an account at a plan limit 409,
+  both as `{"error": ...}` the way the reference answered, at once rather
+  than at the cold-start deadline (`TestRefusedAccountGetsPaymentRequiredAtOnce`).
 
 ## Handed off
 

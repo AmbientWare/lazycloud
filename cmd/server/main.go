@@ -12,6 +12,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
@@ -142,6 +143,8 @@ type serveConfig struct {
 	relayAddr  string
 	relayURL   string
 	cloudflare struct{ zone, token string }
+	// tcp serves TCP pods behind TLS when addr is set.
+	tcp struct{ addr, url, cert, key string }
 }
 
 func serve(ctx context.Context, args []string) error {
@@ -173,6 +176,10 @@ func serve(ctx context.Context, args []string) error {
 		"address other servers' edges relay requests to, inside the cluster (LAZYCLOUD_EDGE_RELAY_ADDR)")
 	fs.StringVar(&cfg.relayURL, "edge-relay-advertise", env("LAZYCLOUD_EDGE_RELAY_ADVERTISE", ""),
 		"host:port other servers reach the relay address at, such as the pod IP; defaults to -edge-relay-addr (LAZYCLOUD_EDGE_RELAY_ADVERTISE)")
+	fs.StringVar(&cfg.tcp.addr, "edge-tcp-addr", env("LAZYCLOUD_EDGE_TCP_ADDR", ""), "TCP pod traffic address, unset for none (LAZYCLOUD_EDGE_TCP_ADDR)")
+	fs.StringVar(&cfg.tcp.url, "edge-tcp-url", env("LAZYCLOUD_EDGE_TCP_URL", ""), "public tls://host:port TCP pods answer under (LAZYCLOUD_EDGE_TCP_URL)")
+	fs.StringVar(&cfg.tcp.cert, "edge-tcp-cert", env("LAZYCLOUD_EDGE_TCP_CERT", ""), "PEM certificate for *.<tcp host> (LAZYCLOUD_EDGE_TCP_CERT)")
+	fs.StringVar(&cfg.tcp.key, "edge-tcp-key", env("LAZYCLOUD_EDGE_TCP_KEY", ""), "PEM private key for -edge-tcp-cert (LAZYCLOUD_EDGE_TCP_KEY)")
 	fs.StringVar(&cfg.cloudflare.zone, "cloudflare-zone-id", env("LAZYCLOUD_CLOUDFLARE_ZONE_ID", ""), "Cloudflare for SaaS zone for custom domains (LAZYCLOUD_CLOUDFLARE_ZONE_ID)")
 	fs.StringVar(&cfg.compute.ServerAddress, "agent-server-addr", env("LAZYCLOUD_AGENT_SERVER_ADDR", ""), "host:port agents dial; defaults to -grpc-addr (LAZYCLOUD_AGENT_SERVER_ADDR)")
 	fs.StringVar(&cfg.grpcCert, "grpc-tls-cert", env("LAZYCLOUD_GRPC_TLS_CERT", ""), "PEM certificate chain the host connection serves; empty serves plaintext for loopback or a TLS-terminating ingress (LAZYCLOUD_GRPC_TLS_CERT)")
@@ -249,7 +256,7 @@ func serve(ctx context.Context, args []string) error {
 		for _, l := range []struct {
 			addr string
 			into *net.Listener
-		}{{cfg.httpAddr, &ls.http}, {cfg.grpcAddr, &ls.grpc}, {cfg.healthAddr, &ls.health}, {cfg.edgeAddr, &ls.edge}, {cfg.relayAddr, &ls.relay}} {
+		}{{cfg.httpAddr, &ls.http}, {cfg.grpcAddr, &ls.grpc}, {cfg.healthAddr, &ls.health}, {cfg.edgeAddr, &ls.edge}, {cfg.relayAddr, &ls.relay}, {cfg.tcp.addr, &ls.tcp}} {
 			if l.addr == "" {
 				continue
 			}
@@ -264,11 +271,11 @@ func serve(ctx context.Context, args []string) error {
 // listeners are the server's sockets; health is nil without a health
 // address.
 type listeners struct {
-	http, grpc, health, edge, relay net.Listener
+	http, grpc, health, edge, relay, tcp net.Listener
 }
 
 func (ls listeners) close() {
-	for _, l := range []net.Listener{ls.http, ls.grpc, ls.health, ls.edge, ls.relay} {
+	for _, l := range []net.Listener{ls.http, ls.grpc, ls.health, ls.edge, ls.relay, ls.tcp} {
 		if l != nil {
 			_ = l.Close()
 		}
@@ -284,7 +291,7 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, tel *te
 	changes := observability.NewChanges(pool, observability.DefaultChangesConfig(), tel.Registry, logger)
 	listener := database.NewListener(pool, logger, database.ChannelHost, database.ChannelTask, database.ChannelClaim,
 		database.ChannelLogs, database.ChannelImageBuild, database.ChannelImageBuildLog, storage.ChannelQueue,
-		execution.ChannelContainerLog)
+		execution.ChannelContainerLog, database.ChannelContainerOp)
 	store := storage.NewStorage(pool, cfg.objectStore)
 	exec := execution.NewExecution(pool)
 	masterKey, err := secrets.LoadFileKey(cfg.secretsKey)
@@ -306,7 +313,18 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, tel *te
 	if relayURL == "" {
 		relayURL = cfg.relayAddr
 	}
-	edgeConfig := edge.Config{URL: cfg.edgeURL, RelayAddress: relayURL}
+	edgeConfig := edge.Config{URL: cfg.edgeURL, RelayAddress: relayURL, TCPURL: cfg.tcp.url}
+	var tcpConfig edge.TCPConfig
+	if ls.tcp != nil {
+		if cfg.tcp.url == "" || cfg.tcp.cert == "" || cfg.tcp.key == "" {
+			return errors.New("-edge-tcp-addr needs -edge-tcp-url, -edge-tcp-cert and -edge-tcp-key")
+		}
+		cert, err := tls.LoadX509KeyPair(cfg.tcp.cert, cfg.tcp.key)
+		if err != nil {
+			return fmt.Errorf("load TCP pod certificate: %w", err)
+		}
+		tcpConfig = edge.TCPConfig{URL: cfg.tcp.url, Certificate: cert}
+	}
 	if cfg.cloudflare.zone != "" && cfg.cloudflare.token != "" {
 		edgeConfig.Domains = edge.NewCloudflare(edge.CloudflareAPI, cfg.cloudflare.zone, cfg.cloudflare.token)
 	}
@@ -314,11 +332,12 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, tel *te
 	if err != nil {
 		return err
 	}
+	sshKeys := execution.NewSSHKeys(pool, vault)
 	owners := api.Owners{
 		Identity: ident, Control: control.NewControl(pool), Storage: store,
 		Execution: exec, Images: im, Notifications: notifications.NewNotifications(pool, nil, logger),
 		Secrets: vault, Schedules: schedules.NewSchedules(pool, exec), Billing: bill, Listener: listener, Compute: comp,
-		Observability: obs, Changes: changes, Edge: edges,
+		Observability: obs, Changes: changes, Edge: edges, SSH: sshKeys,
 	}
 	handler, err := api.NewHandler(owners, cfg.api, logger)
 	if err != nil {
@@ -330,7 +349,7 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, tel *te
 	}
 	hosts := hostsession.NewServer(comp, exec, store, im, listener, hostsession.Config{
 		ImageTemplate: cfg.imageTemplate, TouchInterval: 10 * time.Second,
-		Secrets: vault, ContainerAPI: containerAPI, Observability: obs,
+		Secrets: vault, ContainerAPI: containerAPI, Observability: obs, SSH: sshKeys,
 	}, logger)
 	grpcOptions := append(hosts.ServerOptions(), tel.GRPCServerOption())
 	if cfg.grpcCert != "" {
@@ -373,6 +392,9 @@ func serveWith(ctx context.Context, pool *pgxpool.Pool, cfg serveConfig, tel *te
 		}
 		return nil
 	})
+	if ls.tcp != nil {
+		g.Go(func() error { return edges.ServeTCP(gctx, ls.tcp, tcpConfig) })
+	}
 	g.Go(func() error {
 		if err := relayServer.Serve(ls.relay); err != nil {
 			return fmt.Errorf("serve edge relay: %w", err)

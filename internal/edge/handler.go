@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/AmbientWare/lazycloud/internal/billing"
+
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -43,6 +45,12 @@ var hopHeaders = []string{ //nolint:gochecknoglobals // a constant list
 // admits the request and forwards it to a container, or runs a function.
 func (e *Edge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	if label, under := e.urls.hostLabel(r.Host); under {
+		if id, port, ok := portLabel(label); ok {
+			e.servePod(w, r, id, port)
+			return
+		}
+	}
 	t, err := e.resolve(ctx, r.Host)
 	if err != nil {
 		e.fail(w, r, err)
@@ -83,7 +91,15 @@ func (e *Edge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // fail maps an error to a response.
 func (e *Edge) fail(w http.ResponseWriter, r *http.Request, err error) {
 	var failed *releaseFailedError
+	var payment *billing.PaymentRequiredError
+	var limit *billing.LimitError
 	switch {
+	// Billing's refusals, with the reference's statuses: the account must
+	// pay, or is at a plan limit it can act on.
+	case errors.As(err, &payment):
+		writeError(w, http.StatusPaymentRequired, payment.Error())
+	case errors.As(err, &limit):
+		writeError(w, http.StatusConflict, limit.Error())
 	case errors.Is(err, errNoRoute):
 		writeError(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, identity.ErrUnauthenticated):

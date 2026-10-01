@@ -12,6 +12,7 @@ import (
 
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/database"
+	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
 // ChannelContainerLog wakes followers of a release's container output; the
@@ -170,6 +171,87 @@ func (e *Execution) StreamReleaseLogs(ctx context.Context, listener *database.Li
 		}
 		select {
 		case <-wake:
+		case <-idle.C:
+			if err := emit(nil); err != nil {
+				return err
+			}
+			idle.Reset(heartbeat)
+		case <-ctx.Done():
+			return nil
+		}
+	}
+}
+
+// StreamContainerOutput passes what a container wrote outside attempts
+// after the cursor to emit in batches. With follow it waits for more until
+// the container has stopped and its output is drained, or ctx ends, and
+// emits an empty batch whenever heartbeat passes without one.
+func (e *Execution) StreamContainerOutput(ctx context.Context, listener *database.Listener, workspace identity.WorkspaceID, container ContainerID, after int64, follow bool, heartbeat time.Duration, emit func([]ContainerLogEntry) error) error {
+	route, err := e.Route(ctx, container)
+	if err != nil {
+		return err
+	}
+	if route.Workspace != workspace {
+		return ErrNotFound
+	}
+	release, err := e.queries.ContainerReleaseOf(ctx, uuid.UUID(container))
+	if err != nil {
+		return fmt.Errorf("read container release: %w", err)
+	}
+	done := func(ctx context.Context) (bool, error) {
+		r, err := e.Route(ctx, container)
+		if err != nil {
+			return false, err
+		}
+		return r.State == ContainerStopped, nil
+	}
+	var wake <-chan struct{}
+	var idle *time.Timer
+	if follow {
+		var cancel func()
+		wake, cancel = listener.Subscribe(ChannelContainerLog, release.String())
+		defer cancel()
+		idle = time.NewTimer(heartbeat)
+		defer idle.Stop()
+	}
+	poll := time.NewTicker(time.Second)
+	defer poll.Stop()
+	for {
+		finished := !follow
+		if follow {
+			if finished, err = done(ctx); err != nil {
+				return err
+			}
+		}
+		for {
+			rows, err := e.queries.ContainerOutputAfter(ctx, ContainerOutputAfterParams{ContainerID: uuid.UUID(container), After: after, MaxEntries: logBatch})
+			if err != nil {
+				return fmt.Errorf("read container output: %w", err)
+			}
+			if len(rows) > 0 {
+				batch := make([]ContainerLogEntry, len(rows))
+				for n, row := range rows {
+					batch[n] = ContainerLogEntry{ID: row.ID, Stream: LogStream(row.Stream), Data: row.Data, Time: row.LoggedAt}
+				}
+				if err := emit(batch); err != nil {
+					return err
+				}
+				if idle != nil {
+					idle.Reset(heartbeat)
+				}
+				after = rows[len(rows)-1].ID
+			}
+			if len(rows) < logBatch {
+				break
+			}
+		}
+		if finished {
+			return nil
+		}
+		// A stop sends no output wake; the poll sees it.
+		select {
+		case <-wake:
+		case <-poll.C:
 		case <-idle.C:
 			if err := emit(nil); err != nil {
 				return err

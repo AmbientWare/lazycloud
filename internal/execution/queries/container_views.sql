@@ -3,13 +3,16 @@
 select c.id, a.name as app_name, w.name as function_name, r.id as release_id, r.version, c.state,
        c.stop_reason, c.exit_message, c.slots, c.cpu_millis, c.memory_bytes,
        c.created_at, c.ready_at, c.stopped_at,
-       (select count(*) from attempts at where at.container_id = c.id and at.state = 'running')::int as running
+       (select count(*) from attempts at where at.container_id = c.id and at.state = 'running')::int as running,
+       w.kind, c.purpose, c.exit_code, c.gpu_count, h.name as host_name
 from containers c
 join releases r on r.id = c.release_id
 join workloads w on w.id = r.workload_id
 join apps a on a.id = w.app_id
+left join hosts h on h.id = c.host_id
 where c.workspace_id = @workspace_id
   and c.id < @before
+  and (sqlc.narg('workload_id')::uuid is null or r.workload_id = sqlc.narg('workload_id'))
 order by c.id desc
 limit @max_rows;
 
@@ -19,14 +22,17 @@ limit @max_rows;
 select c.id, a.name as app_name, w.name as function_name, r.id as release_id, r.version, c.state,
        c.stop_reason, c.exit_message, c.slots, c.cpu_millis, c.memory_bytes,
        c.created_at, c.ready_at, c.stopped_at,
-       (select count(*) from attempts at where at.container_id = c.id and at.state = 'running')::int as running
+       (select count(*) from attempts at where at.container_id = c.id and at.state = 'running')::int as running,
+       w.kind, c.purpose, c.exit_code, c.gpu_count, h.name as host_name
 from containers c
 join releases r on r.id = c.release_id
 join workloads w on w.id = r.workload_id
 join apps a on a.id = w.app_id
+left join hosts h on h.id = c.host_id
 where c.workspace_id = @workspace_id
   and c.state <> 'stopped'
   and c.id < @before
+  and (sqlc.narg('workload_id')::uuid is null or r.workload_id = sqlc.narg('workload_id'))
 order by c.id desc
 limit @max_rows;
 
@@ -34,11 +40,13 @@ limit @max_rows;
 select c.id, a.name as app_name, w.name as function_name, r.id as release_id, r.version, c.state,
        c.stop_reason, c.exit_message, c.slots, c.cpu_millis, c.memory_bytes,
        c.created_at, c.ready_at, c.stopped_at,
-       (select count(*) from attempts at where at.container_id = c.id and at.state = 'running')::int as running
+       (select count(*) from attempts at where at.container_id = c.id and at.state = 'running')::int as running,
+       w.kind, c.purpose, c.exit_code, c.gpu_count, h.name as host_name
 from containers c
 join releases r on r.id = c.release_id
 join workloads w on w.id = r.workload_id
 join apps a on a.id = w.app_id
+left join hosts h on h.id = c.host_id
 where c.workspace_id = @workspace_id and c.id = @id;
 
 -- name: LockContainerInWorkspace :one

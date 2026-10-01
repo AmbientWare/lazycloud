@@ -31,6 +31,9 @@ const (
 	ChannelImageBuild Channel = "lc_image_build"
 	// ChannelImageBuildLog wakes followers of a build's output.
 	ChannelImageBuildLog Channel = "lc_image_build_log"
+	// ChannelContainerOp wakes waiters on a memory snapshot or a filesystem
+	// image when its host reports it; payload is its id.
+	ChannelContainerOp Channel = "lc_container_op"
 )
 
 // Listener holds one connection that LISTENs on a fixed set of channels and

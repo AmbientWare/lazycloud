@@ -120,17 +120,24 @@ func (q *Queries) RunningAttemptsOnContainer(ctx context.Context, containerID uu
 
 const stopContainer = `-- name: StopContainer :exec
 update containers
-set state = 'stopped', stop_reason = $1, exit_message = $2, stopped_at = now()
-where id = $3
+set state = 'stopped', stop_reason = $1, exit_message = $2, exit_code = $3,
+    stopped_at = now()
+where id = $4
 `
 
 type StopContainerParams struct {
 	StopReason  *string
 	ExitMessage *string
+	ExitCode    *int32
 	ID          uuid.UUID
 }
 
 func (q *Queries) StopContainer(ctx context.Context, arg StopContainerParams) error {
-	_, err := q.db.Exec(ctx, stopContainer, arg.StopReason, arg.ExitMessage, arg.ID)
+	_, err := q.db.Exec(ctx, stopContainer,
+		arg.StopReason,
+		arg.ExitMessage,
+		arg.ExitCode,
+		arg.ID,
+	)
 	return err
 }

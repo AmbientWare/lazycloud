@@ -145,6 +145,11 @@ func (s *Server) ListDeployments(ctx context.Context, req ListDeploymentsRequest
 	if err != nil {
 		return nil, err
 	}
+	for n := range page.Deployments {
+		if err := s.podDeployment(ctx, &page.Deployments[n]); err != nil {
+			return nil, err
+		}
+	}
 	return ListDeployments200JSONResponse{Deployments: page.Deployments, NextCursor: nextCursor(page.Next)}, nil
 }
 
@@ -156,6 +161,9 @@ func (s *Server) GetDeployment(ctx context.Context, req GetDeploymentRequestObje
 	}
 	d, err := s.owners.Control.GetDeployment(ctx, ws.ID, control.WorkloadID(req.Deployment))
 	if err != nil {
+		return nil, err
+	}
+	if err := s.podDeployment(ctx, &d); err != nil {
 		return nil, err
 	}
 	return GetDeployment200JSONResponse(d), nil
@@ -291,7 +299,7 @@ func (s *Server) ListContainers(ctx context.Context, req ListContainersRequestOb
 		return nil, err
 	}
 	live := req.Params.Live != nil && *req.Params.Live
-	page, err := s.owners.Execution.ListContainers(ctx, ws.ID, live, limitOf(req.Params.Limit), cursorOf(req.Params.Cursor))
+	page, err := s.owners.Execution.ListContainers(ctx, ws.ID, req.Params.Deployment, live, limitOf(req.Params.Limit), cursorOf(req.Params.Cursor))
 	if err != nil {
 		return nil, err
 	}
@@ -340,7 +348,10 @@ func containerOut(c execution.Container) apitypes.Container {
 		State: apitypes.ContainerState(c.State), ExitMessage: c.ExitMessage, Slots: c.Slots, RunningTasks: c.RunningTasks,
 		CpuMillis: c.CPUMillis, MemoryMib: c.MemoryBytes >> 20,
 		CreatedAt: c.CreatedAt, ReadyAt: c.ReadyAt, StoppedAt: c.StoppedAt,
+		Kind: &c.Kind, ExitCode: c.ExitCode, Host: c.Host, GpuCount: &c.GPUCount,
 	}
+	purpose := apitypes.ContainerPurpose(c.Purpose)
+	out.Purpose = &purpose
 	if c.StopReason != nil {
 		r := apitypes.StopReason(*c.StopReason)
 		out.StopReason = &r

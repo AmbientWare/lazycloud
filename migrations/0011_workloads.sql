@@ -29,6 +29,8 @@ alter table containers
     add column snapshot_id uuid,
     add column block_network boolean not null default false,
     add column allow_list text[] not null default '{}',
+    -- Counts policy changes after the start, which hosts apply in order.
+    add column network_version integer not null default 0,
     -- Ports exposed after the start; a release's own ports are always
     -- exposed.
     add column exposed_ports integer[] not null default '{}',

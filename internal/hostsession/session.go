@@ -194,9 +194,17 @@ func (sess *session) handle(ctx context.Context, msg *hostproto.HostMessage) err
 			return sess.server.grpcError(ctx, err)
 		}
 		sess.server.recordStartup(ctx, sess.host, body.Container)
+		if failed := body.Container.GetRestoreFailed(); failed != "" {
+			if snapshot, err := uuid.Parse(failed); err == nil {
+				if err := sess.server.execution.RestoreFailed(ctx, snapshot, "the host started the container cold"); err != nil {
+					return sess.server.grpcError(ctx, err)
+				}
+			}
+		}
 		return sess.sendActions(actions)
 	case *hostproto.HostMessage_Metrics:
 		sess.server.offerMetrics(sess.host, body.Metrics)
+		return nil
 	case *hostproto.HostMessage_Interruption:
 		at := time.Now()
 		if body.Interruption.GetReclaimAt() != nil {
@@ -275,6 +283,9 @@ func (sess *session) sync(ctx context.Context) error {
 				return err
 			}
 		}
+	}
+	if err := sess.syncWorkloads(ctx, commands, derived); err != nil {
+		return err
 	}
 	if err := sess.syncStopped(ctx, derived); err != nil {
 		return err
@@ -374,6 +385,24 @@ func (s *Server) startMessage(ctx context.Context, id string, start execution.St
 	if err != nil {
 		return nil, err
 	}
+	restore, err := s.restoreOut(ctx, start.Container)
+	if err != nil {
+		return nil, err
+	}
+	var function *hostproto.FunctionWorkload
+	var pod *hostproto.PodWorkload
+	if start.Spec.Pod != nil || start.Purpose == execution.PurposeShell {
+		if pod, err = s.podWorkload(ctx, start); err != nil {
+			return nil, err
+		}
+	} else {
+		function = &hostproto.FunctionWorkload{
+			Handler:   deref(start.Spec.Handler),
+			Slots:     int32(start.Slots), //nolint:gosec // The schema caps concurrency at 256.
+			InProcess: start.Spec.InProcess != nil && *start.Spec.InProcess,
+			Hooks:     hooksOut(start.Spec.LifecycleHooks),
+		}
+	}
 	return &hostproto.ServerMessage{CommandId: id, Body: &hostproto.ServerMessage_Start{Start: &hostproto.StartContainer{
 		ContainerId:   start.Container.String(),
 		Image:         image.Reference,
@@ -387,12 +416,11 @@ func (s *Server) startMessage(ctx context.Context, id string, start execution.St
 			DiskLimitBytes: diskLimit,
 			GpuCount:       gpusOf(start.Spec.Resources),
 		},
-		Function: &hostproto.FunctionWorkload{
-			Handler:   deref(start.Spec.Handler),
-			Slots:     int32(start.Slots), //nolint:gosec // The schema caps concurrency at 256.
-			InProcess: start.Spec.InProcess != nil && *start.Spec.InProcess,
-			Hooks:     hooksOut(start.Spec.LifecycleHooks),
-		},
+		Function:    function,
+		Pod:         pod,
+		Docker:      start.Spec.DockerEnabled != nil && *start.Spec.DockerEnabled,
+		Restore:     restore,
+		Disks:       disksOut(start.Spec),
 		Http:        httpServing(start.Spec),
 		Environment: env,
 		Volumes:     volumes,
@@ -515,6 +543,10 @@ func exitIn(e *hostproto.ContainerExit) execution.ContainerExit {
 		exit.Reason = execution.StopStartFailed
 	case hostproto.ExitReason_EXIT_REASON_OUT_OF_MEMORY:
 		exit.Reason = execution.StopOutOfMemory
+	case hostproto.ExitReason_EXIT_REASON_EXITED:
+		exit.Reason = execution.StopExited
+		code := int(e.GetExitCode())
+		exit.ExitCode = &code
 	case hostproto.ExitReason_EXIT_REASON_CRASHED, hostproto.ExitReason_EXIT_REASON_UNSPECIFIED:
 		exit.Reason = execution.StopCrashed
 	}
