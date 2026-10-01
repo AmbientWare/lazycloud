@@ -81,10 +81,10 @@ func newAccountLoops(pool *pgxpool.Pool, exec *execution.Execution, im *images.I
 	return loops, func() { cancelEmail(); cancelDeletion() }, nil
 }
 
-func (a *accountLoops) start(ctx context.Context, group *errgroup.Group, beats *heartbeats) {
+func (a *accountLoops) start(ctx context.Context, group *errgroup.Group, p *pace, beats *heartbeats) {
 	if a.deliver {
 		group.Go(func() error {
-			return loop(ctx, emailTick, a.emailWake, nil, beats.track("email delivery", emailTick, func(ctx context.Context) bool {
+			return p.loop(ctx, cadence{every: emailTick}, a.emailWake, nil, beats.track("email delivery", emailTick, func(ctx context.Context) bool {
 				result, err := a.notifications.Deliver(ctx)
 				if err != nil {
 					a.logger.ErrorContext(ctx, "email delivery pass", "error", err)
@@ -94,7 +94,7 @@ func (a *accountLoops) start(ctx context.Context, group *errgroup.Group, beats *
 		})
 	}
 	group.Go(func() error {
-		return loop(ctx, housekeepingTick, nil, nil, beats.track("housekeeping", housekeepingTick, func(ctx context.Context) bool {
+		return p.loop(ctx, cadence{every: housekeepingTick}, nil, nil, beats.track("housekeeping", housekeepingTick, func(ctx context.Context) bool {
 			if err := a.identity.Housekeeping(ctx, a.logger); err != nil {
 				a.logger.ErrorContext(ctx, "identity housekeeping", "error", err)
 			}
@@ -105,7 +105,7 @@ func (a *accountLoops) start(ctx context.Context, group *errgroup.Group, beats *
 		}))
 	})
 	group.Go(func() error {
-		return loop(ctx, deletionTick, a.deletionWake, nil, beats.track("workspace deletion", deletionTick, func(ctx context.Context) bool {
+		return p.loop(ctx, cadence{every: deletionTick, quiet: true}, a.deletionWake, nil, beats.track("workspace deletion", deletionTick, func(ctx context.Context) bool {
 			// A workspace with objects left reruns the pass at once.
 			return a.deleteWorkspaces(ctx)
 		}))

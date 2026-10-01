@@ -73,7 +73,7 @@ func TestSchedulerReadinessAndShutdown(t *testing.T) {
 
 // A loop that stops finishing passes fails /healthz and /readyz.
 func TestHeartbeatsReportStalledLoops(t *testing.T) {
-	beats := newHeartbeats()
+	beats := newHeartbeats(func() bool { return true })
 	pass := beats.track("placement", time.Second, func(context.Context) bool { return false })
 	beats.track("planning", time.Second, func(context.Context) bool { return false })
 	pass(t.Context())
@@ -92,7 +92,7 @@ func TestHeartbeatsReportStalledLoops(t *testing.T) {
 // and progress within a pass is a heartbeat, so slow work never stalls a
 // loop into a restart.
 func TestPassesEndAtTheirDeadlineAndProgressBeats(t *testing.T) {
-	beats := newHeartbeats()
+	beats := newHeartbeats(func() bool { return true })
 	beats.passTimeout = 50 * time.Millisecond
 	var beatDuringPass time.Time
 	pass := beats.track("workspace deletion", time.Second, func(ctx context.Context) bool {
