@@ -71,24 +71,36 @@ TestDisablingEndsCredentials, TestConcurrentMutualDemotionKeepsAnAdministrator
 
 ## Health and drain
 
-- Server: `/healthz` answers while the process serves; `/readyz` also pings
-  the database (2 s bound) and reports `draining` once SIGTERM arrives. The
+- Both binaries serve probes on `LAZYCLOUD_HEALTH_ADDR` (port 8090 in the
+  images and chart), a port no Service exposes.
+- Server: `/healthz` answers while the process serves; `/readyz` reports
+  `draining` once SIGTERM arrives. Readiness leaves the database out, so a
+  database outage does not pull every replica from the load balancer. The
   server keeps serving for `LAZYCLOUD_DRAIN_DELAY` (default 0, chart 5 s),
-  then ends host sessions and gives requests the 10 s shutdown grace. Probes
-  are on the API port, outside OpenAPI validation and authentication.
-- Scheduler: with `LAZYCLOUD_HEALTH_ADDR` set it serves `/readyz`, true once
-  every loop finished a pass, and `/healthz`, false when a loop has not
-  finished a pass within its interval plus 2 minutes. A wedged loop then
-  restarts the pod instead of silently stopping placement or recovery. On
-  SIGTERM the loops stop. A pass in flight is cancelled and its transaction
-  rolls back; another replica or the next start repeats it. The storage
-  sweep now runs through the same loop, so `Storage.RunSweeper` is gone.
+  then ends host sessions and gives requests the 10 s shutdown grace. The
+  NOTIFY listener and the token-use writer run on their own context, which
+  ends only after the HTTP and gRPC servers stop, so waits and claims open
+  during the drain still wake and token use is still recorded.
+- Scheduler: `/readyz` is true once every loop finished a pass; `/healthz`
+  fails when a loop has not beaten within its interval plus 2 minutes. Each
+  pass runs under a 1 minute deadline and may report progress as a beat, so
+  slow work ends the pass instead of restarting the pod; only a call that
+  ignores its deadline stalls a loop. On SIGTERM the loops stop. A pass in
+  flight is cancelled and its transaction rolls back; another replica or
+  the next start repeats it. The storage sweep runs through the same loop,
+  so `Storage.RunSweeper` is gone.
+- Workspace deletion deletes at most 1000 objects per workspace per pass with
+  batched DeleteObjects and reruns the pass at once while objects remain.
+  Before, one pass deleted every object one request at a time, so a large
+  workspace outlived the stall limit and liveness restarted every replica in
+  turn.
 - Version: `-ldflags -X main.version=` stamps all three binaries; server and
   scheduler log it at start, the agent reports it in its session.
 
-Tests: TestServeDrainsOnShutdown (cmd/server),
-TestSchedulerReadinessAndShutdown and TestHeartbeatsReportStalledLoops
-(cmd/scheduler). In the built images: `docker stop` of the server answered
+Tests: TestServeDrainsOnShutdown (cmd/server; fails if token use stops at
+drain start), TestSchedulerReadinessAndShutdown, TestHeartbeatsReportStalledLoops
+and TestPassesEndAtTheirDeadlineAndProgressBeats (cmd/scheduler),
+TestDeleteWorkspaceObjectsIsBoundedPerCall (internal/storage, 1001 objects). In the built images: `docker stop` of the server answered
 503 on `/readyz` for 3 s with `LAZYCLOUD_DRAIN_DELAY=3s` and exited 0 after
 3047 ms; the scheduler image became ready, then exited 0 on SIGTERM.
 
@@ -112,8 +124,10 @@ enter a build.
 
 Reproducibility: two builds of one commit, the second with `--no-cache`,
 gave identical image IDs for all three after two fixes. The runtimes now
-install third-party versions from uv.lock (they resolved fresh each build
-before), and drop `uv_cache.json`/`direct_url.json` and their RECORD lines.
+install third-party wheels from uv.lock with `--require-hashes` (they
+resolved fresh each build before), the workspace wheels pinned to the
+digests just built, and drop `uv_cache.json`/`direct_url.json` and their
+RECORD lines.
 uv.lock now resolves for Python 3.10 (root `requires-python = ">=3.10"`),
 which forks websockets (16.1.1 below 3.11) and numpy.
 
@@ -127,7 +141,9 @@ any pod changes, and per-deployment values are the reference's model. Argo
 already renders the reference chart through Helm.
 
 - Server Deployment (2 replicas, surge 1, unavailable 0) with Services
-  `server` (HTTP, port 80) and `server-hosts` (gRPC 8081). Scheduler
+  `server` (HTTP, port 80) and `server-hosts` (gRPC 8081). The schema holds
+  `server.hostService.type` to ClusterIP until the agent speaks TLS, and
+  check.sh proves a LoadBalancer value fails to render. Scheduler
   Deployment (2 replicas, no surge). Both spread across nodes and zones, have
   PodDisruptionBudgets with maxUnavailable 1, run nonroot with a read-only
   root filesystem and no capabilities, and set requests with memory limits
@@ -144,6 +160,10 @@ already renders the reference chart through Helm.
   Secrets Manager as hooks weighted before the migration Job (secrets-reader
   service account with an IRSA role, SecretStore, ExternalSecret with
   `creationPolicy: Orphan` so recreating the hook never deletes the Secret).
+- NetworkPolicy (on by default): ingress to every release pod is denied
+  except `networkPolicy.ingressFrom` peers to the API port, `hostCIDRs` to
+  the host port and `nodeCIDRs` to the health ports. Rendering fails without
+  `nodeCIDRs`, because the kubelet could not probe the pods.
 - Isolation: the chart lives at `deploy/helm`, not `deploy/chart`, which the
   production Argo Application reads from the `prod` branch. There is no Argo
   Application for it and no environment values file; `deploy/helm/
@@ -153,22 +173,41 @@ already renders the reference chart through Helm.
 defaults), kubeconform 0.8.0 `-strict` against Kubernetes 1.36.0 and the
 External Secrets CRD schemas (both schema sources pinned to commits), and
 terraform 1.16.4 `fmt -check`, `init -backend=false -lockfile=readonly` and
-`validate`, all from pinned images. Result: 21 resources valid; Terraform
+`validate`, all from pinned images. Result: 27 resources valid; Terraform
 valid.
 
 ## Terraform
 
-`deploy/terraform/images` adds only what the reference roots lack: ECR
-repositories `lazycloud/server` and `lazycloud/agent` (immutable tags, scan
-on push, untagged expiry after 14 days) and the `lazycloud-image-release`
-role. GitHub OIDC trusts it only for jobs in the `images` environment, and
-it may push only to these repositories and `lazycloud/scheduler`. The AWS
-provider is pinned to 6.67.0 with a committed lock.
+`deploy/terraform/images` adds only what the reference roots lack, and
+creates it in an order that never leaves the role trusting an ungated job:
+
+1. The GitHub `images` environment with required reviewers
+   (`release_reviewer_user_ids`, at least one) and a deployment rule
+   admitting `platform-v*` tags only.
+2. A tag ruleset: only repository administrators create, move or delete
+   `platform-v*` tags.
+3. The repository OIDC subject template `repo, context, job_workflow_ref,
+   ref`, so a subject names the workflow file and the tag.
+4. ECR repositories `lazycloud/release/{server,scheduler,agent}` (immutable
+   tags, scan on push, untagged expiry after 14 days), apart from the
+   reference's `lazycloud/<image>` repositories.
+5. The `lazycloud-image-release` role, which depends on 1 to 3. It trusts
+   only `release.yml` at a `platform-v*` tag in the `images` environment and
+   may push only to the three repositories.
+6. The environment variables the workflow reads (role, registry, region).
+
+The subject template applies to every workflow in the repository, so the
+reference deploy and release roles, which match `repo:...:environment:<env>`,
+would stop matching and Ship to production would fail. The root refuses to
+plan until `accept_repository_subject_change = true`, which an operator sets
+only after updating those two trusts. Release tags use `platform-v*`
+because the reference Ship workflow cuts `v*`.
+
+Providers are pinned (aws 6.67.0, github 6.13.0) with a committed lock.
 
 Reused from the reference rather than duplicated:
 
-- platform-core: the EKS cluster, its OIDC provider, `lazycloud/scheduler`
-  (release `v*` tags cannot collide with its commit tags) and
+- platform-core: the EKS cluster, its OIDC provider and
   `lazycloud/workload-images`.
 - platform-deployment, instantiated for a new non-production deployment name:
   the database, buckets, Secrets Manager documents, the control-plane role
@@ -182,10 +221,11 @@ Reused from the reference rather than duplicated:
 
 - `.github/workflows/deploy.yml`: on PRs touching deploy, cmd, Go or Python
   sources, runs `deploy/check.sh` and builds all images without pushing.
-- `.github/workflows/release.yml`: on a `v*` tag, calls go.yml, python.yml,
-  web.yml and deploy.yml (each gained `workflow_call`), then in the `images`
-  environment assumes the release role over OIDC, logs in to ECR, pushes
-  with bake and writes the digests to the job summary. It deploys nothing
+- `.github/workflows/release.yml`: on a `platform-v*` tag, calls go.yml,
+  python.yml, web.yml and deploy.yml (each gained `workflow_call`), then,
+  after a reviewer approves the `images` environment, assumes the release
+  role over OIDC, logs in to ECR, pushes with bake as version `v...` and
+  writes the digests to the job summary. It deploys nothing
   and says so; there is no Ship equivalent, and the checks are owner tests,
   not platform acceptance. Third-party actions are pinned by commit.
 - actionlint 1.7.12 reports only the repository's existing `ubuntu-26.04`
@@ -216,9 +256,13 @@ Separate `Propose:` commits for the integrator:
 - `Remove Storage.RunSweeper now that the scheduler loop runs Sweep`.
 - `Lock the Python workspace for 3.10 so managed runtimes build from uv.lock`
   (root pyproject.toml and uv.lock).
-- `Accept group-readable master key files, as Kubernetes mounts secrets`
-  (internal/secrets: the mask is now 0o027, so group read passes and group
-  write or any other access still fails).
+- `Accept group-readable master key files, as Kubernetes mounts secrets` and
+  `Allow a group-readable master key only when the process is in the file's
+  group` (internal/secrets: group read passes only for the process's own or
+  a supplementary group; group write or any other access fails).
+- `Delete workspace objects in bounded batches per deletion pass`
+  (internal/storage `DeleteWorkspaceObjects` now returns whether the prefix
+  is empty).
 - go.yml, python.yml and web.yml gained `workflow_call` so the release
   workflow can require them.
 
@@ -226,11 +270,14 @@ Separate `Propose:` commits for the integrator:
 
 Each step changes AWS, GitHub or a cluster, and none has run.
 
-1. Apply `deploy/terraform/images` with the `default` profile after checking
-   the STS identity, using the operator backend file.
-2. In GitHub, create the `images` environment, restrict it to `v*` tags, and
-   set `AWS_IMAGE_RELEASE_ROLE_ARN` and `IMAGE_REGISTRY` from the outputs.
-3. Push a `v*` tag to publish images.
+1. Update the reference deploy and release role trusts to the new subject
+   format (`repo:<repo>:environment:<env>:job_workflow_ref:...:ref:...`).
+2. Apply `deploy/terraform/images` with the `default` profile after checking
+   the STS identity, using the operator backend file, a repository-admin
+   `GITHUB_TOKEN`, the reviewer ids and `accept_repository_subject_change =
+   true`. It creates the environment, rules and variables before the role.
+3. Confirm the next reference Ship still assumes its deploy role, then push
+   a `platform-v*` tag and approve the release job.
 4. Instantiate the reference platform-deployment for a non-production name
    with the service account map above, and add the master key and direct
    database URL to its secret documents.
