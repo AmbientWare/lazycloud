@@ -11,7 +11,9 @@ import {
 import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { CurrentSession, Workspace } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
+
+type Workspace = Schemas["Workspace"];
 import { currentSessionQueryOptions } from "@/lib/queries/auth";
 import { updateWorkspace } from "@/lib/queries/workspace";
 
@@ -86,7 +88,7 @@ describe("workspace identity controller", () => {
         `/w/${expectedWorkspace}/apps/app-1?settings=workspace#details`,
       );
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-      expect(updateWorkspaceMock).toHaveBeenCalledWith(target.id, "renamed");
+      expect(updateWorkspaceMock).toHaveBeenCalledWith(targetName, "renamed");
       router.history.destroy();
     },
   );
@@ -94,7 +96,7 @@ describe("workspace identity controller", () => {
   it("normalizes one rename and replaces only the matching directory entry", async () => {
     const target = workspace("workspace-1", "acme");
     const sibling = workspace("workspace-2", "platform");
-    const accepted = { ...target, name: "platform_team", updated_at: "2026-07-21T12:00:00Z" };
+    const accepted = { ...target, name: "platform-team" };
     const queryClient = testQueryClient();
     const onRenamed = vi.fn();
     queryClient.setQueryData(currentSessionQueryOptions().queryKey, {
@@ -104,16 +106,16 @@ describe("workspace identity controller", () => {
     updateWorkspaceMock.mockResolvedValue(accepted);
     const { result } = renderController({ queryClient, workspace: target, onRenamed });
 
-    act(() => result.current.setDraftName("  platform_team  "));
+    act(() => result.current.setDraftName("  platform-team  "));
     act(() => result.current.save());
 
     await waitFor(() => expect(result.current.mode).toBe("saved"));
-    expect(updateWorkspaceMock).toHaveBeenCalledWith("workspace-1", "platform_team");
+    expect(updateWorkspaceMock).toHaveBeenCalledWith("acme", "platform-team");
     expect(queryClient.getQueryData(currentSessionQueryOptions().queryKey)).toEqual({
       user: sessionUser(),
       workspaces: [accepted, sibling],
     });
-    expect(onRenamed).toHaveBeenCalledWith("platform_team");
+    expect(onRenamed).toHaveBeenCalledWith("platform-team");
   });
 
   it("keeps a failed draft and exact error available for retry", async () => {
@@ -170,7 +172,7 @@ describe("workspace identity controller", () => {
     expect(result.current.canSave).toBe(false);
     act(() => result.current.save());
 
-    for (const invalid of ["", "   ", "Acme", "1acme", "acme team", "a".repeat(64)]) {
+    for (const invalid of ["", "   ", "Acme", "1acme", "acme team", "acme_team", "a".repeat(64)]) {
       act(() => result.current.setDraftName(invalid));
       expect(result.current.canSave).toBe(false);
       act(() => result.current.save());
@@ -229,18 +231,16 @@ function controllerWrapper(queryClient: QueryClient) {
     createElement(QueryClientProvider, { client: queryClient }, children);
 }
 
-function sessionUser(): CurrentSession["user"] {
+function sessionUser(): Schemas["User"] {
   return {
     id: "user-1",
     display_name: "owner",
     email: "",
     avatar_url: "",
-    github_user_id: "",
     github_login: "",
-    role: "administrator",
+    is_admin: true,
     status: "active",
     created_at: "2026-07-21T10:00:00Z",
-    updated_at: "2026-07-21T10:00:00Z",
   };
 }
 
@@ -248,16 +248,9 @@ function workspace(id: string, name: string): Workspace {
   return {
     id,
     name,
-    status: "active",
-    signing_key_prefix: null,
-    primary_token_id: null,
-    concurrency_limit_id: null,
-    connection_id: null,
-    storage: { backend: "local", bucket: null, prefix: "" },
-    labels: {},
-    metadata: {},
+    state: "active",
+    role: "owner",
     created_at: "2026-07-21T10:00:00Z",
-    updated_at: "2026-07-21T10:00:00Z",
   };
 }
 

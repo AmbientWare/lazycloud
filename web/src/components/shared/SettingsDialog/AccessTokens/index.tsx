@@ -19,7 +19,7 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
-import type { AuthToken } from "@/lib/api/schemas";
+import type { Schemas } from "@/lib/api/client";
 
 import {
   useAccessTokensController,
@@ -111,7 +111,7 @@ function TokenTable({
   tokens,
 }: {
   controller: AccessTokensController;
-  tokens: readonly AuthToken[];
+  tokens: readonly Schemas["Token"][];
 }) {
   return (
     <div>
@@ -134,7 +134,13 @@ function TokenTable({
   );
 }
 
-function TokenRow({ token, controller }: { token: AuthToken; controller: AccessTokensController }) {
+function TokenRow({
+  token,
+  controller,
+}: {
+  token: Schemas["Token"];
+  controller: AccessTokensController;
+}) {
   const active = token.status === "active";
   const owned = controller.actionTokenId === token.id;
   const confirming =
@@ -157,9 +163,6 @@ function TokenRow({ token, controller }: { token: AuthToken; controller: AccessT
       <div className="min-w-0 lg:col-span-2">
         <div className="micro-label mb-1 lg:hidden">Status</div>
         <StatusChip status={token.status} live={active} />
-        {token.disabled_by_admin ? (
-          <div className="mt-1 text-xs text-warning">Disabled by admin</div>
-        ) : null}
       </div>
       <TokenTime label="Expires" value={token.expires_at} fallback="Never" />
       <TokenTime label="Last used" value={token.last_used_at} fallback="Never" />
@@ -205,7 +208,7 @@ function TokenTime({
   fallback,
 }: {
   label: string;
-  value: string | null;
+  value: string | undefined;
   fallback: string;
 }) {
   return (

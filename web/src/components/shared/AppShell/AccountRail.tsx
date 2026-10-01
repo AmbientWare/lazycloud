@@ -1,7 +1,7 @@
 import { useId, useRef, useState } from "react";
 import { ChevronUp, LogOut, Settings } from "lucide-react";
 
-import { useSession } from "@/components/shared/AuthGate/session";
+import { accountName, useSession } from "@/components/shared/AuthGate/session";
 import { CreditPrompt } from "@/components/shared/AppShell/CreditPrompt";
 import { cn } from "@/lib/utils";
 
@@ -85,10 +85,10 @@ export function AccountRail({
             aria-hidden="true"
             className="flex size-5 shrink-0 items-center justify-center rounded-md bg-muted text-[10px] font-medium text-muted-foreground"
           >
-            {user.display_name.slice(0, 1).toUpperCase()}
+            {accountName(user).slice(0, 1).toUpperCase()}
           </span>
         )}
-        <span className="min-w-0 flex-1 truncate">{user.display_name}</span>
+        <span className="min-w-0 flex-1 truncate">{accountName(user)}</span>
         <ChevronUp
           aria-hidden="true"
           className={cn("size-3.5 shrink-0 transition-transform", open && "rotate-180")}

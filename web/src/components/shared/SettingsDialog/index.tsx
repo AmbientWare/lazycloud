@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { useSession } from "@/components/shared/AuthGate/session";
+import { accountName, useSession } from "@/components/shared/AuthGate/session";
 import { LinearTab, LinearTabsList } from "@/components/shared/LinearSelect";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
@@ -23,7 +23,7 @@ export function SettingsDialog({
   onClose: () => void;
 }) {
   const { user } = useSession();
-  const admin = user.role === "administrator";
+  const admin = user.is_admin;
   // A member can arrive at `?settings=admin` by typing it. The tab is not
   // rendered for them, so the view is shown as billing and the address is
   // corrected to say so.
@@ -43,7 +43,7 @@ export function SettingsDialog({
         <header className="shrink-0 border-b border-border px-4 py-3 pr-12">
           <DialogTitle className="text-base">Settings</DialogTitle>
           <DialogDescription className="sr-only">
-            Signed in as {user.display_name}
+            Signed in as {accountName(user)}
           </DialogDescription>
         </header>
 
