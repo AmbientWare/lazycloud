@@ -25,17 +25,18 @@ func (q *Queries) CountStartFailure(ctx context.Context, id uuid.UUID) (int32, e
 const failQueuedTasksOfRelease = `-- name: FailQueuedTasksOfRelease :many
 update tasks
 set status = 'failed', failure = $1, finished_at = now()
-where release_id = $2 and status = 'queued'
+where id = any($2::uuid[]) and status = 'queued'
 returning id
 `
 
 type FailQueuedTasksOfReleaseParams struct {
-	Failure   []byte
-	ReleaseID uuid.UUID
+	Failure []byte
+	Ids     []uuid.UUID
 }
 
+// The caller holds the rows from LockQueuedWithDependents.
 func (q *Queries) FailQueuedTasksOfRelease(ctx context.Context, arg FailQueuedTasksOfReleaseParams) ([]uuid.UUID, error) {
-	rows, err := q.db.Query(ctx, failQueuedTasksOfRelease, arg.Failure, arg.ReleaseID)
+	rows, err := q.db.Query(ctx, failQueuedTasksOfRelease, arg.Failure, arg.Ids)
 	if err != nil {
 		return nil, err
 	}

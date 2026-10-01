@@ -6,7 +6,6 @@ from lazycloud.control import ControlClientConfig
 
 if TYPE_CHECKING:
     from lazycloud.clients.gateway.control import GatewayControlClient
-    from lazycloud.clients.observability.control import ObservabilityControlClient
     from lazycloud.clients.pod.control import PodControlClient
     from lazycloud.clients.resource.control import ResourceControlClient
 
@@ -33,17 +32,6 @@ def resource_control_client(config: ControlClientConfig) -> ResourceControlClien
     )
 
 
-def observability_control_client(config: ControlClientConfig) -> ObservabilityControlClient:
-    from lazycloud.clients.observability.control import ObservabilityControlClient
-
-    return ObservabilityControlClient.from_endpoint(
-        config.endpoint,
-        token=config.token,
-        workspace=config.workspace,
-        timeout_seconds=config.timeout_seconds,
-    )
-
-
 def pod_control_client(config: ControlClientConfig) -> PodControlClient:
     from lazycloud.clients.pod.control import PodControlClient
 
@@ -57,7 +45,6 @@ def pod_control_client(config: ControlClientConfig) -> PodControlClient:
 
 __all__ = [
     "gateway_control_client",
-    "observability_control_client",
     "pod_control_client",
     "resource_control_client",
 ]

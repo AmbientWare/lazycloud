@@ -24,6 +24,7 @@ alter table tasks
     add column scheduled_for timestamptz;
 
 create index tasks_root on tasks (root_task_id) where root_task_id is not null;
+create index tasks_parent on tasks (parent_task_id) where parent_task_id is not null;
 
 -- One task per occurrence of a schedule.
 create unique index tasks_schedule_occurrence on tasks (workload_id, scheduled_for)

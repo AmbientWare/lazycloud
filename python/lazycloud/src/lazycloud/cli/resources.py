@@ -5,9 +5,11 @@ import sys
 import time
 import webbrowser
 from typing import Annotated, Any
+from uuid import UUID
 
 import typer
 from pydantic import TypeAdapter
+from shared.api import Container, ContainerState, StopReason
 from shared.aws_connections import (
     AwsAccountConnectionPhase,
     AwsAccountNetwork,
@@ -16,14 +18,8 @@ from shared.aws_connections import (
 from shared.http.aws_connections import (
     AwsConnectionResponse,
 )
-from shared.http.compute import (
-    ContainerResponse,
-    MachineJoinCommandRequest,
-)
-from shared.http.gateway import (
-    AttachToContainerResponse,
-    CheckpointContainerRequest,
-)
+from shared.http.compute import MachineJoinCommandRequest
+from shared.http.gateway import CheckpointContainerRequest
 
 from lazycloud._terminal.cards import notice_card, result_card
 from lazycloud._terminal.formatting import duration
@@ -38,12 +34,14 @@ from lazycloud.cli.components.output import (
     write_stream,
 )
 from lazycloud.cli.control import (
+    api_session,
     compute_client,
     gateway_client,
     resource_client,
 )
 from lazycloud.cli.machine_join import agent_join_interrupted, build_machine_join_command
 from lazycloud.clients.aws import create_connection_stack
+from lazycloud.session.task import follow_log_stream
 
 container_app = typer.Typer(help="Inspect and manage containers.")
 machine_app = typer.Typer(help="Manage self-hosted machines.")
@@ -437,25 +435,28 @@ def container_list(
     limit: Annotated[int, typer.Option("--limit", min=1, max=1000)] = 100,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
-    client = resource_client(workspace=workspace)
-    containers: list[ContainerResponse] = []
-    cursor = ""
-    seen_cursors: set[str] = set()
+    client, selected_workspace = api_session(workspace=workspace)
+    containers: list[Container] = []
+    cursor: str | None = None
     while len(containers) < limit:
-        response = client.list_containers(
-            limit=min(100, limit - len(containers)),
-            cursor=cursor or None,
+        page = client.list_containers(
+            selected_workspace, limit=limit - len(containers), cursor=cursor
         )
-        containers.extend(item.container for item in response.data)
-        if not response.next or response.next in seen_cursors:
+        containers.extend(page.containers)
+        if page.next_cursor is None:
             break
-        seen_cursors.add(response.next)
-        cursor = response.next
+        cursor = page.next_cursor
     if json_output_enabled(ctx):
         print_payload(ctx, [item.model_dump(mode="json") for item in containers])
         return
     rows: list[list[Any]] = [
-        [item.name, item.status.value, item.exit_code, item.id] for item in containers
+        [
+            item.function,
+            item.state.value,
+            item.stop_reason.value if item.stop_reason is not None else None,
+            str(item.id),
+        ]
+        for item in containers
     ]
     console.print(table("Containers", ["name", "status", "exit", "id"], rows))
 
@@ -466,33 +467,34 @@ def container_attach(
     container_id: str,
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
+    client, selected_workspace = api_session(workspace=workspace)
+    container = _container_uuid(container_id)
     chunks: list[str] = []
-    terminal: AttachToContainerResponse | None = None
     json_output = json_output_enabled(ctx)
-    for response in gateway_client(workspace=workspace).attach_to_container_events(container_id):
-        if response.error_msg:
-            raise typer.BadParameter(response.error_msg)
-        if response.output:
-            chunks.append(response.output)
-            if not json_output:
-                write_stream(response.output)
-        if response.done:
-            terminal = response
-            break
-    if terminal is None:
+    for entry in follow_log_stream(
+        lambda after: client.stream_container_logs(
+            selected_workspace, container, after=after, follow=True
+        )
+    ):
+        line = entry.data if entry.data.endswith("\n") else f"{entry.data}\n"
+        chunks.append(line)
+        if not json_output:
+            write_stream(line)
+    finished = client.get_container(selected_workspace, container)
+    if finished.state is not ContainerState.stopped or finished.stop_reason is None:
         raise typer.BadParameter("container attach stream ended before the container completed")
-    terminal = terminal.model_copy(update={"output": "".join(chunks)})
+    reason = finished.stop_reason
     emit(
         ctx,
-        payload=terminal.model_dump(mode="json"),
+        payload={**finished.model_dump(mode="json"), "output": "".join(chunks)},
         view=result_card(
-            {"exit_code": terminal.exit_code if terminal.exit_code is not None else "Not reported"},
+            {"exit": reason.value},
             title="Container finished",
-            tone="success" if terminal.exit_code == 0 else "warning",
+            tone="success" if reason is StopReason.stopped else "warning",
         ),
     )
-    if terminal.exit_code != 0:
-        raise typer.Exit(terminal.exit_code if terminal.exit_code is not None else 1)
+    if reason is not StopReason.stopped:
+        raise typer.Exit(1)
 
 
 @container_app.command("checkpoint", help="Create a container checkpoint.")
@@ -521,10 +523,10 @@ def container_stop(
     container_ids: Annotated[list[str], typer.Argument()],
     workspace: Annotated[str | None, typer.Option("--workspace")] = None,
 ) -> None:
-    client = resource_client(workspace=workspace)
+    client, selected_workspace = api_session(workspace=workspace)
     results: list[dict[str, object]] = []
     for container_id in container_ids:
-        client.stop_container(container_id)
+        client.stop_container(selected_workspace, _container_uuid(container_id))
         results.append({"container_id": container_id})
     emit(
         ctx,
@@ -534,6 +536,13 @@ def container_stop(
             tone="success",
         ),
     )
+
+
+def _container_uuid(value: str) -> UUID:
+    try:
+        return UUID(value)
+    except ValueError:
+        raise typer.BadParameter(f"not a container id: {value}") from None
 
 
 @machine_app.command("list", help="List joined machines.")

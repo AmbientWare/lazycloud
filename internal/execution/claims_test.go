@@ -150,9 +150,9 @@ func TestClaimCapsTotalInputBytes(t *testing.T) {
 	e := NewExecution(pool)
 	l := listen(t, pool)
 	f := deployedFunction(t, pool, `{"max_pending_tasks": 10}`)
-	input := Payload{Encoding: EncodingCloudpickle, Data: make([]byte, MaxPayloadBytes)}
+	input := TaskInput{Payload: Payload{Encoding: EncodingCloudpickle, Data: make([]byte, MaxPayloadBytes)}}
 	if _, err := e.Submit(t.Context(), SubmitRequest{
-		Workspace: f.workspace, App: "reports", Function: "summarize", Inputs: []Payload{input, input, input, input, input},
+		Workspace: f.workspace, App: "reports", Function: "summarize", Inputs: []TaskInput{input, input, input, input, input},
 	}); err != nil {
 		t.Fatal(err)
 	}

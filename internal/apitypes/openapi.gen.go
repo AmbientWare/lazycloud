@@ -12,8 +12,9 @@ import (
 
 // Defines values for AppState.
 const (
-	AppStateActive AppState = "active"
-	AppStatePaused AppState = "paused"
+	AppStateActive  AppState = "active"
+	AppStateDeleted AppState = "deleted"
+	AppStatePaused  AppState = "paused"
 )
 
 // Valid indicates whether the value is a known member of the AppState enum.
@@ -21,7 +22,36 @@ func (e AppState) Valid() bool {
 	switch e {
 	case AppStateActive:
 		return true
+	case AppStateDeleted:
+		return true
 	case AppStatePaused:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ContainerState.
+const (
+	ContainerStateDraining ContainerState = "draining"
+	ContainerStatePending  ContainerState = "pending"
+	ContainerStateReady    ContainerState = "ready"
+	ContainerStateStarting ContainerState = "starting"
+	ContainerStateStopped  ContainerState = "stopped"
+)
+
+// Valid indicates whether the value is a known member of the ContainerState enum.
+func (e ContainerState) Valid() bool {
+	switch e {
+	case ContainerStateDraining:
+		return true
+	case ContainerStatePending:
+		return true
+	case ContainerStateReady:
+		return true
+	case ContainerStateStarting:
+		return true
+	case ContainerStateStopped:
 		return true
 	default:
 		return false
@@ -55,6 +85,30 @@ func (e DeliveryState) Valid() bool {
 	case DeliveryStateQueued:
 		return true
 	case DeliveryStateSent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DeploymentPlanAction.
+const (
+	Add      DeploymentPlanAction = "add"
+	Redeploy DeploymentPlanAction = "redeploy"
+	Remove   DeploymentPlanAction = "remove"
+	Retain   DeploymentPlanAction = "retain"
+)
+
+// Valid indicates whether the value is a known member of the DeploymentPlanAction enum.
+func (e DeploymentPlanAction) Valid() bool {
+	switch e {
+	case Add:
+		return true
+	case Redeploy:
+		return true
+	case Remove:
+		return true
+	case Retain:
 		return true
 	default:
 		return false
@@ -159,17 +213,20 @@ func (e ErrorCode) Valid() bool {
 
 // Defines values for FailureKind.
 const (
-	FailureKindLoadError   FailureKind = "load_error"
-	FailureKindLost        FailureKind = "lost"
-	FailureKindStartFailed FailureKind = "start_failed"
-	FailureKindSystem      FailureKind = "system"
-	FailureKindTimeout     FailureKind = "timeout"
-	FailureKindUserError   FailureKind = "user_error"
+	FailureKindDependencyFailed FailureKind = "dependency_failed"
+	FailureKindLoadError        FailureKind = "load_error"
+	FailureKindLost             FailureKind = "lost"
+	FailureKindStartFailed      FailureKind = "start_failed"
+	FailureKindSystem           FailureKind = "system"
+	FailureKindTimeout          FailureKind = "timeout"
+	FailureKindUserError        FailureKind = "user_error"
 )
 
 // Valid indicates whether the value is a known member of the FailureKind enum.
 func (e FailureKind) Valid() bool {
 	switch e {
+	case FailureKindDependencyFailed:
+		return true
 	case FailureKindLoadError:
 		return true
 	case FailureKindLost:
@@ -364,6 +421,24 @@ func (e InvitationRole) Valid() bool {
 	}
 }
 
+// Defines values for LiveAppState.
+const (
+	LiveAppStateActive LiveAppState = "active"
+	LiveAppStatePaused LiveAppState = "paused"
+)
+
+// Valid indicates whether the value is a known member of the LiveAppState enum.
+func (e LiveAppState) Valid() bool {
+	switch e {
+	case LiveAppStateActive:
+		return true
+	case LiveAppStatePaused:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for LogEntryStream.
 const (
 	LogEntryStreamStderr LogEntryStream = "stderr"
@@ -387,16 +462,16 @@ func (e LogEntryStream) Valid() bool {
 
 // Defines values for PayloadEncoding.
 const (
-	Cloudpickle PayloadEncoding = "cloudpickle"
-	Json        PayloadEncoding = "json"
+	PayloadEncodingCloudpickle PayloadEncoding = "cloudpickle"
+	PayloadEncodingJson        PayloadEncoding = "json"
 )
 
 // Valid indicates whether the value is a known member of the PayloadEncoding enum.
 func (e PayloadEncoding) Valid() bool {
 	switch e {
-	case Cloudpickle:
+	case PayloadEncodingCloudpickle:
 		return true
-	case Json:
+	case PayloadEncodingJson:
 		return true
 	default:
 		return false
@@ -430,6 +505,90 @@ const (
 func (e ScheduleTimezone) Valid() bool {
 	switch e {
 	case UTC:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for StopReason.
+const (
+	StopReasonCrashed     StopReason = "crashed"
+	StopReasonHostLost    StopReason = "host_lost"
+	StopReasonLoadError   StopReason = "load_error"
+	StopReasonOutOfMemory StopReason = "out_of_memory"
+	StopReasonStartFailed StopReason = "start_failed"
+	StopReasonStopped     StopReason = "stopped"
+)
+
+// Valid indicates whether the value is a known member of the StopReason enum.
+func (e StopReason) Valid() bool {
+	switch e {
+	case StopReasonCrashed:
+		return true
+	case StopReasonHostLost:
+		return true
+	case StopReasonLoadError:
+		return true
+	case StopReasonOutOfMemory:
+		return true
+	case StopReasonStartFailed:
+		return true
+	case StopReasonStopped:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskInputEncoding.
+const (
+	TaskInputEncodingCloudpickle TaskInputEncoding = "cloudpickle"
+	TaskInputEncodingJson        TaskInputEncoding = "json"
+)
+
+// Valid indicates whether the value is a known member of the TaskInputEncoding enum.
+func (e TaskInputEncoding) Valid() bool {
+	switch e {
+	case TaskInputEncodingCloudpickle:
+		return true
+	case TaskInputEncodingJson:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskPendingReason.
+const (
+	TaskPendingReasonCapacityBusy        TaskPendingReason = "capacity_busy"
+	TaskPendingReasonCapacityLimit       TaskPendingReason = "capacity_limit"
+	TaskPendingReasonCapacityUnavailable TaskPendingReason = "capacity_unavailable"
+	TaskPendingReasonDependencies        TaskPendingReason = "dependencies"
+	TaskPendingReasonProvisioningCompute TaskPendingReason = "provisioning_compute"
+	TaskPendingReasonQueued              TaskPendingReason = "queued"
+	TaskPendingReasonRetry               TaskPendingReason = "retry"
+	TaskPendingReasonStartingContainer   TaskPendingReason = "starting_container"
+)
+
+// Valid indicates whether the value is a known member of the TaskPendingReason enum.
+func (e TaskPendingReason) Valid() bool {
+	switch e {
+	case TaskPendingReasonCapacityBusy:
+		return true
+	case TaskPendingReasonCapacityLimit:
+		return true
+	case TaskPendingReasonCapacityUnavailable:
+		return true
+	case TaskPendingReasonDependencies:
+		return true
+	case TaskPendingReasonProvisioningCompute:
+		return true
+	case TaskPendingReasonQueued:
+		return true
+	case TaskPendingReasonRetry:
+		return true
+	case TaskPendingReasonStartingContainer:
 		return true
 	default:
 		return false
@@ -496,6 +655,42 @@ func (e UploadTargetMethod) Valid() bool {
 	}
 }
 
+// Defines values for WorkloadKind.
+const (
+	WorkloadKindFunction WorkloadKind = "function"
+)
+
+// Valid indicates whether the value is a known member of the WorkloadKind enum.
+func (e WorkloadKind) Valid() bool {
+	switch e {
+	case WorkloadKindFunction:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for WorkloadState.
+const (
+	WorkloadStateActive  WorkloadState = "active"
+	WorkloadStateDeleted WorkloadState = "deleted"
+	WorkloadStateStopped WorkloadState = "stopped"
+)
+
+// Valid indicates whether the value is a known member of the WorkloadState enum.
+func (e WorkloadState) Valid() bool {
+	switch e {
+	case WorkloadStateActive:
+		return true
+	case WorkloadStateDeleted:
+		return true
+	case WorkloadStateStopped:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for WorkspaceRole.
 const (
 	WorkspaceRoleAdministrator WorkspaceRole = "administrator"
@@ -547,13 +742,27 @@ type App struct {
 	Id        openapi_types.UUID `json:"id"`
 	Name      AppName            `json:"name"`
 	State     AppState           `json:"state"`
-}
 
-// AppState defines model for App.State.
-type AppState string
+	// Workloads Deployed workloads that are not deleted.
+	Workloads int `json:"workloads"`
+}
 
 // AppName defines model for AppName.
 type AppName = string
+
+// AppPage defines model for AppPage.
+type AppPage struct {
+	Apps []App `json:"apps"`
+
+	// NextCursor Present when another page follows.
+	NextCursor *string `json:"next_cursor,omitempty"`
+}
+
+// AppRef An app name or id.
+type AppRef = string
+
+// AppState defines model for AppState.
+type AppState string
 
 // Autoscaler defines model for Autoscaler.
 type Autoscaler struct {
@@ -561,6 +770,38 @@ type Autoscaler struct {
 	MinContainers     *int `json:"min_containers,omitempty"`
 	TasksPerContainer *int `json:"tasks_per_container,omitempty"`
 }
+
+// Container defines model for Container.
+type Container struct {
+	App         AppName            `json:"app"`
+	CpuMillis   int64              `json:"cpu_millis"`
+	CreatedAt   time.Time          `json:"created_at"`
+	ExitMessage *string            `json:"exit_message,omitempty"`
+	Function    WorkloadName       `json:"function"`
+	Id          openapi_types.UUID `json:"id"`
+	MemoryMib   int64              `json:"memory_mib"`
+	ReadyAt     *time.Time         `json:"ready_at,omitempty"`
+	ReleaseId   openapi_types.UUID `json:"release_id"`
+
+	// RunningTasks Attempts running now.
+	RunningTasks int            `json:"running_tasks"`
+	Slots        int            `json:"slots"`
+	State        ContainerState `json:"state"`
+	StopReason   *StopReason    `json:"stop_reason,omitempty"`
+	StoppedAt    *time.Time     `json:"stopped_at,omitempty"`
+
+	// Version The deployed version of the release; absent for a working-tree release.
+	Version *int `json:"version,omitempty"`
+}
+
+// ContainerPage defines model for ContainerPage.
+type ContainerPage struct {
+	Containers []Container `json:"containers"`
+	NextCursor *string     `json:"next_cursor,omitempty"`
+}
+
+// ContainerState defines model for ContainerState.
+type ContainerState string
 
 // CreatedToken defines model for CreatedToken.
 type CreatedToken struct {
@@ -573,18 +814,81 @@ type CreatedToken struct {
 // DeliveryState What became of an email: `queued` until the provider accepts it, then `sent`, and `delivered`, `bounced` or `complained` as the provider reports; `failed` when delivery gave up; `discarded` when it was withdrawn before sending.
 type DeliveryState string
 
+// DeployedWorkload defines model for DeployedWorkload.
+type DeployedWorkload struct {
+	App       AppName   `json:"app"`
+	AppState  *AppState `json:"app_state,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+
+	// DeployedAt When the active version was deployed.
+	DeployedAt *time.Time         `json:"deployed_at,omitempty"`
+	Id         openapi_types.UUID `json:"id"`
+	Kind       WorkloadKind       `json:"kind"`
+	Name       WorkloadName       `json:"name"`
+
+	// ReleaseId The active release.
+	ReleaseId *openapi_types.UUID `json:"release_id,omitempty"`
+
+	// State Desired state. A paused app stops its active workloads too.
+	State WorkloadState `json:"state"`
+
+	// Version The active version.
+	Version *int `json:"version,omitempty"`
+}
+
 // Deployment defines model for Deployment.
 type Deployment struct {
-	App      App            `json:"app"`
+	App App `json:"app"`
+
+	// Pruned Functions the prune deleted.
 	Pruned   []WorkloadName `json:"pruned"`
 	Releases []Release      `json:"releases"`
+
+	// RemovedVersions Versions of the pruned functions.
+	RemovedVersions int `json:"removed_versions"`
+}
+
+// DeploymentPage defines model for DeploymentPage.
+type DeploymentPage struct {
+	Deployments []DeployedWorkload `json:"deployments"`
+	NextCursor  *string            `json:"next_cursor,omitempty"`
+}
+
+// DeploymentPlan defines model for DeploymentPlan.
+type DeploymentPlan struct {
+	App AppName `json:"app"`
+
+	// Items Listed workloads by kind and name, then omitted deployed ones.
+	Items []DeploymentPlanItem `json:"items"`
+	Prune bool                 `json:"prune"`
+}
+
+// DeploymentPlanAction `add` deploys a new workload, `redeploy` deploys one that exists, `retain` leaves an omitted one deployed and `remove` deletes an omitted one with prune.
+type DeploymentPlanAction string
+
+// DeploymentPlanItem defines model for DeploymentPlanItem.
+type DeploymentPlanItem struct {
+	// Action `add` deploys a new workload, `redeploy` deploys one that exists, `retain` leaves an omitted one deployed and `remove` deletes an omitted one with prune.
+	Action DeploymentPlanAction `json:"action"`
+	Kind   WorkloadKind         `json:"kind"`
+	Name   WorkloadName         `json:"name"`
+
+	// Versions Versions the workload has now.
+	Versions int `json:"versions"`
+}
+
+// DeploymentPlanRequest defines model for DeploymentPlanRequest.
+type DeploymentPlanRequest struct {
+	Prune     *bool              `json:"prune,omitempty"`
+	Workloads []WorkloadIdentity `json:"workloads"`
 }
 
 // DeploymentRequest defines model for DeploymentRequest.
 type DeploymentRequest struct {
+	// Functions At least one, unless prune deletes every deployed function.
 	Functions []FunctionSpec `json:"functions"`
 
-	// Prune Stop every function of the app that is not listed.
+	// Prune Delete every function of the app that is not listed.
 	Prune *bool `json:"prune,omitempty"`
 }
 
@@ -669,6 +973,9 @@ type FunctionSpec struct {
 
 	// CallbackUrl Receives a signed POST when a task is retried or finishes.
 	CallbackUrl *string `json:"callback_url,omitempty"`
+
+	// ClientContract The signature `lazycloud app export` types clients from.
+	ClientContract *json.RawMessage `json:"client_contract,omitempty"`
 
 	// Concurrency Tasks one container runs at once, one process per slot.
 	Concurrency *int `json:"concurrency,omitempty"`
@@ -878,15 +1185,19 @@ type LifecycleHooks struct {
 	OnSuccess *HookReferences `json:"on_success,omitempty"`
 }
 
+// LiveAppState defines model for LiveAppState.
+type LiveAppState string
+
 // LogEntry defines model for LogEntry.
 type LogEntry struct {
 	Attempt int `json:"attempt"`
 
 	// Data One line of output without its trailing newline.
-	Data   string         `json:"data"`
-	Id     int64          `json:"id"`
-	Stream LogEntryStream `json:"stream"`
-	Time   time.Time      `json:"time"`
+	Data   string             `json:"data"`
+	Id     int64              `json:"id"`
+	Stream LogEntryStream     `json:"stream"`
+	TaskId openapi_types.UUID `json:"task_id"`
+	Time   time.Time          `json:"time"`
 }
 
 // LogEntryStream defines model for LogEntry.Stream.
@@ -938,7 +1249,9 @@ type Release struct {
 	Function  WorkloadName       `json:"function"`
 	Id        openapi_types.UUID `json:"id"`
 	Spec      FunctionSpec       `json:"spec"`
-	Version   int                `json:"version"`
+
+	// Version The deployed version; absent for a release only working-tree calls use.
+	Version *int `json:"version,omitempty"`
 }
 
 // Resources Reservations the container always keeps. CPU above the reservation is shared up to `cpu_limit_millis`, by default the reservation plus 16 cores. Memory above the reservation is allowed up to `memory_limit_mib`, by default four times the reservation, at least 1 GiB and at most 8 GiB above it; the container is killed beyond it.
@@ -1068,9 +1381,38 @@ type SourceUploadRequest struct {
 	SizeBytes int64  `json:"size_bytes"`
 }
 
+// StartDeploymentRequest defines model for StartDeploymentRequest.
+type StartDeploymentRequest struct {
+	// Version Make this deployed version active before starting.
+	Version *int `json:"version,omitempty"`
+}
+
+// StopReason defines model for StopReason.
+type StopReason string
+
+// StopTasksRequest defines model for StopTasksRequest.
+type StopTasksRequest struct {
+	TaskIds []openapi_types.UUID `json:"task_ids"`
+}
+
+// StopTasksResponse defines model for StopTasksResponse.
+type StopTasksResponse struct {
+	// Skipped Tasks that were already finished or are not in the workspace.
+	Skipped []openapi_types.UUID `json:"skipped"`
+
+	// Stopped Tasks this request cancelled.
+	Stopped []openapi_types.UUID `json:"stopped"`
+}
+
 // SubmitTasksRequest defines model for SubmitTasksRequest.
 type SubmitTasksRequest struct {
-	Inputs []Payload `json:"inputs"`
+	Inputs []TaskInput `json:"inputs"`
+
+	// ParentTaskId The task that submits these, which becomes their parent.
+	ParentTaskId *openapi_types.UUID `json:"parent_task_id,omitempty"`
+
+	// ReleaseId Run on this release, such as a prepared one, instead of the active one.
+	ReleaseId *openapi_types.UUID `json:"release_id,omitempty"`
 }
 
 // SubmitTasksResponse defines model for SubmitTasksResponse.
@@ -1083,16 +1425,26 @@ type Task struct {
 	App AppName `json:"app"`
 
 	// Attempts Attempts started so far.
-	Attempts   int                `json:"attempts"`
-	CreatedAt  time.Time          `json:"created_at"`
-	Failure    *TaskFailure       `json:"failure,omitempty"`
-	FinishedAt *time.Time         `json:"finished_at,omitempty"`
-	Function   WorkloadName       `json:"function"`
-	Id         openapi_types.UUID `json:"id"`
+	Attempts int `json:"attempts"`
+
+	// ContainerId The container of the latest attempt.
+	ContainerId *openapi_types.UUID `json:"container_id,omitempty"`
+	CreatedAt   time.Time           `json:"created_at"`
+	Failure     *TaskFailure        `json:"failure,omitempty"`
+	FinishedAt  *time.Time          `json:"finished_at,omitempty"`
+	Function    WorkloadName        `json:"function"`
+	Id          openapi_types.UUID  `json:"id"`
+	MaxAttempts int                 `json:"max_attempts"`
+
+	// NextAttemptAt When a queued task that already ran becomes due again.
+	NextAttemptAt *time.Time `json:"next_attempt_at,omitempty"`
 
 	// ParentTaskId The running task that spawned this one.
 	ParentTaskId *openapi_types.UUID `json:"parent_task_id,omitempty"`
-	ReleaseId    openapi_types.UUID  `json:"release_id"`
+
+	// Pending Why a queued task has not started, derived from current state on every read.
+	Pending   *TaskPendingProgress `json:"pending,omitempty"`
+	ReleaseId openapi_types.UUID   `json:"release_id"`
 
 	// RootTaskId The root of the call graph; the task itself when nothing spawned it.
 	RootTaskId openapi_types.UUID `json:"root_task_id"`
@@ -1101,6 +1453,9 @@ type Task struct {
 	ScheduledFor *time.Time `json:"scheduled_for,omitempty"`
 	StartedAt    *time.Time `json:"started_at,omitempty"`
 	Status       TaskStatus `json:"status"`
+
+	// Version The deployed version of the release; absent for a working-tree release.
+	Version *int `json:"version,omitempty"`
 }
 
 // TaskFailure defines model for TaskFailure.
@@ -1114,6 +1469,39 @@ type TaskFailure struct {
 	// Type The exception type the handler raised.
 	Type *string `json:"type,omitempty"`
 }
+
+// TaskInput A task's arguments. A cloudpickle input refers to each pending FunctionCall it contains by the persistent id `("function_call", task_id)` and lists those ids in `depends_on`; the task waits until they succeed and the runner resolves each id to that task's result.
+type TaskInput struct {
+	Data      *[]byte               `json:"data,omitempty"`
+	DependsOn *[]openapi_types.UUID `json:"depends_on,omitempty"`
+	Encoding  TaskInputEncoding     `json:"encoding"`
+	Value     *json.RawMessage      `json:"value,omitempty"`
+}
+
+// TaskInputEncoding defines model for TaskInput.Encoding.
+type TaskInputEncoding string
+
+// TaskPage defines model for TaskPage.
+type TaskPage struct {
+	NextCursor *string `json:"next_cursor,omitempty"`
+	Tasks      []Task  `json:"tasks"`
+}
+
+// TaskPendingProgress Why a queued task has not started, derived from current state on every read.
+type TaskPendingProgress struct {
+	Message    string    `json:"message"`
+	ObservedAt time.Time `json:"observed_at"`
+
+	// PendingSince When the task last became due or was submitted.
+	PendingSince time.Time         `json:"pending_since"`
+	Reason       TaskPendingReason `json:"reason"`
+
+	// Since When the current reason began.
+	Since time.Time `json:"since"`
+}
+
+// TaskPendingReason defines model for TaskPendingReason.
+type TaskPendingReason string
 
 // TaskStatus defines model for TaskStatus.
 type TaskStatus string
@@ -1185,8 +1573,34 @@ type User struct {
 	IsAdmin bool `json:"is_admin"`
 }
 
+// Version defines model for Version.
+type Version struct {
+	Active    bool               `json:"active"`
+	CreatedAt time.Time          `json:"created_at"`
+	ReleaseId openapi_types.UUID `json:"release_id"`
+	Version   int                `json:"version"`
+}
+
+// VersionPage defines model for VersionPage.
+type VersionPage struct {
+	NextCursor *string   `json:"next_cursor,omitempty"`
+	Versions   []Version `json:"versions"`
+}
+
+// WorkloadIdentity defines model for WorkloadIdentity.
+type WorkloadIdentity struct {
+	Kind WorkloadKind `json:"kind"`
+	Name WorkloadName `json:"name"`
+}
+
+// WorkloadKind defines model for WorkloadKind.
+type WorkloadKind string
+
 // WorkloadName defines model for WorkloadName.
 type WorkloadName = string
+
+// WorkloadState Desired state. A paused app stops its active workloads too.
+type WorkloadState string
 
 // Workspace defines model for Workspace.
 type Workspace struct {
@@ -1220,8 +1634,17 @@ type WorkspaceState string
 // AppPath defines model for AppPath.
 type AppPath = AppName
 
+// AppRefPath An app name or id.
+type AppRefPath = AppRef
+
+// ContainerPath defines model for ContainerPath.
+type ContainerPath = openapi_types.UUID
+
 // Cursor defines model for Cursor.
 type Cursor = string
+
+// DeploymentPath defines model for DeploymentPath.
+type DeploymentPath = openapi_types.UUID
 
 // FunctionPath defines model for FunctionPath.
 type FunctionPath = WorkloadName
@@ -1240,6 +1663,15 @@ type InvitationTokenPath = string
 
 // Limit defines model for Limit.
 type Limit = int
+
+// LogAfter defines model for LogAfter.
+type LogAfter = int64
+
+// LogTail defines model for LogTail.
+type LogTail = int
+
+// PageLimit defines model for PageLimit.
+type PageLimit = int
 
 // SecretPath An environment variable name; the LAZYCLOUD_ prefix is reserved.
 type SecretPath = SecretName
@@ -1269,6 +1701,64 @@ type ListWorkspacesParams struct {
 
 	// Cursor The `next_cursor` of the previous page.
 	Cursor *Name `form:"cursor,omitempty" json:"cursor,omitempty"`
+}
+
+// ListAppsParams defines parameters for ListApps.
+type ListAppsParams struct {
+	// State Only apps in this state. Omitted lists active and paused apps.
+	State *LiveAppState `form:"state,omitempty" json:"state,omitempty"`
+	Limit *PageLimit    `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Cursor The next_cursor of the previous page.
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+}
+
+// ListContainersParams defines parameters for ListContainers.
+type ListContainersParams struct {
+	// Live Only containers that have not stopped.
+	Live  *bool      `form:"live,omitempty" json:"live,omitempty"`
+	Limit *PageLimit `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Cursor The next_cursor of the previous page.
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+}
+
+// StreamContainerLogsParams defines parameters for StreamContainerLogs.
+type StreamContainerLogsParams struct {
+	// After Return entries with an id greater than this.
+	After *LogAfter `form:"after,omitempty" json:"after,omitempty"`
+
+	// Tail Start with only the last this many stored entries.
+	Tail   *LogTail `form:"tail,omitempty" json:"tail,omitempty"`
+	Follow *bool    `form:"follow,omitempty" json:"follow,omitempty"`
+}
+
+// ListDeploymentsParams defines parameters for ListDeployments.
+type ListDeploymentsParams struct {
+	App   *AppName      `form:"app,omitempty" json:"app,omitempty"`
+	Name  *WorkloadName `form:"name,omitempty" json:"name,omitempty"`
+	Limit *PageLimit    `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Cursor The next_cursor of the previous page.
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+}
+
+// StreamDeploymentLogsParams defines parameters for StreamDeploymentLogs.
+type StreamDeploymentLogsParams struct {
+	// After Return entries with an id greater than this.
+	After *LogAfter `form:"after,omitempty" json:"after,omitempty"`
+
+	// Tail Start with only the last this many stored entries.
+	Tail   *LogTail `form:"tail,omitempty" json:"tail,omitempty"`
+	Follow *bool    `form:"follow,omitempty" json:"follow,omitempty"`
+}
+
+// ListDeploymentVersionsParams defines parameters for ListDeploymentVersions.
+type ListDeploymentVersionsParams struct {
+	Limit *PageLimit `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Cursor The next_cursor of the previous page.
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
 }
 
 // GetImageBuildParams defines parameters for GetImageBuild.
@@ -1306,6 +1796,19 @@ type ListSecretsParams struct {
 	Limit  *Limit  `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
+// ListTasksParams defines parameters for ListTasks.
+type ListTasksParams struct {
+	App *AppName `form:"app,omitempty" json:"app,omitempty"`
+
+	// Function Requires `app`.
+	Function *WorkloadName `form:"function,omitempty" json:"function,omitempty"`
+	Status   *TaskStatus   `form:"status,omitempty" json:"status,omitempty"`
+	Limit    *PageLimit    `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Cursor The next_cursor of the previous page.
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+}
+
 // GetTaskParams defines parameters for GetTask.
 type GetTaskParams struct {
 	// WaitSeconds Hold the request until the task finishes or this many seconds pass.
@@ -1315,7 +1818,10 @@ type GetTaskParams struct {
 // StreamTaskLogsParams defines parameters for StreamTaskLogs.
 type StreamTaskLogsParams struct {
 	// After Return entries with an id greater than this.
-	After *int64 `form:"after,omitempty" json:"after,omitempty"`
+	After *LogAfter `form:"after,omitempty" json:"after,omitempty"`
+
+	// Tail Start with only the last this many stored entries.
+	Tail *LogTail `form:"tail,omitempty" json:"tail,omitempty"`
 
 	// Follow Keep the stream open until the task finishes.
 	Follow *bool `form:"follow,omitempty" json:"follow,omitempty"`
@@ -1336,11 +1842,20 @@ type CreateWorkspaceJSONRequestBody = WorkspaceRequest
 // RenameWorkspaceJSONRequestBody defines body for RenameWorkspace for application/json ContentType.
 type RenameWorkspaceJSONRequestBody = WorkspaceRequest
 
+// PlanDeploymentJSONRequestBody defines body for PlanDeployment for application/json ContentType.
+type PlanDeploymentJSONRequestBody = DeploymentPlanRequest
+
 // DeployAppJSONRequestBody defines body for DeployApp for application/json ContentType.
 type DeployAppJSONRequestBody = DeploymentRequest
 
+// PrepareFunctionReleaseJSONRequestBody defines body for PrepareFunctionRelease for application/json ContentType.
+type PrepareFunctionReleaseJSONRequestBody = FunctionSpec
+
 // SubmitTasksJSONRequestBody defines body for SubmitTasks for application/json ContentType.
 type SubmitTasksJSONRequestBody = SubmitTasksRequest
+
+// StartDeploymentJSONRequestBody defines body for StartDeployment for application/json ContentType.
+type StartDeploymentJSONRequestBody = StartDeploymentRequest
 
 // BuildImageJSONRequestBody defines body for BuildImage for application/json ContentType.
 type BuildImageJSONRequestBody = ImageDefinition
@@ -1365,3 +1880,6 @@ type SetSecretJSONRequestBody = SecretValueUpdate
 
 // CreateSourceUploadJSONRequestBody defines body for CreateSourceUpload for application/json ContentType.
 type CreateSourceUploadJSONRequestBody = SourceUploadRequest
+
+// StopTasksJSONRequestBody defines body for StopTasks for application/json ContentType.
+type StopTasksJSONRequestBody = StopTasksRequest

@@ -34,13 +34,13 @@ func (q *Queries) CancelTask(ctx context.Context, id uuid.UUID) error {
 const lockTaskForCancel = `-- name: LockTaskForCancel :one
 select id, status, current_attempt_id, release_id
 from tasks
-where id = $1 and workspace_id = $2
+where id = $1 and ($2::uuid is null or workspace_id = $2::uuid)
 for update
 `
 
 type LockTaskForCancelParams struct {
 	ID          uuid.UUID
-	WorkspaceID uuid.UUID
+	WorkspaceID *uuid.UUID
 }
 
 type LockTaskForCancelRow struct {
@@ -50,6 +50,7 @@ type LockTaskForCancelRow struct {
 	ReleaseID        uuid.UUID
 }
 
+// Without a workspace the caller already knows the task, as planning does.
 func (q *Queries) LockTaskForCancel(ctx context.Context, arg LockTaskForCancelParams) (LockTaskForCancelRow, error) {
 	row := q.db.QueryRow(ctx, lockTaskForCancel, arg.ID, arg.WorkspaceID)
 	var i LockTaskForCancelRow

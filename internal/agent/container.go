@@ -555,6 +555,7 @@ func (c *container) dispatch(task *hostproto.ClaimedTask) {
 		MaxAttempts:   task.GetMaxAttempts(),
 		RootTaskId:    task.GetRootTaskId(),
 		ParentTaskId:  task.GetParentTaskId(),
+		Dependencies:  task.GetDependencies(),
 	}}})
 }
 
