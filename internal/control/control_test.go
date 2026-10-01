@@ -27,6 +27,7 @@ select id from ws`, testSource).Scan(&ws)
 	if err != nil {
 		t.Fatal(err)
 	}
+	dbtest.OwnWorkspaces(t, pool)
 	return pool, identity.WorkspaceID(ws)
 }
 

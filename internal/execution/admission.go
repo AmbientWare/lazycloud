@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
@@ -146,6 +147,13 @@ func (e *Execution) SubmitInTx(ctx context.Context, tx pgx.Tx, req SubmitRequest
 		}
 		if int(queued)+len(req.Inputs) > limit {
 			return &TooManyPendingError{Limit: limit, Queued: int(queued), Submitted: len(req.Inputs)}
+		}
+		live, err := q.CountLiveReleaseContainers(ctx, fn.ReleaseID)
+		if err != nil {
+			return fmt.Errorf("count live containers: %w", err)
+		}
+		if _, err := billing.Admit(ctx, tx, billing.Request{Workspace: uuid.UUID(req.Workspace), Cold: live == 0}); err != nil {
+			return err
 		}
 
 		var parent, root *uuid.UUID

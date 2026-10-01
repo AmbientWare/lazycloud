@@ -41,6 +41,7 @@ select ws.id, rel.id from ws, rel`).Scan(&r.workspace, &r.id)
 	if err != nil {
 		t.Fatalf("insert release: %v", err)
 	}
+	dbtest.OwnWorkspaces(t, pool)
 	return r
 }
 

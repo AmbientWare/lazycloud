@@ -74,7 +74,7 @@ func (i *Identity) CreateOwnedWorkspace(ctx context.Context, p Principal, name s
 	var ws Workspace
 	err := pgx.BeginFunc(ctx, i.pool, func(tx pgx.Tx) error {
 		var err error
-		ws, err = addWorkspace(ctx, i.queries.WithTx(tx), name, p.User)
+		ws, err = addWorkspace(ctx, tx, name, p.User)
 		return err
 	})
 	if err != nil {

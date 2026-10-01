@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/database"
 )
 
@@ -173,6 +174,18 @@ func (e *Execution) planRelease(ctx context.Context, tx pgx.Tx, plan *releasePla
 	case active < desired:
 		count := min(desired-active, int(release.MaxContainers)-live)
 		if count <= 0 {
+			return nil
+		}
+		grant, err := billing.Admit(ctx, tx, billing.Request{Workspace: release.WorkspaceID, Start: count})
+		var refused *billing.PaymentRequiredError
+		if errors.As(err, &refused) {
+			// The account cannot pay; its tasks wait until it can.
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("admit containers: %w", err)
+		}
+		if count = grant.Start; count == 0 {
 			return nil
 		}
 		created, err := q.CreatePendingContainers(ctx, CreatePendingContainersParams{

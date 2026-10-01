@@ -23,6 +23,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/database"
 	"github.com/AmbientWare/lazycloud/internal/execution"
@@ -831,6 +832,11 @@ func (i *Images) recoverBuild(ctx context.Context, id uuid.UUID, digest []byte) 
 			return fmt.Errorf("reset build log count: %w", err)
 		}
 		_, err = i.execution.CreateBuildContainer(ctx, tx, identity.WorkspaceID(build.WorkspaceID), id, buildCPUMillis, buildMemoryBytes)
+		var unpaid *billing.PaymentRequiredError
+		var limit *billing.LimitError
+		if errors.As(err, &unpaid) || errors.As(err, &limit) {
+			return fail(reason + "; " + err.Error())
+		}
 		return err
 	})
 	if err != nil {

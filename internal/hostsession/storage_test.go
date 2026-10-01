@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/AmbientWare/lazycloud/internal/compute"
+	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
 	"github.com/AmbientWare/lazycloud/internal/execution"
 	"github.com/AmbientWare/lazycloud/internal/hostproto"
 	"github.com/AmbientWare/lazycloud/internal/hostsession"
@@ -36,6 +37,7 @@ select ws.id, rel.id from ws, rel`, spec).Scan(&ws, &release)
 	if err != nil {
 		h.t.Fatal(err)
 	}
+	dbtest.OwnWorkspaces(h.t, h.pool)
 	err = h.pool.QueryRow(h.t.Context(), `
 insert into containers (workspace_id, release_id, state, host_id, slots, cpu_millis, memory_bytes, assigned_at)
 values ($1, $2, 'starting', $3, 1, 1000, 1 << 28, now()) returning id`, ws, release, uuid.UUID(host)).Scan(&container)

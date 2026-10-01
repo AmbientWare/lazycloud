@@ -22,6 +22,7 @@ import (
 
 	"github.com/AmbientWare/lazycloud/internal/api"
 	"github.com/AmbientWare/lazycloud/internal/apitypes"
+	"github.com/AmbientWare/lazycloud/internal/billing"
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/control"
 	"github.com/AmbientWare/lazycloud/internal/database"
@@ -69,9 +70,10 @@ func newEnv(t *testing.T) *env {
 	}})
 	e := execution.NewExecution(pool)
 	logger := slog.New(slog.DiscardHandler)
+	bill := billing.NewBilling(pool, billing.Config{PublicURL: dashboardURL}, logger)
 	handler, err := api.NewHandler(api.Owners{
 		Identity: id, Control: control.NewControl(pool), Storage: storage.NewStorage(pool, storagetest.Config()),
-		Execution: e, Notifications: notifications.NewNotifications(pool, nil, logger), Listener: listener,
+		Execution: e, Notifications: notifications.NewNotifications(pool, nil, logger), Listener: listener, Billing: bill,
 		Images: images.NewImages(pool, e, images.Config{Registry: "registry.example.com", Repository: "lazycloud"}),
 	}, api.Config{PublicURL: dashboardURL, ResendWebhookSecret: webhookSecret, ClientReleaseVersion: "9.9.9"}, logger)
 	if err != nil {
@@ -81,7 +83,13 @@ func newEnv(t *testing.T) *env {
 	t.Cleanup(server.Close)
 
 	for _, email := range []string{"owner@example.com", "outsider@example.com"} {
-		if _, err := id.CreateUser(ctx, email, false); err != nil {
+		user, err := id.CreateUser(ctx, email, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Waived accounts are held to Business limits, so these tests
+		// are not held to Free's; the billing tests cover plans.
+		if _, err := bill.SetComplimentary(ctx, uuid.UUID(user), true); err != nil {
 			t.Fatal(err)
 		}
 	}

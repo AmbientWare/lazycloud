@@ -37,6 +37,7 @@ select ws.id, app.id, wl.id, rel.id from ws, app, wl, rel`, spec).Scan(&f.worksp
 	if err != nil {
 		t.Fatalf("insert release: %v", err)
 	}
+	dbtest.OwnWorkspaces(t, pool)
 	exec(t, pool, "update workloads set active_release_id = $1 where id = $2", f.release, f.workload)
 	return f
 }

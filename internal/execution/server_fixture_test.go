@@ -11,6 +11,7 @@ import (
 
 	"github.com/AmbientWare/lazycloud/internal/compute"
 	"github.com/AmbientWare/lazycloud/internal/database"
+	"github.com/AmbientWare/lazycloud/internal/database/dbtest"
 	"github.com/AmbientWare/lazycloud/internal/identity"
 )
 
@@ -35,6 +36,7 @@ select ws.id, rel.id from ws, rel`, spec).Scan(&ws, &f.release)
 	if err != nil {
 		t.Fatalf("insert function: %v", err)
 	}
+	dbtest.OwnWorkspaces(t, pool)
 	if _, err := pool.Exec(t.Context(), "update workloads set active_release_id = $1, next_version = 2", f.release); err != nil {
 		t.Fatal(err)
 	}

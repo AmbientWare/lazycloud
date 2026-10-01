@@ -50,3 +50,9 @@ for update;
 -- name: DrainContainer :exec
 update containers set state = 'draining', drain_started_at = now()
 where id = @id and state in ('starting', 'ready');
+
+-- name: LiveFunctionContainers :many
+select id from containers
+where workspace_id = @workspace_id and state <> 'stopped' and release_id is not null
+order by id
+limit @row_limit;
