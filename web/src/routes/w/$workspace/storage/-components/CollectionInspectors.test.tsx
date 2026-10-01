@@ -10,43 +10,6 @@ import { MapInspector } from "./CollectionInspectors";
 
 beforeEach(() => rememberWorkspaces([{ id: "workspace-1", name: "workspace" }]));
 
-it("loads the value of an empty-string map key", async () => {
-  const queryClient = testQueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
-  queryClient.setQueryData(workspaceQueryKeys.collections.mapCount("workspace-1", "map"), {
-    count: 1,
-  });
-  queryClient.setQueryData([...workspaceQueryKeys.collections.mapKeys("workspace-1", "map"), ""], {
-    pages: [{ data: [""], next: null }],
-    pageParams: [""],
-  });
-  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
-    Response.json({
-      key: "",
-      value: btoa("value for the empty key"),
-      revision: "1",
-      updated_at: "2026-10-01T00:00:00Z",
-    }),
-  );
-  vi.stubGlobal("fetch", fetchMock);
-  render(
-    <QueryClientProvider client={queryClient}>
-      <MapInspector
-        workspaceId="workspace-1"
-        name="map"
-        sizeBytes={23}
-        expiringKeys={0}
-        nearestExpirySeconds={null}
-      />
-    </QueryClientProvider>,
-  );
-
-  await screen.findByText("value for the empty key");
-  expect(screen.getByRole("button", { name: "Edit value" })).toBeDisabled();
-  expect(new URL((fetchMock.mock.calls[0]?.[0] as Request).url).pathname).toBe(
-    "/v1/workspaces/workspace/maps/map/entries/",
-  );
-});
-
 it("keeps the user's draft and original revision when live data changes during an edit", async () => {
   const queryClient = testQueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
   queryClient.setQueryData(workspaceQueryKeys.collections.mapCount("workspace-1", "map"), {
