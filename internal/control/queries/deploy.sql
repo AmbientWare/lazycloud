@@ -12,7 +12,7 @@ where workspace_id = @workspace_id and sha256 = any(@digests::bytea[]);
 -- name: UpsertWorkload :one
 -- Locks the workload row for the release switch.
 insert into workloads (app_id, kind, name, desired_state)
-values (@app_id, 'function', @name, 'active')
+values (@app_id, @kind, @name, 'active')
 on conflict (app_id, kind, name) do update set desired_state = 'active'
 returning id, active_release_id, next_version;
 
@@ -30,7 +30,7 @@ update workloads set active_release_id = @release_id::uuid, next_version = next_
 -- name: PruneFunctions :many
 update workloads
 set desired_state = 'stopped'
-where app_id = @app_id and kind = 'function' and desired_state = 'active' and not (name = any(@keep::text[]))
+where app_id = @app_id and desired_state = 'active' and not (kind || ':' || name = any(@keep::text[]))
 returning name, active_release_id;
 
 -- name: FunctionRelease :one

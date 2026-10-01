@@ -125,7 +125,7 @@ func (q *Queries) InsertRelease(ctx context.Context, arg InsertReleaseParams) (I
 const pruneFunctions = `-- name: PruneFunctions :many
 update workloads
 set desired_state = 'stopped'
-where app_id = $1 and kind = 'function' and desired_state = 'active' and not (name = any($2::text[]))
+where app_id = $1 and desired_state = 'active' and not (kind || ':' || name = any($2::text[]))
 returning name, active_release_id
 `
 
@@ -223,13 +223,14 @@ func (q *Queries) UpsertApp(ctx context.Context, arg UpsertAppParams) (UpsertApp
 
 const upsertWorkload = `-- name: UpsertWorkload :one
 insert into workloads (app_id, kind, name, desired_state)
-values ($1, 'function', $2, 'active')
+values ($1, $2, $3, 'active')
 on conflict (app_id, kind, name) do update set desired_state = 'active'
 returning id, active_release_id, next_version
 `
 
 type UpsertWorkloadParams struct {
 	AppID uuid.UUID
+	Kind  string
 	Name  string
 }
 
@@ -241,7 +242,7 @@ type UpsertWorkloadRow struct {
 
 // Locks the workload row for the release switch.
 func (q *Queries) UpsertWorkload(ctx context.Context, arg UpsertWorkloadParams) (UpsertWorkloadRow, error) {
-	row := q.db.QueryRow(ctx, upsertWorkload, arg.AppID, arg.Name)
+	row := q.db.QueryRow(ctx, upsertWorkload, arg.AppID, arg.Kind, arg.Name)
 	var i UpsertWorkloadRow
 	err := row.Scan(&i.ID, &i.ActiveReleaseID, &i.NextVersion)
 	return i, err

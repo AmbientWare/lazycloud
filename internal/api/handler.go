@@ -121,6 +121,7 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		tooMany       *execution.TooManyPendingError
 		invalidSpec   *control.InvalidSpecError
 		sourceMissing *control.SourceMissingError
+		routeConflict *control.RouteConflictError
 		tooLarge      *http.MaxBytesError
 	)
 	switch {
@@ -136,6 +137,8 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, invalidSpec.Error())
 	case errors.As(err, &sourceMissing):
 		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, sourceMissing.Error())
+	case errors.As(err, &routeConflict):
+		writeJSONError(w, http.StatusConflict, apitypes.Conflict, routeConflict.Error())
 	case errors.Is(err, storage.ErrInvalidDigest), errors.Is(err, errInvalidRequest):
 		writeJSONError(w, http.StatusBadRequest, apitypes.InvalidRequest, err.Error())
 	case errors.As(err, &tooLarge), errors.Is(err, execution.ErrPayloadTooLarge):
