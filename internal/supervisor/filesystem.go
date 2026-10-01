@@ -70,9 +70,13 @@ func (c *control) archiveFilesystem(w http.ResponseWriter, _ *http.Request) erro
 	if err != nil {
 		return err
 	}
+	skip := mountSet(mounts)
+	// gVisor mounts a tmpfs at /tmp when the image's is empty; what the
+	// workload wrote there is its own, as under runc.
+	delete(skip, "/tmp")
 	w.Header().Set("Content-Type", "application/x-tar")
 	w.WriteHeader(http.StatusOK)
-	if err := writeArchive(w, "/", mountSet(mounts)); err != nil {
+	if err := writeArchive(w, "/", skip); err != nil {
 		c.log.Error("filesystem archive failed", "error", err)
 		// The status is sent; an aborted body keeps a partial archive from
 		// looking complete.

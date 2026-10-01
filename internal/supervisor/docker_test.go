@@ -64,10 +64,16 @@ func uniqueName(prefix string) string {
 	return prefix + "-" + strings.ToLower(rand.Text()[:10])
 }
 
+// runContainer runs a container with LAZYCLOUD_TEST_OCI_RUNTIME, runsc for
+// gVisor, or runc.
 func runContainer(t *testing.T, args ...string) string {
 	t.Helper()
 	name := uniqueName("lc-supervisor-test")
-	mustDocker(t, append([]string{"run", "-d", "--name", name}, args...)...)
+	runtime := os.Getenv("LAZYCLOUD_TEST_OCI_RUNTIME")
+	if runtime == "" {
+		runtime = "runc"
+	}
+	mustDocker(t, append([]string{"run", "-d", "--runtime", runtime, "--name", name}, args...)...)
 	t.Cleanup(func() { _, _ = docker(t, "rm", "-f", name) })
 	return name
 }
@@ -126,7 +132,10 @@ ip = struct.pack("!BBHHHBBH4s4s", 0x45, 0, 20 + len(udp), 1, 0, 64, 17, 0, socke
 total = sum(struct.unpack("!10H", ip))
 total = (total & 0xFFFF) + (total >> 16)
 ip = ip[:10] + struct.pack("!H", ~total & 0xFFFF) + ip[12:]
-sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW)
+try:
+    sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW)
+except PermissionError:
+    sys.exit("packet sockets refused")
 sock.bind(("eth0", 0x88B5))
 for _ in range(3):
     try:
@@ -150,8 +159,15 @@ func TestNetfilterDropsRawFramesThatMislabelTheirProtocol(t *testing.T) {
 		return mustDocker(t, "inspect", "-f", "{{range .NetworkSettings.Networks}}{{."+field+"}}{{end}}", name)
 	}
 	send := func(payload string) bool {
-		mustDocker(t, "exec", subject, "python3", "-c", rawFrame,
+		out, err := docker(t, "exec", subject, "python3", "-c", rawFrame,
 			address(target, "IPAddress"), address(target, "MacAddress"), address(subject, "IPAddress"), address(subject, "MacAddress"), payload)
+		if strings.Contains(out, "packet sockets refused") {
+			// gVisor offers no raw sockets unless configured to.
+			t.Skip("this runtime refuses packet sockets")
+		}
+		if err != nil {
+			t.Fatalf("send a raw frame: %v: %s", err, out)
+		}
 		for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
 			if logs, _ := docker(t, "logs", target); strings.Contains(logs, payload) {
 				return true

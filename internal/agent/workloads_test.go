@@ -346,7 +346,7 @@ func TestNonRootContainerUsersCreateTheirSupervisorSockets(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { l.close(time.Second) })
-	out, err := exec.CommandContext(t.Context(), "docker", "run", "--rm", "--user", "65534:65534", "--label", "lazycloud.agent="+c.id,
+	out, err := exec.CommandContext(t.Context(), "docker", "run", "--rm", "--runtime", testRuntime(), "--user", "65534:65534", "--label", "lazycloud.agent="+c.id,
 		"-v", c.linkDir()+":"+containerLinkDir, testImage, "python3", "-c",
 		"import socket; s = socket.socket(socket.AF_UNIX); s.bind('"+containerControlSocket+"'); print('bound')").CombinedOutput()
 	if err != nil || !strings.Contains(string(out), "bound") {
@@ -585,7 +585,7 @@ const testDockerImage = "docker.io/library/docker:28.5.1-dind@sha256:ea9d20492ca
 // bypass.
 func TestDockerPodsNeedPrivilegeAllowedAndNoPolicy(t *testing.T) {
 	e := newEnv(t)
-	e.startAgent()
+	e.startAgent(func(c *Config) { c.OCIRuntime = "runc" })
 	session := e.session()
 	start := e.podCommand(&hostproto.PodWorkload{Command: []string{"docker", "info"}})
 	start.GetStart().Docker = true
