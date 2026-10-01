@@ -4358,7 +4358,7 @@ components:
       properties:
         name: { $ref: "#/components/schemas/WorkloadName" }
         handler:
-          description: "module:qualname within the source archive; every workload but a pod has one"
+          description: "module:qualname within the source archive; pods have none"
           type: string
           pattern: "^[A-Za-z_][A-Za-z0-9_.]*:[A-Za-z_][A-Za-z0-9_.]*$"
         source:
@@ -7654,10 +7654,10 @@ components:
       required: [kind]
       properties:
         kind: { $ref: "#/components/schemas/PodKind" }
+        # Empty runs the image's own entrypoint and command; a devbox keeps
+        # running without one.
         command:
-          description: >-
-            What the container runs; empty runs the image's own entrypoint
-            and command, and a devbox keeps running without one.
+          description: What the container runs.
           type: array
           maxItems: 1024
           items: { type: string, maxLength: 65536 }
@@ -7667,7 +7667,7 @@ components:
           maxProperties: 32
           additionalProperties: { type: integer, minimum: 1, maximum: 65535 }
         tcp:
-          description: Serve the first port as raw TCP behind TLS with SNI; the pod must be public.
+          description: Serve the first port as raw TCP behind TLS with SNI.
           type: boolean
           default: false
         ssh:
@@ -7776,7 +7776,7 @@ components:
         name: { $ref: "#/components/schemas/WorkloadName" }
         app: { $ref: "#/components/schemas/AppName" }
         ssh_command:
-          description: The CLI command that connects, with --app when another app has a devbox of the same name.
+          description: The CLI command that connects, with --app when the name is shared.
           type: string
         ssh_host:
           description: The host `lazycloud ssh-config` writes for it.
@@ -7819,18 +7819,16 @@ components:
           type: array
           maxItems: 1024
           items: { type: string, maxLength: 65536 }
+        # Defaults to the release's keep_warm_seconds; -1 keeps the instance
+        # up until it is stopped.
         timeout_seconds:
-          description: >-
-            Seconds the instance stays up without connections or calls;
-            defaults to the release's keep_warm_seconds, and -1 keeps it up
-            until it is stopped.
+          description: Seconds the instance stays up without connections or calls.
           type: integer
           minimum: -1
           maximum: 604800
+        # The container stops 30 seconds after the last shell closes.
         shell:
-          description: >-
-            Start an idle container of the release for shells; it stops 30
-            seconds after the last shell closes.
+          description: Start an idle container of the release for shells.
           type: boolean
           default: false
 

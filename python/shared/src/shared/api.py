@@ -2473,16 +2473,13 @@ class CreateInstanceRequest(BaseModel):
     timeout_seconds: Annotated[
         int | None,
         Field(
-            description="Seconds the instance stays up without connections or calls; defaults to the release's keep_warm_seconds, and -1 keeps it up until it is stopped.",
+            description="Seconds the instance stays up without connections or calls.",
             ge=-1,
             le=604800,
         ),
     ] = None
     shell: Annotated[
-        bool,
-        Field(
-            description="Start an idle container of the release for shells; it stops 30 seconds after the last shell closes."
-        ),
+        bool, Field(description="Start an idle container of the release for shells.")
     ] = False
 
 
@@ -3145,11 +3142,7 @@ class UsageCostSeries(BaseModel):
 class PodSpec(BaseModel):
     kind: PodKind
     command: Annotated[
-        list[CommandItem] | None,
-        Field(
-            description="What the container runs; empty runs the image's own entrypoint and command, and a devbox keeps running without one.",
-            max_length=1024,
-        ),
+        list[CommandItem] | None, Field(description="What the container runs.", max_length=1024)
     ] = None
     ports: Annotated[
         dict[str, PortsAdditionalProperty] | None,
@@ -3159,10 +3152,7 @@ class PodSpec(BaseModel):
         ),
     ] = None
     tcp: Annotated[
-        bool,
-        Field(
-            description="Serve the first port as raw TCP behind TLS with SNI; the pod must be public."
-        ),
+        bool, Field(description="Serve the first port as raw TCP behind TLS with SNI.")
     ] = False
     ssh: Annotated[
         bool, Field(description="Serve SSH through `lazycloud ssh`; always on for a devbox.")
@@ -3183,10 +3173,7 @@ class Devbox(BaseModel):
     name: Annotated[str, Field(pattern="^[A-Za-z_][A-Za-z0-9_-]{0,62}$")]
     app: Annotated[str, Field(pattern="^[a-z][a-z0-9_]{0,62}$")]
     ssh_command: Annotated[
-        str,
-        Field(
-            description="The CLI command that connects, with --app when another app has a devbox of the same name."
-        ),
+        str, Field(description="The CLI command that connects, with --app when the name is shared.")
     ]
     ssh_host: Annotated[str, Field(description="The host `lazycloud ssh-config` writes for it.")]
     state: DevboxState
@@ -3229,7 +3216,7 @@ class FunctionSpec(BaseModel):
     handler: Annotated[
         str | None,
         Field(
-            description="module:qualname within the source archive; every workload but a pod has one",
+            description="module:qualname within the source archive; pods have none",
             pattern="^[A-Za-z_][A-Za-z0-9_.]*:[A-Za-z_][A-Za-z0-9_.]*$",
         ),
     ] = None

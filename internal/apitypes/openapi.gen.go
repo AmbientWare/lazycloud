@@ -3129,11 +3129,11 @@ type CreateInstanceRequest struct {
 	Command   *[]string           `json:"command,omitempty"`
 	ReleaseId *openapi_types.UUID `json:"release_id,omitempty"`
 
-	// Shell Start an idle container of the release for shells; it stops 30 seconds after the last shell closes.
+	// Shell Start an idle container of the release for shells.
 	Shell      *bool               `json:"shell,omitempty"`
 	SnapshotId *openapi_types.UUID `json:"snapshot_id,omitempty"`
 
-	// TimeoutSeconds Seconds the instance stays up without connections or calls; defaults to the release's keep_warm_seconds, and -1 keeps it up until it is stopped.
+	// TimeoutSeconds Seconds the instance stays up without connections or calls.
 	TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
 }
 
@@ -3325,7 +3325,7 @@ type Devbox struct {
 	// PhaseReason Why the last start failed.
 	PhaseReason *string `json:"phase_reason,omitempty"`
 
-	// SshCommand The CLI command that connects, with --app when another app has a devbox of the same name.
+	// SshCommand The CLI command that connects, with --app when the name is shared.
 	SshCommand string `json:"ssh_command"`
 
 	// SshHost The host `lazycloud ssh-config` writes for it.
@@ -3686,7 +3686,7 @@ type FunctionSpec struct {
 	DockerEnabled *bool              `json:"docker_enabled,omitempty"`
 	Environment   *map[string]string `json:"environment,omitempty"`
 
-	// Handler module:qualname within the source archive; every workload but a pod has one
+	// Handler module:qualname within the source archive; pods have none
 	Handler *string `json:"handler,omitempty"`
 
 	// Http Makes the workload answer HTTP. Its slots are `workers` processes, each handling `concurrency` requests at once.
@@ -4393,7 +4393,7 @@ type PodSpec struct {
 	AllowList    *[]string `json:"allow_list,omitempty"`
 	BlockNetwork *bool     `json:"block_network,omitempty"`
 
-	// Command What the container runs; empty runs the image's own entrypoint and command, and a devbox keeps running without one.
+	// Command What the container runs.
 	Command *[]string `json:"command,omitempty"`
 
 	// HealthCheck An HTTP GET that must answer 2xx or 3xx before the container takes traffic.
@@ -4408,7 +4408,7 @@ type PodSpec struct {
 	// Ssh Serve SSH through `lazycloud ssh`; always on for a devbox.
 	Ssh *bool `json:"ssh,omitempty"`
 
-	// Tcp Serve the first port as raw TCP behind TLS with SNI; the pod must be public.
+	// Tcp Serve the first port as raw TCP behind TLS with SNI.
 	Tcp *bool `json:"tcp,omitempty"`
 }
 
