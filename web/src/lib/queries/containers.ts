@@ -1,11 +1,11 @@
 import { infiniteQueryOptions, mutationOptions, queryOptions } from "@tanstack/react-query";
 
-import { api, apiRequest, ok, withWorkspace } from "@/lib/api/client";
-import {
-  containerMetricsTimeseriesSchema,
-  type Container,
-  type ContainerDetail,
-  type ContainerWithAppPage,
+import { api, ok } from "@/lib/api/client";
+import type {
+  Container,
+  ContainerDetail,
+  ContainerMetricsTimeseries,
+  ContainerWithAppPage,
 } from "@/lib/api/schemas";
 import {
   parseStubId,
@@ -152,11 +152,38 @@ export function containerMetricsTimeseriesQueryOptions(
 ) {
   return queryOptions({
     queryKey: workspaceQueryKeys.containers.metrics(workspaceId, containerId),
-    queryFn: () =>
-      apiRequest(
-        withWorkspace(`/api/v1/metrics/containers/${containerId}/timeseries`, workspaceId),
-        containerMetricsTimeseriesSchema,
-      ),
+    // The container's last hour of life, at the finest step the API keeps.
+    queryFn: async (): Promise<ContainerMetricsTimeseries> => {
+      const metrics = await ok(
+        api.GET("/v1/workspaces/{workspace}/containers/{container}/metrics", {
+          params: { path: { workspace: workspaceName(workspaceId), container: containerId } },
+        }),
+      );
+      const cpuTotal = metrics.cpu_total_millicores;
+      return {
+        container_id: metrics.container_id,
+        points: metrics.points.map((point) => ({
+          timestamp: point.timestamp,
+          sample_interval_ms: point.interval_ms,
+          cpu_millicores: point.cpu_millicores,
+          cpu_total_millicores: cpuTotal,
+          cpu_pct: cpuTotal > 0 ? (point.cpu_millicores / cpuTotal) * 100 : 0,
+          memory_rss_bytes: point.memory_rss_bytes,
+          memory_total_bytes: metrics.memory_total_bytes,
+          network_recv_bytes: point.network_recv_bytes,
+          network_sent_bytes: point.network_sent_bytes,
+          disk_read_bytes: point.disk_read_bytes,
+          disk_write_bytes: point.disk_write_bytes,
+          // The API samples no root disk usage.
+          disk_used_bytes: null,
+          disk_total_bytes: null,
+          gpu_memory_used_bytes: point.gpu_memory_used_bytes ?? 0,
+          gpu_memory_total_bytes: point.gpu_memory_total_bytes ?? 0,
+          gpu_type: point.gpu_type ?? "",
+        })),
+      };
+    },
+    // Hosts sample every 5 seconds; samples are not change events.
     refetchInterval: live ? 5_000 : false,
   });
 }

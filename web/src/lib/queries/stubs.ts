@@ -1,8 +1,8 @@
 import { queryOptions } from "@tanstack/react-query";
 
-import { api, apiRequest, ok, withWorkspace } from "@/lib/api/client";
-import { taskLatencyTimeseriesSchema, type Stub } from "@/lib/api/schemas";
-import { viewStub } from "@/lib/api/views";
+import { api, ok } from "@/lib/api/client";
+import type { Stub, TaskLatencyTimeseries } from "@/lib/api/schemas";
+import { parseDeploymentId, parseStubId, viewStatusCounts, viewStub } from "@/lib/api/views";
 import { workspaceName } from "@/lib/api/workspaces";
 
 import { appById, appDirectory, workloadDirectory } from "./directory";
@@ -50,7 +50,11 @@ export function deployedStubsQueryOptions(workspaceId: string, appId?: string) {
   });
 }
 
-/** Per-stub task-duration percentiles (p50/p95) plus cold starts, bucketed over time. */
+/**
+ * Task run time percentiles (p50/p95), outcomes and cold starts of one
+ * workload, bucketed over the last day. Every stub of a group names the same
+ * workload; a deployment ID names it directly.
+ */
 export function taskLatencyQueryOptions(
   workspaceId: string,
   stubIds: string[],
@@ -64,15 +68,44 @@ export function taskLatencyQueryOptions(
       options.deploymentId ?? null,
       windowSeconds,
     ),
-    queryFn: () => {
-      const params = new URLSearchParams();
-      for (const stubId of stubIds) params.append("stub_id", stubId);
-      params.set("window_seconds", String(windowSeconds));
-      if (options.deploymentId) params.set("deployment_id", options.deploymentId);
-      return apiRequest(
-        withWorkspace(`/api/v1/metrics/task-latency?${params.toString()}`, workspaceId),
-        taskLatencyTimeseriesSchema,
+    queryFn: async ({ client }): Promise<TaskLatencyTimeseries> => {
+      let workload = options.deploymentId ? parseDeploymentId(options.deploymentId).workload : "";
+      if (!workload) {
+        const stub = parseStubId(stubIds[0] ?? "");
+        const workloads = await workloadDirectory(client, workspaceId);
+        workload = workloads.byName.get(`${stub.app}/${stub.name}`)?.id ?? "";
+      }
+      if (!workload) {
+        return {
+          workspace_id: workspaceId,
+          stub_ids: stubIds,
+          deployment_id: "",
+          window_seconds: windowSeconds,
+          buckets: [],
+        };
+      }
+      const performance = await ok(
+        api.GET("/v1/workspaces/{workspace}/deployments/{deployment}/performance", {
+          params: {
+            path: { workspace: workspaceName(workspaceId), deployment: workload },
+            query: { window_seconds: windowSeconds },
+          },
+        }),
       );
+      return {
+        workspace_id: workspaceId,
+        stub_ids: stubIds,
+        deployment_id: options.deploymentId ?? "",
+        window_seconds: performance.window_seconds,
+        buckets: performance.buckets.map((bucket) => ({
+          timestamp: bucket.timestamp,
+          count: bucket.count,
+          p50_ms: bucket.p50_ms ?? null,
+          p95_ms: bucket.p95_ms ?? null,
+          cold_starts: bucket.cold_starts,
+          status_counts: viewStatusCounts(bucket.status_counts),
+        })),
+      };
     },
     enabled: stubIds.length > 0,
     meta: workspaceLiveQueryMeta(true),

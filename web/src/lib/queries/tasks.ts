@@ -3,13 +3,14 @@ import { LIVE_LIST_MAX_PAGES } from "./infinite-list";
 
 import type { QueryClient } from "@tanstack/react-query";
 
-import { api, apiRequest, ok, withWorkspace, type Schemas } from "@/lib/api/client";
-import {
-  callGraphSchema,
-  taskMetricsSummarySchema,
-  taskTimeWindowBucketListSchema,
-  type Task,
-  type TaskSummary,
+import { api, ok, type Schemas } from "@/lib/api/client";
+import type {
+  CallGraph,
+  CallGraphNode,
+  Task,
+  TaskMetricsSummary,
+  TaskSummary,
+  TaskTimeWindowBucket,
 } from "@/lib/api/schemas";
 import {
   apiTaskStatus,
@@ -17,6 +18,8 @@ import {
   parseStubId,
   viewContainer,
   viewResult,
+  viewStatus,
+  viewStatusCounts,
   viewTask,
   viewTaskSummary,
 } from "@/lib/api/views";
@@ -190,7 +193,7 @@ export function taskQueryOptions(workspaceId: string, taskId: string) {
   return queryOptions({
     queryKey: workspaceQueryKeys.tasks.detail(workspaceId, taskId),
     // A running task is read with the API's wait, which answers as soon as it
-    // finishes; a queued one is read again shortly to see it start.
+    // finishes; the change stream refreshes a queued one when it starts.
     queryFn: async ({ client, queryKey, signal }): Promise<Task> => {
       const known = client.getQueryData<Task>(queryKey);
       const task = await ok(
@@ -235,11 +238,7 @@ export function taskQueryOptions(workspaceId: string, taskId: string) {
         { result, container },
       );
     },
-    refetchInterval: (query) => {
-      const status = query.state.data?.status;
-      if (status === "running") return 1_000;
-      return status === "pending" || status === "retry" ? 2_000 : false;
-    },
+    refetchInterval: (query) => (query.state.data?.status === "running" ? 1_000 : false),
     // Rate-limited drawer reads preserve their explicit Retry-After recovery
     // instead of being retried by an unrelated workspace reconnect.
     retry: false,
@@ -247,29 +246,95 @@ export function taskQueryOptions(workspaceId: string, taskId: string) {
   });
 }
 
+/**
+ * The task's call graph as trees: each task under the task that spawned it,
+ * oldest first. A graph past the API's 2,000 tasks ends there.
+ */
 export function callGraphQueryOptions(workspaceId: string, taskId: string) {
   return queryOptions({
     queryKey: workspaceQueryKeys.tasks.callGraph(workspaceId, taskId),
-    queryFn: () =>
-      apiRequest(withWorkspace(`/api/v1/tasks/${taskId}/call-graph`, workspaceId), callGraphSchema),
+    queryFn: async (): Promise<CallGraph> =>
+      viewCallGraph(
+        await ok(
+          api.GET(
+            "/v1/workspaces/{workspace}/tasks/{task}/call-graph",
+            taskPath(workspaceId, taskId),
+          ),
+        ),
+      ),
     meta: workspaceLiveQueryMeta(true),
   });
+}
+
+function viewCallGraph(graph: Schemas["TaskCallGraph"]): CallGraph {
+  const nodes = new Map<string, CallGraphNode>();
+  const roots: CallGraphNode[] = [];
+  for (const node of graph.nodes) {
+    const view: CallGraphNode = {
+      task_id: node.task_id,
+      container_id: node.container_id ?? null,
+      parent_task_id: node.parent_task_id ?? "",
+      root_task_id: graph.root_task_id,
+      status: viewStatus(node.status),
+      name: node.function,
+      function_name: node.function,
+      created_at: node.created_at,
+      started_at: node.started_at ?? null,
+      finished_at: node.finished_at ?? null,
+      dependencies: node.depends_on,
+      children: [],
+    };
+    nodes.set(node.task_id, view);
+    // Parents precede their children, so a parent not seen is outside the graph.
+    const parent = node.parent_task_id ? nodes.get(node.parent_task_id) : undefined;
+    if (parent) parent.children.push(view);
+    else roots.push(view);
+  }
+  return {
+    root_task_id: graph.root_task_id,
+    root: nodes.get(graph.root_task_id) ?? null,
+    nodes: roots,
+  };
+}
+
+/** The app an aggregate is narrowed to, by the name the API filters on. */
+async function appName(
+  client: QueryClient,
+  workspaceId: string,
+  appId: string | undefined,
+): Promise<string | undefined> {
+  return appId ? (await appById(client, workspaceId, appId)).name : undefined;
 }
 
 export function taskMetricsQueryOptions(workspaceId: string, hours = 24, appId?: string) {
   return queryOptions({
     queryKey: workspaceQueryKeys.tasks.metrics(workspaceId, hours, appId ?? null),
-    queryFn: () => {
-      const endedAt = Math.floor(Date.now() / 1000);
-      const startedAt = endedAt - hours * 3600;
-      const appParam = appId ? `&app_id=${encodeURIComponent(appId)}` : "";
-      return apiRequest(
-        withWorkspace(
-          `/api/v1/tasks/metrics?started_at=${startedAt}&ended_at=${endedAt}${appParam}`,
-          workspaceId,
-        ),
-        taskMetricsSummarySchema,
+    queryFn: async ({ client }): Promise<TaskMetricsSummary> => {
+      const metrics = await ok(
+        api.GET("/v1/workspaces/{workspace}/metrics/tasks", {
+          params: {
+            path: { workspace: workspaceName(workspaceId) },
+            query: {
+              start: new Date(Date.now() - hours * 3_600_000).toISOString(),
+              app: await appName(client, workspaceId, appId),
+            },
+          },
+        }),
       );
+      return {
+        total: metrics.total,
+        status_counts: viewStatusCounts(metrics.status_counts),
+        completed: metrics.status_counts.succeeded,
+        failed: metrics.status_counts.failed,
+        cancelled: metrics.status_counts.cancelled,
+        failure_rate: metrics.failure_rate,
+        average_runtime_ms: metrics.average_runtime_ms ?? null,
+        runtime_ms_p50: metrics.runtime_ms_p50 ?? null,
+        runtime_ms_p95: metrics.runtime_ms_p95 ?? null,
+        runtime_ms_p99: metrics.runtime_ms_p99 ?? null,
+        startup_ms_p50: metrics.startup_ms_p50 ?? null,
+        startup_ms_p95: metrics.startup_ms_p95 ?? null,
+      };
     },
     meta: workspaceLiveQueryMeta(true),
   });
@@ -277,6 +342,33 @@ export function taskMetricsQueryOptions(workspaceId: string, hours = 24, appId?:
 
 /** Buckets the activity chart renders; it slices to this and discards the rest. */
 const BUCKETS_DRAWN = 24;
+
+/**
+ * Tasks submitted per bucket over the `BUCKETS_DRAWN` buckets that end with
+ * the current one: one series per app or, for one app, per function.
+ */
+export function taskActivity(
+  workspaceId: string,
+  windowSeconds: number,
+  app?: string,
+): Promise<Schemas["TaskActivity"]> {
+  // The span is computed per fetch and left out of the query key: in the key
+  // every refetch would be a new key and nothing would be served from cache.
+  const windowMs = windowSeconds * 1000;
+  const current = Math.floor(Date.now() / windowMs) * windowMs;
+  return ok(
+    api.GET("/v1/workspaces/{workspace}/metrics/activity", {
+      params: {
+        path: { workspace: workspaceName(workspaceId) },
+        query: {
+          window_seconds: windowSeconds,
+          start: new Date(current - (BUCKETS_DRAWN - 1) * windowMs).toISOString(),
+          app,
+        },
+      },
+    }),
+  );
+}
 
 export function taskBucketsQueryOptions(
   workspaceId: string,
@@ -290,24 +382,46 @@ export function taskBucketsQueryOptions(
       scope.appId ?? null,
       scope.stubId ?? null,
     ),
-    queryFn: () => {
-      // The span is computed per fetch and deliberately left out of the query
-      // key: in the key every refetch would be a new key and nothing would ever
-      // be served from cache. Asking for the buckets the chart draws is the
-      // point of sending it at all, since without a span the server reads the
-      // workspace's whole task history to answer for one day of it.
-      const endedAt = Math.floor(Date.now() / 1000);
-      const params = new URLSearchParams();
-      params.set("window_seconds", String(windowSeconds));
-      params.set("started_at", String(endedAt - windowSeconds * BUCKETS_DRAWN));
-      params.set("ended_at", String(endedAt));
-      if (scope.appId) params.set("app_id", scope.appId);
-      if (scope.stubId) params.set("stub_id", scope.stubId);
-      return apiRequest(
-        withWorkspace(`/api/v1/tasks/aggregate-by-time-window?${params.toString()}`, workspaceId),
-        taskTimeWindowBucketListSchema,
-      );
+    queryFn: async ({ client }): Promise<{ items: TaskTimeWindowBucket[] }> => {
+      const stub = scope.stubId ? parseStubId(scope.stubId) : undefined;
+      const app = stub?.app ?? (await appName(client, workspaceId, scope.appId));
+      const activity = await taskActivity(workspaceId, windowSeconds, app);
+      const byTime = new Map<string, Schemas["TaskStatusCounts"]>();
+      for (const series of activity.series) {
+        if (stub && series.function !== stub.name) continue;
+        for (const bucket of series.buckets) {
+          const sum = byTime.get(bucket.timestamp);
+          byTime.set(
+            bucket.timestamp,
+            sum ? addCounts(sum, bucket.status_counts) : bucket.status_counts,
+          );
+        }
+      }
+      return {
+        items: [...byTime].map(([timestamp, counts]) => ({
+          timestamp,
+          count: countTotal(counts),
+          status_counts: viewStatusCounts(counts),
+        })),
+      };
     },
     meta: workspaceLiveQueryMeta(true),
   });
+}
+
+function addCounts(
+  left: Schemas["TaskStatusCounts"],
+  right: Schemas["TaskStatusCounts"],
+): Schemas["TaskStatusCounts"] {
+  return {
+    queued: left.queued + right.queued,
+    running: left.running + right.running,
+    succeeded: left.succeeded + right.succeeded,
+    failed: left.failed + right.failed,
+    cancelled: left.cancelled + right.cancelled,
+  };
+}
+
+export function countTotal(counts: Schemas["TaskStatusCounts"]): number {
+  return counts.queued + counts.running + counts.succeeded + counts.failed + counts.cancelled;
 }

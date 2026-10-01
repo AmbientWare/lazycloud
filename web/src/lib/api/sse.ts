@@ -1,4 +1,5 @@
 import { ApiError, api, ok, type Schemas } from "@/lib/api/client";
+import { viewChangeFrames } from "@/lib/api/changes";
 import { openLogStream, viewLogRecord } from "@/lib/api/logs";
 import { readNdjson } from "@/lib/api/ndjson";
 import { workspaceName } from "@/lib/api/workspaces";
@@ -13,7 +14,8 @@ export type ServerSentEvent = {
  * Consume a `text/event-stream` response over fetch, authenticated by the
  * session cookie. Resolves when the server closes the stream; rejects on
  * network or HTTP errors. A log stream is read from the API's newline-delimited
- * log endpoints and delivered as the same events.
+ * log endpoints and delivered as the same events; the workspace change stream
+ * is read from the API's and delivered as the reference's change events.
  */
 export async function streamServerSentEvents(
   url: string,
@@ -34,10 +36,21 @@ export async function streamServerSentEvents(
     await streamLogs(target.searchParams, { signal, lastEventId, onOpen, onEvent });
     return;
   }
+  if (target.pathname === "/api/v1/events/changes/stream") {
+    const workspaceId = target.searchParams.get("workspace") ?? "";
+    const workspace = encodeURIComponent(workspaceName(workspaceId));
+    await streamServerSentEvents(`/v1/workspaces/${workspace}/changes/stream`, {
+      signal,
+      lastEventId,
+      onOpen,
+      onEvent: (frame) => viewChangeFrames(frame, workspaceId).forEach(onEvent),
+    });
+    return;
+  }
   const headers = new Headers({ Accept: "text/event-stream" });
   if (lastEventId) headers.set("Last-Event-ID", lastEventId);
 
-  const response = await fetch(url, { headers, signal, credentials: "include" });
+  const response = await fetch(url, { headers, signal, credentials: "same-origin" });
   if (!response.ok || !response.body) {
     const body = await response.text().catch(() => "");
     throw new ApiError(response.status, response.statusText, body, {
