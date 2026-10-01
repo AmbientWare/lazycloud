@@ -489,9 +489,10 @@ class SandboxProcessManager:
     ) -> SandboxProcess:
         args = _command_args_list(command)
         try:
-            request = ProcessRequest.model_validate(
-                {"args": args, "cwd": cwd, "env": dict(env or {}) or None}
-            )
+            fields: dict[str, Any] = {"args": args, "cwd": cwd}
+            if env:
+                fields["env"] = dict(env)
+            request = ProcessRequest.model_validate(fields)
         except ValidationError as exc:
             raise SandboxProcessError(f"invalid sandbox command: {exc}") from exc
         response = _process_call(

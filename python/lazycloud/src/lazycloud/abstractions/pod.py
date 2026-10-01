@@ -449,14 +449,14 @@ class Pod:
         """Start a container of this pod outside its deployment's count."""
         selected_stub_id = stub_id or self.stub_id or self.prepare(workspace=workspace)
         client = self._client(workspace)
+        fields: dict[str, Any] = {"release_id": selected_stub_id}
+        if command:
+            fields["command"] = list(command)
+        lifetime = self.keep_warm if timeout_seconds is None else timeout_seconds
+        if lifetime is not None:
+            fields["timeout_seconds"] = lifetime
         try:
-            instance = client.create_instance(
-                CreateInstanceRequest(
-                    release_id=UUID(selected_stub_id),
-                    command=list(command) if command else None,
-                    timeout_seconds=self.keep_warm if timeout_seconds is None else timeout_seconds,
-                )
-            )
+            instance = client.create_instance(CreateInstanceRequest.model_validate(fields))
         except (SdkError, ValidationError) as exc:
             raise PodOperationError(str(exc)) from exc
         return PodInstance(
