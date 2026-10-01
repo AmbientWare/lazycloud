@@ -71,14 +71,14 @@ test("empty workspace guides the quickstart and flips to the grid live", async (
 
   await page.goto("/w/acme/apps");
 
-  await expect(page.getByText("Deploy your first app")).toBeVisible();
+  await expect(page.getByText("Run your first function")).toBeVisible();
 
   // The workspace change stream invalidates the summary query; the next
   // response contains the first app and replaces the guided steps in place.
   published = true;
   publishWorkspaceChange!();
   await expect(page.getByRole("link", { name: "quickstart" })).toBeVisible({ timeout: 15_000 });
-  await expect(page.getByText("Deploy your first app")).not.toBeVisible();
+  await expect(page.getByText("Run your first function")).not.toBeVisible();
 });
 
 test("device approval page approves a pending CLI sign-in", async ({ page }) => {
