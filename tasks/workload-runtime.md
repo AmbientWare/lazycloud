@@ -100,7 +100,8 @@ parent and root; task logs show `token is ********`; hooks log in order;
 two `in_process` attempts overlap in one container with their own output;
 a retried failure runs on_error/on_retry then on_error/on_failure; signed
 callbacks verify with the revealed signing key; an `every 1m` schedule
-fires and records its run. Passed in 14.5 s.
+fires and records its run. Passed in 14.5 s, and again in 9.3 s after
+merging go-rewrite with the images packet (#412).
 
 Owner tests (PostgreSQL, real gRPC, real runner processes):
 `TestParseCronMatchesCroniter`, `TestSecretLifecycle`,
