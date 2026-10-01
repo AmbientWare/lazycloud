@@ -237,9 +237,7 @@ class Volume(ResourceControlBinding[StorageClient]):
     client: StorageClient | None = field(default=None, init=False, repr=False)
     endpoint: str | None = field(default=None, init=False, repr=False)
     token: str | None = field(default=None, init=False, repr=False)
-    timeout_seconds: float = field(
-        default=DEFAULT_VOLUME_DOWNLOAD_TIMEOUT_SECONDS, init=False, repr=False
-    )
+    timeout_seconds: float = field(default=10.0, init=False, repr=False)
 
     @property
     def control_client(self) -> StorageClient:
