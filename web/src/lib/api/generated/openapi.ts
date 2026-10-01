@@ -1349,7 +1349,7 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** Stored artifact count, bytes and retention */
+        /** Stored artifact count, bytes, cost and retention */
         get: operations["getArtifactSummary"];
         put?: never;
         post?: never;
@@ -3588,6 +3588,21 @@ export interface components {
             count: number;
             /** Format: int64 */
             size_bytes: number;
+            /**
+             * Format: int64
+             * @description size_bytes for 30 days at the volume storage rate.
+             */
+            estimated_monthly_nanos: number;
+            /**
+             * Format: int64
+             * @description Metered cost since accrued_since, by closed quarter-hour.
+             */
+            accrued_nanos: number;
+            /**
+             * Format: date-time
+             * @description The start of the current UTC month.
+             */
+            accrued_since: string;
             /**
              * Format: int64
              * @description How long new artifacts are kept under the workspace's plan.

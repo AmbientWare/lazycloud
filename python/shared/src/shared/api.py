@@ -735,6 +735,15 @@ class PresignArtifactRequest(BaseModel):
 class ArtifactSummary(BaseModel):
     count: int
     size_bytes: int
+    estimated_monthly_nanos: Annotated[
+        int, Field(description="size_bytes for 30 days at the volume storage rate.")
+    ]
+    accrued_nanos: Annotated[
+        int, Field(description="Metered cost since accrued_since, by closed quarter-hour.")
+    ]
+    accrued_since: Annotated[
+        AwareDatetime, Field(description="The start of the current UTC month.")
+    ]
     retention_seconds: Annotated[
         int, Field(description="How long new artifacts are kept under the workspace's plan.")
     ]

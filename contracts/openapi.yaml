@@ -1508,7 +1508,7 @@ paths:
     get:
       operationId: getArtifactSummary
       tags: [storage]
-      summary: Stored artifact count, bytes and retention
+      summary: Stored artifact count, bytes, cost and retention
       responses:
         "200":
           description: The summary
@@ -4643,7 +4643,7 @@ components:
 
     ArtifactSummary:
       type: object
-      required: [count, size_bytes, retention_seconds]
+      required: [count, size_bytes, estimated_monthly_nanos, accrued_nanos, accrued_since, retention_seconds]
       properties:
         count:
           type: integer
@@ -4651,6 +4651,18 @@ components:
         size_bytes:
           type: integer
           format: int64
+        estimated_monthly_nanos:
+          description: size_bytes for 30 days at the volume storage rate.
+          type: integer
+          format: int64
+        accrued_nanos:
+          description: Metered cost since accrued_since, by closed quarter-hour.
+          type: integer
+          format: int64
+        accrued_since:
+          description: The start of the current UTC month.
+          type: string
+          format: date-time
         retention_seconds:
           description: How long new artifacts are kept under the workspace's plan.
           type: integer
