@@ -14,13 +14,14 @@ import (
 
 const ensureWorkload = `-- name: EnsureWorkload :one
 insert into workloads (app_id, kind, name, desired_state)
-values ($1, 'function', $2, 'active')
+values ($1, $2, $3, 'active')
 on conflict (app_id, kind, name) where desired_state <> 'deleted' do update set name = excluded.name
 returning id, active_release_id, desired_state
 `
 
 type EnsureWorkloadParams struct {
 	AppID uuid.UUID
+	Kind  string
 	Name  string
 }
 
@@ -34,7 +35,7 @@ type EnsureWorkloadRow struct {
 // deploy it never reactivates a stopped workload. The no-op update locks the
 // row, so concurrent prepares of one definition insert one release.
 func (q *Queries) EnsureWorkload(ctx context.Context, arg EnsureWorkloadParams) (EnsureWorkloadRow, error) {
-	row := q.db.QueryRow(ctx, ensureWorkload, arg.AppID, arg.Name)
+	row := q.db.QueryRow(ctx, ensureWorkload, arg.AppID, arg.Kind, arg.Name)
 	var i EnsureWorkloadRow
 	err := row.Scan(&i.ID, &i.ActiveReleaseID, &i.DesiredState)
 	return i, err

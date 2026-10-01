@@ -3336,9 +3336,11 @@ paths:
         first max_bytes; the response then carries `Lazycloud-Truncated:
         true`.
       parameters:
+        # Defaults to 64 MiB. No schema default: the request validator would
+        # write it back into the query as a float.
         - name: max_bytes
           in: query
-          schema: { type: integer, format: int64, minimum: 1, maximum: 67108864, default: 67108864 }
+          schema: { type: integer, format: int64, minimum: 1, maximum: 67108864 }
         - name: truncate
           in: query
           schema: { type: boolean, default: false }
