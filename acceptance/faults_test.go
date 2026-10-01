@@ -37,13 +37,17 @@ async def app(scope, receive, send):
         raise RuntimeError("the response breaks off")
     if path == "/stream":
         await send({"type": "http.response.start", "status": 200, "headers": [(b"content-type", b"text/event-stream")]})
-        try:
-            while True:
-                await send({"type": "http.response.body", "body": b"data: tick\n\n", "more_body": True})
-                await asyncio.sleep(0.05)
-        except BaseException:
+
+        async def watch():
+            while (await receive())["type"] != "http.disconnect":
+                pass
             events["disconnected"] = True
-            raise
+
+        watcher = asyncio.ensure_future(watch())
+        while not watcher.done():
+            await send({"type": "http.response.body", "body": b"data: tick\n\n", "more_body": True})
+            await asyncio.sleep(0.05)
+        return
     if path == "/status":
         await answer(b"disconnected" if events["disconnected"] else b"running")
         return
@@ -152,7 +156,7 @@ func TestStalledRequestBodyDoesNotHoldCapacity(t *testing.T) {
 	if _, err := fmt.Fprintf(conn, "POST /ok HTTP/1.1\r\nHost: %s\r\nAuthorization: Bearer %s\r\nContent-Length: %d\r\n\r\n0123456789", host, p.token, 1<<20); err != nil {
 		t.Fatal(err)
 	}
-	_ = conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
 	if err != nil {
 		t.Fatalf("read the early answer: %v", err)

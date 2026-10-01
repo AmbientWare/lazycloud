@@ -222,6 +222,8 @@ func (e *Edge) proxy(w http.ResponseWriter, r *http.Request, t target, authorize
 	defer body.release()
 	body.upgrade = upgrade
 	rc := http.NewResponseController(w)
+	// A streamed body is still being sent while the response comes back.
+	_ = rc.EnableFullDuplex()
 	head := e.requestHead(r, authorized, upgrade, body)
 	deadline := time.Now().Add(t.release.timeout)
 	attempts := 1

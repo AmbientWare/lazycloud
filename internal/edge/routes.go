@@ -240,36 +240,30 @@ func (e *Edge) versionTarget(ctx context.Context, w *workload, id uuid.UUID) (ta
 	return target{workload: w, release: r}, nil
 }
 
-// idTTL is how long the edge remembers what an id host names, or that it
-// names nothing, so repeated requests for one id read the database once.
-const idTTL = 2 * time.Second
-
-type idEntry struct {
-	target target
-	err    error
-	at     time.Time
-}
+// missTTL is how long the edge remembers that an id host names nothing, so
+// repeated requests for an unknown id read the database once. Ids are
+// random, so a release or container never appears under a remembered miss.
+const missTTL = 2 * time.Second
 
 // resolveID resolves a release id, including a preview's, or a container
-// id, from a short-lived cache.
+// id.
 func (e *Edge) resolveID(ctx context.Context, id uuid.UUID) (target, error) {
 	now := time.Now()
 	e.mu.Lock()
-	entry, cached := e.ids[id]
+	missed, known := e.misses[id]
 	e.mu.Unlock()
-	if cached && now.Sub(entry.at) < idTTL {
-		return entry.target, entry.err
+	if known && now.Sub(missed) < missTTL {
+		return target{}, errNoRoute
 	}
 	t, err := e.readID(ctx, id)
-	if err != nil && !errors.Is(err, errNoRoute) {
-		return t, err
+	if errors.Is(err, errNoRoute) {
+		e.mu.Lock()
+		if len(e.misses) >= maxCachedReleases {
+			clear(e.misses)
+		}
+		e.misses[id] = now
+		e.mu.Unlock()
 	}
-	e.mu.Lock()
-	if len(e.ids) >= maxCachedReleases {
-		clear(e.ids)
-	}
-	e.ids[id] = idEntry{target: t, err: err, at: now}
-	e.mu.Unlock()
 	return t, err
 }
 

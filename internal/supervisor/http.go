@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -121,7 +122,47 @@ func (f *httpFront) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer worker.release()
+	// The workload may answer before it read the whole body, and a
+	// streamed body arrives while the answer goes back.
+	rc := http.NewResponseController(w)
+	_ = rc.EnableFullDuplex()
+	if r.Body != nil && r.Body != http.NoBody {
+		r.Body = &requestBody{ReadCloser: r.Body, rc: rc}
+	}
 	worker.proxy.ServeHTTP(w, r)
+}
+
+// requestBody is the agent's request body as the proxy reads it. A read
+// may block on a client that stopped sending after the workload answered,
+// and holds the server's body lock while it does; closing the body before
+// its end sets a read deadline in the past, which ends that read, rather
+// than wait for the lock.
+type requestBody struct {
+	io.ReadCloser
+	rc     *http.ResponseController
+	mu     sync.Mutex
+	sawEOF bool
+}
+
+func (b *requestBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if errors.Is(err, io.EOF) {
+		b.mu.Lock()
+		b.sawEOF = true
+		b.mu.Unlock()
+	}
+	return n, err //nolint:wrapcheck // a body's EOF must pass through unwrapped
+}
+
+func (b *requestBody) Close() error {
+	b.mu.Lock()
+	ended := b.sawEOF
+	b.mu.Unlock()
+	if ended {
+		return b.ReadCloser.Close() //nolint:wrapcheck // passed through
+	}
+	_ = b.rc.SetReadDeadline(time.Now())
+	return nil
 }
 
 // httpWorker is the serving state of one slot's runner. Its fields are

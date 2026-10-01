@@ -57,7 +57,7 @@ type Edge struct {
 	versions  map[versionKey]uuid.UUID
 	workloads map[uuid.UUID]*workloadState
 	loads     map[uuid.UUID]*releaseLoad
-	ids       map[uuid.UUID]idEntry
+	misses    map[uuid.UUID]time.Time
 	// refresh holds workloads whose container set changed; publish kicks
 	// the demand publisher.
 	refresh chan uuid.UUID
@@ -83,7 +83,7 @@ func NewEdge(pool *pgxpool.Pool, id *identity.Identity, exec *execution.Executio
 		versions:  map[versionKey]uuid.UUID{},
 		workloads: map[uuid.UUID]*workloadState{},
 		loads:     map[uuid.UUID]*releaseLoad{},
-		ids:       map[uuid.UUID]idEntry{},
+		misses:    map[uuid.UUID]time.Time{},
 		refresh:   make(chan uuid.UUID, refreshQueue),
 		publish:   make(chan struct{}, 1),
 	}
