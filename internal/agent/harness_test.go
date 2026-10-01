@@ -228,6 +228,8 @@ type env struct {
 	stateDir string
 	docker   *client.Client
 	source   *hostproto.Source
+	// metricsInterval overrides the agent's sampling interval.
+	metricsInterval time.Duration
 }
 
 func newEnv(t *testing.T) *env {
@@ -292,18 +294,19 @@ func (e *env) startAgent() *runningAgent {
 	ctx, cancel := context.WithCancel(context.Background())
 	a := &runningAgent{cancel: cancel, done: make(chan error, 1)}
 	cfg := Config{
-		Server:         e.address,
-		StateDir:       e.stateDir,
-		SocketDir:      filepath.Join(e.stateDir, "s"),
-		JoinToken:      e.server.joinToken,
-		RuntimeDir:     runtimeDir,
-		SupervisorPath: supervisorBinary,
-		OCIRuntime:     "runc",
-		BuildNetwork:   "host",
-		Capacity:       &hostproto.Capacity{CpuMillis: 4000, MemoryBytes: 8 << 30},
-		Labels:         map[string]string{"lazycloud.agent": e.id},
-		Version:        "test",
-		Logger:         slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})),
+		Server:          e.address,
+		StateDir:        e.stateDir,
+		SocketDir:       filepath.Join(e.stateDir, "s"),
+		JoinToken:       e.server.joinToken,
+		RuntimeDir:      runtimeDir,
+		SupervisorPath:  supervisorBinary,
+		OCIRuntime:      "runc",
+		BuildNetwork:    "host",
+		Capacity:        &hostproto.Capacity{CpuMillis: 4000, MemoryBytes: 8 << 30},
+		Labels:          map[string]string{"lazycloud.agent": e.id},
+		Version:         "test",
+		MetricsInterval: e.metricsInterval,
+		Logger:          slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})),
 	}
 	go func() { a.done <- Run(ctx, cfg) }()
 	e.t.Cleanup(a.stop)
