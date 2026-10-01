@@ -1189,12 +1189,16 @@ func (x *Source) GetUrlExpiresAt() *timestamppb.Timestamp {
 	return nil
 }
 
+// Resources reserve cpu_millis and memory_bytes; the container may use more
+// up to the limits. The host caps cpu_limit_millis at its own size.
 type Resources struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	CpuMillis     int64                  `protobuf:"varint,1,opt,name=cpu_millis,json=cpuMillis,proto3" json:"cpu_millis,omitempty"`
-	MemoryBytes   int64                  `protobuf:"varint,2,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	CpuMillis        int64                  `protobuf:"varint,1,opt,name=cpu_millis,json=cpuMillis,proto3" json:"cpu_millis,omitempty"`
+	MemoryBytes      int64                  `protobuf:"varint,2,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"`
+	CpuLimitMillis   int64                  `protobuf:"varint,3,opt,name=cpu_limit_millis,json=cpuLimitMillis,proto3" json:"cpu_limit_millis,omitempty"`
+	MemoryLimitBytes int64                  `protobuf:"varint,4,opt,name=memory_limit_bytes,json=memoryLimitBytes,proto3" json:"memory_limit_bytes,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *Resources) Reset() {
@@ -1237,6 +1241,20 @@ func (x *Resources) GetCpuMillis() int64 {
 func (x *Resources) GetMemoryBytes() int64 {
 	if x != nil {
 		return x.MemoryBytes
+	}
+	return 0
+}
+
+func (x *Resources) GetCpuLimitMillis() int64 {
+	if x != nil {
+		return x.CpuLimitMillis
+	}
+	return 0
+}
+
+func (x *Resources) GetMemoryLimitBytes() int64 {
+	if x != nil {
+		return x.MemoryLimitBytes
 	}
 	return 0
 }
@@ -2068,11 +2086,13 @@ const file_host_v1_host_proto_rawDesc = "" +
 	"\x06Source\x12\x16\n" +
 	"\x06sha256\x18\x01 \x01(\tR\x06sha256\x12\x10\n" +
 	"\x03url\x18\x02 \x01(\tR\x03url\x12@\n" +
-	"\x0eurl_expires_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\furlExpiresAt\"M\n" +
+	"\x0eurl_expires_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\furlExpiresAt\"\xa5\x01\n" +
 	"\tResources\x12\x1d\n" +
 	"\n" +
 	"cpu_millis\x18\x01 \x01(\x03R\tcpuMillis\x12!\n" +
-	"\fmemory_bytes\x18\x02 \x01(\x03R\vmemoryBytes\"B\n" +
+	"\fmemory_bytes\x18\x02 \x01(\x03R\vmemoryBytes\x12(\n" +
+	"\x10cpu_limit_millis\x18\x03 \x01(\x03R\x0ecpuLimitMillis\x12,\n" +
+	"\x12memory_limit_bytes\x18\x04 \x01(\x03R\x10memoryLimitBytes\"B\n" +
 	"\x10FunctionWorkload\x12\x18\n" +
 	"\ahandler\x18\x01 \x01(\tR\ahandler\x12\x14\n" +
 	"\x05slots\x18\x02 \x01(\x05R\x05slots\"W\n" +

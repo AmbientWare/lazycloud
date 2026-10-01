@@ -40,6 +40,10 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+      - name: Object store for storage tests
+        run: |
+          docker compose up -d --wait object-store
+          docker compose run --rm object-store-bootstrap
       - name: Generated code is current
         run: |
           go generate ./...

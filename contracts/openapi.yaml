@@ -136,6 +136,10 @@ paths:
     get:
       operationId: streamTaskLogs
       summary: Log lines after a cursor, one JSON LogEntry per line
+      description: >-
+        A followed stream writes a blank line after 15 seconds without
+        entries, so clients can apply a read timeout. Clients skip blank
+        lines.
       parameters:
         - name: after
           in: query
@@ -292,7 +296,9 @@ components:
       type: object
       required: [url, method, headers, expires_at]
       properties:
-        url: { type: string }
+        url:
+          description: Absolute URL; the request carries no bearer token.
+          type: string
         method:
           type: string
           enum: [PUT]
@@ -398,6 +404,12 @@ components:
           enum: ["3.10", "3.11", "3.12", "3.13", "3.14"]
 
     Resources:
+      description: >-
+        Reservations the container always keeps. CPU above the reservation is
+        shared up to `cpu_limit_millis`, by default the reservation plus 16
+        cores. Memory above the reservation is allowed up to
+        `memory_limit_mib`, by default four times the reservation, at least
+        1 GiB and at most 8 GiB above it; the container is killed beyond it.
       type: object
       required: [cpu_millis, memory_mib]
       properties:
@@ -405,7 +417,15 @@ components:
           type: integer
           minimum: 125
           maximum: 192000
+        cpu_limit_millis:
+          type: integer
+          minimum: 125
+          maximum: 192000
         memory_mib:
+          type: integer
+          minimum: 128
+          maximum: 1572864
+        memory_limit_mib:
           type: integer
           minimum: 128
           maximum: 1572864
@@ -483,7 +503,10 @@ components:
         encoding:
           type: string
           enum: [json, cloudpickle]
-        value: {}
+        value:
+          # Kept as raw JSON so values pass through unchanged, including
+          # integers beyond float64 precision.
+          x-go-type: json.RawMessage
         data:
           type: string
           format: byte
@@ -555,5 +578,7 @@ components:
         stream:
           type: string
           enum: [stdout, stderr, system]
-        data: { type: string }
+        data:
+          description: One line of output without its trailing newline.
+          type: string
         time: { type: string, format: date-time }

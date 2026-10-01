@@ -5,22 +5,10 @@ from typing import TYPE_CHECKING
 from lazycloud.control import ControlClientConfig
 
 if TYPE_CHECKING:
-    from shared.http_transport import HttpChannel
-
     from lazycloud.clients.gateway.control import GatewayControlClient
     from lazycloud.clients.observability.control import ObservabilityControlClient
     from lazycloud.clients.pod.control import PodControlClient
     from lazycloud.clients.resource.control import ResourceControlClient
-
-
-def control_http_channel(config: ControlClientConfig) -> HttpChannel:
-    from shared.http_transport import HttpChannel
-
-    return HttpChannel(
-        endpoint=config.endpoint,
-        token=config.token,
-        timeout_seconds=config.timeout_seconds,
-    )
 
 
 def gateway_control_client(config: ControlClientConfig) -> GatewayControlClient:
@@ -68,7 +56,6 @@ def pod_control_client(config: ControlClientConfig) -> PodControlClient:
 
 
 __all__ = [
-    "control_http_channel",
     "gateway_control_client",
     "observability_control_client",
     "pod_control_client",

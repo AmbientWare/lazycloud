@@ -4,6 +4,7 @@
 package apitypes
 
 import (
+	"encoding/json"
 	"time"
 
 	openapi_types "github.com/oapi-codegen/runtime/types"
@@ -71,28 +72,28 @@ func (e ErrorCode) Valid() bool {
 
 // Defines values for FailureKind.
 const (
-	LoadError   FailureKind = "load_error"
-	Lost        FailureKind = "lost"
-	StartFailed FailureKind = "start_failed"
-	System      FailureKind = "system"
-	Timeout     FailureKind = "timeout"
-	UserError   FailureKind = "user_error"
+	FailureKindLoadError   FailureKind = "load_error"
+	FailureKindLost        FailureKind = "lost"
+	FailureKindStartFailed FailureKind = "start_failed"
+	FailureKindSystem      FailureKind = "system"
+	FailureKindTimeout     FailureKind = "timeout"
+	FailureKindUserError   FailureKind = "user_error"
 )
 
 // Valid indicates whether the value is a known member of the FailureKind enum.
 func (e FailureKind) Valid() bool {
 	switch e {
-	case LoadError:
+	case FailureKindLoadError:
 		return true
-	case Lost:
+	case FailureKindLost:
 		return true
-	case StartFailed:
+	case FailureKindStartFailed:
 		return true
-	case System:
+	case FailureKindSystem:
 		return true
-	case Timeout:
+	case FailureKindTimeout:
 		return true
-	case UserError:
+	case FailureKindUserError:
 		return true
 	default:
 		return false
@@ -138,6 +139,27 @@ func (e ImageSpecPythonVersion) Valid() bool {
 	case N313:
 		return true
 	case N314:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for LogEntryStream.
+const (
+	LogEntryStreamStderr LogEntryStream = "stderr"
+	LogEntryStreamStdout LogEntryStream = "stdout"
+	LogEntryStreamSystem LogEntryStream = "system"
+)
+
+// Valid indicates whether the value is a known member of the LogEntryStream enum.
+func (e LogEntryStream) Valid() bool {
+	switch e {
+	case LogEntryStreamStderr:
+		return true
+	case LogEntryStreamStdout:
+		return true
+	case LogEntryStreamSystem:
 		return true
 	default:
 		return false
@@ -297,10 +319,12 @@ type FunctionSpec struct {
 	KeepWarmSeconds *int         `json:"keep_warm_seconds,omitempty"`
 	MaxPendingTasks *int         `json:"max_pending_tasks,omitempty"`
 	Name            WorkloadName `json:"name"`
-	Resources       Resources    `json:"resources"`
-	RetryPolicy     *RetryPolicy `json:"retry_policy,omitempty"`
-	Source          SourceRef    `json:"source"`
-	TimeoutSeconds  *int         `json:"timeout_seconds,omitempty"`
+
+	// Resources Reservations the container always keeps. CPU above the reservation is shared up to `cpu_limit_millis`, by default the reservation plus 16 cores. Memory above the reservation is allowed up to `memory_limit_mib`, by default four times the reservation, at least 1 GiB and at most 8 GiB above it; the container is killed beyond it.
+	Resources      Resources    `json:"resources"`
+	RetryPolicy    *RetryPolicy `json:"retry_policy,omitempty"`
+	Source         SourceRef    `json:"source"`
+	TimeoutSeconds *int         `json:"timeout_seconds,omitempty"`
 }
 
 // ImageSpec defines model for ImageSpec.
@@ -310,6 +334,20 @@ type ImageSpec struct {
 
 // ImageSpecPythonVersion defines model for ImageSpec.PythonVersion.
 type ImageSpecPythonVersion string
+
+// LogEntry defines model for LogEntry.
+type LogEntry struct {
+	Attempt int `json:"attempt"`
+
+	// Data One line of output without its trailing newline.
+	Data   string         `json:"data"`
+	Id     int64          `json:"id"`
+	Stream LogEntryStream `json:"stream"`
+	Time   time.Time      `json:"time"`
+}
+
+// LogEntryStream defines model for LogEntry.Stream.
+type LogEntryStream string
 
 // Me defines model for Me.
 type Me struct {
@@ -322,9 +360,9 @@ type Name = string
 
 // Payload A task argument or return value. `json` carries `value`; `cloudpickle` carries base64 `data`. Arguments encode `{"args": [...], "kwargs": {...}}`.
 type Payload struct {
-	Data     *[]byte         `json:"data,omitempty"`
-	Encoding PayloadEncoding `json:"encoding"`
-	Value    interface{}     `json:"value,omitempty"`
+	Data     *[]byte          `json:"data,omitempty"`
+	Encoding PayloadEncoding  `json:"encoding"`
+	Value    *json.RawMessage `json:"value,omitempty"`
 }
 
 // PayloadEncoding defines model for Payload.Encoding.
@@ -339,10 +377,12 @@ type Release struct {
 	Version   int                `json:"version"`
 }
 
-// Resources defines model for Resources.
+// Resources Reservations the container always keeps. CPU above the reservation is shared up to `cpu_limit_millis`, by default the reservation plus 16 cores. Memory above the reservation is allowed up to `memory_limit_mib`, by default four times the reservation, at least 1 GiB and at most 8 GiB above it; the container is killed beyond it.
 type Resources struct {
-	CpuMillis int `json:"cpu_millis"`
-	MemoryMib int `json:"memory_mib"`
+	CpuLimitMillis *int `json:"cpu_limit_millis,omitempty"`
+	CpuMillis      int  `json:"cpu_millis"`
+	MemoryLimitMib *int `json:"memory_limit_mib,omitempty"`
+	MemoryMib      int  `json:"memory_mib"`
 }
 
 // RetryPolicy defines model for RetryPolicy.
@@ -432,7 +472,9 @@ type UploadTarget struct {
 	ExpiresAt time.Time          `json:"expires_at"`
 	Headers   map[string]string  `json:"headers"`
 	Method    UploadTargetMethod `json:"method"`
-	Url       string             `json:"url"`
+
+	// Url Absolute URL; the request carries no bearer token.
+	Url string `json:"url"`
 }
 
 // UploadTargetMethod defines model for UploadTarget.Method.

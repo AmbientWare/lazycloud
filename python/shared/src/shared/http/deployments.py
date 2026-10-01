@@ -8,7 +8,6 @@ from shared.deployment_records import CpuRequest, MemoryRequest
 from shared.deployments import DeploymentKind, DevboxPhase, DevboxState, PodRole
 from shared.disks import DiskStatus
 from shared.http.base import HttpModel
-from shared.http.stubs import StubResponse
 from shared.placement import AvailabilityZone, ProductRegion
 
 
@@ -48,10 +47,6 @@ class DeploymentActionCapabilitiesResponse(HttpModel):
 class DeploymentScalingResponse(HttpModel):
     min_replicas: int = Field(ge=0)
     max_replicas: int = Field(ge=0)
-
-
-class DeploymentScaleRequest(HttpModel):
-    replicas: int = Field(ge=0)
 
 
 class DeploymentResponse(HttpModel):
@@ -124,54 +119,13 @@ class DeploymentDetailResponse(DeploymentResponse):
     """Present exactly when the deployment is a devbox."""
 
 
-class DeploymentListResponse(HttpModel):
-    data: list[DeploymentResponse] = Field(default_factory=list)
-    next: str = ""
-
-
-class DeploymentUrlResponse(HttpModel):
-    deployment: DeploymentResponse
-    stub: StubResponse | None = None
-    url: str
-
-
-class DeploymentPackageObjectResponse(HttpModel):
-    id: str
-    bucket: str
-    key: str
-    size: int
-    sha256: str
-    content_type: str = "application/octet-stream"
-    created_at: datetime
-    updated_at: datetime
-
-
-class DeploymentPackagePlanResponse(HttpModel):
-    workspace_id: str
-    stub_id: str
-    object: DeploymentPackageObjectResponse | None = None
-    presigned_url: str | None = None
-    expires_in_seconds: int = 600
-    filename: str = "package"
-
-
-class DeploymentStopAllResponse(HttpModel):
-    stopped: list[DeploymentResponse] = Field(default_factory=list)
-
-
 __all__ = [
     "DeploymentActionCapabilitiesResponse",
     "DeploymentDetailResponse",
-    "DeploymentListResponse",
-    "DeploymentPackageObjectResponse",
-    "DeploymentPackagePlanResponse",
     "DeploymentResourcesResponse",
     "DeploymentResponse",
-    "DeploymentScaleRequest",
     "DeploymentScalingResponse",
     "DeploymentSpecResponse",
-    "DeploymentStopAllResponse",
-    "DeploymentUrlResponse",
     "DevboxDiskResponse",
     "DevboxResponse",
 ]

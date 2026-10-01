@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 from lazycloud.progress import progress
 
 if TYPE_CHECKING:
+    from shared.api import Deployment
     from shared.autoscaling import Autoscaler
     from shared.gpu import GpuType
     from shared.image_building.authoring import LinuxArchitecture, PythonVersion
@@ -48,7 +49,6 @@ if TYPE_CHECKING:
         TaskPendingProgress,
         TaskPendingReason,
     )
-    from lazycloud.session.deployment import Deployment
     from lazycloud.session.task import FunctionCall, Task
     from lazycloud.terminal import output
 
@@ -221,7 +221,7 @@ def __getattr__(name: str):
             if name == "TaskPendingReason":
                 return TaskPendingReason
         case "Deployment":
-            from lazycloud.session.deployment import Deployment
+            from shared.api import Deployment
 
             return Deployment
         case "Task":

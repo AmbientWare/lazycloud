@@ -300,65 +300,66 @@ sandbox = app.sandbox(
 )
 
 
+def _json_result(value: object) -> JsonValue:
+    return json.loads(json.dumps(value))
+
+
 def run_function(value: int = 7) -> dict[str, JsonValue]:
     handle = calculate.spawn(value)
-    result = handle.result(wait=True, timeout_seconds=120, poll_interval_seconds=0.5)
-    if not result.ok:
-        raise RuntimeError(result.error or "function example failed")
-    return {"task_id": handle.task_id, "result": result.task.result}
+    return {"task_id": handle.task_id, "result": _json_result(handle.get(timeout_seconds=120))}
 
 
 def run_function_failure(value: int = 13) -> dict[str, JsonValue]:
     handle = calculate.spawn(value, fail=True)
-    result = handle.result(wait=True, timeout_seconds=120, poll_interval_seconds=0.5)
-    if result.ok:
-        raise RuntimeError("intentional failure example completed successfully")
-    return {
-        "task_id": handle.task_id,
-        "status": result.status.value,
-        "error": result.error,
-        "expected_failure": True,
-    }
+    try:
+        handle.get(timeout_seconds=120)
+    except Exception as exc:
+        return {
+            "task_id": handle.task_id,
+            "status": handle.status().status.value,
+            "error": str(exc),
+            "expected_failure": True,
+        }
+    raise RuntimeError("intentional failure example completed successfully")
 
 
 def run_nested_function(value: int = 6) -> dict[str, JsonValue]:
     handle = nested_calculation.spawn(value)
-    result = handle.result(wait=True, timeout_seconds=120, poll_interval_seconds=0.5)
-    if not result.ok:
-        raise RuntimeError(result.error or "nested function example failed")
-    return {"task_id": handle.task_id, "result": result.task.result}
+    return {"task_id": handle.task_id, "result": _json_result(handle.get(timeout_seconds=120))}
 
 
 def run_background_job(value: int = 5, delay_seconds: float = 0) -> dict[str, JsonValue]:
     handle = jobs.spawn(value, delay_seconds=delay_seconds)
-    result = handle.result(wait=True, timeout_seconds=120, poll_interval_seconds=0.5)
+    try:
+        result: JsonValue = _json_result(handle.get(timeout_seconds=120))
+    except Exception:
+        result = None
+    status = handle.status().status.value
     return {
         "task_id": handle.task_id,
-        "status": result.status.value,
-        "ok": result.ok,
-        "result": result.task.result,
+        "status": status,
+        "ok": status == "succeeded",
+        "result": result,
     }
 
 
 def run_background_job_failure(value: int = 17) -> dict[str, JsonValue]:
     handle = jobs.spawn(value, fail=True)
-    result = handle.result(wait=True, timeout_seconds=120, poll_interval_seconds=0.5)
-    if result.ok:
-        raise RuntimeError("intentional background job failure completed successfully")
-    return {
-        "task_id": handle.task_id,
-        "status": result.status.value,
-        "error": result.error,
-        "expected_failure": True,
-    }
+    try:
+        handle.get(timeout_seconds=120)
+    except Exception as exc:
+        return {
+            "task_id": handle.task_id,
+            "status": handle.status().status.value,
+            "error": str(exc),
+            "expected_failure": True,
+        }
+    raise RuntimeError("intentional background job failure completed successfully")
 
 
 def run_artifacts(label: str = "all workloads") -> dict[str, JsonValue]:
     handle = create_artifacts.spawn(label)
-    result = handle.result(wait=True, timeout_seconds=120, poll_interval_seconds=0.5)
-    if not result.ok:
-        raise RuntimeError(result.error or "artifacts example failed")
-    return {"task_id": handle.task_id, "result": result.task.result}
+    return {"task_id": handle.task_id, "result": _json_result(handle.get(timeout_seconds=120))}
 
 
 def exercise_runs(value: int = 7) -> dict[str, JsonValue]:
@@ -374,12 +375,12 @@ def exercise_runs(value: int = 7) -> dict[str, JsonValue]:
 
 
 def run_endpoint(value: int = 7, fail: bool = False) -> dict[str, JsonValue]:
-    response = predict.target("deployed").request(value, fail=fail)
+    response = predict.request(value, fail=fail)
     return {"status_code": response.status_code, "result": response.json()}
 
 
 def run_asgi() -> dict[str, JsonValue]:
-    response = service.request(method="GET", path="/service", target="deployed")
+    response = service.request(method="GET", path="/service")
     return {"status_code": response.status_code, "result": response.json()}
 
 

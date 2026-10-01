@@ -15,7 +15,6 @@ from rich.text import Text
 from shared.app_identity import ENV_PREFIX
 from shared.errors import InvalidInputError
 from shared.http.errors import HttpApiError
-from shared.tasks import TaskStatus
 from typer import _click as click
 
 from lazycloud._terminal import theme
@@ -23,11 +22,17 @@ from lazycloud._terminal.cards import card
 from lazycloud._terminal.streams import error_console
 from lazycloud.abstractions.function import FunctionOperationError
 from lazycloud.cli.components.output import print_json_line
+from lazycloud.clients.api import ApiConnectionError, ApiError
+from lazycloud.exceptions import (
+    ConfigurationError,
+    FunctionNotDeployedError,
+    RemoteTaskError,
+    TaskCancelledError,
+    UnsupportedFeatureError,
+)
 from lazycloud.json_contracts import parse_json_value
-from lazycloud.session.deployment import ImageBuildError
-from lazycloud.session.task import TaskOperationError
 
-_TOKEN_PATTERN = re.compile(r"\brt_[A-Za-z0-9_-]{8,}\b")
+_TOKEN_PATTERN = re.compile(r"\b(?:rt|lc)_[A-Za-z0-9_-]{8,}\b")
 _BEARER_PATTERN = re.compile(r"(Bearer\s+)([A-Za-z0-9._~+/=-]{12,})", re.IGNORECASE)
 _MAX_BODY_MESSAGE_CHARS = 400
 _TRUNCATED_MESSAGE_MARKER = " ... [truncated] ... "
@@ -112,14 +117,6 @@ def normalize_exception(
     if task_error is not None:
         return task_error
 
-    if any(isinstance(item, ImageBuildError) for item in exception_chain(exc)):
-        return ClientErrorDetails(
-            type="image_build_failed",
-            title="Image build failed",
-            message=message,
-            hint="Fix the failing build step shown above, then run the command again.",
-        )
-
     if _is_forbidden_error(exc):
         return ClientErrorDetails(
             type="permission_denied",
@@ -184,11 +181,18 @@ def _details_from_error_code(
 ) -> ClientErrorDetails | None:
     """Classify from the code the server sent rather than its prose."""
     for item in exception_chain(exc):
-        if not isinstance(item, HttpApiError) or not item.code:
+        code = (
+            item.code.value
+            if isinstance(item, ApiError) and item.code is not None
+            else item.code
+            if isinstance(item, HttpApiError)
+            else ""
+        )
+        if not code:
             continue
         return ClientErrorDetails(
-            type=item.code,
-            title=_CODE_TITLES.get(item.code, _titleize(item.code)),
+            type=code,
+            title=_CODE_TITLES.get(code, _titleize(code)),
             message=message,
         )
     return None
@@ -358,7 +362,7 @@ def _is_auth_error(exc: BaseException) -> bool:
     for item in exception_chain(exc):
         if isinstance(item, PermissionError):
             return True
-        if isinstance(item, HttpApiError) and item.status_code == 401:
+        if isinstance(item, HttpApiError | ApiError) and item.status_code == 401:
             return True
         if isinstance(item, urllib.error.HTTPError) and item.code == 401:
             return True
@@ -367,14 +371,14 @@ def _is_auth_error(exc: BaseException) -> bool:
 
 def _is_forbidden_error(exc: BaseException) -> bool:
     return any(
-        (isinstance(item, HttpApiError) and item.status_code == 403)
+        (isinstance(item, HttpApiError | ApiError) and item.status_code == 403)
         or (isinstance(item, urllib.error.HTTPError) and item.code == 403)
         for item in exception_chain(exc)
     )
 
 
 def _is_connection_error(exc: BaseException, message: str) -> bool:
-    return isinstance(exc, ConnectionError | urllib.error.URLError) or any(
+    return isinstance(exc, ConnectionError | urllib.error.URLError | ApiConnectionError) or any(
         item in message for item in ("connection refused", "name or service not known")
     )
 
@@ -388,28 +392,21 @@ def _task_error_details(
     message: str,
 ) -> ClientErrorDetails | None:
     for item in exception_chain(exc):
-        if isinstance(item, TaskOperationError):
-            if item.status is TaskStatus.Cancelled:
-                return ClientErrorDetails(
-                    type="task_cancelled",
-                    title="Task cancelled",
-                    message="The task was cancelled before it completed.",
-                    exit_code=130,
-                )
-            if item.status is TaskStatus.Timeout:
-                return ClientErrorDetails(
-                    type="task_timeout",
-                    title="Task timed out",
-                    message=message,
-                    hint="Check the task logs and its execution timeout.",
-                )
-            if item.status is TaskStatus.Failed:
-                return ClientErrorDetails(
-                    type="task_failed",
-                    title="Task failed",
-                    message=message,
-                    hint="Check the task logs for the failing operation.",
-                )
+        if isinstance(item, TaskCancelledError):
+            return ClientErrorDetails(
+                type="task_cancelled",
+                title="Task cancelled",
+                message=str(item),
+                exit_code=130,
+            )
+        if isinstance(item, RemoteTaskError):
+            timed_out = item.kind == "timeout"
+            return ClientErrorDetails(
+                type="task_timeout" if timed_out else "task_failed",
+                title="Task timed out" if timed_out else "Task failed",
+                message=str(item),
+                hint="Check `lazycloud task logs` for the failing operation.",
+            )
     return None
 
 
@@ -438,6 +435,26 @@ def _client_operation_classifier(
             title="Invalid input",
             message=message,
             hint="Check the function's argument names and types.",
+        )
+    if isinstance(exc, UnsupportedFeatureError):
+        return ClientErrorDetails(
+            type="unsupported",
+            title="Not supported yet",
+            message=message,
+            hint="Remove these options to deploy or run on the current platform.",
+        )
+    if isinstance(exc, FunctionNotDeployedError):
+        return ClientErrorDetails(
+            type="not_deployed",
+            title="Function not deployed",
+            message=message,
+            hint="Run `lazycloud deploy` for its app first.",
+        )
+    if isinstance(exc, ConfigurationError):
+        return ClientErrorDetails(
+            type="configuration_error",
+            title="Configuration needed",
+            message=message,
         )
     if isinstance(exc, FunctionOperationError):
         return ClientErrorDetails(
@@ -483,7 +500,7 @@ def _client_connection_hint(exc: BaseException) -> str:
 
 
 CLIENT_ERROR_POLICY = CliErrorPolicy(
-    auth_hint=f"Run `{CLIENT_CLI_NAME} login` to sign in again.",
+    auth_hint=f"Run `{CLIENT_CLI_NAME} login --token <token>` to sign in again.",
     connection_hint=_client_connection_hint,
     timeout_hint="Retry the command or check service logs if the operation keeps timing out.",
     debug_hint="Run the command again with `--debug` to see the full traceback.",

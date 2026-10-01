@@ -24,7 +24,7 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, model_validator
 
-from lazycloud import App, CloudBucket, CloudBucketConfig, Image
+from lazycloud import App, CloudBucket, CloudBucketConfig, FunctionCall, Image
 
 APP_NAME = "parallel_parquet"
 BUCKET_ROOT = Path("/data")
@@ -520,13 +520,11 @@ def run_batch(
     task_ids = [call.task_id for call in calls]
     if len(task_ids) != len(validated_keys):
         raise RuntimeError("partition fan-out returned an incomplete call handle set")
-    results = [
-        call.result(wait=True, timeout_seconds=1800, poll_interval_seconds=1) for call in calls
-    ]
+    results = FunctionCall.gather(*calls, timeout_seconds=1800, return_exceptions=True)
     failures = [
-        f"{result.id} ({result.status.value}): {result.error or 'no error detail'}"
-        for result in results
-        if not result.ok
+        f"{call.task_id}: {result}"
+        for call, result in zip(calls, results, strict=True)
+        if isinstance(result, Exception)
     ]
     if failures:
         raise RuntimeError(
@@ -536,13 +534,13 @@ def run_batch(
         raise RuntimeError("partition fan-out returned an incomplete result set")
 
     partitions: list[PartitionResult] = []
-    for expected_key, result in zip(validated_keys, results, strict=True):
+    for expected_key, call, result in zip(validated_keys, calls, results, strict=True):
         try:
-            payload = _PartitionResultModel.model_validate(result.value)
+            payload = _PartitionResultModel.model_validate(result)
         except ValidationError as exc:
-            raise RuntimeError(f"partition task {result.id} returned an invalid result") from exc
+            raise RuntimeError(f"partition task {call.task_id} returned an invalid result") from exc
         if payload.key != expected_key:
-            raise RuntimeError(f"partition task {result.id} returned a mismatched key")
+            raise RuntimeError(f"partition task {call.task_id} returned a mismatched key")
         partitions.append(_partition_result(payload))
     return write_summary.remote(partitions, task_ids)
 

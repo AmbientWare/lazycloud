@@ -26,6 +26,20 @@ linters:
     wrapcheck:
       ignore-package-globs:
         - github.com/AmbientWare/lazycloud/*
+      # The defaults, plus gRPC status errors: they are the transport's typed
+      # result and wrapping them would hide their code.
+      ignore-sigs:
+        - .Errorf(
+        - errors.New(
+        - errors.Unwrap(
+        - errors.Join(
+        - .Wrap(
+        - .Wrapf(
+        - .WithMessage(
+        - .WithMessagef(
+        - .WithStack(
+        - google.golang.org/grpc/status.Error(
+        - google.golang.org/grpc/internal/status.Status).Err()
     depguard:
       rules:
         # Host runtime code runs on customer and platform machines. It reaches

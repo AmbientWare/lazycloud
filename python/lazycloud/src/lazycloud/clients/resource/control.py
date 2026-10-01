@@ -7,7 +7,6 @@ from urllib.parse import urlencode
 
 from pydantic import BaseModel, JsonValue
 from shared.containers import ContainerStatus
-from shared.http.apps import AppListResponse, AppResponse
 from shared.http.compute import (
     ContainerResponse,
     ContainerWithAppPageResponse,
@@ -15,23 +14,12 @@ from shared.http.compute import (
     UnitListResponse,
     WorkerListResponse,
 )
-from shared.http.deployment_plans import (
-    DeploymentPlanRequest,
-    DeploymentPlanResponse,
-    DeploymentPruneRequest,
-    DeploymentPruneResponse,
-)
 from shared.http.deployments import (
     DeploymentDetailResponse,
-    DeploymentListResponse,
-    DeploymentResponse,
-    DeploymentScaleRequest,
     DevboxResponse,
 )
 from shared.http.errors import HttpResponseDecodeError
-from shared.http.tasks import TaskDetailResponse, TaskPageResponse, TaskStopResponse
 from shared.http_transport import HttpChannel
-from shared.tasks import TaskStatus
 from shared.urls import url_path_segment
 
 from lazycloud.control import workspace_path, workspace_query
@@ -64,24 +52,6 @@ class ResourceControlClient:
     channel: ResourceControlChannel
     workspace: str = "default"
 
-    def plan_deployment(self, request: DeploymentPlanRequest) -> DeploymentPlanResponse:
-        return _validate_response(
-            DeploymentPlanResponse,
-            self.channel.post(
-                workspace_path("/api/v1/deployment-plans", self.workspace),
-                request.model_dump(mode="json"),
-            ),
-        )
-
-    def prune_deployments(self, request: DeploymentPruneRequest) -> DeploymentPruneResponse:
-        return _validate_response(
-            DeploymentPruneResponse,
-            self.channel.post(
-                workspace_path("/api/v1/deployment-prunes", self.workspace),
-                request.model_dump(mode="json"),
-            ),
-        )
-
     @classmethod
     def from_endpoint(
         cls,
@@ -96,104 +66,6 @@ class ResourceControlClient:
             workspace=workspace,
         )
 
-    def list_tasks(
-        self,
-        *,
-        stub_ids: Sequence[str] = (),
-        status: TaskStatus | None = None,
-        deployment_id: str | None = None,
-        app_id: str | None = None,
-        limit: int = 100,
-        cursor: str | None = None,
-    ) -> TaskPageResponse:
-        query: list[tuple[str, str | int]] = [
-            *workspace_query(self.workspace).items(),
-            ("limit", limit),
-            *(("stub_id", stub_id) for stub_id in stub_ids),
-        ]
-        if status is not None:
-            query.append(("status", status.value))
-        if deployment_id is not None:
-            query.append(("deployment_id", deployment_id))
-        if app_id is not None:
-            query.append(("app_id", app_id))
-        if cursor is not None:
-            query.append(("cursor", cursor))
-        return _validate_response(
-            TaskPageResponse, self.channel.get(f"/api/v1/tasks?{urlencode(query)}")
-        )
-
-    def list_apps(self, *, active: bool | None = None) -> AppListResponse:
-        query: dict[str, str | bool] = dict(workspace_query(self.workspace))
-        if active is not None:
-            query["active"] = active
-        return _validate_response(
-            AppListResponse,
-            self.channel.get(f"/api/v1/apps?{urlencode(query)}"),
-        )
-
-    def app(self, app_id: str) -> AppResponse:
-        return _validate_response(
-            AppResponse, self.channel.get(self._path(f"/api/v1/apps/{url_path_segment(app_id)}"))
-        )
-
-    def pause_app(self, app_id: str) -> AppResponse:
-        return _validate_response(
-            AppResponse,
-            self.channel.post(self._path(f"/api/v1/apps/{url_path_segment(app_id)}/pause")),
-        )
-
-    def resume_app(self, app_id: str) -> AppResponse:
-        return _validate_response(
-            AppResponse,
-            self.channel.post(self._path(f"/api/v1/apps/{url_path_segment(app_id)}/resume")),
-        )
-
-    def delete_app(self, app_id: str) -> None:
-        self.channel.request("DELETE", self._path(f"/api/v1/apps/{url_path_segment(app_id)}"))
-
-    def task(self, task_id: str) -> TaskDetailResponse:
-        return _validate_response(
-            TaskDetailResponse,
-            self.channel.get(self._path(f"/api/v1/tasks/{url_path_segment(task_id)}")),
-        )
-
-    def stop_tasks(self, task_ids: Sequence[str]) -> TaskStopResponse:
-        query = [
-            *workspace_query(self.workspace).items(),
-            *(("task_ids", task_id) for task_id in task_ids),
-        ]
-        return _validate_response(
-            TaskStopResponse, self.channel.request("DELETE", f"/api/v1/tasks?{urlencode(query)}")
-        )
-
-    def list_deployments(
-        self,
-        *,
-        active: bool | None = None,
-        app_id: str | None = None,
-        name: str | None = None,
-        latest: bool = False,
-        limit: int = 100,
-        cursor: str | None = None,
-    ) -> DeploymentListResponse:
-        query: dict[str, str | int | bool] = {
-            **workspace_query(self.workspace),
-            "latest": latest,
-            "limit": limit,
-        }
-        if active is not None:
-            query["active"] = active
-        if app_id is not None:
-            query["app_id"] = app_id
-        if name is not None:
-            query["name"] = name
-        if cursor is not None:
-            query["cursor"] = cursor
-        return _validate_response(
-            DeploymentListResponse, self.channel.get(f"/api/v1/deployments?{urlencode(query)}")
-        )
-
     def deployment(self, deployment_id: str) -> DeploymentDetailResponse:
         return _validate_response(
             DeploymentDetailResponse,
@@ -206,28 +78,6 @@ class ResourceControlClient:
             self.channel.get(
                 self._path(f"/api/v1/deployments/{url_path_segment(deployment_id)}/devbox")
             ),
-        )
-
-    def stop_deployment(self, deployment_id: str) -> DeploymentResponse:
-        return self._deployment_action(deployment_id, "stop")
-
-    def start_deployment(self, deployment_id: str) -> DeploymentResponse:
-        return self._deployment_action(deployment_id, "start")
-
-    def scale_deployment(self, deployment_id: str, replicas: int) -> DeploymentResponse:
-        request = DeploymentScaleRequest(replicas=replicas)
-        return _validate_response(
-            DeploymentResponse,
-            self.channel.post(
-                self._path(f"/api/v1/deployments/{url_path_segment(deployment_id)}/scale"),
-                request.model_dump(mode="json"),
-            ),
-        )
-
-    def delete_deployment(self, deployment_id: str) -> None:
-        self.channel.request(
-            "DELETE",
-            self._path(f"/api/v1/deployments/{url_path_segment(deployment_id)}"),
         )
 
     def list_containers(
@@ -277,16 +127,6 @@ class ResourceControlClient:
         return _validate_response(
             WorkerListResponse,
             self.channel.get(self._path("/api/v1/workers")),
-        )
-
-    def _deployment_action(self, deployment_id: str, action: str) -> DeploymentResponse:
-        return _validate_response(
-            DeploymentResponse,
-            self.channel.post(
-                self._path(
-                    f"/api/v1/deployments/{url_path_segment(deployment_id)}/{url_path_segment(action)}"
-                )
-            ),
         )
 
     def _path(self, path: str) -> str:

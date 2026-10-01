@@ -4,7 +4,6 @@ from lazycloud.clients.compute.control import ComputeClient
 from lazycloud.clients.disk.control import DiskControlClient
 from lazycloud.clients.domain.control import DomainControlClient
 from lazycloud.clients.gateway.control import GatewayControlClient
-from lazycloud.clients.observability.control import ObservabilityControlClient
 from lazycloud.clients.resource.control import ResourceControlClient
 from lazycloud.clients.secret.control import SecretControlClient
 from lazycloud.clients.ssh.control import SshControlClient
@@ -13,10 +12,8 @@ from lazycloud.clients.workspace.control import WorkspaceControlClient
 from lazycloud.control import ControlClientConfig, resolve_control_client_config
 from lazycloud.control_clients import (
     gateway_control_client,
-    observability_control_client,
     resource_control_client,
 )
-from lazycloud.session.task import TaskClient
 
 
 def control_config(
@@ -68,16 +65,6 @@ def compute_client(
         token=config.token,
         timeout_seconds=config.timeout_seconds,
         workspace=config.workspace,
-    )
-
-
-def observability_client(
-    *,
-    workspace: str | None = None,
-    timeout_seconds: float = 10.0,
-) -> ObservabilityControlClient:
-    return observability_control_client(
-        control_config(workspace=workspace, timeout_seconds=timeout_seconds)
     )
 
 
@@ -151,28 +138,12 @@ def workspace_client(
     )
 
 
-def task_client(
-    *,
-    workspace: str | None = None,
-    timeout_seconds: float = 10.0,
-) -> TaskClient:
-    config = control_config(workspace=workspace, timeout_seconds=timeout_seconds)
-    return TaskClient(
-        workspace=config.workspace,
-        endpoint=config.endpoint,
-        token=config.token,
-        timeout_seconds=config.timeout_seconds,
-    )
-
-
 __all__ = [
     "compute_client",
     "control_config",
     "gateway_client",
-    "observability_client",
     "secret_client",
     "ssh_client",
-    "task_client",
     "volume_client",
     "workspace_client",
 ]

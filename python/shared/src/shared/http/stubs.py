@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import ConfigDict, Field, JsonValue, field_serializer, field_validator
+from pydantic import ConfigDict, Field, JsonValue, field_serializer
 
 from shared.contracts import ContractModel
-from shared.deployment_records import DEFAULT_WORKLOAD_PREEMPTIBLE, CpuRequest, MemoryRequest
+from shared.deployment_records import CpuRequest, MemoryRequest
 from shared.deployments import StubKind
 from shared.http.base import HttpModel
 from shared.placement import AvailabilityZone, ProductRegion
@@ -90,97 +90,8 @@ class StubResponse(HttpModel):
     updated_at: datetime
 
 
-class StubListResponse(HttpModel):
-    stubs: list[StubResponse] = Field(default_factory=list)
-
-
-class StubCreateRequest(HttpModel):
-    name: str
-    workspace: str = "default"
-    kind: StubKind = StubKind.Function
-    handler: str | None = None
-    deployment_id: str | None = None
-    app_id: str | None = None
-    public: bool = False
-    config: StubConfigResponse = Field(default_factory=StubConfigResponse, validate_default=True)
-    metadata: dict[str, JsonValue] = Field(default_factory=dict)
-
-    @field_validator("config")
-    @classmethod
-    def resolve_new_workload_defaults(cls, config: StubConfigResponse) -> StubConfigResponse:
-        runtime = config.runtime or StubRuntimeConfigResponse()
-        if "preemptible" not in runtime.model_fields_set:
-            runtime = runtime.model_copy(update={"preemptible": DEFAULT_WORKLOAD_PREEMPTIBLE})
-        return config.model_copy(update={"runtime": runtime})
-
-
-class StubConfigUpdateRequest(HttpModel):
-    runtime: StubRuntimeConfigResponse | None = None
-    inputs: dict[str, JsonValue] | None = None
-    outputs: dict[str, JsonValue] | None = None
-    task_policy: StubTaskPolicy | None = None
-    python_version: str | None = None
-
-    def fields(self) -> dict[str, JsonValue]:
-        values: dict[str, JsonValue] = {}
-        if self.runtime is not None:
-            runtime = _model_json_object(self.runtime, exclude_none=True, exclude_unset=True)
-            if "region" in self.runtime.model_fields_set:
-                runtime["region"] = self.runtime.region.value if self.runtime.region else None
-            values["runtime"] = runtime
-        if self.inputs is not None:
-            values["inputs"] = self.inputs
-        if self.outputs is not None:
-            values["outputs"] = self.outputs
-        if self.task_policy is not None:
-            values["task_policy"] = _model_json_object(self.task_policy)
-        if self.python_version is not None:
-            values["python_version"] = self.python_version
-        return values
-
-
-class StubConfigUpdateResponse(HttpModel):
-    stub: StubResponse
-    updated_fields: list[str] = Field(default_factory=list)
-    message: str
-
-
-class StubCloneOverrideRequest(HttpModel):
-    cpu: int | None = None
-    memory: int | None = None
-    gpu: list[str] = Field(default_factory=list)
-    gpu_count: int | None = None
-
-
-class StubCloneRequest(HttpModel):
-    workspace: str = "default"
-    overrides: StubCloneOverrideRequest = Field(default_factory=StubCloneOverrideRequest)
-
-
-class StubUrlResponse(HttpModel):
-    stub: StubResponse
-    url: str
-    external_url: str
-    route_kind: StubKind
-    deployment_id: str | None = None
-    deployment_name: str | None = None
-    deployment_version: int | None = None
-
-
-class PublicStubConfigResponse(StubConfigResponse):
-    pass
-
-
 __all__ = [
-    "PublicStubConfigResponse",
-    "StubCloneOverrideRequest",
-    "StubCloneRequest",
     "StubConfigResponse",
-    "StubConfigUpdateRequest",
-    "StubConfigUpdateResponse",
-    "StubCreateRequest",
-    "StubListResponse",
     "StubResponse",
     "StubRuntimeConfigResponse",
-    "StubUrlResponse",
 ]

@@ -9,18 +9,11 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
-from types import TracebackType
-from typing import Protocol
 
 from pathspec import PathSpec
-from shared.app_identity import SOURCE_PACKAGE_BUCKET
-from shared.http.objects import PutObjectResponse
-from typing_extensions import Self
 
-from lazycloud.terminal import ProgressCallback, humanize_bytes
+from lazycloud.terminal import humanize_bytes
 
-SOURCE_PACKAGE_PREFIX = "sources"
-SOURCE_PACKAGE_CONTENT_TYPE = "application/zip"
 SOURCE_IGNORE_FILE = ".lazycloudignore"
 ZIP_EPOCH = (1980, 1, 1, 0, 0, 0)
 ARCHIVE_CHUNK_SIZE = 1024 * 1024
@@ -71,35 +64,6 @@ SOURCE_IGNORE_FILE_WRITTEN_NOTICE = (
 )
 
 
-class SourcePackageUploadClient(Protocol):
-    def upload_source(
-        self,
-        archive: SourcePackageArchive,
-        *,
-        name: str,
-        progress: ProgressCallback | None = None,
-    ) -> PutObjectResponse: ...
-
-
-class SourceSyncStep(Protocol):
-    def __enter__(self) -> Self: ...
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        tb: TracebackType | None,
-    ) -> None: ...
-
-    def update(self, summary: str) -> None: ...
-
-    def done(self, summary: str = "") -> None: ...
-
-
-class SourceSyncTerminal(Protocol):
-    def step(self, name: str, summary: str = "") -> SourceSyncStep: ...
-
-
 class SourcePackageSyncError(RuntimeError):
     pass
 
@@ -110,90 +74,6 @@ class SourcePackageArchive:
     sha256: str
     size: int
     files: tuple[str, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class SourcePackageSyncResult:
-    object_id: str
-    sha256: str
-    size: int
-    files: tuple[str, ...]
-
-
-@dataclass(slots=True)
-class SourcePackageSyncer:
-    object_client: SourcePackageUploadClient
-    root_dir: str | Path = "."
-    archive_prefix: tuple[str, ...] = ()
-    terminal: SourceSyncTerminal | None = None
-
-    def sync(
-        self,
-        *,
-        ignore_patterns: Sequence[str] | None = None,
-        include_patterns: Sequence[str] | None = None,
-    ) -> SourcePackageSyncResult:
-        root = Path(self.root_dir).expanduser().resolve()
-        if not root.exists():
-            msg = f"source root does not exist: {root}"
-            raise SourcePackageSyncError(msg)
-        if not root.is_dir():
-            msg = f"source root is not a directory: {root}"
-            raise SourcePackageSyncError(msg)
-
-        with (
-            self._step("Source", "collecting files") as step,
-            build_source_package_archive(
-                root,
-                archive_prefix=self.archive_prefix,
-                ignore_patterns=ignore_patterns,
-                include_patterns=include_patterns,
-                progress=step.update,
-            ) as archive,
-        ):
-            plural = "s" if len(archive.files) != 1 else ""
-            description = f"{len(archive.files):,} file{plural}, {humanize_bytes(archive.size)}"
-            step.update(f"syncing {description}")
-            object_name = f"{SOURCE_PACKAGE_PREFIX}/{archive.sha256}.zip"
-            uploaded = self.object_client.upload_source(
-                archive,
-                name=object_name,
-                progress=lambda completed: step.update(
-                    f"syncing {min(100, completed * 100 // archive.size):3}% · {description}"
-                ),
-            )
-            result = SourcePackageSyncResult(
-                object_id=uploaded.object_id,
-                sha256=archive.sha256,
-                size=archive.size,
-                files=archive.files,
-            )
-            step.done(description)
-        return result
-
-    def _step(self, name: str, summary: str) -> SourceSyncStep:
-        if self.terminal is None:
-            return _SilentStep()
-        return self.terminal.step(name, summary)
-
-
-class _SilentStep:
-    def __enter__(self) -> Self:
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        tb: TracebackType | None,
-    ) -> None:
-        return None
-
-    def update(self, summary: str) -> None:
-        return None
-
-    def done(self, summary: str = "") -> None:
-        return None
 
 
 @contextmanager
@@ -449,15 +329,9 @@ __all__ = [
     "DEFAULT_IGNORE_PATTERNS",
     "SOURCE_IGNORE_FILE",
     "SOURCE_IGNORE_FILE_WRITTEN_NOTICE",
-    "SOURCE_PACKAGE_BUCKET",
-    "SOURCE_PACKAGE_CONTENT_TYPE",
-    "SOURCE_PACKAGE_PREFIX",
     "SourceFileFilter",
     "SourcePackageArchive",
     "SourcePackageSyncError",
-    "SourcePackageSyncResult",
-    "SourcePackageSyncer",
-    "SourcePackageUploadClient",
     "build_source_package_archive",
     "collect_source_files",
     "effective_ignore_patterns",
