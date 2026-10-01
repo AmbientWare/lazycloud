@@ -20,7 +20,6 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import type { Schemas } from "@/lib/api/client";
-import { tokenPrefix } from "@/lib/queries/tokens";
 
 import {
   useAccessTokensController,
@@ -154,7 +153,7 @@ function TokenRow({
       <div className="col-span-2 min-w-0 lg:col-span-4">
         <div className="truncate text-sm font-medium">{token.name}</div>
         <div className="mt-0.5 flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
-          <code className="mono shrink-0">{tokenPrefix(token)}...</code>
+          <code className="mono shrink-0">{token.prefix}...</code>
           <span aria-hidden="true">/</span>
           <span className="truncate">
             Created <LiveRelativeTime value={token.created_at} />

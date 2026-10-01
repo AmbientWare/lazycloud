@@ -96,7 +96,7 @@ describe("workspace identity controller", () => {
   it("normalizes one rename and replaces only the matching directory entry", async () => {
     const target = workspace("workspace-1", "acme");
     const sibling = workspace("workspace-2", "platform");
-    const accepted = { ...target, name: "platform_team" };
+    const accepted = { ...target, name: "platform-team" };
     const queryClient = testQueryClient();
     const onRenamed = vi.fn();
     queryClient.setQueryData(currentSessionQueryOptions().queryKey, {
@@ -106,16 +106,16 @@ describe("workspace identity controller", () => {
     updateWorkspaceMock.mockResolvedValue(accepted);
     const { result } = renderController({ queryClient, workspace: target, onRenamed });
 
-    act(() => result.current.setDraftName("  platform_team  "));
+    act(() => result.current.setDraftName("  platform-team  "));
     act(() => result.current.save());
 
     await waitFor(() => expect(result.current.mode).toBe("saved"));
-    expect(updateWorkspaceMock).toHaveBeenCalledWith("acme", "platform_team");
+    expect(updateWorkspaceMock).toHaveBeenCalledWith("acme", "platform-team");
     expect(queryClient.getQueryData(currentSessionQueryOptions().queryKey)).toEqual({
       user: sessionUser(),
       workspaces: [accepted, sibling],
     });
-    expect(onRenamed).toHaveBeenCalledWith("platform_team");
+    expect(onRenamed).toHaveBeenCalledWith("platform-team");
   });
 
   it("keeps a failed draft and exact error available for retry", async () => {
@@ -172,7 +172,7 @@ describe("workspace identity controller", () => {
     expect(result.current.canSave).toBe(false);
     act(() => result.current.save());
 
-    for (const invalid of ["", "   ", "Acme", "1acme", "acme team", "a".repeat(64)]) {
+    for (const invalid of ["", "   ", "Acme", "1acme", "acme team", "acme_team", "a".repeat(64)]) {
       act(() => result.current.setDraftName(invalid));
       expect(result.current.canSave).toBe(false);
       act(() => result.current.save());

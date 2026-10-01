@@ -12,16 +12,6 @@ export type CreateTokenInput = {
 };
 
 /**
- * The first characters of the secret, which the server keeps to recognize a token by.
- *
- * TODO(token-prefix): read `token.prefix` directly once the generated `Token` type
- * carries the field the API adds, and delete this helper.
- */
-export function tokenPrefix(token: Schemas["Token"]): string {
-  return (token as Schemas["Token"] & { prefix?: string }).prefix ?? "";
-}
-
-/**
  * Every token the account holds, addressed without a workspace.
  *
  * A token reaches every workspace its account belongs to, so the list is the same

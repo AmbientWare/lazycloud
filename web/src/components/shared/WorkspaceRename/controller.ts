@@ -165,7 +165,7 @@ function normalizeWorkspaceName(name: string): string {
 }
 
 function validWorkspaceName(name: string): boolean {
-  return /^[a-z][a-z0-9_-]{0,62}$/.test(name);
+  return /^[a-z][a-z0-9-]{0,62}$/.test(name);
 }
 
 function asError(error: unknown): Error {

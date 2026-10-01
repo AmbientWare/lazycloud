@@ -10,14 +10,13 @@ import type { Schemas } from "@/lib/api/client";
 import {
   createToken,
   revokeToken,
-  tokenPrefix,
   tokensQueryOptions,
   type CreateTokenInput,
 } from "@/lib/queries/tokens";
 import { accountQueryKeys } from "@/lib/queries/workspace-keys";
 
 type Token = Schemas["Token"];
-type TokenPages = InfiniteData<Schemas["TokenList"], string>;
+type TokenPages = InfiniteData<Schemas["TokenList"]>;
 
 type CreateMode = "closed" | "drafting" | "creating" | "issued" | "error";
 type ActionMode = "idle" | "confirming" | "running" | "error";
@@ -109,7 +108,7 @@ export function useAccessTokensController(showDeviceTokens: boolean): AccessToke
             issued: {
               secret: result.token,
               name: result.record.name,
-              prefix: tokenPrefix(result.record),
+              prefix: result.record.prefix,
             },
           },
           action: { mode: "idle" },
